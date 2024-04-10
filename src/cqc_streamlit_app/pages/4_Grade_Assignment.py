@@ -24,7 +24,7 @@ def define_grading_rubric():
         {GR_CRITERIA: "Inappropriate choice of data types", GR_PPL: 10},
         {GR_CRITERIA: "Failure to utilize constants, when appropriate, for program values", GR_PPL: 10},
         {GR_CRITERIA: "Lack of clear, succinct input prompts for data", GR_PPL: 10},
-        {GR_CRITERIA: "Lack of clear, descriptive labels for output data", GR_PPL:10},
+        {GR_CRITERIA: "Lack of clear, descriptive labels for output data", GR_PPL: 10},
         {GR_CRITERIA: '"hard-coding" numbers in calculations', GR_PPL: 10},
         {GR_CRITERIA: "Failure to include student name as part of flowgorithm file", GR_PPL: 5},
         {GR_CRITERIA: "Failure to include flowgorithm lab number as part of flowgorithm file name", GR_PPL: 5},
@@ -35,12 +35,13 @@ def define_grading_rubric():
     edited_df = st.data_editor(grading_rubric_df, key='grading_rubric', hide_index=True,
                                num_rows="dynamic",
                                column_config={
-                                   'Name': st.column_config.TextColumn(GR_CRITERIA+' (required)', required=True),
-                                   'Description': st.column_config.TextColumn(GR_PPL+' (required)', required=True)
+                                   'Name': st.column_config.TextColumn(GR_CRITERIA + ' (required)', required=True),
+                                   'Description': st.column_config.TextColumn(GR_PPL + ' (required)', required=True)
                                }
                                )  # 👈 An editable dataframe
 
     return edited_df
+
 
 def dict_to_markdown_table(data, headers):
     # Create the header row
@@ -52,7 +53,6 @@ def dict_to_markdown_table(data, headers):
         markdown_table += "| " + " | ".join([str(row_data.get(header, '')) for header in headers]) + " |\n"
 
     return markdown_table
-
 
 
 def main():
@@ -81,6 +81,9 @@ def main():
         ppl = row[GR_PPL]
         grading_rubric_dict[criteria] = ppl
 
+    # Write the Markdown table to a Streamlit textarea
+    st.text_area("Grading Rubric", grading_rubric)
+
     # Example header list
     headers = [GR_CRITERIA, GR_PPL]
     # Convert the dictionary to a Markdown table
@@ -89,12 +92,8 @@ def main():
     # Write the Markdown table to a Streamlit textarea
     st.text_area("Markdown Table", markdown_table)
 
-
     st.header("Assignment Total Points Possible")
     total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
-
-
-
 
 
 if __name__ == '__main__':
