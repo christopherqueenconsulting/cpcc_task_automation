@@ -75,7 +75,7 @@ def main():
 
     # Add grading rubric
     grading_rubric = define_grading_rubric()
-    grading_rubric_dict = []
+    grading_rubric_dict = {}
     for _, row in grading_rubric.iterrows():
         criteria = row[GR_CRITERIA]
         ppl = row[GR_PPL]
