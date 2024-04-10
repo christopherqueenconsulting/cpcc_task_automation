@@ -94,6 +94,7 @@ def main():
 
             student_submission_file_path = add_upload_file_element("Upload Students Submission",
                                                                ["txt", "docx", "pdf", "fprg"])
+            student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
 
             if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
                 student_submission = read_file(student_submission_file_path)
@@ -103,7 +104,7 @@ def main():
                                                                          total_points_possible)
 
                 st.header("Feedback and Grade")
-                st.markdown( feedback_with_grade)
+                st.markdown(f"```\n{feedback_with_grade}\n")
 
         else:
             st.error("Please provide your Open API Key on the settings page.")

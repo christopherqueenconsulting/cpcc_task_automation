@@ -260,4 +260,4 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
         # "response_format": {"type": "json_object"}
     })
 
-    return output
+    return output.content
