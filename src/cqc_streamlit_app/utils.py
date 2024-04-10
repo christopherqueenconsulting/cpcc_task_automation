@@ -59,16 +59,29 @@ def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
     return ChatOpenAI(temperature=temperature, model=model)
 
 
-def define_chatGPTModel() -> Tuple[str, float]:
+def define_chatGPTModel(default_min_value: float = .2, default_max_value: float = .8, default_temp_value: float = .2,
+                        default_step: float = 0.1) -> Tuple[str, float]:
     # Dropdown for selecting ChatGPT models
     default_option = "gpt-3.5-turbo-16k-0613"
     model_options = [default_option, "gpt-4-1106-preview"]
     selected_model = st.selectbox("Select ChatGPT Model", model_options, index=model_options.index(default_option))
 
     # Slider for selecting a value (ranged from 0.2 to 0.8, with step size 0.01)
-    default_value = 0.2
-    temperature = st.slider("Chat GPT Temperature", min_value=0.2, max_value=0.8, step=0.1, value=default_value,
+    # Define the ranges and corresponding labels
+    ranges = [(0, 0.3, "Low temperature: More focused, coherent, and conservative outputs."),
+              (0.3, 0.7, "Medium temperature: Balanced creativity and coherence."),
+              (0.7, 1, "High temperature: Highly creative and diverse, but potentially less coherent.")]
+
+    temperature = st.slider("Chat GPT Temperature", min_value=max(default_min_value, 0),
+                            max_value=min(default_max_value, 1),
+                            step=default_step, value=default_temp_value,
                             format="%.2f")
+
+    # Determine the label based on the selected value
+    for low, high, label in ranges:
+        if low <= temperature <= high:
+            st.write(label)
+            break
 
     return selected_model, temperature
 

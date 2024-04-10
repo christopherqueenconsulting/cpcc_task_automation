@@ -89,7 +89,7 @@ def main():
         st.header("Assignment Total Points Possible")
         total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
 
-        selected_model, temperature = define_chatGPTModel()
+        selected_model, temperature = define_chatGPTModel(default_temp_value=.5)
 
         if st.session_state.openai_api_key:
             custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
