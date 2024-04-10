@@ -164,3 +164,39 @@ Feedback Types:
 Output Instructions:
 {format_instructions}
 """
+
+GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE_v1 = """
+You are a community college professor grading and giving feedback on a students assignment submission.
+Using the given Assignment Instructions, analyze the Student Submission to identify all rubric criteria that applies.
+Analyze the output from the Solution as Expected Output.
+Analyze the output from the Student Submission as Submission Output.
+Note differences between the Expected Output and the Submission Output as they relate to the Assignment and refer to it as Output Alignment.
+Provide a detailed and informative description for each feedback identified, written constructively and referring directly to the issue.
+Provide the text from the relevant line(s) of code from the the Student Submission for each feedback when it is appropriate as code_error_lines.
+Each element in code_error_lines list should represent only one line of code.
+The feedback identified should be exhaustive but if an feedback type does not apply to the Student Submission you do not need to include it. 
+Use the Feedback Types as your guide for feedback.
+Note: Names for variables, functions, and classes are allowed to be different from the Example Solution and the Student Submission
+
+IMPORTANT: Your response must follow the Output Instructions exactly.
+
+---
+Assignment Instructions:
+{assignment}
+
+--- 
+Example Solution:
+{solution}
+
+--- 
+Student Submission:
+{submission}
+
+--- 
+Rubric Criteria:
+{feedback_types}
+
+---
+Output Instructions:
+{format_instructions}
+"""

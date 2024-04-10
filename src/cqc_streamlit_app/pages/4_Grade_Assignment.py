@@ -42,6 +42,19 @@ def define_grading_rubric():
 
     return edited_df
 
+def dict_to_markdown_table(data, headers):
+    # Create the header row
+    markdown_table = "| " + " | ".join(headers) + " |\n"
+    markdown_table += "| " + " | ".join(["-" * len(header) for header in headers]) + " |\n"
+
+    # Iterate over the dictionary items and add rows to the table
+    for row_data in data:
+        markdown_table += "| " + " | ".join([str(row_data.get(header, '')) for header in headers]) + " |\n"
+
+    return markdown_table
+
+
+
 def main():
     # TODO: Initialize other session state variables - the ones you need in .env
 
@@ -58,11 +71,30 @@ def main():
     # Add elements to page to work with
 
     st.header("Assignment Instructions")
-    course_name = st.text_input("Enter assignment Instructions")
+    assignment_instructions = st.text_area("Enter assignment Instructions")
 
     # Add grading rubric
-    st.header("Grading Rubric")
-    feedback_types = define_grading_rubric()
+    grading_rubric = define_grading_rubric()
+    grading_rubric_dict = []
+    for _, row in grading_rubric.iterrows():
+        criteria = row[GR_CRITERIA]
+        ppl = row[GR_PPL]
+        grading_rubric_dict[criteria] = ppl
+
+    # Example header list
+    headers = [GR_CRITERIA, GR_PPL]
+    # Convert the dictionary to a Markdown table
+    markdown_table = dict_to_markdown_table(grading_rubric, headers)
+
+    # Write the Markdown table to a Streamlit textarea
+    st.text_area("Markdown Table", markdown_table)
+
+
+    st.header("Assignment Total Points Possible")
+    total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
+
+
+
 
 
 if __name__ == '__main__':
