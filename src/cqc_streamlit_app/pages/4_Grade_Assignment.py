@@ -1,4 +1,6 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+import os
+
 import pandas as pd
 import streamlit as st
 
