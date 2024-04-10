@@ -84,7 +84,7 @@ def main():
         rubric_grading_markdown_table = dict_to_markdown_table(grading_rubric_dict, headers)
 
         # Write the Markdown table to a Streamlit textarea
-        #st.text_area("Markdown Table", rubric_grading_markdown_table)
+        st.text_area("Markdown Table", rubric_grading_markdown_table)
 
         st.header("Assignment Total Points Possible")
         total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
