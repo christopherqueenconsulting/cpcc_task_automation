@@ -1,4 +1,5 @@
-# CPCC Task Automation
+# [CPCC Task Automation](https://cpcc-task-automation.streamlit.app/)
+
 A multi-page Streamlit app showcasing generative AI uses cases with LangChain, OpenAI, and others to help automate task for instructors at CPCC.
 
 [LangChain](https://langchain.readthedocs.io/en/latest) is an open-source framework created to aid the development of applications leveraging the power of large language models (LLMs). It can be used for chatbots, text summarisation, data generation, code understanding, question answering, evaluation, and more 🔥
