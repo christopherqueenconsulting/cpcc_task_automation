@@ -60,7 +60,10 @@ def main():
 
     st.markdown("""Here we will give feedback and grade a students assignment submission""")
 
-    with st.beta_container():
+    # Create tabs
+    tabs = st.tabs(["Flowgorithm Assignments", "Online GDB", "Other"])
+
+    with tabs[0]:
         st.title('Flowgorithm Assignments')
         # Add elements to page to work with
 
