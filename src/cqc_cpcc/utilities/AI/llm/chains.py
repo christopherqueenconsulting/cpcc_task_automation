@@ -246,8 +246,10 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
         ).strip(),
     )
 
-    # prompt_value = prompt.format_prompt(exam_instructions=EXAM_INSTRUCTIONS, submission=STUDENT_SUBMISSION)
-    # pprint(prompt_value)
+    prompt_value = prompt.format_prompt(submission=student_submission, submission_file_name=student_file_name)
+    pprint(prompt_value)
+
+
 
     #llm.bind(
     #    response_format={"type": "json_object"}
