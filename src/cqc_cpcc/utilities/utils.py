@@ -334,3 +334,15 @@ def read_files(file_paths: Union[str, List[str]]) -> str:
         return concatenated_content
     else:
         return "Invalid input. Please provide a string or a list of strings (file paths)."
+
+
+def dict_to_markdown_table(data, headers):
+    # Create the header row
+    markdown_table = "| " + " | ".join(headers) + " |\n"
+    markdown_table += "| " + " | ".join(["-" * len(header) for header in headers]) + " |\n"
+
+    # Iterate over the dictionary items and add rows to the table
+    for row_data in data:
+        markdown_table += "| " + " | ".join([str(row_data.get(header, '')) for header in headers]) + " |\n"
+
+    return markdown_table

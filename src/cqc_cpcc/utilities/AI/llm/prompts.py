@@ -168,15 +168,9 @@ Output Instructions:
 GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE_v1 = """
 You are a community college professor grading and giving feedback on a students assignment submission.
 Using the given Assignment Instructions, analyze the Student Submission to identify all rubric criteria that applies.
-Analyze the output from the Solution as Expected Output.
-Analyze the output from the Student Submission as Submission Output.
-Note differences between the Expected Output and the Submission Output as they relate to the Assignment and refer to it as Output Alignment.
-Provide a detailed and informative description for each feedback identified, written constructively and referring directly to the issue.
-Provide the text from the relevant line(s) of code from the the Student Submission for each feedback when it is appropriate as code_error_lines.
-Each element in code_error_lines list should represent only one line of code.
-The feedback identified should be exhaustive but if an feedback type does not apply to the Student Submission you do not need to include it. 
-Use the Feedback Types as your guide for feedback.
-Note: Names for variables, functions, and classes are allowed to be different from the Example Solution and the Student Submission
+Provide a detailed and informative description for each rubric criteria identified, written constructively and referring directly to the issue.
+Be fair but consistent. Only deduct points when necessary and consider the assignment as a whole compared to any errors in the assignment.
+Use the Rubric Criteria as your guide for the final grade.
 
 IMPORTANT: Your response must follow the Output Instructions exactly.
 
@@ -185,18 +179,15 @@ Assignment Instructions:
 {assignment}
 
 --- 
-Example Solution:
-{solution}
-
---- 
 Student Submission:
 {submission}
 
 --- 
 Rubric Criteria:
-{feedback_types}
+{rubric_criteria_markdown_table}
 
 ---
 Output Instructions:
-{format_instructions}
+Display a list of Rubric Criteria that applied to the Student Submission followed by the amount of points that should be deducted from the total grade based on that criteria row.
+Display the final grade that should be the total possible points={total_possible_points} minus the sum of all points 
 """

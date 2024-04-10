@@ -1,6 +1,10 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+import os
+import tempfile
+from typing import Tuple
 
 import streamlit as st
+from langchain_openai import ChatOpenAI
 
 
 @st.cache_data
@@ -44,3 +48,39 @@ def get_cpcc_css():
         </style>
         """
     return css
+
+
+@st.cache_resource(hash_funcs={ChatOpenAI: id})
+def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
+    """
+    This function returns a cached instance of ChatOpenAI based on the temperature and model.
+    If the temperature or model changes, a new instance will be created and cached.
+    """
+    return ChatOpenAI(temperature=temperature, model=model)
+
+
+def define_chatGPTModel() -> Tuple[str, float]:
+    # Dropdown for selecting ChatGPT models
+    default_option = "gpt-3.5-turbo-16k-0613"
+    model_options = [default_option, "gpt-4-1106-preview"]
+    selected_model = st.selectbox("Select ChatGPT Model", model_options, index=model_options.index(default_option))
+
+    # Slider for selecting a value (ranged from 0.2 to 0.8, with step size 0.01)
+    default_value = 0.2
+    temperature = st.slider("Chat GPT Temperature", min_value=0.2, max_value=0.8, step=0.1, value=default_value,
+                            format="%.2f")
+
+    return selected_model, temperature
+
+
+def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True):
+    uploaded_file = st.file_uploader(uploader_text, type=accepted_file_types)
+    if uploaded_file is not None:
+        file_extension = os.path.splitext(uploaded_file.name)[1]
+        if success_message:
+            st.success("File uploaded successfully.")
+        # Create a temporary file to store the uploaded instructions
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
+        temp_file.write(uploaded_file.getvalue())
+        # temp_file.close()
+        return temp_file.name

@@ -2,8 +2,10 @@
 import pandas as pd
 import streamlit as st
 
+from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
+from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css
+from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element
 
 # Initialize session state variables
 init_session_state()
@@ -43,18 +45,6 @@ def define_grading_rubric():
     return edited_df
 
 
-def dict_to_markdown_table(data, headers):
-    # Create the header row
-    markdown_table = "| " + " | ".join(headers) + " |\n"
-    markdown_table += "| " + " | ".join(["-" * len(header) for header in headers]) + " |\n"
-
-    # Iterate over the dictionary items and add rows to the table
-    for row_data in data:
-        markdown_table += "| " + " | ".join([str(row_data.get(header, '')) for header in headers]) + " |\n"
-
-    return markdown_table
-
-
 def main():
     # TODO: Initialize other session state variables - the ones you need in .env
 
@@ -77,7 +67,7 @@ def main():
     grading_rubric = define_grading_rubric()
     if not grading_rubric.empty:
         grading_rubric_dict = {}
-        #for _, row in grading_rubric.iterrows():
+        # for _, row in grading_rubric.iterrows():
         #    criteria = row[GR_CRITERIA]
         #    ppl = row[GR_PPL]
         #    grading_rubric_dict[criteria] = ppl
@@ -85,25 +75,39 @@ def main():
         # Convert DataFrame to dictionary
         grading_rubric_dict = grading_rubric.to_dict('records')
 
-        # Convert dictionary to string
-        grading_rubric_dict_str = ""
-        for key, value in grading_rubric_dict.items():
-            grading_rubric_dict_str += f"{key}: {value}\n"
-
-        # Write the Markdown table to a Streamlit textarea
-        st.text_area("Grading Rubric", grading_rubric_dict_str)
-
         # Extract column names from DataFrame
         headers = grading_rubric.columns.tolist()
 
         # Convert the dictionary to a Markdown table
-        markdown_table = dict_to_markdown_table(grading_rubric_dict, headers)
+        rubric_grading_markdown_table = dict_to_markdown_table(grading_rubric_dict, headers)
 
         # Write the Markdown table to a Streamlit textarea
-        st.text_area("Markdown Table", markdown_table)
+        #st.text_area("Markdown Table", rubric_grading_markdown_table)
 
-    st.header("Assignment Total Points Possible")
-    total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
+        st.header("Assignment Total Points Possible")
+        total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
+
+        selected_model, temperature = define_chatGPTModel()
+
+        if st.session_state.openai_api_key:
+            custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
+
+            student_submission_file_path = add_upload_file_element("Upload Students Submission",
+                                                               ["txt", "docx", "pdf", "fprg"])
+
+            if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
+                student_submission = read_file(student_submission_file_path)
+                feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions,
+                                                                         rubric_grading_markdown_table,
+                                                                         student_submission,
+                                                                         total_points_possible)
+
+                st.text_area("Feedback and Grade", feedback_with_grade)
+
+        else:
+            st.error("Please provide your Open API Key on the settings page.")
+
+
 
 
 if __name__ == '__main__':

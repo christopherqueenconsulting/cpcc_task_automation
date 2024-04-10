@@ -1,33 +1,18 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import os
-import tempfile
 from datetime import datetime
 from typing import Union, List
 
 import pandas as pd
 import streamlit as st
-from langchain_openai import ChatOpenAI
 
 from cqc_cpcc.project_feedback import FeedbackType, get_feedback_guide
 from cqc_cpcc.utilities.utils import read_file, read_files
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css
-
+from cqc_streamlit_app.utils import get_cpcc_css, get_custom_llm, define_chatGPTModel, add_upload_file_element
 
 # Initialize session state variables
 init_session_state()
-
-def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True):
-    uploaded_file = st.file_uploader(uploader_text, type=accepted_file_types)
-    if uploaded_file is not None:
-        file_extension = os.path.splitext(uploaded_file.name)[1]
-        if success_message:
-            st.success("File uploaded successfully.")
-        # Create a temporary file to store the uploaded instructions
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
-        temp_file.write(uploaded_file.getvalue())
-        # temp_file.close()
-        return temp_file.name
 
 
 def define_feedback_types():
@@ -60,18 +45,10 @@ def define_feedback_types():
     return edited_df
 
 
-@st.cache(allow_output_mutation=True, hash_funcs={ChatOpenAI: id})
-def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
-    """
-    This function returns a cached instance of ChatOpenAI based on the temperature and model.
-    If the temperature or model changes, a new instance will be created and cached.
-    """
-    return ChatOpenAI(temperature=temperature, model=model)
-
-
 def give_feedback_on_assignments(course_name: str, assignment_name: str, assignment_instructions_file: str,
                                  assignment_solution_file: Union[str, List[str]],
-                                 downloaded_exams_directory: str, wrap_code_in_markdown=True):
+                                 downloaded_exams_directory: str, model: str, temperature: str, FEEDBACK_SIGNATURE: str,
+                                 wrap_code_in_markdown=True):
     # Get the assignment instructions
     assignment_instructions = read_file(assignment_instructions_file)
 
@@ -183,49 +160,41 @@ def main():
         MyFeedbackType = FeedbackType('FeedbackType', feedback_types_dict)
         feedback_types_list = list(MyFeedbackType)
 
-    # Dropdown for selecting ChatGPT models
-    default_option = "gpt-3.5-turbo-16k-0613"
-    model_options = [default_option, "gpt-4-1106-preview"]
-    selected_model = st.selectbox("Select ChatGPT Model", model_options, index=model_options.index(default_option))
 
-    # Slider for selecting a value (ranged from 0.2 to 0.8, with step size 0.01)
-    default_value = 0.2
-    temperature = st.slider("Chat GPT Temperature", min_value=0.2, max_value=0.8, step=0.1, value=default_value,
-                            format="%.2f")
+selected_model, temperature = define_chatGPTModel()
 
-    st.header("Student Submission File(s)")
-    student_submission_file_path = add_upload_file_element("Upload Student Submission",
-                                                           ["txt", "docx", "pdf", "java", "zip"])
-    # Checkbox for enabling Markdown wrapping
-    wrap_code_in_markdown = st.checkbox("Student Submission Is Code", True)
+st.header("Student Submission File(s)")
+student_submission_file_path = add_upload_file_element("Upload Student Submission",
+                                                       ["txt", "docx", "pdf", "java", "zip"])
+# Checkbox for enabling Markdown wrapping
+wrap_code_in_markdown = st.checkbox("Student Submission Is Code", True)
 
-    if instructions_file_path and solution_file_path and student_submission_file_path:
-        st.write("All required file have been uploaded successfully.")
-        # Perform other operations with the uploaded files
-        # After processing, the temporary files will be automatically deleted
+if instructions_file_path and solution_file_path and student_submission_file_path:
+    st.write("All required file have been uploaded successfully.")
+    # Perform other operations with the uploaded files
+    # After processing, the temporary files will be automatically deleted
 
-        student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-        base_student_filename = os.path.basename(student_submission_file_path)
+    student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
+    base_student_filename = os.path.basename(student_submission_file_path)
 
-        # TODO: Create the feedback item - Make this chat-able so that the instructor can make changes
+    # TODO: Create the feedback item - Make this chat-able so that the instructor can make changes
 
-        print("Generating Feedback for: %s" % base_student_filename)
+    print("Generating Feedback for: %s" % base_student_filename)
 
-        custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
-        # TODO: Get the completion chain with static variables passed
-        completion_chain = False
+    custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
+    # TODO: Get the completion chain with static variables passed
+    completion_chain = False
 
-        # TODO: Call the completion chain with the student submission or teacher text for response
+    # TODO: Call the completion chain with the student submission or teacher text for response
 
-        st.session_state.feedback_download_file_path = give_feedback_on_assignments()
+    st.session_state.feedback_download_file_path = give_feedback_on_assignments()
 
-        # Display the button
-        st.button("Click to download", on_click=on_download_click)
+    # Display the button
+    st.button("Click to download", on_click=on_download_click)
 
-        # Display text output TODO: Look into other format options. Markdown is allowed
-        # st.text(pre_feedback + feedback + post_feedback)
-        # TODO: Make this copy/paste-able or write to a file they can download/open to use
-
+    # Display text output TODO: Look into other format options. Markdown is allowed
+    # st.text(pre_feedback + feedback + post_feedback)
+    # TODO: Make this copy/paste-able or write to a file they can download/open to use
 
 if __name__ == '__main__':
     main()

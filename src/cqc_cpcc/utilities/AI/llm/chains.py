@@ -156,8 +156,8 @@ def get_feedback_output_from_completion_chain(completion_chain: RunnableSerializ
         print(e)
         final_output = retry_output(output, parser, prompt, solution=solution)
 
-    #print("\n\nFinal Output:")
-    #pprint(output)
+    # print("\n\nFinal Output:")
+    # pprint(output)
 
     return final_output
 
@@ -223,3 +223,41 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
     pprint(output)
 
     return final_output
+
+
+def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
+                                       rubric_criteria_markdown_table: str, student_submission: str,
+                                       total_possible_points: str) -> str:
+    """
+    Generates feedback and grade based on the assignment instructions, grading rubric, student submission and total possible points using the LLM model.
+    """
+
+    prompt = PromptTemplate(
+        # template_format="jinja2",
+        input_variables=["submission"],
+        partial_variables={
+            "assignment": assignment,
+            "rubric_criteria_markdown_table": rubric_criteria_markdown_table,
+            "total_possible_points": total_possible_points
+
+        },
+        template=(
+            GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE_v1
+        ).strip(),
+    )
+
+    # prompt_value = prompt.format_prompt(exam_instructions=EXAM_INSTRUCTIONS, submission=STUDENT_SUBMISSION)
+    # pprint(prompt_value)
+
+    llm.bind(
+        response_format={"type": "json_object"}
+    )
+
+    completion_chain = prompt | llm
+
+    output = completion_chain.invoke({
+        "submission": student_submission,
+        # "response_format": {"type": "json_object"}
+    })
+
+    return output
