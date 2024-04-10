@@ -77,18 +77,27 @@ def main():
     grading_rubric = define_grading_rubric()
     if not grading_rubric.empty:
         grading_rubric_dict = {}
-        for _, row in grading_rubric.iterrows():
-            criteria = row[GR_CRITERIA]
-            ppl = row[GR_PPL]
-            grading_rubric_dict[criteria] = ppl
+        #for _, row in grading_rubric.iterrows():
+        #    criteria = row[GR_CRITERIA]
+        #    ppl = row[GR_PPL]
+        #    grading_rubric_dict[criteria] = ppl
+
+        # Convert DataFrame to dictionary
+        grading_rubric_dict = grading_rubric.to_dict('records')
+
+        # Convert dictionary to string
+        grading_rubric_dict_str = ""
+        for key, value in grading_rubric_dict.items():
+            grading_rubric_dict_str += f"{key}: {value}\n"
 
         # Write the Markdown table to a Streamlit textarea
-        st.text_area("Grading Rubric", grading_rubric)
+        st.text_area("Grading Rubric", grading_rubric_dict_str)
 
-        # Example header list
-        headers = [GR_CRITERIA, GR_PPL]
+        # Extract column names from DataFrame
+        headers = grading_rubric.columns.tolist()
+
         # Convert the dictionary to a Markdown table
-        markdown_table = dict_to_markdown_table(grading_rubric, headers)
+        markdown_table = dict_to_markdown_table(grading_rubric_dict, headers)
 
         # Write the Markdown table to a Streamlit textarea
         st.text_area("Markdown Table", markdown_table)
