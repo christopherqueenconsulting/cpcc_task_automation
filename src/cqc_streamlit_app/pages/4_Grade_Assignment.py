@@ -101,6 +101,7 @@ def main():
                 feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions,
                                                                          rubric_grading_markdown_table,
                                                                          student_submission,
+                                                                         student_file_name,
                                                                          total_points_possible)
 
                 st.header("Feedback and Grade")

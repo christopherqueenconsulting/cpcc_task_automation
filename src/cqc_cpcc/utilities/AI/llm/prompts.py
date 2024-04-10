@@ -178,6 +178,10 @@ IMPORTANT: Your response must follow the Output Instructions exactly.
 Assignment Instructions:
 {assignment}
 
+---
+Student Submission File Name:
+{submission_file_name}
+
 --- 
 Student Submission:
 {submission}

@@ -226,7 +226,7 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
 
 
 def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
-                                       rubric_criteria_markdown_table: str, student_submission: str,
+                                       rubric_criteria_markdown_table: str, student_submission: str, student_file_name: str,
                                        total_possible_points: str) -> str:
     """
     Generates feedback and grade based on the assignment instructions, grading rubric, student submission and total possible points using the LLM model.
@@ -234,7 +234,7 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
 
     prompt = PromptTemplate(
         # template_format="jinja2",
-        input_variables=["submission"],
+        input_variables=["submission","submission_file_name"],
         partial_variables={
             "assignment": assignment,
             "rubric_criteria_markdown_table": rubric_criteria_markdown_table,
@@ -257,6 +257,7 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
 
     output = completion_chain.invoke({
         "submission": student_submission,
+        "submission_file_name": student_file_name,
         # "response_format": {"type": "json_object"}
     })
 
