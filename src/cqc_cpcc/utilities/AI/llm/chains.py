@@ -257,6 +257,8 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
 
     completion_chain = prompt | llm
 
+    student_submission = wrap_code_in_markdown_backticks(student_submission)
+
     output = completion_chain.invoke({
         "submission": student_submission,
         "submission_file_name": student_file_name,

@@ -60,58 +60,60 @@ def main():
 
     st.markdown("""Here we will give feedback and grade a students assignment submission""")
 
-    # Add elements to page to work with
+    with st.beta_container():
+        st.title('Flowgorithm Assignments')
+        # Add elements to page to work with
 
-    st.header("Assignment Instructions")
-    assignment_instructions = st.text_area("Enter assignment Instructions")
+        st.header("Assignment Instructions")
+        assignment_instructions = st.text_area("Enter assignment Instructions")
 
-    # Add grading rubric
-    grading_rubric = define_grading_rubric()
-    if not grading_rubric.empty:
-        grading_rubric_dict = {}
-        # for _, row in grading_rubric.iterrows():
-        #    criteria = row[GR_CRITERIA]
-        #    ppl = row[GR_PPL]
-        #    grading_rubric_dict[criteria] = ppl
+        # Add grading rubric
+        grading_rubric = define_grading_rubric()
+        if not grading_rubric.empty:
+            grading_rubric_dict = {}
+            # for _, row in grading_rubric.iterrows():
+            #    criteria = row[GR_CRITERIA]
+            #    ppl = row[GR_PPL]
+            #    grading_rubric_dict[criteria] = ppl
 
-        # Convert DataFrame to dictionary
-        grading_rubric_dict = grading_rubric.to_dict('records')
+            # Convert DataFrame to dictionary
+            grading_rubric_dict = grading_rubric.to_dict('records')
 
-        # Extract column names from DataFrame
-        headers = grading_rubric.columns.tolist()
+            # Extract column names from DataFrame
+            headers = grading_rubric.columns.tolist()
 
-        # Convert the dictionary to a Markdown table
-        rubric_grading_markdown_table = dict_to_markdown_table(grading_rubric_dict, headers)
+            # Convert the dictionary to a Markdown table
+            rubric_grading_markdown_table = dict_to_markdown_table(grading_rubric_dict, headers)
 
-        # Write the Markdown table to a Streamlit textarea
-        st.text_area("Markdown Table", rubric_grading_markdown_table)
+            # Write the Markdown table to a Streamlit textarea
+            st.text_area("Markdown Table", rubric_grading_markdown_table)
 
-        st.header("Assignment Total Points Possible")
-        total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
+            st.header("Assignment Total Points Possible")
+            total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
 
-        selected_model, temperature = define_chatGPTModel(default_temp_value=.5)
+            selected_model, temperature = define_chatGPTModel(default_temp_value=.5)
 
-        if st.session_state.openai_api_key:
-            custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
+            if st.session_state.openai_api_key:
+                custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
 
-            student_submission_file_path = add_upload_file_element("Upload Students Submission",
-                                                               ["txt", "docx", "pdf", "fprg"])
+                student_submission_file_path = add_upload_file_element("Upload Students Submission",
+                                                                   ["txt", "docx", "pdf", "fprg"])
 
 
-            if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
-                student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-                student_submission = read_file(student_submission_file_path)
-                feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions,
-                                                                         rubric_grading_markdown_table,
-                                                                         student_submission,
-                                                                         student_file_name,
-                                                                         total_points_possible)
+                if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
+                    student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
+                    student_submission = read_file(student_submission_file_path)
+                    feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions,
+                                                                             rubric_grading_markdown_table,
+                                                                             student_submission,
+                                                                             student_file_name,
+                                                                             total_points_possible)
 
-                st.header("Feedback and Grade")
-                st.markdown(f"```\n{feedback_with_grade}\n")
+                    st.header("Feedback and Grade")
+                    st.markdown(f"```\n{feedback_with_grade}\n")
 
-        else:
-            st.error("Please provide your Open API Key on the settings page.")
+            else:
+                st.error("Please provide your Open API Key on the settings page.")
 
 
 
