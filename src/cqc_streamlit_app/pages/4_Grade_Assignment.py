@@ -13,7 +13,7 @@ GR_PPL = "Possible Points Loss"
 
 
 def define_grading_rubric():
-    st.header("Define Feedback Types")
+    st.header("Grading Rubric")
 
     # Preload the table with default rows and values
     default_data = [
@@ -75,22 +75,23 @@ def main():
 
     # Add grading rubric
     grading_rubric = define_grading_rubric()
-    grading_rubric_dict = {}
-    for _, row in grading_rubric.iterrows():
-        criteria = row[GR_CRITERIA]
-        ppl = row[GR_PPL]
-        grading_rubric_dict[criteria] = ppl
+    if not grading_rubric.empty:
+        grading_rubric_dict = {}
+        for _, row in grading_rubric.iterrows():
+            criteria = row[GR_CRITERIA]
+            ppl = row[GR_PPL]
+            grading_rubric_dict[criteria] = ppl
 
-    # Write the Markdown table to a Streamlit textarea
-    st.text_area("Grading Rubric", grading_rubric)
+        # Write the Markdown table to a Streamlit textarea
+        st.text_area("Grading Rubric", grading_rubric)
 
-    # Example header list
-    headers = [GR_CRITERIA, GR_PPL]
-    # Convert the dictionary to a Markdown table
-    markdown_table = dict_to_markdown_table(grading_rubric, headers)
+        # Example header list
+        headers = [GR_CRITERIA, GR_PPL]
+        # Convert the dictionary to a Markdown table
+        markdown_table = dict_to_markdown_table(grading_rubric, headers)
 
-    # Write the Markdown table to a Streamlit textarea
-    st.text_area("Markdown Table", markdown_table)
+        # Write the Markdown table to a Streamlit textarea
+        st.text_area("Markdown Table", markdown_table)
 
     st.header("Assignment Total Points Possible")
     total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
