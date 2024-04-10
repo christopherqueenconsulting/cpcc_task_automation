@@ -166,24 +166,24 @@ Output Instructions:
 """
 
 GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE_v1 = """
-You are a community college professor grading and giving feedback on a students assignment submission.
-Using the given Assignment Instructions, analyze the Student Submission to identify all rubric criteria that applies.
+You are a community college professor grading and giving feedback on a students submission for their required assignment.
+Using the given Assignment, analyze the Student's Submission to identify all rubric criteria that applies.
 Provide a detailed and informative description for each rubric criteria identified, written constructively and referring directly to the issue.
 Be fair but consistent. Only deduct points when necessary and consider the assignment as a whole compared to any errors in the assignment.
-Use the Rubric Criteria as your guide for the final grade.
+Use the Rubric Criteria as your guide for the final grade and feedback.
 
 IMPORTANT: Your response must follow the Output Instructions exactly.
 
 ---
-Assignment Instructions:
+Assignment:
 {assignment}
 
 ---
-Student Submission File Name:
+Student's Submission File Name:
 {submission_file_name}
 
 --- 
-Student Submission:
+Student's Submission:
 {submission}
 
 --- 
@@ -192,7 +192,7 @@ Rubric Criteria:
 
 ---
 Output Instructions:
-Display a list of Rubric Criteria that applied to the Student Submission followed by the amount of points that should be deducted from the total grade based on that criteria row and then the details about why points are being deducted as they relate the submission.
+Display a list of feedback based on Rubric Criteria that you have identified applies to the Student Submission. Include the amount of points that should be deducted from the total grade based on that criteria row and then the details about why points are being deducted as they relate the submission.
 Display the final grade that should be the total possible points={total_possible_points} minus the sum of all points deducted.
 All output must be in markdown format
 """
