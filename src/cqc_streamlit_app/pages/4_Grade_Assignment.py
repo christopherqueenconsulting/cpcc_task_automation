@@ -102,7 +102,8 @@ def main():
                                                                          student_submission,
                                                                          total_points_possible)
 
-                st.text_area("Feedback and Grade", feedback_with_grade)
+                st.header("Feedback and Grade")
+                st.markdown( feedback_with_grade)
 
         else:
             st.error("Please provide your Open API Key on the settings page.")
