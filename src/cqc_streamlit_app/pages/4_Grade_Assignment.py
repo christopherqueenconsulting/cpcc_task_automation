@@ -96,9 +96,10 @@ def main():
 
             student_submission_file_path = add_upload_file_element("Upload Students Submission",
                                                                ["txt", "docx", "pdf", "fprg"])
-            student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
+
 
             if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
+                student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
                 student_submission = read_file(student_submission_file_path)
                 feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions,
                                                                          rubric_grading_markdown_table,
