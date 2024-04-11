@@ -2,6 +2,7 @@ from typing import List, Optional, Annotated
 
 from docx import Document
 from docx.shared import Pt
+from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic.v1 import Field, BaseModel, StrictStr
 
@@ -13,9 +14,7 @@ from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge
 model = 'gpt-3.5-turbo-16k-0613'
 # model = "gpt-4"
 temperature = .2  # .2 <- More deterministic | More Creative -> .8
-llm = ChatOpenAI(temperature=temperature, model=model)
-
-
+default_llm = ChatOpenAI(temperature=temperature, model=model)
 
 
 class MajorErrorType(ExtendedEnum):
@@ -25,13 +24,13 @@ class MajorErrorType(ExtendedEnum):
     INSUFFICIENT_DOCUMENTATION = "No documentation or insufficient amount of comments in the code"
 
     """Errors in coding sequence and selection."""
-    #SEQUENCE_AND_SELECTION_ERROR = "Errors in the sequence and selection structures in the code"
+    # SEQUENCE_AND_SELECTION_ERROR = "Errors in the sequence and selection structures in the code"
     SEQUENCE_AND_SELECTION_ERROR_V2 = "Errors in the coding sequence, selection and looping including incorrect use of comparison operators"
 
-    #METHOD_ERRORS = """Method errors in the code such as:
-    #- passing the incorrect number of arguments
-    #- incorrect data types for arguments and parameter variables
-    #- failing to include the data type of parameter variables in the method header"""
+    # METHOD_ERRORS = """Method errors in the code such as:
+    # - passing the incorrect number of arguments
+    # - incorrect data types for arguments and parameter variables
+    # - failing to include the data type of parameter variables in the method header"""
 
     """Errors that adversely impact the output (calculation errors, omissions, etc.)."""
     OUTPUT_IMPACT_ERROR = "Errors that adversely impact the expected output, such as calculation errors or omissions"
@@ -220,10 +219,11 @@ class CodeGrader:
         grade_feedback += "\n\n" + self.final_score_text
         return grade_feedback
 
-    def grade_submission(self, exam_instructions: str, exam_solution: str, student_submission: str):
+    def grade_submission(self, exam_instructions: str, exam_solution: str, student_submission: str,
+                         llm: BaseChatModel = default_llm):
         print("Identifying Errors")
         error_definitions_from_llm = generate_error_definitions(
-            llm=llm,
+            llm=default_llm,
             pydantic_object=ErrorDefinitions,
             major_error_type_list=MajorErrorType.list(),
             minor_error_type_list=MinorErrorType.list(),
@@ -330,17 +330,16 @@ class CodeGrader:
         document.save(file_path)
         print("Feedback Saved to : %s" % file_path)
 
-    def save_feedback_template(self,  file_path: str):
+    def save_feedback_template(self, file_path: str):
         error_details = "This is an example detail for feedback."
         # Create all example errors
-        self.major_errors = [MajorError(error_type=error_type, error_details=error_details) for error_type in MajorErrorType.list()]
+        self.major_errors = [MajorError(error_type=error_type, error_details=error_details) for error_type in
+                             MajorErrorType.list()]
         self.minor_errors = [MinorError(error_type=error_type, error_details=error_details) for error_type in
                              MinorErrorType.list()]
 
         # print to file
         self.save_feedback_to_docx(file_path)
-
-
 
 
 def start_grading():

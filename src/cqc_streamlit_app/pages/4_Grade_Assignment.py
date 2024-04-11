@@ -106,14 +106,16 @@ def main():
                 if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
                     student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
                     student_submission = read_file(student_submission_file_path)
-                    feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions,
-                                                                             rubric_grading_markdown_table,
-                                                                             student_submission,
-                                                                             student_file_name,
-                                                                             total_points_possible)
 
-                    st.header("Feedback and Grade")
-                    st.markdown(f"```\n{feedback_with_grade}\n")
+                    with st.spinner('Generating Feedback and Grade...'):
+                        feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions,
+                                                                                 rubric_grading_markdown_table,
+                                                                                 student_submission,
+                                                                                 student_file_name,
+                                                                                 total_points_possible)
+                        st.success('Done!')
+                        st.header("Feedback and Grade")
+                        st.markdown(f"```\n{feedback_with_grade}\n")
 
             else:
                 st.error("Please provide your Open API Key on the settings page.")

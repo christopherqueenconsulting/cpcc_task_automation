@@ -1,5 +1,7 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import os
+import tempfile
+import zipfile
 from datetime import datetime
 from typing import Union, List
 
@@ -45,6 +47,46 @@ def define_feedback_types():
     return edited_df
 
 
+def process_file(file_path, allowed_file_extensions: list = [".java", ".docx"]):
+    if file_path.endswith('.zip'):
+        # Open the zip file
+        with zipfile.ZipFile(file_path, 'r') as zip_file:
+            # Initialize a dictionary to hold concatenated contents by folder
+            folder_contents = {}
+
+            # Iterate over each file in the zip file
+            for zip_info in zip_file.infolist():
+                # Check if the file has an allowed extension
+                if any(zip_info.filename.lower().endswith(ext) for ext in allowed_file_extensions):
+                    # Get the folder path of the file
+                    folder_path = os.path.dirname(zip_info.filename)
+
+                    # Read the contents of the file
+                    with zip_file.open(zip_info) as file:
+                        # file_contents = file.read()
+                        zip_file_name, zip_file_extension = os.path.splitext(zip_info.filename)
+                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=zip_file_extension)
+                        temp_file.write(file.read())
+                        file_contents = read_file(
+                            temp_file.name)  # Reading this way incase it may be .docx or some other type we want to pre-process differently
+
+                    # Concatenate the contents to the folder's contents
+                    folder_contents.setdefault(folder_path, []).append(file_contents)
+
+            # Concatenate the contents of files in each folder
+            for folder_path, files in folder_contents.items():
+                concatenated_contents = b''.join(files)
+                print(f"Contents of folder '{folder_path}': {concatenated_contents.decode()}")
+                st.markdown(f"Contents of folder '{folder_path}': {concatenated_contents.decode()}")
+
+    else:
+        # It's a single file
+        if any(file_path.lower().endswith(ext) for ext in allowed_file_extensions):
+            with open(file_path, 'r') as file:
+                # print("Contents of single file:", file.read())
+                st.markdown(f"Contents of single file:: {file.read()}")
+
+
 def give_feedback_on_assignments(course_name: str, assignment_name: str, assignment_instructions_file: str,
                                  assignment_solution_file: Union[str, List[str]],
                                  downloaded_exams_directory: str, model: str, temperature: str, FEEDBACK_SIGNATURE: str,
@@ -59,51 +101,66 @@ def give_feedback_on_assignments(course_name: str, assignment_name: str, assignm
 
     # print("Assignment Solutions:\n%s" % assignment_solution)
 
-    allowed_file_extensions = (".java"
-                               , ".docx"
-                               )
+    allowed_file_extensions = [".java"
+        , ".docx"
+                               ]
 
-    # TODO: Determine if it is either one file, a directory or a zip file with folders and files
+    # TODO: Determine if it is either one file, or a zip file with folders and files
 
     # Get all the files in the current working directory
     files = [file for file in os.listdir(downloaded_exams_directory) if file.endswith(allowed_file_extensions)]
 
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
-    # Loop through every file in directory and grade the assignment saved to a file
-    for file in files:
-        student_file_name, student_file_extension = os.path.splitext(file)
-        student_file_path = downloaded_exams_directory + "/" + file
-        student_submission = read_file(student_file_path)
+    with st.status("Downloading data...", expanded=True) as status:
 
-        print("Generating Feedback for: %s" % student_file_name)
-        feedback_guide = get_feedback_guide(assignment=assignment_instructions,
-                                            solution=assignment_solution,
-                                            student_submission=student_submission,
-                                            course_name=course_name,
-                                            wrap_code_in_markdown=wrap_code_in_markdown)
+        # Loop through every file in directory and grade the assignment saved to a file
+        for file in files:
+            student_file_name, student_file_extension = os.path.splitext(file)
+            student_file_path = downloaded_exams_directory + "/" + file
+            student_submission = read_file(student_file_path)
 
-        feedback = "\n".join([str(x) for x in feedback_guide.all_feedback])
+            # print("Generating Feedback for: %s" % student_file_name)
+            status.update(label="Generating Feedback for: " + student_file_name)
 
-        pre_feedback = "Good job submitting your assignment. "
-        if len(feedback) > 0:
-            pre_feedback = pre_feedback + "Here is my feedback:\n\n"
-        else:
-            pre_feedback = pre_feedback + "I find no issues with your submission. Keep up the good work!"
-        post_feedback = "\n\n - " + FEEDBACK_SIGNATURE
-        print("\n\n" + pre_feedback + feedback + post_feedback)
+            # TODO: Get feedback chain then process it with only variables that change
 
-        file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.txt".replace(
-            " ", "_")
+            feedback_guide = get_feedback_guide(assignment=assignment_instructions,
+                                                solution=assignment_solution,
+                                                student_submission=student_submission,
+                                                course_name=course_name,
+                                                wrap_code_in_markdown=wrap_code_in_markdown)
 
-        feedback_guide.save_feedback_to_docx(file_path.replace(".txt", ".docx"), pre_feedback, post_feedback)
+            feedback = "\n".join([str(x) for x in feedback_guide.all_feedback])
 
-        f = open(file_path, "w")
-        f.write(pre_feedback + feedback + post_feedback)
-        f.close()
-        print("Feedback saved to : %s" % file_path)
+            pre_feedback = "Good job submitting your assignment. "
+            if len(feedback) > 0:
+                pre_feedback = pre_feedback + "Here is my feedback:\n\n"
+            else:
+                pre_feedback = pre_feedback + "I find no issues with your submission. Keep up the good work!"
+            post_feedback = "\n\n - " + FEEDBACK_SIGNATURE
+            final_feedback = pre_feedback + feedback + post_feedback
+            # print("\n\n" + final_feedback)
 
-    # TODO: If more than one file then zip and return path to zipped file for download
+            # Add a new expander element with the feedback
+            with st.expander(student_file_name, expanded=False):
+                st.markdown(f"```\n{final_feedback}\n")
+
+            status.update(label="Feedback complete!", state="complete", expanded=False)
+
+            """
+            file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.txt".replace(
+                " ", "_")
+    
+            feedback_guide.save_feedback_to_docx(file_path.replace(".txt", ".docx"), pre_feedback, post_feedback)
+    
+            f = open(file_path, "w")
+            f.write(pre_feedback + feedback + post_feedback)
+            f.close()
+            print("Feedback saved to : %s" % file_path)
+            """
+
+        # TODO: If more than one file then zip and return path to zipped file for download
 
 
 def on_download_click():
