@@ -61,9 +61,9 @@ def main():
     st.markdown("""Here we will give feedback and grade a students assignment submission""")
 
     # Create tabs
-    tabs = st.tabs(["Flowgorithm Assignments", "Online GDB", "Other"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Flowgorithm Assignments", "Online GDB", "Exams", "Other"])
 
-    with tabs[0]:
+    with tab1:
         st.title('Flowgorithm Assignments')
         # Add elements to page to work with
 
@@ -117,8 +117,13 @@ def main():
 
             else:
                 st.error("Please provide your Open API Key on the settings page.")
+    with tab2:
+        st.title( "Online GDB")
 
-
+    with tab3:
+        st.title('Grade Exams')
+    with tab4:
+        st.title("Other")
 
 
 if __name__ == '__main__':

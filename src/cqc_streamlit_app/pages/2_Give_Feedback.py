@@ -160,41 +160,41 @@ def main():
         MyFeedbackType = FeedbackType('FeedbackType', feedback_types_dict)
         feedback_types_list = list(MyFeedbackType)
 
+    selected_model, temperature = define_chatGPTModel()
 
-selected_model, temperature = define_chatGPTModel()
+    st.header("Student Submission File(s)")
+    student_submission_file_path = add_upload_file_element("Upload Student Submission",
+                                                           ["txt", "docx", "pdf", "java", "zip"])
+    # Checkbox for enabling Markdown wrapping
+    wrap_code_in_markdown = st.checkbox("Student Submission Is Code", True)
 
-st.header("Student Submission File(s)")
-student_submission_file_path = add_upload_file_element("Upload Student Submission",
-                                                       ["txt", "docx", "pdf", "java", "zip"])
-# Checkbox for enabling Markdown wrapping
-wrap_code_in_markdown = st.checkbox("Student Submission Is Code", True)
+    if instructions_file_path and solution_file_path and student_submission_file_path:
+        st.write("All required file have been uploaded successfully.")
+        # Perform other operations with the uploaded files
+        # After processing, the temporary files will be automatically deleted
 
-if instructions_file_path and solution_file_path and student_submission_file_path:
-    st.write("All required file have been uploaded successfully.")
-    # Perform other operations with the uploaded files
-    # After processing, the temporary files will be automatically deleted
+        student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
+        base_student_filename = os.path.basename(student_submission_file_path)
 
-    student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-    base_student_filename = os.path.basename(student_submission_file_path)
+        # TODO: Create the feedback item - Make this chat-able so that the instructor can make changes
 
-    # TODO: Create the feedback item - Make this chat-able so that the instructor can make changes
+        print("Generating Feedback for: %s" % base_student_filename)
 
-    print("Generating Feedback for: %s" % base_student_filename)
+        custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
+        # TODO: Get the completion chain with static variables passed
+        completion_chain = False
 
-    custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
-    # TODO: Get the completion chain with static variables passed
-    completion_chain = False
+        # TODO: Call the completion chain with the student submission or teacher text for response
 
-    # TODO: Call the completion chain with the student submission or teacher text for response
+        st.session_state.feedback_download_file_path = give_feedback_on_assignments()
 
-    st.session_state.feedback_download_file_path = give_feedback_on_assignments()
+        # Display the button
+        st.button("Click to download", on_click=on_download_click)
 
-    # Display the button
-    st.button("Click to download", on_click=on_download_click)
+        # Display text output TODO: Look into other format options. Markdown is allowed
+        # st.text(pre_feedback + feedback + post_feedback)
+        # TODO: Make this copy/paste-able or write to a file they can download/open to use
 
-    # Display text output TODO: Look into other format options. Markdown is allowed
-    # st.text(pre_feedback + feedback + post_feedback)
-    # TODO: Make this copy/paste-able or write to a file they can download/open to use
 
 if __name__ == '__main__':
     main()
