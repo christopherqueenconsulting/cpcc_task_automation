@@ -34,6 +34,7 @@ chromedriver-autoinstaller = "^0.6.4"
 pyvirtualdisplay = "^3.0"
 streamlit = "^1.32.2"
 textract = "^1.6.5"
+mammoth = "^1.7.1"
 
 
 [tool.poetry.group.lint]

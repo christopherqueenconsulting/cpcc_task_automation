@@ -451,12 +451,19 @@ def grade_all_from_directory(assignment_name: str, exam_instructions_file: str, 
 
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
+    model = 'gpt-3.5-turbo-16k-0613'
+    # model = "gpt-4"
+    temperature = .5  # .2 <- More deterministic | More Creative -> .8
+    my_llm = ChatOpenAI(temperature=temperature, model=model)
+
     code_grader = CodeGrader(
         max_points=max_points,
         exam_instructions=exam_instructions,
         exam_solution=exam_solution,
         deduction_per_major_error=deduction_per_major_error,
-        deduction_per_minor_error=deduction_per_minor_error)
+        deduction_per_minor_error=deduction_per_minor_error,
+        grader_llm=my_llm
+    )
 
     # Loop through every file in directory and grade the assignment saved to a file
     for file in files:

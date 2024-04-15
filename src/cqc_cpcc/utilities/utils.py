@@ -4,6 +4,7 @@ from enum import Enum, StrEnum
 from typing import Optional, Annotated, List, Union
 
 import docx
+import mammoth
 # import markdownify
 import pandas as pd
 import textract
@@ -13,7 +14,6 @@ from ordered_set import OrderedSet
 from pydantic.v1 import BaseModel, Field, StrictStr, PositiveInt
 
 from cqc_cpcc.utilities.date import get_datetime
-
 
 
 # from simplify_docx import simplify
@@ -295,10 +295,14 @@ def convert_tables_to_json_in_tmp__file(doc: Document) -> str:
     return temp_file.name
 
 
-def read_file(file_path: str) -> str:
+def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format. If file ends in .docx will convert it to json and return"""
     file_name, file_extension = os.path.splitext(file_path)
-    if file_extension == ".docx":
+
+    if convert_to_markdown:
+        with open(file_path, "rb") as docx_file:
+            contents = mammoth.convert_to_markdown(docx_file)
+    elif file_extension == ".docx":
         # read in a document
         my_doc = docx.Document(file_path)
 
