@@ -108,7 +108,6 @@ def get_flowgorithm_content():
 
 
 def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
-    st.header("Define Error Definitions")
 
     # Preload the table with default rows and values
     # TODO: Get these from the default enum already defined
@@ -121,6 +120,8 @@ def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
     minor_error_types_data_df = pd.DataFrame(minor_error_types_data)
 
     # Allow users to edit the table
+    st.header("Major Error Definitions")
+
     major_error_types_data_edited_df = st.data_editor(major_error_types_data_df, key='major_error_types',
                                                       hide_index=True,
                                                       num_rows="dynamic",
@@ -134,6 +135,7 @@ def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
                                                       }
                                                       )  # 👈 An editable dataframe
 
+    st.header("Minor Error Definitions")
     minor_error_types_data_edited_df = st.data_editor(minor_error_types_data_df, key='minor_error_types',
                                                       hide_index=True,
                                                       num_rows="dynamic",
