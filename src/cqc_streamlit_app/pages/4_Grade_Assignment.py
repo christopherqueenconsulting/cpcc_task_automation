@@ -190,8 +190,10 @@ def get_grade_exam_content():
             description = row[DESCRIPTION]
             major_error_types_dict[name] = description
             # feedback_types_list.append(FeedbackType(name, description))
-        MyMajorErrorType = MajorErrorType('MajorErrorType', major_error_types_dict)
-        major_error_types_list = list(MyMajorErrorType)
+
+        #TODO: Fix below commented out
+        #MyMajorErrorType = MajorErrorType('MajorErrorType', major_error_types_dict)
+        #major_error_types_list = list(MyMajorErrorType)
 
     if not minor_error_types.empty:
         st.success("Minor errors defined.")
@@ -201,8 +203,9 @@ def get_grade_exam_content():
             description = row[DESCRIPTION]
             minor_error_types_dict[name] = description
             # feedback_types_list.append(FeedbackType(name, description))
-        MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
-        minor_error_types_list = list(MyMinorErrorType)
+        # TODO: Fix below commented out
+        #MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
+        #minor_error_types_list = list(MyMinorErrorType)
 
     selected_model, temperature = define_chatGPTModel()
 
