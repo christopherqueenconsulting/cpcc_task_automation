@@ -105,7 +105,10 @@ def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = 
         file_extension = file_extension[1:]  # Remove the leading dot
 
     st.info("File Path: " + file_path + "| Base Name: "+ basename+" |File Extension :" + file_extension)
-    return file_extension.lower()
+    if file_extension:
+        file_extension = file_extension.lower()
+
+    return file_extension
 
 
 def get_language_from_file_path(file_path):
