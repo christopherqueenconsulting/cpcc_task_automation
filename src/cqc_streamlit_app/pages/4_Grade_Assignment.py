@@ -8,7 +8,8 @@ from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
 from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, read_files
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element
+from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
+    define_code_language_selection
 
 # Initialize session state variables
 init_session_state()
@@ -223,6 +224,12 @@ def get_grade_exam_content():
                                                            ["txt", "docx", "pdf", "java", "zip"])
     # Checkbox for enabling Markdown wrapping
     wrap_code_in_markdown = st.checkbox("Student Submission Is Code", True)
+    if wrap_code_in_markdown:
+        # TODO: Add dropdown for code language to use in code block
+        code_langauge = define_code_language_selection('grade_exam_assignment')
+    else:
+        code_langauge = 'java'
+
 
     if instructions_file_path and solution_file_path and student_submission_file_path:
         st.write("All required file have been uploaded successfully.")
@@ -260,6 +267,14 @@ def get_grade_exam_content():
         # TODO: Determine if file is single or zip
 
         # TODO: If zip go through each file as student submission and grade
+
+        #Display Student Code in code block for each file
+        solution_contents = read_file(solution_file_path)
+        if wrap_code_in_markdown and code_langauge:
+            st.code(solution_contents, language=code_langauge, line_numbers=True)
+        else:
+            st.text_area(solution_contents)
+
         #code_grader.grade_submission(student_submission)
         #print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
