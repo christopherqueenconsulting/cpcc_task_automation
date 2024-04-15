@@ -185,19 +185,19 @@ def get_grade_exam_content():
     if solution_file_paths:
         assignment_solution_contents = ""
 
-    for solution_file_path in solution_file_paths:
-        solution_language = get_language_from_file_path(solution_file_path)
+        for solution_file_path in solution_file_paths:
+            solution_language = get_language_from_file_path(solution_file_path)
 
-        # Get the assignment  solution
-        read_content = read_file(solution_file_path)
-        assignment_solution_contents +=read_content
-        if solution_language:
-            # TODO: Detect file type then add prefix for markdown based on the extension
-            # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
-            # Display the Java code in a code block
-            st.code(read_content, language=solution_language, line_numbers=True)
-        else:
-            st.text_area(read_content)
+            # Get the assignment  solution
+            read_content = read_file(solution_file_path)
+            assignment_solution_contents +=read_content
+            if solution_language:
+                # TODO: Detect file type then add prefix for markdown based on the extension
+                # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
+                # Display the Java code in a code block
+                st.code(read_content, language=solution_language, line_numbers=True)
+            else:
+                st.text_area(read_content)
 
     major_error_types, minor_error_types = define_error_definitions()
     major_error_types_dict = {}
