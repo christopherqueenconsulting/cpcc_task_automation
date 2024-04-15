@@ -177,7 +177,9 @@ def get_grade_exam_content():
         # TODO: Detect file type then add prefix for markdown based on the extension
         solution_contents = read_file(solution_file_path)
         if convert_solution_to_java:
-            st.markdown(f"'''java\n{solution_contents}\n\n'''")
+            #st.markdown(f"'''java\n{solution_contents}\n'''")
+            # Display the Java code in a code block
+            st.code_block(solution_contents, language='java')
         else:
             st.text_area(solution_contents)
 
