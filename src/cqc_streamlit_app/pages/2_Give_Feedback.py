@@ -146,7 +146,7 @@ def give_feedback_on_assignments(course_name: str, assignment_name: str, assignm
             with st.expander(student_file_name, expanded=False):
                 st.markdown(f"```\n{final_feedback}\n")
 
-            status.update(label="Feedback complete!", state="complete", expanded=False)
+        status.update(label="Feedback complete!", state="complete", expanded=False)
 
             """
             file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.txt".replace(

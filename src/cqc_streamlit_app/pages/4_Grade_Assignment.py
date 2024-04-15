@@ -4,12 +4,12 @@ import os
 import pandas as pd
 import streamlit as st
 
-from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
+from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
-from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, read_files
+from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
-    define_code_language_selection
+    define_code_language_selection, get_language_from_file_path
 
 # Initialize session state variables
 init_session_state()
@@ -109,7 +109,6 @@ def get_flowgorithm_content():
 
 
 def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
-
     # Preload the table with default rows and values
     # TODO: Get these from the default enum already defined
 
@@ -165,26 +164,36 @@ def get_grade_exam_content():
     deduction_per_major_error = st.text_input("Point deducted per Major Error", 20)
     deduction_per_minor_error = st.text_input("Point deducted per Minor Error", 5)
 
-
-
     st.header("Instructions File")
     instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
+
+    assignment_instructions_content = None
+
     if instructions_file_path:
-        st.markdown(read_file(instructions_file_path, convert_instructions_to_markdown))
+        # Get the assignment instructions
+        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+        st.markdown(assignment_instructions_content)
 
     st.header("Solution File")
-    solution_file_path = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"])
-    convert_solution_to_java = st.checkbox("Solution File is Java", True)
-    if solution_file_path:
-        # TODO: Detect file type then add prefix for markdown based on the extension
-        solution_contents = read_file(solution_file_path)
-        if convert_solution_to_java:
-            #st.markdown(f"'''java\n{solution_contents}\n'''")
+    solution_file_paths = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"],
+                                                  accept_multiple_files=True)
+    # convert_solution_to_java = st.checkbox("Solution File is Java", True)
+
+    assignment_solution_contents = None
+
+    with solution_file_paths as solution_file_path:
+        solution_language = get_language_from_file_path(solution_file_path)
+
+        # Get the assignment  solution
+        assignment_solution_contents += read_file(solution_file_path)
+        if solution_language:
+            # TODO: Detect file type then add prefix for markdown based on the extension
+            # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
             # Display the Java code in a code block
-            st.code(solution_contents, language='java', line_numbers=True)
+            st.code(assignment_solution_contents, language=solution_language, line_numbers=True)
         else:
-            st.text_area(solution_contents)
+            st.text_area(assignment_solution_contents)
 
     major_error_types, minor_error_types = define_error_definitions()
     major_error_types_dict = {}
@@ -201,9 +210,9 @@ def get_grade_exam_content():
             major_error_types_dict[name] = description
             # feedback_types_list.append(FeedbackType(name, description))
 
-        #TODO: Fix below commented out
-        #MyMajorErrorType = MajorErrorType('MajorErrorType', major_error_types_dict)
-        #major_error_types_list = list(MyMajorErrorType)
+        # TODO: Fix below commented out
+        # MyMajorErrorType = MajorErrorType('MajorErrorType', major_error_types_dict)
+        # major_error_types_list = list(MyMajorErrorType)
 
     if not minor_error_types.empty:
         st.success("Minor errors defined.")
@@ -214,8 +223,8 @@ def get_grade_exam_content():
             minor_error_types_dict[name] = description
             # feedback_types_list.append(FeedbackType(name, description))
         # TODO: Fix below commented out
-        #MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
-        #minor_error_types_list = list(MyMinorErrorType)
+        # MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
+        # minor_error_types_list = list(MyMinorErrorType)
 
     selected_model, temperature = define_chatGPTModel("grade_exam_assigment")
 
@@ -230,8 +239,7 @@ def get_grade_exam_content():
     else:
         code_langauge = 'java'
 
-
-    if instructions_file_path and solution_file_path and student_submission_file_path:
+    if assignment_instructions_content and assignment_solution_contents and student_submission_file_path:
         st.write("All required file have been uploaded successfully.")
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
@@ -245,54 +253,50 @@ def get_grade_exam_content():
 
         custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
 
-        # Get the assignment instructions
-        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+        with st.status("Grading Assignments...", expanded=True) as status:
 
-        # Get the assignment  solution
-        assignment_solution = read_files(solution_file_path)
+            """
+            code_grader = CodeGrader(
+                max_points=max_points,
+                exam_instructions=assignment_instructions_content,
+                exam_solution=assignment_solution_contents,
+                deduction_per_major_error=deduction_per_major_error,
+                deduction_per_minor_error=deduction_per_minor_error,
+                grader_llm=custom_llm
+            )
+            """
 
-        """
-        code_grader = CodeGrader(
-            max_points=max_points,
-            exam_instructions=assignment_instructions_content,
-            exam_solution=assignment_solution,
-            deduction_per_major_error=deduction_per_major_error,
-            deduction_per_minor_error=deduction_per_minor_error,
-            grader_llm=custom_llm
-        )
-        """
+            # TODO: Start status wheel or display with updates from the coder
 
-        # TODO: Start status wheel or display with updates from the coder
+            # TODO: Determine if file is single or zip
 
-        # TODO: Determine if file is single or zip
+            # TODO: If zip go through each file as student submission and grade
 
-        # TODO: If zip go through each file as student submission and grade
+            # Display Student Code in code block for each file
+            student_submission_file_path_contents = read_file(student_submission_file_path)
+            if wrap_code_in_markdown and code_langauge:
+                st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
+            else:
+                st.text_area(student_submission_file_path_contents)
 
-        #Display Student Code in code block for each file
-        student_submission_file_path_contents = read_file(student_submission_file_path)
-        if wrap_code_in_markdown and code_langauge:
-            st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
-        else:
-            st.text_area(student_submission_file_path_contents)
+            # code_grader.grade_submission(student_submission)
+            # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
-        #code_grader.grade_submission(student_submission)
-        #print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
+            # Get Temp file and path to use to store feecback
+            # file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.docx".replace(
+            #    " ", "_")
 
-        # Get Temp file and path to use to store feecback
-        #file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.docx".replace(
-        #    " ", "_")
+            # Style the feedback and save to .docx file
+            # code_grader.save_feedback_to_docx(file_path)
 
-        # Style the feedback and save to .docx file
-        #code_grader.save_feedback_to_docx(file_path)
+            # TODO: Create tab with grade and feedback from the grader class
 
-        # TODO: Create tab with grade and feedback from the grader class
+            # TODO: Add button to download individual feedback on each tab
 
-        # TODO: Add button to download individual feedback on each tab
+            # TODO: Add button to download all feedback from all tabs at once
 
-        # TODO: Add button to download all feedback from all tabs at once
-
-        # TODO: Stop status and show as complete
-
+            # TODO: Stop status and show as complete
+            status.update(label="Grading Complete!", state="complete", expanded=False)
 
 
 def main():
