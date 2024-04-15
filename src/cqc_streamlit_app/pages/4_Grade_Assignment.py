@@ -187,6 +187,7 @@ def get_grade_exam_content():
 
         for solution_file_path in solution_file_paths:
             solution_language = get_language_from_file_path(solution_file_path)
+            st.success("Solution Langugage:"+solution_language)
 
             # Get the assignment  solution
             read_content = read_file(solution_file_path)
