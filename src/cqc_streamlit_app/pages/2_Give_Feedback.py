@@ -217,7 +217,7 @@ def main():
         MyFeedbackType = FeedbackType('FeedbackType', feedback_types_dict)
         feedback_types_list = list(MyFeedbackType)
 
-    selected_model, temperature = define_chatGPTModel()
+    selected_model, temperature = define_chatGPTModel("give_feedback")
 
     st.header("Student Submission File(s)")
     student_submission_file_path = add_upload_file_element("Upload Student Submission",

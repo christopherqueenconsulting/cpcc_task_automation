@@ -207,7 +207,7 @@ def get_grade_exam_content():
         #MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
         #minor_error_types_list = list(MyMinorErrorType)
 
-    selected_model, temperature = define_chatGPTModel()
+    selected_model, temperature = define_chatGPTModel("grade_exam_assigment")
 
     st.header("Student Submission File(s)")
     student_submission_file_path = add_upload_file_element("Upload Student Submission",
