@@ -451,6 +451,13 @@ def grade_all_from_directory(assignment_name: str, exam_instructions_file: str, 
 
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
+    code_grader = CodeGrader(
+        max_points=max_points,
+        exam_instructions=exam_instructions,
+        exam_solution=exam_solution,
+        deduction_per_major_error=deduction_per_major_error,
+        deduction_per_minor_error=deduction_per_minor_error)
+
     # Loop through every file in directory and grade the assignment saved to a file
     for file in files:
         student_submission = read_file(downloaded_exams_directory + "/" + file)
@@ -460,9 +467,7 @@ def grade_all_from_directory(assignment_name: str, exam_instructions_file: str, 
 
         print("Grading: %s" % student_file_name)
 
-        code_grader = CodeGrader(max_points=max_points, deduction_per_major_error=deduction_per_major_error,
-                                 deduction_per_minor_error=deduction_per_minor_error)
-        code_grader.grade_submission(exam_instructions, exam_solution, student_submission)
+        code_grader.grade_submission(student_submission)
         print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
         file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.docx".replace(
@@ -478,12 +483,12 @@ if __name__ == '__main__':
     # exit(0)
 
     grade_all_from_directory(
-        assignment_name="CSC151-N804-Programming-Exam-1",
-        exam_instructions_file="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N804/Exam 1/Exam1_Instructions.docx",
-        exam_solution_file="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N804/Exam 1/Exam1_Solution.java",
-        #downloaded_exams_directory="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N804/Exam 1/submissions_all",
+        assignment_name="CSC151-N852-Programming-Exam-1",
+        exam_instructions_file="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N852/exam1/Exam_Instructions.docx",
+        exam_solution_file="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N852/exam1/Exam1_Solution.java",
+        # downloaded_exams_directory="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N804/Exam 1/submissions_all",
         # Test directory (below)
-        downloaded_exams_directory="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N804/Exam 1/submissions_test",
+        downloaded_exams_directory="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N852/exam1/submissions_test",
         max_points=200,
         deduction_per_major_error=40,
         deduction_per_minor_error=10

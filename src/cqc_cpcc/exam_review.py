@@ -6,7 +6,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic.v1 import Field, BaseModel, StrictStr
 
-from cqc_cpcc.utilities.AI.llm.chains import generate_error_definitions
+from cqc_cpcc.utilities.AI.llm.chains import get_exam_error_definition_from_completion_chain, \
+    get_exam_error_definitions_completion_chain
 from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
 
 # model = 'gpt-3.5-turbo-1106'
@@ -169,11 +170,24 @@ class CodeGrader:
     minor_errors: List[MinorError] = None
     deduction_per_major_error: int
     deduction_per_minor_error: int
+    error_definitions_completion_chain = None
+    error_definitions_parser = None
+    error_definitions_prompt = None
 
-    def __init__(self, max_points: int, deduction_per_major_error: int = 20, deduction_per_minor_error: int = 5):
+    def __init__(self, max_points: int, exam_instructions: str, exam_solution: str, deduction_per_major_error: int = 20,
+                 deduction_per_minor_error: int = 5, wrap_code_in_markdown: bool = True):
         self.max_points = max_points
         self.deduction_per_major_error = deduction_per_major_error
         self.deduction_per_minor_error = deduction_per_minor_error
+        self.error_definitions_completion_chain, self.error_definitions_parser, self.error_definitions_prompt = get_exam_error_definitions_completion_chain(
+            llm=default_llm,
+            pydantic_object=ErrorDefinitions,
+            major_error_type_list=MajorErrorType.list(),
+            minor_error_type_list=MinorErrorType.list(),
+            exam_instructions=exam_instructions,
+            exam_solution=exam_solution,
+            wrap_code_in_markdown=wrap_code_in_markdown
+        )
 
     @property
     def major_deduction_total(self):
@@ -219,17 +233,15 @@ class CodeGrader:
         grade_feedback += "\n\n" + self.final_score_text
         return grade_feedback
 
-    def grade_submission(self, exam_instructions: str, exam_solution: str, student_submission: str,
-                         llm: BaseChatModel = default_llm):
+    def grade_submission(self, student_submission: str):
         print("Identifying Errors")
-        error_definitions_from_llm = generate_error_definitions(
-            llm=default_llm,
-            pydantic_object=ErrorDefinitions,
-            major_error_type_list=MajorErrorType.list(),
-            minor_error_type_list=MinorErrorType.list(),
-            exam_instructions=exam_instructions,
-            exam_solution=exam_solution,
-            student_submission=student_submission)
+        error_definitions_from_llm = get_exam_error_definition_from_completion_chain(
+            student_submission=student_submission,
+            completion_chain=self.error_definitions_completion_chain,
+            parser=self.error_definitions_parser,
+            prompt=self.error_definitions_prompt
+
+        )
         print("Errors Identified")
 
         # print("\n\nFinal Output:")

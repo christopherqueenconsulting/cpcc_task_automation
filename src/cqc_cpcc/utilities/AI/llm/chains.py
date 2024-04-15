@@ -1,11 +1,11 @@
 from pprint import pprint
 from typing import Type, TypeVar, Tuple
 
-from langchain.output_parsers import PydanticOutputParser, RetryWithErrorOutputParser
+from langchain.output_parsers import RetryWithErrorOutputParser
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain_core.output_parsers import BaseOutputParser
+from langchain_core.output_parsers import BaseOutputParser, PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableSerializable
 from langchain_core.runnables.utils import Output
@@ -22,7 +22,7 @@ retry_llm = ChatOpenAI(temperature=0, model=retry_model)
 T = TypeVar("T", bound=BaseModel)
 
 
-def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplate, **prompt_args) -> str:
+def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplate, **prompt_args) -> T:
     final_output = output
     retry_parser = RetryWithErrorOutputParser.from_llm(parser=parser, llm=retry_llm,
                                                        max_retries=RETRY_PARSER_MAX_RETRY
@@ -47,8 +47,10 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
 
     prompt = PromptTemplate(
         # template_format="jinja2",
-        input_variables=["exam_instructions", "exam_solution", "submission"],
+        input_variables=["submission"],
         partial_variables={
+            "exam_instructions": exam_instructions,
+            "exam_solution": exam_solution,
             "format_instructions": format_instructions,
             "major_error_types": "\n\t".join(major_error_type_list),
             "minor_error_types": "\n\t".join(minor_error_type_list)
@@ -74,8 +76,6 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
         student_submission = wrap_code_in_markdown_backticks(student_submission)
 
     output = completion_chain.invoke({
-        "exam_instructions": exam_instructions,
-        "exam_solution": exam_solution,
         "submission": student_submission,
         "response_format": {"type": "json_object"}
     })
@@ -91,6 +91,75 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
         final_output = retry_output(output, parser, prompt,
                                     exam_instructions=exam_instructions,
                                     exam_solution=exam_solution,
+                                    submission=student_submission)
+
+    return final_output
+
+
+def get_exam_error_definitions_completion_chain(llm: BaseChatModel, pydantic_object: Type[T],
+                                                major_error_type_list: list,
+                                                minor_error_type_list: list, exam_instructions: str, exam_solution: str,
+                                                wrap_code_in_markdown: bool = True) -> tuple[
+    RunnableSerializable[dict, BaseMessage], PydanticOutputParser, PromptTemplate]:
+    """ Returns a properly formatted error definitions object from LLM"""
+
+    parser = PydanticOutputParser(pydantic_object=pydantic_object)
+    format_instructions = parser.get_format_instructions()
+
+    if wrap_code_in_markdown:
+        exam_solution = wrap_code_in_markdown_backticks(exam_solution)
+
+    prompt = PromptTemplate(
+        # template_format="jinja2",
+        input_variables=["submission"],
+        partial_variables={
+            "exam_instructions": exam_instructions,
+            "exam_solution": exam_solution,
+            "format_instructions": format_instructions,
+            "major_error_types": "\n\t".join(major_error_type_list),
+            "minor_error_types": "\n\t".join(minor_error_type_list)
+        },
+        template=(
+            EXAM_REVIEW_PROMPT_BASE
+        ).strip(),
+    )
+
+    # prompt_value = prompt.format_prompt(exam_instructions=exam_instructions, exam_solution=exam_solution, submission=student_submission)
+    # print("\n\nPrompt Value:")
+    # pprint(prompt_value)
+    # print("\n\n")
+
+    llm.bind(
+        response_format={"type": "json_object"}
+    )
+
+    completion_chain = prompt | llm
+
+    return completion_chain, parser, prompt
+
+
+def get_exam_error_definition_from_completion_chain(student_submission: str,
+                                                    completion_chain: RunnableSerializable[dict, BaseMessage],
+                                                    parser: PydanticOutputParser,
+                                                    prompt: PromptTemplate, wrap_code_in_markdown=True
+                                                    ) -> T:
+    if wrap_code_in_markdown:
+        student_submission = wrap_code_in_markdown_backticks(student_submission)
+
+    output = completion_chain.invoke({
+        "submission": student_submission,
+        "response_format": {"type": "json_object"}
+    })
+
+    # print("\n\nOutput:")
+    # pprint(output.content)
+
+    try:
+        final_output = parser.parse(output.content)
+    except Exception as e:
+        print("\n\nException during parse:")
+        print(e)
+        final_output = retry_output(output, parser, prompt,
                                     submission=student_submission)
 
     return final_output
@@ -226,7 +295,8 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
 
 
 def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
-                                       rubric_criteria_markdown_table: str, student_submission: str, student_file_name: str,
+                                       rubric_criteria_markdown_table: str, student_submission: str,
+                                       student_file_name: str,
                                        total_possible_points: str) -> str:
     """
     Generates feedback and grade based on the assignment instructions, grading rubric, student submission and total possible points using the LLM model.
@@ -234,7 +304,7 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
 
     prompt = PromptTemplate(
         # template_format="jinja2",
-        input_variables=["submission","submission_file_name"],
+        input_variables=["submission", "submission_file_name"],
         partial_variables={
             "assignment": assignment,
             "rubric_criteria_markdown_table": rubric_criteria_markdown_table,
@@ -249,11 +319,9 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
     prompt_value = prompt.format_prompt(submission=student_submission, submission_file_name=student_file_name)
     pprint(prompt_value)
 
-
-
-    #llm.bind(
+    # llm.bind(
     #    response_format={"type": "json_object"}
-    #)
+    # )
 
     completion_chain = prompt | llm
 
