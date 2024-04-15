@@ -108,7 +108,7 @@ def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = 
     if file_extension:
         file_extension = file_extension.lower()
 
-    st.info("Base Name: " + basename + " | File Name: " + file_name + " | File Extension : " + file_extension)
+    #st.info("Base Name: " + basename + " | File Name: " + file_name + " | File Extension : " + file_extension)
 
     return file_extension
 
@@ -119,10 +119,10 @@ def get_language_from_file_path(file_path):
 
     # Check if the file extension exists in the mapping
     if file_extension in CODE_LANGUAGES:
-        st.info(file_extension + " | Found in CODE_LANGUAGES")
+        #st.info(file_extension + " | Found in CODE_LANGUAGES")
         return file_extension
     else:
-        st.info(file_extension + " | NOT Found in CODE_LANGUAGES")
+        #st.info(file_extension + " | NOT Found in CODE_LANGUAGES")
         return None  # Return None if the file extension is not found
 
 
