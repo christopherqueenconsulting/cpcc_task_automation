@@ -11,7 +11,8 @@ import streamlit as st
 from cqc_cpcc.project_feedback import FeedbackType, get_feedback_guide
 from cqc_cpcc.utilities.utils import read_file, read_files
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, get_custom_llm, define_chatGPTModel, add_upload_file_element
+from cqc_streamlit_app.utils import get_cpcc_css, get_custom_llm, define_chatGPTModel, add_upload_file_element, \
+    get_file_extension_from_filepath
 
 # Initialize session state variables
 init_session_state()
@@ -171,7 +172,7 @@ def on_download_click():
         ".pdf": "application/pdf",
         ".zip": "application/zip"
     }
-    feedback_file_name, feedback_file_extension = os.path.splitext(st.session_state.feedback_download_file_path)
+    feedback_file_name, feedback_file_extension = get_file_extension_from_filepath(st.session_state.feedback_download_file_path)
     mime_type = file_mime_types.get(feedback_file_extension, "application/octet-stream")
 
     # Trigger the download of the file
