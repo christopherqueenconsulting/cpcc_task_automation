@@ -104,7 +104,7 @@ def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = 
     if remove_leading_dot:
         file_extension = file_extension[1:]  # Remove the leading dot
 
-    st.info("File Path: " + file_path + "| File Extension :" + file_extension)
+    st.info("File Path: " + file_path + "| Base Name: "+ basename+" |File Extension :" + file_extension)
     return file_extension.lower()
 
 
