@@ -101,8 +101,10 @@ def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
 def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = False) -> str:
     basename = os.path.basename(file_path)
     file_name, file_extension = os.path.splitext(basename)
-    if remove_leading_dot:
+    if remove_leading_dot and file_extension.startswith("."):
+
         st.info("Removing leading dot from file extension: " + file_extension)
+        file_extension = file_extension[1:]
         #file_extension = file_extension.replace(".", '')  # Remove the leading dot
 
    # if file_extension:
