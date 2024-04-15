@@ -102,13 +102,11 @@ def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = 
     basename = os.path.basename(file_path)
     file_name, file_extension = os.path.splitext(basename)
     if remove_leading_dot and file_extension.startswith("."):
-
-        st.info("Removing leading dot from file extension: " + file_extension)
+        # st.info("Removing leading dot from file extension: " + file_extension)
         file_extension = file_extension[1:]
-        #file_extension = file_extension.replace(".", '')  # Remove the leading dot
 
-   # if file_extension:
-        #file_extension = file_extension.lower()
+    if file_extension:
+        file_extension = file_extension.lower()
 
     st.info("Base Name: " + basename + " | File Name: " + file_name + " | File Extension : " + file_extension)
 
@@ -121,8 +119,10 @@ def get_language_from_file_path(file_path):
 
     # Check if the file extension exists in the mapping
     if file_extension in CODE_LANGUAGES:
+        st.info(file_extension + " | Found in CODE_LANGUAGES")
         return file_extension
     else:
+        st.info(file_extension + " | NOT Found in CODE_LANGUAGES")
         return None  # Return None if the file extension is not found
 
 
