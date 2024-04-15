@@ -182,6 +182,9 @@ def get_grade_exam_content():
 
     assignment_solution_contents = None
 
+    if solution_file_paths:
+        assignment_solution_contents = ""
+
     for solution_file_path in solution_file_paths:
         solution_language = get_language_from_file_path(solution_file_path)
 
