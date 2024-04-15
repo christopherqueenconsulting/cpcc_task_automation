@@ -20,7 +20,6 @@ bs4 = "^0.0.2"
 pandas = "^2.2.0"
 datetime = "^5.4"
 dateparser = "^1.2.0"
-#markdownify = "^0.11.6"
 langchain = "^0.1"
 langchain-community = "^0.0"
 openai = "^1.10.0"
@@ -33,8 +32,9 @@ python-docx = "^1.1.0"
 chromedriver-autoinstaller = "^0.6.4"
 pyvirtualdisplay = "^3.0"
 streamlit = "^1.32.2"
-textract = "^1.6.5"
+textract = "*"
 mammoth = "^1.7.1"
+markdownify = "^0.12.1"
 
 
 [tool.poetry.group.lint]

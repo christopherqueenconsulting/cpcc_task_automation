@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from docx import Document
 from ordered_set import OrderedSet
 from pydantic.v1 import BaseModel, Field, StrictStr, PositiveInt
+from markdownify import markdownify as md
 
 from cqc_cpcc.utilities.date import get_datetime
 
@@ -301,8 +302,10 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
 
     if convert_to_markdown:
         with open(file_path, "rb") as docx_file:
-            results = mammoth.convert_to_markdown(docx_file)
-            contents = results.value
+            #results = mammoth.convert_to_markdown(docx_file)
+            results = mammoth.convert_to_html(docx_file)
+            contents = md(results.value)
+            #contents = results.value
     elif file_extension == ".docx":
         # read in a document
         my_doc = docx.Document(file_path)
@@ -326,15 +329,15 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     return contents
 
 
-def read_files(file_paths: Union[str, List[str]]) -> str:
+def read_files(file_paths: Union[str, List[str]], convert_to_markdown: bool = False) -> str:
     if isinstance(file_paths, str):
         # If a single string is provided, treat it as a file path
-        return read_file(file_paths)
+        return read_file(file_paths, convert_to_markdown)
     elif isinstance(file_paths, list):
         # If a list is provided, loop through each file path and read the file
         concatenated_content = ""
         for path in file_paths:
-            file_content = read_file(path)
+            file_content = read_file(path, convert_to_markdown)
             concatenated_content += file_content + "\n\n"  # You can customize the separator if needed
         return concatenated_content
     else:
