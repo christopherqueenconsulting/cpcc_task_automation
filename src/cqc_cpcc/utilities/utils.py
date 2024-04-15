@@ -301,7 +301,7 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
 
     if convert_to_markdown:
         with open(file_path, "rb") as docx_file:
-            contents = mammoth.convert_to_markdown(docx_file)
+            contents = str(mammoth.convert_to_markdown(docx_file))
     elif file_extension == ".docx":
         # read in a document
         my_doc = docx.Document(file_path)
