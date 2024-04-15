@@ -179,7 +179,7 @@ def get_grade_exam_content():
         if convert_solution_to_java:
             #st.markdown(f"'''java\n{solution_contents}\n'''")
             # Display the Java code in a code block
-            st.code_block(solution_contents, language='java')
+            st.code(solution_contents, language='java', line_numbers=True)
         else:
             st.text_area(solution_contents)
 
