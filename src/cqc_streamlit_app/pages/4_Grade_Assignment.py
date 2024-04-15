@@ -269,11 +269,11 @@ def get_grade_exam_content():
         # TODO: If zip go through each file as student submission and grade
 
         #Display Student Code in code block for each file
-        solution_contents = read_file(solution_file_path)
+        student_submission_file_path_contents = read_file(student_submission_file_path)
         if wrap_code_in_markdown and code_langauge:
-            st.code(solution_contents, language=code_langauge, line_numbers=True)
+            st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
         else:
-            st.text_area(solution_contents)
+            st.text_area(student_submission_file_path_contents)
 
         #code_grader.grade_submission(student_submission)
         #print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
