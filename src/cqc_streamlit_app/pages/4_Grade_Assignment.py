@@ -172,9 +172,14 @@ def get_grade_exam_content():
 
     st.header("Solution File")
     solution_file_path = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"])
+    convert_solution_to_java = st.checkbox("Solution File is Java", True)
     if solution_file_path:
         # TODO: Detect file type then add prefix for markdown based on the extension
-        st.markdown("'''java\n" + read_file(solution_file_path, False) + "'''")
+        solution_contents = read_file(solution_file_path)
+        if convert_solution_to_java:
+            st.markdown(f"'''java\n{solution_contents}\n\n'''")
+        else:
+            st.text_area(solution_contents)
 
     major_error_types, minor_error_types = define_error_definitions()
     major_error_types_dict = {}
