@@ -104,7 +104,7 @@ def get_language_from_file_path(file_path):
     # Extract file extension from the file path
     file_extension = get_file_extension_from_filepath(file_path)
 
-    st.success("File Path: "+file_path+"| File Extension :" + file_extension)
+    st.info("File Path: "+file_path+"| File Extension :" + file_extension)
 
     # Check if the file extension exists in the mapping
     if file_extension in CODE_LANGUAGES:
