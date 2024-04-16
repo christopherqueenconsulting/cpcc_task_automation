@@ -1,6 +1,7 @@
 from pprint import pprint
 from typing import Type, TypeVar, Tuple
 
+import streamlit as st
 from langchain.output_parsers import RetryWithErrorOutputParser
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
@@ -17,7 +18,7 @@ from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
 retry_model = 'gpt-4-1106-preview'
-#retry_llm = ChatOpenAI(temperature=0, model=retry_model)
+# retry_llm = ChatOpenAI(temperature=0, model=retry_model)
 retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
 
 T = TypeVar("T", bound=BaseModel)
@@ -98,6 +99,7 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
     return final_output
 
 
+@st.cache_data
 def get_exam_error_definitions_completion_chain(llm: BaseChatModel, pydantic_object: Type[T],
                                                 major_error_type_list: list,
                                                 minor_error_type_list: list, exam_instructions: str, exam_solution: str,
@@ -126,7 +128,7 @@ def get_exam_error_definitions_completion_chain(llm: BaseChatModel, pydantic_obj
         ).strip(),
     )
 
-    # prompt_value = prompt.format_prompt(exam_instructions=exam_instructions, exam_solution=exam_solution, submission=student_submission)
+    # prompt_value = prompt.format_prompt( submission=student_submission)
     # print("\n\nPrompt Value:")
     # pprint(prompt_value)
     # print("\n\n")
@@ -140,6 +142,7 @@ def get_exam_error_definitions_completion_chain(llm: BaseChatModel, pydantic_obj
     return completion_chain, parser, prompt
 
 
+@st.cache_data
 def get_exam_error_definition_from_completion_chain(student_submission: str,
                                                     completion_chain: RunnableSerializable[dict, BaseMessage],
                                                     parser: PydanticOutputParser,

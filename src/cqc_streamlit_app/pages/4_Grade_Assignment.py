@@ -8,7 +8,7 @@ import streamlit as st
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
-from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file
+from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
     get_language_from_file_path, on_download_click, create_zip_file
@@ -259,6 +259,7 @@ def get_grade_exam_content():
             grader_llm=custom_llm
         )
 
+
         # TODO: If zip go through each folder as student submission and grade using files in each folder
 
         # TODO: Else go through each file and grade
@@ -279,10 +280,16 @@ def get_grade_exam_content():
                 student_submission_file_path_contents = read_file(student_submission_temp_file_path)
                 code_langauge = get_language_from_file_path(student_submission_file_path)
                 st.header( student_file_name+student_file_extension)
-                if code_langauge and code_langauge:
+                if code_langauge:
                     st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
+                    student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(student_submission_file_path_contents)
                 else:
                     st.text_area(student_submission_file_path_contents)
+                    student_submission_file_path_contents_final = student_submission_file_path_contents
+
+                prompt_value = code_grader.error_definitions_prompt.format_prompt(submission=student_submission_file_path_contents_final)
+                st.header("Prompt Value")
+                st.code(prompt_value)
 
                 code_grader.grade_submission(student_submission_file_path_contents)
                 # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())

@@ -159,7 +159,8 @@ class CodeGrader:
     error_definitions_prompt = None
 
     def __init__(self, max_points: int, exam_instructions: str, exam_solution: str, deduction_per_major_error: int = 20,
-                 deduction_per_minor_error: int = 5, wrap_code_in_markdown: bool = True, grader_llm: BaseChatModel = default_llm):
+                 deduction_per_minor_error: int = 5, wrap_code_in_markdown: bool = True,
+                 grader_llm: BaseChatModel = default_llm):
         self.max_points = max_points
         self.deduction_per_major_error = deduction_per_major_error
         self.deduction_per_minor_error = deduction_per_minor_error
@@ -218,7 +219,7 @@ class CodeGrader:
         return grade_feedback
 
     def grade_submission(self, student_submission: str):
-        #print("Identifying Errors")
+        # print("Identifying Errors")
         error_definitions_from_llm = get_exam_error_definition_from_completion_chain(
             student_submission=student_submission,
             completion_chain=self.error_definitions_completion_chain,
@@ -226,14 +227,14 @@ class CodeGrader:
             prompt=self.error_definitions_prompt
 
         )
-        #print("Errors Identified")
+        # print("Errors Identified")
 
         # print("\n\nFinal Output:")
         # pprint(finalOutput)
 
         error_definitions = ErrorDefinitions.parse_obj(error_definitions_from_llm)
 
-        #print("\n\nCompiling Unique Errors")
+        # print("\n\nCompiling Unique Errors")
         unique_major_errors = error_definitions.get_major_errors_unique()
         unique_minor_errors = error_definitions.get_minor_errors_unique()
 
@@ -243,7 +244,7 @@ class CodeGrader:
         if unique_minor_errors is None:
             unique_minor_errors = []
 
-        #print("\n\nFinding Correct Error Line Numbers")
+        # print("\n\nFinding Correct Error Line Numbers")
         jc = JavaCode(entire_raw_code=student_submission)
 
         # Remove or add Sufficient Commenting Error
@@ -251,12 +252,12 @@ class CodeGrader:
                                                 error_details="There is not enough comments to help others understand the purpose, functionality, and structure of the code.")
 
         if jc.sufficient_amount_of_comments:
-            #print("Found Insufficient comments error by LLM but not true so removing")
+            # print("Found Insufficient comments error by LLM but not true so removing")
             # Sufficient comments so remove this error type
             unique_major_errors = [x for x in unique_major_errors if
                                    x.error_type != MajorErrorType.INSUFFICIENT_DOCUMENTATION]
         elif MajorErrorType.INSUFFICIENT_DOCUMENTATION not in [x.error_type for x in unique_major_errors]:
-            #print("Did not find Insufficient comments error by LLM but true so adding it")
+            # print("Did not find Insufficient comments error by LLM but true so adding it")
             # Insufficient comments but error type doesnt exist
             unique_major_errors.insert(0, insufficient_comment_error)
 
@@ -324,7 +325,7 @@ class CodeGrader:
 
         # Save the feedback to file
         document.save(file_path)
-        #print("Feedback Saved to : %s" % file_path)
+        # print("Feedback Saved to : %s" % file_path)
 
     def save_feedback_template(self, file_path: str):
         error_details = "This is an example detail for feedback."
