@@ -120,8 +120,8 @@ def get_exam_error_definitions_completion_chain(llm: BaseChatModel, pydantic_obj
             "exam_instructions": exam_instructions,
             "exam_solution": exam_solution,
             "format_instructions": format_instructions,
-            "major_error_types": "\n\t".join(major_error_type_list),
-            "minor_error_types": "\n\t".join(minor_error_type_list)
+            "major_error_types": "\t"+("\n\t".join(major_error_type_list)),
+            "minor_error_types": "\t"+("\n\t".join(minor_error_type_list))
         },
         template=(
             EXAM_REVIEW_PROMPT_BASE

@@ -240,10 +240,11 @@ class ErrorHolder(BaseModel):
 
 
 def wrap_code_in_markdown_backticks(code: str, code_type: str = "java") -> str:
-    code_fence = "'''"
+    backticks = "`"
+    code_fence = backticks * 3
     # See if code fence exist in code already
     while code_fence in code:
-        code_fence += "'"
+        code_fence += backticks
 
     # Add double-backslash to code
     # code = code.replace('\\','\\\\')
