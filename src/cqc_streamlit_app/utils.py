@@ -197,10 +197,17 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
             if uploaded_file is not None:
                 # Get the original file name
                 original_file_name = uploaded_file.name
+
+                # Read the contents of the file
+                file_contents = uploaded_file.getvalue()
+
+                # Optionally, decode the file contents (for text files)
+                file_contents_decoded = file_contents.decode("utf-8")
+
                 # Create a temporary file to store the uploaded file
                 #temp_file_name = upload_file_to_temp_path(uploaded_file)
-                temp_file_name = str(uploaded_file.getvalue())
-                uploaded_file_paths.append((original_file_name, temp_file_name))
+
+                uploaded_file_paths.append((original_file_name, file_contents_decoded))
         if uploaded_files and success_message:
             st.success("File(s) uploaded successfully.")
         return uploaded_file_paths
@@ -210,10 +217,16 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
         original_file_name = uploaded_files.name
         # Create a temporary file to store the uploaded file
         #temp_file_name = upload_file_to_temp_path(uploaded_files)
-        temp_file_name = str(uploaded_files.getvalue())
+
+        # Read the contents of the file
+        file_contents = uploaded_files.getvalue()
+
+        # Optionally, decode the file contents (for text files)
+        file_contents_decoded = file_contents.decode("utf-8")
+
         if success_message:
             st.success("File uploaded successfully.")
-        return original_file_name, temp_file_name
+        return original_file_name, file_contents_decoded
     else:
         return None, None
 

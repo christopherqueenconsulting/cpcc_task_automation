@@ -182,7 +182,7 @@ def get_grade_exam_content():
     if instructions_file_content:
         # Get the assignment instructions
         # assignment_instructions_content = read_file(instructions_file_content, convert_instructions_to_markdown)
-        assignment_instructions_content = convert_content_to_markdown(str(instructions_file_content))
+        assignment_instructions_content = convert_content_to_markdown(instructions_file_content)
         st.markdown(assignment_instructions_content, unsafe_allow_html=True)
         # st.info("Added: %s" % instructions_file_path)
 
