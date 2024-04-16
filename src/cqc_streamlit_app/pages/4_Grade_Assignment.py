@@ -8,11 +8,9 @@ import streamlit as st
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
-from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks, \
-    convert_content_to_markdown
+from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks, convert_content_to_markdown
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
-    get_language_from_file_path, on_download_click, create_zip_file
+from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, get_language_from_file_path, on_download_click, create_zip_file
 
 # Initialize session state variables
 init_session_state()
