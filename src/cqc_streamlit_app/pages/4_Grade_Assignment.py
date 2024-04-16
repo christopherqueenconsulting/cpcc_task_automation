@@ -239,7 +239,7 @@ def get_grade_exam_content():
 
 
     if assignment_instructions_content and assignment_solution_contents and student_submission_file_paths:
-        st.write("All required file have been uploaded successfully.")
+        st.success("All required file have been uploaded successfully.")
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
 
