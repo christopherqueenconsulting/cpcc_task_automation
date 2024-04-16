@@ -166,9 +166,9 @@ def get_grade_exam_content():
     deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40)
     deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10)
 
-
     st.header("Instructions File")
-    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
+    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Assignment Instructions",
+                                                                      ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
     assignment_instructions_content = None
@@ -290,35 +290,34 @@ def get_grade_exam_content():
                 # Create a temporary file to store the uploaded instructions
                 time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
                 file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
-                                                            " ", "_")
+                    " ", "_")
                 file_name_suffix = ".docx"
                 graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
-                                                        #prefix=file_name_prefix,
-                                                        suffix=file_name_suffix)
-                download_filename = file_name_prefix+file_name_suffix
+                                                                        # prefix=file_name_prefix,
+                                                                        suffix=file_name_suffix)
+                download_filename = file_name_prefix + file_name_suffix
 
                 # Style the feedback and save to .docx file
                 code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
 
-                graded_feedback_file_map.append((base_student_filename,graded_feedback_temp_file))
+                graded_feedback_file_map.append((str(base_student_filename), graded_feedback_temp_file.name))
 
                 student_feedback_content = read_file(graded_feedback_temp_file.name, True)
                 st.markdown(student_feedback_content)
 
-
                 # Add button to download individual feedback on each tab
-                on_download_click(graded_feedback_temp_file.name, "Download Feedback for "+student_file_name, download_filename)
+                on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
+                                  download_filename)
 
                 # Stop status and show as complete
                 status.update(label=student_file_name + " Graded", state="complete", expanded=False)
 
-
             # TODO: Add button to download all feedback from all tabs at once
-            #graded_feedback_file_map
+            # graded_feedback_file_map
             zip_file_path = create_zip_file(graded_feedback_file_map)
             time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            on_download_click(graded_feedback_temp_file.name, "Download All Feedback Files" ,
-                              course_name.replace(' ','_')+"Graded_Feedback_"+time_stamp+".zip")
+            on_download_click(zip_file_path, "Download All Feedback Files",
+                              course_name.replace(' ', '_') + "Graded_Feedback_" + time_stamp + ".zip")
 
 
 def main():
