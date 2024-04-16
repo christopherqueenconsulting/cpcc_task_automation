@@ -181,6 +181,7 @@ def get_grade_exam_content():
             # Get the assignment instructions
             assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
             instruction_file_placeholder = st.markdown(assignment_instructions_content)
+            st.info("Added: %s" % instructions_file_path)
 
         st.header("Solution File")
         solution_file_paths = add_upload_file_element("Upload Exam Solution", ["txt", "docx", "pdf", "java", "zip"],
