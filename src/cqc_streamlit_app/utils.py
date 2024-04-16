@@ -171,15 +171,18 @@ def define_chatGPTModel(unique_key: str | int, default_min_value: float = .2, de
 def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True,
                             accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
     None, None]:
-    # Button to reset the file uploader
-    reset_label = "Reset "+uploader_text+" File Uploader"
-    reset_key = reset_label.replace(" ", "_")
-    if reset_key not in st.session_state:
-        st.session_state[reset_key] = False
 
-    if st.checkbox(reset_label):
-        st.session_state[reset_key] = True
-        st.experimental_rerun()
+    if accept_multiple_files:
+        # Button to reset the multi file uploader
+        reset_label = "Reset "+uploader_text+" File Uploader"
+        reset_key = reset_label.replace(" ", "_")
+
+        if reset_key not in st.session_state:
+            st.session_state[reset_key] = False
+
+        if st.checkbox(reset_label):
+            st.session_state[reset_key] = True
+            st.experimental_rerun()
 
     if st.session_state[reset_key]:
         return None, None
