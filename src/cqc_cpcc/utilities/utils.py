@@ -301,7 +301,7 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     file_name, file_extension = os.path.splitext(file_path)
 
     if convert_to_markdown:
-        with open(file_path, mode='r') as f:
+        with open(file_path, mode='rb') as f:
             # results = mammoth.convert_to_markdown(f)
             results = mammoth.convert_to_html(f)
             contents = md(results.value)
