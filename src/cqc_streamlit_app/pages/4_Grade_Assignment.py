@@ -271,14 +271,14 @@ def get_grade_exam_content():
             base_student_filename = os.path.basename(student_submission_file_path)
 
             # Add a new expander element with grade and feedback from the grader class
-            with st.status("Grading: " + student_file_name, expanded=True) as status:
+            with st.status("Grading: " + student_file_name+student_file_extension, expanded=True) as status:
 
                 # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
                 # Display Student Code in code block for each file
                 student_submission_file_path_contents = read_file(student_submission_temp_file_path)
                 code_langauge = get_language_from_file_path(student_submission_file_path)
-                st.header("Student's Submission")
+                st.header( student_file_name+student_file_extension)
                 if code_langauge and code_langauge:
                     st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
                 else:
