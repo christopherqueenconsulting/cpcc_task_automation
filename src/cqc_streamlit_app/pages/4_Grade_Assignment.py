@@ -251,7 +251,7 @@ def get_grade_exam_content():
                                                             accept_multiple_files=True)
 
     # Check if all required inputs are filled
-    process_grades = not all_required_inputs_filled(course_name, max_points, deduction_per_major_error,
+    process_grades = all_required_inputs_filled(course_name, max_points, deduction_per_major_error,
                                                     deduction_per_minor_error, assignment_instructions_content,
                                                     assignment_solution_contents, student_submission_file_paths)
 
