@@ -323,7 +323,7 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
         os.remove(tmp_file)
 
     else:
-        with open(file_path, "rb") as f: # TODO: Make sure you want to open with rb option
+        with open(file_path) as f: # TODO: Make sure you want to open with rb option
             contents = f.read()
 
     return contents
