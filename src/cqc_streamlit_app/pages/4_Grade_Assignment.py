@@ -171,6 +171,7 @@ def get_grade_exam_content():
 
     # Add elements to page to work with
     submitted = st.empty()
+    disable_submit = st.empty()
     with st.form("exam_setup_form"):
 
         # Text input for entering a course name
