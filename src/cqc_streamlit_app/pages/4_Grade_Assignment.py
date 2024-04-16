@@ -162,9 +162,10 @@ def get_grade_exam_content():
 
     # Text input for entering a course name
     course_name = st.text_input("Enter Course and Assignment Name")
-    max_points = st.text_input("Max points for assignment", 200)
-    deduction_per_major_error = st.text_input("Point deducted per Major Error", 20)
-    deduction_per_minor_error = st.text_input("Point deducted per Minor Error", 5)
+    max_points = st.number_input("Max points for assignment", value=200)
+    deduction_per_major_error = st.number_input("Point deducted per Major Error", value=20)
+    deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=5)
+
 
     st.header("Instructions File")
     instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
@@ -253,8 +254,8 @@ def get_grade_exam_content():
             max_points=max_points,
             exam_instructions=assignment_instructions_content,
             exam_solution=assignment_solution_contents,
-            deduction_per_major_error=deduction_per_major_error,
-            deduction_per_minor_error=deduction_per_minor_error,
+            deduction_per_major_error=int(deduction_per_major_error),
+            deduction_per_minor_error=int(deduction_per_minor_error),
             grader_llm=custom_llm
         )
 
