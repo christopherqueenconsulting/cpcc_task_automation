@@ -179,7 +179,7 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
             # Create a temporary file to store the uploaded instructions
             temp_file_name = upload_file_to_temp_path(each_uploaded_file)
             uploaded_file_paths.append(temp_file_name)
-        if success_message:
+        if uploaded_file is not None and success_message:
             st.success("File(s) uploaded successfully.")
         return uploaded_file_paths
 
