@@ -291,16 +291,16 @@ def get_grade_exam_content():
                 time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
                 file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
                     " ", "_")
-                file_name_suffix = ".docx"
+                graded_feedback_file_extension = ".docx"
                 graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
                                                                         # prefix=file_name_prefix,
-                                                                        suffix=file_name_suffix)
-                download_filename = file_name_prefix + file_name_suffix
+                                                                        suffix=graded_feedback_file_extension)
+                download_filename = file_name_prefix + graded_feedback_file_extension
 
                 # Style the feedback and save to .docx file
                 code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
 
-                graded_feedback_file_map.append((str(base_student_filename), graded_feedback_temp_file.name))
+                graded_feedback_file_map.append((str(base_student_filename).replace(student_file_extension,graded_feedback_file_extension), graded_feedback_temp_file.name))
 
                 student_feedback_content = read_file(graded_feedback_temp_file.name, True)
                 st.markdown(student_feedback_content)
@@ -312,12 +312,12 @@ def get_grade_exam_content():
                 # Stop status and show as complete
                 status.update(label=student_file_name + " Graded", state="complete", expanded=False)
 
-            # TODO: Add button to download all feedback from all tabs at once
-            # graded_feedback_file_map
-            zip_file_path = create_zip_file(graded_feedback_file_map)
-            time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            on_download_click(zip_file_path, "Download All Feedback Files",
-                              course_name.replace(' ', '_') + "Graded_Feedback_" + time_stamp + ".zip")
+        # TODO: Add button to download all feedback from all tabs at once
+        # graded_feedback_file_map
+        zip_file_path = create_zip_file(graded_feedback_file_map)
+        time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        on_download_click(zip_file_path, "Download All Feedback Files",
+                          course_name.replace(' ', '_') + "_Graded_Feedback_" + time_stamp + ".zip")
 
 
 def main():
