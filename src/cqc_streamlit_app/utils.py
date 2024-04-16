@@ -243,6 +243,7 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     }
     file_extension = get_file_extension_from_filepath(download_file_name)
     mime_type = file_mime_types.get(file_extension, "application/octet-stream")
+    st.info("file_extension: " + file_extension + " | mime_type: " + mime_type)
 
     file_content = read_file(file_path)
 
@@ -251,4 +252,4 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
 
     # Trigger the download of the file
     st.download_button(label=button_label, data=file_content,
-                       file_name=download_file_name, mime=mime_type)
+                       file_name=download_file_name, mime=mime_type, key=download_file_name)
