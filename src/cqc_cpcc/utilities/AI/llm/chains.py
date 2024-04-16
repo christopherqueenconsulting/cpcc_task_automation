@@ -101,7 +101,7 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
 
 
 @st.cache_data
-def get_exam_error_definitions_completion_chain(llm: BaseChatModel, pydantic_object: Type[T],
+def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_object: Type[T],
                                                 major_error_type_list: list,
                                                 minor_error_type_list: list, exam_instructions: str, exam_solution: str,
                                                 wrap_code_in_markdown: bool = True) -> tuple[
@@ -134,11 +134,11 @@ def get_exam_error_definitions_completion_chain(llm: BaseChatModel, pydantic_obj
     # pprint(prompt_value)
     # print("\n\n")
 
-    llm.bind(
+    _llm.bind(
         response_format={"type": "json_object"}
     )
 
-    completion_chain = prompt | llm
+    completion_chain = prompt | _llm
 
     return completion_chain, parser, prompt
 

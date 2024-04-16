@@ -165,7 +165,7 @@ class CodeGrader:
         self.deduction_per_major_error = deduction_per_major_error
         self.deduction_per_minor_error = deduction_per_minor_error
         self.error_definitions_completion_chain, self.error_definitions_parser, self.error_definitions_prompt = get_exam_error_definitions_completion_chain(
-            llm=grader_llm,
+            _llm=grader_llm,
             pydantic_object=ErrorDefinitions,
             major_error_type_list=MajorErrorType.list(),
             minor_error_type_list=MinorErrorType.list(),
