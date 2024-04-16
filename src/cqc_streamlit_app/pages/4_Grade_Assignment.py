@@ -179,7 +179,7 @@ def get_grade_exam_content():
         st.markdown(assignment_instructions_content)
 
     st.header("Solution File")
-    _orig_file_name, solution_file_paths = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"],
+    solution_file_paths = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"],
                                                   accept_multiple_files=True)
     # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
@@ -188,7 +188,7 @@ def get_grade_exam_content():
     if solution_file_paths:
         assignment_solution_contents = ""
 
-        for solution_file_path in solution_file_paths:
+        for orig_solution_file_path, solution_file_path in solution_file_paths:
             solution_language = get_language_from_file_path(solution_file_path)
 
             # Get the assignment  solution
