@@ -275,6 +275,7 @@ def get_grade_exam_content():
                 # Display Student Code in code block for each file
                 student_submission_file_path_contents = read_file(student_submission_file_path)
                 code_langauge = get_language_from_file_path(student_submission_file_path)
+                st.header("Student's Submission")
                 if code_langauge and code_langauge:
                     st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
                 else:

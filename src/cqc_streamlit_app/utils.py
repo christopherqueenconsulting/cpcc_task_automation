@@ -95,7 +95,7 @@ def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
     This function returns a cached instance of ChatOpenAI based on the temperature and model.
     If the temperature or model changes, a new instance will be created and cached.
     """
-    return ChatOpenAI(temperature=temperature, model=model)
+    return ChatOpenAI(temperature=temperature, model=model, openai_api_key = st.session_state.openai_api_key)
 
 
 def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = False) -> str:
