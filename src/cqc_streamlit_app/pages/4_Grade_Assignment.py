@@ -175,12 +175,12 @@ def get_grade_exam_content():
 
         assignment_instructions_content = None
 
-        instruction_file_placeholder = st.empty()
+        instruction_content_placeholder = st.empty()
 
         if instructions_file_path:
             # Get the assignment instructions
             assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-            instruction_file_placeholder = st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+            instruction_content_placeholder.markdown(assignment_instructions_content, unsafe_allow_html=True)
             st.info("Added: %s" % instructions_file_path)
 
         st.header("Solution File")
@@ -189,6 +189,8 @@ def get_grade_exam_content():
         # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
         assignment_solution_contents = None
+
+        assignment_solution_content_placeholder = st.empty()
 
         if solution_file_paths:
             assignment_solution_contents = ""
@@ -204,9 +206,9 @@ def get_grade_exam_content():
                     # TODO: Detect file type then add prefix for markdown based on the extension
                     # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
                     # Display the Java code in a code block
-                    st.code(read_content, language=solution_language, line_numbers=True)
+                    assignment_solution_content_placeholder.code(read_content, language=solution_language, line_numbers=True)
                 else:
-                    st.text_area(read_content)
+                    assignment_solution_content_placeholder.text_area(read_content)
 
         major_error_types, minor_error_types = define_error_definitions()
         major_error_types_dict = {}
