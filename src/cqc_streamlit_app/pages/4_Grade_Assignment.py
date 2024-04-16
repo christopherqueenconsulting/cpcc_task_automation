@@ -160,8 +160,8 @@ def all_required_inputs_filled(course_name, max_points, deduction_per_major_erro
                                instructions_file_content, assignment_solution_contents,
                                student_submission_file_paths) -> bool:
     return all(
-            [course_name, max_points, deduction_per_major_error, deduction_per_minor_error, instructions_file_content,
-             assignment_solution_contents, student_submission_file_paths])
+        [course_name, max_points, deduction_per_major_error, deduction_per_minor_error, instructions_file_content,
+         assignment_solution_contents, student_submission_file_paths])
 
 
 def get_grade_exam_content():
@@ -176,17 +176,17 @@ def get_grade_exam_content():
 
     st.header("Instructions File")
     _orig_file_name, instructions_file_content = add_upload_file_element("Upload Exam Instructions",
-                                                                      ["txt", "docx", "pdf"])
+                                                                         ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
     assignment_instructions_content = None
 
     if instructions_file_content:
         # Get the assignment instructions
-        #assignment_instructions_content = read_file(instructions_file_content, convert_instructions_to_markdown)
+        # assignment_instructions_content = read_file(instructions_file_content, convert_instructions_to_markdown)
         assignment_instructions_content = convert_content_to_markdown(instructions_file_content)
         st.markdown(assignment_instructions_content, unsafe_allow_html=True)
-        #st.info("Added: %s" % instructions_file_path)
+        # st.info("Added: %s" % instructions_file_path)
 
     st.header("Solution File")
     solution_file_paths = add_upload_file_element("Upload Exam Solution", ["txt", "docx", "pdf", "java", "zip"],
@@ -202,7 +202,7 @@ def get_grade_exam_content():
             solution_language = get_language_from_file_path(orig_solution_file_path)
 
             # Get the assignment  solution
-            #read_content = read_file(solution_file_path)
+            # read_content = read_file(solution_file_path)
             assignment_solution_contents += read_content
             if solution_language:
                 # st.info("Solution Language: " + solution_language)
@@ -210,7 +210,7 @@ def get_grade_exam_content():
                 # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
                 # Display the Java code in a code block
                 st.code(read_content, language=solution_language,
-                                                             line_numbers=True)
+                        line_numbers=True)
             else:
                 st.text_area(read_content)
 
@@ -292,7 +292,7 @@ def get_grade_exam_content():
                 # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
                 # Display Student Code in code block for each file
-                #student_submission_file_path_contents = read_file(student_submission_temp_file_path)
+                # student_submission_file_path_contents = read_file(student_submission_temp_file_path)
                 code_langauge = get_language_from_file_path(student_submission_file_path)
                 st.header(student_file_name + student_file_extension)
                 if code_langauge:

@@ -302,6 +302,7 @@ def convert_tables_to_json_in_tmp__file(doc: Document) -> str:
 def convert_content_to_markdown(content: str) -> str:
     return md(content)
 
+
 @streamlit.cache_data
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format. If file ends in .docx will convert it to json and return"""
