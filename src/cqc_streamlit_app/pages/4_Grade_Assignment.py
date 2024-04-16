@@ -285,10 +285,10 @@ def get_grade_exam_content():
                 # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
                 # Create a temporary file to store the uploaded instructions
+                time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
                 file_name_prefix = f"{course_name}_{student_file_name}-{selected_model}_temp({str(selected_temperature)})-{time_stamp}".replace(
                                                             " ", "_")
                 file_name_suffix = ".docx"
-                time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
                 temp_file = tempfile.NamedTemporaryFile(delete=False,
                                                         prefix=file_name_prefix,
                                                         suffix=file_name_suffix)
