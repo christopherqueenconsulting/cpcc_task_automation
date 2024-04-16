@@ -2,13 +2,11 @@
 import os
 import tempfile
 import zipfile
-from typing import Tuple, List, Any
+from typing import Tuple, Any
 
 import streamlit as st
 from langchain_openai import ChatOpenAI
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-
-from cqc_cpcc.utilities.utils import read_file
 
 CODE_LANGUAGES = [
     "abap", "abnf", "actionscript", "ada", "agda", "al", "antlr4", "apacheconf",
@@ -97,7 +95,7 @@ def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
     This function returns a cached instance of ChatOpenAI based on the temperature and model.
     If the temperature or model changes, a new instance will be created and cached.
     """
-    return ChatOpenAI(temperature=temperature, model=model, openai_api_key = st.session_state.openai_api_key)
+    return ChatOpenAI(temperature=temperature, model=model, openai_api_key=st.session_state.openai_api_key)
 
 
 def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = False) -> str:
@@ -110,7 +108,7 @@ def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = 
     if file_extension:
         file_extension = file_extension.lower()
 
-    #st.info("Base Name: " + basename + " | File Name: " + file_name + " | File Extension : " + file_extension)
+    # st.info("Base Name: " + basename + " | File Name: " + file_name + " | File Extension : " + file_extension)
 
     return file_extension
 
@@ -121,10 +119,10 @@ def get_language_from_file_path(file_path):
 
     # Check if the file extension exists in the mapping
     if file_extension in CODE_LANGUAGES:
-        #st.info(file_extension + " | Found in CODE_LANGUAGES")
+        # st.info(file_extension + " | Found in CODE_LANGUAGES")
         return file_extension
     else:
-        #st.info(file_extension + " | NOT Found in CODE_LANGUAGES")
+        # st.info(file_extension + " | NOT Found in CODE_LANGUAGES")
         return None  # Return None if the file extension is not found
 
 
@@ -171,7 +169,8 @@ def define_chatGPTModel(unique_key: str | int, default_min_value: float = .2, de
 
 
 def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True,
-                            accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str]:
+                            accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
+    None, None]:
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files)
 
@@ -196,6 +195,9 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
         if success_message:
             st.success("File uploaded successfully.")
         return original_file_name, temp_file_name
+    else:
+        return None, None
+
 
 def upload_file_to_temp_path(uploaded_file: UploadedFile):
     file_extension = get_file_extension_from_filepath(uploaded_file.name)
@@ -243,19 +245,20 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     }
     file_extension = get_file_extension_from_filepath(download_file_name)
     mime_type = file_mime_types.get(file_extension, "application/octet-stream")
-    #st.info("file_extension: " + file_extension + " | mime_type: " + mime_type)
+    # st.info("file_extension: " + file_extension + " | mime_type: " + mime_type)
 
-    #file_content = read_file(file_path)
+    # file_content = read_file(file_path)
     # Read the content of the file
     with open(file_path, "rb") as file:
         file_content = file.read()
 
-    #st.info("file_path: "+file_path+" | download_file_name: "+download_file_name)
-    #st.markdown(file_content)
+    # st.info("file_path: "+file_path+" | download_file_name: "+download_file_name)
+    # st.markdown(file_content)
 
     # Trigger the download of the file
     st.download_button(label=button_label, data=file_content,
                        file_name=download_file_name, mime=mime_type, key=download_file_name)
+
 
 def create_zip_file(file_paths: list[tuple[str, str]]) -> str:
     # Create a temporary file to store the zip file
