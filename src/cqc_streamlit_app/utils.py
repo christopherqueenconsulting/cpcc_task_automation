@@ -2,6 +2,7 @@
 import os
 import tempfile
 import zipfile
+from random import randint
 from typing import Tuple, Any
 
 import streamlit as st
@@ -171,26 +172,21 @@ def define_chatGPTModel(unique_key: str | int, default_min_value: float = .2, de
 def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True,
                             accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
     None, None]:
+    # Button to reset the multi file uploader
+    reset_label = "Reset " + uploader_text + " File Uploader"
+    reset_key = reset_label.replace(" ", "_")
 
-    if accept_multiple_files:
-        # Button to reset the multi file uploader
-        reset_label = "Reset "+uploader_text+" File Uploader"
-        reset_key = reset_label.replace(" ", "_")
-
-        if reset_key not in st.session_state:
-            st.session_state[reset_key] = False
-
-        if st.checkbox(reset_label):
-            st.session_state[reset_key] = True
-            st.experimental_rerun()
-
-        if st.session_state[reset_key]:
-            return None, None
+    if accept_multiple_files and reset_key not in st.session_state:
+        st.session_state[reset_key] = str(randint(1000, 100000000))
 
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
-                                      accept_multiple_files=accept_multiple_files)
+                                      accept_multiple_files=accept_multiple_files, key=st.session_state[reset_key])
 
     if accept_multiple_files:
+        if st.checkbox(reset_label):
+            st.session_state[reset_key] = str(randint(1000, 100000000))
+        # state.sync()
+
         uploaded_file_paths = []
         for uploaded_file in uploaded_files:
             if uploaded_file is not None:
