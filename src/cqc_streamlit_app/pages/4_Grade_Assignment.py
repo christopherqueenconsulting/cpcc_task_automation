@@ -159,90 +159,96 @@ def get_grade_exam_content():
     st.markdown("""Here we will grade and give feedback to student exam submissions""")
 
     # Add elements to page to work with
+    with st.form("exam_setup_form"):
 
-    # Text input for entering a course name
-    course_name = st.text_input("Enter Course and Assignment Name")
-    max_points = st.number_input("Max points for assignment", value=200)
-    deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40)
-    deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10)
+        # Text input for entering a course name
+        course_name = st.text_input("Enter Course and Assignment Name")
+        max_points = st.number_input("Max points for assignment", value=200)
+        deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40)
+        deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10)
 
-    st.header("Instructions File")
-    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Assignment Instructions",
-                                                                      ["txt", "docx", "pdf"])
-    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
+        st.header("Instructions File")
+        _orig_file_name, instructions_file_path = add_upload_file_element("Upload Exam Instructions",
+                                                                          ["txt", "docx", "pdf"])
+        convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
-    assignment_instructions_content = None
+        assignment_instructions_content = None
 
-    if instructions_file_path:
-        # Get the assignment instructions
-        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-        st.markdown(assignment_instructions_content)
+        if instructions_file_path:
+            # Get the assignment instructions
+            assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+            st.markdown(assignment_instructions_content)
 
-    st.header("Solution File")
-    solution_file_paths = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"],
-                                                  accept_multiple_files=True)
-    # convert_solution_to_java = st.checkbox("Solution File is Java", True)
+        st.header("Solution File")
+        solution_file_paths = add_upload_file_element("Upload Exam Solution", ["txt", "docx", "pdf", "java", "zip"],
+                                                      accept_multiple_files=True)
+        # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
-    assignment_solution_contents = None
+        assignment_solution_contents = None
 
-    if solution_file_paths:
-        assignment_solution_contents = ""
+        if solution_file_paths:
+            assignment_solution_contents = ""
 
-        for orig_solution_file_path, solution_file_path in solution_file_paths:
-            solution_language = get_language_from_file_path(solution_file_path)
+            for orig_solution_file_path, solution_file_path in solution_file_paths:
+                solution_language = get_language_from_file_path(solution_file_path)
 
-            # Get the assignment  solution
-            read_content = read_file(solution_file_path)
-            assignment_solution_contents += read_content
-            if solution_language:
-                # st.info("Solution Language: " + solution_language)
-                # TODO: Detect file type then add prefix for markdown based on the extension
-                # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
-                # Display the Java code in a code block
-                st.code(read_content, language=solution_language, line_numbers=True)
-            else:
-                st.text_area(read_content)
+                # Get the assignment  solution
+                read_content = read_file(solution_file_path)
+                assignment_solution_contents += read_content
+                if solution_language:
+                    # st.info("Solution Language: " + solution_language)
+                    # TODO: Detect file type then add prefix for markdown based on the extension
+                    # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
+                    # Display the Java code in a code block
+                    st.code(read_content, language=solution_language, line_numbers=True)
+                else:
+                    st.text_area(read_content)
 
-    major_error_types, minor_error_types = define_error_definitions()
-    major_error_types_dict = {}
-    minor_error_types_dict = {}
-    major_error_types_list = []
-    minor_error_types_list = []
-    # Show success message if feedback types are defined
-    if not major_error_types.empty:
-        st.success("Major errors defined.")
-        # Convert DataFrame to list of FeedbackType objects
-        for _, row in major_error_types.iterrows():
-            name = row[NAME]
-            description = row[DESCRIPTION]
-            major_error_types_dict[name] = description
-            # feedback_types_list.append(FeedbackType(name, description))
+        major_error_types, minor_error_types = define_error_definitions()
+        major_error_types_dict = {}
+        minor_error_types_dict = {}
+        major_error_types_list = []
+        minor_error_types_list = []
+        # Show success message if feedback types are defined
+        if not major_error_types.empty:
+            st.success("Major errors defined.")
+            # Convert DataFrame to list of FeedbackType objects
+            for _, row in major_error_types.iterrows():
+                name = row[NAME]
+                description = row[DESCRIPTION]
+                major_error_types_dict[name] = description
+                # feedback_types_list.append(FeedbackType(name, description))
 
-        # TODO: Fix below commented out
-        # MyMajorErrorType = MajorErrorType('MajorErrorType', major_error_types_dict)
-        # major_error_types_list = list(MyMajorErrorType)
+            # TODO: Fix below commented out
+            # MyMajorErrorType = MajorErrorType('MajorErrorType', major_error_types_dict)
+            # major_error_types_list = list(MyMajorErrorType)
 
-    if not minor_error_types.empty:
-        st.success("Minor errors defined.")
-        # Convert DataFrame to list of FeedbackType objects
-        for _, row in minor_error_types.iterrows():
-            name = row[NAME]
-            description = row[DESCRIPTION]
-            minor_error_types_dict[name] = description
-            # feedback_types_list.append(FeedbackType(name, description))
-        # TODO: Fix below commented out
-        # MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
-        # minor_error_types_list = list(MyMinorErrorType)
+        if not minor_error_types.empty:
+            st.success("Minor errors defined.")
+            # Convert DataFrame to list of FeedbackType objects
+            for _, row in minor_error_types.iterrows():
+                name = row[NAME]
+                description = row[DESCRIPTION]
+                minor_error_types_dict[name] = description
+                # feedback_types_list.append(FeedbackType(name, description))
+            # TODO: Fix below commented out
+            # MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
+            # minor_error_types_list = list(MyMinorErrorType)
 
-    selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment")
+        selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment")
 
-    st.header("Student Submission File(s)")
-    student_submission_file_paths = add_upload_file_element("Upload Student Submission",
-                                                            ["txt", "docx", "pdf", "java", "zip"],
-                                                            accept_multiple_files=True)
+        st.header("Student Submission File(s)")
+        student_submission_file_paths = add_upload_file_element("Upload Student Submission",
+                                                                ["txt", "docx", "pdf", "java", "zip"],
+                                                                accept_multiple_files=True)
+
+    submitted = st.empty()
 
     if course_name and max_points and deduction_per_major_error and deduction_per_minor_error and assignment_instructions_content and assignment_solution_contents and student_submission_file_paths:
-        st.success("All required file have been uploaded successfully.")
+        submitted = st.form_submit_button("Submit")
+
+    if submitted:
+        # st.success("All required file have been uploaded successfully.")
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
 
@@ -259,7 +265,6 @@ def get_grade_exam_content():
             grader_llm=custom_llm
         )
 
-
         # TODO: If zip go through each folder as student submission and grade using files in each folder
 
         # TODO: Else go through each file and grade
@@ -272,24 +277,30 @@ def get_grade_exam_content():
             base_student_filename = os.path.basename(student_submission_file_path)
 
             # Add a new expander element with grade and feedback from the grader class
-            with st.status("Grading: " + student_file_name+student_file_extension, expanded=False) as status:
+            with st.status("Grading: " + student_file_name + student_file_extension, expanded=False) as status:
 
                 # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
                 # Display Student Code in code block for each file
                 student_submission_file_path_contents = read_file(student_submission_temp_file_path)
                 code_langauge = get_language_from_file_path(student_submission_file_path)
-                st.header( student_file_name+student_file_extension)
+                st.header(student_file_name + student_file_extension)
                 if code_langauge:
                     st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
-                    student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(student_submission_file_path_contents)
+                    student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
+                        student_submission_file_path_contents)
                 else:
                     st.text_area(student_submission_file_path_contents)
                     student_submission_file_path_contents_final = student_submission_file_path_contents
 
-                prompt_value = code_grader.error_definitions_prompt.format_prompt(submission=student_submission_file_path_contents_final)
+                prompt_value = code_grader.error_definitions_prompt.format_prompt(
+                    submission=student_submission_file_path_contents_final)
                 st.header("Prompt Value")
-                st.code(f"{prompt_value}")
+                # TODO: fix so that it shows correctly as code block
+                # Get the text attribute from the PromptValue object
+                prompt_value_text = getattr(prompt_value, 'text', '')
+
+                st.code(prompt_value_text)
 
                 code_grader.grade_submission(student_submission_file_path_contents)
                 # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
@@ -307,7 +318,9 @@ def get_grade_exam_content():
                 # Style the feedback and save to .docx file
                 code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
 
-                graded_feedback_file_map.append((str(base_student_filename).replace(student_file_extension,graded_feedback_file_extension), graded_feedback_temp_file.name))
+                graded_feedback_file_map.append((str(base_student_filename).replace(student_file_extension,
+                                                                                    graded_feedback_file_extension),
+                                                 graded_feedback_temp_file.name))
 
                 student_feedback_content = read_file(graded_feedback_temp_file.name, True)
                 st.markdown(student_feedback_content)
@@ -320,7 +333,6 @@ def get_grade_exam_content():
                 status.update(label=student_file_name + " Graded", state="complete")
 
         if (len(student_submission_file_paths) == len(graded_feedback_file_map)):
-
             # Add button to download all feedback from all tabs at once
             zip_file_path = create_zip_file(graded_feedback_file_map)
             time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")

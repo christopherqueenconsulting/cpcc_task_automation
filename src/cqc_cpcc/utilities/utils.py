@@ -7,6 +7,7 @@ import docx
 import mammoth
 # import markdownify
 import pandas as pd
+import streamlit
 import textract
 from bs4 import BeautifulSoup
 from docx import Document
@@ -297,6 +298,7 @@ def convert_tables_to_json_in_tmp__file(doc: Document) -> str:
     return temp_file.name
 
 
+@streamlit.cache_data
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format. If file ends in .docx will convert it to json and return"""
     file_name, file_extension = os.path.splitext(file_path)

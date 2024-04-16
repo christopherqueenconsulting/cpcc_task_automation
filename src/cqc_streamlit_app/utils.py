@@ -171,6 +171,19 @@ def define_chatGPTModel(unique_key: str | int, default_min_value: float = .2, de
 def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True,
                             accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
     None, None]:
+    # Button to reset the file uploader
+    reset_label = "Reset "+uploader_text+" File Uploader"
+    reset_key = reset_label.replace(" ", "_")
+    if reset_key not in st.session_state:
+        st.session_state[reset_key] = False
+
+    if st.button(reset_label):
+        st.session_state[reset_key] = True
+        st.experimental_rerun()
+
+    if st.session_state[reset_key]:
+        return None, None
+
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files)
 
@@ -181,7 +194,8 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
                 # Get the original file name
                 original_file_name = uploaded_file.name
                 # Create a temporary file to store the uploaded file
-                temp_file_name = upload_file_to_temp_path(uploaded_file)
+                #temp_file_name = upload_file_to_temp_path(uploaded_file)
+                temp_file_name = uploaded_file.name
                 uploaded_file_paths.append((original_file_name, temp_file_name))
         if uploaded_files and success_message:
             st.success("File(s) uploaded successfully.")
@@ -191,7 +205,8 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
         # Get the original file name
         original_file_name = uploaded_files.name
         # Create a temporary file to store the uploaded file
-        temp_file_name = upload_file_to_temp_path(uploaded_files)
+        #temp_file_name = upload_file_to_temp_path(uploaded_files)
+        temp_file_name = uploaded_files.name
         if success_message:
             st.success("File uploaded successfully.")
         return original_file_name, temp_file_name

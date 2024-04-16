@@ -234,7 +234,7 @@ class BrightSpace_Course:
                                                                          "Waiting for Student Names")
 
                     completed_dates = get_elements_text_as_list_wait_stale(self.wait,
-                                                                           table_prefix_xpath + "//td[2]",
+                                                                           table_prefix_xpath + "//td[2]//label[1]",
                                                                            "Waiting for Completion Dates")
 
                     student_completions_dict = dict(zip(student_names, completed_dates))

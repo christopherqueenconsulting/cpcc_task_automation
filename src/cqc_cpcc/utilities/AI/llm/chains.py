@@ -17,7 +17,8 @@ from cqc_cpcc.utilities.AI.llm.prompts import *
 from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
-retry_model = 'gpt-4-1106-preview'
+#retry_model = 'gpt-4-1106-preview'
+retry_model = 'gpt-3.5-turbo-16k-0613'
 # retry_llm = ChatOpenAI(temperature=0, model=retry_model)
 retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
 
