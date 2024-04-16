@@ -172,8 +172,7 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
                             accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
     None, None]:
 
-    if False:
-    #if accept_multiple_files:
+    if accept_multiple_files:
         # Button to reset the multi file uploader
         reset_label = "Reset "+uploader_text+" File Uploader"
         reset_key = reset_label.replace(" ", "_")
@@ -198,16 +197,10 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
                 # Get the original file name
                 original_file_name = uploaded_file.name
 
-                # Read the contents of the file
-                file_contents = uploaded_file.getvalue()
-
-                # Optionally, decode the file contents (for text files)
-                file_contents_decoded = file_contents.decode("utf-8")
-
                 # Create a temporary file to store the uploaded file
-                #temp_file_name = upload_file_to_temp_path(uploaded_file)
+                temp_file_name = upload_file_to_temp_path(uploaded_file)
 
-                uploaded_file_paths.append((original_file_name, file_contents_decoded))
+                uploaded_file_paths.append((original_file_name, temp_file_name))
         if uploaded_files and success_message:
             st.success("File(s) uploaded successfully.")
         return uploaded_file_paths
@@ -216,17 +209,11 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
         # Get the original file name
         original_file_name = uploaded_files.name
         # Create a temporary file to store the uploaded file
-        #temp_file_name = upload_file_to_temp_path(uploaded_files)
-
-        # Read the contents of the file
-        file_contents = uploaded_files.getvalue()
-
-        # Optionally, decode the file contents (for text files)
-        file_contents_decoded = file_contents.decode("utf-8")
+        temp_file_name = upload_file_to_temp_path(uploaded_files)
 
         if success_message:
             st.success("File uploaded successfully.")
-        return original_file_name, file_contents_decoded
+        return original_file_name, temp_file_name
     else:
         return None, None
 
