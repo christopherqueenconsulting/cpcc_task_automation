@@ -325,9 +325,7 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
         with open(file_path) as f:  # TODO: Make sure you want to open with rb option
             contents = f.read()
 
-
-
-    return contents
+    return str(contents)
 
 
 def read_files(file_paths: Union[str, List[str]], convert_to_markdown: bool = False) -> str:
