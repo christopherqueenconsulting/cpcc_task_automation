@@ -301,9 +301,9 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     file_name, file_extension = os.path.splitext(file_path)
 
     if convert_to_markdown:
-        with open(file_path, "rb") as docx_file:
-            #results = mammoth.convert_to_markdown(docx_file)
-            results = mammoth.convert_to_html(docx_file)
+        with open(file_path, "rb") as f:
+            #results = mammoth.convert_to_markdown(f)
+            results = mammoth.convert_to_html(f)
             contents = md(results.value)
             #contents = results.value
     elif file_extension == ".docx":
@@ -318,7 +318,7 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
         # contents = simplify(my_doc)
 
         # contents = textract.parsers.process(file_path)
-        print("Extracting contents from: %s" % tmp_file)
+        #print("Extracting contents from: %s" % tmp_file)
         contents = textract.process(tmp_file).decode('utf-8')
         os.remove(tmp_file)
 
