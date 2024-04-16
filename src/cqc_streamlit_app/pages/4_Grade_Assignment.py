@@ -246,61 +246,60 @@ def get_grade_exam_content():
         custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
 
         # Start status wheel and display with updates from the coder
-        with st.status("Grading Assignments...", expanded=True) as status:
-
-            """
-            code_grader = CodeGrader(
-                max_points=max_points,
-                exam_instructions=assignment_instructions_content,
-                exam_solution=assignment_solution_contents,
-                deduction_per_major_error=deduction_per_major_error,
-                deduction_per_minor_error=deduction_per_minor_error,
-                grader_llm=custom_llm
-            )
-            """
-
-            # TODO: If zip go through each folder as student submission and grade using files in each folder
 
 
-            # TODO: Else go through each file and grade
+        hold = """
+        code_grader = CodeGrader(
+            max_points=max_points,
+            exam_instructions=assignment_instructions_content,
+            exam_solution=assignment_solution_contents,
+            deduction_per_major_error=deduction_per_major_error,
+            deduction_per_minor_error=deduction_per_minor_error,
+            grader_llm=custom_llm
+        )
+        """
 
-            for student_submission_file_path in student_submission_file_paths:
+        # TODO: If zip go through each folder as student submission and grade using files in each folder
 
-                student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-                base_student_filename = os.path.basename(student_submission_file_path)
 
-                # Add a new expander element with the feedback
-                with st.expander(student_file_name, expanded=False):
+        # TODO: Else go through each file and grade
 
-                    #print("Generating Feedback and Grade for: %s" % base_student_filename)
-                    status.update(label="Generating Feedback and Grade for: "+student_file_name)
+        for student_submission_file_path in student_submission_file_paths:
 
-                    # Display Student Code in code block for each file
-                    student_submission_file_path_contents = read_file(student_submission_file_path)
-                    code_langauge = get_language_from_file_path(student_submission_file_path)
-                    if code_langauge and code_langauge:
-                        st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
-                    else:
-                        st.text_area(student_submission_file_path_contents)
+            student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
+            base_student_filename = os.path.basename(student_submission_file_path)
 
-                    # code_grader.grade_submission(student_submission)
-                    # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
+            # Add a new expander element with the feedback
+            with st.status("Grading: "+student_file_name, expanded=True) as status:
 
-                    # Get Temp file and path to use to store feecback
-                    # file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.docx".replace(
-                    #    " ", "_")
+                #print("Generating Feedback and Grade for: %s" % base_student_filename)
 
-                    # Style the feedback and save to .docx file
-                    # code_grader.save_feedback_to_docx(file_path)
+                # Display Student Code in code block for each file
+                student_submission_file_path_contents = read_file(student_submission_file_path)
+                code_langauge = get_language_from_file_path(student_submission_file_path)
+                if code_langauge and code_langauge:
+                    st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
+                else:
+                    st.text_area(student_submission_file_path_contents)
 
-            # TODO: Create tab with grade and feedback from the grader class
+                # code_grader.grade_submission(student_submission)
+                # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
-            # TODO: Add button to download individual feedback on each tab
+                # Get Temp file and path to use to store feecback
+                # file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.docx".replace(
+                #    " ", "_")
 
-            # TODO: Add button to download all feedback from all tabs at once
+                # Style the feedback and save to .docx file
+                # code_grader.save_feedback_to_docx(file_path)
 
-            # TODO: Stop status and show as complete
-            status.update(label="Grading Complete!", state="complete", expanded=False)
+        # TODO: Create tab with grade and feedback from the grader class
+
+        # TODO: Add button to download individual feedback on each tab
+
+        # TODO: Add button to download all feedback from all tabs at once
+
+        # TODO: Stop status and show as complete
+                status.update(label="Grading Complete!", state="complete", expanded=False)
 
 
 def main():
