@@ -2,7 +2,7 @@
 import os
 import tempfile
 import zipfile
-from typing import Tuple
+from typing import Tuple, List, Any
 
 import streamlit as st
 from langchain_openai import ChatOpenAI
@@ -169,29 +169,31 @@ def define_chatGPTModel(unique_key: str | int, default_min_value: float = .2, de
 
 
 def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True,
-                            accept_multiple_files: bool = False) -> str | list[str]:
-    uploaded_file = st.file_uploader(label=uploader_text, type=accepted_file_types,
-                                     accept_multiple_files=accept_multiple_files)
+                            accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str]:
+    uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
+                                      accept_multiple_files=accept_multiple_files)
 
     if accept_multiple_files:
         uploaded_file_paths = []
-        for each_uploaded_file in uploaded_file:
-            # Create a temporary file to store the uploaded instructions
-            temp_file_name = upload_file_to_temp_path(each_uploaded_file)
-            uploaded_file_paths.append(temp_file_name)
-        if uploaded_file and success_message:
+        for uploaded_file in uploaded_files:
+            if uploaded_file is not None:
+                # Get the original file name
+                original_file_name = uploaded_file.name
+                # Create a temporary file to store the uploaded file
+                temp_file_name = upload_file_to_temp_path(uploaded_file)
+                uploaded_file_paths.append((original_file_name, temp_file_name))
+        if uploaded_files and success_message:
             st.success("File(s) uploaded successfully.")
         return uploaded_file_paths
 
-    elif uploaded_file:
-        # Create a temporary file to store the uploaded instructions
-        temp_file_name = upload_file_to_temp_path(uploaded_file)
-
+    elif uploaded_files is not None:
+        # Get the original file name
+        original_file_name = uploaded_files.name
+        # Create a temporary file to store the uploaded file
+        temp_file_name = upload_file_to_temp_path(uploaded_files)
         if success_message:
             st.success("File uploaded successfully.")
-
-        return temp_file_name
-
+        return original_file_name, temp_file_name
 
 def upload_file_to_temp_path(uploaded_file: UploadedFile):
     file_extension = get_file_extension_from_filepath(uploaded_file.name)

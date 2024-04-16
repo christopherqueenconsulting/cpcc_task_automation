@@ -183,10 +183,10 @@ def main():
     course_name = st.text_input("Enter Course Name")
 
     st.header("Instructions File")
-    instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
+    _,instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
 
     st.header("Solution File")
-    solution_file_path = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"])
+    _,solution_file_path = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"])
 
     st.header("Feedback Types")
     feedback_types = define_feedback_types()
@@ -207,7 +207,7 @@ def main():
     selected_model, temperature = define_chatGPTModel("give_feedback")
 
     st.header("Student Submission File(s)")
-    student_submission_file_path = add_upload_file_element("Upload Student Submission",
+    _, student_submission_file_path = add_upload_file_element("Upload Student Submission",
                                                            ["txt", "docx", "pdf", "java", "zip"])
     # Checkbox for enabling Markdown wrapping
     wrap_code_in_markdown = st.checkbox("Student Submission Is Code", True)

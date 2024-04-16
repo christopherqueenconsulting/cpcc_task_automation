@@ -89,7 +89,7 @@ def get_flowgorithm_content():
         if st.session_state.openai_api_key:
             custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
 
-            student_submission_file_path = add_upload_file_element("Upload Students Submission",
+            _,student_submission_file_path = add_upload_file_element("Upload Students Submission",
                                                                    ["txt", "docx", "pdf", "fprg"])
 
             if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
@@ -163,12 +163,12 @@ def get_grade_exam_content():
     # Text input for entering a course name
     course_name = st.text_input("Enter Course and Assignment Name")
     max_points = st.number_input("Max points for assignment", value=200)
-    deduction_per_major_error = st.number_input("Point deducted per Major Error", value=20)
-    deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=5)
+    deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40)
+    deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10)
 
 
     st.header("Instructions File")
-    instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
+    _, instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
     assignment_instructions_content = None
@@ -179,7 +179,7 @@ def get_grade_exam_content():
         st.markdown(assignment_instructions_content)
 
     st.header("Solution File")
-    solution_file_paths = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"],
+    _, solution_file_paths = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"],
                                                   accept_multiple_files=True)
     # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
@@ -263,7 +263,7 @@ def get_grade_exam_content():
 
         # TODO: Else go through each file and grade
 
-        for student_submission_file_path in student_submission_file_paths:
+        for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
 
             student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
             base_student_filename = os.path.basename(student_submission_file_path)
@@ -274,7 +274,7 @@ def get_grade_exam_content():
                 # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
                 # Display Student Code in code block for each file
-                student_submission_file_path_contents = read_file(student_submission_file_path)
+                student_submission_file_path_contents = read_file(student_submission_temp_file_path)
                 code_langauge = get_language_from_file_path(student_submission_file_path)
                 st.header("Student's Submission")
                 if code_langauge and code_langauge:
