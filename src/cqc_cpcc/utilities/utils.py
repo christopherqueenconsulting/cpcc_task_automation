@@ -10,9 +10,9 @@ import pandas as pd
 import textract
 from bs4 import BeautifulSoup
 from docx import Document
+from markdownify import markdownify as md
 from ordered_set import OrderedSet
 from pydantic.v1 import BaseModel, Field, StrictStr, PositiveInt
-from markdownify import markdownify as md
 
 from cqc_cpcc.utilities.date import get_datetime
 
@@ -300,7 +300,12 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format. If file ends in .docx will convert it to json and return"""
     file_name, file_extension = os.path.splitext(file_path)
 
-    if file_extension == ".docx":
+    if convert_to_markdown:
+        # results = mammoth.convert_to_markdown(contents)
+        results = mammoth.convert_to_html(file_path)
+        contents = md(results.value)
+        # contents = results.value
+    elif file_extension == ".docx":
         # read in a document
         my_doc = docx.Document(file_path)
 
@@ -312,20 +317,15 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
         # contents = simplify(my_doc)
 
         # contents = textract.parsers.process(file_path)
-        #print("Extracting contents from: %s" % tmp_file)
+        # print("Extracting contents from: %s" % tmp_file)
         contents = textract.process(tmp_file).decode('utf-8')
         os.remove(tmp_file)
 
     else:
-        with open(file_path) as f: # TODO: Make sure you want to open with rb option
+        with open(file_path) as f:  # TODO: Make sure you want to open with rb option
             contents = f.read()
 
-    if convert_to_markdown:
-        with open(file_path, "rb") as f:
-            #results = mammoth.convert_to_markdown(contents)
-            results = mammoth.convert_to_html(contents)
-            contents = md(results.value)
-            #contents = results.value
+
 
     return contents
 

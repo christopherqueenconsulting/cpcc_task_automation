@@ -11,8 +11,7 @@ import streamlit as st
 from cqc_cpcc.project_feedback import FeedbackType, get_feedback_guide
 from cqc_cpcc.utilities.utils import read_file, read_files
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, get_custom_llm, define_chatGPTModel, add_upload_file_element, \
-    get_file_extension_from_filepath
+from cqc_streamlit_app.utils import get_cpcc_css, get_custom_llm, define_chatGPTModel, add_upload_file_element
 
 # Initialize session state variables
 init_session_state()
@@ -102,9 +101,7 @@ def give_feedback_on_assignments(course_name: str, assignment_name: str, assignm
 
     # print("Assignment Solutions:\n%s" % assignment_solution)
 
-    allowed_file_extensions = [".java"
-        , ".docx"
-                               ]
+    allowed_file_extensions = [".java", ".docx"]
 
     # TODO: Determine if it is either one file, or a zip file with folders and files
 
@@ -164,8 +161,6 @@ def give_feedback_on_assignments(course_name: str, assignment_name: str, assignm
         # TODO: If more than one file then zip and return path to zipped file for download
 
 
-
-
 def main():
     st.set_page_config(page_title="Give Feedback", page_icon="🦜️🔗")  # TODO: Change the page icon
 
@@ -183,10 +178,12 @@ def main():
     course_name = st.text_input("Enter Course Name")
 
     st.header("Instructions File")
-    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
+    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Assignment Instructions",
+                                                                      ["txt", "docx", "pdf"])
 
     st.header("Solution File")
-    _orig_file_name, solution_file_path = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"])
+    _orig_file_name, solution_file_path = add_upload_file_element("Upload Assignment Solution",
+                                                                  ["txt", "docx", "pdf", "java", "zip"])
 
     st.header("Feedback Types")
     feedback_types = define_feedback_types()
@@ -232,9 +229,8 @@ def main():
 
         st.session_state.feedback_download_file_path = give_feedback_on_assignments()
 
-
         # Display the button
-        #st.button("Click to download", on_click=on_download_click(st.session_state.feedback_download_file_path))
+        # st.button("Click to download", on_click=on_download_click(st.session_state.feedback_download_file_path))
 
         # Display text output TODO: Look into other format options. Markdown is allowed
         # st.text(pre_feedback + feedback + post_feedback)
