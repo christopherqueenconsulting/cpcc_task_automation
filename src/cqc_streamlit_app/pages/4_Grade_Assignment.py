@@ -89,7 +89,7 @@ def get_flowgorithm_content():
         if st.session_state.openai_api_key:
             custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
 
-            _,student_submission_file_path = add_upload_file_element("Upload Students Submission",
+            student_submission_file_path = add_upload_file_element("Upload Students Submission",
                                                                    ["txt", "docx", "pdf", "fprg"])
 
             if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
@@ -168,7 +168,7 @@ def get_grade_exam_content():
 
 
     st.header("Instructions File")
-    _, instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
+    instructions_file_path = add_upload_file_element("Upload Assignment Instructions", ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
     assignment_instructions_content = None
@@ -179,7 +179,7 @@ def get_grade_exam_content():
         st.markdown(assignment_instructions_content)
 
     st.header("Solution File")
-    _, solution_file_paths = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"],
+    solution_file_paths = add_upload_file_element("Upload Assignment Solution", ["txt", "docx", "pdf", "java", "zip"],
                                                   accept_multiple_files=True)
     # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
