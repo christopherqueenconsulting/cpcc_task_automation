@@ -173,7 +173,7 @@ def get_grade_exam_content():
                                                                           ["txt", "docx", "pdf"])
         convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
-        assignment_instructions_content = st.empty()
+        assignment_instructions_content = None
 
         if instructions_file_path:
             # Get the assignment instructions
@@ -185,7 +185,7 @@ def get_grade_exam_content():
                                                       accept_multiple_files=True)
         # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
-        assignment_solution_contents = st.empty()
+        assignment_solution_contents = None
 
         if solution_file_paths:
             assignment_solution_contents = ""
@@ -244,7 +244,9 @@ def get_grade_exam_content():
                                                                 accept_multiple_files=True)
 
         disable_submit = bool(
-                    course_name and max_points and deduction_per_major_error and deduction_per_minor_error and assignment_instructions_content and assignment_solution_contents and student_submission_file_paths)
+            course_name and max_points and deduction_per_major_error and deduction_per_minor_error and assignment_instructions_content and assignment_solution_contents and student_submission_file_paths)
+
+        st.info("Submit Disabled = " + disable_submit)
 
         submitted = st.form_submit_button("Grade Submissions", disabled=disable_submit)
 
