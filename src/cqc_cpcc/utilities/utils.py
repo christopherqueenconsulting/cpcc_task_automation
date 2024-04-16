@@ -300,13 +300,7 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format. If file ends in .docx will convert it to json and return"""
     file_name, file_extension = os.path.splitext(file_path)
 
-    if convert_to_markdown:
-        with open(file_path, "rb") as f:
-            #results = mammoth.convert_to_markdown(f)
-            results = mammoth.convert_to_html(f)
-            contents = md(results.value)
-            #contents = results.value
-    elif file_extension == ".docx":
+    if file_extension == ".docx":
         # read in a document
         my_doc = docx.Document(file_path)
 
@@ -325,6 +319,13 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     else:
         with open(file_path) as f: # TODO: Make sure you want to open with rb option
             contents = f.read()
+
+    if convert_to_markdown:
+        with open(file_path, "rb") as f:
+            #results = mammoth.convert_to_markdown(contents)
+            results = mammoth.convert_to_html(contents)
+            contents = md(results.value)
+            #contents = results.value
 
     return contents
 
