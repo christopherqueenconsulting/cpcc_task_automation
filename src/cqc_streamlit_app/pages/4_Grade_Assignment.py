@@ -286,11 +286,11 @@ def get_grade_exam_content():
 
                 # Create a temporary file to store the uploaded instructions
                 time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-                file_name_prefix = f"{course_name}_{student_file_name}-{selected_model}_temp({str(selected_temperature)})-{time_stamp}".replace(
+                file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
                                                             " ", "_")
                 file_name_suffix = ".docx"
                 temp_file = tempfile.NamedTemporaryFile(delete=False,
-                                                        prefix=file_name_prefix,
+                                                        #prefix=file_name_prefix,
                                                         suffix=file_name_suffix)
                 download_filename = file_name_prefix+file_name_suffix
 
