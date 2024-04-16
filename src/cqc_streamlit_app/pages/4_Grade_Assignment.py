@@ -173,7 +173,7 @@ def get_grade_exam_content():
                                                                           ["txt", "docx", "pdf"])
         convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
-        assignment_instructions_content = None
+        assignment_instructions_content = st.empty()
 
         if instructions_file_path:
             # Get the assignment instructions
@@ -185,7 +185,7 @@ def get_grade_exam_content():
                                                       accept_multiple_files=True)
         # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
-        assignment_solution_contents = None
+        assignment_solution_contents = st.empty()
 
         if solution_file_paths:
             assignment_solution_contents = ""
