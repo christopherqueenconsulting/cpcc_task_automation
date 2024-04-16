@@ -154,6 +154,17 @@ def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
     return major_error_types_data_edited_df, minor_error_types_data_edited_df
 
 
+# Define a function to check if all required inputs are filled
+def all_required_inputs_filled(course_name, max_points, deduction_per_major_error, deduction_per_minor_error,
+                               instructions_file_content, assignment_solution_contents,
+                               student_submission_file_paths) -> bool:
+    if not all(
+            [course_name, max_points, deduction_per_major_error, deduction_per_minor_error, instructions_file_content,
+             assignment_solution_contents, student_submission_file_paths]):
+        return False
+    return True
+
+
 def get_grade_exam_content():
     st.title('Grade Exams')
     st.markdown("""Here we will grade and give feedback to student exam submissions""")
@@ -181,7 +192,7 @@ def get_grade_exam_content():
             # Get the assignment instructions
             assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
             instruction_content_placeholder.markdown(assignment_instructions_content, unsafe_allow_html=True)
-            st.info("Added: %s" % instructions_file_path)
+            instruction_content_placeholder.info("Added: %s" % instructions_file_path)
 
         st.header("Solution File")
         solution_file_paths = add_upload_file_element("Upload Exam Solution", ["txt", "docx", "pdf", "java", "zip"],
@@ -206,7 +217,8 @@ def get_grade_exam_content():
                     # TODO: Detect file type then add prefix for markdown based on the extension
                     # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
                     # Display the Java code in a code block
-                    assignment_solution_content_placeholder.code(read_content, language=solution_language, line_numbers=True)
+                    assignment_solution_content_placeholder.code(read_content, language=solution_language,
+                                                                 line_numbers=True)
                 else:
                     assignment_solution_content_placeholder.text_area(read_content)
 
@@ -248,10 +260,12 @@ def get_grade_exam_content():
                                                                 ["txt", "docx", "pdf", "java", "zip"],
                                                                 accept_multiple_files=True)
 
-        disable_submit = not bool(
-            course_name and max_points and deduction_per_major_error and deduction_per_minor_error and assignment_instructions_content and assignment_solution_contents and student_submission_file_paths)
+        # Check if all required inputs are filled
+        disable_submit = not all_required_inputs_filled(course_name, max_points, deduction_per_major_error,
+                                                        deduction_per_minor_error, assignment_instructions_content,
+                                                        assignment_solution_contents, student_submission_file_paths)
 
-        #st.info("Submit Disabled = " + str(disable_submit))
+        # st.info("Submit Disabled = " + str(disable_submit))
 
         submitted = st.form_submit_button("Grade Submissions", disabled=disable_submit)
 
