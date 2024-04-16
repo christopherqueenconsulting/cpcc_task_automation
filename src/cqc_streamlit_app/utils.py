@@ -241,5 +241,5 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     mime_type = file_mime_types.get(feedback_file_extension, "application/octet-stream")
 
     # Trigger the download of the file
-    st.download_button(label=button_label, data=st.session_state.feedback_download_file_path,
+    st.download_button(label=button_label, data=file_path,
                        file_name=download_file_name, mime=mime_type)
