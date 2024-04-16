@@ -172,7 +172,8 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
                             accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
     None, None]:
 
-    if accept_multiple_files:
+    if False:
+    #if accept_multiple_files:
         # Button to reset the multi file uploader
         reset_label = "Reset "+uploader_text+" File Uploader"
         reset_key = reset_label.replace(" ", "_")

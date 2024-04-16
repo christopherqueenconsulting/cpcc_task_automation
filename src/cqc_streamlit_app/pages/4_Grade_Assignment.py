@@ -248,7 +248,7 @@ def get_grade_exam_content():
         disable_submit = not bool(
             course_name and max_points and deduction_per_major_error and deduction_per_minor_error and assignment_instructions_content and assignment_solution_contents and student_submission_file_paths)
 
-        st.info("Submit Disabled = " + str(disable_submit))
+        #st.info("Submit Disabled = " + str(disable_submit))
 
         submitted = st.form_submit_button("Grade Submissions", disabled=disable_submit)
 
