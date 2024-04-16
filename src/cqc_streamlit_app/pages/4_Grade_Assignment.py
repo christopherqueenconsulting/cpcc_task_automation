@@ -312,8 +312,7 @@ def get_grade_exam_content():
                 # Stop status and show as complete
                 status.update(label=student_file_name + " Graded", state="complete", expanded=False)
 
-        # TODO: Add button to download all feedback from all tabs at once
-        # graded_feedback_file_map
+        # Add button to download all feedback from all tabs at once
         zip_file_path = create_zip_file(graded_feedback_file_map)
         time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         on_download_click(zip_file_path, "Download All Feedback Files",

@@ -149,7 +149,7 @@ def give_feedback_on_assignments(course_name: str, assignment_name: str, assignm
 
         status.update(label="Feedback complete!", state="complete", expanded=False)
 
-            """
+        tmp = """
             file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.txt".replace(
                 " ", "_")
     
@@ -234,7 +234,7 @@ def main():
 
 
         # Display the button
-        st.button("Click to download", on_click=on_download_click(st.session_state.feedback_download_file_path))
+        #st.button("Click to download", on_click=on_download_click(st.session_state.feedback_download_file_path))
 
         # Display text output TODO: Look into other format options. Markdown is allowed
         # st.text(pre_feedback + feedback + post_feedback)
