@@ -256,3 +256,18 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     # Trigger the download of the file
     st.download_button(label=button_label, data=file_content,
                        file_name=download_file_name, mime=mime_type, key=download_file_name)
+
+def create_zip_file(file_paths: list[tuple[str, str]]) -> str:
+    # Create a temporary file to store the zip file
+    zip_file = tempfile.NamedTemporaryFile(delete=False)
+    zip_file.close()  # Close the file to use it as the output path for the zip file
+
+    with zipfile.ZipFile(zip_file.name, 'w') as zipf:
+        for orig_file_path, temp_file_path in file_paths:
+            # Get the base file name from the original file path
+            base_file_name = os.path.basename(orig_file_path)
+            # Add the temporary file to the zip file with the original file name
+            zipf.write(temp_file_path, arcname=base_file_name)
+
+    # Return the path of the zip file
+    return zip_file.name
