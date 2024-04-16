@@ -299,6 +299,10 @@ def convert_tables_to_json_in_tmp__file(doc: Document) -> str:
 
 
 @streamlit.cache_data
+def convert_content_to_markdown(content: str) -> str:
+    return md(content)
+
+@streamlit.cache_data
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format. If file ends in .docx will convert it to json and return"""
     file_name, file_extension = os.path.splitext(file_path)
@@ -307,7 +311,7 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
         with open(file_path, mode='rb') as f:
             # results = mammoth.convert_to_markdown(f)
             results = mammoth.convert_to_html(f)
-            contents = md(results.value)
+            contents = convert_content_to_markdown(results.value)
         # contents = results.value
     elif file_extension == ".docx":
         # read in a document

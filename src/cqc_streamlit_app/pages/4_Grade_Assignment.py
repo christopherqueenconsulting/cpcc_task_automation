@@ -8,7 +8,8 @@ import streamlit as st
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
-from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks
+from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks, \
+    convert_content_to_markdown
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
     get_language_from_file_path, on_download_click, create_zip_file
@@ -174,15 +175,16 @@ def get_grade_exam_content():
     deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10)
 
     st.header("Instructions File")
-    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Exam Instructions",
+    _orig_file_name, instructions_file_content = add_upload_file_element("Upload Exam Instructions",
                                                                       ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
     assignment_instructions_content = None
 
-    if instructions_file_path:
+    if instructions_file_content:
         # Get the assignment instructions
-        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+        #assignment_instructions_content = read_file(instructions_file_content, convert_instructions_to_markdown)
+        assignment_instructions_content = convert_content_to_markdown(instructions_file_content)
         st.markdown(assignment_instructions_content, unsafe_allow_html=True)
         #st.info("Added: %s" % instructions_file_path)
 
@@ -196,11 +198,11 @@ def get_grade_exam_content():
     if solution_file_paths:
         assignment_solution_contents = ""
 
-        for orig_solution_file_path, solution_file_path in solution_file_paths:
-            solution_language = get_language_from_file_path(solution_file_path)
+        for orig_solution_file_path, read_content in solution_file_paths:
+            solution_language = get_language_from_file_path(orig_solution_file_path)
 
             # Get the assignment  solution
-            read_content = read_file(solution_file_path)
+            #read_content = read_file(solution_file_path)
             assignment_solution_contents += read_content
             if solution_language:
                 # st.info("Solution Language: " + solution_language)
@@ -279,7 +281,7 @@ def get_grade_exam_content():
 
         graded_feedback_file_map = []
 
-        for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
+        for student_submission_file_path, student_submission_file_path_contents in student_submission_file_paths:
 
             student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
             base_student_filename = os.path.basename(student_submission_file_path)
@@ -290,7 +292,7 @@ def get_grade_exam_content():
                 # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
                 # Display Student Code in code block for each file
-                student_submission_file_path_contents = read_file(student_submission_temp_file_path)
+                #student_submission_file_path_contents = read_file(student_submission_temp_file_path)
                 code_langauge = get_language_from_file_path(student_submission_file_path)
                 st.header(student_file_name + student_file_extension)
                 if code_langauge:

@@ -199,7 +199,7 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
                 original_file_name = uploaded_file.name
                 # Create a temporary file to store the uploaded file
                 #temp_file_name = upload_file_to_temp_path(uploaded_file)
-                temp_file_name = uploaded_file.name
+                temp_file_name = str(uploaded_file.getvalue())
                 uploaded_file_paths.append((original_file_name, temp_file_name))
         if uploaded_files and success_message:
             st.success("File(s) uploaded successfully.")
@@ -210,7 +210,7 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
         original_file_name = uploaded_files.name
         # Create a temporary file to store the uploaded file
         #temp_file_name = upload_file_to_temp_path(uploaded_files)
-        temp_file_name = uploaded_files.name
+        temp_file_name = str(uploaded_files.getvalue())
         if success_message:
             st.success("File uploaded successfully.")
         return original_file_name, temp_file_name
