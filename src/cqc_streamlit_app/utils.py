@@ -177,7 +177,7 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
     if reset_key not in st.session_state:
         st.session_state[reset_key] = False
 
-    if st.button(reset_label):
+    if st.checkbox(reset_label):
         st.session_state[reset_key] = True
         st.experimental_rerun()
 
