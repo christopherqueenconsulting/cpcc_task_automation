@@ -162,6 +162,8 @@ def get_grade_exam_content():
     submitted = st.empty()
     with st.form("exam_setup_form"):
 
+        st.markdown("#Exam Setup")
+
         # Text input for entering a course name
         course_name = st.text_input("Enter Course and Assignment Name")
         max_points = st.number_input("Max points for assignment", value=200)
