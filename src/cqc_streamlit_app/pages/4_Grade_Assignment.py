@@ -1,15 +1,17 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import os
+import tempfile
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
-from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType
+from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
 from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
-    define_code_language_selection, get_language_from_file_path
+    get_language_from_file_path, on_download_click
 
 # Initialize session state variables
 init_session_state()
@@ -192,7 +194,7 @@ def get_grade_exam_content():
             read_content = read_file(solution_file_path)
             assignment_solution_contents += read_content
             if solution_language:
-                #st.info("Solution Language: " + solution_language)
+                # st.info("Solution Language: " + solution_language)
                 # TODO: Detect file type then add prefix for markdown based on the extension
                 # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
                 # Display the Java code in a code block
@@ -231,24 +233,22 @@ def get_grade_exam_content():
         # MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
         # minor_error_types_list = list(MyMinorErrorType)
 
-    selected_model, temperature = define_chatGPTModel("grade_exam_assigment")
+    selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment")
 
     st.header("Student Submission File(s)")
     student_submission_file_paths = add_upload_file_element("Upload Student Submission",
-                                                           ["txt", "docx", "pdf", "java", "zip"], accept_multiple_files=True)
+                                                            ["txt", "docx", "pdf", "java", "zip"],
+                                                            accept_multiple_files=True)
 
-
-    if assignment_instructions_content and assignment_solution_contents and student_submission_file_paths:
+    if course_name and max_points and deduction_per_major_error and deduction_per_minor_error and assignment_instructions_content and assignment_solution_contents and student_submission_file_paths:
         st.success("All required file have been uploaded successfully.")
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
 
-        custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
+        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model)
 
         # Start status wheel and display with updates from the coder
 
-
-        hold = """
         code_grader = CodeGrader(
             max_points=max_points,
             exam_instructions=assignment_instructions_content,
@@ -257,10 +257,8 @@ def get_grade_exam_content():
             deduction_per_minor_error=deduction_per_minor_error,
             grader_llm=custom_llm
         )
-        """
 
         # TODO: If zip go through each folder as student submission and grade using files in each folder
-
 
         # TODO: Else go through each file and grade
 
@@ -269,10 +267,10 @@ def get_grade_exam_content():
             student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
             base_student_filename = os.path.basename(student_submission_file_path)
 
-            # Add a new expander element with the feedback
-            with st.status("Grading: "+student_file_name, expanded=True) as status:
+            # Add a new expander element with grade and feedback from the grader class
+            with st.status("Grading: " + student_file_name, expanded=True) as status:
 
-                #print("Generating Feedback and Grade for: %s" % base_student_filename)
+                # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
                 # Display Student Code in code block for each file
                 student_submission_file_path_contents = read_file(student_submission_file_path)
@@ -282,24 +280,33 @@ def get_grade_exam_content():
                 else:
                     st.text_area(student_submission_file_path_contents)
 
-                # code_grader.grade_submission(student_submission)
+                code_grader.grade_submission(student_submission_file_path_contents)
                 # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
-                # Get Temp file and path to use to store feecback
-                # file_path = f"./logs/{assignment_name}_{student_file_name}-{model}_temp({str(temperature)})-{time_stamp}.docx".replace(
-                #    " ", "_")
+                # Create a temporary file to store the uploaded instructions
+                file_name_prefix = f"{course_name}_{student_file_name}-{selected_model}_temp({str(selected_temperature)})-{time_stamp}".replace(
+                                                            " ", "_")
+                file_name_suffix = ".docx"
+                time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+                temp_file = tempfile.NamedTemporaryFile(delete=False,
+                                                        prefix=file_name_prefix,
+                                                        suffix=file_name_suffix)
+                download_filename = file_name_prefix+file_name_suffix
 
                 # Style the feedback and save to .docx file
-                # code_grader.save_feedback_to_docx(file_path)
+                code_grader.save_feedback_to_docx(temp_file.name)
 
-        # TODO: Create tab with grade and feedback from the grader class
+                student_feedback_content = read_file(temp_file.name, True)
+                st.markdown(student_feedback_content)
 
-        # TODO: Add button to download individual feedback on each tab
 
-        # TODO: Add button to download all feedback from all tabs at once
+                # TODO: Add button to download individual feedback on each tab
+                on_download_click(temp_file.name, "Download Feedback for "+student_file_name, download_filename)
 
-        # TODO: Stop status and show as complete
-                status.update(label="Grading Complete!", state="complete", expanded=False)
+                # TODO: Add button to download all feedback from all tabs at once
+
+                # TODO: Stop status and show as complete
+                status.update(label=student_file_name + " Graded", state="complete", expanded=False)
 
 
 def main():

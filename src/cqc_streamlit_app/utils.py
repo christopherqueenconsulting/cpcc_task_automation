@@ -227,3 +227,19 @@ def process_file(file_path, allowed_file_extensions):
         if any(file_path.lower().endswith(ext) for ext in allowed_file_extensions):
             with open(file_path, 'r') as file:
                 print("Contents of single file:", file.read())
+
+
+def on_download_click(file_path: str, button_label: str, download_file_name: str):
+    file_mime_types = {
+        ".java": "text/x-java-source",
+        ".txt": "text/plain",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".pdf": "application/pdf",
+        ".zip": "application/zip"
+    }
+    feedback_file_name, feedback_file_extension = os.path.splitext(file_path)
+    mime_type = file_mime_types.get(feedback_file_extension, "application/octet-stream")
+
+    # Trigger the download of the file
+    st.download_button(label=button_label, data=st.session_state.feedback_download_file_path,
+                       file_name=download_file_name, mime=mime_type)

@@ -164,20 +164,6 @@ def give_feedback_on_assignments(course_name: str, assignment_name: str, assignm
         # TODO: If more than one file then zip and return path to zipped file for download
 
 
-def on_download_click():
-    file_mime_types = {
-        ".java": "text/x-java-source",
-        ".txt": "text/plain",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".pdf": "application/pdf",
-        ".zip": "application/zip"
-    }
-    feedback_file_name, feedback_file_extension = get_file_extension_from_filepath(st.session_state.feedback_download_file_path)
-    mime_type = file_mime_types.get(feedback_file_extension, "application/octet-stream")
-
-    # Trigger the download of the file
-    st.download_button(label="Download Feedback File", data=st.session_state.feedback_download_file_path,
-                       file_name=os.path.basename(feedback_file_name), mime=mime_type)
 
 
 def main():
@@ -246,8 +232,9 @@ def main():
 
         st.session_state.feedback_download_file_path = give_feedback_on_assignments()
 
+
         # Display the button
-        st.button("Click to download", on_click=on_download_click)
+        st.button("Click to download", on_click=on_download_click(st.session_state.feedback_download_file_path))
 
         # Display text output TODO: Look into other format options. Markdown is allowed
         # st.text(pre_feedback + feedback + post_feedback)
