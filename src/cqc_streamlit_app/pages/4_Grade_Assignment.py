@@ -162,8 +162,6 @@ def get_grade_exam_content():
     submitted = st.empty()
     with st.form("exam_setup_form"):
 
-        st.markdown("#Exam Setup")
-
         # Text input for entering a course name
         course_name = st.text_input("Enter Course and Assignment Name")
         max_points = st.number_input("Max points for assignment", value=200)
@@ -177,10 +175,12 @@ def get_grade_exam_content():
 
         assignment_instructions_content = None
 
+        instruction_file_placeholder = st.empty()
+
         if instructions_file_path:
             # Get the assignment instructions
             assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-            st.markdown(assignment_instructions_content)
+            instruction_file_placeholder = st.markdown(assignment_instructions_content)
 
         st.header("Solution File")
         solution_file_paths = add_upload_file_element("Upload Exam Solution", ["txt", "docx", "pdf", "java", "zip"],
