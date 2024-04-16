@@ -184,8 +184,8 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
             st.session_state[reset_key] = True
             st.experimental_rerun()
 
-    if st.session_state[reset_key]:
-        return None, None
+        if st.session_state[reset_key]:
+            return None, None
 
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files)
