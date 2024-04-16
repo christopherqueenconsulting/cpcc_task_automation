@@ -17,7 +17,8 @@ from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
 retry_model = 'gpt-4-1106-preview'
-retry_llm = ChatOpenAI(temperature=0, model=retry_model)
+#retry_llm = ChatOpenAI(temperature=0, model=retry_model)
+retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -29,6 +30,7 @@ def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplat
                                                        )
     try:
         prompt_value = prompt.format_prompt(**prompt_args)
+
         final_output = retry_parser.parse_with_prompt(output.content, prompt_value)
     except OutputParserException as e:
         print("Exception During Retry Output: %s" % e)

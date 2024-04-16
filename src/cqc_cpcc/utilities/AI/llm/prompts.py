@@ -1,6 +1,6 @@
 EXAM_REVIEW_PROMPT_BASE = """
-You are a Java 151 professor grading a student's exam submission. 
-Using the given Exam Instructions and Example Solution, analyze the Student Submission to identify all major and minor errors that apply. 
+You are a college professor grading a student's exam submission. 
+Using the given Exam Instructions and Exam Example Solution, analyze the Student Submission to identify all major and minor errors that apply. 
 Provide a detailed and informative description for each error identified, written constructively and referring directly to the error. 
 Provide the text from the relevant line(s) of code from the Student Submission for each error when appropriate, as code_error_lines. 
 Each element in code_error_lines should represent only one line of code. 
@@ -18,7 +18,7 @@ Minor Error Types:
 Exam Instructions: 
 {exam_instructions}
 
-Example Solution:
+Exam Example Solution:
 {exam_solution}
 
 Student Submission: 

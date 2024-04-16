@@ -271,7 +271,7 @@ def get_grade_exam_content():
             base_student_filename = os.path.basename(student_submission_file_path)
 
             # Add a new expander element with grade and feedback from the grader class
-            with st.status("Grading: " + student_file_name+student_file_extension, expanded=True) as status:
+            with st.status("Grading: " + student_file_name+student_file_extension, expanded=False) as status:
 
                 # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
@@ -310,13 +310,15 @@ def get_grade_exam_content():
                                   download_filename)
 
                 # Stop status and show as complete
-                status.update(label=student_file_name + " Graded", state="complete", expanded=False)
+                status.update(label=student_file_name + " Graded", state="complete")
 
-        # Add button to download all feedback from all tabs at once
-        zip_file_path = create_zip_file(graded_feedback_file_map)
-        time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        on_download_click(zip_file_path, "Download All Feedback Files",
-                          course_name.replace(' ', '_') + "_Graded_Feedback_" + time_stamp + ".zip")
+        if (len(student_submission_file_paths) == len(graded_feedback_file_map)):
+
+            # Add button to download all feedback from all tabs at once
+            zip_file_path = create_zip_file(graded_feedback_file_map)
+            time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            on_download_click(zip_file_path, "Download All Feedback Files",
+                              course_name.replace(' ', '_') + "_Graded_Feedback_" + time_stamp + ".zip")
 
 
 def main():
