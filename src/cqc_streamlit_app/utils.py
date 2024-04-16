@@ -8,6 +8,8 @@ import streamlit as st
 from langchain_openai import ChatOpenAI
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
+from cqc_cpcc.utilities.utils import read_file
+
 CODE_LANGUAGES = [
     "abap", "abnf", "actionscript", "ada", "agda", "al", "antlr4", "apacheconf",
     "apex", "apl", "applescript", "aql", "arduino", "arff", "asciidoc", "asm6502",
@@ -242,6 +244,8 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     file_extension = get_file_extension_from_filepath(download_file_name)
     mime_type = file_mime_types.get(file_extension, "application/octet-stream")
 
+    file_content = read_file(file_path)
+
     # Trigger the download of the file
-    st.download_button(label=button_label, data=file_path,
+    st.download_button(label=button_label, data=file_content,
                        file_name=download_file_name, mime=mime_type)
