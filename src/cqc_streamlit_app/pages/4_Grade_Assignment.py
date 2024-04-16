@@ -159,7 +159,7 @@ def get_grade_exam_content():
     st.markdown("""Here we will grade and give feedback to student exam submissions""")
 
     # Add elements to page to work with
-    submitted = st.empty
+    submitted = st.empty()
     with st.form("exam_setup_form"):
 
         # Text input for entering a course name
