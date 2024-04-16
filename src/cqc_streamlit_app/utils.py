@@ -246,10 +246,13 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     st.info("file_extension: " + file_extension + " | mime_type: " + mime_type)
 
     #file_content = read_file(file_path)
+    # Read the content of the file
+    with open(file_path, "rb") as file:
+        file_content = file.read()
 
     #st.info("file_path: "+file_path+" | download_file_name: "+download_file_name)
     #st.markdown(file_content)
 
     # Trigger the download of the file
-    st.download_button(label=button_label, data=file_path,
+    st.download_button(label=button_label, data=file_content,
                        file_name=download_file_name, mime=mime_type, key=download_file_name)
