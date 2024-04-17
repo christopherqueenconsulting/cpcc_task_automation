@@ -366,7 +366,7 @@ def get_grade_exam_content():
 
 
 def main():
-    # TODO: Initialize other session state variables - the ones you need in .env
+    st.set_page_config(layout="wide")
 
     st.set_page_config(page_title="Grade Assignment", page_icon="🦜️🔗")  # TODO: Change the page icon
 
