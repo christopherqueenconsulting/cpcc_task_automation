@@ -2,6 +2,7 @@ from typing import List, Optional, Annotated
 
 from docx import Document
 from docx.shared import Pt
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic.v1 import Field, BaseModel, StrictStr
@@ -218,13 +219,14 @@ class CodeGrader:
         grade_feedback += "\n\n" + self.final_score_text
         return grade_feedback
 
-    def grade_submission(self, student_submission: str):
+    def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None):
         # print("Identifying Errors")
         error_definitions_from_llm = get_exam_error_definition_from_completion_chain(
             student_submission=student_submission,
             completion_chain=self.error_definitions_completion_chain,
             parser=self.error_definitions_parser,
-            prompt=self.error_definitions_prompt
+            prompt=self.error_definitions_prompt,
+            callback=callback
 
         )
         # print("Errors Identified")

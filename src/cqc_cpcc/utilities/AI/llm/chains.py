@@ -1,14 +1,14 @@
 from pprint import pprint
 from typing import Type, TypeVar, Tuple
 
-import streamlit as st
 from langchain.output_parsers import RetryWithErrorOutputParser
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.output_parsers import BaseOutputParser, PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnableSerializable
+from langchain_core.runnables import RunnableSerializable, ensure_config
 from langchain_core.runnables.utils import Output
 from langchain_openai import ChatOpenAI
 from pydantic.v1 import BaseModel
@@ -145,15 +145,21 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
 def get_exam_error_definition_from_completion_chain(student_submission: str,
                                                     completion_chain: RunnableSerializable[dict, BaseMessage],
                                                     parser: PydanticOutputParser,
-                                                    prompt: PromptTemplate, wrap_code_in_markdown=True
+                                                    prompt: PromptTemplate, wrap_code_in_markdown=True,
+                                                    callback: BaseCallbackHandler = None
                                                     ) -> T:
     if wrap_code_in_markdown:
         student_submission = wrap_code_in_markdown_backticks(student_submission)
 
+    config = None
+    if callback:
+        config = {'callback': callback}
+
     output = completion_chain.invoke({
         "submission": student_submission,
         "response_format": {"type": "json_object"}
-    })
+    },
+        config=config)
 
     # print("\n\nOutput:")
     # pprint(output.content)

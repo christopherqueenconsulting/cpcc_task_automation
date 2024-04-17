@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+from streamlit.external.langchain import StreamlitCallbackHandler
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
@@ -219,7 +220,7 @@ def get_grade_exam_content():
     minor_error_types_list = []
     # Show success message if feedback types are defined
     if not major_error_types.empty:
-        #st.success("Major errors defined.")
+        # st.success("Major errors defined.")
         # Convert DataFrame to list of FeedbackType objects
         for _, row in major_error_types.iterrows():
             name = row[NAME]
@@ -232,7 +233,7 @@ def get_grade_exam_content():
         # major_error_types_list = list(MyMajorErrorType)
 
     if not minor_error_types.empty:
-        #st.success("Minor errors defined.")
+        # st.success("Minor errors defined.")
         # Convert DataFrame to list of FeedbackType objects
         for _, row in minor_error_types.iterrows():
             name = row[NAME]
@@ -308,7 +309,8 @@ def get_grade_exam_content():
                 prompt_value_text = getattr(prompt_value, 'text', '')
                 st.code(prompt_value_text)
 
-                code_grader.grade_submission(student_submission_file_path_contents)
+                code_grader.grade_submission(student_submission_file_path_contents,
+                                             callback=StreamlitCallbackHandler(status))
                 # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
                 # Create a temporary file to store the uploaded instructions

@@ -15,4 +15,4 @@ def init_session_state():
         st.session_state.instructor_password = ""
 
     if 'instructor_signature' not in st.session_state:
-        st.session_state.instructor_signature = ""
+        st.session_state.instructor_signature = "Your Professor"
