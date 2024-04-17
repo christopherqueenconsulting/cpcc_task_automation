@@ -174,19 +174,24 @@ class GradingStatusHandler(BaseCallbackHandler):
     def __init__(
             self,
             status_container: StatusContainer,
+            prefix_label: str =  None
     ):
         self._status_container = status_container
+        if prefix_label is None:
+            self._prefix_label = "";
+        else:
+            self._prefix_label = prefix_label + " | "
 
     def on_llm_start(
             self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
     ) -> None:
-        self._status_container.update(label="Getting feedback from ChatGPT")
+        self._status_container.update(label= self._prefix_label+"Getting feedback from ChatGPT")
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        self._status_container.update(label="From ChatGPT: "+response)
+        self._status_container.update(label= self._prefix_label+"From ChatGPT: "+response)
 
     def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
-        self._status_container.update(label="ErrorT: " + str(erorr))
+        self._status_container.update(label= self._prefix_label+"Error: " + str(error))
 
 def get_grade_exam_content():
     st.title('Grade Exams')
@@ -295,7 +300,8 @@ def get_grade_exam_content():
             base_student_filename = os.path.basename(student_submission_file_path)
 
             # Add a new expander element with grade and feedback from the grader class
-            with st.status("Grading: " + student_file_name + student_file_extension, expanded=False) as status:
+            status_prefix_label = "Grading: " + student_file_name + student_file_extension
+            with st.status(status_prefix_labeln, expanded=False) as status:
 
                 # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
@@ -319,7 +325,7 @@ def get_grade_exam_content():
                 st.code(prompt_value_text)
 
                 code_grader.grade_submission(student_submission_file_path_contents,
-                                             callback=GradingStatusHandler(status))
+                                             callback=GradingStatusHandler(status, status_prefix_label))
                 # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
                 # Create a temporary file to store the uploaded instructions
@@ -347,7 +353,7 @@ def get_grade_exam_content():
                                   download_filename)
 
                 # Stop status and show as complete
-                status.update(label=student_file_name + " Graded", state="complete")
+                #status.update(label=student_file_name + " Graded", state="complete")
 
 
         if (len(student_submission_file_paths) == len(graded_feedback_file_map)):
