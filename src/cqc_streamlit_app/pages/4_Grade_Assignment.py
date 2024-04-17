@@ -219,7 +219,7 @@ def get_grade_exam_content():
     minor_error_types_list = []
     # Show success message if feedback types are defined
     if not major_error_types.empty:
-        st.success("Major errors defined.")
+        #st.success("Major errors defined.")
         # Convert DataFrame to list of FeedbackType objects
         for _, row in major_error_types.iterrows():
             name = row[NAME]
@@ -232,7 +232,7 @@ def get_grade_exam_content():
         # major_error_types_list = list(MyMajorErrorType)
 
     if not minor_error_types.empty:
-        st.success("Minor errors defined.")
+        #st.success("Minor errors defined.")
         # Convert DataFrame to list of FeedbackType objects
         for _, row in minor_error_types.iterrows():
             name = row[NAME]
