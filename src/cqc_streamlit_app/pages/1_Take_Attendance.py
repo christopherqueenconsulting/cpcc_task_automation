@@ -9,9 +9,8 @@ from cqc_streamlit_app.utils import get_cpcc_css
 init_session_state()
 
 def main():
-    # TODO: Initialize other session state variables - the ones you need in .env
 
-    st.set_page_config(page_title="CPCC Take Attendance", page_icon="🦜️🔗")  # TODO: Change the page icon
+    st.set_page_config(layout="wide", page_title="CPCC Take Attendance", page_icon="✅")  # TODO: Change the page icon
 
     css = get_cpcc_css()
     st.markdown(

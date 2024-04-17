@@ -162,7 +162,7 @@ def give_feedback_on_assignments(course_name: str, assignment_name: str, assignm
 
 
 def main():
-    st.set_page_config(page_title="Give Feedback", page_icon="🦜️🔗")  # TODO: Change the page icon
+    st.set_page_config(layout="wide", page_title="Give Feedback", page_icon="💬")  # TODO: Change the page icon
 
     css = get_cpcc_css()
     st.markdown(

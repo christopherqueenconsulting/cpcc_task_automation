@@ -10,6 +10,8 @@ from cqc_streamlit_app.utils import get_cpcc_css
 init_session_state()
 
 def main():
+    st.set_page_config(layout="wide", page_title="Settings", page_icon="⚙️")  # TODO: Change the page icon
+
     css = get_cpcc_css()
     st.markdown(
         css,

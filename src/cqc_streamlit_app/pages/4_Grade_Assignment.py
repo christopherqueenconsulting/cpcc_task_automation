@@ -366,9 +366,7 @@ def get_grade_exam_content():
 
 
 def main():
-    st.set_page_config(layout="wide")
-
-    st.set_page_config(page_title="Grade Assignment", page_icon="🦜️🔗")  # TODO: Change the page icon
+    st.set_page_config(layout="wide", page_title="Grade Assignment", page_icon="📝")  # TODO: Change the page icon
 
     css = get_cpcc_css()
     st.markdown(
