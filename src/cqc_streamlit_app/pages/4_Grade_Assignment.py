@@ -342,8 +342,10 @@ def get_grade_exam_content():
             # Add button to download all feedback from all tabs at once
             zip_file_path = create_zip_file(graded_feedback_file_map)
             time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            zip_file_name_prefix = f"{course_name}_Graded_Feedback__{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
+                " ", "_")
             on_download_click(zip_file_path, "Download All Feedback Files",
-                              course_name.replace(' ', '_') + "_Graded_Feedback_" + time_stamp + ".zip")
+                              zip_file_name_prefix + ".zip")
 
 
 def main():
