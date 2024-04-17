@@ -191,7 +191,7 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
                          value=True,
                          key="Checkbox_" + st.session_state[reset_key],
                          )
-        if cb:
+        if not cb:
             reset_session_key_value(reset_key)
             cb = False
 
