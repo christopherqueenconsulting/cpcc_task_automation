@@ -169,6 +169,10 @@ def define_chatGPTModel(unique_key: str | int, default_min_value: float = .2, de
     return selected_model, temperature
 
 
+def reset_session_key_value(key: str):
+    st.session_state[key] = str(randint(1000, 100000000))
+
+
 def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True,
                             accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
     None, None]:
@@ -177,16 +181,17 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
     reset_key = reset_label.replace(" ", "_")
 
     if reset_key not in st.session_state:
-        st.session_state[reset_key] = str(randint(1000, 100000000))
+        reset_session_key_value(reset_key)
 
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files, key=st.session_state[reset_key])
 
     if accept_multiple_files:
-        cb = st.checkbox(reset_label, key="Checkbox_" + st.session_state[reset_key])
+        cb = st.checkbox(reset_label, key="Checkbox_" + st.session_state[reset_key],
+                         on_change=reset_session_key_value(reset_key))
         # TODO: Fix below commented out
-        if cb == True:
-            st.session_state[reset_key] = str(randint(1000, 100000000))
+        #if cb == True:
+        #    st.session_state[reset_key] = str(randint(1000, 100000000))
         # state.sync()
 
         uploaded_file_paths = []
