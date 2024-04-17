@@ -310,6 +310,9 @@ def get_grade_exam_content():
 
                 st.code(prompt_value_text)
 
+                # TODO: Remove below
+                continue  # Skip the rest of the current iteration and move to the next one
+
                 code_grader.grade_submission(student_submission_file_path_contents)
                 # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
