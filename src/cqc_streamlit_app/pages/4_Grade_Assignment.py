@@ -8,9 +8,10 @@ import streamlit as st
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
-from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks, convert_content_to_markdown
+from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, get_language_from_file_path, on_download_click, create_zip_file
+from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
+    get_language_from_file_path, on_download_click, create_zip_file
 
 # Initialize session state variables
 init_session_state()
@@ -174,7 +175,7 @@ def get_grade_exam_content():
 
     st.header("Instructions File")
     _orig_file_name, instructions_file_path = add_upload_file_element("Upload Exam Instructions",
-                                                                         ["txt", "docx", "pdf"])
+                                                                      ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
     assignment_instructions_content = None
@@ -251,8 +252,8 @@ def get_grade_exam_content():
 
     # Check if all required inputs are filled
     process_grades = all_required_inputs_filled(course_name, max_points, deduction_per_major_error,
-                                                    deduction_per_minor_error, assignment_instructions_content,
-                                                    assignment_solution_contents, student_submission_file_paths)
+                                                deduction_per_minor_error, assignment_instructions_content,
+                                                assignment_solution_contents, student_submission_file_paths)
 
     if process_grades:
         # st.success("All required file have been uploaded successfully.")
