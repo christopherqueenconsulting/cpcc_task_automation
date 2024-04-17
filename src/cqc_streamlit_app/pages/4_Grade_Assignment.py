@@ -294,36 +294,39 @@ def get_grade_exam_content():
                 prompt_value_text = getattr(prompt_value, 'text', '')
                 st.code(prompt_value_text)
 
-                code_grader.grade_submission(student_submission_file_path_contents,
-                                             callback=StreamlitCallbackHandler(status))
-                # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
+                coder_thoughts = st.empty()
+                with coder_thoughts:
+                    code_grader.grade_submission(student_submission_file_path_contents,
+                                                 callback=StreamlitCallbackHandler(coder_thoughts))
+                    # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
-                # Create a temporary file to store the uploaded instructions
-                time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-                file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
-                    " ", "_")
-                graded_feedback_file_extension = ".docx"
-                graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
-                                                                        # prefix=file_name_prefix,
-                                                                        suffix=graded_feedback_file_extension)
-                download_filename = file_name_prefix + graded_feedback_file_extension
+                    # Create a temporary file to store the uploaded instructions
+                    time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+                    file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
+                        " ", "_")
+                    graded_feedback_file_extension = ".docx"
+                    graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
+                                                                            # prefix=file_name_prefix,
+                                                                            suffix=graded_feedback_file_extension)
+                    download_filename = file_name_prefix + graded_feedback_file_extension
 
-                # Style the feedback and save to .docx file
-                code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
+                    # Style the feedback and save to .docx file
+                    code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
 
-                graded_feedback_file_map.append((str(base_student_filename).replace(student_file_extension,
-                                                                                    graded_feedback_file_extension),
-                                                 graded_feedback_temp_file.name))
+                    graded_feedback_file_map.append((str(base_student_filename).replace(student_file_extension,
+                                                                                        graded_feedback_file_extension),
+                                                     graded_feedback_temp_file.name))
 
-                student_feedback_content = read_file(graded_feedback_temp_file.name, True)
-                st.markdown(student_feedback_content)
+                    student_feedback_content = read_file(graded_feedback_temp_file.name, True)
+                    st.markdown(student_feedback_content)
 
-                # Add button to download individual feedback on each tab
-                on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
-                                  download_filename)
+                    # Add button to download individual feedback on each tab
+                    on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
+                                      download_filename)
 
-                # Stop status and show as complete
-                status.update(label=student_file_name + " Graded", state="complete")
+                    # Stop status and show as complete
+                    status.update(label=student_file_name + " Graded", state="complete")
+                status.update(label=coder_thoughts)
 
         if (len(student_submission_file_paths) == len(graded_feedback_file_map)):
             # Add button to download all feedback from all tabs at once
