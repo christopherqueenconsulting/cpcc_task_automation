@@ -2,9 +2,13 @@
 import os
 import tempfile
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 import streamlit as st
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.outputs import LLMResult
+from streamlit.elements.lib.mutable_status_container import StatusContainer
 from streamlit.external.langchain import StreamlitCallbackHandler
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
@@ -164,6 +168,26 @@ def all_required_inputs_filled(course_name, max_points, deduction_per_major_erro
          assignment_solution_contents, student_submission_file_paths])
 
 
+class GradingStatusHandler(BaseCallbackHandler):
+
+
+    def __init__(
+            self,
+            status_container: StatusContainer,
+    ):
+        self._status_container = status_container
+
+    def on_llm_start(
+            self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
+    ) -> None:
+        self._status_container.update(label="Getting feedback from ChatGPT")
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        self._status_container.update(label="From ChatGPT: "+response)
+
+    def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
+        self._status_container.update(label="ErrorT: " + str(erorr))
+
 def get_grade_exam_content():
     st.title('Grade Exams')
     st.markdown("""Here we will grade and give feedback to student exam submissions""")
@@ -227,7 +251,7 @@ def get_grade_exam_content():
         # Convert DataFrame to list of Minor Error types
         minor_error_type_list = minor_error_types[DESCRIPTION].to_list()
 
-    selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment")
+    selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment", default_temp_value=.3)
 
     st.header("Student Submission File(s)")
     student_submission_file_paths = add_upload_file_element("Upload Student Submission",
@@ -294,39 +318,37 @@ def get_grade_exam_content():
                 prompt_value_text = getattr(prompt_value, 'text', '')
                 st.code(prompt_value_text)
 
-                coder_thoughts = st.empty()
-                with coder_thoughts:
-                    code_grader.grade_submission(student_submission_file_path_contents,
-                                                 callback=StreamlitCallbackHandler(coder_thoughts))
-                    # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
+                code_grader.grade_submission(student_submission_file_path_contents,
+                                             callback=GradingStatusHandler(status))
+                # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
-                    # Create a temporary file to store the uploaded instructions
-                    time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-                    file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
-                        " ", "_")
-                    graded_feedback_file_extension = ".docx"
-                    graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
-                                                                            # prefix=file_name_prefix,
-                                                                            suffix=graded_feedback_file_extension)
-                    download_filename = file_name_prefix + graded_feedback_file_extension
+                # Create a temporary file to store the uploaded instructions
+                time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+                file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
+                    " ", "_")
+                graded_feedback_file_extension = ".docx"
+                graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
+                                                                        # prefix=file_name_prefix,
+                                                                        suffix=graded_feedback_file_extension)
+                download_filename = file_name_prefix + graded_feedback_file_extension
 
-                    # Style the feedback and save to .docx file
-                    code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
+                # Style the feedback and save to .docx file
+                code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
 
-                    graded_feedback_file_map.append((str(base_student_filename).replace(student_file_extension,
-                                                                                        graded_feedback_file_extension),
-                                                     graded_feedback_temp_file.name))
+                graded_feedback_file_map.append((str(base_student_filename).replace(student_file_extension,
+                                                                                    graded_feedback_file_extension),
+                                                 graded_feedback_temp_file.name))
 
-                    student_feedback_content = read_file(graded_feedback_temp_file.name, True)
-                    st.markdown(student_feedback_content)
+                student_feedback_content = read_file(graded_feedback_temp_file.name, True)
+                st.markdown(student_feedback_content)
 
-                    # Add button to download individual feedback on each tab
-                    on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
-                                      download_filename)
+                # Add button to download individual feedback on each tab
+                on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
+                                  download_filename)
 
-                    # Stop status and show as complete
-                    status.update(label=student_file_name + " Graded", state="complete")
-                #status.update(label=coder_thoughts)
+                # Stop status and show as complete
+                status.update(label=student_file_name + " Graded", state="complete")
+
 
         if (len(student_submission_file_paths) == len(graded_feedback_file_map)):
             # Add button to download all feedback from all tabs at once
