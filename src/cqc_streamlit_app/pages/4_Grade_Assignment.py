@@ -225,7 +225,7 @@ def get_grade_exam_content():
     if not minor_error_types.empty:
         # st.success("Minor errors defined.")
         # Convert DataFrame to list of Minor Error types
-        major_error_type_list = minor_error_types[DESCRIPTION].to_list()
+        minor_error_type_list = minor_error_types[DESCRIPTION].to_list()
 
     selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment")
 
