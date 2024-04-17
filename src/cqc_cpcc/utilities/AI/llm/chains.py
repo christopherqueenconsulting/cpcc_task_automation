@@ -142,7 +142,6 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
     return completion_chain, parser, prompt
 
 
-@st.cache_data
 def get_exam_error_definition_from_completion_chain(student_submission: str,
                                                     completion_chain: RunnableSerializable[dict, BaseMessage],
                                                     parser: PydanticOutputParser,

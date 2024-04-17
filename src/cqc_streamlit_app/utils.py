@@ -189,7 +189,7 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
     if accept_multiple_files:
         if st.button("Remove All Files", key="Checkbox_" + st.session_state[reset_key]):
             reset_session_key_value(reset_key)
-            st.experimental_rerun()
+            st.rerun()
 
         uploaded_file_paths = []
         for uploaded_file in uploaded_files:
