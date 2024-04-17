@@ -184,10 +184,12 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
         reset_session_key_value(reset_key)
 
     if accept_multiple_files:
-        if st.checkbox(reset_label,
+        cb = st.checkbox(reset_label,
                        key="Checkbox_" + st.session_state[reset_key],
-                       ):
+                       )
+        if cb:
             reset_session_key_value(reset_key)
+            cb = False
 
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files, key=st.session_state[reset_key])
