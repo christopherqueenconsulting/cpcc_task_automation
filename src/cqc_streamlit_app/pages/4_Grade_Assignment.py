@@ -214,35 +214,18 @@ def get_grade_exam_content():
                 st.text_area(read_content)
 
     major_error_types, minor_error_types = define_error_definitions()
-    major_error_types_dict = {}
-    minor_error_types_dict = {}
-    major_error_types_list = []
-    minor_error_types_list = []
+    major_error_type_list = []
+    minor_error_type_list = []
     # Show success message if feedback types are defined
     if not major_error_types.empty:
         # st.success("Major errors defined.")
-        # Convert DataFrame to list of FeedbackType objects
-        for _, row in major_error_types.iterrows():
-            name = row[NAME]
-            description = row[DESCRIPTION]
-            major_error_types_dict[name] = description
-            # feedback_types_list.append(FeedbackType(name, description))
-
-        # TODO: Fix below commented out
-        # MyMajorErrorType = MajorErrorType('MajorErrorType', major_error_types_dict)
-        # major_error_types_list = list(MyMajorErrorType)
+        # Convert DataFrame to list of Major Error types
+        major_error_type_list = major_error_types[DESCRIPTION].to_list()
 
     if not minor_error_types.empty:
         # st.success("Minor errors defined.")
-        # Convert DataFrame to list of FeedbackType objects
-        for _, row in minor_error_types.iterrows():
-            name = row[NAME]
-            description = row[DESCRIPTION]
-            minor_error_types_dict[name] = description
-            # feedback_types_list.append(FeedbackType(name, description))
-        # TODO: Fix below commented out
-        # MyMinorErrorType = MinorErrorType('MinorErrorType', minor_error_types_dict)
-        # minor_error_types_list = list(MyMinorErrorType)
+        # Convert DataFrame to list of Minor Error types
+        major_error_type_list = minor_error_types[DESCRIPTION].to_list()
 
     selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment")
 
@@ -271,6 +254,8 @@ def get_grade_exam_content():
             exam_solution=assignment_solution_contents,
             deduction_per_major_error=int(deduction_per_major_error),
             deduction_per_minor_error=int(deduction_per_minor_error),
+            major_error_type_list=major_error_type_list,
+            minor_error_type_list=minor_error_type_list,
             grader_llm=custom_llm
         )
 

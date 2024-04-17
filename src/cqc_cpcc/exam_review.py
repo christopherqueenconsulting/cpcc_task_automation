@@ -159,17 +159,26 @@ class CodeGrader:
     error_definitions_parser = None
     error_definitions_prompt = None
 
-    def __init__(self, max_points: int, exam_instructions: str, exam_solution: str, deduction_per_major_error: int = 20,
-                 deduction_per_minor_error: int = 5, wrap_code_in_markdown: bool = True,
+    def __init__(self, max_points: int, exam_instructions: str, exam_solution: str,
+                 deduction_per_major_error: int = 20,
+                 deduction_per_minor_error: int = 5,
+                 major_error_type_list: list = None,
+                 minor_error_type_list: list = None,
+                 wrap_code_in_markdown: bool = True,
                  grader_llm: BaseChatModel = default_llm):
         self.max_points = max_points
         self.deduction_per_major_error = deduction_per_major_error
         self.deduction_per_minor_error = deduction_per_minor_error
+        if major_error_type_list is None:
+            major_error_type_list = MajorErrorType.list()
+        if minor_error_type_list is None:
+            minor_error_type_list = MinorErrorType.list()
+
         self.error_definitions_completion_chain, self.error_definitions_parser, self.error_definitions_prompt = get_exam_error_definitions_completion_chain(
             _llm=grader_llm,
             pydantic_object=ErrorDefinitions,
-            major_error_type_list=MajorErrorType.list(),
-            minor_error_type_list=MinorErrorType.list(),
+            major_error_type_list=major_error_type_list,
+            minor_error_type_list=minor_error_type_list,
             exam_instructions=exam_instructions,
             exam_solution=exam_solution,
             wrap_code_in_markdown=wrap_code_in_markdown
