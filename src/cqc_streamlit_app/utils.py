@@ -191,6 +191,7 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files, key=st.session_state[reset_key])
 
+    if accept_multiple_files:
 
         # TODO: Fix below commented out
         #if cb == True:
