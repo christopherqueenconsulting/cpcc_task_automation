@@ -183,19 +183,17 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
     if reset_key not in st.session_state:
         reset_session_key_value(reset_key)
 
-
-
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files, key=st.session_state[reset_key])
 
     if accept_multiple_files:
-        cb = st.checkbox(reset_label,
+        cb = st.checkbox("Deselect to Remove All Files",
+                         value=True,
                          key="Checkbox_" + st.session_state[reset_key],
                          )
         if cb:
             reset_session_key_value(reset_key)
             cb = False
-
 
     if accept_multiple_files:
 
