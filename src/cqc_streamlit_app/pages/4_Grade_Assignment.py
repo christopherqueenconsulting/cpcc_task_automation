@@ -186,10 +186,11 @@ class GradingStatusHandler(BaseCallbackHandler):
         self._status_container.update(label=self._prefix_label + "Getting feedback from ChatGPT")
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        self._status_container.update(label=self._prefix_label + "From ChatGPT: " + str(response))
+        #self._status_container.update(label=self._prefix_label + "From ChatGPT: " + str(response))
+        self._status_container.update(label=self._prefix_label + "ChatGPT Finished")
 
     def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
-        self._status_container.update(label=self._prefix_label + "Error: " + str(error))
+        self._status_container.update(label=self._prefix_label + "ChatGPT Error: " + str(error))
 
 
 def get_grade_exam_content():
