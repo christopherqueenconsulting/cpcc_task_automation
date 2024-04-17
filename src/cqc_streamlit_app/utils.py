@@ -188,12 +188,10 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
 
     if accept_multiple_files:
         cb = st.checkbox("Deselect to Remove All Files",
-                         #value=True,
+                         # value=True,
                          key="Checkbox_" + st.session_state[reset_key],
                          )
-        if cb:
-            cb = False
-        else:
+        if cb == True:
             reset_session_key_value(reset_key)
 
     if accept_multiple_files:
