@@ -183,7 +183,8 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
                                       accept_multiple_files=accept_multiple_files, key=st.session_state[reset_key])
 
     if accept_multiple_files:
-        if not st.checkbox(reset_label, True):
+        cb = st.checkbox(reset_label, True)
+        if not cb:
             st.session_state[reset_key] = str(randint(1000, 100000000))
         # state.sync()
 
