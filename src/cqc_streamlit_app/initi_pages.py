@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+st.set_page_config(layout="wide")
 
 # Initialize session state variables
 def init_session_state():
