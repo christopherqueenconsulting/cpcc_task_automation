@@ -176,14 +176,14 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
     reset_label = "Reset " + uploader_text + " File Uploader"
     reset_key = reset_label.replace(" ", "_")
 
-    if accept_multiple_files and reset_key not in st.session_state:
+    if reset_key not in st.session_state:
         st.session_state[reset_key] = str(randint(1000, 100000000))
 
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files, key=st.session_state[reset_key])
 
     if accept_multiple_files:
-        if st.checkbox(reset_label):
+        if not st.checkbox(reset_label, True):
             st.session_state[reset_key] = str(randint(1000, 100000000))
         # state.sync()
 
