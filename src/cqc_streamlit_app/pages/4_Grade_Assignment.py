@@ -9,7 +9,6 @@ import streamlit as st
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from streamlit.elements.lib.mutable_status_container import StatusContainer
-from streamlit.external.langchain import StreamlitCallbackHandler
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
@@ -170,11 +169,10 @@ def all_required_inputs_filled(course_name, max_points, deduction_per_major_erro
 
 class GradingStatusHandler(BaseCallbackHandler):
 
-
     def __init__(
             self,
             status_container: StatusContainer,
-            prefix_label: str =  None
+            prefix_label: str = None
     ):
         self._status_container = status_container
         if prefix_label is None:
@@ -185,13 +183,14 @@ class GradingStatusHandler(BaseCallbackHandler):
     def on_llm_start(
             self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
     ) -> None:
-        self._status_container.update(label= self._prefix_label+"Getting feedback from ChatGPT")
+        self._status_container.update(label=self._prefix_label + "Getting feedback from ChatGPT")
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        self._status_container.update(label= self._prefix_label+"From ChatGPT: "+response)
+        self._status_container.update(label=self._prefix_label + "From ChatGPT: " + response)
 
     def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
-        self._status_container.update(label= self._prefix_label+"Error: " + str(error))
+        self._status_container.update(label=self._prefix_label + "Error: " + str(error))
+
 
 def get_grade_exam_content():
     st.title('Grade Exams')
@@ -301,7 +300,7 @@ def get_grade_exam_content():
 
             # Add a new expander element with grade and feedback from the grader class
             status_prefix_label = "Grading: " + student_file_name + student_file_extension
-            with st.status(status_prefix_labeln, expanded=False) as status:
+            with st.status(status_prefix_label, expanded=False) as status:
 
                 # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
@@ -353,8 +352,7 @@ def get_grade_exam_content():
                                   download_filename)
 
                 # Stop status and show as complete
-                #status.update(label=student_file_name + " Graded", state="complete")
-
+                # status.update(label=student_file_name + " Graded", state="complete")
 
         if (len(student_submission_file_paths) == len(graded_feedback_file_map)):
             # Add button to download all feedback from all tabs at once
