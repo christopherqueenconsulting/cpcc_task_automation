@@ -326,7 +326,7 @@ def get_grade_exam_content():
 
                     # Stop status and show as complete
                     status.update(label=student_file_name + " Graded", state="complete")
-                status.update(label=coder_thoughts)
+                #status.update(label=coder_thoughts)
 
         if (len(student_submission_file_paths) == len(graded_feedback_file_map)):
             # Add button to download all feedback from all tabs at once

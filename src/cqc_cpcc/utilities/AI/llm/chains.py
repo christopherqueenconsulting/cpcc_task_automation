@@ -153,7 +153,7 @@ def get_exam_error_definition_from_completion_chain(student_submission: str,
 
     config = None
     if callback:
-        config = {'callback': callback}
+        config = {'callbacks': [callback]}
 
     output = completion_chain.invoke({
         "submission": student_submission,
