@@ -304,10 +304,8 @@ def get_grade_exam_content():
                 prompt_value = code_grader.error_definitions_prompt.format_prompt(
                     submission=student_submission_file_path_contents_final)
                 st.header("Prompt Value")
-                # TODO: fix so that it shows correctly as code block
-                # Get the text attribute from the PromptValue object
                 prompt_value_text = getattr(prompt_value, 'text', '')
-
+                prompt_value_text = getattr(prompt_value, 'text', '')
                 st.code(prompt_value_text)
 
                 # TODO: Remove below

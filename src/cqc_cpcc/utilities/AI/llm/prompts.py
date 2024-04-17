@@ -7,24 +7,24 @@ Each element in code_error_lines should represent only one line of code.
 The major and minor errors identified should be exhaustive. 
 If an error type does not apply to the Student Submission, you do not need to include it.
 
-IMPORTANT: Your response must follow the Output Instructions exactly.
+**IMPORTANT:** Your response must follow the Output Instructions exactly.
 
-Major Error Types:
+### Major Error Types:
 {major_error_types}
 
-Minor Error Types:
+### Minor Error Types:
 {minor_error_types}
 
-Exam Instructions: 
+### Exam Instructions: 
 {exam_instructions}
 
-Exam Example Solution:
+### Exam Example Solution:
 {exam_solution}
 
-Student Submission: 
+### Student Submission: 
 {submission}
 
-Output Instructions:
+### Output Instructions:
 {format_instructions}
 """
 

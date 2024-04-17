@@ -17,7 +17,7 @@ from cqc_cpcc.utilities.AI.llm.prompts import *
 from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
-#retry_model = 'gpt-4-1106-preview'
+# retry_model = 'gpt-4-1106-preview'
 retry_model = 'gpt-3.5-turbo-16k-0613'
 # retry_llm = ChatOpenAI(temperature=0, model=retry_model)
 retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
@@ -100,7 +100,6 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
     return final_output
 
 
-@st.cache_data
 def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_object: Type[T],
                                                 major_error_type_list: list,
                                                 minor_error_type_list: list, exam_instructions: str, exam_solution: str,
@@ -121,8 +120,8 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
             "exam_instructions": exam_instructions,
             "exam_solution": exam_solution,
             "format_instructions": format_instructions,
-            "major_error_types": "- "+("\n- ".join(major_error_type_list)),
-            "minor_error_types": "- "+("\n- ".join(minor_error_type_list))
+            "major_error_types": "- " + ("\n- ".join(major_error_type_list)),
+            "minor_error_types": "- " + ("\n- ".join(minor_error_type_list))
         },
         template=(
             EXAM_REVIEW_PROMPT_BASE
