@@ -328,7 +328,7 @@ def get_grade_exam_content():
                                                                student_submission_accepted_file_types)
 
                 total_student_submissions = len(student_submissions_map)
-                for base_student_filename, student_submission_files_map in student_submissions_map:
+                for base_student_filename, student_submission_files_map in student_submissions_map.items():
                     graded_feedback_file_name, graded_feedback_temp_file_name = add_grading_status_extender(
                         base_student_filename,
                         student_submission_files_map, code_grader, course_name,
@@ -375,7 +375,7 @@ def add_grading_status_extender(base_student_filename: str, filename_file_path_m
 
         # print("Generating Feedback and Grade for: %s" % base_student_filename)
 
-        student_submission_file_path_contents_all = ""
+        student_submission_file_path_contents_all = []
 
         for filename, filepath in filename_file_path_map.items():
 
@@ -398,7 +398,9 @@ def add_grading_status_extender(base_student_filename: str, filename_file_path_m
             else:
                 st.text_area(student_submission_file_path_contents)
                 student_submission_file_path_contents_final = student_submission_file_path_contents
-            student_submission_file_path_contents_all += student_submission_file_path_contents_final
+            student_submission_file_path_contents_all.append(student_submission_file_path_contents_final)
+
+        student_submission_file_path_contents_all = "\n\n".join(student_submission_file_path_contents_all)
 
         prompt_value = code_grader.error_definitions_prompt.format_prompt(
             submission=student_submission_file_path_contents_all)
