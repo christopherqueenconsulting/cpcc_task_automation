@@ -25,7 +25,6 @@ def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplat
                  **prompt_args) -> T:
     final_output = output
     retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
-    RetryWithErrorOutputParser.retry_chain()
     retry_parser = RetryWithErrorOutputParser.from_llm(parser=parser, llm=retry_llm,
                                                        max_retries=RETRY_PARSER_MAX_RETRY
                                                        )
