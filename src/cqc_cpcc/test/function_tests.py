@@ -5,8 +5,12 @@ import zipfile
 from pprint import pprint
 from random import randint
 
+from langchain.chains.llm import LLMChain
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+
 from cqc_cpcc.utilities.date import get_datetime
-from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks, read_file
+from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
 
 def test_1():
@@ -66,22 +70,24 @@ def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict
                     student_name = directory_name.split(folder_name_delimiter)[1]
 
                     # Check if the file has an accepted file type
-                    if file_name.endswith(tuple(accepted_file_types)) and not file_name.startswith(tuple(unacceptable_file_prefixes)):
+                    if file_name.endswith(tuple(accepted_file_types)) and not file_name.startswith(
+                            tuple(unacceptable_file_prefixes)):
                         # Read the file contents
                         with zip_ref.open(file_info.filename) as file:
                             # TODO: Change to modules on read file method
-                            #file_contents = file.read().decode('utf-8')  # Assuming UTF-8 encoding
+                            # file_contents = file.read().decode('utf-8')  # Assuming UTF-8 encoding
                             sub_file_name, sub_file_extension = os.path.splitext(file_name)
-                            prefix = 'from_zip_'+str(randint(1000, 100000000))+"_"
-                            temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=prefix, suffix=sub_file_extension)
+                            prefix = 'from_zip_' + str(randint(1000, 100000000)) + "_"
+                            temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=prefix,
+                                                                    suffix=sub_file_extension)
                             temp_file.write(file.read())
-                            #file_contents = read_file(
+                            # file_contents = read_file(
                             #    temp_file.name)  # Reading this way incase it may be .docx or some other type we want to pre-process differently
 
                         # Store the file contents in the dictionary
                         if student_name not in students_data:
                             students_data[student_name] = {}
-                        #students_data[student_name][file_name] = file_contents
+                        # students_data[student_name][file_name] = file_contents
                         students_data[student_name][file_name] = temp_file.name
 
     return students_data
@@ -89,11 +95,23 @@ def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict
 
 def test4():
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "zip"]
-    data = extract_and_read_zip('/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC251-N850/exam1/submissions_all/Programming Exam 1 Download Apr 18, 2024 221 AM.zip',solution_accepted_file_types)
+    data = extract_and_read_zip(
+        '/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC251-N850/exam1/submissions_all/Programming Exam 1 Download Apr 18, 2024 221 AM.zip',
+        solution_accepted_file_types)
     pprint(data)
+
+
+def test5():
+    default_llm = ChatOpenAI(model='gpt-4-turbo')
+    prompt = PromptTemplate(input_variables=["foo"], template="Say {foo}")
+    completion_chain = LLMChain(prompt=prompt, llm=default_llm)
+    model = completion_chain.dict().get('llm').get('model')
+    print("Model (from completion): %s" % model)
+    print("Model (from llm): %s" % default_llm.dict().get('model'))
 
 
 if __name__ == '__main__':
     # test_1()
-    #test3()
-    test4()
+    # test3()
+    # test4()
+    test5()
