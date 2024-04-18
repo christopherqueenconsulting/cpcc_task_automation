@@ -19,15 +19,15 @@ from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
 # retry_model = 'gpt-4-1106-preview'
 # retry_model = 'gpt-3.5-turbo-16k-0613' # TODO: Figure out which is best
-retry_model = 'gpt-4-turbo'  # TODO: Figure out which is best
-# retry_llm = ChatOpenAI(temperature=0, model=retry_model)
-retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
+# retry_model = 'gpt-4-turbo'  # TODO: Figure out which is best
 
 T = TypeVar("T", bound=BaseModel)
 
 
-def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplate, **prompt_args) -> T:
+def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplate, retry_model: str,
+                 **prompt_args) -> T:
     final_output = output
+    retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
     retry_parser = RetryWithErrorOutputParser.from_llm(parser=parser, llm=retry_llm,
                                                        max_retries=RETRY_PARSER_MAX_RETRY
                                                        )
@@ -103,7 +103,9 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
         final_output = retry_output(output, parser, prompt,
                                     exam_instructions=exam_instructions,
                                     exam_solution=exam_solution,
-                                    submission=student_submission)
+                                    submission=student_submission,
+                                    retry_model=llm.model  # TODO: Fix this
+                                    )
 
     return final_output
 
@@ -185,7 +187,9 @@ def get_exam_error_definition_from_completion_chain(student_submission: str,
         print("\n\nException during parse:")
         print(e)
         final_output = retry_output(output, parser, prompt,
-                                    submission=student_submission)
+                                    submission=student_submission,
+                                    retry_model=completion_chain.model  # TODO: Fix this
+                                    )
 
     return final_output
 
@@ -248,7 +252,9 @@ def get_feedback_output_from_completion_chain(completion_chain: RunnableSerializ
         final_output = parser.parse(output.content)
     except Exception as e:
         print(e)
-        final_output = retry_output(output, parser, prompt, solution=solution)
+        final_output = retry_output(output, parser, prompt, solution=solution,
+                                    retry_model=completion_chain.model  # TODO: Fix this
+                                    )
 
     # print("\n\nFinal Output:")
     # pprint(output)
@@ -310,7 +316,8 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
                                     assignment=assignment,
                                     solution=solution,
                                     submission=student_submission,
-                                    course_name=course_name
+                                    course_name=course_name,
+                                    retry_model=llm.model  # TODO: Fix this
                                     )
 
     print("\n\nFinal Output:")
