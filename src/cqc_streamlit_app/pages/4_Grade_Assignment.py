@@ -206,6 +206,10 @@ class GradingStatusHandler(BaseCallbackHandler):
         self._status_container.update(label=self._prefix_label + "ChatGPT Error: " + str(error))
 
 
+def prefix_content_file_name(filename: str, content: str):
+    return "# File: " + filename + "\n\n" + content
+
+
 def get_grade_exam_content():
     st.title('Grade Exams')
     st.markdown("""Here we will grade and give feedback to student exam submissions""")
@@ -226,6 +230,7 @@ def get_grade_exam_content():
     if instructions_file_path:
         # Get the assignment instructions
         assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+
         st.markdown(assignment_instructions_content, unsafe_allow_html=True)
         # st.info("Added: %s" % instructions_file_path)
 
@@ -241,9 +246,13 @@ def get_grade_exam_content():
 
         for orig_solution_file_path, solution_file_path in solution_file_paths:
             solution_language = get_language_from_file_path(orig_solution_file_path)
+            solution_file_name, solution_file_extension = os.path.splitext(orig_solution_file_path)
 
             # Get the assignment  solution
             read_content = read_file(solution_file_path)
+            # Prefix with the file name
+            read_content = prefix_content_file_name(solution_file_name, read_content)
+
             assignment_solution_contents += read_content
             if solution_language:
                 # st.info("Solution Language: " + solution_language)
@@ -320,6 +329,11 @@ def get_grade_exam_content():
 
                 # Display Student Code in code block for each file
                 student_submission_file_path_contents = read_file(student_submission_temp_file_path)
+
+                # Prefix the content with the file name
+                student_submission_file_path_contents = prefix_content_file_name(student_file_name,
+                                                                                 student_submission_file_path_contents)
+
                 code_langauge = get_language_from_file_path(student_submission_file_path)
                 st.header(student_file_name + student_file_extension)
                 if code_langauge:

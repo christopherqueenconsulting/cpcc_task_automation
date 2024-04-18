@@ -21,7 +21,7 @@ If an error type does not apply to the Student Submission, you do not need to in
 ### Exam Example Solution:
 {exam_solution}
 
-### Student Submission: 
+### Student Submission(s): 
 {submission}
 
 ### Output Instructions:
