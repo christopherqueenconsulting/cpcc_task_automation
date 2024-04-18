@@ -90,13 +90,13 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
         "response_format": {"type": "json_object"}
     })
 
-    print("\n\nOutput:")
+    #print("\n\nOutput:")
     # pprint(output.content)
-    pprint(output.get('content'))
+    # pprint(output.get('text'))
 
     try:
         # final_output = parser.parse(output.content)
-        final_output = parser.parse(output.get('content'))
+        final_output = parser.parse(output.get('text'))
     except Exception as e:
         print("\n\nException during parse:")
         print(e)
@@ -184,7 +184,7 @@ def get_exam_error_definition_from_completion_chain(student_submission: str,
 
     try:
         #final_output = parser.parse(output.content)
-        final_output = parser.parse(output.get('content'))
+        final_output = parser.parse(output.get('text'))
     except Exception as e:
         print("\n\nException during parse:")
         print(e)
@@ -308,13 +308,13 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
         "response_format": {"type": "json_object"}
     })
 
-    print("\n\nOutput:")
+    #print("\n\nOutput:")
     #pprint(output.content)
-    pprint(output.get('content'))
+    #pprint(output.get('text'))
 
     try:
         #final_output = parser.parse(output.content)
-        final_output = parser.parse(output.get('content'))
+        final_output = parser.parse(output.get('text'))
     except Exception as e:
         print(e)
         final_output = retry_output(output, parser, prompt,
@@ -373,4 +373,4 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
     })
 
     #return output.content
-    return output.get('content')
+    return output.get('text')

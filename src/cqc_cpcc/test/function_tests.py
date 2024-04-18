@@ -4,10 +4,14 @@ import tempfile
 import zipfile
 from pprint import pprint
 from random import randint
+from typing import Annotated
 
 from langchain.chains.llm import LLMChain
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
+from pydantic import StrictStr, Field
+from pydantic.v1 import BaseModel
 
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
@@ -101,13 +105,44 @@ def test4():
     pprint(data)
 
 
+class TestPersonObject(BaseModel):
+    name: Annotated[
+        StrictStr,
+        Field(description="The name of the person")
+    ]
+    details: Annotated[
+        StrictStr,
+        Field(description="The details about this person")
+    ]
+
+
 def test5():
-    default_llm = ChatOpenAI(model='gpt-4-turbo')
-    prompt = PromptTemplate(input_variables=["foo"], template="Say {foo}")
+    model_version = 'gpt-3.5-turbo-16k-0613'
+    default_llm = ChatOpenAI(model=model_version)
+    prompt = PromptTemplate(input_variables=["foo"], template="Who is {foo} and what are some details about them? ### Output Instructions: {format_instructions}")
     completion_chain = LLMChain(prompt=prompt, llm=default_llm)
     model = completion_chain.dict().get('llm').get('model')
     print("Model (from completion): %s" % model)
     print("Model (from llm): %s" % default_llm.dict().get('model'))
+
+    parser = PydanticOutputParser(pydantic_object=TestPersonObject)
+    format_instructions = parser.get_format_instructions()
+
+    output = completion_chain.invoke({
+        "foo": "Chris Queen",
+        "format_instructions": format_instructions,
+        "response_format": {"type": "json_object"}
+    })
+
+    print("\n\nOutput:")
+    # pprint(output.content)
+    pprint(output)
+
+    final_output = parser.parse(output.get('text'))
+
+    print("\n\nFinal Output:")
+    # pprint(output.content)
+    pprint(final_output)
 
 
 if __name__ == '__main__':
