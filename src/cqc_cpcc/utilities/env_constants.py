@@ -26,9 +26,9 @@ except KeyError:
     IS_GITHUB_ACTION = False
 
 # Get constants from environment .env file
-OPENAI_API_KEY = get_constanct_from_env('OPENAI_API_KEY', True)
-INSTRUCTOR_USERID = get_constanct_from_env('INSTRUCTOR_USERID', True)
-INSTRUCTOR_PASS = get_constanct_from_env('INSTRUCTOR_PASS', True)
+OPENAI_API_KEY = get_constanct_from_env('OPENAI_API_KEY')
+INSTRUCTOR_USERID = get_constanct_from_env('INSTRUCTOR_USERID')
+INSTRUCTOR_PASS = get_constanct_from_env('INSTRUCTOR_PASS')
 HEADLESS_BROWSER = isTrue(get_constanct_from_env('HEADLESS_BROWSER', default_value='False'))
 WAIT_DEFAULT_TIMEOUT = float(get_constanct_from_env('WAIT_DEFAULT_TIMEOUT', default_value='15'))
 MAX_WAIT_RETRY = int(get_constanct_from_env('MAX_WAIT_RETRY', default_value='2'))
