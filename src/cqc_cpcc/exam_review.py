@@ -9,6 +9,7 @@ from pydantic.v1 import Field, BaseModel, StrictStr
 
 from cqc_cpcc.utilities.AI.llm.chains import get_exam_error_definition_from_completion_chain, \
     get_exam_error_definitions_completion_chain
+from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
 from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
 
 # model = 'gpt-3.5-turbo-1106'
@@ -316,7 +317,7 @@ class CodeGrader:
 
         # Add the line numbers for where errors occur
         all_errors = merge_lists(unique_major_errors, unique_minor_errors)
-        if all_errors is not None:
+        if SHOW_ERROR_LINE_NUMBERS and all_errors is not None:
             for code_error in all_errors:
                 line_numbers = []
                 if code_error.code_error_lines is not None:

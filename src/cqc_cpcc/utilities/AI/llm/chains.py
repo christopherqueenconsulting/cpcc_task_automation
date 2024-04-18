@@ -14,7 +14,7 @@ from langchain_openai import ChatOpenAI
 from pydantic.v1 import BaseModel
 
 from cqc_cpcc.utilities.AI.llm.prompts import *
-from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY
+from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
 # retry_model = 'gpt-4-1106-preview'
@@ -49,10 +49,17 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
     parser = PydanticOutputParser(pydantic_object=pydantic_object)
     format_instructions = parser.get_format_instructions()
 
+    extra_system_instructions = ""
+    if SHOW_ERROR_LINE_NUMBERS:
+        extra_system_instructions = """Provide the first 25 characters of the relevant line(s) of code from the Student Submission for each error when appropriate, as code_error_lines. 
+        Each element in code_error_lines should represent only one line of code. 
+        """
+
     prompt = PromptTemplate(
         # template_format="jinja2",
         input_variables=["submission"],
         partial_variables={
+            "extra_system_instructions": extra_system_instructions,
             "exam_instructions": exam_instructions,
             "exam_solution": exam_solution,
             "format_instructions": format_instructions,
@@ -113,10 +120,17 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
     if wrap_code_in_markdown:
         exam_solution = wrap_code_in_markdown_backticks(exam_solution)
 
+    extra_system_instructions=""
+    if SHOW_ERROR_LINE_NUMBERS:
+        extra_system_instructions= """Provide the first 25 characters of the relevant line(s) of code from the Student Submission for each error when appropriate, as code_error_lines. 
+    Each element in code_error_lines should represent only one line of code. 
+    """
+
     prompt = PromptTemplate(
         # template_format="jinja2",
         input_variables=["submission"],
         partial_variables={
+            "extra_system_instructions": extra_system_instructions,
             "exam_instructions": exam_instructions,
             "exam_solution": exam_solution,
             "format_instructions": format_instructions,
