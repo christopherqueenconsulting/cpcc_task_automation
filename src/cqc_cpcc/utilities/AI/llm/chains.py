@@ -8,7 +8,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.output_parsers import BaseOutputParser, PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnableSerializable, ensure_config
+from langchain_core.runnables import RunnableSerializable
 from langchain_core.runnables.utils import Output
 from langchain_openai import ChatOpenAI
 from pydantic.v1 import BaseModel
@@ -18,8 +18,8 @@ from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
 # retry_model = 'gpt-4-1106-preview'
-#retry_model = 'gpt-3.5-turbo-16k-0613' # TODO: Figure out which is best
-retry_model = 'gpt-4-turbo' # TODO: Figure out which is best
+# retry_model = 'gpt-3.5-turbo-16k-0613' # TODO: Figure out which is best
+retry_model = 'gpt-4-turbo'  # TODO: Figure out which is best
 # retry_llm = ChatOpenAI(temperature=0, model=retry_model)
 retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
 
@@ -121,9 +121,9 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
     if wrap_code_in_markdown:
         exam_solution = wrap_code_in_markdown_backticks(exam_solution)
 
-    extra_system_instructions=""
+    extra_system_instructions = ""
     if SHOW_ERROR_LINE_NUMBERS:
-        extra_system_instructions= """Provide the first 25 characters of the relevant line(s) of code from the Student Submission for each error when appropriate, as code_error_lines. 
+        extra_system_instructions = """Provide the first 25 characters of the relevant line(s) of code from the Student Submission for each error when appropriate, as code_error_lines. 
     Each element in code_error_lines should represent only one line of code. 
     """
 
