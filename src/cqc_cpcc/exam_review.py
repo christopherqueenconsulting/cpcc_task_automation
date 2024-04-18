@@ -19,48 +19,90 @@ temperature = .2  # .2 <- More deterministic | More Creative -> .8
 default_llm = ChatOpenAI(temperature=temperature, model=model)
 
 
+def parse_error_type_enum_name(enum_name:str):
+    parts = enum_name.split('_')  # Split the string by underscores
+    course = parts[0]+" "+parts[1]  # First part is the course
+    exam = parts[2]+""+parts[3]  # Second part is the exam
+    name = '_'.join(parts[4:])  # Join the remaining parts to get the name
+    return course, exam, name
+
 class MajorErrorType(ExtendedEnum):
-    """Enum representing various types of coding issues."""
+    """Enum representing various types of major coding errors."""
 
     """No documentation or insufficient documentation (comments)."""
-    INSUFFICIENT_DOCUMENTATION = "No documentation or insufficient amount of comments in the code"
+    CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION = "No documentation or insufficient amount of comments in the code"
 
     """Errors in coding sequence and selection."""
     # SEQUENCE_AND_SELECTION_ERROR = "Errors in the sequence and selection structures in the code"
-    SEQUENCE_AND_SELECTION_ERROR_V2 = "Errors in the coding sequence, selection and looping including incorrect use of comparison operators"
+    CSC_151_EXAM_1_SEQUENCE_AND_SELECTION_ERROR = "Errors in the coding sequence, selection and looping including incorrect use of comparison operators"
 
-    # METHOD_ERRORS = """Method errors in the code such as:
-    # - passing the incorrect number of arguments
-    # - incorrect data types for arguments and parameter variables
-    # - failing to include the data type of parameter variables in the method header"""
+    CSC_151_EXAM_2_METHOD_ERRORS = """Method errors in the code (passing the incorrect number of arguments, incorrect data types for arguments and parameter variables, or failing to include the data type of parameter variables in the method header)"""
 
     """Errors that adversely impact the output (calculation errors, omissions, etc.)."""
-    OUTPUT_IMPACT_ERROR = "Errors that adversely impact the expected output, such as calculation errors or omissions"
+    CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR = "Errors that adversely impact the expected output, such as calculation errors or omissions"
+
+    # CSC 251 Major Errors (includes the ones above)
+
+    """Failure to declare and use constants."""
+    CSC_251_EXAM_1_CONSTANTS_ERROR = "Constants are not properly declared or used"
+
+    """Decimal scale is not correct and/or missing comma separators."""
+    CSC_251_EXAM_1_DECIMAL_SCALE = "There are issues with the expected code output where the decimal scale is not correct and/or missing commas separators"
+
+    """Omit curly braces"""
+    CSC_251_EXAM_1_CURLY_BRACES_OMITTED = "The code has omission of curly braces"
+
+    """Security Holes"""
+    CSC_251_EXAM_2_SECURITY_HOLES = "There are security holes in the code"
+
+    """All method errors - adding or removing parameters, changing return type or name, returning incorrect values, etc."""
+    CSC_251_EXAM_1_METHOD_ERRORS = "There are method errors (issues with parameters, return types, incorrect values, etc.)"
+
+    """Any class design errors"""
+    CSC_251_EXAM_1_CLASS_DESIGN_ERRORS = "There are class design errors"
+
+    """Any ArrayList errors"""
+    CSC_251_EXAM_1_ARRAYLIST_ERRORS = "There are errors involving ArrayList"
+
+    """Any aggregation errors"""
+    CSC_251_EXAM_2_AGGREGATION_ERRORS = "There are aggregation errors"
+
 
 
 class MinorErrorType(ExtendedEnum):
     """Enum representing various types of minor coding errors."""
 
     """Syntax error in the code."""
-    SYNTAX_ERROR = "There are syntax errors in the code"
+    CSC_151_EXAM_1_SYNTAX_ERROR = "There are syntax errors in the code"
 
     """Violation of naming conventions."""
-    NAMING_CONVENTION = "Naming conventions are not followed"
+    CSC_151_EXAM_1_NAMING_CONVENTION = "Naming conventions are not followed"
 
     """Failure to declare and use constants."""
-    CONSTANTS_ERROR = "Constants are not properly declared or used"
+    CSC_151_EXAM_1_CONSTANTS_ERROR = "Constants are not properly declared or used"
 
     """Inefficient code practices."""
-    INEFFICIENT_CODE = "The code is inefficient and can be optimized"
+    CSC_151_EXAM_1_INEFFICIENT_CODE = "The code is inefficient and can be optimized"
 
     """Issues with the code output formatting."""
-    OUTPUT_FORMATTING = "There are issues with the expected code output formatting (spacing, decimal places, etc.)"
+    CSC_151_EXAM_1_OUTPUT_FORMATTING = "There are issues with the expected code output formatting (spacing, decimal places, etc.)"
 
     """Programming style issues (indentation, white space, etc.)."""
-    PROGRAMMING_STYLE = "There are programming style issues that do not adhere to language standards (indentation, white space, etc.)"
+    CSC_151_EXAM_1_PROGRAMMING_STYLE = "There are programming style issues that do not adhere to language standards (indentation, white space, etc.)"
 
     """Error related to the use of the Scanner class."""
-    SCANNER_CLASS = "There are errors related to the use of the Scanner class"
+    CSC_151_EXAM_1_SCANNER_CLASS = "There are errors related to the use of the Scanner class"
+
+    # CSC 251 Minor Errors (includes the ones above
+
+    """Filename and class container name are not the same"""
+    CSC_251_EXAM_1_FILE_CLASS_NAME_MISMATCH = "The filename and class container are not the same"
+
+    """Minor formatting issues – not matching Sample Input and Output (ex: missing spaces, missing dollar sign, not using print/println appropriately)"""
+    CSC_251_EXAM_1_MINOR_FORMATTING = "There are formating issues not matching Sample Input and Output (i.e spacing, missing dollar sign, not using print/println appropriately, etc.)"
+
+    """Stale data in classes"""
+    CSC_251_EXAM_1_STALE_DATA = "There is stale data in classes"
 
 
 class MinorError(CodeError):

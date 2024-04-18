@@ -10,7 +10,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from streamlit.elements.lib.mutable_status_container import StatusContainer
 
-from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader
+from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader, parse_error_type_enum_name
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
 from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks
 from cqc_streamlit_app.initi_pages import init_session_state
@@ -22,6 +22,8 @@ init_session_state()
 
 GR_CRITERIA = "Criteria"
 GR_PPL = "Possible Points Loss"
+COURSE = "COURSE"
+EXAM = "EXAM"
 NAME = "Name"
 DESCRIPTION = "Description"
 
@@ -119,8 +121,15 @@ def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
     # TODO: Get these from the default enum already defined
 
     # Convert the enum class to a list of dictionaries
-    major_error_types_data = [{NAME: member.name, DESCRIPTION: member.value} for member in MajorErrorType]
-    minor_error_types_data = [{NAME: member.name, DESCRIPTION: member.value} for member in MinorErrorType]
+    # major_error_types_data = [{NAME: member.name, DESCRIPTION: member.value} for member in MajorErrorType]
+    # minor_error_types_data = [{NAME: member.name, DESCRIPTION: member.value} for member in MinorErrorType]
+
+    major_error_types_data = [
+        {**dict(zip((COURSE, EXAM, NAME), parse_error_type_enum_name(enum_name))), **{DESCRIPTION: enum_value}}
+        for enum_name, enum_value in MajorErrorType]
+    minor_error_types_data = [
+        {**dict(zip((COURSE, EXAM, NAME), parse_error_type_enum_name(enum_name))), **{DESCRIPTION: enum_value}}
+        for enum_name, enum_value in MinorErrorType]
 
     major_error_types_data_df = pd.DataFrame(major_error_types_data)
     minor_error_types_data_df = pd.DataFrame(minor_error_types_data)
@@ -132,10 +141,12 @@ def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
                                                       hide_index=True,
                                                       num_rows="dynamic",
                                                       column_config={
-                                                          NAME: st.column_config.TextColumn(NAME + ' (required)',
+                                                          COURSE: st.column_config.TextColumn(COURSE),
+                                                          EXAM: st.column_config.TextColumn(EXAM),
+                                                          NAME: st.column_config.TextColumn(NAME,
                                                                                             help='Uppercase and Underscores only',
                                                                                             validate="^[A-Z_]+$",
-                                                                                            required=True),
+                                                                                            ),
                                                           DESCRIPTION: st.column_config.TextColumn(
                                                               DESCRIPTION + ' (required)', required=True)
                                                       }
@@ -146,10 +157,12 @@ def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
                                                       hide_index=True,
                                                       num_rows="dynamic",
                                                       column_config={
-                                                          NAME: st.column_config.TextColumn(NAME + ' (required)',
+                                                          COURSE: st.column_config.TextColumn(COURSE),
+                                                          EXAM: st.column_config.TextColumn(EXAM),
+                                                          NAME: st.column_config.TextColumn(NAME,
                                                                                             help='Uppercase and Underscores only',
                                                                                             validate="^[A-Z_]+$",
-                                                                                            required=True),
+                                                                                            ),
                                                           DESCRIPTION: st.column_config.TextColumn(
                                                               DESCRIPTION + ' (required)', required=True)
                                                       }
@@ -183,10 +196,10 @@ class GradingStatusHandler(BaseCallbackHandler):
     def on_llm_start(
             self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
     ) -> None:
-        self._status_container.update(label=self._prefix_label + "Getting feedback from ChatGPT")
+        self._status_container.update(label=self._prefix_label + "Getting response from ChatGPT")
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        #self._status_container.update(label=self._prefix_label + "From ChatGPT: " + str(response))
+        # self._status_container.update(label=self._prefix_label + "From ChatGPT: " + str(response))
         self._status_container.update(label=self._prefix_label + "ChatGPT Finished")
 
     def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
