@@ -22,7 +22,7 @@ default_llm = ChatOpenAI(temperature=temperature, model=model)
 def parse_error_type_enum_name(enum_name:str):
     parts = enum_name.split('_')  # Split the string by underscores
     course = parts[0]+" "+parts[1]  # First part is the course
-    exam = parts[2]+""+parts[3]  # Second part is the exam
+    exam = parts[3]  # Second part is the exam
     name = '_'.join(parts[4:])  # Join the remaining parts to get the name
     return course, exam, name
 

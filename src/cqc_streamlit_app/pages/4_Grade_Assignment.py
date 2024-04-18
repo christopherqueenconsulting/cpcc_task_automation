@@ -126,10 +126,10 @@ def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
 
     major_error_types_data = [
         {**dict(zip((COURSE, EXAM, NAME), parse_error_type_enum_name(enum_name))), **{DESCRIPTION: enum_value}}
-        for enum_name, enum_value in MajorErrorType]
+        for enum_name, enum_value in MajorErrorType.__dict__.items() if not enum_name.startswith('_')]
     minor_error_types_data = [
         {**dict(zip((COURSE, EXAM, NAME), parse_error_type_enum_name(enum_name))), **{DESCRIPTION: enum_value}}
-        for enum_name, enum_value in MinorErrorType]
+        for enum_name, enum_value in MinorErrorType.__dict__.items() if not enum_name.startswith('_')]
 
     major_error_types_data_df = pd.DataFrame(major_error_types_data)
     minor_error_types_data_df = pd.DataFrame(minor_error_types_data)
