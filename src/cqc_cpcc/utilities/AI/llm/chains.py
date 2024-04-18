@@ -30,8 +30,8 @@ def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplat
                                                        )
     try:
         prompt_value = prompt.format_prompt(**prompt_args)
-
-        final_output = retry_parser.parse_with_prompt(output.content, prompt_value)
+        #final_output = retry_parser.parse_with_prompt(output.content, prompt_value)
+        final_output = retry_parser.parse_with_prompt(output.get('text'), prompt_value)
     except OutputParserException as e:
         print("Exception During Retry Output: %s" % e)
         # if max_tries > 0:
@@ -251,7 +251,8 @@ def get_feedback_output_from_completion_chain(completion_chain: LLMChain,
     # pprint(output)
 
     try:
-        final_output = parser.parse(output.content)
+        #final_output = parser.parse(output.content)
+        final_output = parser.parse(output.get('text'))
     except Exception as e:
         print(e)
         final_output = retry_output(output, parser, prompt, solution=solution,
