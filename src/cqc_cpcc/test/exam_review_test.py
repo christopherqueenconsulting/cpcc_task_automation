@@ -52,26 +52,26 @@ def get_test_definitions() -> ErrorDefinitions:
     return ErrorDefinitions(
         all_minor_errors=[
             MinorError(
-                error_type=MinorErrorType.NAMING_CONVENTION,
+                error_type=MinorErrorType.CSC_151_EXAM_1_NAMING_CONVENTION,
                 line_numbers_of_error=[113],
                 error_details="Use lower camel_case when creating variables"),
             MinorError(
-                error_type=MinorErrorType.NAMING_CONVENTION,
+                error_type=MinorErrorType.CSC_151_EXAM_1_NAMING_CONVENTION,
                 line_numbers_of_error=[200, 113, 414],
                 error_details="Use lower camel_case when creating variables"),
             MinorError(
-                error_type=MinorErrorType.NAMING_CONVENTION,
+                error_type=MinorErrorType.CSC_151_EXAM_1_NAMING_CONVENTION,
                 line_numbers_of_error=[311, 414],
                 error_details="Use lower camel_case when creating variables"),
             MinorError(
-                error_type=MinorErrorType.CONSTANTS_ERROR,
+                error_type=MinorErrorType.CSC_151_EXAM_1_CONSTANTS_ERROR,
                 line_numbers_of_error=[20],
                 error_details="You did not use any constants as expected")
         ]
         ,
         all_major_errors=[
             MajorError(
-                error_type=MajorErrorType.INSUFFICIENT_DOCUMENTATION,
+                error_type=MajorErrorType.CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION,
                 line_numbers_of_error=[90],
                 error_details="You did not put any comments in your code")
         ]

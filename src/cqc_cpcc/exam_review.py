@@ -301,15 +301,15 @@ class CodeGrader:
         jc = JavaCode(entire_raw_code=student_submission)
 
         # Remove or add Sufficient Commenting Error
-        insufficient_comment_error = MajorError(error_type=MajorErrorType.INSUFFICIENT_DOCUMENTATION,
+        insufficient_comment_error = MajorError(error_type=MajorErrorType.CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION,
                                                 error_details="There is not enough comments to help others understand the purpose, functionality, and structure of the code.")
 
         if jc.sufficient_amount_of_comments:
             # print("Found Insufficient comments error by LLM but not true so removing")
             # Sufficient comments so remove this error type
             unique_major_errors = [x for x in unique_major_errors if
-                                   x.error_type != MajorErrorType.INSUFFICIENT_DOCUMENTATION]
-        elif MajorErrorType.INSUFFICIENT_DOCUMENTATION not in [x.error_type for x in unique_major_errors]:
+                                   x.error_type != MajorErrorType.CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION]
+        elif MajorErrorType.CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION not in [x.error_type for x in unique_major_errors]:
             # print("Did not find Insufficient comments error by LLM but true so adding it")
             # Insufficient comments but error type doesnt exist
             unique_major_errors.insert(0, insufficient_comment_error)
