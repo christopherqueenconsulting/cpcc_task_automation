@@ -12,12 +12,15 @@ from cqc_cpcc.utilities.AI.llm.chains import get_exam_error_definition_from_comp
 from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
 from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
 
-# model = 'gpt-3.5-turbo-1106'
-# model = 'gpt-4-1106-preview'
-model = 'gpt-3.5-turbo-16k-0613'
-# model = "gpt-4"
-temperature = .2  # .2 <- More deterministic | More Creative -> .8
-default_llm = ChatOpenAI(temperature=temperature, model=model)
+def get_default_llm()->BaseChatModel:
+
+    # model = 'gpt-3.5-turbo-1106'
+    # model = 'gpt-4-1106-preview'
+    model = 'gpt-3.5-turbo-16k-0613'
+    # model = "gpt-4"
+    temperature = .2  # .2 <- More deterministic | More Creative -> .8
+    default_llm = ChatOpenAI(temperature=temperature, model=model)
+    return default_llm
 
 
 def parse_error_type_enum_name(enum_name:str):
@@ -208,7 +211,7 @@ class CodeGrader:
                  major_error_type_list: list = None,
                  minor_error_type_list: list = None,
                  wrap_code_in_markdown: bool = True,
-                 grader_llm: BaseChatModel = default_llm):
+                 grader_llm: BaseChatModel = None):
         self.max_points = max_points
         self.deduction_per_major_error = deduction_per_major_error
         self.deduction_per_minor_error = deduction_per_minor_error
@@ -216,6 +219,9 @@ class CodeGrader:
             major_error_type_list = MajorErrorType.list()
         if minor_error_type_list is None:
             minor_error_type_list = MinorErrorType.list()
+
+        if grader_llm is None:
+            grader_llm = get_default_llm()
 
         self.error_definitions_completion_chain, self.error_definitions_parser, self.error_definitions_prompt = get_exam_error_definitions_completion_chain(
             _llm=grader_llm,
