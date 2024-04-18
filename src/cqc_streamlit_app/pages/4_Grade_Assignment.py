@@ -503,7 +503,10 @@ def main():
         st.title("Online GDB")
 
     with tab3:
-        get_grade_exam_content()
+        if st.session_state.openai_api_key:
+            get_grade_exam_content()
+        else:
+            st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
     with tab4:
         st.title("Other")
 
