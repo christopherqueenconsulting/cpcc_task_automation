@@ -1,7 +1,9 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import os
 import tempfile
+import zipfile
 from datetime import datetime
+from random import randint
 from typing import Any
 
 import pandas as pd
@@ -235,25 +237,26 @@ def get_grade_exam_content():
         # st.info("Added: %s" % instructions_file_path)
 
     st.header("Solution File")
-    solution_file_paths = add_upload_file_element("Upload Exam Solution", ["txt", "docx", "pdf", "java", "zip"],
+    solution_accepted_file_types = ["txt", "docx", "pdf", "java", "zip"]
+    solution_file_paths = add_upload_file_element("Upload Exam Solution", solution_accepted_file_types,
                                                   accept_multiple_files=True)
     # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
     assignment_solution_contents = None
 
     if solution_file_paths:
-        assignment_solution_contents = ""
+        assignment_solution_contents = []
 
         for orig_solution_file_path, solution_file_path in solution_file_paths:
             solution_language = get_language_from_file_path(orig_solution_file_path)
-            solution_file_name, solution_file_extension = os.path.splitext(orig_solution_file_path)
+            solution_file_name = os.path.basename(orig_solution_file_path)
 
             # Get the assignment  solution
             read_content = read_file(solution_file_path)
             # Prefix with the file name
             read_content = prefix_content_file_name(solution_file_name, read_content)
 
-            assignment_solution_contents += read_content
+            assignment_solution_contents.append(read_content)
             if solution_language:
                 # st.info("Solution Language: " + solution_language)
                 # TODO: Detect file type then add prefix for markdown based on the extension
@@ -263,6 +266,8 @@ def get_grade_exam_content():
                         line_numbers=True)
             else:
                 st.text_area(read_content)
+
+        assignment_solution_contents = "\n\n".join(assignment_solution_contents)
 
     major_error_types, minor_error_types = define_error_definitions()
     major_error_type_list = []
@@ -281,8 +286,9 @@ def get_grade_exam_content():
     selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment", default_temp_value=.3)
 
     st.header("Student Submission File(s)")
+    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "zip"]
     student_submission_file_paths = add_upload_file_element("Upload Student Submission",
-                                                            ["txt", "docx", "pdf", "java", "zip"],
+                                                            student_submission_accepted_file_types,
                                                             accept_multiple_files=True)
 
     # Check if all required inputs are filled
@@ -310,79 +316,45 @@ def get_grade_exam_content():
             grader_llm=custom_llm
         )
 
-        # TODO: If zip go through each folder as student submission and grade using files in each folder
-
-        # TODO: Else go through each file and grade
-
         graded_feedback_file_map = []
+        total_student_submissions = len(student_submission_file_paths)
 
         for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
 
-            student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-            base_student_filename = os.path.basename(student_submission_file_path)
+            # If zip go through each folder as student name and grade using files in each folder as the submission
+            if student_submission_file_path.endswith('.zip'):
+                # Process the zip file for student name sub-folder and submitted files
+                student_submissions_map = extract_and_read_zip(student_submission_temp_file_path,
+                                                               student_submission_accepted_file_types)
 
-            # Add a new expander element with grade and feedback from the grader class
-            status_prefix_label = "Grading: " + student_file_name + student_file_extension
-            with st.status(status_prefix_label, expanded=False) as status:
+                total_student_submissions = len(student_submissions_map)
+                for base_student_filename, student_submission_files_map in student_submissions_map:
+                    graded_feedback_file_name, graded_feedback_temp_file_name = add_grading_status_extender(
+                        base_student_filename,
+                        student_submission_files_map, code_grader, course_name,
+                        selected_model,
+                        selected_temperature)
 
-                # print("Generating Feedback and Grade for: %s" % base_student_filename)
+                    graded_feedback_file_map.append((graded_feedback_file_name, graded_feedback_temp_file_name))
+            else:
+                # Go through the file and grade
 
-                # Display Student Code in code block for each file
-                student_submission_file_path_contents = read_file(student_submission_temp_file_path)
+                # student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
+                base_student_filename = os.path.basename(student_submission_file_path)
 
-                # Prefix the content with the file name
-                student_submission_file_path_contents = prefix_content_file_name(student_file_name,
-                                                                                 student_submission_file_path_contents)
+                # status_prefix_label = "Grading: " + student_file_name + student_file_extension
 
-                code_langauge = get_language_from_file_path(student_submission_file_path)
-                st.header(student_file_name + student_file_extension)
-                if code_langauge:
-                    st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
-                    student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
-                        student_submission_file_path_contents)
-                else:
-                    st.text_area(student_submission_file_path_contents)
-                    student_submission_file_path_contents_final = student_submission_file_path_contents
+                # Add a new expander element with grade and feedback from the grader class
 
-                prompt_value = code_grader.error_definitions_prompt.format_prompt(
-                    submission=student_submission_file_path_contents_final)
-                st.header("Chat GPT Prompt")
-                prompt_value_text = getattr(prompt_value, 'text', '')
-                prompt_value_text = getattr(prompt_value, 'text', '')
-                st.code(prompt_value_text)
+                graded_feedback_file_name, graded_feedback_temp_file_name = add_grading_status_extender(
+                    base_student_filename,
+                    {base_student_filename: student_submission_temp_file_path}, code_grader, course_name,
+                    selected_model,
+                    selected_temperature)
 
-                code_grader.grade_submission(student_submission_file_path_contents,
-                                             callback=GradingStatusHandler(status, status_prefix_label))
-                # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
+                graded_feedback_file_map.append((graded_feedback_file_name, graded_feedback_temp_file_name))
 
-                # Create a temporary file to store the uploaded instructions
-                time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-                file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
-                    " ", "_")
-                graded_feedback_file_extension = ".docx"
-                graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
-                                                                        # prefix=file_name_prefix,
-                                                                        suffix=graded_feedback_file_extension)
-                download_filename = file_name_prefix + graded_feedback_file_extension
-
-                # Style the feedback and save to .docx file
-                code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
-
-                graded_feedback_file_map.append((str(base_student_filename).replace(student_file_extension,
-                                                                                    graded_feedback_file_extension),
-                                                 graded_feedback_temp_file.name))
-
-                student_feedback_content = read_file(graded_feedback_temp_file.name, True)
-                st.markdown(student_feedback_content)
-
-                # Add button to download individual feedback on each tab
-                on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
-                                  download_filename)
-
-                # Stop status and show as complete
-                # status.update(label=student_file_name + " Graded", state="complete")
-
-        if (len(student_submission_file_paths) == len(graded_feedback_file_map)):
+        if (total_student_submissions == len(graded_feedback_file_map)):
             # Add button to download all feedback from all tabs at once
             zip_file_path = create_zip_file(graded_feedback_file_map)
             time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -390,6 +362,123 @@ def get_grade_exam_content():
                 " ", "_")
             on_download_click(zip_file_path, "Download All Feedback Files",
                               zip_file_name_prefix + ".zip")
+
+
+def add_grading_status_extender(base_student_filename: str, filename_file_path_map: dict, code_grader: CodeGrader,
+                                course_name: str, selected_model: str, selected_temperature: float):
+    base_student_filename = base_student_filename.replace(" ", "_")
+
+    status_prefix_label = "Grading: " + base_student_filename
+
+    # Add a new expander element with grade and feedback from the grader class
+    with st.status(status_prefix_label, expanded=False) as status:
+
+        # print("Generating Feedback and Grade for: %s" % base_student_filename)
+
+        student_submission_file_path_contents_all = ""
+
+        for filename, filepath in filename_file_path_map.items():
+
+            student_file_name, student_file_extension = os.path.splitext(filename)
+
+            # Display Student Code in code block for each file
+            student_submission_file_path_contents = read_file(filepath)
+
+            # Prefix the content with the file name
+            student_submission_file_path_contents = prefix_content_file_name(filename,
+                                                                             student_submission_file_path_contents)
+
+            code_langauge = get_language_from_file_path(filename)
+
+            st.header(filename)
+            if code_langauge:
+                st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
+                student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
+                    student_submission_file_path_contents)
+            else:
+                st.text_area(student_submission_file_path_contents)
+                student_submission_file_path_contents_final = student_submission_file_path_contents
+            student_submission_file_path_contents_all += student_submission_file_path_contents_final
+
+        prompt_value = code_grader.error_definitions_prompt.format_prompt(
+            submission=student_submission_file_path_contents_all)
+        st.header("Chat GPT Prompt")
+        prompt_value_text = getattr(prompt_value, 'text', '')
+        st.code(prompt_value_text)
+
+        code_grader.grade_submission(student_submission_file_path_contents_all,
+                                     callback=GradingStatusHandler(status, status_prefix_label))
+        # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
+
+        # Create a temporary file to store the feedback
+        time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
+            " ", "_")
+        graded_feedback_file_extension = ".docx"
+        graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
+                                                                # prefix=file_name_prefix,
+                                                                suffix=graded_feedback_file_extension)
+        download_filename = file_name_prefix + graded_feedback_file_extension
+
+        # Style the feedback and save to .docx file
+        code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
+
+        base_feedback_file_name, _extension = os.path.splitext(base_student_filename)
+
+        student_feedback_content = read_file(graded_feedback_temp_file.name, True)
+        st.markdown(student_feedback_content)
+
+        # Add button to download individual feedback on each tab
+        on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
+                          download_filename)
+
+        # Stop status and show as complete
+        # status.update(label=student_file_name + " Graded", state="complete")
+
+        return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
+
+
+def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict:
+    unacceptable_file_prefixes = ['._']
+    students_data = {}
+
+    if file_path.endswith('.zip'):
+
+        # Open the zip file
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            # Iterate over each file in the zip archive
+            for file_info in zip_ref.infolist():
+                # Extract the file name and directory name
+                file_name = os.path.basename(file_info.filename)
+                directory_name = os.path.dirname(file_info.filename)
+
+                # Check if the directory name represents a student folder
+                folder_name_delimiter = ' - '
+                if directory_name and folder_name_delimiter in directory_name:
+                    student_name = directory_name.split(folder_name_delimiter)[1]
+
+                    # Check if the file has an accepted file type
+                    if file_name.endswith(tuple(accepted_file_types)) and not file_name.startswith(
+                            tuple(unacceptable_file_prefixes)):
+                        # Read the file contents
+                        with zip_ref.open(file_info.filename) as file:
+                            # TODO: Change to modules on read file method
+                            # file_contents = file.read().decode('utf-8')  # Assuming UTF-8 encoding
+                            sub_file_name, sub_file_extension = os.path.splitext(file_name)
+                            prefix = 'from_zip_' + str(randint(1000, 100000000)) + "_"
+                            temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=prefix,
+                                                                    suffix=sub_file_extension)
+                            temp_file.write(file.read())
+                            # file_contents = read_file(
+                            #    temp_file.name)  # Reading this way incase it may be .docx or some other type we want to pre-process differently
+
+                        # Store the file contents in the dictionary
+                        if student_name not in students_data:
+                            students_data[student_name] = {}
+                        # students_data[student_name][file_name] = file_contents
+                        students_data[student_name][file_name] = temp_file.name
+
+    return students_data
 
 
 def main():
