@@ -1,6 +1,7 @@
 from pprint import pprint
 from typing import Type, TypeVar
 
+from langchain import hub
 from langchain.chains.llm import LLMChain
 from langchain.output_parsers import RetryWithErrorOutputParser
 from langchain_core.callbacks import BaseCallbackHandler
@@ -127,6 +128,7 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
     Each element in code_error_lines should represent only one line of code. 
     """
 
+    """
     prompt = PromptTemplate(
         # template_format="jinja2",
         input_variables=["submission"],
@@ -142,6 +144,9 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
             EXAM_REVIEW_PROMPT_BASE
         ).strip(),
     )
+    """
+
+    prompt = hub.pull("cqc/exam_review")
 
     # prompt_value = prompt.format_prompt( submission=student_submission)
     # print("\n\nPrompt Value:")
@@ -159,11 +164,11 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
 
 
 async def get_exam_error_definition_from_completion_chain(student_submission: str,
-                                                    completion_chain: LLMChain,
-                                                    parser: PydanticOutputParser,
-                                                    prompt: PromptTemplate, wrap_code_in_markdown=True,
-                                                    callback: BaseCallbackHandler = None
-                                                    ) -> T:
+                                                          completion_chain: LLMChain,
+                                                          parser: PydanticOutputParser,
+                                                          prompt: PromptTemplate, wrap_code_in_markdown=True,
+                                                          callback: BaseCallbackHandler = None
+                                                          ) -> T:
     if wrap_code_in_markdown:
         student_submission = wrap_code_in_markdown_backticks(student_submission)
 
