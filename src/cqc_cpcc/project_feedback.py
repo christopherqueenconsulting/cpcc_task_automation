@@ -35,6 +35,7 @@ COMMENTS_MISSING_STRING = "The code does not include sufficient commenting throu
 class FeedbackType(ExtendedEnum):
     pass
 
+
 class DefaultFeedbackType(FeedbackType):
     """Enum representing various feedback types."""
 

@@ -67,7 +67,7 @@ def get_flowgorithm_content():
     # Add elements to page to work with
 
     st.header("Assignment Instructions")
-    assignment_instructions = st.empty()
+
     _orig_file_name, instructions_file_path = add_upload_file_element("Upload Exam Instructions",
                                                                       ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
@@ -78,7 +78,7 @@ def get_flowgorithm_content():
         # Get the assignment instructions
         assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
 
-        assignment_instructions = st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+        st.markdown(assignment_instructions_content, unsafe_allow_html=True)
         # st.info("Added: %s" % instructions_file_path)
 
 
