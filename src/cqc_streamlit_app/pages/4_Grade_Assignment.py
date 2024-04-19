@@ -67,7 +67,20 @@ def get_flowgorithm_content():
     # Add elements to page to work with
 
     st.header("Assignment Instructions")
-    assignment_instructions = st.text_area("Enter assignment Instructions")
+    assignment_instructions = st.empty()
+    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Exam Instructions",
+                                                                      ["txt", "docx", "pdf"])
+    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
+
+    assignment_instructions_content = None
+
+    if instructions_file_path:
+        # Get the assignment instructions
+        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+
+        assignment_instructions = st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+        # st.info("Added: %s" % instructions_file_path)
+
 
     # Add grading rubric
     grading_rubric = define_grading_rubric()
@@ -101,12 +114,12 @@ def get_flowgorithm_content():
             student_submission_file_path = add_upload_file_element("Upload Students Submission",
                                                                    ["txt", "docx", "pdf", "fprg"])
 
-            if student_submission_file_path and custom_llm and assignment_instructions and rubric_grading_markdown_table and total_points_possible:
+            if student_submission_file_path and custom_llm and assignment_instructions_content and rubric_grading_markdown_table and total_points_possible:
                 student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
                 student_submission = read_file(student_submission_file_path)
 
                 with st.spinner('Generating Feedback and Grade...'):
-                    feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions,
+                    feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions_content,
                                                                              rubric_grading_markdown_table,
                                                                              student_submission,
                                                                              student_file_name,
