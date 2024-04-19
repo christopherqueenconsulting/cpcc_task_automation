@@ -36,6 +36,7 @@ streamlit = "^1.32.2"
 textract = "*"
 mammoth = "^1.7.1"
 markdownify = "^0.12.1"
+langchainhub = "^0.1.15"
 
 
 [tool.poetry.group.lint]
