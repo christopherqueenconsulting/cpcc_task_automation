@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cpcc-task-automation"
-version = "0.1.0"
+version = "0.1.1"
 description = ""
 authors = ["gitchrisqueen <christopher.queen@gmail.com>"]
 readme = "README.md"
