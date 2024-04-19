@@ -81,7 +81,6 @@ def get_flowgorithm_content():
         st.markdown(assignment_instructions_content, unsafe_allow_html=True)
         # st.info("Added: %s" % instructions_file_path)
 
-
     # Add grading rubric
     grading_rubric = define_grading_rubric()
     if not grading_rubric.empty:
@@ -111,15 +110,17 @@ def get_flowgorithm_content():
         if st.session_state.openai_api_key:
             custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
 
-            student_submission_file_path = add_upload_file_element("Upload Students Submission",
-                                                                   ["txt", "docx", "pdf", "fprg"])
+            student_submission_file_path, student_submission_temp_file_path = add_upload_file_element(
+                "Upload Student Submission",
+                ["txt", "docx", "pdf", "fprg"])
 
             if student_submission_file_path and custom_llm and assignment_instructions_content and rubric_grading_markdown_table and total_points_possible:
                 student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
                 student_submission = read_file(student_submission_file_path)
 
                 with st.spinner('Generating Feedback and Grade...'):
-                    feedback_with_grade = generate_assignment_feedback_grade(custom_llm, assignment_instructions_content,
+                    feedback_with_grade = generate_assignment_feedback_grade(custom_llm,
+                                                                             assignment_instructions_content,
                                                                              rubric_grading_markdown_table,
                                                                              student_submission,
                                                                              student_file_name,

@@ -360,7 +360,7 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
 
         },
         template=(
-            GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE_v1
+            GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE
         ).strip(),
     )
 
