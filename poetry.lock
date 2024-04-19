@@ -5187,6 +5187,25 @@ watchdog = {version = ">=2.1.5", markers = "platform_system != \"Darwin\""}
 snowflake = ["snowflake-connector-python (>=2.8.0)", "snowflake-snowpark-python (>=0.9.0)"]
 
 [[package]]
+name = "streamlit-ext"
+version = "0.1.10"
+description = "Small handy widgets for streamlit, e.g. download button which won't cause rerun, set page width"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "streamlit-ext-0.1.10.tar.gz", hash = "sha256:60c19def7cf594fdabbdafa7d2bdbbb549daee063bc7dcd92afc18f471bf0e13"},
+    {file = "streamlit_ext-0.1.10-py3-none-any.whl", hash = "sha256:ae6c824e42b33acd8bddfbae585ca47a8b06aa07d289859ea5111458cd0de17d"},
+]
+
+[package.dependencies]
+packaging = "*"
+streamlit = ">=1.30.0"
+
+[package.extras]
+dev = ["black (>=22.6.0)", "flake8 (>=4.0,<5.0)", "isort (>=5.10.1)", "mypy", "pandas-stubs (>=1.4.3)"]
+test = ["openpyxl", "pandas", "pytest (>=7.1)", "pytest-cov (>=3.0.0)"]
+
+[[package]]
 name = "sympy"
 version = "1.12"
 description = "Computer algebra system (CAS) in Python"
@@ -6350,4 +6369,4 @@ testing = ["coverage (>=5.0.3)", "zope.event", "zope.testing"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.12,<4.0"
-content-hash = "17d30700b780f95c20767ac9709716d79c28c71087d428598a9e4816590bedbf"
+content-hash = "43524a288e4e65f5638af8656244909f890aefe463b47fbb0736aaf90e0c1996"

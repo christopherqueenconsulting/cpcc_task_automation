@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cpcc-task-automation"
-version = "0.1.1"
+version = "0.1.2"
 description = ""
 authors = ["gitchrisqueen <christopher.queen@gmail.com>"]
 readme = "README.md"
@@ -37,6 +37,7 @@ textract = "*"
 mammoth = "^1.7.1"
 markdownify = "^0.12.1"
 langchainhub = "^0.1.15"
+streamlit-ext = "^0.1.10"
 
 
 [tool.poetry.group.lint]

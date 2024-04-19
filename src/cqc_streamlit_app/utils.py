@@ -6,6 +6,7 @@ from random import randint
 from typing import Tuple, Any
 
 import streamlit as st
+import streamlit_ext as ste
 from langchain_openai import ChatOpenAI
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
@@ -99,7 +100,7 @@ def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
     return ChatOpenAI(temperature=temperature,
                       model=model,
                       openai_api_key=st.session_state.openai_api_key,
-                      #streaming=True
+                      # streaming=True
                       )
 
 
@@ -258,7 +259,7 @@ def process_file(file_path, allowed_file_extensions):
                 print("Contents of single file:", file.read())
 
 
-def on_download_click(file_path: str, button_label: str, download_file_name: str) -> bool:
+def on_download_click(file_path: str, button_label: str, download_file_name: str) -> str:
     file_mime_types = {
         ".java": "text/x-java-source",
         ".txt": "text/plain",
@@ -279,8 +280,10 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     # st.markdown(file_content)
 
     # Trigger the download of the file
-    return st.download_button(label=button_label, data=file_content,
-                       file_name=download_file_name, mime=mime_type, key=download_file_name)
+    return ste.download_button(label=button_label, data=file_content,
+                               file_name=download_file_name, mime=mime_type
+                               # , key=download_file_name
+                               )
 
 
 def create_zip_file(file_paths: list[tuple[str, str]]) -> str:
