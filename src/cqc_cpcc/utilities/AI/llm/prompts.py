@@ -224,7 +224,7 @@ Grading Rubric Criteria:
 
 ---
 Output Instructions:
-Display a list of feedback based on Rubric Criteria that you have identified applies to the Submission. Include the amount of points that should be deducted from the total grade based on that criteria row and then the details about why points are being deducted as they relate the submission.
+Display a list of feedback based on the Rubric Criteria that you have identified applies to the Submission where points would be deducted. Include the amount of points that should be deducted from the total grade based on that criteria row and then the details about why points are being deducted as they relate the submission.
 Display the final grade that should be the total possible points={total_possible_points} minus the sum of all points deducted.
 All output must be in markdown format.
 """
