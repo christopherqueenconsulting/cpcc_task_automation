@@ -1,7 +1,6 @@
 from pprint import pprint
 from typing import Type, TypeVar
 
-from langchain import hub
 from langchain.chains.llm import LLMChain
 from langchain.output_parsers import RetryWithErrorOutputParser
 from langchain_core.callbacks import BaseCallbackHandler
@@ -122,13 +121,12 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
     if wrap_code_in_markdown:
         exam_solution = wrap_code_in_markdown_backticks(exam_solution)
 
-    extra_system_instructions = " "
+    extra_system_instructions = ""
     if SHOW_ERROR_LINE_NUMBERS:
         extra_system_instructions = """Provide the first 25 characters of the relevant line(s) of code from the Exam Submission for each error when appropriate, as code_error_lines. 
     Each element in code_error_lines should represent only one line of code. 
     """
 
-    """
     prompt = PromptTemplate(
         # template_format="jinja2",
         input_variables=["submission"],
@@ -144,9 +142,8 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
             EXAM_REVIEW_PROMPT_BASE
         ).strip(),
     )
-    """
 
-    prompt = hub.pull("cqc/exam_review")
+    # prompt = hub.pull("cqc/exam_review")
 
     # prompt_value = prompt.format_prompt( submission=student_submission)
     # print("\n\nPrompt Value:")
@@ -157,11 +154,10 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
         response_format={"type": "json_object"}
     )
 
-
-
     # completion_chain = prompt | _llm
     completion_chain = LLMChain(llm=_llm, prompt=prompt)
 
+    """
     # Bind the variables to the completion chain
     completion_chain.bind(extra_system_instructions=extra_system_instructions,
                           exam_instructions=exam_instructions,
@@ -169,6 +165,7 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
                           format_instructions=format_instructions,
                           major_error_types="- " + ("\n- ".join(major_error_type_list)),
                           minor_error_types="- " + ("\n- ".join(minor_error_type_list)))
+    """
 
     return completion_chain, parser, prompt
 
