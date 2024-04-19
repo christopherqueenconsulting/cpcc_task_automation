@@ -116,7 +116,7 @@ def get_flowgorithm_content():
 
             if student_submission_file_path and custom_llm and assignment_instructions_content and rubric_grading_markdown_table and total_points_possible:
                 student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-                student_submission = read_file(student_submission_file_path)
+                student_submission = read_file(student_submission_temp_file_path)
 
                 with st.spinner('Generating Feedback and Grade...'):
                     feedback_with_grade = generate_assignment_feedback_grade(custom_llm,
