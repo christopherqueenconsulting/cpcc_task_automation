@@ -103,7 +103,7 @@ class MinorErrorType(ExtendedEnum):
     CSC_251_EXAM_1_FILE_CLASS_NAME_MISMATCH = "The filename and class container are not the same"
 
     """Minor formatting issues – not matching Sample Input and Output (ex: missing spaces, missing dollar sign, not using print/println appropriately)"""
-    CSC_251_EXAM_1_MINOR_FORMATTING = "There are formating issues not matching Sample Input and Output (i.e spacing, missing dollar sign, not using print/println appropriately, etc.)"
+    CSC_251_EXAM_1_MINOR_FORMATTING = "There are formatting issues not matching Sample Input and Output (i.e spacing, missing dollar sign, not using print/println appropriately, etc.)"
 
     """Stale data in classes"""
     CSC_251_EXAM_1_STALE_DATA = "There is stale data in classes"
@@ -277,9 +277,9 @@ class CodeGrader:
         grade_feedback += "\n\n" + self.final_score_text
         return grade_feedback
 
-    def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None):
+    async def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None):
         # print("Identifying Errors")
-        error_definitions_from_llm = get_exam_error_definition_from_completion_chain(
+        error_definitions_from_llm = await get_exam_error_definition_from_completion_chain(
             student_submission=student_submission,
             completion_chain=self.error_definitions_completion_chain,
             parser=self.error_definitions_parser,

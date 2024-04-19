@@ -1,4 +1,5 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+import asyncio
 import os
 import tempfile
 import zipfile
@@ -120,7 +121,6 @@ def get_flowgorithm_content():
 
 def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
     # Preload the table with default rows and values
-    # TODO: Get these from the default enum already defined
 
     # Convert the enum class to a list of dictionaries
     # major_error_types_data = [{NAME: member.name, DESCRIPTION: member.value} for member in MajorErrorType]
@@ -191,7 +191,7 @@ class GradingStatusHandler(BaseCallbackHandler):
     ):
         self._status_container = status_container
         if prefix_label is None:
-            self._prefix_label = "";
+            self._prefix_label = ""
         else:
             self._prefix_label = prefix_label + " | "
 
@@ -212,7 +212,7 @@ def prefix_content_file_name(filename: str, content: str):
     return "# File: " + filename + "\n\n" + content
 
 
-def get_grade_exam_content():
+async def get_grade_exam_content():
     st.title('Grade Exams')
     st.markdown("""Here we will grade and give feedback to student exam submissions""")
 
@@ -257,9 +257,10 @@ def get_grade_exam_content():
             read_content = prefix_content_file_name(solution_file_name, read_content)
 
             assignment_solution_contents.append(read_content)
+            # Detect file langauge then display accordingly
             if solution_language:
                 # st.info("Solution Language: " + solution_language)
-                # TODO: Detect file type then add prefix for markdown based on the extension
+
                 # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
                 # Display the Java code in a code block
                 st.code(read_content, language=solution_language,
@@ -319,6 +320,8 @@ def get_grade_exam_content():
         graded_feedback_file_map = []
         total_student_submissions = len(student_submission_file_paths)
 
+        tasks = []
+
         for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
 
             # If zip go through each folder as student name and grade using files in each folder as the submission
@@ -329,13 +332,12 @@ def get_grade_exam_content():
 
                 total_student_submissions = len(student_submissions_map)
                 for base_student_filename, student_submission_files_map in student_submissions_map.items():
-                    graded_feedback_file_name, graded_feedback_temp_file_name = add_grading_status_extender(
+                    tasks.append(add_grading_status_extender(
                         base_student_filename,
                         student_submission_files_map, code_grader, course_name,
                         selected_model,
-                        selected_temperature)
+                        selected_temperature))
 
-                    graded_feedback_file_map.append((graded_feedback_file_name, graded_feedback_temp_file_name))
             else:
                 # Go through the file and grade
 
@@ -346,14 +348,18 @@ def get_grade_exam_content():
 
                 # Add a new expander element with grade and feedback from the grader class
 
-                graded_feedback_file_name, graded_feedback_temp_file_name = add_grading_status_extender(
+                tasks.append(add_grading_status_extender(
                     base_student_filename,
                     {base_student_filename: student_submission_temp_file_path}, code_grader, course_name,
                     selected_model,
-                    selected_temperature)
+                    selected_temperature))
 
-                graded_feedback_file_map.append((graded_feedback_file_name, graded_feedback_temp_file_name))
+        results = await asyncio.gather(*tasks)
 
+        for graded_feedback_file_name, graded_feedback_temp_file_name in results:
+            graded_feedback_file_map.append((graded_feedback_file_name, graded_feedback_temp_file_name))
+
+        # TODO: Get a list of the created status container and when they are all complete add the download button. Use place holder up front
         if (total_student_submissions == len(graded_feedback_file_map)):
             # Add button to download all feedback from all tabs at once
             zip_file_path = create_zip_file(graded_feedback_file_map)
@@ -364,8 +370,8 @@ def get_grade_exam_content():
                               zip_file_name_prefix + ".zip")
 
 
-def add_grading_status_extender(base_student_filename: str, filename_file_path_map: dict, code_grader: CodeGrader,
-                                course_name: str, selected_model: str, selected_temperature: float):
+async def add_grading_status_extender(base_student_filename: str, filename_file_path_map: dict, code_grader: CodeGrader,
+                                      course_name: str, selected_model: str, selected_temperature: float):
     base_student_filename = base_student_filename.replace(" ", "_")
 
     status_prefix_label = "Grading: " + base_student_filename
@@ -408,8 +414,13 @@ def add_grading_status_extender(base_student_filename: str, filename_file_path_m
         prompt_value_text = getattr(prompt_value, 'text', '')
         st.code(prompt_value_text)
 
-        code_grader.grade_submission(student_submission_file_path_contents_all,
-                                     callback=GradingStatusHandler(status, status_prefix_label))
+        feedback_placeholder = st.empty()
+        download_button_placeholder = st.empty()
+
+        # TODO: Process below using asyncio
+
+        await code_grader.grade_submission(student_submission_file_path_contents_all,
+                                           callback=GradingStatusHandler(status, status_prefix_label))
         # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
         # Create a temporary file to store the feedback
@@ -432,11 +443,13 @@ def add_grading_status_extender(base_student_filename: str, filename_file_path_m
 
         status.update(label=status_prefix_label + " | Reading Feedback File For Display")
         student_feedback_content = read_file(graded_feedback_temp_file.name, True)
-        st.markdown(student_feedback_content)
+        feedback_placeholder = st.markdown(student_feedback_content)
 
         # Add button to download individual feedback on each tab
-        on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
-                          download_filename)
+        # TODO: Pass a place holder for this function to then draw the button to
+        download_button_placeholder = on_download_click(graded_feedback_temp_file.name,
+                                                        "Download Feedback for " + student_file_name,
+                                                        download_filename)
         status.update(label=status_prefix_label + " | Feedback File Ready for Download")
 
         # Stop status and show as complete
@@ -509,7 +522,7 @@ def main():
 
     with tab3:
         if st.session_state.openai_api_key:
-            get_grade_exam_content()
+            asyncio.run(get_grade_exam_content())
         else:
             st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
     with tab4:

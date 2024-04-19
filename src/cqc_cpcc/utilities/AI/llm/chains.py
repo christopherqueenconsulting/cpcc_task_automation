@@ -123,7 +123,7 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
 
     extra_system_instructions = ""
     if SHOW_ERROR_LINE_NUMBERS:
-        extra_system_instructions = """Provide the first 25 characters of the relevant line(s) of code from the Student Submission for each error when appropriate, as code_error_lines. 
+        extra_system_instructions = """Provide the first 25 characters of the relevant line(s) of code from the Exam Submission for each error when appropriate, as code_error_lines. 
     Each element in code_error_lines should represent only one line of code. 
     """
 
@@ -158,7 +158,7 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
     return completion_chain, parser, prompt
 
 
-def get_exam_error_definition_from_completion_chain(student_submission: str,
+async def get_exam_error_definition_from_completion_chain(student_submission: str,
                                                     completion_chain: LLMChain,
                                                     parser: PydanticOutputParser,
                                                     prompt: PromptTemplate, wrap_code_in_markdown=True,
@@ -171,7 +171,7 @@ def get_exam_error_definition_from_completion_chain(student_submission: str,
     if callback:
         config = {'callbacks': [callback]}
 
-    output = completion_chain.invoke({
+    output = await completion_chain.ainvoke({
         "submission": student_submission,
         "response_format": {"type": "json_object"}
     },

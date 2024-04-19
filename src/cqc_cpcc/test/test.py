@@ -30,6 +30,12 @@ def test_date_xpression():
 
 
 
+from langchain import LangChain
+
+# Create a LangChain instance
+lc = LangChain()
+
+
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':

@@ -1,4 +1,7 @@
-EXAM_REVIEW_PROMPT_BASE = """
+from langchain import hub
+EXAM_REVIEW_PROMPT_BASE = hub.pull("cqc/exam_review")
+
+EXAM_REVIEW_PROMPT_BASE_v2 = """
 You are a college professor grading a student's exam submission. 
 Using the given Exam Instructions and Exam Example Solution, analyze the Student Submission to identify all major and minor errors that apply. 
 Provide a detailed and informative description for each error identified, written constructively and referring directly to the error. 

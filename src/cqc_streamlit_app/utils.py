@@ -258,7 +258,7 @@ def process_file(file_path, allowed_file_extensions):
                 print("Contents of single file:", file.read())
 
 
-def on_download_click(file_path: str, button_label: str, download_file_name: str):
+def on_download_click(file_path: str, button_label: str, download_file_name: str) -> bool:
     file_mime_types = {
         ".java": "text/x-java-source",
         ".txt": "text/plain",
@@ -279,7 +279,7 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     # st.markdown(file_content)
 
     # Trigger the download of the file
-    st.download_button(label=button_label, data=file_content,
+    return st.download_button(label=button_label, data=file_content,
                        file_name=download_file_name, mime=mime_type, key=download_file_name)
 
 
