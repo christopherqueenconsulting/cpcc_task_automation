@@ -413,6 +413,7 @@ def add_grading_status_extender(base_student_filename: str, filename_file_path_m
         # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
         # Create a temporary file to store the feedback
+        status.update(label=status_prefix_label + " | Creating Feedback File")
         time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
             " ", "_")
@@ -420,19 +421,23 @@ def add_grading_status_extender(base_student_filename: str, filename_file_path_m
         graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
                                                                 # prefix=file_name_prefix,
                                                                 suffix=graded_feedback_file_extension)
+        status.update(label=status_prefix_label + " | Temp Feedback File Created")
         download_filename = file_name_prefix + graded_feedback_file_extension
 
         # Style the feedback and save to .docx file
         code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
+        status.update(label=status_prefix_label + " | Feedback Saved to File")
 
         base_feedback_file_name, _extension = os.path.splitext(base_student_filename)
 
+        status.update(label=status_prefix_label + " | Reading Feedback File For Display")
         student_feedback_content = read_file(graded_feedback_temp_file.name, True)
         st.markdown(student_feedback_content)
 
         # Add button to download individual feedback on each tab
         on_download_click(graded_feedback_temp_file.name, "Download Feedback for " + student_file_name,
                           download_filename)
+        status.update(label=status_prefix_label + " | Feedback File Ready for Download")
 
         # Stop status and show as complete
         # status.update(label=student_file_name + " Graded", state="complete")

@@ -1,15 +1,13 @@
 from pprint import pprint
-from typing import Type, TypeVar, Tuple
+from typing import Type, TypeVar
 
 from langchain.chains.llm import LLMChain
 from langchain.output_parsers import RetryWithErrorOutputParser
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage
 from langchain_core.output_parsers import BaseOutputParser, PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnableSerializable
 from langchain_core.runnables.utils import Output
 from langchain_openai import ChatOpenAI
 from pydantic.v1 import BaseModel
@@ -24,13 +22,13 @@ T = TypeVar("T", bound=BaseModel)
 def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplate, retry_model: str,
                  **prompt_args) -> T:
     final_output = output
-    retry_llm = ChatOpenAI(temperature=.5, model=retry_model)
+    retry_llm = ChatOpenAI(temperature=0, model=retry_model)
     retry_parser = RetryWithErrorOutputParser.from_llm(parser=parser, llm=retry_llm,
                                                        max_retries=RETRY_PARSER_MAX_RETRY
                                                        )
     try:
         prompt_value = prompt.format_prompt(**prompt_args)
-        #final_output = retry_parser.parse_with_prompt(output.content, prompt_value)
+        # final_output = retry_parser.parse_with_prompt(output.content, prompt_value)
         final_output = retry_parser.parse_with_prompt(output.get('text'), prompt_value)
     except OutputParserException as e:
         print("Exception During Retry Output: %s" % e)
@@ -90,7 +88,7 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
         "response_format": {"type": "json_object"}
     })
 
-    #print("\n\nOutput:")
+    # print("\n\nOutput:")
     # pprint(output.content)
     # pprint(output.get('text'))
 
@@ -183,7 +181,7 @@ def get_exam_error_definition_from_completion_chain(student_submission: str,
     # pprint(output.content)
 
     try:
-        #final_output = parser.parse(output.content)
+        # final_output = parser.parse(output.content)
         final_output = parser.parse(output.get('text'))
     except Exception as e:
         print("\n\nException during parse:")
@@ -230,7 +228,7 @@ def get_feedback_completion_chain(llm: BaseChatModel, parser: BaseOutputParser, 
         response_format={"type": "json_object"}
     )
 
-    #completion_chain = prompt | llm
+    # completion_chain = prompt | llm
     completion_chain = LLMChain(prompt=prompt, llm=llm)
 
     return completion_chain
@@ -251,7 +249,7 @@ def get_feedback_output_from_completion_chain(completion_chain: LLMChain,
     # pprint(output)
 
     try:
-        #final_output = parser.parse(output.content)
+        # final_output = parser.parse(output.content)
         final_output = parser.parse(output.get('text'))
     except Exception as e:
         print(e)
@@ -294,7 +292,7 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
         response_format={"type": "json_object"}
     )
 
-    #completion_chain = prompt | llm
+    # completion_chain = prompt | llm
     completion_chain = LLMChain(prompt=prompt, llm=llm)
 
     if wrap_code_in_markdown:
@@ -309,12 +307,12 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
         "response_format": {"type": "json_object"}
     })
 
-    #print("\n\nOutput:")
-    #pprint(output.content)
-    #pprint(output.get('text'))
+    # print("\n\nOutput:")
+    # pprint(output.content)
+    # pprint(output.get('text'))
 
     try:
-        #final_output = parser.parse(output.content)
+        # final_output = parser.parse(output.content)
         final_output = parser.parse(output.get('text'))
     except Exception as e:
         print(e)
@@ -361,8 +359,7 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
     #    response_format={"type": "json_object"}
     # )
 
-
-    #completion_chain = prompt | llm
+    # completion_chain = prompt | llm
     completion_chain = LLMChain(llm=llm, prompt=prompt)
 
     student_submission = wrap_code_in_markdown_backticks(student_submission)
@@ -373,5 +370,5 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
         # "response_format": {"type": "json_object"}
     })
 
-    #return output.content
+    # return output.content
     return output.get('text')
