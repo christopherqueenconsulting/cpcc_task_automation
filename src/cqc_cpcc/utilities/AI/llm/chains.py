@@ -122,7 +122,7 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
     if wrap_code_in_markdown:
         exam_solution = wrap_code_in_markdown_backticks(exam_solution)
 
-    extra_system_instructions = ""
+    extra_system_instructions = " "
     if SHOW_ERROR_LINE_NUMBERS:
         extra_system_instructions = """Provide the first 25 characters of the relevant line(s) of code from the Exam Submission for each error when appropriate, as code_error_lines. 
     Each element in code_error_lines should represent only one line of code. 
