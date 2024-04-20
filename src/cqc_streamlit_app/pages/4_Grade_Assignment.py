@@ -68,7 +68,7 @@ def get_flowgorithm_content():
 
     st.header("Assignment Instructions")
 
-    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Exam Instructions",
+    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Flowgorithm Instructions",
                                                                       ["txt", "docx", "pdf"])
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
 
@@ -111,7 +111,7 @@ def get_flowgorithm_content():
             custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
 
             student_submission_file_path, student_submission_temp_file_path = add_upload_file_element(
-                "Upload Student Submission",
+                "Upload Student Flowgorithm Submission",
                 ["txt", "docx", "pdf", "fprg"])
 
             if student_submission_file_path and custom_llm and assignment_instructions_content and rubric_grading_markdown_table and total_points_possible:
