@@ -125,9 +125,9 @@ def get_flowgorithm_content():
                                                                              student_submission,
                                                                              student_file_name,
                                                                              total_points_possible)
-                    st.success('Done!')
                     st.header("Feedback and Grade")
-                    st.markdown(f"```\n{feedback_with_grade}\n")
+                    #st.markdown(f"```\n{feedback_with_grade}\n")
+                    st.markdown(feedback_with_grade)
 
         else:
             st.error("Please provide your Open API Key on the settings page.")
