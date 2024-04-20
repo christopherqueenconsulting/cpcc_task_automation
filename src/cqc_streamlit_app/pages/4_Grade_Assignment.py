@@ -240,7 +240,7 @@ async def get_grade_exam_content():
             if solution_language:
                 # st.info("Solution Language: " + solution_language)
 
-                # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
+                # st.markdown(f"'''java\n{assignment_solution_contents}\nƒ'''")
                 # Display the Java code in a code block
                 st.code(read_content, language=solution_language,
                         line_numbers=True)
