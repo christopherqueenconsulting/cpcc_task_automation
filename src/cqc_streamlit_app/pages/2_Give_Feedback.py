@@ -166,7 +166,8 @@ async def get_feedback_content():
     st.header("Solution File")
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "zip"]
     _orig_file_name, solution_file_paths = add_upload_file_element("Upload Assignment Solution",
-                                                                   solution_accepted_file_types)
+                                                                   solution_accepted_file_types,
+                                                                   accept_multiple_files=True)
 
     assignment_solution_contents = None
 
