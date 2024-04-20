@@ -206,9 +206,9 @@ async def get_feedback_content():
         # Convert DataFrame to list of FeedbackType objects
         feedback_types_list = feedback_types[DESCRIPTION].to_list()
 
-    selected_model, selected_temperature = define_chatGPTModel("give_feedback")
-
     if st.session_state.openai_api_key:
+        selected_model, selected_temperature = define_chatGPTModel("give_feedback")
+
         custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model)
 
         st.header("Student Submission File(s)")
