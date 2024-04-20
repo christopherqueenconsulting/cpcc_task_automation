@@ -7,7 +7,10 @@ from typing import Tuple, Any
 
 import streamlit as st
 import streamlit_ext as ste
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.outputs import LLMResult
 from langchain_openai import ChatOpenAI
+from streamlit.elements.lib.mutable_status_container import StatusContainer
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 CODE_LANGUAGES = [
@@ -300,3 +303,33 @@ def create_zip_file(file_paths: list[tuple[str, str]]) -> str:
 
     # Return the path of the zip file
     return zip_file.name
+
+
+def prefix_content_file_name(filename: str, content: str):
+    return "# File: " + filename + "\n\n" + content
+
+
+class ChatGPTStatusCallbackHandler(BaseCallbackHandler):
+
+    def __init__(
+            self,
+            status_container: StatusContainer,
+            prefix_label: str = None
+    ):
+        self._status_container = status_container
+        if prefix_label is None:
+            self._prefix_label = ""
+        else:
+            self._prefix_label = prefix_label + " | "
+
+    def on_llm_start(
+            self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
+    ) -> None:
+        self._status_container.update(label=self._prefix_label + "Getting response from ChatGPT")
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        # self._status_container.update(label=self._prefix_label + "From ChatGPT: " + str(response))
+        self._status_container.update(label=self._prefix_label + "ChatGPT Finished")
+
+    def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
+        self._status_container.update(label=self._prefix_label + "ChatGPT Error: " + str(error))

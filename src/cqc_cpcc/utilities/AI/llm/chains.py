@@ -275,13 +275,18 @@ def get_feedback_output_from_completion_chain(completion_chain: LLMChain,
     return final_output
 
 
-def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_type_list: list, assignment: str,
-                      solution: str, student_submission: str, course_name: str, wrap_code_in_markdown=True) -> str:
+async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_type_list: list, assignment: str,
+                            solution: str, student_submission: str, course_name: str, wrap_code_in_markdown=True,
+                            callback: BaseCallbackHandler = None) -> str:
     """
     Generates feedback based on the assignment, solution, student submission and course name using the LLM model.
     """
     parser = PydanticOutputParser(pydantic_object=pydantic_object)
     format_instructions = parser.get_format_instructions()
+
+    prompt_base = ASSIGNMENT_FEEDBACK_PROMPT_BASE
+    if wrap_code_in_markdown:
+        prompt_base = CODE_ASSIGNMENT_FEEDBACK_PROMPT_BASE
 
     prompt = PromptTemplate(
         # template_format="jinja2",
@@ -292,8 +297,7 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
 
         },
         template=(
-            # ASSIGNMENT_FEEDBACK_PROMPT_BASE
-            CODE_ASSIGNMENT_FEEDBACK_PROMPT_BASE
+            prompt_base
         ).strip(),
     )
 
@@ -311,13 +315,18 @@ def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_typ
         solution = wrap_code_in_markdown_backticks(solution)
         student_submission = wrap_code_in_markdown_backticks(student_submission)
 
-    output = completion_chain.invoke({
+    config = None
+    if callback:
+        config = {'callbacks': [callback]}
+
+    output = await completion_chain.ainvoke({
         "assignment": assignment,
         "solution": solution,
         "submission": student_submission,
         "course_name": course_name,
         "response_format": {"type": "json_object"}
-    })
+
+    }, config=config)
 
     # print("\n\nOutput:")
     # pprint(output.content)

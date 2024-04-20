@@ -1,6 +1,9 @@
+import os
 import os.path
 import tempfile
+import zipfile
 from enum import Enum, StrEnum
+from random import randint
 from typing import Optional, Annotated, List, Union
 
 import docx
@@ -362,3 +365,46 @@ def dict_to_markdown_table(data, headers):
         markdown_table += "| " + " | ".join([str(row_data.get(header, '')) for header in headers]) + " |\n"
 
     return markdown_table
+
+
+def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict:
+    unacceptable_file_prefixes = ['._']
+    students_data = {}
+
+    if file_path.endswith('.zip'):
+
+        # Open the zip file
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            # Iterate over each file in the zip archive
+            for file_info in zip_ref.infolist():
+                # Extract the file name and directory name
+                file_name = os.path.basename(file_info.filename)
+                directory_name = os.path.dirname(file_info.filename)
+
+                # Check if the directory name represents a student folder
+                folder_name_delimiter = ' - '
+                if directory_name and folder_name_delimiter in directory_name:
+                    student_name = directory_name.split(folder_name_delimiter)[1]
+
+                    # Check if the file has an accepted file type
+                    if file_name.endswith(tuple(accepted_file_types)) and not file_name.startswith(
+                            tuple(unacceptable_file_prefixes)):
+                        # Read the file contents
+                        with zip_ref.open(file_info.filename) as file:
+                            # TODO: Change to modules on read file method
+                            # file_contents = file.read().decode('utf-8')  # Assuming UTF-8 encoding
+                            sub_file_name, sub_file_extension = os.path.splitext(file_name)
+                            prefix = 'from_zip_' + str(randint(1000, 100000000)) + "_"
+                            temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=prefix,
+                                                                    suffix=sub_file_extension)
+                            temp_file.write(file.read())
+                            # file_contents = read_file(
+                            #    temp_file.name)  # Reading this way incase it may be .docx or some other type we want to pre-process differently
+
+                        # Store the file contents in the dictionary
+                        if student_name not in students_data:
+                            students_data[student_name] = {}
+                        # students_data[student_name][file_name] = file_contents
+                        students_data[student_name][file_name] = temp_file.name
+
+    return students_data

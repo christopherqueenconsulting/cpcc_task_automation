@@ -4,23 +4,13 @@ from docx import Document
 from docx.shared import Pt
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_openai import ChatOpenAI
 from pydantic.v1 import Field, BaseModel, StrictStr
 
 from cqc_cpcc.utilities.AI.llm.chains import get_exam_error_definition_from_completion_chain, \
     get_exam_error_definitions_completion_chain
+from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
 from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
 from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
-
-def get_default_llm()->BaseChatModel:
-
-    # model = 'gpt-3.5-turbo-1106'
-    # model = 'gpt-4-1106-preview'
-    model = 'gpt-3.5-turbo-16k-0613'
-    # model = "gpt-4"
-    temperature = .2  # .2 <- More deterministic | More Creative -> .8
-    default_llm = ChatOpenAI(temperature=temperature, model=model)
-    return default_llm
 
 
 def parse_error_type_enum_name(enum_name:str):

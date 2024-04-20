@@ -2,23 +2,19 @@
 import asyncio
 import os
 import tempfile
-import zipfile
 from datetime import datetime
-from random import randint
-from typing import Any
 
 import pandas as pd
 import streamlit as st
-from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.outputs import LLMResult
-from streamlit.elements.lib.mutable_status_container import StatusContainer
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader, parse_error_type_enum_name
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
-from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks
+from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks, \
+    extract_and_read_zip
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
-    get_language_from_file_path, on_download_click, create_zip_file
+    get_language_from_file_path, on_download_click, create_zip_file, prefix_content_file_name, \
+    ChatGPTStatusCallbackHandler
 
 # Initialize session state variables
 init_session_state()
@@ -196,36 +192,6 @@ def all_required_inputs_filled(course_name, max_points, deduction_per_major_erro
          assignment_solution_contents, student_submission_file_paths])
 
 
-class GradingStatusHandler(BaseCallbackHandler):
-
-    def __init__(
-            self,
-            status_container: StatusContainer,
-            prefix_label: str = None
-    ):
-        self._status_container = status_container
-        if prefix_label is None:
-            self._prefix_label = ""
-        else:
-            self._prefix_label = prefix_label + " | "
-
-    def on_llm_start(
-            self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
-    ) -> None:
-        self._status_container.update(label=self._prefix_label + "Getting response from ChatGPT")
-
-    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        # self._status_container.update(label=self._prefix_label + "From ChatGPT: " + str(response))
-        self._status_container.update(label=self._prefix_label + "ChatGPT Finished")
-
-    def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
-        self._status_container.update(label=self._prefix_label + "ChatGPT Error: " + str(error))
-
-
-def prefix_content_file_name(filename: str, content: str):
-    return "# File: " + filename + "\n\n" + content
-
-
 async def get_grade_exam_content():
     st.title('Grade Exams')
     st.markdown("""Here we will grade and give feedback to student exam submissions""")
@@ -322,7 +288,7 @@ async def get_grade_exam_content():
         code_grader = CodeGrader(
             max_points=max_points,
             exam_instructions=assignment_instructions_content,
-            exam_solution=assignment_solution_contents,
+            exam_solution=str(assignment_solution_contents),
             deduction_per_major_error=int(deduction_per_major_error),
             deduction_per_minor_error=int(deduction_per_minor_error),
             major_error_type_list=major_error_type_list,
@@ -433,7 +399,7 @@ async def add_grading_status_extender(base_student_filename: str, filename_file_
         # TODO: Process below using asyncio
 
         await code_grader.grade_submission(student_submission_file_path_contents_all,
-                                           callback=GradingStatusHandler(status, status_prefix_label))
+                                           callback=ChatGPTStatusCallbackHandler(status, status_prefix_label))
         # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
         # Create a temporary file to store the feedback
@@ -469,49 +435,6 @@ async def add_grading_status_extender(base_student_filename: str, filename_file_
         # status.update(label=student_file_name + " Graded", state="complete")
 
         return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
-
-
-def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict:
-    unacceptable_file_prefixes = ['._']
-    students_data = {}
-
-    if file_path.endswith('.zip'):
-
-        # Open the zip file
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            # Iterate over each file in the zip archive
-            for file_info in zip_ref.infolist():
-                # Extract the file name and directory name
-                file_name = os.path.basename(file_info.filename)
-                directory_name = os.path.dirname(file_info.filename)
-
-                # Check if the directory name represents a student folder
-                folder_name_delimiter = ' - '
-                if directory_name and folder_name_delimiter in directory_name:
-                    student_name = directory_name.split(folder_name_delimiter)[1]
-
-                    # Check if the file has an accepted file type
-                    if file_name.endswith(tuple(accepted_file_types)) and not file_name.startswith(
-                            tuple(unacceptable_file_prefixes)):
-                        # Read the file contents
-                        with zip_ref.open(file_info.filename) as file:
-                            # TODO: Change to modules on read file method
-                            # file_contents = file.read().decode('utf-8')  # Assuming UTF-8 encoding
-                            sub_file_name, sub_file_extension = os.path.splitext(file_name)
-                            prefix = 'from_zip_' + str(randint(1000, 100000000)) + "_"
-                            temp_file = tempfile.NamedTemporaryFile(delete=False, prefix=prefix,
-                                                                    suffix=sub_file_extension)
-                            temp_file.write(file.read())
-                            # file_contents = read_file(
-                            #    temp_file.name)  # Reading this way incase it may be .docx or some other type we want to pre-process differently
-
-                        # Store the file contents in the dictionary
-                        if student_name not in students_data:
-                            students_data[student_name] = {}
-                        # students_data[student_name][file_name] = file_contents
-                        students_data[student_name][file_name] = temp_file.name
-
-    return students_data
 
 
 def main():

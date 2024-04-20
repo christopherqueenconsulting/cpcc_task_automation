@@ -4,8 +4,9 @@ from typing import Optional, Annotated, List
 
 from docx import Document
 from docx.shared import Pt
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.language_models import BaseChatModel
 from langchain_core.pydantic_v1 import Field
-from langchain_openai import ChatOpenAI
 from selenium.common import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -14,6 +15,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 from cqc_cpcc.exam_review import JavaCode
 from cqc_cpcc.utilities.AI.llm.chains import generate_feedback
+from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
 from cqc_cpcc.utilities.cpcc_utils import duo_login
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import *
@@ -23,21 +25,16 @@ from cqc_cpcc.utilities.selenium_util import get_session_driver, click_element_w
     get_elements_href_as_list_wait_stale
 from cqc_cpcc.utilities.utils import are_you_satisfied, ExtendedEnum, CodeError, ErrorHolder
 
-# model = 'gpt-3.5-turbo-1106'
-#model = 'gpt-4-1106-preview'
-model = 'gpt-3.5-turbo-16k-0613'
-temperature = .2  # .2 <- More deterministic | More Creative -> .8
-llm = ChatOpenAI(temperature=temperature, model=model)
-
 COMMENTS_MISSING_STRING = "The code does not include sufficient commenting throughout"
 
 
-def parse_error_type_enum_name(enum_name:str):
+def parse_error_type_enum_name(enum_name: str):
     parts = enum_name.split('_')  # Split the string by underscores
-    course = parts[0]+" "+parts[1]  # First part is the course
+    course = parts[0] + " " + parts[1]  # First part is the course
     project = parts[3]  # Second part is the exam
     name = '_'.join(parts[4:])  # Join the remaining parts to get the name
     return course, project, name
+
 
 class FeedbackType(ExtendedEnum):
     pass
@@ -65,16 +62,15 @@ class DefaultFeedbackType(FeedbackType):
     """Offered additional insights, knowledge, or tips."""
     CSC_151_PROJECT_ALL_ADDITIONAL_TIPS_PROVIDED = "Helpful insights regarding the submission to enhance learning"
 
-
     #### ------- Below is for DOCX expected submissions ------- #####
-    #"""Feedback to reference the expected input"""
-    #EXPECTED_INPUTS = "There are missing variables or their corresponding data types in the Input column to ensure proper storage of user-entered values"
-    #"""Feedback to reference an ideal process"""
-    #ALGORITHM_LOGIC = "The Process column does not clearly indicate the connection between the expected inputs from the Input column and desired output from the Output column"
-    #"""Feedback to reference expected output"""
-    #EXPECTED_OUTPUT = "The Output column fails to show the desired outputs or maintain proper formatting for the desired outputs"
-    #"""Feedback to share additional insight regarding their submission as related to the instructions and example solution"""
-    #FINAL_THOUGHTS = "Additional insight regarding possible improvements"
+    # """Feedback to reference the expected input"""
+    # EXPECTED_INPUTS = "There are missing variables or their corresponding data types in the Input column to ensure proper storage of user-entered values"
+    # """Feedback to reference an ideal process"""
+    # ALGORITHM_LOGIC = "The Process column does not clearly indicate the connection between the expected inputs from the Input column and desired output from the Output column"
+    # """Feedback to reference expected output"""
+    # EXPECTED_OUTPUT = "The Output column fails to show the desired outputs or maintain proper formatting for the desired outputs"
+    # """Feedback to share additional insight regarding their submission as related to the instructions and example solution"""
+    # FINAL_THOUGHTS = "Additional insight regarding possible improvements"
 
 
 class Feedback(CodeError):
@@ -89,9 +85,6 @@ class Feedback(CodeError):
 class FeedbackGuide(ErrorHolder):
     """Class representing feedback after reviewing a student's submission"""
     all_feedback: Optional[List[Feedback]] = Field(description="List of all the feedback for the submission.")
-
-
-
 
     def get_feedback_unique(self) -> None | List[Feedback]:
         feedback_errors = None
@@ -302,23 +295,23 @@ def process_submission_from_link(driver: WebDriver, wait: WebDriverWait, url: st
     driver.close()
 
 
-def get_feedback_guide(assignment: str,
-                       solution: str, student_submission: str, course_name: str, wrap_code_in_markdown=True, custom_llm = None) -> FeedbackGuide:
-
+async def get_feedback_guide(assignment: str,
+                       solution: str, student_submission: str, course_name: str, wrap_code_in_markdown=True,
+                       custom_llm: BaseChatModel = None, callback: BaseCallbackHandler = None) -> FeedbackGuide:
     if custom_llm is None:
-        custom_llm = llm
+        custom_llm = get_default_llm()
 
-    feedback_from_llm = generate_feedback(custom_llm, FeedbackGuide, DefaultFeedbackType.list(), assignment, solution,
-                                          student_submission, course_name, wrap_code_in_markdown)
+    feedback_from_llm = await generate_feedback(custom_llm, FeedbackGuide, DefaultFeedbackType.list(), assignment, solution,
+                                          student_submission, course_name, wrap_code_in_markdown, callback)
 
-    print("\n\nFinal Output From LLM:")
-    pprint(feedback_from_llm)
+    #print("\n\nFinal Output From LLM:")
+    #pprint(feedback_from_llm)
 
     feedback_guide = FeedbackGuide.parse_obj(feedback_from_llm)
 
     if COMMENTS_MISSING_STRING in DefaultFeedbackType.list():
 
-        print("\n\nFinding Correct Error Line Numbers")
+        #print("\n\nFinding Correct Error Line Numbers")
         jc = JavaCode(entire_raw_code=student_submission)
 
         if feedback_guide.all_feedback is not None:
@@ -335,18 +328,18 @@ def get_feedback_guide(assignment: str,
                     line_numbers = sorted(set(line_numbers))
                     code_error.set_line_numbers_of_error(line_numbers)
 
-
             # Create Insufficient Comments if applicable
-            insufficient_comment_error = Feedback(error_type=DefaultFeedbackType.CSC_151_ALL_COMMENTS_MISSING,
+            insufficient_comment_error = Feedback(error_type=DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING,
                                                   error_details="There is not enough comments to help others understand the purpose, functionality, and structure of the code.")
 
             if jc.sufficient_amount_of_comments:
-                print("Found Insufficient comments error by LLM but not true so removing")
+                #print("Found Insufficient comments error by LLM but not true so removing")
                 # Sufficient comments so remove this error type
                 unique_feedback = [x for x in unique_feedback if
-                                   x.error_type != DefaultFeedbackType.CSC_151_ALL_COMMENTS_MISSING]
-            elif DefaultFeedbackType.CSC_151_ALL_COMMENTS_MISSING not in [x.error_type for x in unique_feedback]:
-                print("Did not find Insufficient comments error by LLM but true so adding it")
+                                   x.error_type != DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING]
+            elif DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING not in [x.error_type for x in
+                                                                                  unique_feedback]:
+                #print("Did not find Insufficient comments error by LLM but true so adding it")
                 # Insufficient comments but error type doesnt exist
                 unique_feedback.insert(0, insufficient_comment_error)
 
