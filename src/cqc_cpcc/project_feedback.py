@@ -32,6 +32,13 @@ llm = ChatOpenAI(temperature=temperature, model=model)
 COMMENTS_MISSING_STRING = "The code does not include sufficient commenting throughout"
 
 
+def parse_error_type_enum_name(enum_name:str):
+    parts = enum_name.split('_')  # Split the string by underscores
+    course = parts[0]+" "+parts[1]  # First part is the course
+    project = parts[3]  # Second part is the exam
+    name = '_'.join(parts[4:])  # Join the remaining parts to get the name
+    return course, project, name
+
 class FeedbackType(ExtendedEnum):
     pass
 
@@ -41,22 +48,22 @@ class DefaultFeedbackType(FeedbackType):
 
     #### ------- Below is for JAVA expected submissions ------- #####
     """Checked for comments (indicated by // or /*) throughout the code."""
-    COMMENTS_MISSING = COMMENTS_MISSING_STRING
+    CSC_151_PROJECT_ALL_COMMENTS_MISSING = COMMENTS_MISSING_STRING
 
     """Identified and addressed any syntax errors present."""
-    SYNTAX_ERROR = "There are syntax errors in the code"
+    CSC_151_PROJECT_ALL_SYNTAX_ERROR = "There are syntax errors in the code"
 
     """Scrutinized for spelling mistakes in the code."""
-    SPELLING_ERROR = "There are spelling mistakes in the code"
+    CSC_151_PROJECT_ALL_SPELLING_ERROR = "There are spelling mistakes in the code"
 
     """Referenced any Output Alignment differences and emphasized its importance."""
-    OUTPUT_ALIGNMENT_ERROR = "There are output alignment issues in the code that will affect exam grades"
+    CSC_151_PROJECT_ALL_OUTPUT_ALIGNMENT_ERROR = "There are output alignment issues in the code that will affect exam grades"
 
     """Evaluated the programming style for adherence to language standards."""
-    PROGRAMMING_STYLE = "There are programming style issues that do not adhere to java language standards"
+    CSC_151_PROJECT_ALL_PROGRAMMING_STYLE = "There are programming style issues that do not adhere to java language standards"
 
     """Offered additional insights, knowledge, or tips."""
-    ADDITIONAL_TIPS_PROVIDED = "Additional insights regarding the code and learning"
+    CSC_151_PROJECT_ALL_ADDITIONAL_TIPS_PROVIDED = "Helpful insights regarding the submission to enhance learning"
 
 
     #### ------- Below is for DOCX expected submissions ------- #####
@@ -330,15 +337,15 @@ def get_feedback_guide(assignment: str,
 
 
             # Create Insufficient Comments if applicable
-            insufficient_comment_error = Feedback(error_type=DefaultFeedbackType.COMMENTS_MISSING,
+            insufficient_comment_error = Feedback(error_type=DefaultFeedbackType.CSC_151_ALL_COMMENTS_MISSING,
                                                   error_details="There is not enough comments to help others understand the purpose, functionality, and structure of the code.")
 
             if jc.sufficient_amount_of_comments:
                 print("Found Insufficient comments error by LLM but not true so removing")
                 # Sufficient comments so remove this error type
                 unique_feedback = [x for x in unique_feedback if
-                                   x.error_type != DefaultFeedbackType.COMMENTS_MISSING]
-            elif DefaultFeedbackType.COMMENTS_MISSING not in [x.error_type for x in unique_feedback]:
+                                   x.error_type != DefaultFeedbackType.CSC_151_ALL_COMMENTS_MISSING]
+            elif DefaultFeedbackType.CSC_151_ALL_COMMENTS_MISSING not in [x.error_type for x in unique_feedback]:
                 print("Did not find Insufficient comments error by LLM but true so adding it")
                 # Insufficient comments but error type doesnt exist
                 unique_feedback.insert(0, insufficient_comment_error)

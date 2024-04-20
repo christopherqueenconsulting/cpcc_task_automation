@@ -8,7 +8,8 @@ from typing import Union, List
 import pandas as pd
 import streamlit as st
 
-from cqc_cpcc.project_feedback import FeedbackType, get_feedback_guide
+from cqc_cpcc.exam_review import parse_error_type_enum_name
+from cqc_cpcc.project_feedback import FeedbackType, get_feedback_guide, DefaultFeedbackType
 from cqc_cpcc.utilities.utils import read_file, read_files
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, get_custom_llm, define_chatGPTModel, add_upload_file_element
@@ -16,10 +17,12 @@ from cqc_streamlit_app.utils import get_cpcc_css, get_custom_llm, define_chatGPT
 # Initialize session state variables
 init_session_state()
 
+COURSE = "Course"
+PROJECT = "Project"
+NAME = "Name"
+DESCRIPTION = "Description"
 
 def define_feedback_types():
-    st.header("Define Feedback Types")
-
     # Preload the table with default rows and values
     default_data = [
         {"Name": "COMMENTS_MISSING", "Description": "The code does not include sufficient commenting throughout"},
@@ -31,16 +34,24 @@ def define_feedback_types():
          "Description": "There are programming style issues that do not adhere to java language standards"},
         {"Name": "ADDITIONAL_TIPS_PROVIDED", "Description": "Additional insights regarding the code and learning"},
     ]
+
+    # Convert the enum class to a list of dictionaries
+    default_data = [
+        {**dict(zip((COURSE, PROJECT, NAME), parse_error_type_enum_name(enum_name))), **{DESCRIPTION: enum_value}}
+        for enum_name, enum_value in DefaultFeedbackType.__dict__.items() if not enum_name.startswith('_')]
+
     feedback_types_df = pd.DataFrame(default_data)
 
     # Allow users to edit the table
     edited_df = st.data_editor(feedback_types_df, key='feedback_types', hide_index=True,
                                num_rows="dynamic",
                                column_config={
-                                   'Name': st.column_config.TextColumn('Name (required)',
+                                   COURSE: st.column_config.TextColumn(COURSE),
+                                   PROJECT: st.column_config.TextColumn(PROJECT),
+                                   NAME: st.column_config.TextColumn(NAME,
                                                                        help='Uppercase and Underscores only',
-                                                                       validate="^[A-Z_]+$", required=True),
-                                   'Description': st.column_config.TextColumn('Description (required)', required=True)
+                                                                       validate="^[A-Z_]+$"),
+                                   DESCRIPTION: st.column_config.TextColumn(DESCRIPTION+' (required)', required=True)
                                }
                                )  # 👈 An editable dataframe
 
