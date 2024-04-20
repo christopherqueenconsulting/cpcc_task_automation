@@ -267,7 +267,7 @@ async def get_grade_exam_content():
 
     st.header("Student Submission File(s)")
     student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "zip"]
-    student_submission_file_paths = add_upload_file_element("Upload Student Submission",
+    student_submission_file_paths = add_upload_file_element("Upload Student Exam Submission",
                                                             student_submission_accepted_file_types,
                                                             accept_multiple_files=True)
 
