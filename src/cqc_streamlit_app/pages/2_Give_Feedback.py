@@ -241,12 +241,13 @@ async def get_feedback_content():
                     total_student_submissions = len(student_submissions_map)
                     for base_student_filename, student_submission_files_map in student_submissions_map.items():
                         tasks.append(add_feedback_status_extender(
-                            base_student_filename,
-                            student_submission_files_map,
-                            course_name,
-                            assignment_instructions_content,
-                            str(assignment_solution_contents),
-                            custom_llm,
+                            base_student_filename=base_student_filename,
+                            filename_file_path_map=student_submission_files_map,
+                            course_name=course_name,
+                            feedback_type_list=feedback_types_list,
+                            assignment_instructions=assignment_instructions_content,
+                            assignment_solution=str(assignment_solution_contents),
+                            custom_llm=custom_llm
                         ))
 
                 else:
@@ -260,12 +261,14 @@ async def get_feedback_content():
                     # Add a new expander element with grade and feedback from the grader class
 
                     tasks.append(add_feedback_status_extender(
-                        base_student_filename,
-                        {base_student_filename: student_submission_temp_file_path},
-                        course_name,
-                        assignment_instructions_content,
-                        str(assignment_solution_contents),
-                        custom_llm))
+                        base_student_filename=base_student_filename,
+                        filename_file_path_map={base_student_filename: student_submission_temp_file_path},
+                        course_name=course_name,
+                        feedback_type_list=feedback_types_list,
+                        assignment_instructions=assignment_instructions_content,
+                        assignment_solution=str(assignment_solution_contents),
+                        custom_llm=custom_llm
+                    ))
 
             results = await asyncio.gather(*tasks)
 
@@ -314,8 +317,12 @@ async def get_feedback_content():
             """
 
 
-async def add_feedback_status_extender(base_student_filename: str, filename_file_path_map: dict,
-                                       course_name: str, assignment_instructions: str, assignment_solution: str,
+async def add_feedback_status_extender(base_student_filename: str,
+                                       filename_file_path_map: dict,
+                                       course_name: str,
+                                       feedback_type_list: list,
+                                       assignment_instructions: str,
+                                       assignment_solution: str,
                                        custom_llm: BaseChatModel):
     base_student_filename = base_student_filename.replace(" ", "_")
 
@@ -373,6 +380,7 @@ async def add_feedback_status_extender(base_student_filename: str, filename_file
                                                   solution=assignment_solution,
                                                   student_submission=student_submission_file_path_contents,
                                                   course_name=course_name,
+                                                  feedback_type_list=feedback_type_list,
                                                   custom_llm=custom_llm,
                                                   wrap_code_in_markdown=wrap_code_in_markdown,
                                                   callback=ChatGPTStatusCallbackHandler(status, status_prefix_label)

@@ -1,5 +1,4 @@
 import datetime as DT
-from pprint import pprint
 from typing import Optional, Annotated, List
 
 from docx import Document
@@ -296,22 +295,25 @@ def process_submission_from_link(driver: WebDriver, wait: WebDriverWait, url: st
 
 
 async def get_feedback_guide(assignment: str,
-                       solution: str, student_submission: str, course_name: str, wrap_code_in_markdown=True,
-                       custom_llm: BaseChatModel = None, callback: BaseCallbackHandler = None) -> FeedbackGuide:
+                             solution: str, student_submission: str, course_name: str,
+                             feedback_type_list: list,
+                             wrap_code_in_markdown=True,
+                             custom_llm: BaseChatModel = None, callback: BaseCallbackHandler = None) -> FeedbackGuide:
     if custom_llm is None:
         custom_llm = get_default_llm()
 
-    feedback_from_llm = await generate_feedback(custom_llm, FeedbackGuide, DefaultFeedbackType.list(), assignment, solution,
-                                          student_submission, course_name, wrap_code_in_markdown, callback)
+    feedback_from_llm = await generate_feedback(custom_llm, FeedbackGuide, feedback_type_list, assignment,
+                                                solution,
+                                                student_submission, course_name, wrap_code_in_markdown, callback)
 
-    #print("\n\nFinal Output From LLM:")
-    #pprint(feedback_from_llm)
+    # print("\n\nFinal Output From LLM:")
+    # pprint(feedback_from_llm)
 
     feedback_guide = FeedbackGuide.parse_obj(feedback_from_llm)
 
     if COMMENTS_MISSING_STRING in DefaultFeedbackType.list():
 
-        #print("\n\nFinding Correct Error Line Numbers")
+        # print("\n\nFinding Correct Error Line Numbers")
         jc = JavaCode(entire_raw_code=student_submission)
 
         if feedback_guide.all_feedback is not None:
@@ -333,13 +335,13 @@ async def get_feedback_guide(assignment: str,
                                                   error_details="There is not enough comments to help others understand the purpose, functionality, and structure of the code.")
 
             if jc.sufficient_amount_of_comments:
-                #print("Found Insufficient comments error by LLM but not true so removing")
+                # print("Found Insufficient comments error by LLM but not true so removing")
                 # Sufficient comments so remove this error type
                 unique_feedback = [x for x in unique_feedback if
                                    x.error_type != DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING]
             elif DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING not in [x.error_type for x in
                                                                                   unique_feedback]:
-                #print("Did not find Insufficient comments error by LLM but true so adding it")
+                # print("Did not find Insufficient comments error by LLM but true so adding it")
                 # Insufficient comments but error type doesnt exist
                 unique_feedback.insert(0, insufficient_comment_error)
 
