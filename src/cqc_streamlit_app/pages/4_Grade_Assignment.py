@@ -70,7 +70,7 @@ def get_flowgorithm_content():
 
     _orig_file_name, instructions_file_path = add_upload_file_element("Upload Flowgorithm Instructions",
                                                                       ["txt", "docx", "pdf"])
-    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
+    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True, key="convert_flowgoritm_instruction_to_markdown")
 
     assignment_instructions_content = None
 
@@ -239,7 +239,7 @@ async def get_grade_exam_content():
     st.header("Instructions File")
     _orig_file_name, instructions_file_path = add_upload_file_element("Upload Exam Instructions",
                                                                       ["txt", "docx", "pdf"])
-    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True)
+    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True, key="convert_exam_instruction_to_markdown")
 
     assignment_instructions_content = None
 
@@ -254,7 +254,6 @@ async def get_grade_exam_content():
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "zip"]
     solution_file_paths = add_upload_file_element("Upload Exam Solution", solution_accepted_file_types,
                                                   accept_multiple_files=True)
-    # convert_solution_to_java = st.checkbox("Solution File is Java", True)
 
     assignment_solution_contents = None
 
