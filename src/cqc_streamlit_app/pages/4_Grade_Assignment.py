@@ -405,7 +405,7 @@ async def add_grading_status_extender(base_student_filename: str, filename_file_
         # Create a temporary file to store the feedback
         status.update(label=status_prefix_label + " | Creating Feedback File")
         time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        file_name_prefix = f"{course_name}_{student_file_name}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
+        file_name_prefix = f"{course_name}_{base_student_filename}_{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
             " ", "_")
         graded_feedback_file_extension = ".docx"
         graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
@@ -427,7 +427,7 @@ async def add_grading_status_extender(base_student_filename: str, filename_file_
         # Add button to download individual feedback on each tab
         # TODO: Pass a place holder for this function to then draw the button to
         download_button_placeholder = on_download_click(graded_feedback_temp_file.name,
-                                                        "Download Feedback for " + student_file_name,
+                                                        "Download Feedback for " + base_student_filename,
                                                         download_filename)
         status.update(label=status_prefix_label + " | Feedback File Ready for Download")
 
