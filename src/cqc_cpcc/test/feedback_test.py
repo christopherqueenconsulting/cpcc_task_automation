@@ -51,7 +51,7 @@ def give_feedback_on_assignments(assignment_name: str, assignment_instructions_f
 
     # print("Assignment Solutions:\n%s" % assignment_solution)
 
-    allowed_file_extensions = (".java"
+    allowed_file_extensions = ("EmmaNova.java"
                                , ".docx"
                                )
 

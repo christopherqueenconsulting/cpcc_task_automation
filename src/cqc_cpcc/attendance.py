@@ -6,7 +6,7 @@ from selenium.webdriver import Keys
 from selenium.webdriver.support.ui import Select
 
 from cqc_cpcc.utilities.cpcc_utils import duo_login
-from cqc_cpcc.utilities.date import format_year, get_datetime, filter_dates_in_range
+from cqc_cpcc.utilities.date import format_year, get_datetime, filter_dates_in_range, is_date_in_range
 from cqc_cpcc.utilities.selenium_util import *
 from cqc_cpcc.utilities.utils import first_two_uppercase, get_unique_names_flip_first_last
 
@@ -41,7 +41,8 @@ class BrightSpace_Course:
         if self.open_course_tab():
             self.get_attendance_from_assignments()
             self.get_attendance_from_quizzes()
-            self.get_attendance_from_discussions()
+            # TODO: Fix the attendance from discussions (Something going on with iframes)
+            # self.get_attendance_from_discussions()
             self.close_course_tab()
             self.normalize_attendance_records()
             logger.info("Attendance Records (ALL):\n%s" % self.attendance_records)
@@ -146,11 +147,21 @@ class BrightSpace_Course:
             # print("Found Due Dates:")
             # pprint(due_dates)
 
-            # Keep only the text before Available on
-            due_dates = [s.split("Available on ")[0] for s in due_dates]
+            # Keep only the text after "Available on"
+            due_dates = [s.split("Available on ")[-1].strip() for s in due_dates]
 
             # Remove the "Due On" prefix
-            due_dates = [s.split("Due on ")[-1] for s in due_dates]
+            due_dates = [s.split("Due on ")[-1].strip() for s in due_dates]
+
+            # Remove the "Ends" prefix
+            due_dates = [s.split("Ends ")[-1].strip() for s in due_dates]
+
+            # Remove everything before and including "-"
+            due_dates = [s.split("- ")[-1].strip() for s in due_dates]
+
+            # Remove everything before and including "until"
+            due_dates = [s.split("until ")[-1].strip() for s in due_dates]
+
             # print("Found Due Dates (after):")
             # pprint(due_dates)
 
@@ -179,7 +190,8 @@ class BrightSpace_Course:
 
         # Get all the Due Dates
         due_dates = self.get_inrange_duedates_from_xpath(
-            "//div[contains(@class,'d2l-dates-text') and contains(.//text(),'Due on')]")
+            "//div[contains(@class,'d2l-folderdate-wrapper-row')]")
+
         # logger.info("Found Due Dates:")
         # logger.info(due_dates)
 
@@ -188,9 +200,9 @@ class BrightSpace_Course:
         else:
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
-            xpath_expression = "//div[contains(@class,'d2l-folderdates-wrapper') and (" + " or ".join(
+            xpath_expression = "//div[contains(@class,'d2l-folderdate-wrapper-row')][descendant::*[" + " or ".join(
                 ["contains(.//text(), '{}')".format(d_date) for d_date in
-                 due_dates]) + ")]/preceding-sibling::div[1]//a[contains(@class,'d2l-link')]"
+                 due_dates]) + "]]/ancestor::th[1]//a[contains(@class,'d2l-link')]"
 
             assignment_links = get_elements_href_as_list_wait_stale(self.wait, xpath_expression,
                                                                     "Waiting for Assignment Links")
@@ -282,17 +294,17 @@ class BrightSpace_Course:
     def get_attendance_from_quizzes(self):
         """Navigate to quizzes and find all due between the date ranges"""
         self.click_course_tools_link()
-        # Click the Assignments link
+        # Click the Quizzes link
         click_element_wait_retry(self.driver, self.wait,
                                  "//d2l-menu-item-link[contains(@text,'Quizzes')]",
-                                 "Waiting for Assignments Link")
+                                 "Waiting for Quizzes Link")
 
         # Wait for title to change
         self.wait.until(EC.title_contains("Quizzes"))
 
         # Get all the Due Dates
         due_dates = self.get_inrange_duedates_from_xpath(
-            "//table[contains(@summary,'list of quizzes')]//span[contains(@class,'ds_b') and contains(.//text(),'Due on')]")
+            "//table[contains(@summary,'list of quizzes')]//span[contains(@class,'ds_b')]")
         # logger.info("Found Due Dates:")
         # logger.info(due_dates)
 
@@ -333,11 +345,11 @@ class BrightSpace_Course:
 
         # Get Max Value
         option_values = [x.get_attribute('value') for x in
-                         select_options]  # TODO: Check to make sure working same as above
+                         select_options]
         # logger.info("Select Options: %s" % "\n".join(option_values))
         numeric_values = list(map(int, option_values))
         max_value = max(numeric_values)
-        logger.info("Max Value: %s" % max_value)
+        # logger.info("Max Value: %s" % max_value)
 
         # Change results per page to max
         select_element = click_element_wait_retry(self.driver, self.wait,
@@ -484,7 +496,7 @@ class BrightSpace_Course:
             # Keep track of current tab
             new_tab = self.driver.current_window_handle
 
-            # Got to discussion url
+            # Go to discussion url
             self.driver.get(du)
 
             # Switch to 1st Iframe
@@ -593,8 +605,6 @@ class MyColleges:
             lambda d: d.find_elements(By.XPATH, "//a[starts-with(@id, 'section') and contains(@id, 'link')]"),
             "Waiting for course links")
 
-        # TODO: Filter out courses that have ended
-
         # TODO: Not sure if this paginates once course list grows
 
         for atag in course_section_atags:
@@ -631,71 +641,94 @@ class MyColleges:
                                      "//a[contains(@class, 'esg-tab__link') and contains(text(),'Attendance')]",
                                      "Waiting for Attendance Tab")
 
-            # Find the corresponding Brightspace course
-            term = self.driver.find_element(By.ID, "section-header-term").text
-            term_semester, term_year = term.split()
+            # Determine if course has started or ended within the last week
+            section_dates = self.driver.find_element(By.XPATH, "//*[@id='section-dates-0']").text
+            section_start_date, section_end_date = section_dates.split(" - ")
+            section_start_date = get_datetime(section_start_date)
+            section_end_date = get_datetime(section_end_date)
+            check_date = DT.date.today() - DT.timedelta(days=7)
 
-            logger.info("Term Semester: %s | Year: %s" % (term_semester, term_year))
+            # Skip courses that have not started or have ended within the last week
+            if is_date_in_range(section_start_date, check_date, section_end_date):
 
-            bsc = BrightSpace_Course(course_name, term_semester, term_year, self.driver, self.wait)
+                # Find the corresponding Brightspace course
+                term = self.driver.find_element(By.ID, "section-header-term").text
+                term_semester, term_year = term.split()
 
-            # Switch back to tab
-            self.driver.switch_to.window(current_tab)
+                logger.info("Term Semester: %s | Year: %s" % (term_semester, term_year))
 
-            next_day_students = []
+                bsc = BrightSpace_Course(course_name, term_semester, term_year, self.driver, self.wait)
 
-            # For each date update the attendance on MyColleges Faculty page
-            for record_date, students in bsc.attendance_records.items():
-                # add any students from next day list
-                students.extend(next_day_students)
-                # Clear the next day student list
+                # Switch back to tab
+                self.driver.switch_to.window(current_tab)
+
                 next_day_students = []
-                # Sort students in alphabetical order
-                students.sort()
-                # Format the date to match drop down selection
-                formatted_date = get_datetime(record_date).strftime("%-m/%-d/%Y (%A)")
 
-                logger.info("Attendance Date: %s | Name(s): %s " % (formatted_date, " | ".join(students)))
+                # For each date update the attendance on MyColleges Faculty page
+                for record_date, students in bsc.attendance_records.items():
+                    # add any students from next day list
+                    students.extend(next_day_students)
+                    # Clear the next day student list
+                    next_day_students = []
+                    # Sort students in alphabetical order
+                    students.sort()
+                    # Format the date to match drop down selection
+                    formatted_date = get_datetime(record_date).strftime("%-m/%-d/%Y (%A)")
 
-                try:
-                    # Click on date drop down select
-                    date_select_id = "event-dates-dropdown"
-                    click_element_wait_retry(self.driver, self.wait, date_select_id, 'Waiting for Select Date Dropdown',
-                                             By.ID)
+                    logger.info("Attendance Date: %s | Name(s): %s " % (formatted_date, " | ".join(students)))
 
-                    date_select = Select(self.driver.find_element(By.ID, date_select_id))
-                    date_select.select_by_visible_text(formatted_date)
+                    try:
+                        # Click on date drop down select
+                        date_select_id = "event-dates-dropdown"
+                        click_element_wait_retry(self.driver, self.wait, date_select_id,
+                                                 'Waiting for Select Date Dropdown',
+                                                 By.ID)
 
-                    wait_for_ajax(self.driver)
-                    # satisfied = are_you_satisfied()
+                        date_select = Select(self.driver.find_element(By.ID, date_select_id))
+                        date_select.select_by_visible_text(formatted_date)
 
-                    # Update the attendance for each student
-                    logger.info("Updating Attendance for Date: %s" % formatted_date)
-                    for student_name in students:
-                        # student_name_parts = student_name.split(",")
-                        # student_first_name = student_name_parts[0].strip()
-                        # student_last_name = student_name_parts[1].strip()
-                        # student_name_formatted = flip_name(student_name)
-                        logger.info("Present: %s" % student_name)
+                        wait_for_ajax(self.driver)
+                        # satisfied = are_you_satisfied()
 
-                        # Set the present for OCLS and OLAB
-                        success = self.mark_student_present(student_name)
-                        if success:
-                            logger.info("Marked Present: %s" % student_name)
-                        else:
-                            logger.info("Could Not Mark Present: %s" % student_name)
+                        # Update the attendance for each student
+                        logger.info("Updating Attendance for Date: %s" % formatted_date)
+                        for student_name in students:
+                            # student_name_parts = student_name.split(",")
+                            # student_first_name = student_name_parts[0].strip()
+                            # student_last_name = student_name_parts[1].strip()
+                            # student_name_formatted = flip_name(student_name)
+                            logger.info("Present: %s" % student_name)
 
-                except (NoSuchElementException, TimeoutException):
-                    logger.info(
-                        "Cannot update attendance for Date: %s | Dropdown option was not found. | Adding students to the next available date." % formatted_date)
-                    next_day_students.extend(students)
-                    logger.info("Present (not recorded for %s): %s" % (formatted_date, " | ".join(students)))
+                            # Set the present for OCLS and OLAB
+                            success = self.mark_student_present(student_name)
+                            if success:
+                                logger.info("Marked Present: %s" % student_name)
+                            else:
+                                logger.info("Could Not Mark Present: %s" % student_name)
+
+                    except (NoSuchElementException, TimeoutException):
+                        logger.info(
+                            "Cannot update attendance for Date: %s | Dropdown option was not found. | Adding students to the next available date." % formatted_date)
+                        next_day_students.extend(students)
+                        logger.info("Present (not recorded for %s): %s" % (formatted_date, " | ".join(students)))
+
+            else:
+                logger.info("Course: %s | Dates %s - %s | Not in Date Range. | Skipping " % (
+                    course_name, section_start_date.strftime("%-m/%-d/%Y"), section_end_date.strftime("%-m/%-d/%Y")))
 
             # Ask user to review before moving on - give them a chance to review
             # satisfied = are_you_satisfied()
 
+            logger.info("Closing Tab for Course: %s" % course_name)
+            # Switch back to tab
+            self.driver.switch_to.window(current_tab)
             # Close tab when done
             close_tab(self.driver)
+
+        # Switch back to original_tab
+        self.driver.switch_to.window(original_tab)
+        # Close window when done
+        close_tab(self.driver)
 
     def mark_student_present(self, full_name: str, retry=0):
         success = False
@@ -757,7 +790,6 @@ def update_attendance_tracker():
     # TODO: Write code for this
 
     # TODO: Check if class is beyond the last withdrawal dates
-
 
 
 def normalize_attendance_records(attendance_records: dict) -> dict:

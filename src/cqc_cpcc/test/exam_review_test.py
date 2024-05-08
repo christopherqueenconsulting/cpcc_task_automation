@@ -90,7 +90,7 @@ def test_code_loader():
     java_docs_loader = GenericLoader.from_filesystem(
         repo_path,
         glob="**/*",
-        suffixes=[".java"],
+        suffixes=["EmmaNova.java"],
         exclude=["**/non-utf8-encoding.java"],
         parser=LanguageParser(language=None, parser_threshold=500),
 
@@ -447,7 +447,7 @@ def grade_all_from_directory(assignment_name: str, exam_instructions_file: str, 
     # print("Exam Solutions:\n%s" % exam_solution)
 
     # Get all the files in the current working directory
-    files = [file for file in os.listdir(downloaded_exams_directory) if file.endswith(".java")]
+    files = [file for file in os.listdir(downloaded_exams_directory) if file.endswith("EmmaNova.java")]
 
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
