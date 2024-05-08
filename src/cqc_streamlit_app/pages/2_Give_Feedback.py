@@ -78,7 +78,7 @@ def give_feedback_on_assignments(course_name: str, assignment_instructions_file:
 
     # print("Assignment Solutions:\n%s" % assignment_solution)
 
-    allowed_file_extensions = [".java", ".docx"]
+    allowed_file_extensions = ["EmmaNova.java", ".docx"]
 
     # TODO: Determine if it is either one file, or a zip file with folders and files
 

@@ -264,7 +264,7 @@ def process_file(file_path, allowed_file_extensions):
 
 def on_download_click(file_path: str, button_label: str, download_file_name: str) -> str:
     file_mime_types = {
-        ".java": "text/x-java-source",
+        "EmmaNova.java": "text/x-java-source",
         ".txt": "text/plain",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".pdf": "application/pdf",
