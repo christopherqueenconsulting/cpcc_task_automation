@@ -142,24 +142,11 @@ find_class_with_main() {
     fi
 }
 
-nothing='''
-start_timestamp=$(date +"%Y-%m-%d %H:%M:%S")
-java_output_pipe="/tmp/${start_timestamp}_made_up_output"
-cat < <(retrieve_log_stream "$java_output_pipe") &
-echo "Starting Java -> $start_timestamp" | while IFS= read -r line; do
-  log_message "$java_output_pipe" "$line"
-done
-
-exit 0
-'''
-
 # Prompt the user for the main directory
-#read -rp "Enter the main directory path: " main_dir
-main_dir="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N852/exam2/submissions_test"
+read -rp "Enter the main directory path: " main_dir
 
 # Prompt the user for the directory path containing sample input files
-#read -rp "Enter the directory path containing sample input files: " input_dir
-input_dir="/Users/christopherqueen/Google Drive/CPCC/CPCC_Task_Automation/downloads/CSC151-N852/exam2"
+read -rp "Enter the directory path containing sample input files: " input_dir
 
 # Ensure the main directory exists
 if [ ! -d "$main_dir" ]; then
