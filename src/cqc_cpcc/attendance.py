@@ -156,6 +156,9 @@ class BrightSpace_Course:
             # Remove the "Ends" prefix
             due_dates = [s.split("Ends ")[-1].strip() for s in due_dates]
 
+            # Remove the "Starts" prefix
+            due_dates = [s.split("Starts ")[-1].strip() for s in due_dates]
+
             # Remove everything before and including "-"
             due_dates = [s.split("- ")[-1].strip() for s in due_dates]
 
@@ -780,6 +783,8 @@ def take_attendance():
 
     # Update the Attendance Tracker
     update_attendance_tracker()
+
+    # TODO: Use driver.get_screenshot_as_file() to take screenshots to send to streamlit app or for record
 
     logger.info("Finished Attendance")
     driver.quit()

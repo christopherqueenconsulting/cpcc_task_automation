@@ -21,6 +21,8 @@ def main():
     # Streamlit app
     st.subheader('Settings')
 
+    st.write('The information entered on this page is not stored online. It is only available in the browser for the other pages to use and run properly')
+
     # Get API keys
     openai_api_key = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key, type="password")
     st.caption("*Required for all apps; get it [here](https://platform.openai.com/account/api-keys).*")
