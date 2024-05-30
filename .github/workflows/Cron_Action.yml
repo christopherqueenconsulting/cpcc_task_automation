@@ -1,8 +1,8 @@
 name: Run Cron Job  On GitHub Action
 run-name: Cron Run ${{ inputs.working-directory }} by @${{ github.actor }}
 on:
-  schedule:  #runs at 15:00 UTC / 10AM EST everyday
-    - cron: "0 7 * * *"
+  #schedule:  #runs at 15:00 UTC / 10AM EST everyday
+  #  - cron: "0 7 * * *"
   workflow_dispatch:  # Allows to trigger the workflow manually in GitHub UI
     inputs:
       working-directory:
