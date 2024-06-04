@@ -338,47 +338,52 @@ class BrightSpace_Course:
             # logger.info("Attendance Records (after quizzes):\n%s" % self.attendance_records)
 
     def click_max_results_select(self, select_xpath: str) -> bool:
-        # Click the Results per page select element
-        select_option_xpath = select_xpath + "//option"
-
-        select_options = self.wait.until(
-            lambda d: d.find_elements(By.XPATH,
-                                      select_option_xpath),
-            "Waiting for Select options")
-
-        # Get Max Value
-        option_values = [x.get_attribute('value') for x in
-                         select_options]
-        # logger.info("Select Options: %s" % "\n".join(option_values))
-        numeric_values = list(map(int, option_values))
-        max_value = max(numeric_values)
-        # logger.info("Max Value: %s" % max_value)
-
-        # Change results per page to max
-        select_element = click_element_wait_retry(self.driver, self.wait,
-                                                  select_xpath,
-                                                  "Waiting for Max Per Page Select")
-
-        # are_you_satisfied()
-
         select_successful = False
-        retry = 3
-        while not select_successful and retry > 0:
-            try:
-                select_element = self.driver.find_element(By.XPATH, select_xpath)
-                select = Select(select_element)
-                select.select_by_value(str(max_value))
-                wait_for_ajax(self.driver)
-                select_element.send_keys(Keys.TAB)  # Use to blur the select element
-                select_successful = True
-            except (NoSuchElementException, ElementNotInteractableException):
-                # Break the while loop
-                break
-            except StaleElementReferenceException:
-                retry -= 1
-                self.driver.implicitly_wait(3)  # wait 3 seconds
 
-        # are_you_satisfied()
+        try:
+            # Click the Results per page select element
+            select_option_xpath = select_xpath + "//option"
+
+            select_options = self.wait.until(
+                lambda d: d.find_elements(By.XPATH,
+                                          select_option_xpath),
+                "Waiting for Select options")
+
+            # Get Max Value
+            option_values = [x.get_attribute('value') for x in
+                             select_options]
+            # logger.info("Select Options: %s" % "\n".join(option_values))
+            numeric_values = list(map(int, option_values))
+            max_value = max(numeric_values)
+            # logger.info("Max Value: %s" % max_value)
+
+            # Change results per page to max
+            select_element = click_element_wait_retry(self.driver, self.wait,
+                                                      select_xpath,
+                                                      "Waiting for Max Per Page Select")
+
+            # are_you_satisfied()
+
+            retry = 3
+            while not select_successful and retry > 0:
+                try:
+                    select_element = self.driver.find_element(By.XPATH, select_xpath)
+                    select = Select(select_element)
+                    select.select_by_value(str(max_value))
+                    wait_for_ajax(self.driver)
+                    select_element.send_keys(Keys.TAB)  # Use to blur the select element
+                    select_successful = True
+                except (NoSuchElementException, ElementNotInteractableException):
+                    # Break the while loop
+                    break
+                except StaleElementReferenceException:
+                    retry -= 1
+                    self.driver.implicitly_wait(3)  # wait 3 seconds
+
+            # are_you_satisfied()
+
+        except TimeoutException:
+            logger.info("Timeout Exception Looking while looking for: %s" % select_xpath)
 
         return select_successful
 
