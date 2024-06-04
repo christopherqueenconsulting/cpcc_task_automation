@@ -383,7 +383,7 @@ class BrightSpace_Course:
             # are_you_satisfied()
 
         except TimeoutException:
-            logger.info("Timeout Exception Looking while looking for: %s" % select_xpath)
+            logger.info("Timeout Exception while looking for: %s" % select_xpath)
 
         return select_successful
 
