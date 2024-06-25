@@ -145,9 +145,9 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
     # element = False
     try:
         # Wait for element
-        element = wait.until(
-            lambda d: d.find_element(find_by, find_by_value),
-            wait_text)
+        element = get_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try)
+
+        # Wait for element to be clickable
         element = wait.until(EC.element_to_be_clickable(element))
         ActionChains(driver).move_to_element(element).click().perform()
         wait_for_ajax(driver)
@@ -159,6 +159,28 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
         driver.implicitly_wait(5)  # wait on driver 5 seconds
         if max_try > 1:
             element = click_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
+        else:
+            raise TimeoutException("Timeout while " + wait_text)
+
+    return element
+
+
+def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
+                           find_by: str = By.XPATH,
+                           max_try: int = MAX_WAIT_RETRY) -> WebElement:
+    # element = False
+    try:
+        # Wait for element
+        element = wait.until(
+            lambda d: d.find_element(find_by, find_by_value),
+            wait_text)
+
+    except (StaleElementReferenceException, TimeoutException) as se:
+        logger.debug(wait_text + " | Stale | .....retrying")
+        time.sleep(5)  # wait 5 seconds
+        driver.implicitly_wait(5)  # wait on driver 5 seconds
+        if max_try > 1:
+            element = get_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
         else:
             raise TimeoutException("Timeout while " + wait_text)
 
@@ -206,7 +228,7 @@ def wait_for_ajax(driver):
         pass
 
 
-def getText(curElement):
+def getText(curElement: WebElement):
     """
     Get Selenium element text
 

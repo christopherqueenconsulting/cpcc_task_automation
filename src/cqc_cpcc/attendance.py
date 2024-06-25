@@ -1,14 +1,18 @@
 import datetime as DT
 import re
 from collections import defaultdict
+from pprint import pprint
 
 from selenium.webdriver import Keys
 from selenium.webdriver.support.ui import Select
 
 from cqc_cpcc.utilities.cpcc_utils import duo_login
-from cqc_cpcc.utilities.date import format_year, get_datetime, filter_dates_in_range, is_date_in_range
+from cqc_cpcc.utilities.date import format_year, get_datetime, filter_dates_in_range, is_date_in_range, get_latest_date
 from cqc_cpcc.utilities.selenium_util import *
 from cqc_cpcc.utilities.utils import first_two_uppercase, get_unique_names_flip_first_last
+
+# Global Constants
+LINE_DASH_COUNT = 33
 
 
 def login_if_needed(driver: WebDriver):
@@ -25,24 +29,40 @@ class BrightSpace_Course:
     driver: WebDriver
     wait: WebDriverWait
     attendance_records: dict
+    withdrawal_records: dict
+    first_drop_day: DT.date
+    final_drop_day: DT.date
     date_range_start: DT.date
     date_range_end: DT.date
     course_main_tab: str
 
-    def __init__(self, name, term_semester: str, term_year: str, driver: WebDriver, wait: WebDriverWait):
+    def __init__(self, name: str, term_semester: str, term_year: str, first_drop_day: DT.date, final_drop_day: DT.date,
+                 driver: WebDriver, wait: WebDriverWait,
+                 date_range_start: DT.date = None
+                 ):
         self.name = name
         self.term_semester = term_semester
         self.term_year = term_year
+        self.first_drop_day = first_drop_day
+        self.final_drop_day = final_drop_day
         self.driver = driver
         self.wait = wait
         self.date_range_end = DT.date.today() - DT.timedelta(days=2)  # TODO: This should be 2
-        self.date_range_start = self.date_range_end - DT.timedelta(days=7)  # TODO: This should be 7
+        if date_range_start is None:
+            self.date_range_start = self.date_range_end - DT.timedelta(days=7)  # TODO: This should be 7
+        else:
+            self.date_range_start = (date_range_start
+                                     + DT.timedelta( days=1)
+                                     )  # Start from the passed in date non-inclusive
         self.attendance_records = {}
+        self.withdrawal_records = {}
         if self.open_course_tab():
             self.get_attendance_from_assignments()
             self.get_attendance_from_quizzes()
             # TODO: Fix the attendance from discussions (Something going on with iframes)
             # self.get_attendance_from_discussions()
+            if is_date_in_range(self.first_drop_day, self.date_range_end, self.final_drop_day):
+                self.get_withdrawal_records()
             self.close_course_tab()
             self.normalize_attendance_records()
             logger.info("Attendance Records (ALL):\n%s" % self.attendance_records)
@@ -127,6 +147,67 @@ class BrightSpace_Course:
 
         return course_in_brightspace
 
+    def get_withdrawal_records(self):
+        # TODO: Write code to get the withdrawal records from BrightSpace
+        # Switch back to course tab
+        self.driver.switch_to.window(self.course_main_tab)
+
+        click_element_wait_retry(self.driver, self.wait,
+                                 "//button[contains(.//text(), 'Roster')]",
+                                 "Waiting for Roster Link")
+
+        # Click the Classlist link
+        click_element_wait_retry(self.driver, self.wait,
+                                 "//d2l-menu-item-link[contains(@text,'Classlist')]",
+                                 "Waiting for Classlist Link")
+
+        # Click the Enrollment Statistics button
+        click_element_wait_retry(self.driver, self.wait,
+                                 "//button[contains(.//text(), 'Enrollment Statistics')]",
+                                 "Waiting for Enrollment Statistics button")
+
+        # Click the Results per page select element
+        if self.click_max_results_select("//select[contains(@title,'Results Per Page')]"):
+            table_prefix_xpath = "//table[@summary='Withdrawals summary']"
+
+            # Get all the students that have withdrawn between the first drop date and final drop date
+            student_names = get_elements_text_as_list_wait_stale(self.wait,
+                                                                 table_prefix_xpath + "//th[@class='d_gn d_ich']",
+                                                                 "Waiting for Student Names")
+
+            student_ids = get_elements_text_as_list_wait_stale(self.wait,
+                                                               table_prefix_xpath + "//td[4]//label[1]",
+                                                               "Waiting for Completion Dates")
+
+            withdrawal_dates = get_elements_text_as_list_wait_stale(self.wait,
+                                                                    table_prefix_xpath + "//td[7]//label[1]",
+                                                                    "Waiting for Completion Dates")
+
+            student_withdrawals_dict = dict(zip(student_names, zip(student_ids, withdrawal_dates)))
+
+            filtered_withdrawals = {}
+
+            for student_name, (student_id, withdrawal_date) in student_withdrawals_dict.items():
+                # Convert withdrawal_date to a datetime object for comparison
+                withdrawal_datetime = get_datetime(withdrawal_date)
+
+                # Check if the withdrawal date is within the specified range
+                if is_date_in_range(self.first_drop_day, withdrawal_datetime, self.final_drop_day):
+                    # Add the student to the filtered withdrawals
+                    if withdrawal_date not in filtered_withdrawals:
+                        self.withdrawal_records[student_name] = []
+
+                    # TODO: Get the last activity of the student
+
+                    filtered_withdrawals[student_name].append((student_id, withdrawal_datetime))
+
+            # filtered_withdrawals now contains the student withdrawals within the specified date range
+
+
+
+        else:
+            logger.info("No withdrawals found for course: %s" % self.name)
+
     def click_course_tools_link(self):
         """Click the Course Tools link"""
         # Switch back to course tab
@@ -144,10 +225,14 @@ class BrightSpace_Course:
             due_dates = get_elements_text_as_list_wait_stale(self.wait,
                                                              find_by_xpath_value,
                                                              "Waiting for Dates")
-            # print("Found Due Dates:")
+            # print("Found Due Dates: (before)")
             # pprint(due_dates)
+            # print("-" * LINE_DASH_COUNT)
 
-            # Keep only the text after "Available on"
+            # Split newlines in due_dates to their own entry in the array
+            due_dates = [s for s in "\n".join(due_dates).split("\n") if s]
+
+            # Remove the "Available on" prefix
             due_dates = [s.split("Available on ")[-1].strip() for s in due_dates]
 
             # Remove the "Due On" prefix
@@ -165,16 +250,24 @@ class BrightSpace_Course:
             # Remove everything before and including "until"
             due_dates = [s.split("until ")[-1].strip() for s in due_dates]
 
-            # print("Found Due Dates (after):")
-            # pprint(due_dates)
-
             # Remove whitespaces and new line characters from ends
             due_dates = [s.strip() for s in due_dates]
 
+            # print("Found Due Dates (after):")
+            # pprint(due_dates)
+            # print("-" * LINE_DASH_COUNT)
+
             # Filter down to the ones within range
-            # logger.info("Due Dates Between %s - %s" % (self.date_range_start, self.date_range_end))
             due_dates = filter_dates_in_range(due_dates, self.date_range_start, self.date_range_end)
+
+            # Remove duplicates from the due_dates array
+            due_dates = list(set(due_dates))
+
+            print("Found Due Dates (Filtered To between %s - %s):" % (self.date_range_start, self.date_range_end))
+            pprint(due_dates)
+            print("-" * LINE_DASH_COUNT)
             # logger.info(due_dates)
+
         except TimeoutException:
             logger.info("No Dates For Xpath: %s" % find_by_xpath_value)
 
@@ -191,19 +284,22 @@ class BrightSpace_Course:
         # Wait for title to change
         self.wait.until(EC.title_contains("Assignments"))
 
+        # Set the xpath prefix for the searched table or element
+        table_prefix_xpath = "//table[contains(@summary,'List of assignments')]//div[contains(@class,'d2l-folderdates-wrapper')]"
+
         # Get all the Due Dates
         due_dates = self.get_inrange_duedates_from_xpath(
-            "//div[contains(@class,'d2l-folderdate-wrapper-row')]")
+            table_prefix_xpath + "//div[contains(@class,'date')]")
 
-        # logger.info("Found Due Dates:")
-        # logger.info(due_dates)
+        logger.info("Found Due Dates:")
+        logger.info(due_dates)
 
         if not due_dates:
             logger.info("No Assignment Link(s) Due Between %s - %s:" % (self.date_range_start, self.date_range_end))
         else:
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
-            xpath_expression = "//div[contains(@class,'d2l-folderdate-wrapper-row')][descendant::*[" + " or ".join(
+            xpath_expression = table_prefix_xpath + "[descendant::*[" + " or ".join(
                 ["contains(.//text(), '{}')".format(d_date) for d_date in
                  due_dates]) + "]]/ancestor::th[1]//a[contains(@class,'d2l-link')]"
 
@@ -305,9 +401,12 @@ class BrightSpace_Course:
         # Wait for title to change
         self.wait.until(EC.title_contains("Quizzes"))
 
+        # Set the xpath prefix for the searched table or element
+        table_prefix_xpath = "//table[contains(@summary,'list of quizzes')]"
+
         # Get all the Due Dates
         due_dates = self.get_inrange_duedates_from_xpath(
-            "//table[contains(@summary,'list of quizzes')]//span[contains(@class,'ds_b')]")
+            table_prefix_xpath + "//span[contains(@class,'ds_b')]")
         # logger.info("Found Due Dates:")
         # logger.info(due_dates)
 
@@ -317,7 +416,7 @@ class BrightSpace_Course:
         else:
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
-            xpath_expression = "//th[.//span[contains(@class,'ds_b') and (" + " or ".join(
+            xpath_expression = table_prefix_xpath + "//th[.//span[contains(@class,'ds_b') and (" + " or ".join(
                 ['contains(text(), "{}")'.format(d_date) for d_date in
                  due_dates]) + ")]]/a[contains(@class,'d2l-link')]"
 
@@ -586,13 +685,13 @@ class BrightSpace_Course:
 class MyColleges:
     driver: WebDriver
     wait: WebDriverWait
-    course_urls: dict
+    course_information: dict
     current_tab: str
 
     def __init__(self, driver: WebDriver, wait: WebDriverWait):
         self.driver = driver
         self.wait = wait
-        self.course_urls = {}
+        self.course_information = {}
 
     def open_faculty_page(self):
         faculty_url = MYCOLLEGE_URL + "/Student/Student/Faculty"
@@ -605,7 +704,7 @@ class MyColleges:
         # Wait for title to change
         self.wait.until(EC.title_contains("Faculty"))
 
-    def get_course_urls(self):
+    def get_course_info(self):
         self.open_faculty_page()
 
         # Find each course
@@ -613,59 +712,119 @@ class MyColleges:
             lambda d: d.find_elements(By.XPATH, "//a[starts-with(@id, 'section') and contains(@id, 'link')]"),
             "Waiting for course links")
 
+        # Get the course dates
+        course_section_dates = self.wait.until(
+            lambda d: d.find_elements(By.XPATH,
+                                      "//a[starts-with(@id, 'section') and contains(@id, 'link')]/ancestor::td[1]/following-sibling::td[1]/div/div[3]/span"),
+            "Waiting for course dates")
+
         # TODO: Not sure if this paginates once course list grows
 
-        for atag in course_section_atags:
-            course_name = atag.text
-            self.course_urls[course_name] = atag.get_attribute("href")
+        for index, atag in enumerate(course_section_atags):
+            course_name = getText(atag)
+            course_href = atag.get_attribute("href")
+            course_dates = getText(course_section_dates[index])
+            course_start_date, course_end_date = course_dates.split(" - ")
+            course_start_date = get_datetime(course_start_date)
+            course_end_date = get_datetime(course_end_date)
+            self.course_information[course_name] = {'href': course_href, 'start_date': course_start_date,
+                                                    'end_date': course_end_date}
+
+            # TODO: Get the deadlines for the course and start and end dates
 
     def process_attendance(self):
-        self.get_course_urls()
+        self.get_course_info()
 
         # Keep track of original tab
         original_tab = self.driver.current_window_handle
 
-        for course_name, course_url in self.course_urls.items():
+        # Use check date of a week ago
+        check_date = DT.date.today() - DT.timedelta(days=7)
 
-            # Switch back to original_tab
-            self.driver.switch_to.window(original_tab)
-
-            handles = self.driver.window_handles
-
-            # Opens a new tab and switches to new tab
-            self.driver.switch_to.new_window('tab')
-
-            # Wait for the new window or tab
-            self.wait.until(EC.new_window_is_opened(handles))
-
-            # Keep track of current tab
-            current_tab = self.driver.current_window_handle
-
-            # Navigate to course url
-            self.driver.get(course_url)
-
-            # Click on attendance link when available
-            click_element_wait_retry(self.driver, self.wait,
-                                     "//a[contains(@class, 'esg-tab__link') and contains(text(),'Attendance')]",
-                                     "Waiting for Attendance Tab")
-
-            # Determine if course has started or ended within the last week
-            section_dates = self.driver.find_element(By.XPATH, "//*[@id='section-dates-0']").text
-            section_start_date, section_end_date = section_dates.split(" - ")
-            section_start_date = get_datetime(section_start_date)
-            section_end_date = get_datetime(section_end_date)
-            check_date = DT.date.today() - DT.timedelta(days=7)
+        for course_name, course_info in self.course_information.items():
+            course_url = course_info['href']
+            course_start_date = course_info['start_date']
+            course_end_date = course_info['end_date']
 
             # Skip courses that have not started or have ended within the last week
-            if is_date_in_range(section_start_date, check_date, section_end_date):
+            if is_date_in_range(course_start_date, check_date, course_end_date):
+
+                # Switch back to original_tab
+                self.driver.switch_to.window(original_tab)
+
+                handles = self.driver.window_handles
+
+                # Opens a new tab and switches to new tab
+                self.driver.switch_to.new_window('tab')
+
+                # Wait for the new window or tab
+                self.wait.until(EC.new_window_is_opened(handles))
+
+                # Keep track of current tab
+                current_tab = self.driver.current_window_handle
+
+                # Navigate to course url
+                self.driver.get(course_url)
+
+                # Get the Deadline Dates and add to the course information
+                click_element_wait_retry(self.driver, self.wait,
+                                         "deadline-dates-label",
+                                         "Waiting for Attendance Tab", By.ID)
+
+                self.course_information[course_name]['last_day_to_add'] = get_datetime(
+
+                    getText(get_element_wait_retry(self.driver, self.wait,
+                                                   "//span[@data-bind='text: AddEndDateDisplay()']",
+                                                   "Waiting for Deadline End Date")))
+                self.course_information[course_name][
+                    'first_day_to_drop'] = first_day_to_drop = get_datetime(
+                    getText(get_element_wait_retry(self.driver, self.wait,
+                                                   "//span[@data-bind='text: DropStartDateDisplay()']",
+                                                   "Waiting for Deadline Start Date")))
+                self.course_information[course_name]['last_day_to_drop_without_grade'] = get_datetime(
+                    getText(get_element_wait_retry(self.driver, self.wait,
+                                                   "//span[@data-bind='text: DropGradesRequiredDateDisplay()']",
+                                                   "Waiting for Deadline Drop Without Grade Date")))
+                self.course_information[course_name][
+                    'last_day_to_drop_with_grade'] = final_day_to_drop = get_datetime(
+                    getText(get_element_wait_retry(self.driver, self.wait,
+                                                   "//span[@data-bind='text: DropEndDateDisplay()']",
+                                                   "Waiting for Deadline Drop With Grade Date")))
+
+                # Close the Deadline Dates Dialog
+                click_element_wait_retry(self.driver, self.wait,
+                                         "//button[@title='Close' and contains(text(),'Close')]",
+                                         "Waiting for Deadline Dates Close Button")
+
+                # Click on attendance link when available
+                click_element_wait_retry(self.driver, self.wait,
+                                         "//a[contains(@class, 'esg-tab__link') and contains(text(),'Attendance')]",
+                                         "Waiting for Attendance Tab")
+
+                # Find the latest attendance record to use as start date
+                last_attendance_record_dates = get_elements_text_as_list_wait_stale(self.wait,
+                                                                                    "//td[@data-role='Last Attendance Recorded']",
+
+                                                                                    "Waiting for Latest Attendance Records")
+                # Get Latest Date and Convert To date time
+                last_attendance_record_date = get_datetime(get_latest_date(last_attendance_record_dates))
+                logger.info("Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
+
+                # Determine if course has started or ended within the last week
+                # section_dates = self.driver.find_element(By.XPATH, "//*[@id='section-dates-0']").text
+                # section_start_date, section_end_date = section_dates.split(" - ")
+                # section_start_date = get_datetime(section_start_date)
+                # section_end_date = get_datetime(section_end_date)
 
                 # Find the corresponding Brightspace course
-                term = self.driver.find_element(By.ID, "section-header-term").text
+                term = getText(get_element_wait_retry(self.driver, self.wait,
+                                                      "section-header-term", "Waiting For Course Term Text", By.ID))
                 term_semester, term_year = term.split()
 
                 logger.info("Term Semester: %s | Year: %s" % (term_semester, term_year))
 
-                bsc = BrightSpace_Course(course_name, term_semester, term_year, self.driver, self.wait)
+                bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
+                                         self.driver, self.wait, last_attendance_record_date)
 
                 # Switch back to tab
                 self.driver.switch_to.window(current_tab)
@@ -720,18 +879,18 @@ class MyColleges:
                         next_day_students.extend(students)
                         logger.info("Present (not recorded for %s): %s" % (formatted_date, " | ".join(students)))
 
+                # Ask user to review before moving on - give them a chance to review
+                # satisfied = are_you_satisfied()
+
+                logger.info("Closing Tab for Course: %s" % course_name)
+                # Switch back to tab
+                self.driver.switch_to.window(current_tab)
+                # Close tab when done
+                close_tab(self.driver)
+
             else:
                 logger.info("Course: %s | Dates %s - %s | Not in Date Range. | Skipping " % (
-                    course_name, section_start_date.strftime("%-m/%-d/%Y"), section_end_date.strftime("%-m/%-d/%Y")))
-
-            # Ask user to review before moving on - give them a chance to review
-            # satisfied = are_you_satisfied()
-
-            logger.info("Closing Tab for Course: %s" % course_name)
-            # Switch back to tab
-            self.driver.switch_to.window(current_tab)
-            # Close tab when done
-            close_tab(self.driver)
+                    course_name, course_start_date.strftime("%-m/%-d/%Y"), course_end_date.strftime("%-m/%-d/%Y")))
 
         # Switch back to original_tab
         self.driver.switch_to.window(original_tab)
@@ -787,6 +946,7 @@ def take_attendance():
     mc.process_attendance()
 
     # Update the Attendance Tracker
+
     update_attendance_tracker()
 
     # TODO: Use driver.get_screenshot_as_file() to take screenshots to send to streamlit app or for record

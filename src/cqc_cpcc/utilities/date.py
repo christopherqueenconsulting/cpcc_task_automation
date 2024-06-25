@@ -38,9 +38,31 @@ def is_date_in_range(start_date: DT.datetime | DT.date, check_date: DT.datetime 
         check_date = DT.datetime.combine(check_date, DT.datetime.min.time())
     if isinstance(end_date, DT.date):
         end_date = DT.datetime.combine(end_date, DT.datetime.max.time())
+
+    time_format = "%m-%d-%Y %H:%M:%S %Z"
+    #print("Checking Date Range | Start: %s | Check: %s | End: %s" % (start_date.strftime(time_format),
+    #                                                                 check_date.strftime(time_format),
+    #                                                                 end_date.strftime(time_format)))
+    # pprint(due_dates)
+
     return start_date <= check_date <= end_date
 
 
 def filter_dates_in_range(date_strings: list[str], start_date: DT.datetime | DT.date, end_date: DT.datetime | DT.date):
     filtered_dates = [s for s in date_strings if is_date_in_range(start_date, get_datetime(s), end_date)]
     return filtered_dates
+
+
+def order_dates(date_strings: list[str]) -> list[str]:
+    time_format = "%m-%d-%Y %H:%M:%S"
+    return sorted(date_strings, key=lambda x: get_datetime(x).strftime(time_format))
+
+
+def get_latest_date(date_strings: list[str]) -> str:
+    # Return the latest date from the order_dates function
+    return order_dates(date_strings)[-1]
+
+
+def get_earliest_date(date_strings: list[str]) -> str:
+    # Return the earliest date from the order_dates function
+    return order_dates(date_strings)[0]
