@@ -768,6 +768,17 @@ files = [
 packaging = ">=23.1"
 
 [[package]]
+name = "chromium"
+version = "0.0.0"
+description = "A hobby project"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "chromium-0.0.0-py3-none-any.whl", hash = "sha256:a789163f8c17a5007259cc58fd77eff13ca4b7e2cd74ea79ba7bdef2daa2d853"},
+    {file = "chromium-0.0.0.tar.gz", hash = "sha256:dfed04f56ab56721c1e05c77a97a79ad1b88be44c222eb1f7ffbd6fff54e1e72"},
+]
+
+[[package]]
 name = "click"
 version = "8.1.7"
 description = "Composable command line interface toolkit"
@@ -6534,4 +6545,4 @@ testing = ["coverage (>=5.0.3)", "zope.event", "zope.testing"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.12,<4.0"
-content-hash = "31dfbde4e2efb8f90ef4a3c060cd7043d7485122754e094294c8aa8e89d3ccc0"
+content-hash = "b3592c07de8396ae0264ed05f1a707719dfab324709889d05c0a1f7b5dd4c643"

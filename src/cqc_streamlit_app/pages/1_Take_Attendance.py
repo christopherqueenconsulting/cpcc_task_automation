@@ -8,10 +8,11 @@ from streamlit.runtime import get_instance
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 from streamlit_elements import elements, mui, html, sync
 
-import cqc_cpcc.attendance as AT
+
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.pexels_helper import get_photo
 from cqc_streamlit_app.utils import get_cpcc_css
+import cqc_cpcc.attendance as AT
 
 # Initialize session state variables
 init_session_state()
@@ -130,8 +131,16 @@ def main():
     st.markdown(
         """Here we will take attendance for you and provide log of what we have for each of our courses for each date""")
 
-    # TODO: Add input for start and end date - pre-set with values
 
+
+    if st.session_state.instructor_user_id and st.session_state.instructor_password:
+        attendance_section()
+    else:
+        st.write("Please visit the Settings page and enter the Instructor User ID and Instructor User ID to proceed")
+
+
+def attendance_section():
+    # TODO: Add input for start and end date - pre-set with values
     randImage = getRandomImage()
 
     # Initiate the images array

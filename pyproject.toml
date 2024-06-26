@@ -41,6 +41,7 @@ streamlit-ext = "^0.1.10"
 streamlit-elements = "^0.1.0"
 watchdog = "^4.0.1"
 pexels-api = "^1.0.1"
+chromium = "^0.0.0"
 
 
 [tool.poetry.group.lint]

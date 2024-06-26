@@ -123,11 +123,11 @@ def get_local_chrome_driver(headless=True):
     # options.headless = headless
     driver = webdriver.Chrome(
         # TODO: Working before below but checking for streamlit cloud
-        service=Service(
-            ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
+        #service=Service(
+            #ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
             #ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
-        ),
-        #service=Service(),
+        #),
+        service=Service(), # Works locally
         # TODO: Working before above but checking for streamlit cloud
         options=options
     )
@@ -149,9 +149,10 @@ def add_headless_options(options: Options) -> Options:
 
     # Additional options while headless
     options.add_argument('--start-maximized')  # Working
+    options.add_argument("--window-size=1920x1080")  # Working
     options.add_argument('--disable-popup-blocking')  # Working
-    options.add_argument('--incognito')
-    options.add_argument('--no-sandbox')
+    options.add_argument('--incognito')  # Working
+    options.add_argument('--no-sandbox')  # Working
     options.add_argument('--enable-automation')  # Working
     options.add_argument('--disable-gpu')  # Working
     options.add_argument('--disable-extensions')  # Working
@@ -159,8 +160,10 @@ def add_headless_options(options: Options) -> Options:
     options.add_argument('--disable-browser-side-navigation')  # Working
     options.add_argument('--disable-dev-shm-usage')  # Working
     options.add_argument('--disable-features=VizDisplayCompositor')  # Working
-    options.add_argument('--dns-prefetch-disable')
+    options.add_argument('--dns-prefetch-disable')  # Working
     options.add_argument("--force-device-scale-factor=1")  # Working
+
+    options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
 
     return options
 
