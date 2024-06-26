@@ -1,3 +1,5 @@
+import os
+
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
@@ -7,7 +9,12 @@ from cqc_cpcc.utilities.selenium_util import get_driver_wait, click_element_wait
 
 
 def duo_login(driver: WebDriver):
-    from cqc_cpcc.utilities.env_constants import INSTRUCTOR_USERID, INSTRUCTOR_PASS
+
+    # TODO: This is not working when in streamlit cloud. Need to get values set before this line
+    #from cqc_cpcc.utilities.env_constants import INSTRUCTOR_USERID, INSTRUCTOR_PASS
+
+    instructor_user_id = os.environ["INSTRUCTOR_USERID"]
+    instructor_password = os.environ["INSTRUCTOR_PASS"]
 
     wait = get_driver_wait(driver)
 
@@ -24,8 +31,8 @@ def duo_login(driver: WebDriver):
     # Login
     username_field = driver.find_element(By.ID, "username")
     password_field = driver.find_element(By.ID, "password")
-    username_field.send_keys(INSTRUCTOR_USERID)
-    password_field.send_keys(INSTRUCTOR_PASS)
+    username_field.send_keys(instructor_user_id)
+    password_field.send_keys(instructor_password)
     # login_field = driver.find_element(By.NAME, "_eventId_proceed")
     # login_field.click()
     click_element_wait_retry(driver, wait, "_eventId_proceed", "Waiting for login field", By.NAME)
