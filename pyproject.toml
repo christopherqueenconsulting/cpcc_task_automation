@@ -38,6 +38,7 @@ mammoth = "^1.7.1"
 markdownify = "^0.12.1"
 langchainhub = "^0.1.15"
 streamlit-ext = "^0.1.10"
+streamlit-elements = "^0.1.0"
 
 
 [tool.poetry.group.lint]

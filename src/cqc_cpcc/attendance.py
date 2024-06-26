@@ -2,6 +2,7 @@ import datetime as DT
 import re
 from collections import defaultdict
 from pprint import pprint
+from threading import Thread
 
 from selenium.webdriver import Keys
 from selenium.webdriver.support.ui import Select
@@ -52,7 +53,7 @@ class BrightSpace_Course:
             self.date_range_start = self.date_range_end - DT.timedelta(days=7)  # TODO: This should be 7
         else:
             self.date_range_start = (date_range_start
-                                     + DT.timedelta( days=1)
+                                     + DT.timedelta(days=1)
                                      )  # Start from the passed in date non-inclusive
         self.attendance_records = {}
         self.withdrawal_records = {}
@@ -730,8 +731,6 @@ class MyColleges:
             self.course_information[course_name] = {'href': course_href, 'start_date': course_start_date,
                                                     'end_date': course_end_date}
 
-            # TODO: Get the deadlines for the course and start and end dates
-
     def process_attendance(self):
         self.get_course_info()
 
@@ -953,6 +952,36 @@ def take_attendance():
 
     logger.info("Finished Attendance")
     driver.quit()
+
+
+class AttendanceScreenShot:
+    def __init__(self, interval: int = 5):
+        self._running = True
+        self.interval = interval
+        self.driver, self.wait = get_session_driver()
+        self.mc = MyColleges(self.driver, self.wait)
+
+    def terminate(self):
+        self._running = False
+        self.driver.quit()
+
+    def main(self):
+        # Process attendance
+        self.mc.process_attendance()
+
+        # Update the Attendance Tracker
+        update_attendance_tracker()
+
+        logger.info("Finished Attendance")
+
+        self.terminate()
+
+    def run(self, screenshot_holder: list[str] = None):
+        Thread(target=self.main)  # Start a thread for processing attendance
+        while self._running:
+            # TODO: Use driver.get_screenshot_as_file() to take screenshots to send to streamlit app or for record
+            screenshot_holder.append(self.driver.get_screenshot_as_file())
+            time.sleep(self.interval)
 
 
 def update_attendance_tracker():
