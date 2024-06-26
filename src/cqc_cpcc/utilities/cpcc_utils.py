@@ -2,11 +2,13 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 
-from cqc_cpcc.utilities.env_constants import INSTRUCTOR_USERID, INSTRUCTOR_PASS
+#from cqc_cpcc.utilities.env_constants import INSTRUCTOR_USERID, INSTRUCTOR_PASS
 from cqc_cpcc.utilities.selenium_util import get_driver_wait, click_element_wait_retry
 
 
 def duo_login(driver: WebDriver):
+    from cqc_cpcc.utilities.env_constants import INSTRUCTOR_USERID, INSTRUCTOR_PASS
+
     wait = get_driver_wait(driver)
 
     original_window = driver.current_window_handle
