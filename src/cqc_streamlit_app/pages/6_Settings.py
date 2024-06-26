@@ -48,6 +48,11 @@ def main():
             st.session_state.instructor_user_id = os.environ["INSTRUCTOR_USERID"] = instructor_user_id
             st.session_state.instructor_password = os.environ["INSTRUCTOR_PASS"] = instructor_password
             st.session_state.instructor_signature = os.environ["FEEDBACK_SIGNATURE"] = instructor_signature
+
+            # Refresh the constants after manual save
+            from cqc_cpcc.utilities.env_constants import refresh_from_env
+            refresh_from_env()
+
             st.success("Settings Saved")
 
 
