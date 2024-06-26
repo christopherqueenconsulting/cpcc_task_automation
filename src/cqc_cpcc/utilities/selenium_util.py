@@ -124,8 +124,8 @@ def get_local_chrome_driver(headless=True):
     driver = webdriver.Chrome(
         # TODO: Working before below but checking for streamlit cloud
         service=Service(
-            #ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
-            ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
+            ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
+            #ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
         ),
         #service=Service(),
         # TODO: Working before above but checking for streamlit cloud
@@ -144,13 +144,14 @@ def get_local_chrome_driver(headless=True):
 
 def add_headless_options(options: Options) -> Options:
     # options.add_argument("--headless=new") # <--- DOES NOT WORK
-    options.add_argument("--headless=chrome")  # <--- WORKING
+    #options.add_argument("--headless=chrome")  # <--- WORKING
+    options.add_argument("--headless")  # <--- ???
 
     # Additional options while headless
     options.add_argument('--start-maximized')  # Working
     options.add_argument('--disable-popup-blocking')  # Working
     options.add_argument('--incognito')
-    # options.add_argument('--no-sandbox')
+    options.add_argument('--no-sandbox')
     options.add_argument('--enable-automation')  # Working
     options.add_argument('--disable-gpu')  # Working
     options.add_argument('--disable-extensions')  # Working
@@ -158,8 +159,8 @@ def add_headless_options(options: Options) -> Options:
     options.add_argument('--disable-browser-side-navigation')  # Working
     options.add_argument('--disable-dev-shm-usage')  # Working
     options.add_argument('--disable-features=VizDisplayCompositor')  # Working
-    # options.add_argument('--dns-prefetch-disable')
-    # options.add_argument("--force-device-scale-factor=1")  # Working
+    options.add_argument('--dns-prefetch-disable')
+    options.add_argument("--force-device-scale-factor=1")  # Working
 
     return options
 
