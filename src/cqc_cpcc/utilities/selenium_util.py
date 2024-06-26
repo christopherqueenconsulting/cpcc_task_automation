@@ -76,6 +76,8 @@ def close_tab(driver: WebDriver, handles: list[str] = None, max_retry=3):
 def get_browser_driver():
     if IS_GITHUB_ACTION:
         browser_type = BrowserType.LOCAL_CHROME
+    elif HEADLESS_BROWSER:
+        browser_type = BrowserType.BROWSERLESS
     else:
         browser_type = which_browser()
     driver = None
@@ -91,7 +93,10 @@ def get_browser_driver():
 
 def get_docker_driver(headless=True):
     options = getBaseOptions()
-    options.headless = headless
+    #options.headless = headless
+    if headless:
+        detached = False
+        options.add_argument("--headless=new")
     options.add_argument('--ignore-ssl-errors=yes')
     options.add_argument('--ignore-certificate-errors')
     driver = webdriver.Remote(
@@ -104,11 +109,18 @@ def get_docker_driver(headless=True):
 
 def get_local_chrome_driver(headless=True):
     options = getBaseOptions()
-    options.add_experimental_option("detach", True)  # Change if you want to close when program ends
-    options.headless = headless
+    detached = True
+    if headless:
+        detached = False
+        options.add_argument("--headless=new")
+
+    options.add_experimental_option("detach", detached)  # Change if you want to close when program ends
+    #options.headless = headless
     driver = webdriver.Chrome(options=options)
     # driver.set_window_size(1800, 900)
-    driver.maximize_window()
+    if not headless:
+        driver.maximize_window()
+
     return driver
 
 

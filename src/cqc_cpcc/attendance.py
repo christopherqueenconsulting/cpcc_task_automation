@@ -1,5 +1,6 @@
 import datetime as DT
 import re
+import tempfile
 from collections import defaultdict
 from pprint import pprint
 from threading import Thread
@@ -980,7 +981,11 @@ class AttendanceScreenShot:
         Thread(target=self.main)  # Start a thread for processing attendance
         while self._running:
             # TODO: Use driver.get_screenshot_as_file() to take screenshots to send to streamlit app or for record
-            screenshot_holder.append(self.driver.get_screenshot_as_file())
+            # Create a temporary file to store the uploaded instructions
+            temp_file = tempfile.NamedTemporaryFile(delete=True, suffix='.png')
+            logger.info("Created temp file for image: %s" % temp_file.name)
+            screenshot_holder.append(self.driver.get_screenshot_as_file(temp_file.name))
+            logger.info("Screenshot taken!")
             time.sleep(self.interval)
 
 

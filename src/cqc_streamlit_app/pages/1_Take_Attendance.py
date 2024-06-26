@@ -66,7 +66,7 @@ def main():
     # TODO: Add input for start and end date - pre-set with values
 
     # Initiate the images array
-    IMAGES = []
+    IMAGES = ["https://unsplash.com/photos/GJ8ZQV7eGmU/download?force=true&w=1920"]
 
     st.subheader("Swipeable slideshow")
     slideshow_swipeable(IMAGES)
