@@ -125,7 +125,7 @@ def get_local_chrome_driver(headless=True):
         # TODO: Working before below but checking for streamlit cloud
         service=Service(
             #ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
-            ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
+            ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install() # Works locally
         ),
         #service=Service(), # Works locally
         # TODO: Working before above but checking for streamlit cloud
