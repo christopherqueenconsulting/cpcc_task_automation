@@ -8,11 +8,14 @@ from selenium.common import NoSuchElementException, StaleElementReferenceExcepti
     TimeoutException, WebDriverException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
@@ -118,13 +121,21 @@ def get_local_chrome_driver(headless=True):
 
     options.add_experimental_option("detach", detached)  # Change if you want to close when program ends
     # options.headless = headless
-    driver = webdriver.Chrome(options=options)
+    driver = webdriver.Chrome(
+        # TODO: Working before below but checking for streamlit cloud
+        #service=Service(
+        #    ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
+        #),
+        service=Service(),
+        # TODO: Working before above but checking for streamlit cloud
+        options=options
+    )
     # driver.set_window_size(1800, 900)
     if not headless:
         driver.maximize_window()
     else:
         # TODO: Determine what size you want to set
-        #driver.maximize_window()
+        # driver.maximize_window()
         driver.set_window_size(1800, 900)
 
     return driver
@@ -139,15 +150,15 @@ def add_headless_options(options: Options) -> Options:
     options.add_argument('--disable-popup-blocking')  # Working
     options.add_argument('--incognito')
     # options.add_argument('--no-sandbox')
-    options.add_argument('--enable-automation') # Working
+    options.add_argument('--enable-automation')  # Working
     options.add_argument('--disable-gpu')  # Working
     options.add_argument('--disable-extensions')  # Working
-    options.add_argument('--disable-infobars') # Working
-    options.add_argument('--disable-browser-side-navigation') # Working
-    options.add_argument('--disable-dev-shm-usage') # Working
-    options.add_argument('--disable-features=VizDisplayCompositor') # Working
+    options.add_argument('--disable-infobars')  # Working
+    options.add_argument('--disable-browser-side-navigation')  # Working
+    options.add_argument('--disable-dev-shm-usage')  # Working
+    options.add_argument('--disable-features=VizDisplayCompositor')  # Working
     # options.add_argument('--dns-prefetch-disable')
-    #options.add_argument("--force-device-scale-factor=1")  # Working
+    # options.add_argument("--force-device-scale-factor=1")  # Working
 
     return options
 

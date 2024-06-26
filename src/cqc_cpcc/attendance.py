@@ -1002,13 +1002,12 @@ class ScreenshotListener(AbstractEventListener):
         t.start()
 
     def take_screenshot(self, driver: WebDriver) -> None:
-        # Create a temporary file to store the uploaded instructions
-        # temp_file = tempfile.NamedTemporaryFile(
-        #                                        delete=False,
-        #                                        prefix="attendance_", suffix='.png',
-        #                                        dir="src/cqc_streamlit_app/screenshots")
-        # logger.info("Created temp file for image: %s" % temp_file.name)
-        # saved = driver.save_screenshot(temp_file.name)
+
+        # TODO: Not sure if this is needed below
+        # Explicitly wait for an essential element to ensure content is loaded
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+        # TODO: Not sure if this is needed above
+
         saved = driver.get_screenshot_as_base64()
         if saved:
             # logger.info("Screenshot taken!")
@@ -1026,6 +1025,7 @@ class AttendanceScreenShot:
         self.screenshot_holder = screenshot_holder
         self.interval = interval
         # self.initiatePool() # TODO: Determine if the pool concept helps with threading
+        # TODO: Think about cacheing this driver so that when the page is reloaded a new driver is not created ???
         tmp_driver, self.wait = get_session_driver()
         self.listener = ScreenshotListener(self.screenshot_holder)
         self.driver = EventFiringWebDriver(tmp_driver, self.listener)

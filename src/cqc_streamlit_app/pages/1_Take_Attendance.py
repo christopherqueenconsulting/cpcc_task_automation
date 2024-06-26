@@ -23,7 +23,7 @@ def slideshow_swipeable(images):
     # Generate a session state key based on images as a hashable key.
     key = f"slideshow_swipeable_{str(images).encode().hex()}"
     # Truncate the key to a few characters lie md5 length
-    #key = key[:256]
+    # key = key[:256]
 
     print("Key: %s" % key)
 
@@ -178,7 +178,7 @@ def main():
 
         # Wait for actual termination (if needed)
         # t.join()
-        #slideshow_swipeable(st.session_state['placeholder_images'])
+        # slideshow_swipeable(st.session_state['placeholder_images'])
 
     else:
         # Session is not running, Do what you want to do on user exit here
@@ -191,18 +191,15 @@ def main():
             time.sleep(1)
         else:
             # TODO: Fixe the swipable slideshow (SMH)
-            #slideshow_swipeable(st.session_state['placeholder_images'])
+            # slideshow_swipeable(st.session_state['placeholder_images'])
             # exit the while loop
             break
-
-
 
         # Loop through all the images
         # for img in st.session_state['placeholder_images']:
         #    placeholder.image(img)
         #    time.sleep(1)
         #    time.sleep(5)
-
 
     print("Runtime Finished")
 
