@@ -39,6 +39,8 @@ markdownify = "^0.12.1"
 langchainhub = "^0.1.15"
 streamlit-ext = "^0.1.10"
 streamlit-elements = "^0.1.0"
+watchdog = "^4.0.1"
+pexels-api = "^1.0.1"
 
 
 [tool.poetry.group.lint]

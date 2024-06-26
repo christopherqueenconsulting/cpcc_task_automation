@@ -1,11 +1,14 @@
 import datetime as DT
 import re
-import tempfile
 from collections import defaultdict
 from pprint import pprint
 from threading import Thread
+from typing import Callable
 
+import urllib3
 from selenium.webdriver import Keys
+from selenium.webdriver.support.abstract_event_listener import AbstractEventListener
+from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
 from selenium.webdriver.support.ui import Select
 
 from cqc_cpcc.utilities.cpcc_utils import duo_login
@@ -690,7 +693,7 @@ class MyColleges:
     course_information: dict
     current_tab: str
 
-    def __init__(self, driver: WebDriver, wait: WebDriverWait):
+    def __init__(self, driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait):
         self.driver = driver
         self.wait = wait
         self.course_information = {}
@@ -955,16 +958,92 @@ def take_attendance():
     driver.quit()
 
 
+class ScreenshotListener(AbstractEventListener):
+
+    def __init__(self, screenshot_holder: Callable[..., None]):
+        self.screenshot_holder = screenshot_holder
+
+    def after_navigate_to(self, url, driver) -> None:
+        self.take_screenshot(driver)
+        #self.take_screenshot_threaded(driver)
+
+    def after_click(self, element, driver) -> None:
+        self.take_screenshot(driver)
+        #self.take_screenshot_threaded(driver)
+
+    def after_change_value_of(self, element, driver) -> None:
+        self.take_screenshot(driver)
+        # self.take_screenshot_threaded(driver)
+
+    def after_navigate_back(self, driver) -> None:
+        self.take_screenshot(driver)
+        # self.take_screenshot_threaded(driver)
+
+
+    def after_navigate_forward(self, driver) -> None:
+        self.take_screenshot(driver)
+        # self.take_screenshot_threaded(driver)
+
+    def after_execute_script(self, script, driver) -> None:
+        self.take_screenshot(driver)
+        # self.take_screenshot_threaded(driver)
+
+    def before_close(self, driver) -> None:
+        self.take_screenshot(driver)
+        # self.take_screenshot_threaded(driver)
+
+    def on_exception(self, exception, driver) -> None:
+        self.take_screenshot(driver)
+        # self.take_screenshot_threaded(driver)
+
+
+    def take_screenshot_threaded(self, driver: WebDriver):
+        t = Thread(target=self.take_screenshot, args=[driver])  # Start a thread for processing attendance
+        t.start()
+
+    def take_screenshot(self, driver: WebDriver) -> None:
+        # Create a temporary file to store the uploaded instructions
+        # temp_file = tempfile.NamedTemporaryFile(
+        #                                        delete=False,
+        #                                        prefix="attendance_", suffix='.png',
+        #                                        dir="src/cqc_streamlit_app/screenshots")
+        # logger.info("Created temp file for image: %s" % temp_file.name)
+        # saved = driver.save_screenshot(temp_file.name)
+        saved = driver.get_screenshot_as_base64()
+        if saved:
+            # logger.info("Screenshot taken!")
+            # self.screenshot_holder(temp_file.name)
+            logger.info("Screenshot Saved!")
+            self.screenshot_holder(saved)
+            logger.info("Screenshot added to holder!")
+        else:
+            logger.info("Could Not Save Screenshot")
+
+
 class AttendanceScreenShot:
-    def __init__(self, interval: int = 5):
+    def __init__(self, screenshot_holder: Callable[..., None], interval: int = 5):
         self._running = True
+        self.screenshot_holder = screenshot_holder
         self.interval = interval
-        self.driver, self.wait = get_session_driver()
+        # self.initiatePool() # TODO: Determine if the pool concept helps with threading
+        tmp_driver, self.wait = get_session_driver()
+        self.listener = ScreenshotListener(self.screenshot_holder)
+        self.driver = EventFiringWebDriver(tmp_driver, self.listener)
+        # self.driver.register(self.listener)
         self.mc = MyColleges(self.driver, self.wait)
+
+    def initiatePool(self):
+        self.http = urllib3.PoolManager(maxsize=50, block=True)
+        pool = urllib3.HTTPConnectionPool("cpcc.edu", maxsize=25, block=True)
+        pool2 = urllib3.HTTPConnectionPool("localhost", maxsize=25, block=True)
 
     def terminate(self):
         self._running = False
         self.driver.quit()
+        logger.info("Attendance Screenshots Terminated")
+
+    def isRunning(self):
+        return self._running
 
     def main(self):
         # Process attendance
@@ -977,16 +1056,27 @@ class AttendanceScreenShot:
 
         self.terminate()
 
-    def run(self, screenshot_holder: list[str] = None):
-        Thread(target=self.main)  # Start a thread for processing attendance
-        while self._running:
+    def run(self):
+        mt = Thread(target=self.main)  # Start a thread for processing attendance
+        mt.start()
+        mt.join()
+
+        '''
+        while self._running and mt.is_alive():
             # TODO: Use driver.get_screenshot_as_file() to take screenshots to send to streamlit app or for record
             # Create a temporary file to store the uploaded instructions
-            temp_file = tempfile.NamedTemporaryFile(delete=True, suffix='.png')
+            temp_file = tempfile.NamedTemporaryFile(delete=False, prefix="attendance_", suffix='.png',
+                                                    dir="src/cqc_streamlit_app/screenshots")
             logger.info("Created temp file for image: %s" % temp_file.name)
-            screenshot_holder.append(self.driver.get_screenshot_as_file(temp_file.name))
+            self.screenshot_holder.append(self.driver.get_screenshot_as_file(temp_file.name))
             logger.info("Screenshot taken!")
+            logger.info("Pools: %s " % str(len(self.http.pools)))
             time.sleep(self.interval)
+
+            threading.Timer()
+        '''
+
+        self.terminate()
 
 
 def update_attendance_tracker():

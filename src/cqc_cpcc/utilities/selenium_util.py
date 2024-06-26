@@ -93,17 +93,19 @@ def get_browser_driver():
 
 def get_docker_driver(headless=True):
     options = getBaseOptions()
-    #options.headless = headless
+    # options.headless = headless
     if headless:
-        detached = False
-        options.add_argument("--headless=new")
+        options = add_headless_options(options)
+
     options.add_argument('--ignore-ssl-errors=yes')
     options.add_argument('--ignore-certificate-errors')
     driver = webdriver.Remote(
         command_executor='http://chrome:4444/wd/hub',
         options=options
     )
-    driver.maximize_window()
+    if not headless:
+        driver.maximize_window()
+
     return driver
 
 
@@ -111,17 +113,43 @@ def get_local_chrome_driver(headless=True):
     options = getBaseOptions()
     detached = True
     if headless:
-        detached = False
-        options.add_argument("--headless=new")
+        options = add_headless_options(options)
+        # detached = False
 
     options.add_experimental_option("detach", detached)  # Change if you want to close when program ends
-    #options.headless = headless
+    # options.headless = headless
     driver = webdriver.Chrome(options=options)
     # driver.set_window_size(1800, 900)
     if not headless:
         driver.maximize_window()
+    else:
+        # TODO: Determine what size you want to set
+        #driver.maximize_window()
+        driver.set_window_size(1800, 900)
 
     return driver
+
+
+def add_headless_options(options: Options) -> Options:
+    # options.add_argument("--headless=new") # <--- DOES NOT WORK
+    options.add_argument("--headless=chrome")  # <--- WORKING
+
+    # Additional options while headless
+    options.add_argument('--start-maximized')  # Working
+    options.add_argument('--disable-popup-blocking')  # Working
+    options.add_argument('--incognito')
+    # options.add_argument('--no-sandbox')
+    options.add_argument('--enable-automation') # Working
+    options.add_argument('--disable-gpu')  # Working
+    options.add_argument('--disable-extensions')  # Working
+    options.add_argument('--disable-infobars') # Working
+    options.add_argument('--disable-browser-side-navigation') # Working
+    options.add_argument('--disable-dev-shm-usage') # Working
+    options.add_argument('--disable-features=VizDisplayCompositor') # Working
+    # options.add_argument('--dns-prefetch-disable')
+    #options.add_argument("--force-device-scale-factor=1")  # Working
+
+    return options
 
 
 def getBaseOptions():
@@ -132,6 +160,10 @@ def getBaseOptions():
              "download.directory_upgrade": True,
              "plugins.always_open_pdf_externally": True}
     options.add_experimental_option("prefs", prefs)
+
+    # options.page_load_strategy = 'eager'  # interactive
+    # options.page_load_strategy = "normal"  # complete
+
     return options
 
 
@@ -183,9 +215,13 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
     # element = False
     try:
         # Wait for element
+        # TODO: Below was working so put back if anything stops
         element = wait.until(
             lambda d: d.find_element(find_by, find_by_value),
             wait_text)
+        # TODO: Above was working fine. Put back if below is not working
+        # element = wait.until(
+        #    EC.presence_of_element_located((find_by, find_by_value)), wait_text)
 
     except (StaleElementReferenceException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale | .....retrying")
