@@ -127,7 +127,7 @@ def get_local_chrome_driver(headless=True):
             #ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install() # Not working locally but works on streamlit cloud but partially (inputs not going into formas)
             #ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install() # Works locally but not in streamlit cloud
         #),
-        service=Service(), # Works locally
+        service=Service(), # Works locally and on streamlit cloud
         # TODO: Working before above but checking for streamlit cloud
         options=options
     )
