@@ -1,4 +1,5 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+import logging
 
 from cqc_cpcc.utilities.logger import logger,fmt
 
