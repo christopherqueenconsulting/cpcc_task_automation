@@ -8,9 +8,10 @@ from streamlit.runtime import get_instance
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 from streamlit_elements import elements, mui, html, sync
 
-
+from cqc_cpcc.utilities.logger import LOGGING_FILENAME
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.pexels_helper import get_photo
+from cqc_streamlit_app.streamlit_logger import streamlit_handler
 from cqc_streamlit_app.utils import get_cpcc_css
 import cqc_cpcc.attendance as AT
 
@@ -135,8 +136,19 @@ def main():
 
     if st.session_state.instructor_user_id and st.session_state.instructor_password:
         attendance_section()
+
+        logging_section()
+
     else:
         st.write("Please visit the Settings page and enter the Instructor User ID and Instructor User ID to proceed")
+
+def logging_section():
+    st.text_area("Log Output", value=streamlit_handler.get_logs(), height=400)
+
+    with open(LOGGING_FILENAME, "r") as f:
+        log_data = f.read()
+
+    st.download_button(label="Download Log", data=log_data, file_name=LOGGING_FILENAME)
 
 
 def attendance_section():

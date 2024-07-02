@@ -52,6 +52,7 @@ class BrightSpace_Course:
         self.final_drop_day = final_drop_day
         self.driver = driver
         self.wait = wait
+        #TODO: Create delta date function in the date utility file for below
         self.date_range_end = DT.date.today() - DT.timedelta(days=2)  # TODO: This should be 2
         if date_range_start is None:
             self.date_range_start = self.date_range_end - DT.timedelta(days=7)  # TODO: This should be 7
@@ -774,6 +775,8 @@ class MyColleges:
                                          "deadline-dates-label",
                                          "Waiting for Attendance Tab", By.ID)
 
+
+                # TODO: Set default dates if these elements below dont exist
                 self.course_information[course_name]['last_day_to_add'] = get_datetime(
 
                     getText(get_element_wait_retry(self.driver, self.wait,
@@ -793,6 +796,8 @@ class MyColleges:
                     getText(get_element_wait_retry(self.driver, self.wait,
                                                    "//span[@data-bind='text: DropEndDateDisplay()']",
                                                    "Waiting for Deadline Drop With Grade Date")))
+
+                # TODO: Set default dates if these elements above dont exist
 
                 # Close the Deadline Dates Dialog
                 click_element_wait_retry(self.driver, self.wait,

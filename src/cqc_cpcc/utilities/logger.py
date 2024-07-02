@@ -3,7 +3,7 @@ from logging.handlers import RotatingFileHandler
 import datetime as DT
 
 # Setup logger
-logger = logging.getLogger('cpc_logger')
+logger = logging.getLogger('cpcc_logger')
 INFO_FORMAT = "%(message)s"
 #DEBUG_FORMAT = "[%(asctime)s %(filename)s->%(funcName)s():%(lineno)s]%(levelname)s: %(message)s"
 #ERROR_FORMAT = "[%(asctime)s %(filename)s->%(funcName)s():%(lineno)s]%(levelname)s: %(message)s"
