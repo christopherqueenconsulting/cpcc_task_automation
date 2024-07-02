@@ -1,5 +1,6 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import base64
+import os
 import time
 from threading import Thread
 
@@ -13,7 +14,7 @@ from cqc_cpcc.utilities.logger import LOGGING_FILENAME
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.pexels_helper import get_photo
 from cqc_streamlit_app.streamlit_logger import streamlit_handler
-from cqc_streamlit_app.utils import get_cpcc_css
+from cqc_streamlit_app.utils import get_cpcc_css, on_download_click
 
 # Initialize session state variables
 init_session_state()
@@ -149,14 +150,12 @@ def main():
             add_script_run_ctx(attendance_thread)
             attendance_thread.start()
 
-
         screenshot_section()
         logging_section()
 
         # Display the download button for the log file
-        with open(LOGGING_FILENAME, "r") as f:
-            log_data = f.read()
-        st.download_button(label="Download Log", data=log_data, file_name=LOGGING_FILENAME)
+        base_file_name, _extension = os.path.splitext(LOGGING_FILENAME)
+        on_download_click(LOGGING_FILENAME, "Download Log", base_file_name)
 
         # attendance_section()
         # logging_section()
@@ -169,10 +168,12 @@ def main():
 def logging_section():
     global log_placeholder
 
+    st.subheader("Log Output")
     # Add the logs to the screen for download if user wants along with screenshot slideshow (errors too???)
-    st.text_area("Log Output", value=streamlit_handler.get_logs(), height=400, key="cpcc_logs")
-    #text = "This is a random number: " + str(time.time())
-    #st.text_area("Log Output", value=text, height=400, key="cpcc_logs")
+    st.text_area("", value=streamlit_handler.get_logs(), height=400, key="cpcc_logs")
+    # text = "This is a random number: " + str(time.time())
+    # st.text_area("Log Output", value=text, height=400, key="cpcc_logs")
+
 
 @st.experimental_fragment(run_every=1)
 def screenshot_section():
@@ -235,7 +236,7 @@ def start_attendance():
     while runtime.exists():
         if screenshot.isRunning():
             # Just show the last image created in the array
-            #screenshot_placeholder.image(st.session_state['placeholder_images'][-1])
+            # screenshot_placeholder.image(st.session_state['placeholder_images'][-1])
             time.sleep(1)
         else:
             # TODO: Fixe the swipable slideshow (SMH)
