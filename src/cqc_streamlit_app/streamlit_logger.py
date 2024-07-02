@@ -1,7 +1,8 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import logging
 
-from cqc_cpcc.utilities.logger import logger,fmt
+from cqc_cpcc.utilities.logger import logger, fmt
+
 
 class StreamlitHandler(logging.Handler):
     def __init__(self):
@@ -17,7 +18,11 @@ class StreamlitHandler(logging.Handler):
     def get_logs(self):
         return "\n".join(self.logs)
 
+
 # Streamlit logging handler
 streamlit_handler = StreamlitHandler()
 streamlit_handler.setFormatter(fmt)
 logger.addHandler(streamlit_handler)
+
+# Set the desired logging level
+logger.setLevel(logging.DEBUG)

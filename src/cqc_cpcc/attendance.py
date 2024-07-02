@@ -1017,11 +1017,11 @@ class ScreenshotListener(AbstractEventListener):
         if saved:
             # logger.info("Screenshot taken!")
             # self.screenshot_holder(temp_file.name)
-            logger.info("Screenshot Saved!")
+            logger.debug("Screenshot Saved!")
             self.screenshot_holder(saved)
-            logger.info("Screenshot added to holder!")
+            logger.debug("Screenshot added to holder!")
         else:
-            logger.info("Could Not Save Screenshot")
+            logger.debug("Could Not Save Screenshot")
 
 
 class AttendanceScreenShot:
@@ -1045,7 +1045,7 @@ class AttendanceScreenShot:
     def terminate(self):
         self._running = False
         self.driver.quit()
-        logger.info("Attendance Screenshots Terminated")
+        logger.debug("Attendance Screenshots Terminated")
 
     def isRunning(self):
         return self._running

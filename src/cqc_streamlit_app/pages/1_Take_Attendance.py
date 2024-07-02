@@ -8,15 +8,20 @@ from streamlit.runtime import get_instance
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 from streamlit_elements import elements, mui, html, sync
 
+import cqc_cpcc.attendance as AT
 from cqc_cpcc.utilities.logger import LOGGING_FILENAME
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.pexels_helper import get_photo
 from cqc_streamlit_app.streamlit_logger import streamlit_handler
 from cqc_streamlit_app.utils import get_cpcc_css
-import cqc_cpcc.attendance as AT
 
 # Initialize session state variables
 init_session_state()
+
+# Placeholder for screenshots
+screenshot_placeholder = st
+# Placeholder for logs
+log_placeholder = st
 
 
 def slideshow_swipeable(images):
@@ -121,6 +126,7 @@ def update_placeholder_from_base64(base64_data_url: str):
 
 
 def main():
+    global screenshot_placeholder, log_placeholder
     st.set_page_config(layout="wide", page_title="CPCC Take Attendance", page_icon="✅")  # TODO: Change the page icon
 
     css = get_cpcc_css()
@@ -132,28 +138,54 @@ def main():
     st.markdown(
         """Here we will take attendance for you and provide log of what we have for each of our courses for each date""")
 
-
+    start_button_placeholder = st.empty()
+    screenshot_placeholder = st.empty()
+    log_placeholder = st.empty()
 
     if st.session_state.instructor_user_id and st.session_state.instructor_password:
-        attendance_section()
+        if start_button_placeholder.button("Start Attendance"):
+            # Start the attendance process in a separate thread
+            attendance_thread = Thread(target=start_attendance)
+            add_script_run_ctx(attendance_thread)
+            attendance_thread.start()
 
+
+        screenshot_section()
         logging_section()
+
+        # Display the download button for the log file
+        with open(LOGGING_FILENAME, "r") as f:
+            log_data = f.read()
+        st.download_button(label="Download Log", data=log_data, file_name=LOGGING_FILENAME)
+
+        # attendance_section()
+        # logging_section()
 
     else:
         st.write("Please visit the Settings page and enter the Instructor User ID and Instructor User ID to proceed")
 
+
+@st.experimental_fragment(run_every=5)
 def logging_section():
-    st.text_area("Log Output", value=streamlit_handler.get_logs(), height=400)
+    global log_placeholder
 
-    with open(LOGGING_FILENAME, "r") as f:
-        log_data = f.read()
+    # Add the logs to the screen for download if user wants along with screenshot slideshow (errors too???)
+    st.text_area("Log Output", value=streamlit_handler.get_logs(), height=400, key="cpcc_logs")
+    #text = "This is a random number: " + str(time.time())
+    #st.text_area("Log Output", value=text, height=400, key="cpcc_logs")
 
-    st.download_button(label="Download Log", data=log_data, file_name=LOGGING_FILENAME)
+@st.experimental_fragment(run_every=1)
+def screenshot_section():
+    if 'placeholder_images' not in st.session_state:
+        st.session_state['placeholder_images'] = [getRandomImage()]
+
+    st.subheader("Attendance Screenshot")
+    st.image(st.session_state['placeholder_images'][-1])
 
 
-def attendance_section():
+def start_attendance():
+    global screenshot_placeholder
     # TODO: Add input for start and end date - pre-set with values
-    randImage = getRandomImage()
 
     # Initiate the images array
     # if 'slideshow_images' not in st.session_state:
@@ -168,11 +200,6 @@ def attendance_section():
     # screenshot = AT.AttendanceScreenShot(update_placeholder_from_bytes)
     screenshot = AT.AttendanceScreenShot(update_placeholder_from_base64)
     # screenshot.main()
-
-    st.subheader("Image Placeholder")
-    placeholder = st.empty()
-    if 'placeholder_images' not in st.session_state:
-        st.session_state['placeholder_images'] = [randImage]
 
     t = Thread(target=screenshot.main)
     # t = Thread(target=screenshot.run)
@@ -208,7 +235,7 @@ def attendance_section():
     while runtime.exists():
         if screenshot.isRunning():
             # Just show the last image created in the array
-            placeholder.image(st.session_state['placeholder_images'][-1])
+            #screenshot_placeholder.image(st.session_state['placeholder_images'][-1])
             time.sleep(1)
         else:
             # TODO: Fixe the swipable slideshow (SMH)
@@ -228,8 +255,6 @@ def attendance_section():
     # https://discuss.streamlit.io/t/automatic-slideshow/38342/5 - How to do slideshow
     # https://www.geeksforgeeks.org/how-to-capture-screen-shot-in-selenium-webdriver/ - How to take screenshots
     # Note: May have to use docker container hosted (Render) if driver doesnt work on streamlit cloud
-
-    # TODO: Add the logs to the screen for download if user wants along with screenshot slideshow (errors too???)
 
 
 if __name__ == '__main__':
