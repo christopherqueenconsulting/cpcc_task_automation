@@ -169,3 +169,5 @@ logs/*
 # exception to the logs folder rule
 !logs/.gitkeep
 
+# ignore screenshots in the src/cqc_streamlit_app/scressnshots folder
+src/cqc_streamlit_app/screenshots/*

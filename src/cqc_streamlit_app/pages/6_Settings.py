@@ -36,7 +36,10 @@ def main():
     instructor_signature = st.text_input("Instructor Signature", value=st.session_state.instructor_signature)
     st.caption("Used at end of feedback.")
 
-    required_vars = [openai_api_key, instructor_user_id, instructor_password, instructor_signature]
+    attendance_tracker_url = st.text_input("Attendance Tracker URL", value=st.session_state.attendance_tracker_url)
+    st.caption("URL to the Attendance Tracker")
+
+    required_vars = [openai_api_key, instructor_user_id, instructor_password, instructor_signature, attendance_tracker_url]
 
     # If the 'Save' button is clicked
     if st.button("Save"):
@@ -48,6 +51,7 @@ def main():
             st.session_state.instructor_user_id = os.environ["INSTRUCTOR_USERID"] = instructor_user_id
             st.session_state.instructor_password = os.environ["INSTRUCTOR_PASS"] = instructor_password
             st.session_state.instructor_signature = os.environ["FEEDBACK_SIGNATURE"] = instructor_signature
+            st.session_state.attendance_tracker_url = os.environ["ATTENDANCE_TRACKER_URL"] = attendance_tracker_url
 
             st.success("Settings Saved")
 

@@ -3,7 +3,7 @@ import re
 from collections import defaultdict
 from pprint import pprint
 from threading import Thread
-from typing import Callable
+from typing import Callable, List
 
 import urllib3
 from selenium.webdriver import Keys
@@ -12,9 +12,11 @@ from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriv
 from selenium.webdriver.support.ui import Select
 
 from cqc_cpcc.utilities.cpcc_utils import duo_login
-from cqc_cpcc.utilities.date import format_year, get_datetime, filter_dates_in_range, is_date_in_range, get_latest_date
+from cqc_cpcc.utilities.date import format_year, get_datetime, filter_dates_in_range, is_date_in_range, get_latest_date, \
+    weeks_between_dates, is_checkdate_before_date, is_checkdate_after_date, convert_datetime_to_end_of_day, \
+    convert_datetime_to_start_of_day, convert_date_to_datetime
 from cqc_cpcc.utilities.selenium_util import *
-from cqc_cpcc.utilities.utils import first_two_uppercase, get_unique_names_flip_first_last
+from cqc_cpcc.utilities.utils import first_two_uppercase, get_unique_names_flip_first_last, are_you_satisfied
 
 # Global Constants
 LINE_DASH_COUNT = 33
@@ -42,17 +44,20 @@ class BrightSpace_Course:
     course_main_tab: str
 
     def __init__(self, name: str, term_semester: str, term_year: str, first_drop_day: DT.date, final_drop_day: DT.date,
+                 course_start_date: DT.datetime, course_end_date: DT.datetime,
                  driver: WebDriver, wait: WebDriverWait,
                  date_range_start: DT.date = None
                  ):
         self.name = name
         self.term_semester = term_semester
         self.term_year = term_year
-        self.first_drop_day = first_drop_day
-        self.final_drop_day = final_drop_day
+        self.first_drop_day = convert_datetime_to_end_of_day(convert_date_to_datetime(first_drop_day))
+        self.final_drop_day = convert_datetime_to_end_of_day(convert_date_to_datetime(final_drop_day))
+        self.course_start_date = convert_datetime_to_start_of_day(course_start_date)
+        self.course_end_date = convert_datetime_to_end_of_day(course_end_date)
         self.driver = driver
         self.wait = wait
-        #TODO: Create delta date function in the date utility file for below
+        # TODO: Create delta date function in the date utility file for below
         self.date_range_end = DT.date.today() - DT.timedelta(days=2)  # TODO: This should be 2
         if date_range_start is None:
             self.date_range_start = self.date_range_end - DT.timedelta(days=7)  # TODO: This should be 7
@@ -63,17 +68,58 @@ class BrightSpace_Course:
         self.attendance_records = {}
         self.withdrawal_records = {}
         if self.open_course_tab():
-            self.get_attendance_from_assignments()
-            self.get_attendance_from_quizzes()
+
+            # TODO: MUST uncomment below
+            # self.get_attendance_from_assignments()
+            # self.get_attendance_from_quizzes()
+            # TODO: MUST uncomment above
+
             # TODO: Fix the attendance from discussions (Something going on with iframes)
             # self.get_attendance_from_discussions()
             if is_date_in_range(self.first_drop_day, self.date_range_end, self.final_drop_day):
-                self.get_withdrawal_records()
+                self.get_withdrawal_records_from_classlist()
             self.close_course_tab()
             self.normalize_attendance_records()
             logger.info("Attendance Records (ALL):\n%s" % self.attendance_records)
         else:
             logger.warn("No Attendance Records - Cant find Course")
+
+    def get_course_and_section(self):
+        # Derived from the name prior to the colon
+        return self.name.split(":")[0]
+
+    def get_weeks_in_course(self):
+        return weeks_between_dates(self.course_start_date, self.course_end_date, round_up=True)
+
+    def get_session_type(self):
+        # Derived from the number of weeks in the course
+        weeks = self.get_weeks_in_course()
+
+        if weeks > 8:
+            return "Full Session"
+        else:
+            return "%s Week" % weeks
+
+    def get_section(self):
+        # Derived from the course and section after the last dash
+        return self.get_course_and_section().split("-")[-1].strip()
+
+    def get_delivery_type(self):
+        # Derived from letter that prefixes the section
+        section = self.get_section()
+        dt = section[0]
+
+        if dt == "B":
+            return "Blended"
+        if dt == "H":
+            return "Hybrid"
+        if dt == "N":
+            return "Online"
+        else:
+            return "Traditional"
+
+    def get_withdrawal_records(self):
+        return self.withdrawal_records
 
     def normalize_attendance_records(self):
         # Sort the records first
@@ -153,8 +199,9 @@ class BrightSpace_Course:
 
         return course_in_brightspace
 
-    def get_withdrawal_records(self):
+    def get_withdrawal_records_from_classlist(self):
         # TODO: Write code to get the withdrawal records from BrightSpace
+
         # Switch back to course tab
         self.driver.switch_to.window(self.course_main_tab)
 
@@ -183,36 +230,91 @@ class BrightSpace_Course:
 
             student_ids = get_elements_text_as_list_wait_stale(self.wait,
                                                                table_prefix_xpath + "//td[4]//label[1]",
-                                                               "Waiting for Completion Dates")
+                                                               "Waiting for Student Ids")
 
             withdrawal_dates = get_elements_text_as_list_wait_stale(self.wait,
                                                                     table_prefix_xpath + "//td[7]//label[1]",
-                                                                    "Waiting for Completion Dates")
+                                                                    "Waiting for Withdrawal Dates")
 
-            student_withdrawals_dict = dict(zip(student_names, zip(student_ids, withdrawal_dates)))
+            student_withdrawals_dict = dict(zip(student_ids, zip(student_names, withdrawal_dates)))
 
             filtered_withdrawals = {}
 
-            for student_name, (student_id, withdrawal_date) in student_withdrawals_dict.items():
+
+            logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
+            are_you_satisfied()
+
+            for student_id, (student_name, withdrawal_date) in student_withdrawals_dict.items():
                 # Convert withdrawal_date to a datetime object for comparison
                 withdrawal_datetime = get_datetime(withdrawal_date)
 
-                # Check if the withdrawal date is within the specified range
-                if is_date_in_range(self.first_drop_day, withdrawal_datetime, self.final_drop_day):
-                    # Add the student to the filtered withdrawals
-                    if withdrawal_date not in filtered_withdrawals:
-                        self.withdrawal_records[student_name] = []
+                # Use today's date for last activity
+                today = get_datetime(DT.date.today().strftime("%m-%d-%Y"))
 
-                    # TODO: Get the last activity of the student
+                # Faculty Reason
+                faculty_reason = ""
 
-                    filtered_withdrawals[student_name].append((student_id, withdrawal_datetime))
+                # Status of withdrawal
+                status = "N/A"
 
-            # filtered_withdrawals now contains the student withdrawals within the specified date range
+                # Check if the withdrawal date is before the first course day
+                if is_checkdate_before_date(withdrawal_datetime, self.course_start_date):
+                    status = "N/A"
+                    latest_activity = "N/A"
+                    faculty_reason = "Dropped before the course started"
+                # Check if the withdrawal date is before the first drop day
+                elif is_checkdate_before_date(withdrawal_datetime, self.first_drop_day):
+                    # TODO: Find the week of last activity
+                    date_of_last_activity = today
 
+                    # Get the week of the last activity
+                    last_activity_week = weeks_between_dates(self.course_start_date,
+                                                             date_of_last_activity)  # TODO: Use date of last activity
+                    latest_activity = "Week %s of %s" % (last_activity_week, self.get_weeks_in_course())
+                    faculty_reason = "Student withdrew without contacting the instructor"
+                    status = "W"
+                # Check if the withdrawal date is after the final drop day
+                elif is_checkdate_after_date(withdrawal_datetime, self.final_drop_day):
+                    # TODO: Find the week of last activity
+                    date_of_last_activity = today
 
+                    # Get the week of the last activity
+                    last_activity_week = weeks_between_dates(self.course_start_date,
+                                                             date_of_last_activity)  # TODO: Use date of last activity
+                    latest_activity = "Week %s of %s" % (last_activity_week, self.get_weeks_in_course())
+                    faculty_reason = "Student stopped submitting work"  # TODO: Check if this makes sense
+                    status = "S"  # TODO: Check if this makes sense
+                # Display error if any other condition for debugging later
+                else:
+                    logger.debug(
+                        "Error procssing withdrawal for %s | Withdrawal Date: %s | Course Start Day: %s | First Drop Day: %s | Final Drop Day: %s | Course End Date: %s" % (
+                            student_name, withdrawal_datetime, self.course_start_date, self.first_drop_day,
+                            self.final_drop_day, self.course_end_date))
+                    continue
+
+                # Convert spaces to underscores in the student name
+                student_name = student_name.replace(" ", "_")
+
+                # Add the student to the self.withdrawal_records
+                if student_name not in self.withdrawal_records:
+                    self.withdrawal_records[student_name] = []
+
+                # Add the student withdrawal to the self.withdrawal_records with pertinent information
+                self.withdrawal_records[student_name].append(
+                    (student_id, self.get_course_and_section(),
+                     self.get_session_type(), self.get_delivery_type(), status, latest_activity, faculty_reason))
+
+            # self.withdrawal_records now contains the student withdrawals within the specified date range
+
+            # Get the index keys from the self.withdrawal_records and convert to list replacing underscores with spaces
+            student_names = [key.replace("_", " ") for key in self.withdrawal_records.keys()]
+
+            date_format = "%m/%d/%Y"
+            logger.info("Withdrawal Records (Between %s - %s):\n%s" % (
+                self.course_start_date.strftime(date_format), self.final_drop_day.strftime(date_format), student_names))
 
         else:
-            logger.info("No withdrawals found for course: %s" % self.name)
+            logger.info("No withdrawals found for course: %s" % self.get_course_and_section())
 
     def click_course_tools_link(self):
         """Click the Course Tools link"""
@@ -736,7 +838,7 @@ class MyColleges:
             self.course_information[course_name] = {'href': course_href, 'start_date': course_start_date,
                                                     'end_date': course_end_date}
 
-    def process_attendance(self):
+    def process_attendance(self) -> List[BrightSpace_Course]:
         self.get_course_info()
 
         # Keep track of original tab
@@ -744,6 +846,9 @@ class MyColleges:
 
         # Use check date of a week ago
         check_date = DT.date.today() - DT.timedelta(days=7)
+
+        # Keep array of all the BrightSpace courses
+        bs_courses = []
 
         for course_name, course_info in self.course_information.items():
             course_url = course_info['href']
@@ -765,7 +870,7 @@ class MyColleges:
                 self.wait.until(EC.new_window_is_opened(handles))
 
                 # Keep track of current tab
-                current_tab = self.driver.current_window_handle
+                self.current_tab = self.driver.current_window_handle
 
                 # Navigate to course url
                 self.driver.get(course_url)
@@ -774,7 +879,6 @@ class MyColleges:
                 click_element_wait_retry(self.driver, self.wait,
                                          "deadline-dates-label",
                                          "Waiting for Attendance Tab", By.ID)
-
 
                 # TODO: Set default dates if these elements below dont exist
                 self.course_information[course_name]['last_day_to_add'] = get_datetime(
@@ -814,17 +918,23 @@ class MyColleges:
                                                                                     "//td[@data-role='Last Attendance Recorded']",
 
                                                                                     "Waiting for Latest Attendance Records")
-                # Get Latest Date and Convert To date time
-                last_attendance_record_date = get_datetime(get_latest_date(last_attendance_record_dates))
-                logger.info("Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
 
-                # Determine if course has started or ended within the last week
-                # section_dates = self.driver.find_element(By.XPATH, "//*[@id='section-dates-0']").text
-                # section_start_date, section_end_date = section_dates.split(" - ")
-                # section_start_date = get_datetime(section_start_date)
-                # section_end_date = get_datetime(section_end_date)
+                try:
+                    # logger.debug("Latest Attendance Recorded Dates: %s" % last_attendance_record_dates)
+                    latest_date_str = get_latest_date(last_attendance_record_dates)
+                    # logger.debug("Latest Attendance Recorded Date (string): %s" % latest_date_str)
 
-                # Find the corresponding Brightspace course
+                    # Get Latest Date and Convert To date time
+                    last_attendance_record_date = get_datetime(latest_date_str)
+                    logger.info(
+                        "Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
+                except ValueError:
+                    # No date found so use date of a week ago
+                    last_attendance_record_date = get_datetime(check_date.strftime("%m-%d-%Y"))
+                    logger.info("No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
+                        "%m-%d-%Y"))
+
+                # Find the corresponding BrightSpace course
                 term = getText(get_element_wait_retry(self.driver, self.wait,
                                                       "section-header-term", "Waiting For Course Term Text", By.ID))
                 term_semester, term_year = term.split()
@@ -832,10 +942,14 @@ class MyColleges:
                 logger.info("Term Semester: %s | Year: %s" % (term_semester, term_year))
 
                 bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
+                                         course_start_date, course_end_date,
                                          self.driver, self.wait, last_attendance_record_date)
 
+                # Add to list of BrightSpace courses
+                bs_courses.append(bsc)
+
                 # Switch back to tab
-                self.driver.switch_to.window(current_tab)
+                self.driver.switch_to.window(self.current_tab)
 
                 next_day_students = []
 
@@ -892,7 +1006,7 @@ class MyColleges:
 
                 logger.info("Closing Tab for Course: %s" % course_name)
                 # Switch back to tab
-                self.driver.switch_to.window(current_tab)
+                self.driver.switch_to.window(self.current_tab)
                 # Close tab when done
                 close_tab(self.driver)
 
@@ -902,8 +1016,13 @@ class MyColleges:
 
         # Switch back to original_tab
         self.driver.switch_to.window(original_tab)
+
+        # TODO: Review this commented out section below
         # Close window when done
-        close_tab(self.driver)
+        # close_tab(self.driver) # Leave open so driver can do other thins
+
+        # Return the list of BrightSpaceCourses
+        return bs_courses
 
     def mark_student_present(self, full_name: str, retry=0):
         success = False
@@ -946,20 +1065,21 @@ class MyColleges:
         return success
 
 
-def take_attendance():
+def take_attendance(attendance_tracker_url: str):
     driver, wait = get_session_driver()
 
     mc = MyColleges(driver, wait)
 
-    mc.process_attendance()
+    bs_courses = mc.process_attendance()
 
     # Update the Attendance Tracker
-
-    update_attendance_tracker()
-
-    # TODO: Use driver.get_screenshot_as_file() to take screenshots to send to streamlit app or for record
+    update_attendance_tracker(driver, wait, bs_courses, attendance_tracker_url)
 
     logger.info("Finished Attendance")
+
+    # Prompt the user before closing
+    are_you_satisfied()
+
     driver.quit()
 
 
@@ -970,11 +1090,11 @@ class ScreenshotListener(AbstractEventListener):
 
     def after_navigate_to(self, url, driver) -> None:
         self.take_screenshot(driver)
-        #self.take_screenshot_threaded(driver)
+        # self.take_screenshot_threaded(driver)
 
     def after_click(self, element, driver) -> None:
         self.take_screenshot(driver)
-        #self.take_screenshot_threaded(driver)
+        # self.take_screenshot_threaded(driver)
 
     def after_change_value_of(self, element, driver) -> None:
         self.take_screenshot(driver)
@@ -983,7 +1103,6 @@ class ScreenshotListener(AbstractEventListener):
     def after_navigate_back(self, driver) -> None:
         self.take_screenshot(driver)
         # self.take_screenshot_threaded(driver)
-
 
     def after_navigate_forward(self, driver) -> None:
         self.take_screenshot(driver)
@@ -1001,7 +1120,6 @@ class ScreenshotListener(AbstractEventListener):
         self.take_screenshot(driver)
         # self.take_screenshot_threaded(driver)
 
-
     def take_screenshot_threaded(self, driver: WebDriver):
         t = Thread(target=self.take_screenshot, args=[driver])  # Start a thread for processing attendance
         t.start()
@@ -1017,15 +1135,15 @@ class ScreenshotListener(AbstractEventListener):
         if saved:
             # logger.info("Screenshot taken!")
             # self.screenshot_holder(temp_file.name)
-            logger.debug("Screenshot Saved!")
+            # logger.debug("Screenshot Saved!")
             self.screenshot_holder(saved)
-            logger.debug("Screenshot added to holder!")
+            # logger.debug("Screenshot added to holder!")
         else:
             logger.debug("Could Not Save Screenshot")
 
 
 class AttendanceScreenShot:
-    def __init__(self, screenshot_holder: Callable[..., None], interval: int = 5):
+    def __init__(self, attendance_tracker_url: str, screenshot_holder: Callable[..., None], interval: int = 5):
         self._running = True
         self.screenshot_holder = screenshot_holder
         self.interval = interval
@@ -1036,6 +1154,7 @@ class AttendanceScreenShot:
         self.driver = EventFiringWebDriver(tmp_driver, self.listener)
         # self.driver.register(self.listener)
         self.mc = MyColleges(self.driver, self.wait)
+        self.attendance_tracker_url = attendance_tracker_url
 
     def initiatePool(self):
         self.http = urllib3.PoolManager(maxsize=50, block=True)
@@ -1052,10 +1171,10 @@ class AttendanceScreenShot:
 
     def main(self):
         # Process attendance
-        self.mc.process_attendance()
+        bs_courses = self.mc.process_attendance()
 
         # Update the Attendance Tracker
-        update_attendance_tracker()
+        update_attendance_tracker(self.driver, self.wait, bs_courses, self.attendance_tracker_url)
 
         logger.info("Finished Attendance")
 
@@ -1084,11 +1203,56 @@ class AttendanceScreenShot:
         self.terminate()
 
 
-def update_attendance_tracker():
+def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait,
+                              bs_courses: List[BrightSpace_Course],
+                              attendance_tracker_url: str):
     """ For each class look at the withdrawal list and update the attendance tracker"""
-    # TODO: Write code for this
 
-    # TODO: Check if class is beyond the last withdrawal dates
+    # Keep track of original tab
+    original_tab = driver.current_window_handle
+
+    # Switch back to original_tab
+    # driver.switch_to.window(original_tab)
+
+    handles = driver.window_handles
+
+    # Opens a new tab and switches to new tab
+    driver.switch_to.new_window('tab')
+
+    # Wait for the new window or tab
+    wait.until(EC.new_window_is_opened(handles))
+
+    # Keep track of current tab
+    current_tab = driver.current_window_handle
+
+    # Navigate to attendance tracker
+    driver.get(attendance_tracker_url)
+
+    # TODO: Handle Microsoft Authentication process
+
+    # For each bs_courses get the withdrawals and update the tracker
+    for bsc in bs_courses:
+        # Get the withdrawal list
+        withdrawals = bsc.get_withdrawal_records()
+
+        # Update the attendance tracker
+
+        #  self.withdrawal_records[student_name].append((student_id, withdrawal_datetime))
+        for student_name in withdrawals:
+            for entry in withdrawals[student_name]:
+                student_id, course_and_section, session_type, delivery_type, status, latest_activity, faculty_reason = entry
+
+                # TODO: Check by studentId to make sure the student is not already in the attendance tracker for the same course sections
+
+                logger.info(
+                    "Adding to Tracker: Student Name: %s | Student ID: %s | Course and Section: %s | Delivery Type: %s | Status: %s | Week of Last Activity: %s | Faculty Reason: %s" %
+                    (student_name, student_id, course_and_section, delivery_type, status, latest_activity,
+                     faculty_reason)
+                )
+
+                # TODO: Add info to the tracker
+
+        # TODO: Open in new browser or prompt user to update empty cells from new additions
 
 
 def normalize_attendance_records(attendance_records: dict) -> dict:

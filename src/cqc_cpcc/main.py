@@ -1,3 +1,4 @@
+import os
 from enum import Enum
 import cqc_cpcc.attendance as AT
 import cqc_cpcc.project_feedback as PF
@@ -28,11 +29,19 @@ def prompt_action():
         print("Invalid selection.")
         return prompt_action()
 
+def prompt_attendance_tracker_url():
+    """Prompts the user for the Attendance Tracker URL, using the default from the environment variable."""
+    default_url = os.getenv('ATTENDANCE_TRACKER_URL', 'http://default.url')
+    user_input = input(f'Enter Attendance Tracker URL [{default_url}]: ').strip()
+    return user_input or default_url
+
 def take_action():
     action = prompt_action()
     match action:
         case Instructor_Actions.TAKE_ATTENDANCE:
-            AT.take_attendance()
+            # Prompt for Attendance Tracker URL - use default from env variable ATTENDANCE_TRACKER_URL
+            attendance_tracker_url = prompt_attendance_tracker_url()
+            AT.take_attendance(attendance_tracker_url)
         case Instructor_Actions.GIVE_FEEDBACK:
             PF.give_project_feedback()
         case Instructor_Actions.GRADE_EXAM:

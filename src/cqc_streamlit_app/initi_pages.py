@@ -18,3 +18,6 @@ def init_session_state():
 
     if 'instructor_signature' not in st.session_state:
         st.session_state.instructor_signature = FEEDBACK_SIGNATURE
+
+    if 'attendance_tracker_url' not in st.session_state:
+        st.session_state.attendance_tracker_url = ATTENDANCE_TRACKER_URL

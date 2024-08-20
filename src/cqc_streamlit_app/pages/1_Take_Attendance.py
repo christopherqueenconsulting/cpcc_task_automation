@@ -139,43 +139,59 @@ def main():
     st.markdown(
         """Here we will take attendance for you and provide log of what we have for each of our courses for each date""")
 
+    attendance_tracker_placeholder = st.empty()
     start_button_placeholder = st.empty()
     screenshot_placeholder = st.empty()
     log_placeholder = st.empty()
 
-    if st.session_state.instructor_user_id and st.session_state.instructor_password:
-        if start_button_placeholder.button("Start Attendance"):
-            # Start the attendance process in a separate thread
-            attendance_thread = Thread(target=start_attendance)
-            add_script_run_ctx(attendance_thread)
-            attendance_thread.start()
+    required_vars = [st.session_state.instructor_user_id, st.session_state.instructor_password,
+                     st.session_state.attendance_tracker_url]
 
-        screenshot_section()
-        logging_section()
+    if all(required_vars):
 
-        # Display the download button for the log file
-        base_file_name, _extension = os.path.splitext(LOGGING_FILENAME)
-        on_download_click(LOGGING_FILENAME, "Download Log", base_file_name)
+        # TODO: Make this editable without breaking the rest of the page
+        # Add input for the attendance tracker url
+        attendance_tracker_url = attendance_tracker_placeholder.text_input("Attendance Tracker URL",
+                                                                           value=st.session_state.attendance_tracker_url,
+                                                                           disabled=True)
 
-        # attendance_section()
-        # logging_section()
+        # Make sure the attendance_tracker_placeholder is not empty
+        if attendance_tracker_url:
+
+            if start_button_placeholder.button("Start Attendance"):
+                # Start the attendance process in a separate thread and pass the attendance_tracker_placeholder text as the args
+                attendance_thread = Thread(target=start_attendance, args=(attendance_tracker_url,))
+                add_script_run_ctx(attendance_thread)
+                attendance_thread.start()
+
+            screenshot_section()
+            logging_section()
+
+            # Display the download button for the log file
+            base_file_name, _extension = os.path.splitext(LOGGING_FILENAME)
+            on_download_click(LOGGING_FILENAME, "Download Log", base_file_name)
+
+            # attendance_section()
+            # logging_section()
 
     else:
-        st.write("Please visit the Settings page and enter the Instructor User ID and Instructor User ID to proceed")
+        st.write(
+            "Please visit the Settings page and enter the Instructor User ID, Instructor User ID, and the Attendance Tracker URL to proceed")
 
 
-@st.experimental_fragment(run_every=5)
+@st.fragment(run_every=5)
 def logging_section():
     global log_placeholder
 
     st.subheader("Log Output")
     # Add the logs to the screen for download if user wants along with screenshot slideshow (errors too???)
-    st.text_area("", value=streamlit_handler.get_logs(), height=400, key="cpcc_logs")
+    st.text_area("Log Output", value=streamlit_handler.get_logs(), height=400, key="cpcc_logs",
+                 label_visibility="hidden")
     # text = "This is a random number: " + str(time.time())
     # st.text_area("Log Output", value=text, height=400, key="cpcc_logs")
 
 
-@st.experimental_fragment(run_every=1)
+@st.fragment(run_every=1)
 def screenshot_section():
     if 'placeholder_images' not in st.session_state:
         st.session_state['placeholder_images'] = [getRandomImage()]
@@ -184,7 +200,7 @@ def screenshot_section():
     st.image(st.session_state['placeholder_images'][-1])
 
 
-def start_attendance():
+def start_attendance(attendance_tracker_url: str):
     global screenshot_placeholder
     # TODO: Add input for start and end date - pre-set with values
 
@@ -195,11 +211,11 @@ def start_attendance():
     # st.subheader("Slide Show")
     # slideshow_swipeable()
 
-    # TODO: Start the Attendance code
     # screenshot = AT.AttendanceScreenShot(update_placeholder_random)
     # screenshot = AT.AttendanceScreenShot(update_placeholder_from_file)
     # screenshot = AT.AttendanceScreenShot(update_placeholder_from_bytes)
-    screenshot = AT.AttendanceScreenShot(update_placeholder_from_base64)
+    screenshot = AT.AttendanceScreenShot(attendance_tracker_url=attendance_tracker_url,
+                                         screenshot_holder=update_placeholder_from_base64)
     # screenshot.main()
 
     t = Thread(target=screenshot.main)
@@ -252,7 +268,7 @@ def start_attendance():
 
     print("Runtime Finished")
 
-    # TODO: Pipe the driver screenshot to the screen as a slideshow
+    # TODO: Slideshow examples below (may not need these anymore)
     # https://discuss.streamlit.io/t/automatic-slideshow/38342/5 - How to do slideshow
     # https://www.geeksforgeeks.org/how-to-capture-screen-shot-in-selenium-webdriver/ - How to take screenshots
     # Note: May have to use docker container hosted (Render) if driver doesnt work on streamlit cloud

@@ -13,9 +13,7 @@ init_session_state()
 
 def main():
 
-    # TODO: Initialize other session state variables - the ones you need in .env
-
-    st.set_page_config(layout="wide", page_title="CPCC Task Automation", page_icon="🦜️🔗")  # TODO: Change the page icon
+    st.set_page_config(layout="wide", page_title="CPCC Task Automation", page_icon="📚🤖")
 
     css = get_cpcc_css()
     st.markdown(
