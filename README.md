@@ -48,3 +48,4 @@ A multi-page Streamlit app showcasing generative AI uses cases with LangChain, O
 * Instructor User ID
 * Instructor Password
 * Instructor Signature
+* Attendance Tracker URL
