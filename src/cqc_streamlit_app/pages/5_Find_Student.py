@@ -55,8 +55,7 @@ def main():
     # Streamlit app
     st.subheader('Find Student')
 
-    required_vars = [st.session_state.instructor_user_id, st.session_state.instructor_password,
-                     st.session_state.attendance_tracker_url]
+    required_vars = [st.session_state.instructor_user_id, st.session_state.instructor_password]
 
     if all(required_vars):
 
@@ -102,6 +101,9 @@ def main():
                                    on_change=on_find_by_change, key="find_student_by_id")
         else:
             placeholder = st.empty()
+    else:
+        st.write(
+            "Please visit the Settings page and enter the Instructor User ID and Instructor User ID to proceed")
 
 
 def on_find_by_change():
