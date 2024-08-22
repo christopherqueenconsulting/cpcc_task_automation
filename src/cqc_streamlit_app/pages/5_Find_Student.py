@@ -111,16 +111,16 @@ def on_find_by_change():
         fs = st.session_state.fs
         found_students = []
         if active_index == "tab1" and "find_student_by_email" in st.session_state:
-            st.success("Searching for student by email")
+            # st.success("Searching for student by email")
             # convert a tuple to a list
             found_students = list(fs.get_student_by_email(st.session_state.find_student_by_email))
 
         if active_index == "tab2" and "find_student_by_name" in st.session_state:
-            st.success("Searching for student by Name")
+            # st.success("Searching for student by Name")
             found_students = list(fs.get_student_by_name(st.session_state.find_student_by_name))
 
         if active_index == "tab3" and "find_student_by_id" in st.session_state:
-            st.success("Searching for student by ID")
+            # st.success("Searching for student by ID")
             found_students = list(fs.get_student_by_student_id(st.session_state.find_student_by_id))
 
         # if list is not empty
@@ -129,6 +129,9 @@ def on_find_by_change():
             st.session_state.found_students = json.dumps(found_students)
         else:
             st.error("No Student Found")
+            # remove the session state
+            if 'found_students' in st.session_state:
+                del st.session_state['found_students']
 
     else:
         st.error("Something went wrong")
@@ -138,8 +141,16 @@ def on_find_by_change():
         # Convert the JSON string back to a list
         found_students = json.loads(st.session_state.found_students)
         # found_students = st.session_state.found_students
-        st.table(found_students)
+        st.dataframe(data=found_students,
+                     use_container_width=True,
+                     hide_index=True,
+                     column_config={
+                         1: st.column_config.TextColumn("ID"),
+                         2: st.column_config.TextColumn("Name"),
+                         3: st.column_config.TextColumn("Email"),
+                         4: st.column_config.TextColumn("Course Name"),
 
+                     })
 
 
 if __name__ == '__main__':
