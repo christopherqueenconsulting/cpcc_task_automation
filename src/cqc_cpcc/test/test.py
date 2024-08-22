@@ -1,4 +1,5 @@
 import cqc_cpcc.attendance as AT
+import cqc_cpcc.brightspace
 from cqc_cpcc.utilities.selenium_util import *
 
 
@@ -19,7 +20,7 @@ def test_bright_space_course_class():
     # Wait for title to change
     wait.until(EC.title_is(MYCOLLEGE_FACULTY_TITLE))
 
-    bsc = AT.BrightSpace_Course("CSC-151-N804: Java Programming", "Spring", "2024", driver, wait)
+    bsc = cqc_cpcc.brightspace.BrightSpace_Course("CSC-151-N804: Java Programming", "Spring", "2024", driver, wait)
 
 def test_date_xpression():
     latest_post_dates = ["03-16-2024"]

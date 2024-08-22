@@ -15,14 +15,13 @@ from selenium.webdriver.support.wait import WebDriverWait
 from cqc_cpcc.exam_review import JavaCode
 from cqc_cpcc.utilities.AI.llm.chains import generate_feedback
 from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
-from cqc_cpcc.utilities.cpcc_utils import duo_login
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import get_session_driver, click_element_wait_retry, \
     get_elements_text_as_list_wait_stale, \
     get_elements_href_as_list_wait_stale
-from cqc_cpcc.utilities.utils import are_you_satisfied, ExtendedEnum, CodeError, ErrorHolder
+from cqc_cpcc.utilities.utils import are_you_satisfied, ExtendedEnum, CodeError, ErrorHolder, duo_login
 
 COMMENTS_MISSING_STRING = "The code does not include sufficient commenting throughout"
 

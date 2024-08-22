@@ -10,6 +10,7 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ct
 from streamlit_elements import elements, mui, html, sync
 
 import cqc_cpcc.attendance as AT
+import cqc_cpcc.attendance_screenshot
 from cqc_cpcc.utilities.logger import LOGGING_FILENAME
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.pexels_helper import get_photo
@@ -214,8 +215,8 @@ def start_attendance(attendance_tracker_url: str):
     # screenshot = AT.AttendanceScreenShot(update_placeholder_random)
     # screenshot = AT.AttendanceScreenShot(update_placeholder_from_file)
     # screenshot = AT.AttendanceScreenShot(update_placeholder_from_bytes)
-    screenshot = AT.AttendanceScreenShot(attendance_tracker_url=attendance_tracker_url,
-                                         screenshot_holder=update_placeholder_from_base64)
+    screenshot = cqc_cpcc.attendance_screenshot.AttendanceScreenShot(attendance_tracker_url=attendance_tracker_url,
+                                                                     screenshot_holder=update_placeholder_from_base64)
     # screenshot.main()
 
     t = Thread(target=screenshot.main)

@@ -14,8 +14,6 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
 
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
@@ -123,11 +121,11 @@ def get_local_chrome_driver(headless=True):
     # options.headless = headless
     driver = webdriver.Chrome(
         # TODO: Working before below but checking for streamlit cloud
-        #service=Service(
-            #ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install() # Not working locally but works on streamlit cloud but partially (inputs not going into formas)
-            #ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install() # Works locally but not in streamlit cloud
-        #),
-        service=Service(), # Works locally and on streamlit cloud
+        # service=Service(
+        # ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install() # Not working locally but works on streamlit cloud but partially (inputs not going into formas)
+        # ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install() # Works locally but not in streamlit cloud
+        # ),
+        service=Service(),  # Works locally and on streamlit cloud
         # TODO: Working before above but checking for streamlit cloud
         options=options
     )
@@ -144,7 +142,7 @@ def get_local_chrome_driver(headless=True):
 
 def add_headless_options(options: Options) -> Options:
     # options.add_argument("--headless=new") # <--- DOES NOT WORK
-    #options.add_argument("--headless=chrome")  # <--- WORKING
+    # options.add_argument("--headless=chrome")  # <--- WORKING
     options.add_argument("--headless")  # <--- ???
 
     # Additional options while headless
@@ -288,6 +286,14 @@ def wait_for_ajax(driver):
     try:
         wait.until(lambda d: d.execute_script('return jQuery.active') == 0)
         wait.until(lambda d: d.execute_script('return document.readyState') == 'complete')
+    except Exception as e:
+        pass
+
+
+def wait_for_element_to_hide(wait: WebDriverWait, find_by_value: str, wait_text: str,
+                             find_by: str = By.XPATH):
+    try:
+        wait.until(EC.invisibility_of_element_located((find_by, find_by_value)), wait_text)
     except Exception as e:
         pass
 
