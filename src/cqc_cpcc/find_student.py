@@ -24,12 +24,9 @@ class FindStudents:
     def get_student_by_email(self, email: str):
         found_students = []
 
-        logger.info("Looking for: %s", email)
-
         #  Search through the student_info list for the student with the matching email
         for student_id, (student_name, student_email, course_name) in self.get_student_info_items():
             if student_email == email:
-                logger.info("Found for: %s", email)
                 # append the student info back to found students list
                 found_students.append((student_id, student_name, student_email, course_name))
 
@@ -65,4 +62,4 @@ class FindStudents:
     def terminate(self):
         self._running = False
         self.driver.quit()
-        logger.debug("Find Students Terminated")
+        logger.debug("Find Students Process Terminated")
