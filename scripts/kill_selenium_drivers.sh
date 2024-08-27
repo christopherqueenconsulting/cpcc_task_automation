@@ -8,5 +8,5 @@
 #!/bin/bash
 
 echo "Killing all Selenium drivers started by the current user..."
-ps aux | grep -E 'chrome|chromedriver' | grep $(whoami) | awk '{print $2}' | xargs kill -9
+ps u | grep 'Chrome.app' | grep -v grep | awk '{print $2}' | xargs kill -9
 echo "All Selenium drivers started by the current user killed."
