@@ -59,6 +59,9 @@ class MyColleges:
                                       "//a[starts-with(@id, 'section') and contains(@id, 'link')]/ancestor::td[1]/following-sibling::td[1]/div/div[3]/span"),
             "Waiting for course dates")
 
+        # TODO: Get or calculate the EVA date and store with course info
+
+
         # TODO: Not sure if this paginates once course list grows
 
         for index, atag in enumerate(course_section_atags):

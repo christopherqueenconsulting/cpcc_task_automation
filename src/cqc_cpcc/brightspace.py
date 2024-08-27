@@ -21,8 +21,8 @@ from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry, get_elements_text_as_list_wait_stale, \
     get_elements_href_as_list_wait_stale, wait_for_ajax
-from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, are_you_satisfied, \
-    login_if_needed, LINE_DASH_COUNT
+from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, login_if_needed, \
+    LINE_DASH_COUNT
 
 
 class BrightSpace_Course:
@@ -237,9 +237,8 @@ class BrightSpace_Course:
 
             filtered_withdrawals = {}
 
-
             logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
-            #are_you_satisfied()
+            # are_you_satisfied()
 
             for student_id, (student_name, withdrawal_date) in student_withdrawals_dict.items():
                 # Convert withdrawal_date to a datetime object for comparison
@@ -259,10 +258,16 @@ class BrightSpace_Course:
                     status = "N/A"
                     latest_activity = "N/A"
                     faculty_reason = "Dropped before the course started"
-                # Check if the withdrawal date is before the first drop day
-                elif is_checkdate_before_date(withdrawal_datetime, self.first_drop_day):
-                    # TODO: Find the week of last activity
+                # TODO: Check if the withdrawal date is after the EVA date and add note specific for that
+
+
+                # Check if the withdrawal date between the first drop day and last drop date
+                elif is_date_in_range(self.first_drop_day, withdrawal_datetime, self.final_drop_day):
+                    # TODO: Find the week of last activity (Go to user, click view grades, then view event, find last event with user id)
                     date_of_last_activity = today
+
+                    # TODO: If no Activity set to N/A
+                    # latest_activity = "N/A"
 
                     # Get the week of the last activity
                     last_activity_week = weeks_between_dates(self.course_start_date,
