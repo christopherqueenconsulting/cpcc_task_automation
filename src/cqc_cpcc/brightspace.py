@@ -238,7 +238,7 @@ class BrightSpace_Course:
             filtered_withdrawals = {}
 
 
-            logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
+            #logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
             #are_you_satisfied()
 
             for student_id, (student_name, withdrawal_date) in student_withdrawals_dict.items():
