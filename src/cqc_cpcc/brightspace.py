@@ -16,13 +16,13 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 from cqc_cpcc.utilities.date import convert_datetime_to_end_of_day, convert_date_to_datetime, \
     convert_datetime_to_start_of_day, is_date_in_range, weeks_between_dates, format_year, get_datetime, \
-    is_checkdate_before_date, is_checkdate_after_date, filter_dates_in_range
+    is_checkdate_before_date, filter_dates_in_range
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry, get_elements_text_as_list_wait_stale, \
     get_elements_href_as_list_wait_stale, wait_for_ajax
-from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, are_you_satisfied, \
-    login_if_needed, LINE_DASH_COUNT
+from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, login_if_needed, \
+    LINE_DASH_COUNT
 
 
 class BrightSpace_Course:
@@ -67,8 +67,8 @@ class BrightSpace_Course:
         if self.open_course_tab():
 
             # TODO: MUST uncomment below
-            # self.get_attendance_from_assignments()
-            # self.get_attendance_from_quizzes()
+            self.get_attendance_from_assignments()
+            self.get_attendance_from_quizzes()
             # TODO: MUST uncomment above
 
             # TODO: Fix the attendance from discussions (Something going on with iframes)
@@ -237,9 +237,8 @@ class BrightSpace_Course:
 
             filtered_withdrawals = {}
 
-
-            logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
-            #are_you_satisfied()
+            # logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
+            # are_you_satisfied()
 
             for student_id, (student_name, withdrawal_date) in student_withdrawals_dict.items():
                 # Convert withdrawal_date to a datetime object for comparison
@@ -259,8 +258,8 @@ class BrightSpace_Course:
                     status = "N/A"
                     latest_activity = "N/A"
                     faculty_reason = "Dropped before the course started"
-                # Check if the withdrawal date is before the first drop day
-                elif is_checkdate_before_date(withdrawal_datetime, self.first_drop_day):
+                # Check if the withdrawal date is before the first drop day (Add 1 day so its includsive)
+                elif is_checkdate_before_date(withdrawal_datetime, (self.first_drop_day + DT.timedelta(days=1))):
                     # TODO: Find the week of last activity
                     date_of_last_activity = today
 
@@ -271,7 +270,7 @@ class BrightSpace_Course:
                     faculty_reason = "Student withdrew without contacting the instructor"
                     status = "W"
                 # Check if the withdrawal date is after the final drop day
-                elif is_checkdate_after_date(withdrawal_datetime, self.final_drop_day):
+                elif is_checkdate_before_date(withdrawal_datetime, self.final_drop_day):
                     # TODO: Find the week of last activity
                     date_of_last_activity = today
 

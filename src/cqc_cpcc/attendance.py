@@ -22,7 +22,7 @@ def take_attendance(attendance_tracker_url: str):
     logger.info("Finished Attendance")
 
     # Prompt the user before closing
-    are_you_satisfied()
+    #are_you_satisfied()
 
     driver.quit()
 
@@ -60,6 +60,12 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
     # TODO: Uncomment below
     # open_attendance_tracker(driver, wait, attendance_tracker_url)
 
+    logger.info("Log the following to the attendance tracker")
+    logger.info(
+        "Last Name, First Name, Student ID, Course and Section, Session Type, Delivery Type, Status, Week of Last Activity | Faculty Reason"
+
+    )
+
     # For each bs_courses get the withdrawals and update the tracker
     for bsc in bs_courses:
         # Get the withdrawal list
@@ -68,11 +74,7 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
         # Update the attendance tracker
 
         #  self.withdrawal_records[student_name].append((student_id, withdrawal_datetime))
-        logger.info("Log the following to the attendance tracker")
-        logger.info(
-            "Student Name | Student ID | Course and Section| Session Type | Delivery Type | Status | Week of Last Activity | Faculty Reason"
 
-        )
         for student_name in withdrawals:
             for entry in withdrawals[student_name]:
                 student_id, course_and_section, session_type, delivery_type, status, latest_activity, faculty_reason = entry
@@ -85,9 +87,15 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
                 #     faculty_reason)
                 # )
 
+                # Student Last Name and First Name is the student_name split by comma and replace underscore blank character
+                student_name = student_name.replace("_", "")
+                student_name_array = student_name.split(",")
+                last_name = student_name_array[0].strip()
+                first_name = student_name_array[1].strip()
+
                 logger.info(
-                    "%s, %s, %s, %s, %s, %s, %s, %s" %
-                    (student_name, student_id, course_and_section, session_type, delivery_type, status, latest_activity,
+                    "%s, %s, %s, %s, %s, %s, %s, %s, %s" %
+                    (last_name, first_name, student_id, course_and_section, session_type, delivery_type, status, latest_activity,
                      faculty_reason)
                 )
 

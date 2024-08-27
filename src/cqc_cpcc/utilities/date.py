@@ -31,22 +31,22 @@ def get_datetime(text: str) -> DT.datetime:
     return dt
 
 
-def is_checkdate_before_date(check_date: DT.datetime | DT.date, start_date: DT.datetime | DT.date):
-    if isinstance(start_date, DT.date):
-        start_date = DT.datetime.combine(start_date, DT.datetime.min.time())
+def is_checkdate_before_date(check_date: DT.datetime | DT.date, before_date: DT.datetime | DT.date):
+    if isinstance(before_date, DT.date):
+        before_date = DT.datetime.combine(before_date, DT.datetime.min.time())
     if isinstance(check_date, DT.date):
         check_date = DT.datetime.combine(check_date, DT.datetime.min.time())
 
-    return check_date < start_date
+    return check_date < before_date
 
 
-def is_checkdate_after_date(check_date: DT.datetime | DT.date ,start_date: DT.datetime | DT.date):
-    if isinstance(start_date, DT.date):
-        start_date = DT.datetime.combine(start_date, DT.datetime.min.time())
+def is_checkdate_after_date(check_date: DT.datetime | DT.date, after_date: DT.datetime | DT.date):
+    if isinstance(after_date, DT.date):
+        after_date = DT.datetime.combine(after_date, DT.datetime.min.time())
     if isinstance(check_date, DT.date):
         check_date = DT.datetime.combine(check_date, DT.datetime.min.time())
 
-    return start_date < check_date
+    return after_date < check_date
 
 
 def is_date_in_range(start_date: DT.datetime | DT.date, check_date: DT.datetime | DT.date,
@@ -104,6 +104,7 @@ def get_latest_date(date_strings: list[str]) -> str:
     ordered_dates = order_dates(date_strings)
     return ordered_dates[-1] if ordered_dates else ""
 
+
 def get_earliest_date(date_strings: list[str]) -> str:
     # Return the earliest date from the order_dates function or empty string if not dates or empty list
     ordered_dates = order_dates(date_strings)
@@ -127,8 +128,10 @@ def weeks_between_dates(date1: DT.date, date2: DT.date, round_up: bool = False) 
 def convert_datetime_to_end_of_day(dt: DT.datetime) -> DT.datetime:
     return DT.datetime.combine(dt, DT.datetime.max.time())
 
+
 def convert_datetime_to_start_of_day(dt: DT.datetime) -> DT.datetime:
     return DT.datetime.combine(dt, DT.datetime.min.time())
+
 
 def convert_date_to_datetime(date: DT.date) -> DT.datetime:
     return DT.datetime.combine(date, DT.datetime.min.time())
