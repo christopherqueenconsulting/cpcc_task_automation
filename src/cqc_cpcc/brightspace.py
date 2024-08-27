@@ -67,8 +67,8 @@ class BrightSpace_Course:
         if self.open_course_tab():
 
             # TODO: MUST uncomment below
-            # self.get_attendance_from_assignments()
-            # self.get_attendance_from_quizzes()
+            self.get_attendance_from_assignments()
+            self.get_attendance_from_quizzes()
             # TODO: MUST uncomment above
 
             # TODO: Fix the attendance from discussions (Something going on with iframes)
@@ -255,9 +255,8 @@ class BrightSpace_Course:
 
                 # Check if the withdrawal date is before the first course day
                 if is_checkdate_before_date(withdrawal_datetime, self.course_start_date):
-                    status = "N/A"
-                    latest_activity = "N/A"
-                    faculty_reason = "Dropped before the course started"
+                    # Skip these students. They don't go on the tracker
+                    continue
                 # TODO: Check if the withdrawal date is after the EVA date and add note specific for that
 
 
