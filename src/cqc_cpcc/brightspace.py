@@ -239,7 +239,7 @@ class BrightSpace_Course:
 
 
             logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
-            are_you_satisfied()
+            #are_you_satisfied()
 
             for student_id, (student_name, withdrawal_date) in student_withdrawals_dict.items():
                 # Convert withdrawal_date to a datetime object for comparison
