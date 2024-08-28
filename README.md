@@ -7,8 +7,8 @@ A multi-page Streamlit app showcasing generative AI uses cases with LangChain, O
 
 1. **Clone the repository:**
    ```sh
-   git clone <repository-url>
-   cd <repository-directory>
+   git clone https://github.com/gitchrisqueen/cpcc_task_automation
+   cd cpcc_task_automation
    ```
 
 2. **Install dependencies:**
