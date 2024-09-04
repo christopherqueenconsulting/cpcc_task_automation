@@ -2,6 +2,7 @@
 import json
 
 import extra_streamlit_components as stx
+import pandas as pd
 import streamlit as st
 
 from cqc_cpcc.find_student import FindStudents
@@ -101,6 +102,37 @@ def main():
                                    on_change=on_find_by_change, key="find_student_by_id")
         else:
             placeholder = st.empty()
+
+        if fs:
+            # Convert the fs.get_student_info_items() into a Pandas DataFrame usable for streamlit data_editor
+            student_info_items = fs.get_student_info_items()
+            data = [{"ID": item[0], "Name": item[1][0], "Email": item[1][1], "Course Name": item[1][2]} for item in
+                    student_info_items]
+            df = pd.DataFrame(data)
+
+
+            # Create a filter input for the column
+            filter_value = st.text_input("Filter by Course Name")
+
+            # Apply the filter to the DataFrame dynamically
+            if filter_value:
+                df = df[df["Course Name"].str.contains(filter_value, case=False, na=False)]
+
+
+
+            # Add a editable table of all the students found
+            edited_df = fs_placeholder.data_editor(data=df,
+                                                   use_container_width=True,
+                                                   num_rows="dynamic",
+                                                   hide_index=True,
+                                                   column_config={
+                                                       1: st.column_config.TextColumn("ID"),
+                                                       2: st.column_config.TextColumn("Name"),
+                                                       3: st.column_config.TextColumn("Email"),
+                                                       4: st.column_config.TextColumn("Course Name"),
+                                                   })
+
+
     else:
         st.write(
             "Please visit the Settings page and enter the Instructor User ID and Instructor User ID to proceed")
