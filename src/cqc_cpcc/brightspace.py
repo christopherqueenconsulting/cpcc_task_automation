@@ -372,8 +372,12 @@ class BrightSpace_Course:
             # Remove duplicates from the due_dates array
             due_dates = list(set(due_dates))
 
-            print("Found Due Dates (Filtered To between %s - %s):" % (self.date_range_start, self.date_range_end))
-            pprint(due_dates)
+            if due_dates:
+                print("Found Due Dates (Filtered To between %s - %s):" % (self.date_range_start, self.date_range_end))
+                pprint(due_dates)
+            else:
+                logger.info("No Due Dates Found Between %s - %s" % (self.date_range_start, self.date_range_end))
+
             print("-" * LINE_DASH_COUNT)
             # logger.info(due_dates)
 
@@ -400,12 +404,12 @@ class BrightSpace_Course:
         due_dates = self.get_inrange_duedates_from_xpath(
             table_prefix_xpath + "//div[contains(@class,'date')]")
 
-        logger.info("Found Due Dates:")
-        logger.info(due_dates)
-
         if not due_dates:
             logger.info("No Assignment Link(s) Due Between %s - %s:" % (self.date_range_start, self.date_range_end))
         else:
+            logger.info("Found Due Dates:")
+            logger.info(due_dates)
+
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
             xpath_expression = table_prefix_xpath + "[descendant::*[" + " or ".join(
@@ -521,8 +525,10 @@ class BrightSpace_Course:
 
         if not due_dates:
             logger.info("No Quiz Link(s) Due Between %s - %s:" % (self.date_range_start, self.date_range_end))
-
         else:
+            logger.info("Found Due Dates:")
+            logger.info(due_dates)
+
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
             xpath_expression = table_prefix_xpath + "//th[.//span[contains(@class,'ds_b') and (" + " or ".join(
@@ -532,7 +538,7 @@ class BrightSpace_Course:
             # logger.info("Quizzes Links XPath: %s" % xpath_expression)
 
             quizzes_links = get_elements_href_as_list_wait_stale(self.wait, xpath_expression,
-                                                                 "Waiting for Quizzes Links")
+                                                                 "Waiting for Quizzes Links within due date range")
 
             # Need to modify the links using the quiz id
             quizzes_links = [self.modify_quiz_edit_url_to_attempt_log_url(link) for link in quizzes_links]
@@ -670,13 +676,14 @@ class BrightSpace_Course:
         # Get all the Due Dates
         latest_post_dates = self.get_inrange_duedates_from_xpath(
             "//div[contains(@class,'d2l-last-post-date-container')]//abbr[contains(@class,'d2l-fuzzydate')]")
-        # logger.info("Found Latest Post Dates:")
-        # logger.info(latest_post_dates)
+
 
         if not latest_post_dates:
             logger.info("No Discussion Latest Posts(s) Between %s - %s:" % (self.date_range_start, self.date_range_end))
 
         else:
+            logger.info("Found Latest Post Dates:")
+            logger.info(latest_post_dates)
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
             xpath_expression = "//tr[.//abbr[" + " or ".join(
