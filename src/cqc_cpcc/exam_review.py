@@ -98,6 +98,14 @@ class MinorErrorType(ExtendedEnum):
     """Stale data in classes"""
     CSC_251_EXAM_1_STALE_DATA = "There is stale data in classes"
 
+    """Declaring variables/fields and not using them in the program"""
+    CSC_251_EXAM_1_UNUSED_VARIABLES = "There are variables/fields declared that are not used in the program"
+
+    """Incorrect data type used"""
+    CSC_251_EXAM_1_INCORRECT_DATA_TYPE = "The program has the incorrect data type(s) used"
+
+    """Program does not compile"""
+    CSC_251_EXAM_1_DOES_NOT_COMPILE = "The program does not compile"
 
 class MinorError(CodeError):
     """Class representing various types of minor coding errors."""
