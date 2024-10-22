@@ -43,7 +43,7 @@ class MyColleges:
         login_if_needed(self.driver)
 
         # Wait for title to change
-        self.wait.until(EC.title_contains("Faculty"))
+        self.wait.until(EC.title_contains("Faculty"), "Waiting for Faculty in title.")
 
     def get_course_info(self):
         self.open_faculty_page()

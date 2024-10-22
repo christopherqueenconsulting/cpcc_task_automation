@@ -10,9 +10,9 @@ from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support.wait import WebDriverWait
 
 from cqc_cpcc.utilities.env_constants import *
@@ -218,7 +218,7 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
         if max_try > 1:
             element = click_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
         else:
-            #raise TimeoutException("Timeout while " + wait_text)
+            # raise TimeoutException("Timeout while " + wait_text)
             raise se
 
     return element
@@ -245,14 +245,14 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
         if max_try > 1:
             element = get_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
         else:
-            #raise TimeoutException("Timeout while " + wait_text)
+            # raise TimeoutException("Timeout while " + wait_text)
             raise se
 
     return element
 
 
 def get_elements_as_list_wait_stale(wait: WebDriverWait, find_by_value: str, wait_text: str,
-                                         find_by: str = By.XPATH, max_retry=3) -> list[WebElement]:
+                                    find_by: str = By.XPATH, max_retry=3) -> list[WebElement]:
     elements = []
 
     try:
@@ -272,41 +272,29 @@ def get_elements_as_list_wait_stale(wait: WebDriverWait, find_by_value: str, wai
 
 def get_elements_text_as_list_wait_stale(wait: WebDriverWait, find_by_value: str, wait_text: str,
                                          find_by: str = By.XPATH, max_retry=3) -> list[str]:
-
-    elements = get_elements_as_list_wait_stale(wait, find_by_value, wait_text, find_by, max_retry)
     elements_list = []
-    for element in elements:
+    for _ in range(max_retry):
         try:
-            elements_list.append(getText(element))
+            elements = get_elements_as_list_wait_stale(wait, find_by_value, wait_text, find_by, max_retry)
+            elements_list = [getText(element) for element in elements]
+            break
         except StaleElementReferenceException:
-            # Attempt to relocate the element and retry
-            try:
-                logger.info("Element went stale. Relocating by XPath: %s" % element.get_attribute('xpath'))
-                relocated_element = wait.until(lambda d: d.find_element(By.XPATH, element.get_attribute('xpath')))
-                elements_list.append(getText(relocated_element))
-            except StaleElementReferenceException:
-                logger.warning("Element went stale and could not be relocated.")
-
-
+            logger.info(wait_text + " | Stale | .....retrying")
+            time.sleep(5)  # wait 5 seconds
     return elements_list
 
 
 def get_elements_href_as_list_wait_stale(wait: WebDriverWait, find_by_value: str, wait_text: str,
                                          find_by: str = By.XPATH, max_retry=3) -> list:
-    elements = get_elements_as_list_wait_stale(wait, find_by_value, wait_text, find_by, max_retry)
     elements_list = []
-    for element in elements:
+    for _ in range(max_retry):
         try:
-            elements_list.append(element.get_attribute('href'))
+            elements = get_elements_as_list_wait_stale(wait, find_by_value, wait_text, find_by, max_retry)
+            elements_list = [element.get_attribute('href') for element in elements]
+            break
         except StaleElementReferenceException:
-            # Attempt to relocate the element and retry
-            try:
-                logger.info("Element went stale. Relocating by XPath: %s" % element.get_attribute('xpath'))
-                relocated_element = wait.until(lambda d: d.find_element(By.XPATH, element.get_attribute('xpath')))
-                elements_list.append(relocated_element.get_attribute('href'))
-            except StaleElementReferenceException:
-                logger.warning("Element went stale and could not be relocated.")
-
+            logger.info(wait_text + " | Stale | .....retrying")
+            time.sleep(5)  # wait 5 seconds
     return elements_list
 
 

@@ -1,6 +1,7 @@
 import os
 import os.path
 import tempfile
+import time
 import zipfile
 from enum import Enum, StrEnum
 from random import randint
@@ -419,10 +420,55 @@ def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict
 
 
 def login_if_needed(driver: WebDriver):
+    # sleep for 3 seconds
+    time.sleep(3)
     if "Web Login Service" in driver.title:
-        # Login
+        # Duo Login
         duo_login(driver)
+    elif "Sign in to your account" in driver.title:
+        # Microsoft Login
+        microsoft_login(driver)
 
+def microsoft_login(driver: WebDriver):
+    #Enter in user info and password
+    instructor_user_id = os.environ["INSTRUCTOR_USERID"]
+    instructor_password = os.environ["INSTRUCTOR_PASS"]
+
+    wait = get_driver_wait(driver)
+
+    original_window = driver.current_window_handle
+
+    # Wait for title to change
+    wait.until(EC.title_is("Sign in to your account"))
+
+    # Wait for login elements
+    wait.until(
+        lambda d: d.find_element(By.XPATH, "//div[@id='loginHeader']"),
+        "Waiting for login screen presence")
+
+    # Enter username / email
+    username_field = driver.find_element(By.NAME, "loginfmt")
+    username_field.send_keys(instructor_user_id+"@cpcc.edu")
+    # Click Next
+    click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Next')]", "Waiting for Next Button", By.XPATH)
+    # Enter password
+    password_field = driver.find_element(By.NAME, "passwd")
+    password_field.send_keys(instructor_password)
+    # Click Sign In
+    click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Sign in')]",
+                             "Waiting for Sign in Button", By.XPATH)
+    # Click the no button for Stay signed in
+    no_stay_signed_in_button = click_element_wait_retry(driver, wait,
+                                             "//input[contains(@class, 'button-secondary') and contains(@value,'No')]",
+                                             "Waiting to click 'No' button to Stay Signed in")
+
+    # Wait until login accepted
+    wait.until(
+        EC.invisibility_of_element(no_stay_signed_in_button),
+        'Waiting for login to be successful')
+
+    # Switch back to original window
+    driver.switch_to.window(original_window)
 
 def duo_login(driver: WebDriver):
 
