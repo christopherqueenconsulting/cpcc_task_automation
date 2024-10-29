@@ -171,3 +171,4 @@ logs/*
 
 # ignore screenshots in the src/cqc_streamlit_app/scressnshots folder
 src/cqc_streamlit_app/screenshots/*
+/src/cqc_cpcc/utilities/selenium_profiles/

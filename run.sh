@@ -49,7 +49,7 @@ run_app() {
             ;;
         "${options[1]}")
             echo "Running via ${options[1]}"
-            poetry run python ./src/cqc_cpcc/main.py
+            poetry run python -m cqc_cpcc.main
             ;;
         *)
             echo "Invalid option. Please select a valid option."

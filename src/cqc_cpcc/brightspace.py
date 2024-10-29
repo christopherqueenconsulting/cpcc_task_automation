@@ -532,7 +532,7 @@ class BrightSpace_Course:
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
             xpath_expression = table_prefix_xpath + "//th[.//span[contains(@class,'ds_b') and (" + " or ".join(
-                ['contains(text(), "{}")'.format(d_date) for d_date in
+                ['text()[contains(., "{}")]'.format(d_date) for d_date in
                  due_dates]) + ")]]/a[contains(@class,'d2l-link')]"
 
             # logger.info("Quizzes Links XPath: %s" % xpath_expression)

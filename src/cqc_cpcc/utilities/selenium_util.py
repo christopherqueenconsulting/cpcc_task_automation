@@ -5,7 +5,7 @@ import chromedriver_autoinstaller
 from pyvirtualdisplay import Display
 from selenium import webdriver
 from selenium.common import NoSuchElementException, StaleElementReferenceException, ElementNotInteractableException, \
-    TimeoutException, WebDriverException
+    TimeoutException, WebDriverException, JavascriptException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -14,6 +14,7 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support.wait import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
 
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
@@ -109,6 +110,11 @@ def get_docker_driver(headless=True):
 
     return driver
 
+def create_folder_if_not_exists(folder_path):
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+
 
 def get_local_chrome_driver(headless=True):
     options = getBaseOptions()
@@ -116,16 +122,32 @@ def get_local_chrome_driver(headless=True):
     if headless:
         options = add_headless_options(options)
         # detached = False
+    else:
+
+        # Create a sub_folder for the current user to use as the profile folder
+        # Get the directory of the current file
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Define the local path relative to the current file
+        profile_folder_path = os.path.join(current_dir, 'selenium_profiles')
+
+        create_folder_if_not_exists(profile_folder_path)
+
+        # Set up the Chrome driver options
+        # Note: This will create a new profile for each run (not shared between runs)
+        # options.add_argument("--user-data-dir=" + profile_folder_path)  # This is to keep the browser logged in between runs
+        options.add_argument("user-data-dir=" + str(profile_folder_path))  # This is to keep the browser logged in between runs
+        options.add_argument("--profile-directory=" + INSTRUCTOR_USERID)
 
     options.add_experimental_option("detach", detached)  # Change if you want to close when program ends
     # options.headless = headless
     driver = webdriver.Chrome(
         # TODO: Working before below but checking for streamlit cloud
         # service=Service(
-        # ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install() # Not working locally but works on streamlit cloud but partially (inputs not going into formas)
+        # ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install() # Not working locally but works on streamlit cloud but partially (inputs not going into forms)
         # ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install() # Works locally but not in streamlit cloud
         # ),
-        service=Service(),  # Works locally and on streamlit cloud
+        service=Service(ChromeDriverManager().install()),  # Works locally and on streamlit cloud
         # TODO: Working before above but checking for streamlit cloud
         options=options
     )
@@ -135,7 +157,18 @@ def get_local_chrome_driver(headless=True):
     else:
         # TODO: Determine what size you want to set
         # driver.maximize_window()
-        driver.set_window_size(1800, 900)
+        driver.set_window_size(1920, 1080)
+
+    #try:
+        # Remove navigator.webdriver Flag using JavaScript
+        #driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    #except JavascriptException as je:
+        #logger.debug(f"Error while removing navigator.webdriver flag: {je}")
+        #pass
+
+    # Give some time for multiple calls
+    time.sleep(2)
+
 
     return driver
 
@@ -166,14 +199,25 @@ def add_headless_options(options: Options) -> Options:
     return options
 
 
-def getBaseOptions():
+def getBaseOptions(base_download_directory:str = None):
     options = Options()
     # options.add_argument("--incognito") # TODO: May cause issues with tabs
-    prefs = {"download.default_directory": os.getcwd() + '/downloads',
+    if base_download_directory is None:
+        base_download_directory = os.getcwd()
+    prefs = {"download.default_directory": base_download_directory+ '/downloads',
              "download.prompt_for_download": False,
              "download.directory_upgrade": True,
              "plugins.always_open_pdf_externally": True}
     options.add_experimental_option("prefs", prefs)
+
+    options.add_argument('--disable-gpu')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+
+    # Options to make us undetectable (Review https://amiunique.org/fingerprint from the browser to verify)
+    options.add_argument("window-size=1920x1080")
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36")
 
     # options.page_load_strategy = 'eager'  # interactive
     # options.page_load_strategy = "normal"  # complete
@@ -188,8 +232,11 @@ def get_session_driver():
     return driver, wait
 
 
-def get_driver_wait(driver):
-    return WebDriverWait(driver, WAIT_DEFAULT_TIMEOUT,
+def get_driver_wait(driver, wait_default_timeout = None):
+    if wait_default_timeout is None:
+        wait_default_timeout = WAIT_DEFAULT_TIMEOUT
+
+    return WebDriverWait(driver, wait_default_timeout,
                          # poll_frequency=3,
                          ignored_exceptions=[
                              NoSuchElementException,  # This is handled individually

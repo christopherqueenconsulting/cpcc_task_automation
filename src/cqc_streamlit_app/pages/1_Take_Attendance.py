@@ -256,7 +256,7 @@ def start_attendance(attendance_tracker_url: str):
             # screenshot_placeholder.image(st.session_state['placeholder_images'][-1])
             time.sleep(1)
         else:
-            # TODO: Fixe the swipable slideshow (SMH)
+            # TODO: Fix the swipeable slideshow (SMH)
             # slideshow_swipeable(st.session_state['placeholder_images'])
             # exit the while loop
             break

@@ -18,6 +18,7 @@ from docx import Document
 from markdownify import markdownify as md
 from ordered_set import OrderedSet
 from pydantic.v1 import BaseModel, Field, StrictStr, PositiveInt
+from selenium.common import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
@@ -25,12 +26,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.selenium_util import get_driver_wait, click_element_wait_retry
 
-
 # from simplify_docx import simplify
 
 # Global Constants
 LINE_DASH_COUNT = 33
-
 
 
 class Satisfactory(Enum):
@@ -429,12 +428,13 @@ def login_if_needed(driver: WebDriver):
         # Microsoft Login
         microsoft_login(driver)
 
+
 def microsoft_login(driver: WebDriver):
-    #Enter in user info and password
+    # Enter in user info and password
     instructor_user_id = os.environ["INSTRUCTOR_USERID"]
     instructor_password = os.environ["INSTRUCTOR_PASS"]
 
-    wait = get_driver_wait(driver)
+    wait = get_driver_wait(driver, 3) # Using shorter wait time for login
 
     original_window = driver.current_window_handle
 
@@ -446,11 +446,34 @@ def microsoft_login(driver: WebDriver):
         lambda d: d.find_element(By.XPATH, "//div[@id='loginHeader']"),
         "Waiting for login screen presence")
 
-    # Enter username / email
-    username_field = driver.find_element(By.NAME, "loginfmt")
-    username_field.send_keys(instructor_user_id+"@cpcc.edu")
-    # Click Next
-    click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Next')]", "Waiting for Next Button", By.XPATH)
+    # Username may already be prefilled If it is correct continue if not go back anc clear it
+    user_name_already_entered = False
+    try:
+        wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//div[@id='displayName' and contains(@title,'" + instructor_user_id.lower() + "')]")), "Waiting for username to be prefilled")
+        user_name_already_entered = True
+    except TimeoutException:
+        #logger.info("Element not found within timeout")
+        # Make sure that another username is not entered and we need to go back
+        try:
+            wait.until(EC.presence_of_element_located(
+                (By.XPATH, "//div[@id='displayName']")), "Waiting to see if another username is present")
+            # Click back button
+            click_element_wait_retry(driver, wait, "//button[@class='backButton']", "Waiting for back button")
+            # Click the use another account button
+            click_element_wait_retry(driver, wait, "//div[contains(text(),'Use another')]/parent::div", "Waiting for use another account button")
+            time.sleep(2)
+        except TimeoutException:
+            # logger.info("Element not found within timeout")
+            pass
+
+    if not user_name_already_entered:
+        # Enter username / email
+        username_field = driver.find_element(By.NAME, "loginfmt")
+        username_field.send_keys(instructor_user_id + "@cpcc.edu")
+        # Click Next
+        click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Next')]",
+                                 "Waiting for Next Button", By.XPATH)
     # Enter password
     password_field = driver.find_element(By.NAME, "passwd")
     password_field.send_keys(instructor_password)
@@ -459,8 +482,8 @@ def microsoft_login(driver: WebDriver):
                              "Waiting for Sign in Button", By.XPATH)
     # Click the no button for Stay signed in
     no_stay_signed_in_button = click_element_wait_retry(driver, wait,
-                                             "//input[contains(@class, 'button-secondary') and contains(@value,'No')]",
-                                             "Waiting to click 'No' button to Stay Signed in")
+                                                        "//input[contains(@class, 'button-secondary') and contains(@value,'No')]",
+                                                        "Waiting to click 'No' button to Stay Signed in")
 
     # Wait until login accepted
     wait.until(
@@ -470,15 +493,15 @@ def microsoft_login(driver: WebDriver):
     # Switch back to original window
     driver.switch_to.window(original_window)
 
-def duo_login(driver: WebDriver):
 
+def duo_login(driver: WebDriver):
     # TODO: This is not working when in streamlit cloud. Need to get values set before this line
-    #from cqc_cpcc.utilities.env_constants import INSTRUCTOR_USERID, INSTRUCTOR_PASS
+    # from cqc_cpcc.utilities.env_constants import INSTRUCTOR_USERID, INSTRUCTOR_PASS
 
     instructor_user_id = os.environ["INSTRUCTOR_USERID"]
     instructor_password = os.environ["INSTRUCTOR_PASS"]
 
-    wait = get_driver_wait(driver)
+    wait = get_driver_wait(driver, 3) # Using shorter wait times
 
     original_window = driver.current_window_handle
 
@@ -500,20 +523,26 @@ def duo_login(driver: WebDriver):
     click_element_wait_retry(driver, wait, "_eventId_proceed", "Waiting for login field", By.NAME)
 
     # Switch to Duo Iframe
-    #duo_frame = wait.until(lambda d: d.find_element(By.ID, "duo_iframe"), "Waiting for Duo Iframe")
-    #wait.until(EC.frame_to_be_available_and_switch_to_it(duo_frame))
+    # duo_frame = wait.until(lambda d: d.find_element(By.ID, "duo_iframe"), "Waiting for Duo Iframe")
+    # wait.until(EC.frame_to_be_available_and_switch_to_it(duo_frame))
 
     # NOTE: Duo push happens automatically now. Used to require a button push
-    #click_element_wait_retry(driver, wait, "//button[contains(text(),'Send Me a Push')]", "Waiting for auth buttons")
+    # click_element_wait_retry(driver, wait, "//button[contains(text(),'Send Me a Push')]", "Waiting for auth buttons")
 
-    # Click the no to is this your device message
-    login_message = click_element_wait_retry(driver, wait, "//button[contains(text(),'No, other people use this device')]", "Waiting to click 'No, other people use this device' button")
 
-    # Wait until login accepted
-    wait.until(
-        EC.invisibility_of_element(login_message),
-        'Waiting for login to be successful')
+    try:
+        # Click the no to is this your device message
+        login_message = click_element_wait_retry(driver, wait,
+                                                 "//button[contains(text(),'No, other people use this device')]",
+                                                 "Waiting to click 'No, other people use this device' button", max_try=1)
+
+        # Wait until login accepted
+        wait.until(
+            EC.invisibility_of_element(login_message),
+            'Waiting for login to be successful')
+    except TimeoutException:
+        # logger.info("Element not found within timeout")
+        pass
 
     # Switch back to original window
     driver.switch_to.window(original_window)
-
