@@ -259,7 +259,6 @@ class BrightSpace_Course:
                     continue
                 # TODO: Check if the withdrawal date is after the EVA date and add note specific for that
 
-
                 # Check if the withdrawal date between the first drop day and last drop date
                 elif is_date_in_range(self.first_drop_day, withdrawal_datetime, self.final_drop_day):
                     # TODO: Find the week of last activity (Go to user, click view grades, then view event, find last event with user id)
@@ -554,50 +553,48 @@ class BrightSpace_Course:
     def click_max_results_select(self, select_xpath: str) -> bool:
         select_successful = False
 
-        try:
-            # Click the Results per page select element
-            select_option_xpath = select_xpath + "//option"
+        retry = 3
+        while not select_successful and retry > 0:
+            try:
 
-            select_options = self.wait.until(
-                lambda d: d.find_elements(By.XPATH,
-                                          select_option_xpath),
-                "Waiting for Select options")
+                # Click the Results per page select element
+                select_option_xpath = select_xpath + "//option"
 
-            # Get Max Value
-            option_values = [x.get_attribute('value') for x in
-                             select_options]
-            # logger.info("Select Options: %s" % "\n".join(option_values))
-            numeric_values = list(map(int, option_values))
-            max_value = max(numeric_values)
-            # logger.info("Max Value: %s" % max_value)
+                select_options = self.wait.until(
+                    lambda d: d.find_elements(By.XPATH,
+                                              select_option_xpath),
+                    "Waiting for Select options")
 
-            # Change results per page to max
-            select_element = click_element_wait_retry(self.driver, self.wait,
-                                                      select_xpath,
-                                                      "Waiting for Max Per Page Select")
+                # Get Max Value
+                option_values = [x.get_attribute('value') for x in
+                                 select_options]
+                # logger.info("Select Options: %s" % "\n".join(option_values))
+                numeric_values = list(map(int, option_values))
+                max_value = max(numeric_values)
+                # logger.info("Max Value: %s" % max_value)
+
+                # Change results per page to max
+                select_element = click_element_wait_retry(self.driver, self.wait,
+                                                          select_xpath,
+                                                          "Waiting for Max Per Page Select")
+
+                # are_you_satisfied()
+
+                select_element = self.driver.find_element(By.XPATH, select_xpath)
+                select = Select(select_element)
+                select.select_by_value(str(max_value))
+                wait_for_ajax(self.driver)
+                select_element.send_keys(Keys.TAB)  # Use to blur the select element
+                select_successful = True
+            except (NoSuchElementException, ElementNotInteractableException):
+                # Break the while loop
+                break
+            except (StaleElementReferenceException, TimeoutException) as ste:
+                logger.info("Exception while looking for: %s | Error: %s" % (select_xpath, ste))
+                retry -= 1
+                self.driver.implicitly_wait(3)  # wait 3 seconds
 
             # are_you_satisfied()
-
-            retry = 3
-            while not select_successful and retry > 0:
-                try:
-                    select_element = self.driver.find_element(By.XPATH, select_xpath)
-                    select = Select(select_element)
-                    select.select_by_value(str(max_value))
-                    wait_for_ajax(self.driver)
-                    select_element.send_keys(Keys.TAB)  # Use to blur the select element
-                    select_successful = True
-                except (NoSuchElementException, ElementNotInteractableException):
-                    # Break the while loop
-                    break
-                except StaleElementReferenceException:
-                    retry -= 1
-                    self.driver.implicitly_wait(3)  # wait 3 seconds
-
-            # are_you_satisfied()
-
-        except TimeoutException:
-            logger.info("Timeout Exception while looking for: %s" % select_xpath)
 
         return select_successful
 
@@ -676,7 +673,6 @@ class BrightSpace_Course:
         # Get all the Due Dates
         latest_post_dates = self.get_inrange_duedates_from_xpath(
             "//div[contains(@class,'d2l-last-post-date-container')]//abbr[contains(@class,'d2l-fuzzydate')]")
-
 
         if not latest_post_dates:
             logger.info("No Discussion Latest Posts(s) Between %s - %s:" % (self.date_range_start, self.date_range_end))

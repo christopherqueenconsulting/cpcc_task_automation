@@ -53,10 +53,21 @@ simulate_typing_line() {
     while IFS= read -r line; do
 
         # Print the entire line without a newline
-        printf "%s\n" "$line"
+        printf "%s" "$line"
+        #printf "%s\n" "$line"
+        #printf "%s\r" "$line"
+        printf "%s\r\n" "$line"
         #wait
 
+        # Allow the final output pipe and typing pipe to consume the printed characters
         sleep .1
+
+        # Print the new line
+        printf "\n"
+
+        # Give time for the java output to be written to the output pipe
+        sleep .5
+
 
      done <<< "$input"
 }
@@ -247,25 +258,59 @@ for folder in "$main_dir"/*; do
                     truncate -s 0 "$output_file"
 
                     # Create named pipes
-                    java_output_pipe="/tmp/${folder_name}_${timestamp}_${input_name}_java_output"
+                    final_output_pipe="/tmp/${folder_name}_${timestamp}_${input_name}_java_output"
                     typing_output_pipe="/tmp/${folder_name}_${timestamp}_${input_name}_typing_output"
 
-                    mkfifo "$java_output_pipe" || { echo "Failed to create pipe: $java_output_pipe"; exit 1; }
-                    named_pipes+=("$java_output_pipe")
+                    mkfifo "$final_output_pipe" || { echo "Failed to create pipe: $final_output_pipe"; exit 1; }
+                    named_pipes+=("$final_output_pipe")
                     mkfifo "$typing_output_pipe" || { echo "Failed to create pipe: $typing_output_pipe"; exit 1; }
                     named_pipes+=("$typing_output_pipe")
 
+
+                    # Write input to the named pipe
+                    #cat "$input_file" > "$typing_output_pipe" &
+
                     # Run Java command in the background
                     # Start the Java command and have it read from the named pipe
-                    (java -cp "$folder" "$class_name" > "$java_output_pipe" 2> "$error_file" < "$typing_output_pipe") &
+                    #(java -cp "$folder" "$class_name" > "$final_output_pipe" 2> "$error_file" < "$typing_output_pipe") &
+                    # Run Java program and redirect output
+                    (java -cp "$folder" "$class_name" < "$typing_output_pipe" > "$final_output_pipe" 2> "$error_file") &
 
-                    cat "$java_output_pipe" >> "$output_file" &
+                    java_pid=$!
+
+                    # Append Java output to the final output file
+                    cat "$final_output_pipe" >> "$output_file" &
+
+                    # Read input file line by line and simulate typing
+                    while IFS= read -r line; do
+                        echo "$line" | tee -a "$final_output_pipe" > "$typing_output_pipe"
+                        sleep 0.2 # Simulate typing delay
+
+                    done < "$input_file"
+
+
+
+
+                    # Allow Java program to finish processing
+                    wait
+
+
+                    # Dump the final output pipe to the output file (in the background to not stall processes)
+                    #cat "$final_output_pipe" >> "$output_file" &
+
+                    # Allow for output from java start before typing
+                    #sleep 5
 
                     # Start the sub-process and write its output to the named pipe
-                    (simulate_typing_line "$input_text" | tee -a "$output_file" > "$typing_output_pipe") &
+                    #(simulate_typing_line "$input_text" | tee -a "$final_output_pipe" > "$typing_output_pipe") &
 
                     # Wait for background processes to complete
                     wait
+
+                    # Dump the final output pipe to the output file (in the background to not stall processes)
+                    #cat "$final_output_pipe" >> "$output_file" &
+
+
 
                     # Remove empty lines from the beginning and end of the outputfile
                     remove_empty_lines "$output_file"

@@ -3,10 +3,17 @@ import os
 import tempfile
 import zipfile
 from random import randint
-from typing import Tuple, Any
+from typing import Tuple, Any, TypeVar
 
 import streamlit as st
 import streamlit_ext as ste
+from streamlit.delta_generator import DeltaGenerator
+from streamlit.errors import NoSessionContext
+from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx, SCRIPT_RUN_CONTEXT_ATTR_NAME
+
+import threading
+from typing import Any, TypeVar, cast
+
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_openai import ChatOpenAI
@@ -977,7 +984,7 @@ def get_file_mime_type(file_extension: str):
     return preferred_mime_dict.get(file_extension, "application/octet-stream")
 
 
-def on_download_click(file_path: str, button_label: str, download_file_name: str) -> str:
+def on_download_click(download_button_placeholder: DeltaGenerator, file_path: str, button_label: str, download_file_name: str):
     file_extension = get_file_extension_from_filepath(download_file_name)
     mime_type = get_file_mime_type(file_extension)
     # st.info("file_extension: " + file_extension + " | mime_type: " + mime_type)
@@ -991,7 +998,7 @@ def on_download_click(file_path: str, button_label: str, download_file_name: str
     # st.markdown(file_content)
 
     # Trigger the download of the file
-    return ste.download_button(label=button_label, data=file_content,
+    download_button_placeholder.download_button(label=button_label, data=file_content,
                                file_name=download_file_name, mime=mime_type
                                # , key=download_file_name
                                )
@@ -1017,6 +1024,42 @@ def prefix_content_file_name(filename: str, content: str):
     return "# File: " + filename + "\n\n" + content
 
 
+T = TypeVar("T")
+
+
+def with_streamlit_context(fn: T) -> T:
+    """Fix bug in streamlit which raises streamlit.errors.NoSessionContext."""
+    ctx = get_script_run_ctx()
+
+    if ctx is None:
+        raise NoSessionContext(
+            "with_streamlit_context must be called inside a context; "
+            "construct your function on the fly, not earlier."
+        )
+
+    def _cb(*args: Any, **kwargs: Any) -> Any:
+        """Do it."""
+
+        thread = threading.current_thread()
+        do_nothing = hasattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) and (
+            getattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) == ctx
+        )
+
+        if not do_nothing:
+            setattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME, ctx)
+
+        # Call the callback.
+        ret = fn(*args, **kwargs)
+
+        if not do_nothing:
+            # Why delattr? Because tasks for different users may be done by
+            # the same thread at different times. Danger danger.
+            delattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME)
+        return ret
+
+    return cast(T, _cb)
+
+
 class ChatGPTStatusCallbackHandler(BaseCallbackHandler):
 
     def __init__(
@@ -1030,14 +1073,17 @@ class ChatGPTStatusCallbackHandler(BaseCallbackHandler):
         else:
             self._prefix_label = prefix_label + " | "
 
+    @with_streamlit_context
     def on_llm_start(
             self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
     ) -> None:
         self._status_container.update(label=self._prefix_label + "Getting response from ChatGPT")
 
+    @with_streamlit_context
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         # self._status_container.update(label=self._prefix_label + "From ChatGPT: " + str(response))
         self._status_container.update(label=self._prefix_label + "ChatGPT Finished")
 
+    @with_streamlit_context
     def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
         self._status_container.update(label=self._prefix_label + "ChatGPT Error: " + str(error))

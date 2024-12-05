@@ -217,7 +217,8 @@ def getBaseOptions(base_download_directory:str = None):
     # Options to make us undetectable (Review https://amiunique.org/fingerprint from the browser to verify)
     options.add_argument("window-size=1920x1080")
     options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36")
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.91 Safari/537.36")
+
 
     # options.page_load_strategy = 'eager'  # interactive
     # options.page_load_strategy = "normal"  # complete

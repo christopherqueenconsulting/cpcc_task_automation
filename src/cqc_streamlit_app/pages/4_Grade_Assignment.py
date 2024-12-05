@@ -6,6 +6,8 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx
+from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx, ScriptRunContext
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader, parse_error_type_enum_name
 from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
@@ -41,8 +43,8 @@ def define_grading_rubric():
         {GR_CRITERIA: "Lack of clear, succinct input prompts for data", GR_PPL: 10},
         {GR_CRITERIA: "Lack of clear, descriptive labels for output data", GR_PPL: 10},
         {GR_CRITERIA: '"hard-coding" numbers in calculations', GR_PPL: 10},
-        {GR_CRITERIA: "Failure to include student name as part of flowgorithm file", GR_PPL: 5},
-        {GR_CRITERIA: "Failure to include flowgorithm lab number as part of flowgorithm file name", GR_PPL: 5},
+        {GR_CRITERIA: "Failure to include student name as part of Flowgorithm file", GR_PPL: 5},
+        {GR_CRITERIA: "Failure to include Flowgorithm lab number as part of Flowgorithm file name", GR_PPL: 5},
     ]
     grading_rubric_df = pd.DataFrame(default_data)
 
@@ -66,7 +68,8 @@ def get_flowgorithm_content():
 
     _orig_file_name, instructions_file_path = add_upload_file_element("Upload Flowgorithm Instructions",
                                                                       ["txt", "docx", "pdf"])
-    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True, key="convert_flowgoritm_instruction_to_markdown")
+    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True,
+                                                   key="convert_flowgoritm_instruction_to_markdown")
 
     assignment_instructions_content = None
 
@@ -122,7 +125,7 @@ def get_flowgorithm_content():
                                                                              student_file_name,
                                                                              total_points_possible)
                     st.header("Feedback and Grade")
-                    #st.markdown(f"```\n{feedback_with_grade}\n")
+                    # st.markdown(f"```\n{feedback_with_grade}\n")
                     st.markdown(feedback_with_grade)
 
         else:
@@ -205,7 +208,8 @@ async def get_grade_exam_content():
     st.header("Instructions File")
     _orig_file_name, instructions_file_path = add_upload_file_element("Upload Exam Instructions",
                                                                       ["txt", "docx", "pdf"])
-    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True, key="convert_exam_instruction_to_markdown")
+    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True,
+                                                   key="convert_exam_instruction_to_markdown")
 
     assignment_instructions_content = None
 
@@ -300,57 +304,85 @@ async def get_grade_exam_content():
         total_student_submissions = len(student_submission_file_paths)
 
         tasks = []
+        ctx = get_script_run_ctx()
 
-        for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
+        download_all_results_placeholder = st.empty()
 
-            # If zip go through each folder as student name and grade using files in each folder as the submission
-            if student_submission_file_path.endswith('.zip'):
-                # Process the zip file for student name sub-folder and submitted files
-                student_submissions_map = extract_and_read_zip(student_submission_temp_file_path,
-                                                               student_submission_accepted_file_types)
+        async with asyncio.TaskGroup() as tg:
 
-                total_student_submissions = len(student_submissions_map)
-                for base_student_filename, student_submission_files_map in student_submissions_map.items():
-                    tasks.append(add_grading_status_extender(
+            for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
+
+                # If zip go through each folder as student name and grade using files in each folder as the submission
+                if student_submission_file_path.endswith('.zip'):
+                    # Process the zip file for student name sub-folder and submitted files
+                    student_submissions_map = extract_and_read_zip(student_submission_temp_file_path,
+                                                                   student_submission_accepted_file_types)
+
+                    total_student_submissions = len(student_submissions_map)
+                    for base_student_filename, student_submission_files_map in student_submissions_map.items():
+                        task = tg.create_task(add_grading_status_extender(
+                            ctx,
+                            base_student_filename,
+                            student_submission_files_map,
+                            code_grader,
+                            course_name,
+                            selected_model,
+                            selected_temperature))
+                        tasks.append(task)
+
+                else:
+                    # Go through the file and grade
+
+                    # student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
+                    base_student_filename = os.path.basename(student_submission_file_path)
+
+                    # status_prefix_label = "Grading: " + student_file_name + student_file_extension
+
+                    # Add a new expander element with grade and feedback from the grader class
+
+                    task = tg.create_task(add_grading_status_extender(
+                        ctx,
                         base_student_filename,
-                        student_submission_files_map, code_grader, course_name,
+                        {base_student_filename: student_submission_temp_file_path},
+                        code_grader,
+                        course_name,
                         selected_model,
                         selected_temperature))
+                    tasks.append(task)
 
-            else:
-                # Go through the file and grade
 
-                # student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-                base_student_filename = os.path.basename(student_submission_file_path)
 
-                # status_prefix_label = "Grading: " + student_file_name + student_file_extension
-
-                # Add a new expander element with grade and feedback from the grader class
-
-                tasks.append(add_grading_status_extender(
-                    base_student_filename,
-                    {base_student_filename: student_submission_temp_file_path}, code_grader, course_name,
-                    selected_model,
-                    selected_temperature))
-
-        results = await asyncio.gather(*tasks)
-
-        for graded_feedback_file_name, graded_feedback_temp_file_name in results:
+        for complete_task in tasks:
+            graded_feedback_file_name, graded_feedback_temp_file_name = complete_task.result()
+            # for graded_feedback_file_name, graded_feedback_temp_file_name in results:
             graded_feedback_file_map.append((graded_feedback_file_name, graded_feedback_temp_file_name))
 
         # TODO: Get a list of the created status container and when they are all complete add the download button. Use place holder up front
-        if (total_student_submissions == len(graded_feedback_file_map)):
+        if total_student_submissions == len(graded_feedback_file_map):
             # Add button to download all feedback from all tabs at once
             zip_file_path = create_zip_file(graded_feedback_file_map)
             time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
             zip_file_name_prefix = f"{course_name}_Graded_Feedback__{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
                 " ", "_")
-            on_download_click(zip_file_path, "Download All Feedback Files",
+            on_download_click(download_all_results_placeholder,zip_file_path, "Download All Feedback Files",
                               zip_file_name_prefix + ".zip")
+        else:
+            download_all_results_placeholder.error(f"Total Student Submissions: {total_student_submissions} | Total Graded Feedback Files: {len(graded_feedback_file_map)}")
 
 
-async def add_grading_status_extender(base_student_filename: str, filename_file_path_map: dict, code_grader: CodeGrader,
+def run_callback_within_context(callback, *args, **kwargs):
+    try:
+        callback(*args, **kwargs)
+    except st.errors.NoSessionContext:
+        st.warning(
+            "No session context available. Please ensure the callback is executed within the Streamlit session context.")
+
+
+async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filename: str, filename_file_path_map: dict,
+                                      code_grader: CodeGrader,
                                       course_name: str, selected_model: str, selected_temperature: float):
+    add_script_run_ctx(ctx=ctx)
+
     base_student_filename = base_student_filename.replace(" ", "_")
 
     status_prefix_label = "Grading: " + base_student_filename
@@ -396,10 +428,9 @@ async def add_grading_status_extender(base_student_filename: str, filename_file_
         feedback_placeholder = st.empty()
         download_button_placeholder = st.empty()
 
-        # TODO: Process below using asyncio
-
         await code_grader.grade_submission(student_submission_file_path_contents_all,
-                                           callback=ChatGPTStatusCallbackHandler(status, status_prefix_label))
+                                           callback=
+                                           ChatGPTStatusCallbackHandler(status, status_prefix_label))
         # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
         # Create a temporary file to store the feedback
@@ -422,11 +453,11 @@ async def add_grading_status_extender(base_student_filename: str, filename_file_
 
         status.update(label=status_prefix_label + " | Reading Feedback File For Display")
         student_feedback_content = read_file(graded_feedback_temp_file.name, True)
-        feedback_placeholder = st.markdown(student_feedback_content)
+        feedback_placeholder.markdown(student_feedback_content)
 
         # Add button to download individual feedback on each tab
-        # TODO: Pass a place holder for this function to then draw the button to
-        download_button_placeholder = on_download_click(graded_feedback_temp_file.name,
+        # Pass a placeholder for this function to then draw the button to
+        on_download_click(download_button_placeholder,graded_feedback_temp_file.name,
                                                         "Download Feedback for " + base_student_filename,
                                                         download_filename)
         status.update(label=status_prefix_label + " | Feedback File Ready for Download")
