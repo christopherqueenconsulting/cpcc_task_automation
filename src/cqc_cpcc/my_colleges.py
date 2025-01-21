@@ -276,7 +276,7 @@ class MyColleges:
             wait_for_ajax(self.driver)
 
             # Click the OLAB select element
-            click_element_wait_retry(self.driver, self.wait, xpath2_select, "Waiting for OLAB select")
+            click_element_wait_retry(self.driver, self.wait, xpath2_select, "Waiting for OLAB select", max_try=0)
             olab_select_element = self.driver.find_element(By.XPATH, xpath2_select)
             olab_select = Select(olab_select_element)
             olab_select.select_by_value(present_value)
