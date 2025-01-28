@@ -454,7 +454,8 @@ class BrightSpace_Course:
                 try:
                     student_names = get_elements_text_as_list_wait_stale(self.wait,
                                                                          table_prefix_xpath + "//td[3]",
-                                                                         "Waiting for Student Names")
+                                                                         "Waiting for Student Names",
+                                                                         max_retry=1)
 
                     completed_dates = get_elements_text_as_list_wait_stale(self.wait,
                                                                            table_prefix_xpath + "//td[2]//label[1]",
@@ -550,10 +551,9 @@ class BrightSpace_Course:
 
             # logger.info("Attendance Records (after quizzes):\n%s" % self.attendance_records)
 
-    def click_max_results_select(self, select_xpath: str) -> bool:
+    def click_max_results_select(self, select_xpath: str, retry = 1) -> bool:
         select_successful = False
 
-        retry = 3
         while not select_successful and retry > 0:
             try:
 
@@ -627,7 +627,8 @@ class BrightSpace_Course:
                 try:
                     student_names = get_elements_text_as_list_wait_stale(self.wait,
                                                                          table_prefix_xpath + "//td[2]",
-                                                                         "Waiting for Student Names")
+                                                                         "Waiting for Student Names",
+                                                                         max_retry=1)
 
                     completed_dates = get_elements_text_as_list_wait_stale(self.wait,
                                                                            table_prefix_xpath + "//td[3]",
@@ -744,7 +745,8 @@ class BrightSpace_Course:
                 try:
                     student_names = get_elements_text_as_list_wait_stale(self.wait,
                                                                          table_prefix_xpath + "//td[last()-1]",
-                                                                         "Waiting for Student Names")
+                                                                         "Waiting for Student Names",
+                                                                         max_retry=1)
 
                     logger.info("Student Names: %s" % "\n".join(student_names))
 
@@ -754,7 +756,7 @@ class BrightSpace_Course:
 
                     logger.info("Post Dates: %s" % "\n".join(post_dates))
 
-                    # Create a defaultdict to store dates associated with each student
+                    # Create a default dict to store dates associated with each student
                     student_post_date_dict = defaultdict(list)
 
                     # Populate the dictionary

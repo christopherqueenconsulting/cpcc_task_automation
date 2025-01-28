@@ -270,7 +270,7 @@ class MyColleges:
 
         try:
             # Click the OCLS select element
-            click_element_wait_retry(self.driver, self.wait, xpath1_select, "Waiting for OCLS select")
+            click_element_wait_retry(self.driver, self.wait, xpath1_select, "Waiting for OCLS select", max_try=0)
             ocls_select = Select(self.driver.find_element(By.XPATH, xpath1_select))
             ocls_select.select_by_value(present_value)
             wait_for_ajax(self.driver)
@@ -291,6 +291,7 @@ class MyColleges:
             logger.error("Exception: %s" % e)
         except StaleElementReferenceException as se:
             if retry < 3:
+                logger.error("Stale Element Exception. Trying again in 5 seconds...")
                 self.driver.implicitly_wait(5)  # wait 5 seconds
                 success = self.mark_student_present(full_name, retry + 1)
             else:
