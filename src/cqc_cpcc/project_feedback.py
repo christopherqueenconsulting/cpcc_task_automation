@@ -1,11 +1,12 @@
 import datetime as DT
-from typing import Optional, Annotated, List
+from typing import Optional, Annotated, List, TypeVar
 
 from docx import Document
 from docx.shared import Pt
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.pydantic_v1 import Field
+from pydantic.v1 import BaseModel
 from selenium.common import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -13,7 +14,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
 from cqc_cpcc.exam_review import JavaCode
-from cqc_cpcc.utilities.AI.llm.chains import generate_feedback
+from cqc_cpcc.utilities.AI.llm.chains import get_feedback_completion_chain, \
+    get_feedback_from_completion_chain
 from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import *
@@ -24,6 +26,7 @@ from cqc_cpcc.utilities.selenium_util import get_session_driver, click_element_w
 from cqc_cpcc.utilities.utils import are_you_satisfied, ExtendedEnum, CodeError, ErrorHolder, duo_login
 
 COMMENTS_MISSING_STRING = "The code does not include sufficient commenting throughout"
+T = TypeVar("T", bound=BaseModel)
 
 
 def parse_error_type_enum_name(enum_name: str):
@@ -35,10 +38,42 @@ def parse_error_type_enum_name(enum_name: str):
 
 
 class FeedbackType(ExtendedEnum):
-    pass
+    """Enum representing various types of feedback for code."""
+
+    # General feedback for all programming languages
+    COMMENTS_MISSING = "The code does not include sufficient commenting throughout"
+    SYNTAX_ERROR = "There are syntax errors in the code"
+    SPELLING_ERROR = "There are spelling mistakes in the code"
+    OUTPUT_ALIGNMENT_ERROR = "There are output alignment issues in the code that will affect grades"
+    PROGRAMMING_STYLE = "There are programming style issues that do not adhere to language standards"
+    ADDITIONAL_TIPS_PROVIDED = "Additional insights regarding the code and learning"
+
+    # Specific feedback for Java
+    JAVA_NAMING_CONVENTION = "Naming conventions are not followed in the Java code"
+    JAVA_CONSTANTS_ERROR = "Constants are not properly declared or used in the Java code"
+    JAVA_INEFFICIENT_CODE = "The Java code is inefficient and can be optimized"
+    JAVA_OUTPUT_FORMATTING = "There are issues with the expected Java code output formatting"
+    JAVA_SCANNER_CLASS_ERROR = "There are errors related to the use of the Scanner class in Java"
+
+    # Specific feedback for C++
+    CPP_POINTER_ERROR = "There are errors related to the use of pointers in the C++ code"
+    CPP_MEMORY_LEAK = "Potential memory leaks detected in the C++ code"
+    CPP_SYNTAX_ERROR = "There are syntax errors specific to C++"
+    CPP_NAMING_CONVENTION = "Naming conventions are not followed in the C++ code"
+    CPP_CONSTANTS_ERROR = "Constants are not properly declared or used in the C++ code"
+
+    # Future entry-level programming feedback
+    VARIABLE_NAMING = "Variable names are not descriptive or do not follow naming conventions"
+    FUNCTION_NAMING = "Function names are not descriptive or do not follow naming conventions"
+    CODE_INDENTATION = "Code indentation is inconsistent or does not follow best practices"
+    UNUSED_VARIABLES = "There are variables declared that are not used in the program"
+    INCORRECT_DATA_TYPE = "The program has the incorrect data type(s) used"
+    DOES_NOT_COMPILE = "The program does not compile"
+    LOGIC_ERROR = "There are logical errors in the code that affect the program's functionality"
+    MISSING_FUNCTIONALITY = "The code is missing required functionality as per the assignment instructions"
 
 
-class DefaultFeedbackType(FeedbackType):
+class DefaultFeedbackType(ExtendedEnum):
     """Enum representing various feedback types."""
 
     #### ------- Below is for JAVA expected submissions ------- #####
@@ -90,55 +125,6 @@ class FeedbackGuide(ErrorHolder):
             feedback_errors = self.get_combined_errors_by_type(self.all_feedback)
         return feedback_errors
 
-    def set_document_style(self, document: Document):
-        style = document.styles['Heading 3']
-        font = style.font
-        font.name = 'Lato'
-        font.size = Pt(23)
-        style2 = document.styles['List Bullet 2']
-        font = style2.font
-        font.name = 'Lato'
-        font.size = Pt(19)
-        style3 = document.styles['List Bullet 3']
-        font = style3.font
-        font.name = 'Lato'
-        font.size = Pt(15)
-
-    def add_feedback_to_doc_document(self, d: Document, errors: List[CodeError]):
-        for error in errors:
-            # Add the error type
-            type_paragraph = d.add_paragraph("", style='List Bullet 2')
-            type_paragraph.add_run(str(error.error_type) + ":").italic = True
-
-            # Add the error details
-            for details in error.error_details.split("\n"):
-                details_paragraph = d.add_paragraph("", style='List Bullet 3')
-                details_paragraph.add_run(details)
-
-    def save_feedback_to_docx(self, file_path: str, pre_text: str = "", post_text: str = "",
-                              pre_post_heading_size: int = 3):
-        document = Document()
-
-        # Set the styles for the document
-        self.set_document_style(document)
-
-        feedback_list = self.get_feedback_unique()
-
-        # Add the pre-text to the document
-        if len(pre_text) > 0:
-            document.add_heading(pre_text, pre_post_heading_size)
-
-        # Add the feedback to the document
-        if len(feedback_list) > 0:
-            self.add_feedback_to_doc_document(document, feedback_list)
-
-        # Add the pre-text to the document
-        if len(post_text) > 0:
-            document.add_heading(post_text, pre_post_heading_size)
-
-        # Save the feedback to file
-        document.save(file_path)
-        print("Feedback Saved to : %s" % file_path)
 
 
 def init_page(driver: WebDriver, wait: WebDriverWait) -> str:
@@ -293,58 +279,142 @@ def process_submission_from_link(driver: WebDriver, wait: WebDriverWait, url: st
     driver.close()
 
 
-async def get_feedback_guide(assignment: str,
-                             solution: str, student_submission: str, course_name: str,
-                             feedback_type_list: list,
-                             wrap_code_in_markdown=True,
-                             custom_llm: BaseChatModel = None, callback: BaseCallbackHandler = None) -> FeedbackGuide:
-    if custom_llm is None:
-        custom_llm = get_default_llm()
 
-    feedback_from_llm = await generate_feedback(custom_llm, FeedbackGuide, feedback_type_list, assignment,
-                                                solution,
-                                                student_submission, course_name, wrap_code_in_markdown, callback)
 
-    # print("\n\nFinal Output From LLM:")
-    # pprint(feedback_from_llm)
+class FeedbackGiver:
+    feedback_list: List[Feedback] = None
+    feedback_completion_chain = None
+    feedback_parser = None
+    feedback_prompt = None
+    feedback_guide: FeedbackGuide = None
 
-    feedback_guide = FeedbackGuide.parse_obj(feedback_from_llm)
+    def __init__(self,
+                 course_name: str,
+                 assignment_instructions: str,
+                 assignment_solution: str,
+                 wrap_code_in_markdown: bool = True,
+                 feedback_llm: BaseChatModel = None,
+                 feedback_type_list: list = None,
 
-    if COMMENTS_MISSING_STRING in DefaultFeedbackType.list():
+                 ):
+        if feedback_llm is None:
+            feedback_llm = get_default_llm()
 
-        # print("\n\nFinding Correct Error Line Numbers")
-        jc = JavaCode(entire_raw_code=student_submission)
+        self.feedback_completion_chain, self.feedback_parser, self.feedback_prompt = get_feedback_completion_chain(
+            llm=feedback_llm,
+            pydantic_object=FeedbackGuide,
+            feedback_type_list=feedback_type_list,
+            assignment=assignment_instructions,
+            solution=assignment_solution,
+            course_name=course_name,
+            wrap_code_in_markdown=wrap_code_in_markdown
+        )
 
-        if feedback_guide.all_feedback is not None:
-            unique_feedback = feedback_guide.get_feedback_unique()
+    async def generate_feedback(self, student_submission: str, callback: BaseCallbackHandler = None):
+        # print("Identifying Errors")
+        feedback_from_llm = await get_feedback_from_completion_chain(
+            student_submission=student_submission,
+            completion_chain=self.feedback_completion_chain,
+            parser=self.feedback_parser,
+            prompt=self.feedback_prompt,
+            callback=callback
 
-            for code_error in unique_feedback:
-                line_numbers = []
-                if code_error.code_error_lines is not None:
-                    for code_line in code_error.code_error_lines:
-                        line_numbers_found = jc.get_line_number(code_line)
-                        if line_numbers_found is not None:
-                            line_numbers.extend(line_numbers_found)
-                    # Return the unique list of line numbers
-                    line_numbers = sorted(set(line_numbers))
-                    code_error.set_line_numbers_of_error(line_numbers)
+        )
+        # print("\n\nFinal Output From LLM:")
+        # pprint(feedback_from_llm)
 
-            # Create Insufficient Comments if applicable
-            insufficient_comment_error = Feedback(error_type=DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING,
-                                                  error_details="There is not enough comments to help others understand the purpose, functionality, and structure of the code.")
+        feedback_guide = FeedbackGuide.parse_obj(feedback_from_llm)
 
-            if jc.sufficient_amount_of_comments:
-                # print("Found Insufficient comments error by LLM but not true so removing")
-                # Sufficient comments so remove this error type
-                unique_feedback = [x for x in unique_feedback if
-                                   x.error_type != DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING]
-            elif DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING not in [x.error_type for x in
-                                                                                  unique_feedback]:
-                # print("Did not find Insufficient comments error by LLM but true so adding it")
-                # Insufficient comments but error type doesnt exist
-                unique_feedback.insert(0, insufficient_comment_error)
+        unique_feedback = feedback_guide.get_feedback_unique()
+        # Set feedback to empty list if set to None
+        if unique_feedback is None:
+            unique_feedback = []
 
-            # Append the feedback back to the instance variables
-            feedback_guide.all_feedback = unique_feedback
 
-    return feedback_guide
+        if COMMENTS_MISSING_STRING in DefaultFeedbackType.list():
+
+            # print("\n\nFinding Correct Error Line Numbers")
+            jc = JavaCode(entire_raw_code=student_submission)
+
+            if feedback_guide.all_feedback is not None:
+                unique_feedback = feedback_guide.get_feedback_unique()
+
+                for code_error in unique_feedback:
+                    line_numbers = []
+                    if code_error.code_error_lines is not None:
+                        for code_line in code_error.code_error_lines:
+                            line_numbers_found = jc.get_line_number(code_line)
+                            if line_numbers_found is not None:
+                                line_numbers.extend(line_numbers_found)
+                        # Return the unique list of line numbers
+                        line_numbers = sorted(set(line_numbers))
+                        code_error.set_line_numbers_of_error(line_numbers)
+
+                # Create Insufficient Comments if applicable
+                insufficient_comment_error = Feedback(
+                    error_type=DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING,
+                    error_details="There is not enough comments to help others understand the purpose, functionality, and structure of the code.")
+
+                if jc.sufficient_amount_of_comments:
+                    # print("Found Insufficient comments error by LLM but not true so removing")
+                    # Sufficient comments so remove this error type
+                    unique_feedback = [x for x in unique_feedback if
+                                       x.error_type != DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING]
+                elif DefaultFeedbackType.CSC_151_PROJECT_ALL_COMMENTS_MISSING not in [x.error_type for x in
+                                                                                      unique_feedback]:
+                    # print("Did not find Insufficient comments error by LLM but true so adding it")
+                    # Insufficient comments but error type doesnt exist
+                    unique_feedback.insert(0, insufficient_comment_error)
+
+        # Append the feedback back to the instance variables
+        self.feedback_list = unique_feedback
+
+    def set_document_style(self, document: Document):
+        style = document.styles['Heading 3']
+        font = style.font
+        font.name = 'Lato'
+        font.size = Pt(23)
+        style2 = document.styles['List Bullet 2']
+        font = style2.font
+        font.name = 'Lato'
+        font.size = Pt(19)
+        style3 = document.styles['List Bullet 3']
+        font = style3.font
+        font.name = 'Lato'
+        font.size = Pt(15)
+
+    def add_feedback_to_doc_document(self, d: Document, errors: List[CodeError]):
+        for error in errors:
+            # Add the error type
+            type_paragraph = d.add_paragraph("", style='List Bullet 2')
+            type_paragraph.add_run(str(error.error_type) + ":").italic = True
+
+            # Add the error details
+            for details in error.error_details.split("\n"):
+                details_paragraph = d.add_paragraph("", style='List Bullet 3')
+                details_paragraph.add_run(details)
+
+    def save_feedback_to_docx(self, file_path: str, pre_text: str = "", post_text: str = "",
+                              pre_post_heading_size: int = 3):
+        document = Document()
+
+        # Set the styles for the document
+        self.set_document_style(document)
+
+        feedback_list = self.feedback_list
+
+        # Add the pre-text to the document
+        if len(pre_text) > 0:
+            document.add_heading(pre_text, pre_post_heading_size)
+
+        # Add the feedback to the document
+        if len(feedback_list) > 0:
+            self.add_feedback_to_doc_document(document, feedback_list)
+
+        # Add the pre-text to the document
+        if len(post_text) > 0:
+            document.add_heading(post_text, pre_post_heading_size)
+
+        # Save the feedback to file
+        document.save(file_path)
+        print("Feedback Saved to : %s" % file_path)

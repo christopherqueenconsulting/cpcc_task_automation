@@ -434,7 +434,8 @@ def microsoft_login(driver: WebDriver):
     instructor_user_id = os.environ["INSTRUCTOR_USERID"]
     instructor_password = os.environ["INSTRUCTOR_PASS"]
 
-    wait = get_driver_wait(driver, 3) # Using shorter wait time for login
+    wait = get_driver_wait(driver, 15) # Using shorter wait time for login
+    wait_long = get_driver_wait(driver, 30)  # Using  longer time
 
     original_window = driver.current_window_handle
 
@@ -480,13 +481,15 @@ def microsoft_login(driver: WebDriver):
     # Click Sign In
     click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Sign in')]",
                              "Waiting for Sign in Button", By.XPATH)
+
+
     # Click the no button for Stay signed in
     no_stay_signed_in_button = click_element_wait_retry(driver, wait,
                                                         "//input[contains(@class, 'button-secondary') and contains(@value,'No')]",
                                                         "Waiting to click 'No' button to Stay Signed in")
 
     # Wait until login accepted
-    wait.until(
+    wait_long.until(
         EC.invisibility_of_element(no_stay_signed_in_button),
         'Waiting for login to be successful')
 

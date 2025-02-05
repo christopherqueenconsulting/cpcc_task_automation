@@ -206,11 +206,17 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
     return final_output
 
 
-def get_feedback_completion_chain(llm: BaseChatModel, parser: BaseOutputParser, feedback_type_list: list,
+def get_feedback_completion_chain(llm: BaseChatModel,
+                                  pydantic_object: Type[T],
+                                  feedback_type_list: list,
                                   assignment: str,
-                                  solution: str, student_submission: str, course_name: str,
-                                  wrap_code_in_markdown=True) -> LLMChain:
+                                  solution: str,
+                                  course_name: str,
+                                  wrap_code_in_markdown=True) -> tuple[
+    LLMChain, PydanticOutputParser, PromptTemplate]:
     """Return the completion chain that can be used to get feedback on student submissions"""
+    parser = PydanticOutputParser(pydantic_object=pydantic_object)
+
     format_instructions = parser.get_format_instructions()
 
     if wrap_code_in_markdown:
@@ -218,7 +224,7 @@ def get_feedback_completion_chain(llm: BaseChatModel, parser: BaseOutputParser, 
 
     prompt = PromptTemplate(
         # template_format="jinja2",
-        input_variables=["assignment", "solution", "submission", "course_name"],
+        input_variables=["submission"],
         partial_variables={
             "format_instructions": format_instructions,
             "feedback_types": "\n\t".join(feedback_type_list),
@@ -243,19 +249,28 @@ def get_feedback_completion_chain(llm: BaseChatModel, parser: BaseOutputParser, 
     # completion_chain = prompt | llm
     completion_chain = LLMChain(prompt=prompt, llm=llm)
 
-    return completion_chain
+    return completion_chain, parser, prompt
 
 
-def get_feedback_output_from_completion_chain(completion_chain: LLMChain,
-                                              parser: BaseOutputParser, prompt: PromptTemplate, solution: str,
-                                              wrap_code_in_markdown=True):
+async def get_feedback_from_completion_chain(
+        student_submission: str,
+        completion_chain: LLMChain,
+        parser: BaseOutputParser, prompt: PromptTemplate,
+        wrap_code_in_markdown=True,
+        callback: BaseCallbackHandler = None
+):
     if wrap_code_in_markdown:
-        solution = wrap_code_in_markdown_backticks(solution)
+        student_submission = wrap_code_in_markdown_backticks(student_submission)
 
-    output = completion_chain.invoke({
-        "solution": solution,
+    config = None
+    if callback:
+        config = {'callbacks': [callback]}
+
+    output = await completion_chain.ainvoke({
+        "submission": student_submission,
         "response_format": {"type": "json_object"}
-    })
+    },
+        config=config)
 
     # print("\n\nOutput:")
     # pprint(output)
@@ -265,7 +280,8 @@ def get_feedback_output_from_completion_chain(completion_chain: LLMChain,
         final_output = parser.parse(output.get('text'))
     except Exception as e:
         print(e)
-        final_output = retry_output(output, parser, prompt, solution=solution,
+        final_output = retry_output(output, parser, prompt,
+                                    submission=student_submission,
                                     retry_model=completion_chain.dict().get('llm').get('model')
                                     )
 

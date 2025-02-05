@@ -300,12 +300,10 @@ async def get_grade_exam_content():
             grader_llm=custom_llm
         )
 
-        graded_feedback_file_map = []
-        total_student_submissions = len(student_submission_file_paths)
-
         tasks = []
         ctx = get_script_run_ctx()
-
+        graded_feedback_file_map = []
+        total_student_submissions = len(student_submission_file_paths)
         download_all_results_placeholder = st.empty()
 
         async with asyncio.TaskGroup() as tg:
