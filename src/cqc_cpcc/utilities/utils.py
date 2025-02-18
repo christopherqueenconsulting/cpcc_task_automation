@@ -342,8 +342,21 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
         os.remove(tmp_file)
 
     else:
-        with open(file_path, mode='r') as f:  # TODO: Make sure you want to open with rb option
-            contents = f.read()
+
+        encodings = ['utf-8', 'latin-1', 'utf-16', 'ascii']
+        contents = ""
+        index = 0
+
+        while index < len(encodings):
+            try:
+                with open(file_path, mode='r', encoding=encodings[index]) as f:
+                    contents = f.read()
+                break
+            except UnicodeDecodeError:
+                index += 1
+            except Exception:
+                contents = ""
+                break
 
     return str(contents)
 
