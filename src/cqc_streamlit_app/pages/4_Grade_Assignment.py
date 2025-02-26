@@ -239,17 +239,19 @@ async def get_grade_exam_content():
             # Prefix with the file name
             read_content = prefix_content_file_name(solution_file_name, read_content)
 
-            assignment_solution_contents.append(read_content)
             # Detect file langauge then display accordingly
             if solution_language:
-                # st.info("Solution Language: " + solution_language)
-
-                # st.markdown(f"'''java\n{assignment_solution_contents}\nƒ'''")
-                # Display the Java code in a code block
+                # Display the code in a code block
                 st.code(read_content, language=solution_language,
                         line_numbers=True)
+                # Wrap the code in markdown backticks
+                read_content = wrap_code_in_markdown_backticks(
+                    read_content, solution_language)
+
             else:
                 st.text_area(read_content)
+            # Append the content to the list
+            assignment_solution_contents.append(read_content)
 
         assignment_solution_contents = "\n\n".join(assignment_solution_contents)
 
@@ -409,7 +411,7 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             if code_langauge:
                 st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
                 student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
-                    student_submission_file_path_contents)
+                    student_submission_file_path_contents, code_langauge)
             else:
                 st.text_area(student_submission_file_path_contents)
                 student_submission_file_path_contents_final = student_submission_file_path_contents

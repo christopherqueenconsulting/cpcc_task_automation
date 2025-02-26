@@ -292,7 +292,6 @@ class FeedbackGiver:
                  course_name: str,
                  assignment_instructions: str,
                  assignment_solution: str,
-                 wrap_code_in_markdown: bool = True,
                  feedback_llm: BaseChatModel = None,
                  feedback_type_list: list = None,
 
@@ -306,8 +305,7 @@ class FeedbackGiver:
             feedback_type_list=feedback_type_list,
             assignment=assignment_instructions,
             solution=assignment_solution,
-            course_name=course_name,
-            wrap_code_in_markdown=wrap_code_in_markdown
+            course_name=course_name
         )
 
     async def generate_feedback(self, student_submission: str, callback: BaseCallbackHandler = None):

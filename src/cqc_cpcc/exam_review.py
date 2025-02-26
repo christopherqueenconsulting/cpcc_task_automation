@@ -257,7 +257,6 @@ class CodeGrader:
                  deduction_per_minor_error: int = 5,
                  major_error_type_list: list = None,
                  minor_error_type_list: list = None,
-                 wrap_code_in_markdown: bool = True,
                  grader_llm: BaseChatModel = None):
         self.max_points = max_points
         self.deduction_per_major_error = deduction_per_major_error
@@ -276,8 +275,8 @@ class CodeGrader:
             major_error_type_list=major_error_type_list,
             minor_error_type_list=minor_error_type_list,
             exam_instructions=exam_instructions,
-            exam_solution=exam_solution,
-            wrap_code_in_markdown=wrap_code_in_markdown
+            exam_solution=exam_solution
+
         )
 
     @property

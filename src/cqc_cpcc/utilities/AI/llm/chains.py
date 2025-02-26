@@ -39,7 +39,7 @@ def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplat
 
 def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], major_error_type_list: list,
                                minor_error_type_list: list, exam_instructions: str, exam_solution: str,
-                               student_submission: str, wrap_code_in_markdown=True) -> str:
+                               student_submission: str) -> str:
     """ Returns a properly formatted error definitions object from LLM"""
 
     parser = PydanticOutputParser(pydantic_object=pydantic_object)
@@ -79,10 +79,6 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
     completion_chain = LLMChain(llm=llm, prompt=prompt)
     # completion_chain = prompt | llm
 
-    if wrap_code_in_markdown:
-        exam_solution = wrap_code_in_markdown_backticks(exam_solution)
-        student_submission = wrap_code_in_markdown_backticks(student_submission)
-
     output = completion_chain.invoke({
         "submission": student_submission,
         "response_format": {"type": "json_object"}
@@ -110,16 +106,13 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
 
 def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_object: Type[T],
                                                 major_error_type_list: list,
-                                                minor_error_type_list: list, exam_instructions: str, exam_solution: str,
-                                                wrap_code_in_markdown: bool = True) -> tuple[
+                                                minor_error_type_list: list, exam_instructions: str, exam_solution: str
+                                               ) -> tuple[
     LLMChain, PydanticOutputParser, PromptTemplate]:
     """ Returns a properly formatted error definitions object from LLM"""
 
     parser = PydanticOutputParser(pydantic_object=pydantic_object)
     format_instructions = parser.get_format_instructions()
-
-    if wrap_code_in_markdown:
-        exam_solution = wrap_code_in_markdown_backticks(exam_solution)
 
     extra_system_instructions = ""
     if SHOW_ERROR_LINE_NUMBERS:
@@ -173,11 +166,9 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
 async def get_exam_error_definition_from_completion_chain(student_submission: str,
                                                           completion_chain: LLMChain,
                                                           parser: PydanticOutputParser,
-                                                          prompt: PromptTemplate, wrap_code_in_markdown=True,
+                                                          prompt: PromptTemplate,
                                                           callback: BaseCallbackHandler = None
                                                           ) -> T:
-    if wrap_code_in_markdown:
-        student_submission = wrap_code_in_markdown_backticks(student_submission)
 
     config = None
     if callback:
@@ -211,16 +202,13 @@ def get_feedback_completion_chain(llm: BaseChatModel,
                                   feedback_type_list: list,
                                   assignment: str,
                                   solution: str,
-                                  course_name: str,
-                                  wrap_code_in_markdown=True) -> tuple[
+                                  course_name: str
+                                  ) -> tuple[
     LLMChain, PydanticOutputParser, PromptTemplate]:
     """Return the completion chain that can be used to get feedback on student submissions"""
     parser = PydanticOutputParser(pydantic_object=pydantic_object)
 
     format_instructions = parser.get_format_instructions()
-
-    if wrap_code_in_markdown:
-        solution = wrap_code_in_markdown_backticks(solution)
 
     prompt = PromptTemplate(
         # template_format="jinja2",
@@ -256,11 +244,8 @@ async def get_feedback_from_completion_chain(
         student_submission: str,
         completion_chain: LLMChain,
         parser: BaseOutputParser, prompt: PromptTemplate,
-        wrap_code_in_markdown=True,
         callback: BaseCallbackHandler = None
 ):
-    if wrap_code_in_markdown:
-        student_submission = wrap_code_in_markdown_backticks(student_submission)
 
     config = None
     if callback:
@@ -292,7 +277,7 @@ async def get_feedback_from_completion_chain(
 
 
 async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedback_type_list: list, assignment: str,
-                            solution: str, student_submission: str, course_name: str, wrap_code_in_markdown=True,
+                            solution: str, student_submission: str, course_name: str, is_code_assignment=True,
                             callback: BaseCallbackHandler = None) -> str:
     """
     Generates feedback based on the assignment, solution, student submission and course name using the LLM model.
@@ -301,7 +286,7 @@ async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedba
     format_instructions = parser.get_format_instructions()
 
     prompt_base = ASSIGNMENT_FEEDBACK_PROMPT_BASE
-    if wrap_code_in_markdown:
+    if is_code_assignment:
         prompt_base = CODE_ASSIGNMENT_FEEDBACK_PROMPT_BASE
 
     prompt = PromptTemplate(
@@ -326,10 +311,6 @@ async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedba
 
     # completion_chain = prompt | llm
     completion_chain = LLMChain(prompt=prompt, llm=llm)
-
-    if wrap_code_in_markdown:
-        solution = wrap_code_in_markdown_backticks(solution)
-        student_submission = wrap_code_in_markdown_backticks(student_submission)
 
     config = None
     if callback:
@@ -398,8 +379,6 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
 
     # completion_chain = prompt | llm
     completion_chain = LLMChain(llm=llm, prompt=prompt)
-
-    student_submission = wrap_code_in_markdown_backticks(student_submission)
 
     output = completion_chain.invoke({
         "submission": student_submission,

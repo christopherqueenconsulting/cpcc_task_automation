@@ -104,17 +104,19 @@ async def get_feedback_content():
             # Prefix with the file name
             read_content = prefix_content_file_name(solution_file_name, read_content)
 
-            assignment_solution_contents.append(read_content)
             # Detect file langauge then display accordingly
             if solution_language:
-                # st.info("Solution Language: " + solution_language)
-
-                # st.markdown(f"'''java\n{assignment_solution_contents}\n'''")
                 # Display the Java code in a code block
                 st.code(read_content, language=solution_language,
                         line_numbers=True)
+                # Wrap the code in markdown backticks
+                read_content = wrap_code_in_markdown_backticks(
+                    read_content, solution_language)
+
             else:
                 st.text_area(read_content)
+            # Append the content to the list
+            assignment_solution_contents.append(read_content)
 
         assignment_solution_contents = "\n\n".join(assignment_solution_contents)
 
@@ -267,7 +269,7 @@ async def add_feedback_status_extender(
             if code_langauge:
                 st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
                 student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
-                    student_submission_file_path_contents)
+                    student_submission_file_path_contents, code_langauge)
             else:
                 st.text_area(student_submission_file_path_contents)
                 student_submission_file_path_contents_final = student_submission_file_path_contents
@@ -287,7 +289,7 @@ async def add_feedback_status_extender(
 
         await feedback_giver.generate_feedback(student_submission_file_path_contents_all,
                                                callback=
-                                                ChatGPTStatusCallbackHandler(status, status_prefix_label))
+                                               ChatGPTStatusCallbackHandler(status, status_prefix_label))
 
         # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
@@ -315,9 +317,9 @@ async def add_feedback_status_extender(
 
         # Add button to download individual feedback on each tab
         # Pass a placeholder for this function to then draw the button to
-        on_download_click(download_button_placeholder,graded_feedback_temp_file.name,
-                                                        "Download Feedback for " + base_student_filename,
-                                                        download_filename)
+        on_download_click(download_button_placeholder, graded_feedback_temp_file.name,
+                          "Download Feedback for " + base_student_filename,
+                          download_filename)
         status.update(label=status_prefix_label + " | Feedback File Ready for Download")
 
         # Stop status and show as complete
