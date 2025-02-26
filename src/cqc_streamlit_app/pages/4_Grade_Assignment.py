@@ -221,7 +221,7 @@ async def get_grade_exam_content():
         # st.info("Added: %s" % instructions_file_path)
 
     st.header("Solution File")
-    solution_accepted_file_types = ["txt", "docx", "pdf", "java", "zip"]
+    solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "zip"]
     solution_file_paths = add_upload_file_element("Upload Exam Solution", solution_accepted_file_types,
                                                   accept_multiple_files=True)
 
@@ -270,7 +270,7 @@ async def get_grade_exam_content():
     selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment", default_temp_value=.3)
 
     st.header("Student Submission File(s)")
-    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "zip"]
+    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "zip"]
     student_submission_file_paths = add_upload_file_element("Upload Student Exam Submission",
                                                             student_submission_accepted_file_types,
                                                             accept_multiple_files=True)

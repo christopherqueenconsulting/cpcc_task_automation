@@ -61,6 +61,28 @@ class MajorErrorType(ExtendedEnum):
     """Any aggregation errors"""
     CSC_251_EXAM_2_AGGREGATION_ERRORS = "There are aggregation errors"
 
+    # CSC 134 Project 1 Major Errors
+
+    """Program does not compile"""
+    CSC_134_PROJECT_1_DOES_NOT_COMPILE = "The program does not compile"
+
+    """Major formatting issues – instructions are not followed for output (output and formatting must match)"""
+    CSC_134_PROJECT_1_MAJOR_FORMATTING = "Major formatting issues – instructions are not followed for output (output and formatting must match)"
+
+    """All errors when coding sequence, selection and/or looping control structures"""
+    CSC_134_PROJECT_1_SEQUENCE_SELECTION_LOOPING_ERRORS = "There are errors in the coding sequence, selection and/or looping control structures"
+
+    """Failure to validate input or input validation is incorrect"""
+    CSC_134_PROJECT_1_INPUT_VALIDATION_ERRORS = "The code fails to validate input or input validation is incorrect"
+
+    """Functions / Prototypes not declared and called correctly per the assignment instructions"""
+    CSC_134_PROJECT_1_FUNCTION_PROTOTYPE_ERRORS = "Functions / Prototypes not declared and called correctly per the assignment instructions"
+
+    """Calculation errors"""
+    CSC_134_PROJECT_1_CALCULATION_ERRORS = "There are calculation errors"
+
+    """Any errors that adversely impact the output"""
+    CSC_134_PROJECT_1_OUTPUT_IMPACT_ERRORS = "There are errors that adversely impact the output"
 
 
 class MinorErrorType(ExtendedEnum):
@@ -106,6 +128,33 @@ class MinorErrorType(ExtendedEnum):
 
     """Program does not compile"""
     CSC_251_EXAM_1_DOES_NOT_COMPILE = "The program does not compile"
+
+
+    # CSC 134 Project 1 Minor Errors
+
+    """Incorrect filenames"""
+    CSC_134_PROJECT_1_INCORRECT_FILENAMES = "There are incorrect filenames"
+
+    """Data type declaration is incorrect"""
+    CSC_134_PROJECT_1_INCORRECT_DATA_TYPE_DECLARATION = "The code has data type declaration(s) that are incorrect"
+
+    """Misspelling(s)"""
+    CSC_134_PROJECT_1_MISSPELLINGS = "There are Misspelling(s)"
+
+    """Failing to follow naming conventions"""
+    CSC_134_PROJECT_1_NAMING_CONVENTION = "The code fails to follow naming conventions"
+
+    """Failing to declare and use named constants (if needed)"""
+    CSC_134_PROJECT_1_CONSTANTS_ERROR = "The code fails to declare and use named constants (if needed)"
+
+    """Inefficient code (code duplication; spaghetti code, etc.)"""
+    CSC_134_PROJECT_1_INEFFICIENT_CODE = "There is inefficient code (code duplication; spaghetti code, etc.)"
+
+    """Minor formatting issues – decimal scale"""
+    CSC_134_PROJECT_1_DECIMAL_SCALE = "Minor formatting issues – decimal scale"
+
+    """Programming style (inconsistent or no indentation, inadequate white space, etc.)"""
+    CSC_134_PROJECT_1_PROGRAMMING_STYLE = "Programming style (inconsistent or no indentation, inadequate white space, etc.)"
 
 class MinorError(CodeError):
     """Class representing various types of minor coding errors."""
