@@ -6,7 +6,7 @@ from langchain.output_parsers import RetryWithErrorOutputParser
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
-from langchain_core.output_parsers import BaseOutputParser, PydanticOutputParser
+from langchain_core.output_parsers import BaseOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables.utils import Output
 from langchain_openai import ChatOpenAI
@@ -14,6 +14,7 @@ from pydantic.v1 import BaseModel
 
 from cqc_cpcc.utilities.AI.llm.prompts import *
 from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS
+from cqc_cpcc.utilities.my_pydantic_parser import CustomPydanticOutputParser
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
 T = TypeVar("T", bound=BaseModel)
@@ -42,7 +43,9 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
                                student_submission: str) -> str:
     """ Returns a properly formatted error definitions object from LLM"""
 
-    parser = PydanticOutputParser(pydantic_object=pydantic_object)
+    parser = CustomPydanticOutputParser(pydantic_object=pydantic_object,
+                                        major_error_type_list=major_error_type_list,
+                                        minor_error_type_list=minor_error_type_list)
     format_instructions = parser.get_format_instructions()
 
     extra_system_instructions = ""
@@ -108,10 +111,13 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
                                                 major_error_type_list: list,
                                                 minor_error_type_list: list, exam_instructions: str, exam_solution: str
                                                ) -> tuple[
-    LLMChain, PydanticOutputParser, PromptTemplate]:
+    LLMChain, CustomPydanticOutputParser, PromptTemplate]:
     """ Returns a properly formatted error definitions object from LLM"""
 
-    parser = PydanticOutputParser(pydantic_object=pydantic_object)
+    parser = CustomPydanticOutputParser(pydantic_object=pydantic_object,
+                                        major_error_type_list=major_error_type_list,
+                                        minor_error_type_list=minor_error_type_list)
+
     format_instructions = parser.get_format_instructions()
 
     extra_system_instructions = ""
@@ -165,7 +171,7 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
 
 async def get_exam_error_definition_from_completion_chain(student_submission: str,
                                                           completion_chain: LLMChain,
-                                                          parser: PydanticOutputParser,
+                                                          parser: CustomPydanticOutputParser,
                                                           prompt: PromptTemplate,
                                                           callback: BaseCallbackHandler = None
                                                           ) -> T:
@@ -204,9 +210,11 @@ def get_feedback_completion_chain(llm: BaseChatModel,
                                   solution: str,
                                   course_name: str
                                   ) -> tuple[
-    LLMChain, PydanticOutputParser, PromptTemplate]:
+    LLMChain, CustomPydanticOutputParser, PromptTemplate]:
     """Return the completion chain that can be used to get feedback on student submissions"""
-    parser = PydanticOutputParser(pydantic_object=pydantic_object)
+    parser = CustomPydanticOutputParser(pydantic_object=pydantic_object,
+                                       feedback_type_list=feedback_type_list
+                                        )
 
     format_instructions = parser.get_format_instructions()
 
@@ -282,7 +290,9 @@ async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedba
     """
     Generates feedback based on the assignment, solution, student submission and course name using the LLM model.
     """
-    parser = PydanticOutputParser(pydantic_object=pydantic_object)
+    parser = CustomPydanticOutputParser(pydantic_object=pydantic_object,
+                                        feedback_type_list=feedback_type_list)
+
     format_instructions = parser.get_format_instructions()
 
     prompt_base = ASSIGNMENT_FEEDBACK_PROMPT_BASE

@@ -84,6 +84,14 @@ class MajorErrorType(ExtendedEnum):
     """Any errors that adversely impact the output"""
     CSC_134_PROJECT_1_OUTPUT_IMPACT_ERRORS = "There are errors that adversely impact the output"
 
+    """Major Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
+    CSC_152_EXAM_1_STEP_ONE = "PROC SORT does not correctly sort by year and distance as specified"
+    CSC_152_EXAM_1_STEP_TWO = "PROC TABULATE does not generate the required two-dimensional table"
+    CSC_152_EXAM_1_STEP_THREE = "PROC REPORT does not correctly replicate the PROC TABULATE table"
+    CSC_152_EXAM_1_STEP_FOUR = "PROC MEANS does not generate or display the required statistics"
+    CSC_152_EXAM_1_STEP_FIVE = "PROC FREQ does not generate the required report with swimmer names and medal counts"
+    CSC_152_EXAM_1_STEP_EIGHT = "The time is not displayed with two digits to the right of the decimal"
+
 
 class MinorErrorType(ExtendedEnum):
     """Enum representing various types of minor coding errors."""
@@ -155,6 +163,11 @@ class MinorErrorType(ExtendedEnum):
 
     """Programming style (inconsistent or no indentation, inadequate white space, etc.)"""
     CSC_134_PROJECT_1_PROGRAMMING_STYLE = "Programming style (inconsistent or no indentation, inadequate white space, etc.)"
+
+    """Minor Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
+    CSC_152_EXAM_1_STEP_SIX = "The dataset for 2020 medalists is not properly filtered"
+    CSC_152_EXAM_1_STEP_SEVEN = "PROC FORMAT does not correctly replace rank with Gold, Silver, or Bronze"
+
 
 class MinorError(CodeError):
     """Class representing various types of minor coding errors."""
@@ -268,6 +281,10 @@ class CodeGrader:
 
         if grader_llm is None:
             grader_llm = get_default_llm()
+
+        # Reduce the major and minor errors in the ErrorDefinitions class to only the ones that are in the list
+
+
 
         self.error_definitions_completion_chain, self.error_definitions_parser, self.error_definitions_prompt = get_exam_error_definitions_completion_chain(
             _llm=grader_llm,
