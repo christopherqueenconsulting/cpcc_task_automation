@@ -35,7 +35,17 @@ class MajorErrorType(ExtendedEnum):
     """Errors that adversely impact the output (calculation errors, omissions, etc.)."""
     CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR = "Errors that adversely impact the expected output, such as calculation errors or omissions"
 
-    # CSC 251 Major Errors (includes the ones above)
+    # CSC 251 Major Errors
+
+    """No documentation or insufficient documentation (comments)."""
+    CSC_251_EXAM_1_INSUFFICIENT_DOCUMENTATION = "No documentation or insufficient amount of comments in the code"
+
+    """Errors in coding sequence and selection."""
+    # SEQUENCE_AND_SELECTION_ERROR = "Errors in the sequence and selection structures in the code"
+    CSC_251_EXAM_1_SEQUENCE_AND_SELECTION_ERROR = "Errors in the coding sequence, selection and looping including incorrect use of comparison operators"
+
+    """Errors that adversely impact the output (calculation errors, omissions, etc.)."""
+    CSC_251_EXAM_1_OUTPUT_IMPACT_ERROR = "Errors that adversely impact the expected output, such as calculation errors or omissions"
 
     """Failure to declare and use constants."""
     CSC_251_EXAM_1_CONSTANTS_ERROR = "Constants are not properly declared or used"
@@ -84,7 +94,14 @@ class MajorErrorType(ExtendedEnum):
     """Any errors that adversely impact the output"""
     CSC_134_PROJECT_1_OUTPUT_IMPACT_ERRORS = "There are errors that adversely impact the output"
 
-    """Major Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
+    """No documentation or insufficient documentation (comments)"""
+    CSC_134_PROJECT_2_INSUFFICIENT_DOCUMENTATION = "No documentation or insufficient amount of comments in the code"
+
+    """Omit curly braces"""
+    CSC_134_PROJECT_2_CURLY_BRACES_OMITTED = "The code has omission of curly braces"
+
+
+    # """Major Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
     CSC_152_EXAM_1_STEP_ONE = "PROC SORT does not correctly sort by year and distance as specified"
     CSC_152_EXAM_1_STEP_TWO = "PROC TABULATE does not generate the required two-dimensional table"
     CSC_152_EXAM_1_STEP_THREE = "PROC REPORT does not correctly replicate the PROC TABULATE table"
@@ -117,7 +134,19 @@ class MinorErrorType(ExtendedEnum):
     """Error related to the use of the Scanner class."""
     CSC_151_EXAM_1_SCANNER_CLASS = "There are errors related to the use of the Scanner class"
 
-    # CSC 251 Minor Errors (includes the ones above
+    # CSC 251 Minor Errors
+
+    """Syntax error in the code."""
+    CSC_251_EXAM_1_SYNTAX_ERROR = "There are syntax errors in the code"
+
+    """Violation of naming conventions."""
+    CSC_251_EXAM_1_NAMING_CONVENTION = "Naming conventions are not followed"
+
+    """Inefficient code practices."""
+    CSC_251_EXAM_1_INEFFICIENT_CODE = "The code is inefficient and can be optimized"
+
+    """Programming style issues (indentation, white space, etc.)."""
+    CSC_251_EXAM_1_PROGRAMMING_STYLE = "There are programming style issues that do not adhere to language standards (indentation, white space, etc.)"
 
     """Filename and class container name are not the same"""
     CSC_251_EXAM_1_FILE_CLASS_NAME_MISMATCH = "The filename and class container are not the same"
@@ -143,6 +172,11 @@ class MinorErrorType(ExtendedEnum):
     """Incorrect filenames"""
     CSC_134_PROJECT_1_INCORRECT_FILENAMES = "There are incorrect filenames"
 
+    """Filename and class container name are not the same"""
+    CSC_134_PROJECT_2_FILE_CLASS_NAME_MISMATCH = "The filename and class container are not the same"
+
+    """Minor formatting issues – not matching Sample Input and Output (ex: missing spaces, missing dollar sign, not using print/println appropriately)"""
+
     """Data type declaration is incorrect"""
     CSC_134_PROJECT_1_INCORRECT_DATA_TYPE_DECLARATION = "The code has data type declaration(s) that are incorrect"
 
@@ -164,7 +198,7 @@ class MinorErrorType(ExtendedEnum):
     """Programming style (inconsistent or no indentation, inadequate white space, etc.)"""
     CSC_134_PROJECT_1_PROGRAMMING_STYLE = "Programming style (inconsistent or no indentation, inadequate white space, etc.)"
 
-    """Minor Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
+    #"""Minor Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
     CSC_152_EXAM_1_STEP_SIX = "The dataset for 2020 medalists is not properly filtered"
     CSC_152_EXAM_1_STEP_SEVEN = "PROC FORMAT does not correctly replace rank with Gold, Silver, or Bronze"
 
