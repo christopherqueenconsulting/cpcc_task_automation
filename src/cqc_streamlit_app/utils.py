@@ -825,9 +825,9 @@ def define_code_language_selection(unique_key: str | int, default_option: str = 
 
 def define_chatGPTModel(unique_key: str | int, default_min_value: float = .2, default_max_value: float = .8,
                         default_temp_value: float = .2,
-                        default_step: float = 0.1, default_option="gpt-4o") -> Tuple[str, float]:
+                        default_step: float = 0.1, default_option="gpt-4-turbo") -> Tuple[str, float]:
     # Dropdown for selecting ChatGPT models
-    model_options = [default_option, "gpt-4-turbo", "gpt-4-1106-preview", "gpt-3.5-turbo", "gpt-3.5-turbo-16k-0613"]
+    model_options = [default_option, "gpt-4-1106-preview", "gpt-3.5-turbo", "gpt-3.5-turbo-16k-0613"]
     selected_model = st.selectbox(label="Select ChatGPT Model",
                                   key="chat_select_" + unique_key,
                                   options=model_options,
