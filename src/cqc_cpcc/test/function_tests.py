@@ -13,6 +13,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import StrictStr, Field
 from pydantic.v1 import BaseModel
 
+from cqc_cpcc.utilities.AI.llm.llms import get_default_llm, get_llm_model_from_runnable_serializable
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
@@ -119,7 +120,8 @@ class TestPersonObject(BaseModel):
 def test5():
     model_version = 'gpt-3.5-turbo-16k-0613'
     default_llm = ChatOpenAI(model=model_version)
-    prompt = PromptTemplate(input_variables=["foo"], template="Who is {foo} and what are some details about them? ### Output Instructions: {format_instructions}")
+    prompt = PromptTemplate(input_variables=["foo"],
+                            template="Who is {foo} and what are some details about them? ### Output Instructions: {format_instructions}")
     completion_chain = LLMChain(prompt=prompt, llm=default_llm)
     model = completion_chain.dict().get('llm').get('model')
     print("Model (from completion): %s" % model)
@@ -145,8 +147,41 @@ def test5():
     pprint(final_output)
 
 
+def test6():
+    """Test that we get the correct retry model from  the creation of a RunnableSerializible object"""
+    prompt = PromptTemplate(
+        # template_format="jinja2",
+        input_variables=["test"],
+        template=(
+            """This is a test prompt. The test model is: {test}"""
+        ).strip(),
+    )
+
+    test_model = "gpt-3.5-turbo-1106"
+
+
+    _llm = ChatOpenAI(temperature=.5, model=test_model)
+
+    _llm.bind(
+        response_format={"type": "json_object"}
+    )
+
+    completion_chain = prompt | _llm
+
+    test_llm_model = get_llm_model_from_runnable_serializable(completion_chain)
+
+    if  test_llm_model == test_model:
+        print("Test Passed")
+    else:
+        print("Test Failed")
+        print("Expected: %s" % test_model)
+        print("Actual: %s" % test_llm_model)
+
+
+
 if __name__ == '__main__':
     # test_1()
     # test3()
     # test4()
-    test5()
+    # test5()
+    test6()

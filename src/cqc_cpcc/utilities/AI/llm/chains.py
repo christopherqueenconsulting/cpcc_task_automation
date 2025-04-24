@@ -1,21 +1,21 @@
 from pprint import pprint
 from typing import Type, TypeVar
 
-from langchain.chains.llm import LLMChain
 from langchain.output_parsers import RetryWithErrorOutputParser
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import BaseOutputParser
 from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnableSerializable
 from langchain_core.runnables.utils import Output
 from langchain_openai import ChatOpenAI
 from pydantic.v1 import BaseModel
 
+from cqc_cpcc.utilities.AI.llm.llms import get_llm_model_from_runnable_serializable
 from cqc_cpcc.utilities.AI.llm.prompts import *
 from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS
 from cqc_cpcc.utilities.my_pydantic_parser import CustomPydanticOutputParser
-from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -29,8 +29,8 @@ def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplat
                                                        )
     try:
         prompt_value = prompt.format_prompt(**prompt_args)
-        # final_output = retry_parser.parse_with_prompt(output.content, prompt_value)
-        final_output = retry_parser.parse_with_prompt(output.get('text'), prompt_value)
+        final_output = retry_parser.parse_with_prompt(output.content, prompt_value)
+        #final_output = retry_parser.parse_with_prompt(output.get('text'), prompt_value)
     except OutputParserException as e:
         print("Exception During Retry Output: %s" % e)
         # if max_tries > 0:
@@ -79,8 +79,8 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
         response_format={"type": "json_object"}
     )
 
-    completion_chain = LLMChain(llm=llm, prompt=prompt)
-    # completion_chain = prompt | llm
+    # completion_chain = LLMChain(llm=llm, prompt=prompt)
+    completion_chain = prompt | llm
 
     output = completion_chain.invoke({
         "submission": student_submission,
@@ -92,8 +92,8 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
     # pprint(output.get('text'))
 
     try:
-        # final_output = parser.parse(output.content)
-        final_output = parser.parse(output.get('text'))
+        final_output = parser.parse(output.content)
+        # final_output = parser.parse(output.get('text'))
     except Exception as e:
         print("\n\nException during parse:")
         print(e)
@@ -110,8 +110,8 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
 def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_object: Type[T],
                                                 major_error_type_list: list,
                                                 minor_error_type_list: list, exam_instructions: str, exam_solution: str
-                                               ) -> tuple[
-    LLMChain, CustomPydanticOutputParser, PromptTemplate]:
+                                                ) -> tuple[
+    RunnableSerializable, CustomPydanticOutputParser, PromptTemplate]:
     """ Returns a properly formatted error definitions object from LLM"""
 
     parser = CustomPydanticOutputParser(pydantic_object=pydantic_object,
@@ -153,8 +153,8 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
         response_format={"type": "json_object"}
     )
 
-    # completion_chain = prompt | _llm
-    completion_chain = LLMChain(llm=_llm, prompt=prompt)
+    completion_chain = prompt | _llm
+    # completion_chain = LLMChain(llm=_llm, prompt=prompt)
 
     """
     # Bind the variables to the completion chain
@@ -170,12 +170,11 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
 
 
 async def get_exam_error_definition_from_completion_chain(student_submission: str,
-                                                          completion_chain: LLMChain,
+                                                          completion_chain: RunnableSerializable,
                                                           parser: CustomPydanticOutputParser,
                                                           prompt: PromptTemplate,
                                                           callback: BaseCallbackHandler = None
                                                           ) -> T:
-
     config = None
     if callback:
         config = {'callbacks': [callback]}
@@ -190,14 +189,15 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
     # pprint(output.content)
 
     try:
-        # final_output = parser.parse(output.content)
-        final_output = parser.parse(output.get('text'))
+        final_output = parser.parse(output.content)
+        #final_output = parser.parse(output.get('text'))
     except Exception as e:
         print("\n\nException during parse:")
         print(e)
+        retry_model = get_llm_model_from_runnable_serializable(completion_chain)
         final_output = retry_output(output, parser, prompt,
                                     submission=student_submission,
-                                    retry_model=completion_chain.dict().get('llm').get('model')
+                                    retry_model=retry_model
                                     )
 
     return final_output
@@ -210,10 +210,10 @@ def get_feedback_completion_chain(llm: BaseChatModel,
                                   solution: str,
                                   course_name: str
                                   ) -> tuple[
-    LLMChain, CustomPydanticOutputParser, PromptTemplate]:
+    RunnableSerializable, CustomPydanticOutputParser, PromptTemplate]:
     """Return the completion chain that can be used to get feedback on student submissions"""
     parser = CustomPydanticOutputParser(pydantic_object=pydantic_object,
-                                       feedback_type_list=feedback_type_list
+                                        feedback_type_list=feedback_type_list
                                         )
 
     format_instructions = parser.get_format_instructions()
@@ -242,19 +242,18 @@ def get_feedback_completion_chain(llm: BaseChatModel,
         response_format={"type": "json_object"}
     )
 
-    # completion_chain = prompt | llm
-    completion_chain = LLMChain(prompt=prompt, llm=llm)
+    completion_chain = prompt | llm
+    # completion_chain = LLMChain(prompt=prompt, llm=llm)
 
     return completion_chain, parser, prompt
 
 
 async def get_feedback_from_completion_chain(
         student_submission: str,
-        completion_chain: LLMChain,
+        completion_chain: RunnableSerializable,
         parser: BaseOutputParser, prompt: PromptTemplate,
         callback: BaseCallbackHandler = None
 ):
-
     config = None
     if callback:
         config = {'callbacks': [callback]}
@@ -269,13 +268,14 @@ async def get_feedback_from_completion_chain(
     # pprint(output)
 
     try:
-        # final_output = parser.parse(output.content)
-        final_output = parser.parse(output.get('text'))
+        final_output = parser.parse(output.content)
+        # final_output = parser.parse(output.get('text'))
     except Exception as e:
         print(e)
+        retry_model = get_llm_model_from_runnable_serializable(completion_chain)
         final_output = retry_output(output, parser, prompt,
                                     submission=student_submission,
-                                    retry_model=completion_chain.dict().get('llm').get('model')
+                                    retry_model=retry_model
                                     )
 
     # print("\n\nFinal Output:")
@@ -319,8 +319,8 @@ async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedba
         response_format={"type": "json_object"}
     )
 
-    # completion_chain = prompt | llm
-    completion_chain = LLMChain(prompt=prompt, llm=llm)
+    completion_chain = prompt | llm
+    # completion_chain = LLMChain(prompt=prompt, llm=llm)
 
     config = None
     if callback:
@@ -340,16 +340,17 @@ async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedba
     # pprint(output.get('text'))
 
     try:
-        # final_output = parser.parse(output.content)
-        final_output = parser.parse(output.get('text'))
+        final_output = parser.parse(output.content)
+        # final_output = parser.parse(output.get('text'))
     except Exception as e:
         print(e)
+        retry_model = get_llm_model_from_runnable_serializable(completion_chain)
         final_output = retry_output(output, parser, prompt,
                                     assignment=assignment,
                                     solution=solution,
                                     submission=student_submission,
                                     course_name=course_name,
-                                    retry_model=llm.dict().get('model')
+                                    retry_model=retry_model
                                     )
 
     print("\n\nFinal Output:")
@@ -387,8 +388,8 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
     #    response_format={"type": "json_object"}
     # )
 
-    # completion_chain = prompt | llm
-    completion_chain = LLMChain(llm=llm, prompt=prompt)
+    completion_chain = prompt | llm
+    # completion_chain = LLMChain(llm=llm, prompt=prompt)
 
     output = completion_chain.invoke({
         "submission": student_submission,
@@ -396,5 +397,5 @@ def generate_assignment_feedback_grade(llm: BaseChatModel, assignment: str,
         # "response_format": {"type": "json_object"}
     })
 
-    # return output.content
-    return output.get('text')
+    return output.content
+    #return output.get('text')

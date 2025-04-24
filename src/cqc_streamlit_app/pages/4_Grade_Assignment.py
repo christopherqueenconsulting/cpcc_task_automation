@@ -77,8 +77,10 @@ def get_flowgorithm_content():
         # Get the assignment instructions
         assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
 
-        st.markdown(assignment_instructions_content, unsafe_allow_html=True)
-        # st.info("Added: %s" % instructions_file_path)
+        if st.checkbox("Show Instructions"):
+
+            st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+            # st.info("Added: %s" % instructions_file_path)
 
     # Add grading rubric
     grading_rubric = define_grading_rubric()
@@ -217,8 +219,9 @@ async def get_grade_exam_content():
         # Get the assignment instructions
         assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
 
-        st.markdown(assignment_instructions_content, unsafe_allow_html=True)
-        # st.info("Added: %s" % instructions_file_path)
+        if st.checkbox("Show Instructions"):
+            st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+            # st.info("Added: %s" % instructions_file_path)
 
     st.header("Solution File")
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
@@ -226,6 +229,7 @@ async def get_grade_exam_content():
                                                   accept_multiple_files=True)
 
     assignment_solution_contents = None
+    show_solution_file = st.checkbox("Show Solution")
 
     if solution_file_paths:
         assignment_solution_contents = []
@@ -239,17 +243,21 @@ async def get_grade_exam_content():
             # Prefix with the file name
             read_content = prefix_content_file_name(solution_file_name, read_content)
 
+
+
             # Detect file langauge then display accordingly
             if solution_language:
-                # Display the code in a code block
-                st.code(read_content, language=solution_language,
-                        line_numbers=True)
+                if show_solution_file:
+                    # Display the code in a code block
+                    st.code(read_content, language=solution_language,
+                            line_numbers=True)
                 # Wrap the code in markdown backticks
                 read_content = wrap_code_in_markdown_backticks(
                     read_content, solution_language)
 
             else:
-                st.text_area(read_content)
+                if show_solution_file:
+                    st.text_area(read_content)
             # Append the content to the list
             assignment_solution_contents.append(read_content)
 
@@ -410,12 +418,17 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             code_langauge = get_language_from_file_path(filename)
 
             st.header(filename)
+            show_contents =  st.checkbox("Show contents")
             if code_langauge:
-                st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
+                if show_contents:
+                    # Display the code in a code block
+                    st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
                 student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
                     student_submission_file_path_contents, code_langauge)
             else:
-                st.text_area(student_submission_file_path_contents)
+                if show_contents:
+                    # Display the code in a text area
+                    st.text_area(student_submission_file_path_contents)
                 student_submission_file_path_contents_final = student_submission_file_path_contents
             student_submission_file_path_contents_all.append(student_submission_file_path_contents_final)
 
@@ -425,7 +438,10 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             submission=student_submission_file_path_contents_all)
         st.header("Chat GPT Prompt")
         prompt_value_text = getattr(prompt_value, 'text', '')
-        st.code(prompt_value_text)
+
+        if  st.checkbox("Show Prompt"):
+            # Display the prompt value in a code block
+            st.code(prompt_value_text)
 
         feedback_placeholder = st.empty()
         download_button_placeholder = st.empty()
