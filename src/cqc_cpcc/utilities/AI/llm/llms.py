@@ -8,13 +8,14 @@ from langchain_openai import ChatOpenAI
 def get_default_llm_model() -> str:
     # model = 'gpt-3.5-turbo-1106'
     # model = 'gpt-4-1106-preview'
-    model = 'gpt-3.5-turbo-16k-0613'
+    model = 'gpt-3.5-turbo' # Deprecated 'gpt-3.5-turbo-16k-0613'
     # model = 'gpt-4-turbo'
     # model = "gpt-4"
+    # model = "gpt-4o"
     return model
 
 def get_default_retry_model() -> str:
-    model = 'gpt-3.5-turbo-16k-0613'
+    model = 'gpt-3.5-turbo' # Deprecated 'gpt-3.5-turbo-16k-0613'
     return model
 
 
