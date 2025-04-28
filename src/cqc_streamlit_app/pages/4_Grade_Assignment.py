@@ -77,7 +77,7 @@ def get_flowgorithm_content():
         # Get the assignment instructions
         assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
 
-        if st.checkbox("Show Instructions"):
+        if st.checkbox("Show Instructions", key="show_flowgorithn_instructions_check_box"):
 
             st.markdown(assignment_instructions_content, unsafe_allow_html=True)
             # st.info("Added: %s" % instructions_file_path)
@@ -219,7 +219,7 @@ async def get_grade_exam_content():
         # Get the assignment instructions
         assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
 
-        if st.checkbox("Show Instructions"):
+        if st.checkbox("Show Instructions", key="show_exam_instructions_check_box"):
             st.markdown(assignment_instructions_content, unsafe_allow_html=True)
             # st.info("Added: %s" % instructions_file_path)
 
@@ -229,7 +229,7 @@ async def get_grade_exam_content():
                                                   accept_multiple_files=True)
 
     assignment_solution_contents = None
-    show_solution_file = st.checkbox("Show Solution")
+    show_solution_file = st.checkbox("Show Solution", key="show_exam_solution_file_check_box")
 
     if solution_file_paths:
         assignment_solution_contents = []
@@ -316,48 +316,51 @@ async def get_grade_exam_content():
         total_student_submissions = len(student_submission_file_paths)
         download_all_results_placeholder = st.empty()
 
-        async with asyncio.TaskGroup() as tg:
+        try:
+            async with asyncio.TaskGroup() as tg:
 
-            for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
+                for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
 
-                # If zip go through each folder as student name and grade using files in each folder as the submission
-                if student_submission_file_path.endswith('.zip'):
-                    # Process the zip file for student name sub-folder and submitted files
-                    student_submissions_map = extract_and_read_zip(student_submission_temp_file_path,
-                                                                   student_submission_accepted_file_types)
+                    # If zip go through each folder as student name and grade using files in each folder as the submission
+                    if student_submission_file_path.endswith('.zip'):
+                        # Process the zip file for student name sub-folder and submitted files
+                        student_submissions_map = extract_and_read_zip(student_submission_temp_file_path,
+                                                                       student_submission_accepted_file_types)
 
-                    total_student_submissions = len(student_submissions_map)
-                    for base_student_filename, student_submission_files_map in student_submissions_map.items():
+                        total_student_submissions = len(student_submissions_map)
+                        for base_student_filename, student_submission_files_map in student_submissions_map.items():
+                            task = tg.create_task(add_grading_status_extender(
+                                ctx,
+                                base_student_filename,
+                                student_submission_files_map,
+                                code_grader,
+                                course_name,
+                                selected_model,
+                                selected_temperature))
+                            tasks.append(task)
+
+                    else:
+                        # Go through the file and grade
+
+                        # student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
+                        base_student_filename = os.path.basename(student_submission_file_path)
+
+                        # status_prefix_label = "Grading: " + student_file_name + student_file_extension
+
+                        # Add a new expander element with grade and feedback from the grader class
+
                         task = tg.create_task(add_grading_status_extender(
                             ctx,
                             base_student_filename,
-                            student_submission_files_map,
+                            {base_student_filename: student_submission_temp_file_path},
                             code_grader,
                             course_name,
                             selected_model,
                             selected_temperature))
                         tasks.append(task)
-
-                else:
-                    # Go through the file and grade
-
-                    # student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-                    base_student_filename = os.path.basename(student_submission_file_path)
-
-                    # status_prefix_label = "Grading: " + student_file_name + student_file_extension
-
-                    # Add a new expander element with grade and feedback from the grader class
-
-                    task = tg.create_task(add_grading_status_extender(
-                        ctx,
-                        base_student_filename,
-                        {base_student_filename: student_submission_temp_file_path},
-                        code_grader,
-                        course_name,
-                        selected_model,
-                        selected_temperature))
-                    tasks.append(task)
-
+        except* Exception as e:
+            for exc in e.exceptions:
+                print(f"Unhandled error: {exc}")
 
 
         for complete_task in tasks:
@@ -418,7 +421,7 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             code_langauge = get_language_from_file_path(filename)
 
             st.header(filename)
-            show_contents =  st.checkbox("Show contents")
+            show_contents =  st.checkbox("Show contents", key=base_student_filename+"_"+filename+"_show_contents")
             if code_langauge:
                 if show_contents:
                     # Display the code in a code block
@@ -439,7 +442,7 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
         st.header("Chat GPT Prompt")
         prompt_value_text = getattr(prompt_value, 'text', '')
 
-        if  st.checkbox("Show Prompt"):
+        if  st.checkbox("Show Prompt", key=base_student_filename+"_"+filename+"_prompt"):
             # Display the prompt value in a code block
             st.code(prompt_value_text)
 
