@@ -341,8 +341,13 @@ class CodeGrader:
         )
 
     @property
-    def major_deduction_total(self):
+    def major_deduction_total_orig(self):
         return len(self.major_errors) * self.deduction_per_major_error
+
+    @property
+    def major_deduction_total(self):
+        """ Calculates diminishing major error penalties as a geometric series: d * (1 - 0.5^n) / 0.5 """
+        return self.deduction_per_major_error * (1 - 0.5 ** len(self.major_errors)) / (1 - 0.5)
 
     @property
     def minor_deduction_total(self):
@@ -353,7 +358,7 @@ class CodeGrader:
         return self.major_deduction_total + self.minor_deduction_total
 
     @property
-    def points(self) -> int:
+    def points(self) -> float:
         # Ensure the calculated points are non-negative
         return max(self.max_points - self.total_deduction, 0)
 

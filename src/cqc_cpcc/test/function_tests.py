@@ -177,10 +177,38 @@ def test6():
         print("Actual: %s" % test_llm_model)
 
 
+def major_deduction_total(error_count:int, deduction_per_major_error:int = 40):
+    return deduction_per_major_error * (1 - 0.5 ** error_count) / (1 - 0.5)
+
+
+def major_deduction_total_geo_series(error_count:int, deduction_per_major_error:int =40):
+    total = 0
+    for i in range(error_count):
+        total += deduction_per_major_error / (2 ** i)
+    return total
+
+
+def test7():
+    # Test the two methods for calculating the total deduction
+    # for a given number of major errors
+    # and compare the results
+
+    deduction_per_major_error = 40
+    print("Deduction Per Major Error: %s" % deduction_per_major_error)
+
+    # Test error counts from 0 to 5
+    for i in range(6):
+        error_count = i
+        print("Error Count: %s" % error_count)
+        total_deduction = major_deduction_total(error_count, deduction_per_major_error)
+        total_deduction_geo_series = major_deduction_total_geo_series(error_count, deduction_per_major_error)
+        print("Total Deduction: %s" % total_deduction)
+        print("Total Deduction Geo Series: %s" % total_deduction_geo_series)
 
 if __name__ == '__main__':
     # test_1()
     # test3()
     # test4()
     # test5()
-    test6()
+    # test6()
+    test7()
