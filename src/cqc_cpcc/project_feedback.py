@@ -5,8 +5,7 @@ from docx import Document
 from docx.shared import Pt
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.pydantic_v1 import Field
-from pydantic.v1 import BaseModel
+from pydantic import BaseModel, Field
 from selenium.common import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver

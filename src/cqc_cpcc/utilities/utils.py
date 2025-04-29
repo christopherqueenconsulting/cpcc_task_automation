@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 from docx import Document
 from markdownify import markdownify as md
 from ordered_set import OrderedSet
-from pydantic.v1 import BaseModel, Field, StrictStr, PositiveInt
+from pydantic import BaseModel, Field, StrictStr, PositiveInt
 from selenium.common import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -447,7 +447,7 @@ def microsoft_login(driver: WebDriver):
     instructor_user_id = os.environ["INSTRUCTOR_USERID"]
     instructor_password = os.environ["INSTRUCTOR_PASS"]
 
-    wait = get_driver_wait(driver, 15) # Using shorter wait time for login
+    wait = get_driver_wait(driver, 15)  # Using shorter wait time for login
     wait_long = get_driver_wait(driver, 30)  # Using  longer time
 
     original_window = driver.current_window_handle
@@ -464,10 +464,11 @@ def microsoft_login(driver: WebDriver):
     user_name_already_entered = False
     try:
         wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//div[@id='displayName' and contains(@title,'" + instructor_user_id.lower() + "')]")), "Waiting for username to be prefilled")
+            (By.XPATH, "//div[@id='displayName' and contains(@title,'" + instructor_user_id.lower() + "')]")),
+            "Waiting for username to be prefilled")
         user_name_already_entered = True
     except TimeoutException:
-        #logger.info("Element not found within timeout")
+        # logger.info("Element not found within timeout")
         # Make sure that another username is not entered and we need to go back
         try:
             wait.until(EC.presence_of_element_located(
@@ -475,7 +476,8 @@ def microsoft_login(driver: WebDriver):
             # Click back button
             click_element_wait_retry(driver, wait, "//button[@class='backButton']", "Waiting for back button")
             # Click the use another account button
-            click_element_wait_retry(driver, wait, "//div[contains(text(),'Use another')]/parent::div", "Waiting for use another account button")
+            click_element_wait_retry(driver, wait, "//div[contains(text(),'Use another')]/parent::div",
+                                     "Waiting for use another account button")
             time.sleep(2)
         except TimeoutException:
             # logger.info("Element not found within timeout")
@@ -486,7 +488,8 @@ def microsoft_login(driver: WebDriver):
         username_field = driver.find_element(By.NAME, "loginfmt")
         username_field.send_keys(instructor_user_id + "@cpcc.edu")
         # Click Next
-        click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Next')]",
+        click_element_wait_retry(driver, wait,
+                                 "//input[contains(@class, 'button_primary') and contains(@value,'Next')]",
                                  "Waiting for Next Button", By.XPATH)
     # Enter password
     password_field = driver.find_element(By.NAME, "passwd")
@@ -494,7 +497,6 @@ def microsoft_login(driver: WebDriver):
     # Click Sign In
     click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Sign in')]",
                              "Waiting for Sign in Button", By.XPATH)
-
 
     # Click the no button for Stay signed in
     no_stay_signed_in_button = click_element_wait_retry(driver, wait,
@@ -517,7 +519,7 @@ def duo_login(driver: WebDriver):
     instructor_user_id = os.environ["INSTRUCTOR_USERID"]
     instructor_password = os.environ["INSTRUCTOR_PASS"]
 
-    wait = get_driver_wait(driver, 3) # Using shorter wait times
+    wait = get_driver_wait(driver, 3)  # Using shorter wait times
 
     original_window = driver.current_window_handle
 
@@ -545,12 +547,12 @@ def duo_login(driver: WebDriver):
     # NOTE: Duo push happens automatically now. Used to require a button push
     # click_element_wait_retry(driver, wait, "//button[contains(text(),'Send Me a Push')]", "Waiting for auth buttons")
 
-
     try:
         # Click the no to is this your device message
         login_message = click_element_wait_retry(driver, wait,
                                                  "//button[contains(text(),'No, other people use this device')]",
-                                                 "Waiting to click 'No, other people use this device' button", max_try=1)
+                                                 "Waiting to click 'No, other people use this device' button",
+                                                 max_try=1)
 
         # Wait until login accepted
         wait.until(

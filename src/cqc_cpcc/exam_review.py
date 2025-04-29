@@ -4,7 +4,7 @@ from docx import Document
 from docx.shared import Pt
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from pydantic.v1 import Field, BaseModel, StrictStr
+from pydantic import Field, BaseModel, StrictStr
 
 from cqc_cpcc.utilities.AI.llm.chains import get_exam_error_definition_from_completion_chain, \
     get_exam_error_definitions_completion_chain
@@ -201,6 +201,16 @@ class MinorErrorType(ExtendedEnum):
     #"""Minor Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
     CSC_152_EXAM_1_STEP_SIX = "The dataset for 2020 medalists is not properly filtered"
     CSC_152_EXAM_1_STEP_SEVEN = "PROC FORMAT does not correctly replace rank with Gold, Silver, or Bronze"
+
+    # """Minor Error Definitions for the CSC 152 Chapter 8 Exercise 23 Assignment"""
+    CSC_152_ASIGN_CHP8EXC23_STEP_A = "Histogram does not accurately use the most recent population estimates for all countries."
+    CSC_152_ASIGN_CHP8EXC23_STEP_B = "Histograms for each continent are not correctly separated or labeled."
+    CSC_152_ASIGN_CHP8EXC23_STEP_C = "Box plot graph does not correctly group or display populations per continent."
+    CSC_152_ASIGN_CHP8EXC23_STEP_D = "Comment does not adequately describe the statistical differences between histograms and box plots."
+    CSC_152_ASIGN_CHP8EXC23_DATA_LABELS_ATTRIBUTES = "Program does not properly examine or report SAS data set labels and attributes."
+    CSC_152_ASIGN_CHP8EXC23_HISTOGRAM_FORMAT = "Histograms are improperly formatted or missing required graphical elements."
+    CSC_152_ASIGN_CHP8EXC23_BOXPLOT_FORMAT = "Box plots are improperly formatted or missing required graphical elements."
+    CSC_152_ASIGN_CHP8EXC23_COMMENT_CLARITY = "Comment describing histogram and box plot differences lacks clarity or sufficient detail."
 
 
 class MinorError(CodeError):

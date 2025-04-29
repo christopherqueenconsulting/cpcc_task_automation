@@ -10,8 +10,7 @@ from langchain.chains.llm import LLMChain
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
-from pydantic import StrictStr, Field
-from pydantic.v1 import BaseModel
+from pydantic import StrictStr, Field, BaseModel
 
 from cqc_cpcc.utilities.AI.llm.llms import get_default_llm, get_llm_model_from_runnable_serializable
 from cqc_cpcc.utilities.date import get_datetime

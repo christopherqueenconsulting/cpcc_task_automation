@@ -10,7 +10,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableSerializable
 from langchain_core.runnables.utils import Output
 from langchain_openai import ChatOpenAI
-from pydantic.v1 import BaseModel
+from pydantic import BaseModel
 
 from cqc_cpcc.utilities.AI.llm.llms import get_default_retry_model
 from cqc_cpcc.utilities.AI.llm.prompts import *
