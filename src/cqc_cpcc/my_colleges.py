@@ -61,8 +61,10 @@ class MyColleges:
 
         # TODO: Get or calculate the EVA date and store with course info
 
-
         # TODO: Not sure if this paginates once course list grows
+
+        # Use check date of today
+        check_date = DT.date.today()
 
         for index, atag in enumerate(course_section_atags):
             course_name = getText(atag)
@@ -71,6 +73,9 @@ class MyColleges:
             course_start_date, course_end_date = course_dates.split(" - ")
             course_start_date = get_datetime(course_start_date)
             course_end_date = get_datetime(course_end_date)
+            # If course has ended then append "ended" to the course name
+            if is_date_in_range(course_start_date, course_end_date, check_date):
+                course_name += " (ended)"
             self.course_information[course_name] = {'href': course_href, 'start_date': course_start_date,
                                                     'end_date': course_end_date}
 
@@ -155,6 +160,15 @@ class MyColleges:
 
                                                                                     "Waiting for Latest Attendance Records")
 
+                logger.info("Processing Course: : %s" % course_name)
+
+                # Find the corresponding BrightSpace course
+                term = getText(get_element_wait_retry(self.driver, self.wait,
+                                                      "section-header-term", "Waiting For Course Term Text", By.ID))
+                term_semester, term_year = term.split()
+
+                logger.info("Term Semester: %s | Year: %s" % (term_semester, term_year))
+
                 try:
                     # logger.debug("Latest Attendance Recorded Dates: %s" % last_attendance_record_dates)
                     latest_date_str = get_latest_date(last_attendance_record_dates)
@@ -165,17 +179,11 @@ class MyColleges:
                     logger.info(
                         "Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
                 except ValueError:
-                    # No date found so use date of a week ago
-                    last_attendance_record_date = get_datetime(check_date.strftime("%m-%d-%Y"))
+                    # No date found so use start of course date
+                    # last_attendance_record_date = get_datetime(check_date.strftime("%m-%d-%Y"))
+                    last_attendance_record_date = course_start_date
                     logger.info("No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
                         "%m-%d-%Y"))
-
-                # Find the corresponding BrightSpace course
-                term = getText(get_element_wait_retry(self.driver, self.wait,
-                                                      "section-header-term", "Waiting For Course Term Text", By.ID))
-                term_semester, term_year = term.split()
-
-                logger.info("Term Semester: %s | Year: %s" % (term_semester, term_year))
 
                 bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
                                          course_start_date, course_end_date,
@@ -360,7 +368,7 @@ class MyColleges:
                 course_names = [course_name] * len(student_ids)
 
                 student_info = dict(zip(student_ids, zip(student_names, student_emails, course_names)))
-                #logger.info("Students Info Gathered: %s" % student_info)
+                # logger.info("Students Info Gathered: %s" % student_info)
 
                 # Update it to the class' student info field that may have other data also
                 self.student_info.update(student_info)
@@ -373,4 +381,3 @@ class MyColleges:
 
         # Switch back to original_tab
         self.driver.switch_to.window(original_tab)
-
