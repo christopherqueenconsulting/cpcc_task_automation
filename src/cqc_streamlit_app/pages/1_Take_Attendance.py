@@ -166,11 +166,12 @@ def main():
                 attendance_thread.start()
 
             screenshot_section()
+            log_download_button_placeholder = st.empty()
             logging_section()
 
             # Display the download button for the log file
             base_file_name, _extension = os.path.splitext(LOGGING_FILENAME)
-            on_download_click(LOGGING_FILENAME, "Download Log", base_file_name)
+            on_download_click(log_download_button_placeholder,LOGGING_FILENAME, "Download Log", base_file_name)
 
             # attendance_section()
             # logging_section()
