@@ -37,7 +37,7 @@ class CustomPydanticOutputParser(PydanticOutputParser):
         schema_str = json.dumps(reduced_schema, ensure_ascii=False)
 
         # Print to the console all the reduced_schema["properties"]
-        print("Reduced Schema Properties: ", schema_str)
+        # print("Reduced Schema Properties: ", schema_str)
 
         return _PYDANTIC_FORMAT_INSTRUCTIONS.format(schema=schema_str)
 
