@@ -109,6 +109,9 @@ class MajorErrorType(ExtendedEnum):
     CSC_152_EXAM_1_STEP_FIVE = "PROC FREQ does not generate the required report with swimmer names and medal counts"
     CSC_152_EXAM_1_STEP_EIGHT = "The time is not displayed with two digits to the right of the decimal"
 
+    CSC_152_EXAM_2_STEP_TWO = "The program does not satisfy the requirements in step 2"
+    CSC_152_EXAM_2_STEP_EIGHT = "The program does not satisfy the requirements in step 8"
+
 
 class MinorErrorType(ExtendedEnum):
     """Enum representing various types of minor coding errors."""
@@ -203,14 +206,20 @@ class MinorErrorType(ExtendedEnum):
     CSC_152_EXAM_1_STEP_SEVEN = "PROC FORMAT does not correctly replace rank with Gold, Silver, or Bronze"
 
     # """Minor Error Definitions for the CSC 152 Chapter 8 Exercise 23 Assignment"""
-    CSC_152_ASIGN_CHP8EXC23_STEP_A = "Histogram does not accurately use the most recent population estimates for all countries."
-    CSC_152_ASIGN_CHP8EXC23_STEP_B = "Histograms for each continent are not correctly separated or labeled."
-    CSC_152_ASIGN_CHP8EXC23_STEP_C = "Box plot graph does not correctly group or display populations per continent."
-    CSC_152_ASIGN_CHP8EXC23_STEP_D = "Comment does not adequately describe the statistical differences between histograms and box plots."
-    CSC_152_ASIGN_CHP8EXC23_DATA_LABELS_ATTRIBUTES = "Program does not properly examine or report SAS data set labels and attributes."
-    CSC_152_ASIGN_CHP8EXC23_HISTOGRAM_FORMAT = "Histograms are improperly formatted or missing required graphical elements."
-    CSC_152_ASIGN_CHP8EXC23_BOXPLOT_FORMAT = "Box plots are improperly formatted or missing required graphical elements."
-    CSC_152_ASIGN_CHP8EXC23_COMMENT_CLARITY = "Comment describing histogram and box plot differences lacks clarity or sufficient detail."
+    CSC_152_ASIGN_CHP8EXC23_STEP_A = "Histogram does not accurately use the most recent population estimates for all countries"
+    CSC_152_ASIGN_CHP8EXC23_STEP_B = "Histograms for each continent are not correctly separated or labeled"
+    CSC_152_ASIGN_CHP8EXC23_STEP_C = "Box plot graph does not correctly group or display populations per continent"
+    CSC_152_ASIGN_CHP8EXC23_STEP_D = "Comment does not adequately describe the statistical differences between histograms and box plots"
+    CSC_152_ASIGN_CHP8EXC23_DATA_LABELS_ATTRIBUTES = "Program does not properly examine or report SAS data set labels and attributes"
+    CSC_152_ASIGN_CHP8EXC23_HISTOGRAM_FORMAT = "Histograms are improperly formatted or missing required graphical elements"
+    CSC_152_ASIGN_CHP8EXC23_BOXPLOT_FORMAT = "Box plots are improperly formatted or missing required graphical elements"
+    CSC_152_ASIGN_CHP8EXC23_COMMENT_CLARITY = "Comment describing histogram and box plot differences lacks clarity or sufficient detail"
+    CSC_152_EXAM_2_STEP_THREE = "The program does not satisfy the requirements in step 3"
+    CSC_152_EXAM_2_STEP_FOUR = "The program does not satisfy the requirements in step 4"
+    CSC_152_EXAM_2_STEP_FIVE = "The program does not satisfy the requirements in step 5"
+    CSC_152_EXAM_2_STEP_SIX = "The program does not satisfy the requirements in step 6"
+    CSC_152_EXAM_2_STEP_SEVEN = "The program does not satisfy the requirements in step 7"
+
 
 
 class MinorError(CodeError):
