@@ -29,7 +29,7 @@ def take_attendance(attendance_tracker_url: str):
 
 def open_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait,
                             attendance_tracker_url: str):
-    # Keep track of original tab
+    # Keep track of the original tab
     original_tab = driver.current_window_handle
 
     # Switch back to original_tab
@@ -43,7 +43,7 @@ def open_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: WebD
     # Wait for the new window or tab
     wait.until(EC.new_window_is_opened(handles))
 
-    # Keep track of current tab
+    # Keep track of the current tab
     current_tab = driver.current_window_handle
 
     # Navigate to attendance tracker

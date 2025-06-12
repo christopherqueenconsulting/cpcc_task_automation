@@ -795,7 +795,7 @@ def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = 
     if file_extension:
         file_extension = file_extension.lower()
 
-    # st.info("Base Name: " + basename + " | File Name: " + file_name + " | File Extension : " + file_extension)
+    # st.info("Base Name: " + basename + " | File Name: " + file_name + " | File Extension: " + file_extension)
 
     return file_extension
 

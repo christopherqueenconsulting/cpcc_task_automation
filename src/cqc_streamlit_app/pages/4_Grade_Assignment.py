@@ -16,7 +16,7 @@ from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_cod
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
     get_language_from_file_path, on_download_click, create_zip_file, prefix_content_file_name, \
-    ChatGPTStatusCallbackHandler
+    ChatGPTStatusCallbackHandler, get_file_extension_from_filepath
 
 # Initialize session state variables
 init_session_state()
@@ -78,7 +78,6 @@ def get_flowgorithm_content():
         assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
 
         if st.checkbox("Show Instructions", key="show_flowgorithn_instructions_check_box"):
-
             st.markdown(assignment_instructions_content, unsafe_allow_html=True)
             # st.info("Added: %s" % instructions_file_path)
 
@@ -224,9 +223,13 @@ async def get_grade_exam_content():
             # st.info("Added: %s" % instructions_file_path)
 
     st.header("Solution File")
-    solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
+    solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip", "xlsx", "xls", "xlsm"]
     solution_file_paths = add_upload_file_element("Upload Exam Solution", solution_accepted_file_types,
                                                   accept_multiple_files=True)
+
+    #convert_solution_to_markdown = st.checkbox("Convert To Markdown", True,
+    #                                               key="convert_exam_solution_to_markdown")
+    convert_solution_to_markdown = False
 
     assignment_solution_contents = None
     show_solution_file = st.checkbox("Show Solution", key="show_exam_solution_file_check_box")
@@ -238,12 +241,10 @@ async def get_grade_exam_content():
             solution_language = get_language_from_file_path(orig_solution_file_path)
             solution_file_name = os.path.basename(orig_solution_file_path)
 
-            # Get the assignment  solution
-            read_content = read_file(solution_file_path)
+            # Get the assignment solution
+            read_content = read_file(solution_file_path, convert_solution_to_markdown)
             # Prefix with the file name
             read_content = prefix_content_file_name(solution_file_name, read_content)
-
-
 
             # Detect file langauge then display accordingly
             if solution_language:
@@ -257,7 +258,11 @@ async def get_grade_exam_content():
 
             else:
                 if show_solution_file:
-                    st.text_area(read_content)
+                    if get_file_extension_from_filepath(orig_solution_file_path) in [".xlsx", ".xls", ".xlsm"]:
+                        st.markdown(read_content)
+                    else:
+                        st.text_area(read_content)
+
             # Append the content to the list
             assignment_solution_contents.append(read_content)
 
@@ -280,7 +285,7 @@ async def get_grade_exam_content():
     selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment", default_temp_value=.3)
 
     st.header("Student Submission File(s)")
-    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
+    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip", "xlsx", "xls", "xlsm"]
     student_submission_file_paths = add_upload_file_element("Upload Student Exam Submission",
                                                             student_submission_accepted_file_types,
                                                             accept_multiple_files=True)
@@ -291,7 +296,7 @@ async def get_grade_exam_content():
                                                 assignment_solution_contents, student_submission_file_paths)
 
     if process_grades:
-        # st.success("All required file have been uploaded successfully.")
+        # st.success("All required files have been uploaded successfully.")
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
 
@@ -362,7 +367,6 @@ async def get_grade_exam_content():
             for exc in e.exceptions:
                 print(f"Unhandled error: {exc}")
 
-
         for complete_task in tasks:
             graded_feedback_file_name, graded_feedback_temp_file_name = complete_task.result()
             # for graded_feedback_file_name, graded_feedback_temp_file_name in results:
@@ -375,10 +379,11 @@ async def get_grade_exam_content():
             time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
             zip_file_name_prefix = f"{course_name}_Graded_Feedback__{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
                 " ", "_")
-            on_download_click(download_all_results_placeholder,zip_file_path, "Download All Feedback Files",
+            on_download_click(download_all_results_placeholder, zip_file_path, "Download All Feedback Files",
                               zip_file_name_prefix + ".zip")
         else:
-            download_all_results_placeholder.error(f"Total Student Submissions: {total_student_submissions} | Total Graded Feedback Files: {len(graded_feedback_file_map)}")
+            download_all_results_placeholder.error(
+                f"Total Student Submissions: {total_student_submissions} | Total Graded Feedback Files: {len(graded_feedback_file_map)}")
 
 
 def run_callback_within_context(callback, *args, **kwargs):
@@ -421,7 +426,7 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             code_langauge = get_language_from_file_path(filename)
 
             st.header(filename)
-            show_contents =  st.checkbox("Show contents", key=base_student_filename+"_"+filename+"_show_contents")
+            show_contents = st.checkbox("Show contents", key=base_student_filename + "_" + filename + "_show_contents")
             if code_langauge:
                 if show_contents:
                     # Display the code in a code block
@@ -442,7 +447,7 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
         st.header("Chat GPT Prompt")
         prompt_value_text = getattr(prompt_value, 'text', '')
 
-        if  st.checkbox("Show Prompt", key=base_student_filename+"_"+filename+"_prompt"):
+        if st.checkbox("Show Prompt", key=base_student_filename + "_" + filename + "_prompt"):
             # Display the prompt value in a code block
             st.code(prompt_value_text)
 
@@ -474,23 +479,21 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             code_grader.save_feedback_to_docx(graded_feedback_temp_file.name)
             status.update(label=status_prefix_label + " | Feedback Saved to File")
 
-
             status.update(label=status_prefix_label + " | Reading Feedback File For Display")
             student_feedback_content = read_file(graded_feedback_temp_file.name, True)
             feedback_placeholder.markdown(student_feedback_content)
 
             # Add button to download individual feedback on each tab
             # Pass a placeholder for this function to then draw the button to
-            on_download_click(download_button_placeholder,graded_feedback_temp_file.name,
-                                                            "Download Feedback for " + base_student_filename,
-                                                            download_filename)
+            on_download_click(download_button_placeholder, graded_feedback_temp_file.name,
+                              "Download Feedback for " + base_student_filename,
+                              download_filename)
             status.update(label=status_prefix_label + " | Feedback File Ready for Download")
 
             # Stop status and show as complete
             # status.update(label=student_file_name + " Graded", state="complete")
         except Exception as e:
             status.update(label=status_prefix_label + " | Error: " + str(e), state="error", expanded=True)
-
 
         return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
 

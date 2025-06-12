@@ -315,8 +315,32 @@ def convert_content_to_markdown(content: str) -> str:
 
 
 @streamlit.cache_data
+def convert_xlsx_to_markdown(file_path: str) -> str:
+    """Convert Excel sheets into well-formatted markdown."""
+    try:
+        sheets = pd.read_excel(file_path, sheet_name=None)
+        markdown_output = []
+
+        for sheet_name, df in sheets.items():
+            # Process each column individually based on its dtype
+            for column in df.columns:
+                if pd.api.types.is_numeric_dtype(df[column]):
+                    # Replace numeric NaNs with a placeholder or keep as is
+                    df[column] = df[column].apply(lambda x: '' if pd.isna(x) else x)
+                else:
+                    df[column] = df[column].fillna('')
+
+            markdown = df.to_markdown(index=False, tablefmt='github')
+            markdown_output.append(f"### {sheet_name}\n\n{markdown}")
+
+        return "\n\n".join(markdown_output)
+    except Exception as e:
+        return f"Error converting Excel file to markdown: {str(e)}"
+
+
+@streamlit.cache_data
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
-    """ Return the file contents in string format. If file ends in .docx will convert it to json and return"""
+    """ Return the file contents in string format."""
     file_name, file_extension = os.path.splitext(file_path)
 
     if convert_to_markdown:
@@ -325,6 +349,10 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
             results = mammoth.convert_to_html(f)
             contents = convert_content_to_markdown(results.value)
         # contents = results.value
+    # If file ends in .xlsx, convert it to markdown
+    elif file_extension in ['.xlsx', '.xls', '.xlsm']:
+        contents = convert_xlsx_to_markdown(file_path)
+    # If file ends in .docx will convert it to json and return
     elif file_extension == ".docx":
         # read in a document
         my_doc = docx.Document(file_path)

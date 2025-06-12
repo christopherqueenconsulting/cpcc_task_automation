@@ -101,7 +101,7 @@ class MajorErrorType(ExtendedEnum):
     CSC_134_PROJECT_2_CURLY_BRACES_OMITTED = "The code has omission of curly braces"
 
 
-    # """Major Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
+    """Major Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
     CSC_152_EXAM_1_STEP_ONE = "PROC SORT does not correctly sort by year and distance as specified"
     CSC_152_EXAM_1_STEP_TWO = "PROC TABULATE does not generate the required two-dimensional table"
     CSC_152_EXAM_1_STEP_THREE = "PROC REPORT does not correctly replicate the PROC TABULATE table"
@@ -111,6 +111,11 @@ class MajorErrorType(ExtendedEnum):
 
     CSC_152_EXAM_2_STEP_TWO = "The program does not satisfy the requirements in step 2"
     CSC_152_EXAM_2_STEP_EIGHT = "The program does not satisfy the requirements in step 8"
+
+    """Major Error Definitions for the CSC 112 Assignment 1"""
+    CSC_112_ASIGN_1_SIMPREGRES_RESULTS = "The regression results are missing"
+    CSC_112_ASIGN_1_SIMPREGRES_FORMULA = "The regression formula is missing"
+    CSC_112_ASIGN_1_SIMPREGRES_DIFFERENCE = "The explanation of difference is missing"
 
 
 class MinorErrorType(ExtendedEnum):
@@ -220,7 +225,10 @@ class MinorErrorType(ExtendedEnum):
     CSC_152_EXAM_2_STEP_SIX = "The program does not satisfy the requirements in step 6"
     CSC_152_EXAM_2_STEP_SEVEN = "The program does not satisfy the requirements in step 7"
 
-
+    """MINOR Error Definitions for the CSC 112 Assignment 1"""
+    CSC_112_ASIGN_1_MISSING_DATA_NOT_REMOVED = "The missing data was not removed"
+    CSC_112_ASIGN_1_STATISTIC_NOT_IDENTIFIED = "The statistic was not identified"
+    CSC_112_ASIGN_1_PREDICTED_VALUE_NOT_CALCULATED = "The predicted value was not calculated"
 
 class MinorError(CodeError):
     """Class representing various types of minor coding errors."""
