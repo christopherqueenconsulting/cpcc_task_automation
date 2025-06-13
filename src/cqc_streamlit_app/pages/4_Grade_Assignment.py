@@ -271,10 +271,10 @@ async def get_grade_exam_content():
     major_error_types, minor_error_types = define_error_definitions()
     major_error_type_list = []
     minor_error_type_list = []
-    # Show success message if feedback types are defined
+    # Show a success message if feedback types are defined
     if not major_error_types.empty:
         # st.success("Major errors defined.")
-        # Convert DataFrame to list of Major Error types
+        # Convert DataFrame to a list of Major Error types
         major_error_type_list = major_error_types[DESCRIPTION].to_list()
 
     if not minor_error_types.empty:
