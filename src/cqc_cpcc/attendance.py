@@ -62,7 +62,7 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
 
     logger.info("Log the following to the attendance tracker")
     logger.info(
-        "Instructor,Last Name,First Name,Student ID,Student Email,Course and Section,Session Type,Delivery Type,Status,,Week of Last Activity,Faculty Reason"
+        "Instructor,Last Name,First Name,Student ID,Student Email,Course and Section,Session Type,Delivery Type,Status,Week of Last Activity,Faculty Reason"
 
     )
 
@@ -94,7 +94,7 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
                 first_name = student_name_array[1].strip()
 
                 logger.info(
-                    "%s,%s,%s,%s,%s,%s,%s,%s,%s,,%s,%s" %
+                    "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s" %
                     (INSTRUCTOR_NAME,last_name, first_name, student_id, student_email, course_and_section, session_type, delivery_type, status, latest_activity,
                      faculty_reason)
                 )
