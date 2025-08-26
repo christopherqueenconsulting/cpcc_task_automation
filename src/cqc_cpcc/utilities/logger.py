@@ -3,7 +3,8 @@ from logging.handlers import RotatingFileHandler
 import datetime as DT
 
 # Setup logger
-logger = logging.getLogger('cpcc_logger')
+base_name = "cpcc"
+logger = logging.getLogger(base_name+'_logger')
 INFO_FORMAT = "%(message)s"
 #DEBUG_FORMAT = "[%(asctime)s %(filename)s->%(funcName)s():%(lineno)s]%(levelname)s: %(message)s"
 #ERROR_FORMAT = "[%(asctime)s %(filename)s->%(funcName)s():%(lineno)s]%(levelname)s: %(message)s"
@@ -13,7 +14,7 @@ logging.basicConfig(format=INFO_FORMAT, level=logging.INFO)
 
 today = DT.date.today()
 # Log to file
-LOGGING_FILENAME = 'logs/cpcc_'+today.strftime("%Y_%m_%d")+'.log'
+LOGGING_FILENAME = 'logs/'+base_name+'_'+today.strftime("%Y_%m_%d")+'.log'
 
 
 class MyFormatter(logging.Formatter):

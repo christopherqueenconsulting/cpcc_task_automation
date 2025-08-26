@@ -55,14 +55,14 @@ def open_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: WebD
 def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait,
                               bs_courses: List[BrightSpace_Course],
                               attendance_tracker_url: str):
-    """ For each class look at the withdrawal list and update the attendance tracker"""
+    """ For each class, look at the withdrawal list and update the attendance tracker"""
 
     # TODO: Uncomment below
     # open_attendance_tracker(driver, wait, attendance_tracker_url)
 
     logger.info("Log the following to the attendance tracker")
     logger.info(
-        "Instructor,Last Name,First Name,Student ID,Course and Section,Session Type,Delivery Type,Status,,Week of Last Activity,Faculty Reason"
+        "Instructor,Last Name,First Name,Student ID,Student Email,Course and Section,Session Type,Delivery Type,Status,,Week of Last Activity,Faculty Reason"
 
     )
 
@@ -77,7 +77,7 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
 
         for student_name in withdrawals:
             for entry in withdrawals[student_name]:
-                student_id, course_and_section, session_type, delivery_type, status, latest_activity, faculty_reason = entry
+                student_id, student_email, course_and_section, session_type, delivery_type, status, latest_activity, faculty_reason = entry
 
                 # TODO: Check by studentId to make sure the student is not already in the attendance tracker for the same course sections
 
@@ -94,8 +94,8 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
                 first_name = student_name_array[1].strip()
 
                 logger.info(
-                    "%s,%s,%s,%s,%s,%s,%s,%s,,%s,%s" %
-                    (INSTRUCTOR_NAME,last_name, first_name, student_id, course_and_section, session_type, delivery_type, status, latest_activity,
+                    "%s,%s,%s,%s,%s,%s,%s,%s,%s,,%s,%s" %
+                    (INSTRUCTOR_NAME,last_name, first_name, student_id, student_email, course_and_section, session_type, delivery_type, status, latest_activity,
                      faculty_reason)
                 )
 

@@ -229,18 +229,22 @@ class BrightSpace_Course:
                                                                table_prefix_xpath + "//td[4]//label[1]",
                                                                "Waiting for Student Ids")
 
+            student_emails = get_elements_text_as_list_wait_stale(self.wait,
+                                                               table_prefix_xpath + "//td[5]//label[1]",
+                                                               "Waiting for Student Ids")
+
             withdrawal_dates = get_elements_text_as_list_wait_stale(self.wait,
                                                                     table_prefix_xpath + "//td[7]//label[1]",
                                                                     "Waiting for Withdrawal Dates")
 
-            student_withdrawals_dict = dict(zip(student_ids, zip(student_names, withdrawal_dates)))
+            student_withdrawals_dict = dict(zip(student_ids, zip(student_names, student_emails, withdrawal_dates)))
 
             filtered_withdrawals = {}
 
             logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
             # are_you_satisfied()
 
-            for student_id, (student_name, withdrawal_date) in student_withdrawals_dict.items():
+            for student_id, (student_name, student_email, withdrawal_date) in student_withdrawals_dict.items():
                 # Convert withdrawal_date to a datetime object for comparison
                 withdrawal_datetime = get_datetime(withdrawal_date)
 
@@ -287,12 +291,12 @@ class BrightSpace_Course:
                 # Display error if any other condition for debugging later
                 else:
                     logger.debug(
-                        "Error procssing withdrawal for %s | Withdrawal Date: %s | Course Start Day: %s | First Drop Day: %s | Final Drop Day: %s | Course End Date: %s" % (
+                        "Error processing withdrawal for %s | Withdrawal Date: %s | Course Start Day: %s | First Drop Day: %s | Final Drop Day: %s | Course End Date: %s" % (
                             student_name, withdrawal_datetime, self.course_start_date, self.first_drop_day,
                             self.final_drop_day, self.course_end_date))
                     continue
 
-                # Convert spaces to underscores in the student name
+                # Convert spaces to underscore in the student name
                 student_name = student_name.replace(" ", "_")
 
                 # Add the student to the self.withdrawal_records
@@ -301,7 +305,7 @@ class BrightSpace_Course:
 
                 # Add the student withdrawal to the self.withdrawal_records with pertinent information
                 self.withdrawal_records[student_name].append(
-                    (student_id, self.get_course_and_section(),
+                    (student_id, student_email, self.get_course_and_section(),
                      self.get_session_type(), self.get_delivery_type(), status, latest_activity, faculty_reason))
 
             # self.withdrawal_records now contains the student withdrawals within the specified date range
