@@ -129,7 +129,10 @@ async def get_feedback_content():
         # Convert DataFrame to list of FeedbackType objects
         feedback_types_list = feedback_types[DESCRIPTION].to_list()
 
-    selected_model, selected_temperature = define_chatGPTModel("give_feedback", default_temp_value=.3)
+    model_cfg = define_chatGPTModel("give_feedback", default_temp_value=.3)
+    selected_model = model_cfg.get("model", "gpt-5")
+    selected_temperature = float(model_cfg.get("temperature", .3))
+    selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
     st.header("Student Submission File(s)")
     student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "zip"]
@@ -143,7 +146,7 @@ async def get_feedback_content():
 
     if process_feedback:
 
-        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model)
+        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model, service_tier=selected_service_tier)
 
         feedback_giver = FeedbackGiver(
             course_name=course_name,

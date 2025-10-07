@@ -1,23 +1,18 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
-import os
 import tempfile
+import threading
 import zipfile
 from random import randint
-from typing import Tuple, Any, TypeVar
+from typing import TypeVar, cast
 
 import streamlit as st
-import streamlit_ext as ste
-from streamlit.delta_generator import DeltaGenerator
-from streamlit.errors import NoSessionContext
-from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx, SCRIPT_RUN_CONTEXT_ATTR_NAME
-
-import threading
-from typing import Any, TypeVar, cast
-
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_openai import ChatOpenAI
+from streamlit.delta_generator import DeltaGenerator
 from streamlit.elements.lib.mutable_status_container import StatusContainer
+from streamlit.errors import NoSessionContext
+from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx, SCRIPT_RUN_CONTEXT_ATTR_NAME
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 CODE_LANGUAGES = [
@@ -773,7 +768,7 @@ def get_cpcc_css():
 
 
 @st.cache_resource(hash_funcs={ChatOpenAI: id})
-def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
+def get_custom_llm(temperature: float, model: str, service_tier: str ="default") -> ChatOpenAI:
     """
     This function returns a cached instance of ChatOpenAI based on the temperature and model.
     If the temperature or model changes, a new instance will be created and cached.
@@ -781,6 +776,8 @@ def get_custom_llm(temperature: float, model: str) -> ChatOpenAI:
     return ChatOpenAI(temperature=temperature,
                       model=model,
                       openai_api_key=st.session_state.openai_api_key,
+                      use_responses_api=True,
+                      service_tier=service_tier
                       # streaming=True
                       )
 
@@ -823,36 +820,222 @@ def define_code_language_selection(unique_key: str | int, default_option: str = 
     return selected_language
 
 
-def define_chatGPTModel(unique_key: str | int, default_min_value: float = .2, default_max_value: float = .8,
-                        default_temp_value: float = .2,
-                        default_step: float = 0.1, default_option="gpt-4-turbo") -> Tuple[str, float]:
-    # Dropdown for selecting ChatGPT models
-    model_options = [default_option, "gpt-4-1106-preview", "gpt-3.5-turbo", "gpt-3.5-turbo-16k-0613"]
-    selected_model = st.selectbox(label="Select ChatGPT Model",
-                                  key="chat_select_" + unique_key,
-                                  options=model_options,
-                                  index=model_options.index(default_option))
+# streamlit model/tier selector with updated GPT-5 Flex pricing (per 1M tokens)
+from typing import Any, Dict, Optional
+import os
+import json
+import streamlit as st
 
-    # Slider for selecting a value (ranged from 0.2 to 0.8, with step size 0.01)
-    # Define the ranges and corresponding labels
-    ranges = [(0, 0.3, "Low temperature: More focused, coherent, and conservative outputs."),
-              (0.3, 0.7, "Medium temperature: Balanced creativity and coherence."),
-              (0.7, 1, "High temperature: Highly creative and diverse, but potentially less coherent.")]
 
-    temperature = st.slider(label="Chat GPT Temperature",
-                            key="chat_temp_" + unique_key,
-                            min_value=max(default_min_value, 0),
-                            max_value=min(default_max_value, 1),
-                            step=default_step, value=default_temp_value,
-                            format="%.2f")
+def define_chatGPTModel(unique_key: str | int,
+                        default_min_value: float = 0.2,
+                        default_max_value: float = 0.8,
+                        default_temp_value: float = 0.2,
+                        default_step: float = 0.1,
+                        default_option: str = "gpt-5") -> Dict[str, Any]:
+    """
+    Presents model selection, temperature slider, and service tier.
+    Returns JSON-serializable dict:
+      {
+        "model": str,
+        "temperature": float,
+        "service_tier": "Standard" | "Priority" | "Flex",
+        "pricing": {input, cached, output, unit},
+        "token_limits": {"context_window": int, "max_input": int|None, "max_output": int|None}
+      }
 
-    # Determine the label based on the selected value
-    for low, high, label in ranges:
-        if low <= temperature <= high:
-            st.write(label)
-            break
+    Notes
+    - Units are per **1M tokens** (matches OpenAI pricing pages).
+    - Models listed support structured outputs (JSON/JSON Schema via Responses API).
+    """
 
-    return selected_model, temperature
+    uk = str(unique_key)
+
+    # === Models supporting structured output ===
+    model_options = [
+        # GPT-5 family
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        # Optional keepers from 4.x that also support structured outputs
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4o",
+        "gpt-4o-mini",
+    ]
+    if default_option not in model_options:
+        default_option = "gpt-5"
+
+    # === Indicative context windows ===
+    token_limits = {
+        # GPT-5 family (API page lists 400K total; 128K max output cap)
+        "gpt-5": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
+        "gpt-5-mini": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
+        "gpt-5-nano": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
+        # Common baselines for 4.x
+        "gpt-4.1": {"context_window": 1_000_000, "max_input": None, "max_output": None},
+        "gpt-4.1-mini": {"context_window": 1_000_000, "max_input": None, "max_output": None},
+        "gpt-4o": {"context_window": 128_000, "max_input": None, "max_output": None},
+        "gpt-4o-mini": {"context_window": 128_000, "max_input": None, "max_output": None},
+    }
+
+    # === Standard pricing (per 1M tokens) ===
+    # Source: OpenAI API Pricing page
+    standard_prices = {
+        "gpt-5": {"input": 1.25, "cached": 0.125, "output": 10.00, "unit": "1M tokens"},
+        "gpt-5-mini": {"input": 0.25, "cached": 0.025, "output": 2.00, "unit": "1M tokens"},
+        "gpt-5-nano": {"input": 0.05, "cached": 0.005, "output": 0.40, "unit": "1M tokens"},
+        "gpt-4.1": {"input": 2.00, "cached": 0.50, "output": 8.00, "unit": "1M tokens"},
+        "gpt-4.1-mini": {"input": 0.40, "cached": 0.10, "output": 1.60, "unit": "1M tokens"},
+        "gpt-4o": {"input": 2.50, "cached": None, "output": 10.00, "unit": "1M tokens"},
+        "gpt-4o-mini": {"input": 0.60, "cached": 0.30, "output": 2.40, "unit": "1M tokens"},
+    }
+
+    # === Priority pricing (per 1M tokens) ===
+    # Source: OpenAI "Priority Processing for API Customers"
+    priority_prices = {
+        "gpt-5": {"input": 2.50, "cached": 0.250, "output": 20.00, "unit": "1M tokens"},
+        "gpt-5-mini": {"input": 0.45, "cached": 0.045, "output": 3.60, "unit": "1M tokens"},
+        "gpt-4.1": {"input": 3.50, "cached": 0.875, "output": 14.00, "unit": "1M tokens"},
+        "gpt-4.1-mini": {"input": 0.70, "cached": 0.175, "output": 2.80, "unit": "1M tokens"},
+        "gpt-4o": {"input": 4.25, "cached": 2.125, "output": 17.00, "unit": "1M tokens"},
+        "gpt-4o-mini": {"input": 0.25, "cached": 0.125, "output": 1.00, "unit": "1M tokens"},
+    }
+
+    # === Flex pricing (per 1M tokens) — updated from your screenshot ===
+    # If you want to override via env, set FLEX_PRICE_OVERRIDES as JSON.
+    flex_prices_default = {
+        "gpt-5": {"input": 0.625, "cached": 0.0625, "output": 5.00, "unit": "1M tokens"},
+        "gpt-5-mini": {"input": 0.125, "cached": 0.0125, "output": 1.00, "unit": "1M tokens"},
+        "gpt-5-nano": {"input": 0.025, "cached": 0.0025, "output": 0.20, "unit": "1M tokens"},
+        # Leaving 4.x Flex out unless you explicitly want them; easy to add later.
+    }
+    flex_overrides_env = os.getenv("FLEX_PRICE_OVERRIDES")
+    if flex_overrides_env:
+        try:
+            parsed = json.loads(flex_overrides_env)
+            for k, v in parsed.items():
+                if isinstance(v, dict):
+                    flex_prices_default[k] = {**v, "unit": "1M tokens"}
+        except Exception:
+            pass
+
+    def get_flex_price(model: str) -> Dict[str, Optional[float]]:
+        if model in flex_prices_default:
+            d = flex_prices_default[model]
+            return {
+                "input": d.get("input"),
+                "cached": d.get("cached"),
+                "output": d.get("output"),
+                "unit": d.get("unit", "1M tokens"),
+            }
+        return {"input": None, "cached": None, "output": None, "unit": "1M tokens"}
+
+    # === UI controls ===
+    selected_model = st.selectbox(
+        label="Select Model (structured output capable)",
+        key=f"chat_select_{uk}",
+        options=model_options,
+        index=model_options.index(default_option)
+    )
+
+    service_tier = st.radio(
+        label="Service Tier",
+        key=f"chat_tier_{uk}",
+        options=["Standard", "Priority", "Flex"],
+        index=0
+    )
+
+    temperature = st.slider(
+        label="Temperature",
+        key=f"chat_temp_{uk}",
+        min_value=max(default_min_value, 0.0),
+        max_value=min(default_max_value, 1.0),
+        step=default_step,
+        value=default_temp_value,
+        format="%.2f"
+    )
+    if temperature <= 0.3:
+        st.caption("Low: most deterministic, best for strict JSON/schema.")
+    elif temperature <= 0.7:
+        st.caption("Medium: balanced creativity vs. schema adherence.")
+    else:
+        st.caption("High: diverse outputs; may reduce schema adherence.")
+
+    # === Resolve pricing based on tier ===
+    if service_tier == "Standard":
+        pricing = standard_prices.get(selected_model,
+                                      {"input": None, "cached": None, "output": None, "unit": "1M tokens"})
+    elif service_tier == "Priority":
+        pricing = priority_prices.get(selected_model,
+                                      {"input": None, "cached": None, "output": None, "unit": "1M tokens"})
+    else:  # Flex
+        pricing = get_flex_price(selected_model)
+
+    # === Display price + limits ===
+    tl = token_limits.get(selected_model, {})
+    cw = tl.get("context_window")
+    max_in = tl.get("max_input")
+    max_out = tl.get("max_output")
+
+    def _fmt_price(p: Optional[float], label: str) -> Optional[str]:
+        return f"{label}: ${p:.4f} / {pricing['unit']}" if isinstance(p, (int, float)) else None
+
+    parts = [
+        _fmt_price(pricing.get("input"), "Input"),
+        _fmt_price(pricing.get("cached"), "Cached input"),
+        _fmt_price(pricing.get("output"), "Output"),
+    ]
+    price_line = " | ".join([p for p in parts if p]) if any(parts) else "Pricing: not available"
+
+    cw_bits = [f"Context window: ~{cw:,} tokens" if cw else "Context window: see model docs"]
+    if max_in:
+        cw_bits.append(f"Max input: ~{max_in:,}")
+    if max_out:
+        cw_bits.append(f"Max output: ~{max_out:,}")
+    st.info(f"Model: {selected_model} | Tier: {service_tier} | {price_line} | {' | '.join(cw_bits)}")
+
+    # === Optional: inline cost estimator ===
+    with st.expander("Estimate cost for this request (optional)"):
+        in_tokens = st.number_input("Estimated input tokens (prompt)", min_value=0, value=0, step=1000,
+                                    key=f"in_tokens_{uk}")
+        cached_ratio = st.slider("Estimated % of input tokens served from prompt cache", 0, 100, 0, 5,
+                                 key=f"cached_ratio_{uk}")
+        out_tokens = st.number_input("Estimated output tokens (completion)", min_value=0, value=0, step=1000,
+                                     key=f"out_tokens_{uk}")
+
+        def estimate_cost(pr: Dict[str, Any], in_tok: int, cached_pct: int, out_tok: int) -> Optional[float]:
+            if pr.get("input") is None or pr.get("output") is None:
+                return None
+            cached = pr.get("cached")
+            cached_tokens = int(in_tok * (cached_pct / 100.0))
+            regular_tokens = max(0, in_tok - cached_tokens)
+            per_m = 1_000_000.0
+            input_cost = (regular_tokens / per_m) * pr["input"]
+            cached_cost = (cached_tokens / per_m) * (cached if cached is not None else pr["input"])
+            output_cost = (out_tok / per_m) * pr["output"]
+            return round(input_cost + cached_cost + output_cost, 6)
+
+        est = estimate_cost(pricing, in_tokens, cached_ratio, out_tokens)
+        if est is None:
+            st.warning("Pricing not available for this tier/model combination.")
+        else:
+            st.success(f"Estimated cost: ${est:,.6f}")
+
+    # Map UI service tiers to LangChain BaseChatOpenAI service_tier values
+    _service_tier_map = {"Standard": "default", "Priority": "auto", "Flex": "flex"}
+
+    # ... inside define_chatGPTModel, after service_tier is set:
+    langchain_service_tier = _service_tier_map.get(service_tier, "default")
+
+    return {
+        "model": selected_model,
+        "temperature": float(temperature),
+        "service_tier": service_tier,  # UI-facing
+        "langchain_service_tier": langchain_service_tier,  # use this when creating ChatOpenAI(...)
+        "pricing": pricing,
+        "token_limits": {"context_window": cw, "max_input": max_in, "max_output": max_out},
+    }
 
 
 def reset_session_key_value(key: str):
@@ -972,7 +1155,6 @@ def get_file_mime_type(file_extension: str):
             key = None
             value = None
 
-
         if key in mime_dict:
             mime_dict[key].append(value)
         else:
@@ -984,7 +1166,8 @@ def get_file_mime_type(file_extension: str):
     return preferred_mime_dict.get(file_extension, "application/octet-stream")
 
 
-def on_download_click(download_button_placeholder: DeltaGenerator, file_path: str, button_label: str, download_file_name: str):
+def on_download_click(download_button_placeholder: DeltaGenerator, file_path: str, button_label: str,
+                      download_file_name: str):
     file_extension = get_file_extension_from_filepath(download_file_name)
     mime_type = get_file_mime_type(file_extension)
     # st.info("file_extension: " + file_extension + " | mime_type: " + mime_type)
@@ -999,9 +1182,9 @@ def on_download_click(download_button_placeholder: DeltaGenerator, file_path: st
 
     # Trigger the download of the file
     download_button_placeholder.download_button(label=button_label, data=file_content,
-                               file_name=download_file_name, mime=mime_type
-                               # , key=download_file_name
-                               )
+                                                file_name=download_file_name, mime=mime_type
+                                                # , key=download_file_name
+                                                )
 
 
 def create_zip_file(file_paths: list[tuple[str, str]]) -> str:
@@ -1042,7 +1225,7 @@ def with_streamlit_context(fn: T) -> T:
 
         thread = threading.current_thread()
         do_nothing = hasattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) and (
-            getattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) == ctx
+                getattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) == ctx
         )
 
         if not do_nothing:

@@ -1,3 +1,4 @@
+import json
 from pprint import pprint
 from typing import Type, TypeVar
 
@@ -14,7 +15,7 @@ from pydantic import BaseModel
 
 from cqc_cpcc.utilities.AI.llm.llms import get_default_retry_model
 from cqc_cpcc.utilities.AI.llm.prompts import *
-from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS
+from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS, DEBUG
 from cqc_cpcc.utilities.my_pydantic_parser import CustomPydanticOutputParser
 
 T = TypeVar("T", bound=BaseModel)
@@ -23,7 +24,7 @@ T = TypeVar("T", bound=BaseModel)
 def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplate, retry_model: str,
                  **prompt_args) -> T:
     final_output = output
-    retry_llm = ChatOpenAI(temperature=0, model=retry_model)
+    retry_llm = ChatOpenAI(temperature=0, model=retry_model, use_responses_api=True)
     retry_parser = RetryWithErrorOutputParser.from_llm(parser=parser, llm=retry_llm,
                                                        max_retries=RETRY_PARSER_MAX_RETRY
                                                        )
@@ -155,6 +156,8 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
         response_format={"type": "json_object"}
     )
 
+    _llm.with_structured_output(pydantic_object, method="json_schema", include_raw=False)
+
     completion_chain = prompt | _llm
     # completion_chain = LLMChain(llm=_llm, prompt=prompt)
 
@@ -187,21 +190,101 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
     },
         config=config)
 
-    # print("\n\nOutput:")
-    # pprint(output.content)
+    if DEBUG:
+        print("\n\nOutput:")
+        pprint(output.content)
 
-    try:
-        final_output = parser.parse(output.content)
-        # final_output = parser.parse(output.get('text'))
-    except Exception as e:
-        print("\n\nException during parse:")
-        print(e)
-        # retry_model = get_llm_model_from_runnable_serializable(completion_chain)
-        retry_model = get_default_retry_model()
-        final_output = retry_output(output, parser, prompt,
-                                    submission=student_submission,
-                                    retry_model=retry_model
-                                    )
+    # Defensive parse of the returned content
+    content = output.content
+    final_output = None
+
+    # If it's already a JSON string
+    if isinstance(content, str):
+        try:
+            final_output = parser.parse(content)
+            if DEBUG:
+                print("\n\nFinal Output (was already json string):")
+                pprint(final_output)
+        except Exception as e:
+            print("\n\nException during parse (string):")
+            print(e)
+            retry_model = get_default_retry_model()
+            final_output = retry_output(output, parser, prompt,
+                                        submission=student_submission,
+                                        retry_model=retry_model
+                                        )
+
+    # If the Responses API returned a dict already
+    elif isinstance(content, dict):
+        try:
+            final_output = parser.parse(json.dumps(content))
+            if DEBUG:
+                print("\n\nFinal Output (already a dict):")
+                pprint(final_output)
+        except Exception as e:
+            print("\n\nException during parse (dict):")
+            print(e)
+            retry_model = get_default_retry_model()
+            final_output = retry_output(output, parser, prompt,
+                                        submission=student_submission,
+                                        retry_model=retry_model
+                                        )
+
+    # If the Responses API returned a list (common case: [{'type':'text','text':'{...}'}])
+    elif isinstance(content, list):
+        parsed_obj = None
+        # look for a JSON string in common keys, or for a dict matching expected keys
+        for item in content:
+            if isinstance(item, dict):
+                # direct structured dict (contains expected top-level keys)
+                if any(k in item for k in ("all_major_errors", "all_minor_errors")):
+                    parsed_obj = item
+                    break
+                # common text fields that may contain JSON
+                for key in ("text", "content", "value", "data"):
+                    if key in item and isinstance(item[key], str):
+                        s = item[key].strip()
+                        try:
+                            parsed_obj = json.loads(s)
+                            break
+                        except Exception:
+                            # not valid JSON, continue scanning
+                            parsed_obj = None
+                if parsed_obj is not None:
+                    break
+
+        if parsed_obj is not None:
+            try:
+                final_output = parser.parse(json.dumps(parsed_obj))
+                if DEBUG:
+                    print("\n\nFinal Output (parsed from list):")
+                    pprint(final_output)
+            except Exception as e:
+                print("\n\nException during parse (from list):")
+                print(e)
+                retry_model = get_default_retry_model()
+                final_output = retry_output(output, parser, prompt,
+                                            submission=student_submission,
+                                            retry_model=retry_model
+                                            )
+        else:
+            # fallback: pass the raw content to parser (or retry)
+            try:
+                final_output = parser.parse(json.dumps(content))
+            except Exception as e:
+                print("\n\nException during parse (fallback list):")
+                print(e)
+                retry_model = get_default_retry_model()
+                final_output = retry_output(output, parser, prompt,
+                                            submission=student_submission,
+                                            retry_model=retry_model
+                                            )
+
+    else:
+        final_output = content
+        if DEBUG:
+            print("\n\nFinal Output (not a string, dict, nor list):")
+            pprint(final_output)
 
     return final_output
 

@@ -26,6 +26,7 @@ except KeyError:
     IS_GITHUB_ACTION = False
 
 # Get constants from environment .env file
+DEBUG = isTrue(get_constanct_from_env('DEBUG', default_value='False'))
 OPENAI_API_KEY = get_constanct_from_env('OPENAI_API_KEY')
 INSTRUCTOR_USERID = get_constanct_from_env('INSTRUCTOR_USERID')
 INSTRUCTOR_PASS = get_constanct_from_env('INSTRUCTOR_PASS')

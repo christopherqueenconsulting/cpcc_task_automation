@@ -105,10 +105,13 @@ def get_flowgorithm_content():
         st.header("Assignment Total Points Possible")
         total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
 
-        selected_model, temperature = define_chatGPTModel(unique_key="flowgorithm_assignment", default_temp_value=.5)
+        model_cfg = define_chatGPTModel("flowgorithm_assignment", default_temp_value=.5)
+        selected_model = model_cfg.get("model", "gpt-5")
+        selected_temperature = float(model_cfg.get("temperature", .5))
+        selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
         if st.session_state.openai_api_key:
-            custom_llm = get_custom_llm(temperature=temperature, model=selected_model)
+            custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model, service_tier=selected_service_tier)
 
             student_submission_file_path, student_submission_temp_file_path = add_upload_file_element(
                 "Upload Student Flowgorithm Submission",
@@ -282,7 +285,10 @@ async def get_grade_exam_content():
         # Convert DataFrame to list of Minor Error types
         minor_error_type_list = minor_error_types[DESCRIPTION].to_list()
 
-    selected_model, selected_temperature = define_chatGPTModel("grade_exam_assigment", default_temp_value=.3)
+    model_cfg = define_chatGPTModel("grade_exam_assigment", default_temp_value=.3)
+    selected_model = model_cfg.get("model", "gpt-5")
+    selected_temperature = float(model_cfg.get("temperature", .3))
+    selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
     st.header("Student Submission File(s)")
     student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip", "xlsx", "xls", "xlsm"]
@@ -300,7 +306,7 @@ async def get_grade_exam_content():
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
 
-        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model)
+        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model,service_tier=selected_service_tier)
 
         # Start status wheel and display with updates from the coder
 
