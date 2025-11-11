@@ -2,7 +2,7 @@ import json
 from pprint import pprint
 from typing import Type, TypeVar
 
-from langchain.output_parsers import RetryWithErrorOutputParser
+from langchain_classic.output_parsers import RetryWithErrorOutputParser
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel

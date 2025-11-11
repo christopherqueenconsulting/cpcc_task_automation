@@ -87,7 +87,7 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
                 #     faculty_reason)
                 # )
 
-                # Student Last Name and First Name is the student_name split by comma and replace underscore blank character
+                # Student's Last Name and First Name is the student_name split by comma and replace underscore blank character
                 student_name = student_name.replace("_", "")
                 student_name_array = student_name.split(",")
                 last_name = student_name_array[0].strip()

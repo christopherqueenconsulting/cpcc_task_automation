@@ -1,6 +1,7 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
 import datetime as DT
+import time
 from typing import List
 
 from selenium.common import NoSuchElementException, TimeoutException, StaleElementReferenceException
@@ -82,13 +83,13 @@ class MyColleges:
     def process_attendance(self) -> List[BrightSpace_Course]:
         self.get_course_info()
 
-        # Keep track of original tab
+        # Keep track of the original tab
         original_tab = self.driver.current_window_handle
 
         # Use check date of a week ago
         check_date = DT.date.today() - DT.timedelta(days=7)
 
-        # Keep array of all the BrightSpace courses
+        # Keep an array of all the BrightSpace courses
         bs_courses = []
 
         for course_name, course_info in self.course_information.items():
@@ -110,7 +111,7 @@ class MyColleges:
                 # Wait for the new window or tab
                 self.wait.until(EC.new_window_is_opened(handles))
 
-                # Keep track of current tab
+                # Keep track of the current tab
                 self.current_tab = self.driver.current_window_handle
 
                 # Navigate to course url
@@ -155,7 +156,7 @@ class MyColleges:
                                          "Waiting for Attendance Tab")
 
                 # Find the latest attendance record to use as start date
-                last_attendance_record_dates = get_elements_text_as_list_wait_stale(self.wait,
+                last_attendance_record_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                                     "//td[@data-role='Last Attendance Recorded']",
 
                                                                                     "Waiting for Latest Attendance Records")
@@ -174,7 +175,7 @@ class MyColleges:
                     latest_date_str = get_latest_date(last_attendance_record_dates)
                     # logger.debug("Latest Attendance Recorded Date (string): %s" % latest_date_str)
 
-                    # Get Latest Date and Convert To date time
+                    # Get the Latest Date and Convert To date time
                     last_attendance_record_date = get_datetime(latest_date_str)
                     logger.info(
                         "Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
@@ -184,6 +185,10 @@ class MyColleges:
                     last_attendance_record_date = course_start_date
                     logger.info("No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
                         "%m-%d-%Y"))
+
+                # TODO: NOTE:  VVV This is to be used to start attendance from the course start date if something went wrong over time
+                # last_attendance_record_date = course_start_date
+                # TODO: NOTE:  ^^^ This is to be used to start attendance from the course start date if something went wrong over time
 
                 bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
                                          course_start_date, course_end_date,
@@ -300,7 +305,8 @@ class MyColleges:
         except StaleElementReferenceException as se:
             if retry < 3:
                 logger.error("Stale Element Exception. Trying again in 5 seconds...")
-                self.driver.implicitly_wait(5)  # wait 5 seconds
+                #self.driver.implicitly_wait(5)  # wait 5 seconds
+                time.sleep(5)
                 success = self.mark_student_present(full_name, retry + 1)
             else:
                 logger.error("Exception (after %s retries): %s" % (str(retry), se))
@@ -346,21 +352,21 @@ class MyColleges:
 
                 # Wait for the Loading section roster message to disappear
                 wait_for_element_to_hide(self.wait, '//*[@id="faculty-roster"]/spinner/div',
-                                         "Waiting for Roster Loading Message to disaapera")
+                                         "Waiting for Roster Loading Message to disappear")
 
                 # TODO. Make sure there is not pagination that should be handled
 
                 # Grab the student information
                 # Get all the students that have withdrawn between the first drop date and final drop date
-                student_names = get_elements_text_as_list_wait_stale(self.wait,
+                student_names = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                      '//*[contains(@id,"roster_studentname")]',
                                                                      "Waiting for Student Names")
 
-                student_ids = get_elements_text_as_list_wait_stale(self.wait,
+                student_ids = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                    '//*[contains(@id,"roster_studentid")]',
                                                                    "Waiting for Student Ids")
 
-                student_emails = get_elements_text_as_list_wait_stale(self.wait,
+                student_emails = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                       '//*[contains(@id,"roster_preferredemail")]',
                                                                       "Waiting for Student Emails")
 

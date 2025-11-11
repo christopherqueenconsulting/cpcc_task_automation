@@ -1,11 +1,12 @@
 import time
 from enum import Enum
+from typing import Callable
 
 import chromedriver_autoinstaller
 from pyvirtualdisplay import Display
 from selenium import webdriver
 from selenium.common import NoSuchElementException, StaleElementReferenceException, ElementNotInteractableException, \
-    TimeoutException, WebDriverException, JavascriptException
+    TimeoutException, WebDriverException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -262,7 +263,7 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
     except (StaleElementReferenceException, ElementNotInteractableException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale or Not Interactable | .....retrying")
         time.sleep(5)  # wait 5 seconds
-        driver.implicitly_wait(5)  # wait on driver 5 seconds
+        #driver.implicitly_wait(5)  # wait on driver 5 seconds
         if max_try > 1:
             element = click_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
         else:
@@ -289,7 +290,7 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
     except (StaleElementReferenceException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale | .....retrying")
         time.sleep(5)  # wait 5 seconds
-        driver.implicitly_wait(5)  # wait on driver 5 seconds
+        #driver.implicitly_wait(5)  # wait on driver 5 seconds
         if max_try > 1:
             element = get_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
         else:
@@ -299,52 +300,105 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
     return element
 
 
-def get_elements_as_list_wait_stale(wait: WebDriverWait, find_by_value: str, wait_text: str,
-                                    find_by: str = By.XPATH, max_retry=3) -> list[WebElement]:
-    elements = []
+def get_elements_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
+                                    find_by: str = By.XPATH, max_retry=3, refresh_on_stale: bool = False,
+                                    additional_lambda_function: Callable[[WebElement], str|None] | None  = None) -> list[WebElement|str]:
+    """Return a list of WebElement found by the locator.
+
+    Behavior:
+    - Retries up to `max_retry` times when encountering StaleElementReferenceException.
+    - Optionally performs a single page refresh on the first stale occurrence when
+      `refresh_on_stale=True` to recover from large DOM replacements.
+    - This method performs the retry loop itself (iteratively) so child callers
+      should not wrap or add additional retries to avoid compounding attempts.
+    """
+    elements: list[WebElement|str] = []
+
+    refreshed = False
+
+    for attempt in range(1, max_retry + 1):
+        try:
+            #elements = wait.until(lambda d: d.find_elements(find_by, find_by_value), wait_text)
+
+            # Find all the elements by the locator. If additional_lambda_function is provided, apply the lambda function to each element as well.
+            elements = wait.until(lambda d: [additional_lambda_function(e) if additional_lambda_function is not None else e for e in d.find_elements(find_by, find_by_value)], wait_text)
+
+            return elements
+        except StaleElementReferenceException as se:
+            logger.info("%s | Stale | retrying (%s/%s)", wait_text, attempt, max_retry)
+            time.sleep(1)
+
+            # Optionally, try a refresh once to recover from major DOM replacement
+            if refresh_on_stale and not refreshed:
+                try:
+                    logger.info("Refreshing page to recover from stale elements")
+                    driver.refresh()
+                    refreshed = True
+                    try:
+                        wait_for_ajax(driver)
+                    except Exception:
+                        # best-effort only
+                        pass
+                except Exception as e:
+                    logger.debug("Refresh failed while recovering from stale: %s", e)
+
+            # continue the loop and attempt to re-query
+            continue
+        except TimeoutException as te:
+            # If waiting timed out, re-raise so callers can handle as before
+            logger.debug("%s | Timeout while finding elements: %s", wait_text, te)
+            raise te
+
+    # Exhausted retries - raise stale to indicate callers that recovery failed
+    raise StaleElementReferenceException(f"Unable to get stable elements for '{wait_text}' after {max_retry} attempts")
+
+
+def get_elements_text_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
+                                         find_by: str = By.XPATH, max_retry=3, refresh_on_stale: bool = False) -> list[str]:
+    """Return the text of elements found by the locator. Delegates to
+    `get_elements_as_list_wait_stale` which now contains the retry + refresh logic.
+
+    If the base method raises StaleElementReferenceException the child will log the
+    simplified failure message and return an empty list (per request).
+    """
+    elements: list[str] = []
 
     try:
-        elements = wait.until(lambda d: d.find_elements(find_by, find_by_value), wait_text)
-        # elements_list = list(map(lambda x: getText(x), elements))
-    except (StaleElementReferenceException, TimeoutException) as se:
-        logger.debug(wait_text + " | Stale | .....retrying")
-        time.sleep(5)  # wait 5 seconds
-        if max_retry > 1:
-            elements = get_elements_as_list_wait_stale(wait, find_by_value, wait_text, find_by, max_retry - 1)
-        else:
-            # raise NoSuchElementException("Could not find element by %s with value: %s" % (find_by, find_by_value))
-            raise se
-
-    return elements
-
-
-def get_elements_text_as_list_wait_stale(wait: WebDriverWait, find_by_value: str, wait_text: str,
-                                         find_by: str = By.XPATH, max_retry=3) -> list[str]:
-    elements_list = []
-    for _ in range(max_retry):
-        try:
-            elements = get_elements_as_list_wait_stale(wait, find_by_value, wait_text, find_by, max_retry)
-            elements_list = [getText(element) for element in elements]
-            break
-        except StaleElementReferenceException:
-            logger.info(wait_text + " | Stale | .....retrying")
-            time.sleep(5)  # wait 5 seconds
-    return elements_list
+        elements = get_elements_as_list_wait_stale(driver, wait, find_by_value, wait_text, find_by, max_retry, refresh_on_stale,
+                                                   lambda x: getText(x))
+        #logger.info(f"Found {len(elements)} elements")
+        return elements
+    except StaleElementReferenceException:
+        logger.info(wait_text + " | List Count: %s | Stale | .....failed", len(elements))
+        return []
+    except TimeoutException:
+        # Preserve previous behavior: propagate or return empty list depending on callers expectations
+        logger.info(wait_text + " | Timeout | .....failed")
+        return []
+        #raise
 
 
-def get_elements_href_as_list_wait_stale(wait: WebDriverWait, find_by_value: str, wait_text: str,
-                                         find_by: str = By.XPATH, max_retry=3) -> list:
-    elements_list = []
-    for _ in range(max_retry):
-        try:
-            elements = get_elements_as_list_wait_stale(wait, find_by_value, wait_text, find_by, max_retry)
-            elements_list = [element.get_attribute('href') for element in elements]
-            break
-        except StaleElementReferenceException:
-            logger.info(wait_text + " | Stale | .....retrying")
-            time.sleep(5)  # wait 5 seconds
-    return elements_list
+def get_elements_href_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
+                                         find_by: str = By.XPATH, max_retry=3, refresh_on_stale: bool = False) -> list:
+    """Return the href attributes for elements found by the locator.
 
+    Delegates to `get_elements_as_list_wait_stale`. If the base raises a stale
+    exception the child logs the simplified failure message and returns an empty list.
+    """
+
+    elements: list[str] = []
+
+    try:
+        elements = get_elements_as_list_wait_stale(driver, wait, find_by_value, wait_text, find_by, max_retry, refresh_on_stale,
+                                                   lambda x: x.get_attribute('href'))
+        #logger.info(f"Found {len(elements)} elements")
+        return elements
+    except StaleElementReferenceException:
+        logger.info(wait_text + " | List Count: %s | Stale | .....failed", len(elements))
+        return []
+    except TimeoutException:
+        logger.info(wait_text + " | Timeout | .....failed")
+        return []
 
 def wait_for_ajax(driver):
     wait = get_driver_wait(driver)

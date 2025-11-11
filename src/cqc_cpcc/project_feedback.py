@@ -201,7 +201,7 @@ def process_submissions_from_course_url(driver: WebDriver, wait: WebDriverWait, 
     # Find Projects with Past Due Dates
     # Criteria - Name contains "Project", Has Submissions
     try:
-        due_dates = get_elements_text_as_list_wait_stale(wait,
+        due_dates = get_elements_text_as_list_wait_stale(driver, wait,
                                                          "//tr[descendant::a[contains(@title,'Project')] and descendant::a[contains(@class,'d2l-link') and contains(@title,'new')]]//*[contains(text(),'Due')]",
                                                          "Waiting on Due Dates")
     except TimeoutException as te:
@@ -211,7 +211,7 @@ def process_submissions_from_course_url(driver: WebDriver, wait: WebDriverWait, 
     due_dates = list(map(lambda b: b.replace("Due on ", ""), due_dates))
     logger.info("Due Dates:\n%s" % "\n".join(due_dates))
 
-    submission_links = get_elements_href_as_list_wait_stale(wait,
+    submission_links = get_elements_href_as_list_wait_stale(driver, wait,
                                                             "//tr[descendant::a[contains(@title,'Project')] and descendant::a[contains(@class,'d2l-link') and contains(@title,'new')]]//a[contains(@class,'d2l-link') and contains(@title,'new')]",
                                                             "Waiting on submission links")
 

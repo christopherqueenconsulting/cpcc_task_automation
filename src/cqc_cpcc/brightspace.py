@@ -2,6 +2,7 @@
 
 import datetime as DT
 import re
+import time
 from collections import defaultdict
 from pprint import pprint
 
@@ -221,21 +222,25 @@ class BrightSpace_Course:
             table_prefix_xpath = "//table[@summary='Withdrawals summary']"
 
             # Get all the students that have withdrawn between the first drop date and final drop date
-            student_names = get_elements_text_as_list_wait_stale(self.wait,
+            student_names = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                  table_prefix_xpath + "//th[@class='d_gn d_ich']",
-                                                                 "Waiting for Student Names")
+                                                                 "Waiting for Student Names",
+                                                                 refresh_on_stale=True)
 
-            student_ids = get_elements_text_as_list_wait_stale(self.wait,
+            student_ids = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                table_prefix_xpath + "//td[4]//label[1]",
-                                                               "Waiting for Student Ids")
+                                                               "Waiting for Student Ids",
+                                                               refresh_on_stale=True)
 
-            student_emails = get_elements_text_as_list_wait_stale(self.wait,
+            student_emails = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                table_prefix_xpath + "//td[5]//label[1]",
-                                                               "Waiting for Student Ids")
+                                                               "Waiting for Student Ids",
+                                                               refresh_on_stale=True)
 
-            withdrawal_dates = get_elements_text_as_list_wait_stale(self.wait,
+            withdrawal_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                     table_prefix_xpath + "//td[7]//label[1]",
-                                                                    "Waiting for Withdrawal Dates")
+                                                                    "Waiting for Withdrawal Dates",
+                                                                    refresh_on_stale=True)
 
             student_withdrawals_dict = dict(zip(student_ids, zip(student_names, student_emails, withdrawal_dates)))
 
@@ -334,9 +339,10 @@ class BrightSpace_Course:
 
         try:
             # Get all the Due Dates
-            due_dates = get_elements_text_as_list_wait_stale(self.wait,
+            due_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                              find_by_xpath_value,
-                                                             "Waiting for Dates")
+                                                             "Waiting for Dates",
+                                                             refresh_on_stale=True)
             # print("Found Due Dates: (before)")
             # pprint(due_dates)
             # print("-" * LINE_DASH_COUNT)
@@ -419,8 +425,8 @@ class BrightSpace_Course:
                 ["contains(.//text(), '{}')".format(d_date) for d_date in
                  due_dates]) + "]]/ancestor::th[1]//a[contains(@class,'d2l-link')]"
 
-            assignment_links = get_elements_href_as_list_wait_stale(self.wait, xpath_expression,
-                                                                    "Waiting for Assignment Links")
+            assignment_links = get_elements_href_as_list_wait_stale(self.driver, self.wait, xpath_expression,
+                                                                    "Waiting for Assignment Links", refresh_on_stale=True)
             logger.info("Assignment Link(s) Due Between %s - %s:" % (self.date_range_start, self.date_range_end))
             logger.info("\n".join(assignment_links))
 
@@ -446,6 +452,10 @@ class BrightSpace_Course:
 
             # Got to assignment url
             self.driver.get(au)
+
+            # Wait for ajax to load
+            wait_for_ajax(self.driver)
+
             # Get the Completion Summary Link
             click_element_wait_retry(self.driver, self.wait, "//a[contains(.//text(),'Submissions')]",
                                      "Waiting for Submissions Link")
@@ -456,14 +466,39 @@ class BrightSpace_Course:
                 # Find the student names and the dates the for completed assignments
                 table_prefix_xpath = "//table[contains(@summary,'List of users and the submissions')]"
                 try:
-                    student_names = get_elements_text_as_list_wait_stale(self.wait,
-                                                                         table_prefix_xpath + "//td[3]",
-                                                                         "Waiting for Student Names",
-                                                                         max_retry=1)
 
-                    completed_dates = get_elements_text_as_list_wait_stale(self.wait,
-                                                                           table_prefix_xpath + "//td[2]//label[1]",
-                                                                           "Waiting for Completion Dates")
+                    attempts = 0
+                    max_attempts = 2
+                    student_names = []
+                    completed_dates = []
+                    while attempts < max_attempts:
+
+                        student_names = get_elements_text_as_list_wait_stale(self.driver, self.wait,
+                                                                             table_prefix_xpath + "//td[3]",
+                                                                             "Waiting for Student Names",
+                                                                             refresh_on_stale=True)
+
+                        completed_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
+                                                                               table_prefix_xpath + "//td[2]//label[1]",
+                                                                               "Waiting for Completion Dates",
+                                                                               refresh_on_stale=True)
+                        if len(student_names) == len(completed_dates):
+                            break  # Success, exit loop
+                        attempts += 1
+                        logger.warn(
+                            "Attempt %d: Mismatched lengths for student names and completed dates for assignment: %s | Student Names: %s | Completed Dates: %s | .....retrying." % (
+                                attempts, au, len(student_names), len(completed_dates)))
+
+                    if len(student_names) == 0:
+                        logger.info("No Student Names Found")
+                    if len(completed_dates) == 0:
+                        logger.info("No Completion Dates Found")
+                    # If the student names and completed dates lengths do not match, log an error and skip this assignment
+                    if len(student_names) != len(completed_dates):
+                        logger.error(
+                            "Mismatched lengths for student names and completed dates for assignment: %s | Student Names: %s | Completed Dates: %s" % (
+                                au, len(student_names), len(completed_dates)))
+                        continue
 
                     student_completions_dict = dict(zip(student_names, completed_dates))
 
@@ -541,8 +576,8 @@ class BrightSpace_Course:
 
             # logger.info("Quizzes Links XPath: %s" % xpath_expression)
 
-            quizzes_links = get_elements_href_as_list_wait_stale(self.wait, xpath_expression,
-                                                                 "Waiting for Quizzes Links within due date range")
+            quizzes_links = get_elements_href_as_list_wait_stale(self.driver, self.wait, xpath_expression,
+                                                                 "Waiting for Quizzes Links within due date range", refresh_on_stale=True)
 
             # Need to modify the links using the quiz id
             quizzes_links = [self.modify_quiz_edit_url_to_attempt_log_url(link) for link in quizzes_links]
@@ -589,6 +624,9 @@ class BrightSpace_Course:
                 select.select_by_value(str(max_value))
                 wait_for_ajax(self.driver)
                 select_element.send_keys(Keys.TAB)  # Use to blur the select element
+                # Explicit wait 1 second
+                time.sleep(3)
+                #self.driver.implicitly_wait(3)
                 select_successful = True
             except (NoSuchElementException, ElementNotInteractableException):
                 # Break the while loop
@@ -596,7 +634,8 @@ class BrightSpace_Course:
             except (StaleElementReferenceException, TimeoutException) as ste:
                 logger.info("Exception while looking for: %s | Error: %s" % (select_xpath, ste))
                 retry -= 1
-                self.driver.implicitly_wait(3)  # wait 3 seconds
+                #self.driver.implicitly_wait(3)  # wait 3 seconds
+                time.sleep(3)
 
             # are_you_satisfied()
 
@@ -619,6 +658,10 @@ class BrightSpace_Course:
 
             # Got to quizzes url
             self.driver.get(qu)
+
+            # Wait for ajax to load
+            wait_for_ajax(self.driver)
+
             # Click the Quiz Completion Link
             click_element_wait_retry(self.driver, self.wait, "//a[contains(.//text(),'Quiz Completion')]",
                                      "Waiting for Quiz Completion Link")
@@ -629,14 +672,36 @@ class BrightSpace_Course:
                 # Find the student names and the dates the for completed assignments
                 table_prefix_xpath = "//div[@id='OverviewGrid']//table"
                 try:
-                    student_names = get_elements_text_as_list_wait_stale(self.wait,
-                                                                         table_prefix_xpath + "//td[2]",
-                                                                         "Waiting for Student Names",
-                                                                         max_retry=1)
 
-                    completed_dates = get_elements_text_as_list_wait_stale(self.wait,
-                                                                           table_prefix_xpath + "//td[3]",
-                                                                           "Waiting for Completion Dates")
+                    attempts = 0
+                    max_attempts = 2
+                    student_names = []
+                    completed_dates = []
+                    while attempts < max_attempts:
+                        student_names = get_elements_text_as_list_wait_stale(self.driver, self.wait,
+                                                                             table_prefix_xpath + "//td[2]",
+                                                                             "Waiting for Student Names",
+                                                                             refresh_on_stale=True)
+
+                        completed_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
+                                                                               table_prefix_xpath + "//td[3]",
+                                                                               "Waiting for Completion Dates",
+                                                                               refresh_on_stale=True)
+
+
+                        if len(student_names) == len(completed_dates):
+                            break  # Success, exit loop
+                        attempts += 1
+                        logger.warn("Attempt %d: Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s | .....retrying." % (attempts, qu, len(student_names), len(completed_dates)))
+
+                    if len(student_names) == 0:
+                        logger.info("No Student Names Found")
+                    if len(completed_dates) == 0:
+                        logger.info("No Completion Dates Found")
+                    # If the student names and post-dates lengths do not match, log an error and skip this quiz
+                    if len(student_names) != len(completed_dates):
+                        logger.error("Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s" % (qu, len(student_names), len(completed_dates)))
+                        continue
 
                     student_completions_dict = dict(zip(student_names, completed_dates))
 
@@ -691,8 +756,8 @@ class BrightSpace_Course:
                 ['contains(text(), "{}")'.format(d_date) for d_date in
                  latest_post_dates]) + "]]//a[contains(@class,'d2l-linkheading-link')]"
 
-            discussion_links = get_elements_href_as_list_wait_stale(self.wait, xpath_expression,
-                                                                    "Waiting for Discussions Links")
+            discussion_links = get_elements_href_as_list_wait_stale(self.driver, self.wait, xpath_expression,
+                                                                    "Waiting for Discussions Links", refresh_on_stale=True)
             logger.info("Discussion Latest Post Link(s) Between %s - %s:" % (
                 self.date_range_start, DT.date.today()))  # Use today as the end date incase someone posted recently
             logger.info("\n".join(discussion_links))
@@ -723,6 +788,9 @@ class BrightSpace_Course:
             # Go to discussion url
             self.driver.get(du)
 
+            # Wait for ajax to load
+            wait_for_ajax(self.driver)
+
             # Switch to 1st Iframe
             iframe = self.wait.until(lambda d: d.find_element(By.XPATH, "//iframe[contains(@title,'Main Content')]"),
                                      "Waiting for Main Content Iframe")
@@ -747,18 +815,45 @@ class BrightSpace_Course:
                 # Find the student names and the dates the for completed assignments
                 table_prefix_xpath = "//table[contains(@class, 'd2l-grid') and contains(@class,'d_gl')]"
                 try:
-                    student_names = get_elements_text_as_list_wait_stale(self.wait,
-                                                                         table_prefix_xpath + "//td[last()-1]",
-                                                                         "Waiting for Student Names",
-                                                                         max_retry=1)
 
-                    logger.info("Student Names: %s" % "\n".join(student_names))
+                    attempts = 0
+                    max_attempts = 2
+                    student_names = []
+                    post_dates = []
+                    while attempts < max_attempts:
+                        student_names = get_elements_text_as_list_wait_stale(self.driver, self.wait,
+                                                                             table_prefix_xpath + "//td[last()-1]",
+                                                                             "Waiting for Student Names",
+                                                                             refresh_on_stale=True)
 
-                    post_dates = get_elements_text_as_list_wait_stale(self.wait,
-                                                                      table_prefix_xpath + "//td[last()]",
-                                                                      "Waiting for Completion Dates")
+                        logger.info("Student Names: %s" % "\n".join(student_names))
 
-                    logger.info("Post Dates: %s" % "\n".join(post_dates))
+                        post_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
+                                                                          table_prefix_xpath + "//td[last()]",
+                                                                          "Waiting for Completion Dates",
+                                                                          refresh_on_stale=True)
+
+                        logger.info("Post Dates: %s" % "\n".join(post_dates))
+
+                        if len(student_names) == len(post_dates):
+                            break  # Success, exit loop
+                        attempts += 1
+                        logger.warn(
+                            "Attempt %d: Mismatched lengths for student names and post dates for discussion: %s | Student Names: %s | Post Dates: %s | .....retrying." % (
+                                attempts, du, len(student_names), len(post_dates)))
+
+                    if len(student_names) == 0:
+                        logger.info("No Student Names Found")
+                    if len(post_dates) == 0:
+                        logger.info("No Completion Dates Found")
+
+                    # If the student names and post-dates lengths do not match, log an error and skip this quiz
+                    if len(student_names) != len(post_dates):
+                        logger.error(
+                            "Mismatched lengths for student names and post-dates for Discussion: %s | Student Names: %s | Post Dates: %s" % (
+                                du, len(student_names), len(post_dates)))
+                        continue
+
 
                     # Create a default dict to store dates associated with each student
                     student_post_date_dict = defaultdict(list)
