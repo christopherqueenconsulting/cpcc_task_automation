@@ -135,21 +135,38 @@ def get_flowgorithm_content():
         else:
             st.error("Please provide your Open API Key on the settings page.")
 
+def get_course_list_from_error_definitions() -> list[str]:
+    course_set = set()
 
-def define_error_definitions() -> tuple[pd.DataFrame, pd.DataFrame]:
+    for enum_name in MajorErrorType.__dict__.keys():
+        if not enum_name.startswith('_'):
+            course, _exam, _name = parse_error_type_enum_name(enum_name)
+            course_set.add(course)
+
+    for enum_name in MinorErrorType.__dict__.keys():
+        if not enum_name.startswith('_'):
+            course, _exam, _name = parse_error_type_enum_name(enum_name)
+            course_set.add(course)
+
+    course_list = sorted(list(course_set))
+    return course_list
+
+
+def define_error_definitions(course_filter:str = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     # Preload the table with default rows and values
 
-    # Convert the enum class to a list of dictionaries
-    # major_error_types_data = [{NAME: member.name, DESCRIPTION: member.value} for member in MajorErrorType]
-    # minor_error_types_data = [{NAME: member.name, DESCRIPTION: member.value} for member in MinorErrorType]
 
+    # Filter by course_filter when provided (keep previous check for private names)
     major_error_types_data = [
         {**dict(zip((COURSE, EXAM, NAME), parse_error_type_enum_name(enum_name))), **{DESCRIPTION: enum_value}}
-        for enum_name, enum_value in MajorErrorType.__dict__.items() if not enum_name.startswith('_')]
+        for enum_name, enum_value in MajorErrorType.__dict__.items()
+        if not enum_name.startswith('_') and (course_filter is None or enum_name.startswith(course_filter))
+    ]
     minor_error_types_data = [
         {**dict(zip((COURSE, EXAM, NAME), parse_error_type_enum_name(enum_name))), **{DESCRIPTION: enum_value}}
-        for enum_name, enum_value in MinorErrorType.__dict__.items() if not enum_name.startswith('_')]
-
+        for enum_name, enum_value in MinorErrorType.__dict__.items()
+        if not enum_name.startswith('_') and (course_filter is None or enum_name.startswith(course_filter))
+    ]
     major_error_types_data_df = pd.DataFrame(major_error_types_data)
     minor_error_types_data_df = pd.DataFrame(minor_error_types_data)
 
@@ -203,8 +220,16 @@ async def get_grade_exam_content():
     st.title('Grade Exams')
     st.markdown("""Here we will grade and give feedback to student exam submissions""")
 
+    # Display dropdown of courses from error definitions
+    course_list = get_course_list_from_error_definitions()
+    selected_course = st.selectbox("Select Course", ["-- Select Course --"] + course_list)
+    # Create course filter from selected course converting spaces to underscore
+    course_filter = selected_course.replace(" ", "_") if selected_course != "-- Select Course --" else None
+
+
     # Text input for entering a course name
-    course_name = st.text_input("Enter Course and Assignment Name")
+    course_section = st.text_input("Enter Course Section")
+    course_name = selected_course+"_"+course_section if course_section else None
     max_points = st.number_input("Max points for assignment", value=200)
     deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40)
     deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10)
@@ -271,7 +296,7 @@ async def get_grade_exam_content():
 
         assignment_solution_contents = "\n\n".join(assignment_solution_contents)
 
-    major_error_types, minor_error_types = define_error_definitions()
+    major_error_types, minor_error_types = define_error_definitions(course_filter=course_filter)
     major_error_type_list = []
     minor_error_type_list = []
     # Show a success message if feedback types are defined
