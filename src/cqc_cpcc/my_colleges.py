@@ -180,7 +180,7 @@ class MyColleges:
                     logger.info(
                         "Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
                 except ValueError:
-                    # No date found so use start of course date
+                    # No date found then use start of course date
                     # last_attendance_record_date = get_datetime(check_date.strftime("%m-%d-%Y"))
                     last_attendance_record_date = course_start_date
                     logger.info("No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(

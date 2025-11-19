@@ -60,13 +60,13 @@ Step 3 — Evaluate the Submission Against Each Requirement
 Step 4 — Locate and Classify Errors
 - For every requirement with status ⚠️ or ❌:
   - Classify the issue as a Major or Minor error using the provided error-type lists.
-  - Assign a specific error type from {major_error_types} or {minor_error_types}. If multiple apply, choose the single most fitting type and note secondary types in a brief field if the schema allows.
+  - Assign a specific error type from "❗ Major Error Types" or "⚠️ Minor Error Types". If multiple apply, choose the single most fitting type and note secondary types in a brief field if the schema allows.
   - Identify line numbers (or ranges) where the issue appears or should have appeared. If exact lines are ambiguous (e.g., missing code), indicate "not_applicable" and explain why in the justification field allowed by the schema.
   - Include minimal, relevant code snippets to illustrate the issue when visible, trimmed to only the necessary lines.
 
 Step 5 — Explain Each Error (Without Referring to the Example Solution)
 - For each error:
-  - State the requirement (R# and its text).
+  - State the requirement (Do not refer to the R#. Just its simplified text).
   - State the error type (Major/Minor + specific type).
   - Provide line numbers and minimal snippet(s), if identifiable.
   - Provide a concise explanation of what was required, how the submission falls short, and why the severity classification applies.
