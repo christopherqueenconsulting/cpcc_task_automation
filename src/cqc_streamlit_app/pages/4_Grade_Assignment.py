@@ -228,7 +228,7 @@ async def get_grade_exam_content():
 
 
     # Text input for entering a course name
-    course_section = st.text_input("Enter Course Section")
+    course_section = st.text_input("Enter Course Section and Assignment Name")
     course_name = selected_course+"_"+course_section if course_section else None
     max_points = st.number_input("Max points for assignment", value=200)
     deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40)
