@@ -40,6 +40,7 @@ class BrightSpace_Course:
     date_range_start: DT.date
     date_range_end: DT.date
     course_main_tab: str
+    select_xpath: str
 
     def __init__(self, name: str, term_semester: str, term_year: str, first_drop_day: DT.date, final_drop_day: DT.date,
                  course_start_date: DT.datetime, course_end_date: DT.datetime,
@@ -55,6 +56,7 @@ class BrightSpace_Course:
         self.course_end_date = convert_datetime_to_end_of_day(course_end_date)
         self.driver = driver
         self.wait = wait
+        self.select_xpath = "//select[.//option[contains(., 'per page')]]"
         # TODO: Create delta date function in the date utility file for below
         self.date_range_end = DT.date.today() - DT.timedelta(days=2)  # TODO: This should be 2
         if date_range_start is None:
@@ -218,7 +220,7 @@ class BrightSpace_Course:
                                  "Waiting for Enrollment Statistics button")
 
         # Click the Results per page select element
-        if self.click_max_results_select("//select[contains(@title,'Results Per Page')]"):
+        if self.click_max_results_select(self.select_xpath):
             table_prefix_xpath = "//table[@summary='Withdrawals summary']"
 
             # Get all the students that have withdrawn between the first drop date and final drop date
@@ -461,7 +463,7 @@ class BrightSpace_Course:
                                      "Waiting for Submissions Link")
 
             # Click the Results per page select element
-            if self.click_max_results_select("//select[contains(@title,'Results Per Page')]"):
+            if self.click_max_results_select(self.select_xpath):
 
                 # Find the student names and the dates the for completed assignments
                 table_prefix_xpath = "//table[contains(@summary,'List of users and the submissions')]"
@@ -808,12 +810,11 @@ class BrightSpace_Course:
             self.driver.switch_to.frame(iframe)
 
             # Click the Results per page select element
-            select_xpath = "//select[contains(@title,'Results Per Page')]"
-
-            if self.click_max_results_select("//select[contains(@title,'Results Per Page')]"):
+            if self.click_max_results_select(self.select_xpath):
 
                 # Find the student names and the dates the for completed assignments
-                table_prefix_xpath = "//table[contains(@class, 'd2l-grid') and contains(@class,'d_gl')]"
+                #TODo: Fix this xpath for table
+                table_prefix_xpath = "//table[contains(@class,'d2l-grid') and contains(@summary,'submissions')]"
                 try:
 
                     attempts = 0
@@ -822,14 +823,14 @@ class BrightSpace_Course:
                     post_dates = []
                     while attempts < max_attempts:
                         student_names = get_elements_text_as_list_wait_stale(self.driver, self.wait,
-                                                                             table_prefix_xpath + "//td[last()-1]",
+                                                                             table_prefix_xpath + "//td[last()]",
                                                                              "Waiting for Student Names",
                                                                              refresh_on_stale=True)
 
                         logger.info("Student Names: %s" % "\n".join(student_names))
 
                         post_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
-                                                                          table_prefix_xpath + "//td[last()]",
+                                                                          table_prefix_xpath + "//td[last()-1]/label",
                                                                           "Waiting for Completion Dates",
                                                                           refresh_on_stale=True)
 
