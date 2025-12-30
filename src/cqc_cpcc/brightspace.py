@@ -459,7 +459,7 @@ class BrightSpace_Course:
             wait_for_ajax(self.driver)
 
             # Get the Completion Summary Link
-            click_element_wait_retry(self.driver, self.wait, "//a[contains(.//text(),'Submissions')]",
+            click_element_wait_retry(self.driver, self.wait, "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]",
                                      "Waiting for Submissions Link")
 
             # Click the Results per page select element
