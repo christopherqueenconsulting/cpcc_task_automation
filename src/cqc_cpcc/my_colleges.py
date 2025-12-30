@@ -304,7 +304,7 @@ class MyColleges:
         present_value = 'P'
         
         # Use consolidated XPath to find all attendance-entry selects for the student
-        xpath_select = ("//table[@id='student-attendance-table']//tr[descendant::div[" + " and ".join(
+        xpath_select = ("//table[contains(@id,'student-attendance-table')]//tr[descendant::div[" + " and ".join(
             ['contains(text(), "{}")'.format(element) for element in
              full_name.split(" ")]) + "]]//td//select[contains(@class,'attendance-entry')]")
 
