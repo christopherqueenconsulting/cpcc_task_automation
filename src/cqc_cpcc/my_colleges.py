@@ -17,8 +17,8 @@ from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.utilities.date import get_datetime, is_date_in_range, get_latest_date
 from cqc_cpcc.utilities.env_constants import MYCOLLEGE_URL
 from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.selenium_util import getText, click_element_wait_retry, get_element_wait_retry, \
-    get_elements_text_as_list_wait_stale, wait_for_ajax, close_tab, wait_for_element_to_hide
+from cqc_cpcc.utilities.selenium_util import getText, click_element_wait_retry, click_given_element_wait_retry, \
+    get_element_wait_retry, get_elements_text_as_list_wait_stale, wait_for_ajax, close_tab, wait_for_element_to_hide
 from cqc_cpcc.utilities.utils import login_if_needed
 
 
@@ -216,17 +216,43 @@ class MyColleges:
                     logger.info("Attendance Date: %s | Name(s): %s " % (formatted_date, " | ".join(students)))
 
                     try:
-                        # Click on date drop down select
-                        date_select_id = "event-dates-dropdown"
-                        click_element_wait_retry(self.driver, self.wait, date_select_id,
-                                                 'Waiting for Select Date Dropdown',
-                                                 By.ID)
+                        # Try to find datepicker first
+                        datepicker_xpath = "//date-picker//input"
+                        date_input_found = False
+                        
+                        try:
+                            # Check if datepicker exists
+                            date_input_element = get_element_wait_retry(self.driver, self.wait, datepicker_xpath,
+                                                                        'Checking for Date Picker Input', max_try=1)
+                            if date_input_element:
+                                logger.info("Datepicker found, using input method")
+                                # Format date as M/d/yyyy (e.g., "1/15/2024" instead of "01/15/2024 (Monday)")
+                                # Using cross-platform compatible formatting
+                                date_obj = get_datetime(record_date)
+                                date_for_picker = f"{date_obj.month}/{date_obj.day}/{date_obj.year}"
+                                
+                                # Clear existing value and input new date
+                                date_input_element.clear()
+                                date_input_element.send_keys(date_for_picker)
+                                date_input_element.send_keys(Keys.ENTER)
+                                
+                                wait_for_ajax(self.driver)
+                                date_input_found = True
+                        except (NoSuchElementException, TimeoutException):
+                            logger.info("Datepicker not found, trying dropdown")
+                        
+                        # If datepicker not found, fall back to dropdown
+                        if not date_input_found:
+                            # Click on date drop down select
+                            date_select_id = "event-dates-dropdown"
+                            click_element_wait_retry(self.driver, self.wait, date_select_id,
+                                                     'Waiting for Select Date Dropdown',
+                                                     By.ID)
 
-                        date_select = Select(self.driver.find_element(By.ID, date_select_id))
-                        date_select.select_by_visible_text(formatted_date)
+                            date_select = Select(self.driver.find_element(By.ID, date_select_id))
+                            date_select.select_by_visible_text(formatted_date)
 
-                        wait_for_ajax(self.driver)
-                        # satisfied = are_you_satisfied()
+                            wait_for_ajax(self.driver)
 
                         # Update the attendance for each student
                         logger.info("Updating Attendance for Date: %s" % formatted_date)
@@ -276,27 +302,55 @@ class MyColleges:
     def mark_student_present(self, full_name: str, retry=0):
         success = False
         present_value = 'P'
-        xpath1_select = ("//table[@id='student-attendance-table']//tr[descendant::div[" + " and ".join(
+        
+        # Use consolidated XPath to find all attendance-entry selects for the student
+        xpath_select = ("//table[contains(@id,'student-attendance-table')]//tr[descendant::div[" + " and ".join(
             ['contains(text(), "{}")'.format(element) for element in
-             full_name.split(" ")]) + "]]//td[contains(@data-role,'OCLS')]//select")
-        xpath2_select = xpath1_select.replace("OCLS", "OLAB")
+             full_name.split(" ")]) + "]]//td//select[contains(@class,'attendance-entry')]")
 
         try:
-            # Click the OCLS select element
-            click_element_wait_retry(self.driver, self.wait, xpath1_select, "Waiting for OCLS select", max_try=0)
-            ocls_select = Select(self.driver.find_element(By.XPATH, xpath1_select))
-            ocls_select.select_by_value(present_value)
-            wait_for_ajax(self.driver)
-
-            # Click the OLAB select element
-            click_element_wait_retry(self.driver, self.wait, xpath2_select, "Waiting for OLAB select", max_try=0)
-            olab_select_element = self.driver.find_element(By.XPATH, xpath2_select)
-            olab_select = Select(olab_select_element)
-            olab_select.select_by_value(present_value)
-            wait_for_ajax(self.driver)
-
-            # Tab away from the select
-            olab_select_element.send_keys(Keys.TAB)
+            # Find all select elements for this student
+            select_elements = self.driver.find_elements(By.XPATH, xpath_select)
+            
+            if not select_elements:
+                logger.error("No attendance select elements found for: %s" % full_name)
+                return False
+            
+            logger.info("Found %d attendance select element(s) for: %s" % (len(select_elements), full_name))
+            
+            # Iterate over each select element
+            for idx, select_element in enumerate(select_elements):
+                try:
+                    # Click the element
+                    click_given_element_wait_retry(self.driver, self.wait, select_element,
+                                                  "Waiting for attendance select element %d" % (idx + 1))
+                    
+                    # Re-find the element to avoid stale reference after click
+                    select_elements_refreshed = self.driver.find_elements(By.XPATH, xpath_select)
+                    if idx < len(select_elements_refreshed):
+                        select_element = select_elements_refreshed[idx]
+                    
+                    # Create Select object and select the present value
+                    select_obj = Select(select_element)
+                    select_obj.select_by_value(present_value)
+                    wait_for_ajax(self.driver)
+                    
+                except StaleElementReferenceException:
+                    # If element becomes stale, re-find all elements and continue
+                    logger.info("Stale element at index %d, re-finding elements" % idx)
+                    select_elements = self.driver.find_elements(By.XPATH, xpath_select)
+                    if idx < len(select_elements):
+                        select_element = select_elements[idx]
+                        select_obj = Select(select_element)
+                        select_obj.select_by_value(present_value)
+                        wait_for_ajax(self.driver)
+                
+            # Tab away from the last select element
+            if select_elements:
+                # Re-get the last element to avoid stale reference
+                select_elements_final = self.driver.find_elements(By.XPATH, xpath_select)
+                if select_elements_final:
+                    select_elements_final[-1].send_keys(Keys.TAB)
 
             success = True
 
@@ -305,7 +359,6 @@ class MyColleges:
         except StaleElementReferenceException as se:
             if retry < 3:
                 logger.error("Stale Element Exception. Trying again in 5 seconds...")
-                #self.driver.implicitly_wait(5)  # wait 5 seconds
                 time.sleep(5)
                 success = self.mark_student_present(full_name, retry + 1)
             else:
