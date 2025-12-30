@@ -227,7 +227,9 @@ class MyColleges:
                             if date_input_element:
                                 logger.info("Datepicker found, using input method")
                                 # Format date as M/d/yyyy (e.g., "1/15/2024" instead of "01/15/2024 (Monday)")
-                                date_for_picker = get_datetime(record_date).strftime("%-m/%-d/%Y")
+                                # Using cross-platform compatible formatting
+                                date_obj = get_datetime(record_date)
+                                date_for_picker = f"{date_obj.month}/{date_obj.day}/{date_obj.year}"
                                 
                                 # Clear existing value and input new date
                                 date_input_element.clear()
@@ -321,7 +323,7 @@ class MyColleges:
                 try:
                     # Click the element
                     click_given_element_wait_retry(self.driver, self.wait, select_element,
-                                                  "Waiting for attendance select element %d" % (idx + 1), max_try=0)
+                                                  "Waiting for attendance select element %d" % (idx + 1))
                     
                     # Re-find the element to avoid stale reference after click
                     select_elements_refreshed = self.driver.find_elements(By.XPATH, xpath_select)

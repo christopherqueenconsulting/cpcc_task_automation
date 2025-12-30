@@ -278,15 +278,24 @@ def click_given_element_wait_retry(driver: WebDriver, wait: WebDriverWait, eleme
     """
     Click on a given WebElement with retry logic.
     
+    Note: This function does not internally retry on StaleElementReferenceException because
+    the element reference becomes invalid. The caller should catch StaleElementReferenceException
+    and re-fetch the element before calling this function again.
+    
     Args:
         driver: WebDriver instance
         wait: WebDriverWait instance
         element: The WebElement to click
         wait_text: Description text for logging
-        max_try: Maximum number of retry attempts
+        max_try: Maximum number of retry attempts (currently unused, kept for API consistency)
         
     Returns:
         WebElement: The clicked element
+        
+    Raises:
+        StaleElementReferenceException: If element becomes stale, caller should re-fetch and retry
+        ElementNotInteractableException: If element is not interactable
+        TimeoutException: If waiting for clickable times out
     """
     try:
         # Wait for element to be clickable
@@ -295,14 +304,10 @@ def click_given_element_wait_retry(driver: WebDriver, wait: WebDriverWait, eleme
         wait_for_ajax(driver)
 
     except (StaleElementReferenceException, ElementNotInteractableException, TimeoutException) as se:
-        logger.debug(wait_text + " | Stale or Not Interactable | .....retrying")
-        time.sleep(5)  # wait 5 seconds
-        if max_try > 1:
-            # Note: We can't retry with the same element reference after a stale exception
-            # The caller should re-fetch the element and call this function again
-            raise se
-        else:
-            raise se
+        logger.debug(wait_text + " | Stale or Not Interactable | .....failed")
+        # Re-raise the exception for the caller to handle
+        # The caller should re-fetch the element and retry if needed
+        raise se
 
     return element
 
