@@ -9,6 +9,7 @@ from pydantic import Field, BaseModel, StrictStr
 from cqc_cpcc.utilities.AI.llm.chains import get_exam_error_definition_from_completion_chain, \
     get_exam_error_definitions_completion_chain
 from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
+from cqc_cpcc.utilities.AI.exam_grading_openai import grade_exam_submission
 from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
 from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
 
@@ -325,37 +326,49 @@ class CodeGrader:
     error_definitions_completion_chain = None
     error_definitions_parser = None
     error_definitions_prompt = None
+    
+    # New OpenAI-based attributes
+    exam_instructions: str = None
+    exam_solution: str = None
+    major_error_type_list: list = None
+    minor_error_type_list: list = None
+    use_openai_wrapper: bool = True  # Default to new implementation
 
     def __init__(self, max_points: int, exam_instructions: str, exam_solution: str,
                  deduction_per_major_error: int = 20,
                  deduction_per_minor_error: int = 5,
                  major_error_type_list: list = None,
                  minor_error_type_list: list = None,
-                 grader_llm: BaseChatModel = None):
+                 grader_llm: BaseChatModel = None,
+                 use_openai_wrapper: bool = True):
         self.max_points = max_points
         self.deduction_per_major_error = deduction_per_major_error
         self.deduction_per_minor_error = deduction_per_minor_error
+        self.exam_instructions = exam_instructions
+        self.exam_solution = exam_solution
+        self.use_openai_wrapper = use_openai_wrapper
+        
         if major_error_type_list is None:
             major_error_type_list = MajorErrorType.list()
         if minor_error_type_list is None:
             minor_error_type_list = MinorErrorType.list()
+        
+        self.major_error_type_list = major_error_type_list
+        self.minor_error_type_list = minor_error_type_list
 
-        if grader_llm is None:
-            grader_llm = get_default_llm()
+        # Keep LangChain setup for backward compatibility
+        if not use_openai_wrapper:
+            if grader_llm is None:
+                grader_llm = get_default_llm()
 
-        # Reduce the major and minor errors in the ErrorDefinitions class to only the ones that are in the list
-
-
-
-        self.error_definitions_completion_chain, self.error_definitions_parser, self.error_definitions_prompt = get_exam_error_definitions_completion_chain(
-            _llm=grader_llm,
-            pydantic_object=ErrorDefinitions,
-            major_error_type_list=major_error_type_list,
-            minor_error_type_list=minor_error_type_list,
-            exam_instructions=exam_instructions,
-            exam_solution=exam_solution
-
-        )
+            self.error_definitions_completion_chain, self.error_definitions_parser, self.error_definitions_prompt = get_exam_error_definitions_completion_chain(
+                _llm=grader_llm,
+                pydantic_object=ErrorDefinitions,
+                major_error_type_list=major_error_type_list,
+                minor_error_type_list=minor_error_type_list,
+                exam_instructions=exam_instructions,
+                exam_solution=exam_solution
+            )
 
     @property
     def major_deduction_total_orig(self):
@@ -408,20 +421,32 @@ class CodeGrader:
 
     async def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None):
         # print("Identifying Errors")
-        error_definitions_from_llm = await get_exam_error_definition_from_completion_chain(
-            student_submission=student_submission,
-            completion_chain=self.error_definitions_completion_chain,
-            parser=self.error_definitions_parser,
-            prompt=self.error_definitions_prompt,
-            callback=callback
-
-        )
+        
+        if self.use_openai_wrapper:
+            # New OpenAI wrapper path
+            error_definitions = await grade_exam_submission(
+                exam_instructions=self.exam_instructions,
+                exam_solution=self.exam_solution,
+                student_submission=student_submission,
+                major_error_type_list=self.major_error_type_list,
+                minor_error_type_list=self.minor_error_type_list,
+                callback=callback
+            )
+        else:
+            # Legacy LangChain path
+            error_definitions_from_llm = await get_exam_error_definition_from_completion_chain(
+                student_submission=student_submission,
+                completion_chain=self.error_definitions_completion_chain,
+                parser=self.error_definitions_parser,
+                prompt=self.error_definitions_prompt,
+                callback=callback
+            )
+            error_definitions = ErrorDefinitions.model_validate(error_definitions_from_llm)
+        
         # print("Errors Identified")
 
         # print("\n\nFinal Output:")
         # pprint(finalOutput)
-
-        error_definitions = ErrorDefinitions.parse_obj(error_definitions_from_llm)
 
         # print("\n\nCompiling Unique Errors")
         unique_major_errors = error_definitions.get_major_errors_unique()
