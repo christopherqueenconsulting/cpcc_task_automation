@@ -295,10 +295,12 @@ class FeedbackGiver:
                  assignment_solution: str,
                  feedback_llm: str = None,
                  feedback_type_list: list = None,
+                 temperature: float = 0.2,
 
                  ):
         # Store configuration for generating feedback
         self.model_name = feedback_llm if feedback_llm else get_default_llm_model()
+        self.temperature = temperature
         self.course_name = course_name
         self.assignment_instructions = assignment_instructions
         self.assignment_solution = assignment_solution

@@ -134,15 +134,20 @@ Created test suite mirroring exam review test patterns:
 - ⚠️ **Breaking**: `feedback_llm` parameter now expects `str` (model name) instead of `BaseChatModel`
   - Migration: Change `feedback_llm=get_default_llm()` to `feedback_llm="gpt-4o"`
   - Or: Omit parameter to use default model
+- ✅ **New**: `temperature` parameter added to `__init__()` (optional, defaults to 0.2)
 
 ### Removed Dependencies
 - No longer needs `get_feedback_completion_chain()`
 - No longer needs `get_feedback_from_completion_chain()`
 - Callback parameter is deprecated (kept for compatibility but not used)
 
+### Updated Files
+- ✅ `src/cqc_cpcc/project_feedback.py` - Core migration
+- ✅ `src/cqc_streamlit_app/pages/2_Give_Feedback.py` - UI updated to pass model name and temperature
+
 ## Testing Status
 
-- ✅ Unit tests created (11 tests across 5 test classes)
+- ✅ Unit tests created (12 tests across 5 test classes)
 - ✅ Syntax validation passed
 - ✅ Linting passed (ruff)
 - ⏳ Functional tests pending (requires full dependency installation)
@@ -173,7 +178,8 @@ Created test suite mirroring exam review test patterns:
 
 1. `src/cqc_cpcc/project_feedback.py` - FeedbackGiver class migration
 2. `src/cqc_cpcc/utilities/AI/llm/prompts.py` - New OpenAI-friendly prompt
-3. `tests/unit/test_project_feedback.py` - Comprehensive test suite
+3. `src/cqc_streamlit_app/pages/2_Give_Feedback.py` - UI updated for API changes
+4. `tests/unit/test_project_feedback.py` - Comprehensive test suite
 
 ## Next Steps
 

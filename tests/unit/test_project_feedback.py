@@ -385,3 +385,17 @@ class TestFeedbackGiverInit:
         )
         
         assert giver.feedback_type_list == []
+    
+    def test_init_with_custom_temperature(self):
+        """Should use custom temperature when provided."""
+        giver = FeedbackGiver(
+            course_name="CSC 151",
+            assignment_instructions="Test",
+            assignment_solution="Test",
+            feedback_llm="gpt-4o",
+            temperature=0.5,
+            feedback_type_list=[]
+        )
+        
+        assert giver.temperature == 0.5
+        assert giver.model_name == "gpt-4o"
