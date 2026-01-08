@@ -12,13 +12,14 @@ All OpenAI calls are fully mocked - no real API calls are made.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
+
 from cqc_cpcc.project_feedback import (
+    Feedback,
     FeedbackGiver,
     FeedbackGuide,
-    Feedback,
     FeedbackType,
 )
 from cqc_cpcc.utilities.AI.openai_exceptions import (
@@ -60,16 +61,21 @@ class TestFeedbackGiverSuccess:
         # Create FeedbackGiver
         giver = FeedbackGiver(
             course_name="CSC 151",
-            assignment_instructions="Write a Java program that prints Hello World",
-            assignment_solution="public class Hello { public static void main(String[] args) { System.out.println(\"Hello World\"); } }",
-            feedback_type_list=[
-                "Syntax errors in the code",
-                "Missing comments"
-            ]
+            assignment_instructions="Write a Java program that prints Hello",
+            assignment_solution=(
+                "public class Hello { "
+                "public static void main(String[] args) { "
+                'System.out.println("Hello World"); } }'
+            ),
+            feedback_type_list=["Syntax errors in the code", "Missing comments"],
         )
-        
+
         # Generate feedback
-        student_code = "public class Hello { public static void main(String[] args) { System.out.println(\"Hello World\") } }"
+        student_code = (
+            "public class Hello { "
+            "public static void main(String[] args) { "
+            'System.out.println("Hello World") } }'
+        )
         await giver.generate_feedback(student_code)
         
         # Verify get_structured_completion was called
@@ -326,8 +332,9 @@ class TestFeedbackGiverConcurrency:
         # All tasks should complete
         assert len(results) == 3
         
-        # Note: feedback_list will be from last completion due to shared state
-        # This is expected behavior - in real usage, each submission is processed sequentially
+        # Note: feedback_list will be from last completion due to shared
+        # state. This is expected behavior - in real usage, each submission
+        # is processed sequentially
 
 
 @pytest.mark.unit
