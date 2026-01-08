@@ -1,0 +1,30 @@
+{
+  "recommendations": [
+    // Python Development
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff",
+    
+    // GitHub Copilot
+    "github.copilot",
+    "github.copilot-chat",
+    
+    // Testing
+    "littlefoxteam.vscode-python-test-adapter",
+    
+    // Markdown
+    "yzhang.markdown-all-in-one",
+    "davidanson.vscode-markdownlint",
+    
+    // YAML
+    "redhat.vscode-yaml",
+    
+    // Git
+    "eamodio.gitlens",
+    
+    // Utility
+    "editorconfig.editorconfig",
+    "visualstudioexptteam.vscodeintellicode",
+    "gruntfuggly.todo-tree"
+  ]
+}

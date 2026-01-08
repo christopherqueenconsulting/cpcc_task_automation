@@ -227,7 +227,47 @@ def getBaseOptions(base_download_directory:str = None):
     return options
 
 
-def get_session_driver():
+def get_session_driver() -> tuple[WebDriver, WebDriverWait]:
+    """Create and configure a Selenium WebDriver session with explicit waits.
+    
+    This is the primary entry point for obtaining a configured Selenium driver
+    for web scraping operations. It handles all browser setup including:
+    - Chrome driver installation and configuration
+    - Headless mode (if HEADLESS_BROWSER env var is True)
+    - User profile management (to persist logins)
+    - Download directory configuration
+    - Timeout and wait configuration
+    
+    Returns:
+        Tuple of (WebDriver, WebDriverWait):
+            - WebDriver: Configured Chrome WebDriver instance ready for automation
+            - WebDriverWait: Configured wait object with default timeout and ignored exceptions
+    
+    Environment Variables Used:
+        - HEADLESS_BROWSER: If "true", runs browser in headless mode
+        - WAIT_DEFAULT_TIMEOUT: Timeout in seconds for wait conditions (default: 10)
+        - INSTRUCTOR_USERID: Used for profile directory naming
+        - IS_GITHUB_ACTION: If True, uses virtual display and chromedriver-autoinstaller
+    
+    Example:
+        >>> driver, wait = get_session_driver()
+        >>> driver.get("https://example.com")
+        >>> element = wait.until(EC.presence_of_element_located((By.ID, "login")))
+        >>> # ... perform automation
+        >>> driver.quit()
+        
+    Note:
+        Always call driver.quit() when done to clean up resources.
+        The WebDriverWait instance ignores NoSuchElementException and 
+        StaleElementReferenceException by default.
+        
+    Raises:
+        WebDriverException: If Chrome driver cannot be initialized
+        
+    See Also:
+        - get_browser_driver(): For just the driver without wait
+        - get_driver_wait(): For just the wait configuration
+    """
     driver = get_browser_driver()
     wait = get_driver_wait(driver)
 
@@ -249,6 +289,54 @@ def get_driver_wait(driver, wait_default_timeout = None):
 def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
                              find_by: str = By.XPATH,
                              max_try: int = MAX_WAIT_RETRY) -> WebElement:
+    """Click an element with automatic retry logic for stale elements.
+    
+    This function provides robust clicking for dynamic web pages where elements
+    may become stale due to DOM updates. It:
+    1. Waits for element to be present
+    2. Waits for element to be clickable
+    3. Uses ActionChains for reliable clicking
+    4. Waits for AJAX completion after click
+    5. Retries if element becomes stale or unclickable
+    
+    Args:
+        driver: Selenium WebDriver instance
+        wait: WebDriverWait instance for explicit waits
+        find_by_value: Selector value (e.g., XPath string, CSS selector, ID)
+        wait_text: Human-readable description for logging (e.g., "Clicking submit button")
+        find_by: Selenium By locator type (default: By.XPATH)
+                 Options: By.XPATH, By.ID, By.CSS_SELECTOR, etc.
+        max_try: Maximum number of retry attempts (default: MAX_WAIT_RETRY from env)
+    
+    Returns:
+        WebElement: The clicked element (after successful click)
+        
+    Raises:
+        TimeoutException: If element not found or not clickable after all retries
+        StaleElementReferenceException: If element still stale after max retries
+        ElementNotInteractableException: If element cannot be clicked after max retries
+        
+    Example:
+        >>> driver, wait = get_session_driver()
+        >>> element = click_element_wait_retry(
+        ...     driver, wait,
+        ...     find_by_value="//button[@id='submit']",
+        ...     wait_text="Clicking submission form button",
+        ...     find_by=By.XPATH
+        ... )
+        
+    Note:
+        This function is essential for scraping BrightSpace and MyColleges due to
+        their heavy use of AJAX and dynamic DOM updates. Prefer this over direct
+        element.click() for all automation code.
+        
+        The function automatically waits for AJAX completion after clicking to
+        ensure subsequent operations occur on fully loaded content.
+    
+    See Also:
+        - click_given_element_wait_retry(): When you already have the element
+        - get_element_wait_retry(): To just get the element without clicking
+    """
     # element = False
     try:
         # Wait for element
