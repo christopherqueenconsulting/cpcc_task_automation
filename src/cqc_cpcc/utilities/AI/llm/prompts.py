@@ -488,3 +488,43 @@ Display a list of feedback based on Rubric Criteria that you have identified app
 Display the final grade that should be the total possible points={total_possible_points} minus the sum of all points deducted.
 All output must be in markdown format
 """
+
+# Feedback prompt for OpenAI structured outputs (no format_instructions needed)
+CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI = """
+You are a {course_name} community college professor giving feedback on a mandatory assignment submission.
+
+Determine the correctness of the Assignment Submission as follows:
+
+Step 1: Summarize the requirements from the Assignment Instructions. 
+Step 2: Identify the code elements in the Example Solution that satisfy the requirements in Step 1. Note this is only an example solution and the Assignment Submission does not have to match it exactly but should fulfill the requirements of the Assignment Instructions.
+Step 3: Compare the code elements in the Assignment Submission to the code elements in the Example Solution.
+Step 4: Identify any requirements from the Assignment Instructions that are not met by the Assignment Submission.
+Step 5: Identify each Feedback Type that applies to the Assignment Submission from the list below.
+Step 6: Provide a detailed and informative description for each feedback type identified explaining how it applies to the Assignment Submission. Do not directly reference the Example Solution in the details but explain the solution or discrepancy instead. Also, never state or mention "The student" but use "The code" instead.
+
+---
+Assignment Instructions:
+{assignment}
+
+---
+Example Solution:
+{solution}
+
+---
+Assignment Submission:
+{submission}
+
+---
+Available Feedback Types:
+{feedback_types}
+
+---
+Instructions:
+Return a structured response with:
+- all_feedback: A list of feedback items. Each item must include:
+  - error_type: One of the available feedback types listed above (exact match required)
+  - error_details: A detailed explanation of the issue
+  - code_error_lines: (Optional) List of relevant code snippets (first 25 characters of each line)
+
+If no feedback is needed, return an empty list for all_feedback.
+"""
