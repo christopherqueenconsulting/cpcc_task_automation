@@ -28,7 +28,7 @@ langchainhub                         0.1.21
 ```toml
 [tool.poetry.dependencies]
 # langchain = "^0"                  # REMOVED - unused
-langchain-core = "^1"               # v1.0.4  - ADDED (explicit)
+langchain-core = "^1.2.5"           # v1.2.6  - ADDED (explicit, security patched)
 langchain-community = "^0"          # v0.4.1  - KEPT (legacy paths)
 langchain-openai = "^0"             # v0.3.34 - KEPT (production)
 # langchainhub = "^0"               # REMOVED - unused
@@ -38,7 +38,7 @@ langchain-openai = "^0"             # v0.3.34 - KEPT (production)
 ```
 langchain-classic                    1.0.0   (transitive)
 langchain-community                  0.4.1
-langchain-core                       1.0.4   (explicit)
+langchain-core                       1.2.6   (explicit, security patched)
 langchain-openai                     0.3.34
 langchain-text-splitters             1.0.0   (transitive)
 ```
@@ -58,8 +58,12 @@ langchain-text-splitters             1.0.0   (transitive)
 - **Risk**: None - completely unused
 - **Savings**: ~10KB package size
 
-### Added: `langchain-core = "^1"` (v1.0.4)
+### Added: `langchain-core = "^1.2.5"` (v1.2.6)
 - **Status**: ✅ ADDED (explicit)
+- **Version**: Updated to 1.2.6 (patched for security vulnerabilities)
+- **Security Fix**: Addresses CVE vulnerabilities:
+  - Template injection via attribute access in prompt templates
+  - Serialization injection vulnerability enabling secret extraction
 - **Reason**: Was implicit dependency via other packages, now explicit
 - **Usage**: Extensively used throughout codebase
 - **Imports**:
@@ -177,16 +181,43 @@ cpcc-task-automation
 ### After
 ```
 cpcc-task-automation
-├── langchain-core (1.0.4) ✅ EXPLICIT
+├── langchain-core (1.2.6) ✅ EXPLICIT (security patched)
 ├── langchain-openai (0.3.34) ✅ KEPT
-│   └── langchain-core (1.0.4) [satisfied by explicit]
+│   └── langchain-core (1.2.6) [satisfied by explicit]
 └── langchain-community (0.4.1) ✅ KEPT
-    ├── langchain-core (1.0.4) [satisfied by explicit]
+    ├── langchain-core (1.2.6) [satisfied by explicit]
     ├── langchain-classic (1.0.0) [transitive]
     └── langchain-text-splitters (1.0.0) [transitive]
 ```
 
 ## Risk Assessment
+
+### Security Fixes ✅
+**Critical**: Updated `langchain-core` from v1.0.4 to v1.2.6 to address multiple CVE vulnerabilities:
+
+1. **Template Injection Vulnerability**
+   - **CVE**: Template injection via attribute access in prompt templates
+   - **Affected**: langchain-core >= 1.0.0, <= 1.0.6
+   - **Patched**: v1.0.7+
+   - **Impact**: Could allow attackers to inject malicious code through prompt templates
+
+2. **Template Injection (Legacy)**
+   - **CVE**: Template injection via attribute access
+   - **Affected**: langchain-core <= 0.3.79
+   - **Patched**: v0.3.80+
+
+3. **Serialization Injection Vulnerability**
+   - **CVE**: Serialization injection enabling secret extraction in dumps/loads APIs
+   - **Affected**: langchain-core >= 1.0.0, < 1.2.5
+   - **Patched**: v1.2.5+
+   - **Impact**: Could allow extraction of secrets through deserialization
+
+4. **Serialization Injection (Legacy)**
+   - **CVE**: Serialization injection enabling secret extraction
+   - **Affected**: langchain-core < 0.3.81
+   - **Patched**: v0.3.81+
+
+**Resolution**: Upgraded to v1.2.6 which includes all security patches.
 
 ### Low Risk Changes
 ✅ Removing `langchain` - Not imported anywhere
