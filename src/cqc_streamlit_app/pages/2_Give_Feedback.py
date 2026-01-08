@@ -146,14 +146,14 @@ async def get_feedback_content():
 
     if process_feedback:
 
-        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model, service_tier=selected_service_tier)
-
+        # Note: FeedbackGiver now accepts model name string and temperature
         feedback_giver = FeedbackGiver(
             course_name=course_name,
             assignment_instructions=assignment_instructions_content,
             assignment_solution=str(assignment_solution_contents),
             feedback_type_list=feedback_types_list,
-            feedback_llm=custom_llm
+            feedback_llm=selected_model,  # Pass model name directly
+            temperature=selected_temperature,  # Pass temperature directly
         )
 
         tasks = []

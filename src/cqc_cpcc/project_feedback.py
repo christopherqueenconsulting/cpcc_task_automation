@@ -3,8 +3,6 @@ from typing import Optional, Annotated, List, TypeVar
 
 from docx import Document
 from docx.shared import Pt
-from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, Field
 from selenium.common import TimeoutException
 from selenium.webdriver.common.by import By
@@ -13,9 +11,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
 from cqc_cpcc.exam_review import JavaCode
-from cqc_cpcc.utilities.AI.llm.chains import get_feedback_completion_chain, \
-    get_feedback_from_completion_chain
-from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
+from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
+from cqc_cpcc.utilities.AI.llm.llms import get_default_llm_model
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
@@ -282,45 +279,64 @@ def process_submission_from_link(driver: WebDriver, wait: WebDriverWait, url: st
 
 class FeedbackGiver:
     feedback_list: List[Feedback] = None
-    feedback_completion_chain = None
-    feedback_parser = None
-    feedback_prompt = None
     feedback_guide: FeedbackGuide = None
+    
+    # Configuration for OpenAI structured completion
+    model_name: str = None
+    temperature: float = 0.2
+    course_name: str = None
+    assignment_instructions: str = None
+    assignment_solution: str = None
+    feedback_type_list: list = None
 
     def __init__(self,
                  course_name: str,
                  assignment_instructions: str,
                  assignment_solution: str,
-                 feedback_llm: BaseChatModel = None,
+                 feedback_llm: str = None,
                  feedback_type_list: list = None,
+                 temperature: float = 0.2,
 
                  ):
-        if feedback_llm is None:
-            feedback_llm = get_default_llm()
+        # Store configuration for generating feedback
+        self.model_name = feedback_llm if feedback_llm else get_default_llm_model()
+        self.temperature = temperature
+        self.course_name = course_name
+        self.assignment_instructions = assignment_instructions
+        self.assignment_solution = assignment_solution
+        self.feedback_type_list = feedback_type_list if feedback_type_list else []
 
-        self.feedback_completion_chain, self.feedback_parser, self.feedback_prompt = get_feedback_completion_chain(
-            llm=feedback_llm,
-            pydantic_object=FeedbackGuide,
-            feedback_type_list=feedback_type_list,
-            assignment=assignment_instructions,
-            solution=assignment_solution,
-            course_name=course_name
+    async def generate_feedback(self, student_submission: str, callback=None):
+        """Generate feedback using OpenAI structured completion.
+        
+        Args:
+            student_submission: The student's code or submission text
+            callback: (Deprecated) Callback handler for compatibility, not used
+            
+        Returns:
+            None (sets self.feedback_list)
+        """
+        from cqc_cpcc.utilities.AI.llm.prompts import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
+        
+        # Build the prompt with all parameters
+        feedback_types_str = "\n\t".join(self.feedback_type_list) if self.feedback_type_list else "N/A"
+        
+        prompt = CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
+            course_name=self.course_name,
+            assignment=self.assignment_instructions,
+            solution=self.assignment_solution,
+            submission=student_submission,
+            feedback_types=feedback_types_str
         )
-
-    async def generate_feedback(self, student_submission: str, callback: BaseCallbackHandler = None):
-        # print("Identifying Errors")
-        feedback_from_llm = await get_feedback_from_completion_chain(
-            student_submission=student_submission,
-            completion_chain=self.feedback_completion_chain,
-            parser=self.feedback_parser,
-            prompt=self.feedback_prompt,
-            callback=callback
-
+        
+        # Call OpenAI structured completion
+        feedback_guide = await get_structured_completion(
+            prompt=prompt,
+            model_name=self.model_name,
+            schema_model=FeedbackGuide,
+            temperature=self.temperature,
+            max_tokens=4096
         )
-        # print("\n\nFinal Output From LLM:")
-        # pprint(feedback_from_llm)
-
-        feedback_guide = FeedbackGuide.parse_obj(feedback_from_llm)
 
         unique_feedback = feedback_guide.get_feedback_unique()
         # Set feedback to empty list if set to None
