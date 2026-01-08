@@ -4,7 +4,7 @@
 
 ## Overview
 
-**CPCC Task Automation** is a Python-based educational automation platform designed for CPCC instructors. It combines web scraping (Selenium), AI-powered analysis (LangChain + OpenAI), and a multi-page Streamlit interface to automate time-consuming teaching tasks.
+**CPCC Task Automation** is a Python-based educational automation platform designed for CPCC instructors. It combines web scraping (Selenium), AI-powered analysis (OpenAI API), and a multi-page Streamlit interface to automate time-consuming teaching tasks.
 
 **Target Users**: College instructors at Central Piedmont Community College (CPCC), particularly those teaching programming courses.
 
@@ -90,7 +90,7 @@ RETRY_PARSER_MAX_RETRY = "3"            # Max retries for LLM output parsing
 ### Core Technologies
 - **Python**: 3.12+
 - **Web Scraping**: Selenium 4.x, webdriver-manager, chromedriver-autoinstaller
-- **AI/ML**: LangChain, LangChain-OpenAI, OpenAI API (GPT-4o, GPT-4o-mini)
+- **AI/ML**: OpenAI API (GPT-4o, GPT-4o-mini), LangChain-Core (types), LangChain-OpenAI (optional)
 - **UI Framework**: Streamlit 1.x (multi-page app)
 - **Testing**: pytest, pytest-mock, pytest-asyncio
 
@@ -257,6 +257,6 @@ Copyright (c) 2024 Christopher Queen Consulting LLC
 
 Built with:
 - [Streamlit](https://streamlit.io/) - Web UI framework
-- [LangChain](https://www.langchain.com/) - AI orchestration
-- [OpenAI](https://openai.com/) - GPT models
+- [OpenAI](https://openai.com/) - GPT models and AI capabilities
 - [Selenium](https://www.selenium.dev/) - Web automation
+- [LangChain Core](https://www.langchain.com/) - Type definitions and callbacks
