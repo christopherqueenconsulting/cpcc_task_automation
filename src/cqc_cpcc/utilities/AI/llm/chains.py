@@ -115,7 +115,12 @@ def get_exam_error_definitions_completion_chain(_llm: BaseChatModel, pydantic_ob
                                                 minor_error_type_list: list, exam_instructions: str, exam_solution: str
                                                 ) -> tuple[
     RunnableSerializable, CustomPydanticOutputParser, PromptTemplate]:
-    """ Returns a properly formatted error definitions object from LLM"""
+    """Returns a properly formatted error definitions object from LLM.
+    
+    DEPRECATED: This function uses LangChain chains for exam grading.
+    For new code, use cqc_cpcc.utilities.AI.exam_grading_openai.grade_exam_submission instead.
+    This function is kept for backward compatibility only.
+    """
 
     parser = CustomPydanticOutputParser(pydantic_object=pydantic_object,
                                         major_error_type_list=major_error_type_list,
@@ -180,6 +185,12 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
                                                           prompt: PromptTemplate,
                                                           callback: BaseCallbackHandler = None
                                                           ) -> T:
+    """Get exam error definitions from completion chain.
+    
+    DEPRECATED: This function uses LangChain chains for exam grading.
+    For new code, use cqc_cpcc.utilities.AI.exam_grading_openai.grade_exam_submission instead.
+    This function is kept for backward compatibility only.
+    """
     config = None
     if callback:
         config = {'callbacks': [callback]}
