@@ -157,6 +157,7 @@ class Rubric(BaseModel):
         description: Optional description of the rubric purpose
         criteria: List of grading criteria
         overall_bands: Optional overall performance bands for total score
+        course_ids: List of course identifiers this rubric applies to (e.g., ["CSC151", "CSC152"])
     """
     rubric_id: Annotated[str, Field(description="Unique identifier for this rubric")]
     rubric_version: Annotated[str, Field(description="Rubric version")]
@@ -166,6 +167,10 @@ class Rubric(BaseModel):
     overall_bands: Annotated[
         Optional[list[OverallBand]], 
         Field(default=None, description="Optional overall performance bands")
+    ]
+    course_ids: Annotated[
+        list[str],
+        Field(default_factory=lambda: ["UNASSIGNED"], description="List of course IDs this rubric applies to")
     ]
     
     @computed_field

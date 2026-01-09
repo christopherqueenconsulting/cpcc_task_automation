@@ -35,6 +35,7 @@ RUBRICS_JSON = """{
         "rubric_version": "1.0",
         "title": "Default 100-Point Rubric",
         "description": "General purpose rubric for programming assignments",
+        "course_ids": ["CSC151", "CSC152", "CSC251"],
         "criteria": [
             {
                 "criterion_id": "understanding",
@@ -527,3 +528,52 @@ def list_available_rubrics() -> list[str]:
     """
     rubrics = load_rubrics_from_config()
     return list(rubrics.keys())
+
+
+def get_distinct_course_ids() -> list[str]:
+    """Get list of distinct course IDs from all rubrics.
+    
+    Returns:
+        Sorted list of unique course IDs across all rubrics
+        
+    Example:
+        >>> course_ids = get_distinct_course_ids()
+        >>> print(course_ids)
+        ['CSC151', 'CSC152', 'CSC251']
+    """
+    rubrics = load_rubrics_from_config()
+    course_ids_set = set()
+    
+    for rubric in rubrics.values():
+        course_ids_set.update(rubric.course_ids)
+    
+    # Remove UNASSIGNED if there are other courses
+    if len(course_ids_set) > 1 and "UNASSIGNED" in course_ids_set:
+        course_ids_set.discard("UNASSIGNED")
+    
+    return sorted(list(course_ids_set))
+
+
+def get_rubrics_for_course(course_id: str) -> Dict[str, Rubric]:
+    """Get all rubrics applicable to a specific course.
+    
+    Args:
+        course_id: Course identifier (e.g., "CSC151")
+        
+    Returns:
+        Dictionary mapping rubric_id to Rubric objects for the specified course
+        
+    Example:
+        >>> rubrics = get_rubrics_for_course("CSC151")
+        >>> for rubric_id, rubric in rubrics.items():
+        ...     print(f"{rubric_id}: {rubric.title}")
+    """
+    all_rubrics = load_rubrics_from_config()
+    filtered_rubrics = {
+        rubric_id: rubric
+        for rubric_id, rubric in all_rubrics.items()
+        if course_id in rubric.course_ids
+    }
+    
+    logger.info(f"Found {len(filtered_rubrics)} rubrics for course '{course_id}'")
+    return filtered_rubrics
