@@ -70,7 +70,8 @@ async def get_feedback_content():
 
     st.header("Instructions File")
     _orig_file_name, instructions_file_path = add_upload_file_element("Upload Assignment Instructions",
-                                                                      ["txt", "docx", "pdf"])
+                                                                      ["txt", "docx", "pdf"],
+                                                                      key_prefix="feedback_")
 
     convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True,
                                                    key="convert_assignment_instruction_to_markdown")
@@ -88,7 +89,8 @@ async def get_feedback_content():
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "zip"]
     solution_file_paths = add_upload_file_element("Upload Assignment Solution",
                                                   solution_accepted_file_types,
-                                                  accept_multiple_files=True)
+                                                  accept_multiple_files=True,
+                                                  key_prefix="feedback_")
 
     assignment_solution_contents = None
 
@@ -114,7 +116,7 @@ async def get_feedback_content():
                     read_content, solution_language)
 
             else:
-                st.text_area(read_content)
+                st.text_area(label="Solution Content", value=read_content, key=f"feedback_solution_{solution_file_name}")
             # Append the content to the list
             assignment_solution_contents.append(read_content)
 
@@ -138,7 +140,8 @@ async def get_feedback_content():
     student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "zip"]
     student_submission_file_paths = add_upload_file_element("Upload Student Project Submission",
                                                             student_submission_accepted_file_types,
-                                                            accept_multiple_files=True)
+                                                            accept_multiple_files=True,
+                                                            key_prefix="feedback_")
 
     process_feedback = all(
         [course_name, assignment_instructions_content,
@@ -277,7 +280,7 @@ async def add_feedback_status_extender(
                 student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
                     student_submission_file_path_contents, code_langauge)
             else:
-                st.text_area(student_submission_file_path_contents)
+                st.text_area(label="Student Submission Content", value=student_submission_file_path_contents, key=f"{base_student_filename}_{filename}_text_area")
                 student_submission_file_path_contents_final = student_submission_file_path_contents
             student_submission_file_path_contents_all.append(student_submission_file_path_contents_final)
 
