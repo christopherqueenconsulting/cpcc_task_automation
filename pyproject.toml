@@ -27,7 +27,7 @@ langchain-openai = "^0"
 openai = "^1"
 ordered-set = "^4"
 chromadb = "^1"
-protobuf = "^3.19"
+protobuf = "^4.25"
 python-docx = "^1"
 #simplify_docx= { git = "https://github.com/gitchrisqueen/Simplify-Docx.git"}
 chromedriver-autoinstaller = "^0"
@@ -58,7 +58,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0.0"
-setuptools = "^67.6.1"
+setuptools = "^78.1.1"
 grandalf = "^0.8"
 
 

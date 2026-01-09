@@ -644,7 +644,7 @@ except Exception as e:
 - [src-cqc-cpcc.md](src-cqc-cpcc.md) - Core modules that use these utilities
 - [ai-llm.md](ai-llm.md) - AI utilities and LangChain integration
 - [src-cqc-streamlit-app.md](src-cqc-streamlit-app.md) - UI that uses utilities
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Overall system design
 
 ---
 

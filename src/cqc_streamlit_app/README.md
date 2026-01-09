@@ -33,7 +33,7 @@ For detailed documentation about this package, see:
 For overall project documentation:
 - [Project README](../../README.md) - Quick start and overview
 - [docs/README.md](../../docs/README.md) - Documentation hub
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) - System architecture
+- [ARCHITECTURE.md](../../docs/ARCHITECTURE.md) - System architecture
 - [PRODUCT.md](../../PRODUCT.md) - Product features and use cases
 
 ## Running the Application
