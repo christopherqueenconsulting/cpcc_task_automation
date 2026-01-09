@@ -13,17 +13,15 @@ fi
 # Define the options
 options=("streamlit" "poetry")
 
-# Function to generate the prompt
+# Simple prompt generator (no comma list)
 generate_prompt() {
     local default_option=$1
-    shift
-    local options=("$@")
-    local options_list=$(IFS=, ; echo "${options[*]}")
-    echo "Would you like to run the app via ${options_list}? (default: $default_option)"
+    echo "Select run method (default: $default_option)"
 }
 
-# Generate the prompt using the first option as default
-prompt=$(generate_prompt "${options[0]}" "${options[@]}")
+# Build prompt and call dialog with explicit menu height
+prompt=$(generate_prompt "${options[0]}")
+menu_height=${#options[@]}
 warning="Warning: dialog is not installed. Please install it using 'brew install dialog' and try again."
 
 # Function to display the menu and get user choice
@@ -62,7 +60,7 @@ run_app() {
 # Check if dialog is installed
 if command -v dialog &> /dev/null; then
     # Use dialog to present the options
-    dialog --menu "$prompt" 0 0 0 \
+    dialog --clear --title "Run App" --menu "$prompt" 10 60 "$menu_height" \
     1 "${options[0]}" \
     2 "${options[1]}" 2>tempfile
 
