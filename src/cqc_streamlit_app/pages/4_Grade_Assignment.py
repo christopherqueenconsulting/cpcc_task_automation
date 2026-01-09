@@ -18,6 +18,23 @@ from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custo
     get_language_from_file_path, on_download_click, create_zip_file, prefix_content_file_name, \
     ChatGPTStatusCallbackHandler, get_file_extension_from_filepath
 
+# Import rubric system
+from cqc_cpcc.rubric_config import (
+    get_distinct_course_ids,
+    get_rubrics_for_course,
+    get_rubric_by_id,
+    load_error_definitions_from_config
+)
+from cqc_cpcc.rubric_models import Rubric, DetectedError
+from cqc_cpcc.rubric_overrides import (
+    RubricOverrides,
+    CriterionOverride,
+    PerformanceLevelOverride,
+    merge_rubric_overrides,
+    validate_overrides_compatible
+)
+from cqc_cpcc.rubric_grading import grade_with_rubric
+
 # Initialize session state variables
 init_session_state()
 
@@ -205,6 +222,180 @@ def define_error_definitions(course_filter:str = None) -> tuple[pd.DataFrame, pd
                                                       )  # 👈 An editable dataframe
 
     return major_error_types_data_edited_df, minor_error_types_data_edited_df
+
+
+def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
+    """Display course dropdown and rubric selector, return selected course_id and rubric.
+    
+    Returns:
+        Tuple of (selected_course_id, selected_rubric) or (None, None) if not selected
+    """
+    st.header("Rubric Selection")
+    
+    # Get distinct courses from rubrics
+    course_ids = get_distinct_course_ids()
+    
+    if not course_ids:
+        st.warning("No courses found in rubric configuration. Add course_ids to rubrics in rubric_config.py")
+        return None, None
+    
+    # Course dropdown
+    # Initialize session state for course selection persistence
+    if "selected_course_id" not in st.session_state:
+        st.session_state.selected_course_id = None
+    
+    # Create display labels for courses (e.g., "CSC151" -> "CSC 151")
+    course_display_options = ["-- Select Course --"] + [
+        c.replace("CSC", "CSC ") if c.startswith("CSC") else c 
+        for c in course_ids
+    ]
+    
+    # Find current index
+    current_index = 0
+    if st.session_state.selected_course_id:
+        display_label = st.session_state.selected_course_id.replace("CSC", "CSC ") if st.session_state.selected_course_id.startswith("CSC") else st.session_state.selected_course_id
+        if display_label in course_display_options:
+            current_index = course_display_options.index(display_label)
+    
+    selected_course_display = st.selectbox(
+        "Select Course",
+        course_display_options,
+        index=current_index,
+        key="course_selector"
+    )
+    
+    # Convert display back to course_id
+    if selected_course_display == "-- Select Course --":
+        selected_course_id = None
+    else:
+        # Reverse the display transformation
+        selected_course_id = selected_course_display.replace("CSC ", "CSC") if "CSC " in selected_course_display else selected_course_display
+    
+    # Check if course changed
+    if selected_course_id != st.session_state.selected_course_id:
+        st.session_state.selected_course_id = selected_course_id
+        # Reset rubric selection when course changes
+        if "selected_rubric_id" in st.session_state:
+            st.session_state.selected_rubric_id = None
+    
+    if not selected_course_id:
+        return None, None
+    
+    # Get rubrics for selected course
+    course_rubrics = get_rubrics_for_course(selected_course_id)
+    
+    if not course_rubrics:
+        st.warning(f"No rubrics found for course {selected_course_id}")
+        return selected_course_id, None
+    
+    # Rubric dropdown
+    if "selected_rubric_id" not in st.session_state:
+        st.session_state.selected_rubric_id = None
+    
+    rubric_options = ["-- Select Rubric --"] + [
+        f"{rubric.title} (v{rubric.rubric_version}, {rubric.total_points_possible} pts)"
+        for rubric_id, rubric in course_rubrics.items()
+    ]
+    rubric_ids = list(course_rubrics.keys())
+    
+    # Find current rubric index
+    rubric_index = 0
+    if st.session_state.selected_rubric_id and st.session_state.selected_rubric_id in rubric_ids:
+        rubric_index = rubric_ids.index(st.session_state.selected_rubric_id) + 1
+    
+    selected_rubric_display = st.selectbox(
+        "Select Rubric",
+        rubric_options,
+        index=rubric_index,
+        key="rubric_selector"
+    )
+    
+    if selected_rubric_display == "-- Select Rubric --":
+        return selected_course_id, None
+    
+    # Get rubric ID from selection
+    selected_rubric_idx = rubric_options.index(selected_rubric_display) - 1
+    selected_rubric_id = rubric_ids[selected_rubric_idx]
+    st.session_state.selected_rubric_id = selected_rubric_id
+    
+    # Load the rubric
+    selected_rubric = course_rubrics[selected_rubric_id]
+    
+    return selected_course_id, selected_rubric
+
+
+def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
+    """Display editable tables for rubric criteria and return overrides.
+    
+    Args:
+        rubric: The base rubric to edit
+        
+    Returns:
+        RubricOverrides object with user edits
+    """
+    st.header("Rubric Criteria Editor")
+    st.markdown(f"**Rubric:** {rubric.title} (v{rubric.rubric_version})")
+    st.markdown(f"**Total Points:** {rubric.total_points_possible}")
+    
+    # Build criteria dataframe for editing
+    criteria_data = []
+    for criterion in rubric.criteria:
+        criteria_data.append({
+            "enabled": criterion.enabled,
+            "criterion_id": criterion.criterion_id,
+            "name": criterion.name,
+            "max_points": criterion.max_points,
+            "has_levels": len(criterion.levels) if criterion.levels else 0
+        })
+    
+    criteria_df = pd.DataFrame(criteria_data)
+    
+    # Display editable criteria table
+    edited_criteria_df = st.data_editor(
+        criteria_df,
+        hide_index=True,
+        disabled=["criterion_id", "has_levels"],  # Read-only columns
+        column_config={
+            "enabled": st.column_config.CheckboxColumn("Enabled", help="Enable/disable this criterion"),
+            "criterion_id": st.column_config.TextColumn("ID", help="Criterion identifier (read-only)"),
+            "name": st.column_config.TextColumn("Name", help="Criterion display name"),
+            "max_points": st.column_config.NumberColumn("Max Points", min_value=1, help="Maximum points for this criterion"),
+            "has_levels": st.column_config.NumberColumn("# Levels", help="Number of performance levels (read-only)")
+        },
+        key="criteria_editor"
+    )
+    
+    # Build overrides from edited dataframe
+    criterion_overrides = {}
+    for _, row in edited_criteria_df.iterrows():
+        criterion_id = row["criterion_id"]
+        base_criterion = next(c for c in rubric.criteria if c.criterion_id == criterion_id)
+        
+        # Check if any field changed
+        changed = False
+        override = CriterionOverride()
+        
+        if row["enabled"] != base_criterion.enabled:
+            override.enabled = row["enabled"]
+            changed = True
+        
+        if row["name"] != base_criterion.name:
+            override.name = row["name"]
+            changed = True
+        
+        if row["max_points"] != base_criterion.max_points:
+            override.max_points = int(row["max_points"])
+            changed = True
+        
+        if changed:
+            criterion_overrides[criterion_id] = override
+    
+    # Optional: Add level editor in expander
+    with st.expander("Advanced: Edit Performance Levels", expanded=False):
+        st.info("Performance level editing is optional. Leave unchanged to use default levels from rubric configuration.")
+        st.markdown("*Level editing UI can be added here in future if needed.*")
+    
+    return RubricOverrides(criterion_overrides=criterion_overrides)
 
 
 # Define a function to check if all required inputs are filled
@@ -529,6 +720,221 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
         return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
 
 
+async def get_rubric_based_exam_grading():
+    """New rubric-based exam grading workflow."""
+    st.title('Rubric-Based Exam Grading')
+    st.markdown("""Grade exam submissions using structured rubrics with course-specific filtering.""")
+    
+    # Step 1: Course and Rubric Selection
+    selected_course_id, selected_rubric = select_rubric_with_course_filter()
+    
+    if not selected_rubric:
+        st.info("👆 Please select a course and rubric to begin grading.")
+        return
+    
+    # Step 2: Rubric Overrides Editor
+    rubric_overrides = display_rubric_overrides_editor(selected_rubric)
+    
+    # Step 3: Merge overrides with base rubric
+    try:
+        # Validate overrides first
+        is_valid, errors = validate_overrides_compatible(selected_rubric, rubric_overrides)
+        if not is_valid:
+            st.error("Invalid rubric overrides:")
+            for error in errors:
+                st.error(f"  - {error}")
+            return
+        
+        # Merge to get effective rubric
+        effective_rubric = merge_rubric_overrides(selected_rubric, rubric_overrides)
+        
+        st.success(f"Effective rubric: {effective_rubric.total_points_possible} total points, "
+                  f"{len([c for c in effective_rubric.criteria if c.enabled])} enabled criteria")
+        
+    except ValueError as e:
+        st.error(f"Failed to merge rubric overrides: {e}")
+        return
+    
+    # Step 4: Assignment Instructions
+    st.header("Assignment Instructions")
+    _orig_file_name, instructions_file_path = add_upload_file_element(
+        "Upload Exam Instructions",
+        ["txt", "docx", "pdf"]
+    )
+    convert_instructions_to_markdown = st.checkbox(
+        "Convert To Markdown", 
+        True,
+        key="convert_rubric_exam_instruction_to_markdown"
+    )
+    
+    assignment_instructions_content = None
+    if instructions_file_path:
+        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+        if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
+            st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+    
+    # Step 5: Solution File (Optional)
+    st.header("Solution File (Optional)")
+    solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
+    solution_file_paths = add_upload_file_element(
+        "Upload Exam Solution (Optional)",
+        solution_accepted_file_types,
+        accept_multiple_files=True
+    )
+    
+    assignment_solution_contents = None
+    if solution_file_paths:
+        assignment_solution_contents = []
+        for orig_solution_file_path, solution_file_path in solution_file_paths:
+            solution_file_name = os.path.basename(orig_solution_file_path)
+            read_content = read_file(solution_file_path, False)
+            read_content = prefix_content_file_name(solution_file_name, read_content)
+            
+            solution_language = get_language_from_file_path(orig_solution_file_path)
+            if solution_language:
+                read_content = wrap_code_in_markdown_backticks(read_content, solution_language)
+            
+            assignment_solution_contents.append(read_content)
+        
+        assignment_solution_contents = "\n\n".join(assignment_solution_contents)
+    
+    # Step 6: Error Definitions (Optional)
+    st.header("Error Definitions (Optional)")
+    use_error_definitions = st.checkbox("Include error definitions in grading", value=True)
+    
+    error_definitions = None
+    if use_error_definitions:
+        error_definitions = load_error_definitions_from_config()
+        st.info(f"Loaded {len(error_definitions)} error definitions from configuration")
+    
+    # Step 7: Model Configuration
+    model_cfg = define_chatGPTModel("rubric_grade_exam", default_temp_value=0.2)
+    selected_model = model_cfg.get("model", "gpt-4o")
+    selected_temperature = float(model_cfg.get("temperature", 0.2))
+    
+    # Step 8: Student Submissions
+    st.header("Student Submission File(s)")
+    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
+    student_submission_file_paths = add_upload_file_element(
+        "Upload Student Exam Submission",
+        student_submission_accepted_file_types,
+        accept_multiple_files=True
+    )
+    
+    # Step 9: Process Grading
+    if not all([assignment_instructions_content, student_submission_file_paths]):
+        st.info("📝 Please upload assignment instructions and student submissions to begin grading.")
+        return
+    
+    st.success("All required inputs provided. Ready to grade!")
+    
+    # Process each student submission
+    graded_results = []
+    
+    for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
+        base_student_filename = os.path.basename(student_submission_file_path)
+        
+        with st.status(f"Grading: {base_student_filename}", expanded=True) as status:
+            try:
+                # Read student submission
+                student_submission_content = read_file(student_submission_temp_file_path, False)
+                student_submission_content = prefix_content_file_name(base_student_filename, student_submission_content)
+                
+                status.update(label=f"Grading {base_student_filename} | Calling OpenAI...")
+                
+                # Grade with rubric
+                result = await grade_with_rubric(
+                    rubric=effective_rubric,
+                    assignment_instructions=assignment_instructions_content,
+                    student_submission=student_submission_content,
+                    reference_solution=assignment_solution_contents,
+                    error_definitions=error_definitions,
+                    model_name=selected_model,
+                    temperature=selected_temperature
+                )
+                
+                status.update(label=f"Grading {base_student_filename} | Complete")
+                
+                # Display results
+                display_rubric_assessment_result(result, base_student_filename)
+                
+                graded_results.append((base_student_filename, result))
+                
+                status.update(label=f"✅ {base_student_filename} graded", state="complete")
+                
+            except Exception as e:
+                st.error(f"Error grading {base_student_filename}: {e}")
+                status.update(label=f"❌ Error: {base_student_filename}", state="error")
+    
+    if graded_results:
+        st.success(f"Graded {len(graded_results)} submission(s) successfully!")
+
+
+def display_rubric_assessment_result(result, student_name: str):
+    """Display rubric assessment results in a structured format.
+    
+    Args:
+        result: RubricAssessmentResult from grading
+        student_name: Name of the student for display
+    """
+    st.subheader(f"📊 Results for {student_name}")
+    
+    # Overall score
+    score_percentage = (result.total_points_earned / result.total_points_possible * 100) if result.total_points_possible > 0 else 0
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Points", f"{result.total_points_earned}/{result.total_points_possible}")
+    with col2:
+        st.metric("Percentage", f"{score_percentage:.1f}%")
+    with col3:
+        if result.overall_band_label:
+            st.metric("Performance Band", result.overall_band_label)
+    
+    # Per-criterion results
+    st.markdown("### Criterion Breakdown")
+    
+    for criterion_result in result.criteria_results:
+        with st.expander(f"**{criterion_result.criterion_name}** - {criterion_result.points_earned}/{criterion_result.points_possible} pts", expanded=False):
+            if criterion_result.selected_level_label:
+                st.markdown(f"**Level:** {criterion_result.selected_level_label}")
+            
+            st.markdown("**Feedback:**")
+            st.markdown(criterion_result.feedback)
+            
+            if criterion_result.evidence:
+                st.markdown("**Evidence:**")
+                for evidence in criterion_result.evidence:
+                    st.code(evidence, language="text")
+    
+    # Overall feedback
+    st.markdown("### Overall Feedback")
+    st.markdown(result.overall_feedback)
+    
+    # Detected errors
+    if result.detected_errors:
+        st.markdown("### Detected Errors")
+        
+        major_errors = [e for e in result.detected_errors if e.severity == "major"]
+        minor_errors = [e for e in result.detected_errors if e.severity == "minor"]
+        
+        if major_errors:
+            st.markdown("**Major Errors:**")
+            for error in major_errors:
+                with st.expander(f"{error.name} ({error.code})", expanded=False):
+                    st.markdown(error.description)
+                    if error.notes:
+                        st.markdown(f"*Notes:* {error.notes}")
+        
+        if minor_errors:
+            st.markdown("**Minor Errors:**")
+            for error in minor_errors:
+                with st.expander(f"{error.name} ({error.code})", expanded=False):
+                    st.markdown(error.description)
+                    if error.notes:
+                        st.markdown(f"*Notes:* {error.notes}")
+
+
 def main():
     st.set_page_config(layout="wide", page_title="Grade Assignment", page_icon="📝")  # TODO: Change the page icon
 
@@ -540,8 +946,8 @@ def main():
 
     st.markdown("""Here we will give feedback and grade a students assignment submission""")
 
-    # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["Flowgorithm Assignments", "Online GDB", "Exams", "Other"])
+    # Create tabs - Added new "Exams (Rubric)" tab
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Flowgorithm Assignments", "Online GDB", "Exams (Legacy)", "Exams (Rubric)", "Other"])
 
     with tab1:
         get_flowgorithm_content()
@@ -553,7 +959,14 @@ def main():
             asyncio.run(get_grade_exam_content())
         else:
             st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
+    
     with tab4:
+        if st.session_state.openai_api_key:
+            asyncio.run(get_rubric_based_exam_grading())
+        else:
+            st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
+    
+    with tab5:
         st.title("Other")
 
 

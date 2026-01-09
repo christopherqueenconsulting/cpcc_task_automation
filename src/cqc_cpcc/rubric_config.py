@@ -35,6 +35,7 @@ RUBRICS_JSON = """{
         "rubric_version": "1.0",
         "title": "Default 100-Point Rubric",
         "description": "General purpose rubric for programming assignments",
+        "course_ids": ["CSC151", "CSC152", "CSC251"],
         "criteria": [
             {
                 "criterion_id": "understanding",
@@ -189,6 +190,117 @@ RUBRICS_JSON = """{
                 "label": "Beginning",
                 "score_min": 0,
                 "score_max": 59
+            }
+        ]
+    },
+    "csc151_java_exam_rubric": {
+        "rubric_id": "csc151_java_exam_rubric",
+        "rubric_version": "1.0",
+        "title": "CSC 151 Java Exam Rubric",
+        "description": "Specialized rubric for CSC 151 Java programming exams",
+        "course_ids": ["CSC151"],
+        "criteria": [
+            {
+                "criterion_id": "correctness",
+                "name": "Correctness & Logic",
+                "description": "Program produces correct output and implements proper logic",
+                "max_points": 50,
+                "enabled": true,
+                "levels": [
+                    {
+                        "label": "Exemplary",
+                        "score_min": 45,
+                        "score_max": 50,
+                        "description": "All requirements met perfectly with correct logic throughout"
+                    },
+                    {
+                        "label": "Proficient",
+                        "score_min": 35,
+                        "score_max": 44,
+                        "description": "Most requirements met with minor logic issues"
+                    },
+                    {
+                        "label": "Developing",
+                        "score_min": 25,
+                        "score_max": 34,
+                        "description": "Some requirements met but significant logic errors"
+                    },
+                    {
+                        "label": "Beginning",
+                        "score_min": 0,
+                        "score_max": 24,
+                        "description": "Major logic errors or minimal functionality"
+                    }
+                ]
+            },
+            {
+                "criterion_id": "syntax_compilation",
+                "name": "Syntax & Compilation",
+                "description": "Code compiles without errors and follows Java syntax",
+                "max_points": 20,
+                "enabled": true,
+                "levels": [
+                    {
+                        "label": "Exemplary",
+                        "score_min": 18,
+                        "score_max": 20,
+                        "description": "Compiles perfectly with no syntax errors"
+                    },
+                    {
+                        "label": "Proficient",
+                        "score_min": 14,
+                        "score_max": 17,
+                        "description": "Compiles with only minor syntax issues"
+                    },
+                    {
+                        "label": "Developing",
+                        "score_min": 10,
+                        "score_max": 13,
+                        "description": "Multiple syntax errors prevent compilation"
+                    },
+                    {
+                        "label": "Beginning",
+                        "score_min": 0,
+                        "score_max": 9,
+                        "description": "Significant syntax errors throughout"
+                    }
+                ]
+            },
+            {
+                "criterion_id": "documentation",
+                "name": "Documentation & Comments",
+                "description": "Code includes appropriate comments and documentation",
+                "max_points": 15,
+                "enabled": true
+            },
+            {
+                "criterion_id": "style",
+                "name": "Code Style & Conventions",
+                "description": "Follows Java naming conventions and style guidelines",
+                "max_points": 15,
+                "enabled": true
+            }
+        ],
+        "overall_bands": [
+            {
+                "label": "Excellent",
+                "score_min": 90,
+                "score_max": 100
+            },
+            {
+                "label": "Good",
+                "score_min": 80,
+                "score_max": 89
+            },
+            {
+                "label": "Satisfactory",
+                "score_min": 70,
+                "score_max": 79
+            },
+            {
+                "label": "Needs Improvement",
+                "score_min": 0,
+                "score_max": 69
             }
         ]
     }
@@ -527,3 +639,52 @@ def list_available_rubrics() -> list[str]:
     """
     rubrics = load_rubrics_from_config()
     return list(rubrics.keys())
+
+
+def get_distinct_course_ids() -> list[str]:
+    """Get list of distinct course IDs from all rubrics.
+    
+    Returns:
+        Sorted list of unique course IDs across all rubrics
+        
+    Example:
+        >>> course_ids = get_distinct_course_ids()
+        >>> print(course_ids)
+        ['CSC151', 'CSC152', 'CSC251']
+    """
+    rubrics = load_rubrics_from_config()
+    course_ids_set = set()
+    
+    for rubric in rubrics.values():
+        course_ids_set.update(rubric.course_ids)
+    
+    # Remove UNASSIGNED if there are other courses
+    if len(course_ids_set) > 1 and "UNASSIGNED" in course_ids_set:
+        course_ids_set.discard("UNASSIGNED")
+    
+    return sorted(list(course_ids_set))
+
+
+def get_rubrics_for_course(course_id: str) -> Dict[str, Rubric]:
+    """Get all rubrics applicable to a specific course.
+    
+    Args:
+        course_id: Course identifier (e.g., "CSC151")
+        
+    Returns:
+        Dictionary mapping rubric_id to Rubric objects for the specified course
+        
+    Example:
+        >>> rubrics = get_rubrics_for_course("CSC151")
+        >>> for rubric_id, rubric in rubrics.items():
+        ...     print(f"{rubric_id}: {rubric.title}")
+    """
+    all_rubrics = load_rubrics_from_config()
+    filtered_rubrics = {
+        rubric_id: rubric
+        for rubric_id, rubric in all_rubrics.items()
+        if course_id in rubric.course_ids
+    }
+    
+    logger.info(f"Found {len(filtered_rubrics)} rubrics for course '{course_id}'")
+    return filtered_rubrics
