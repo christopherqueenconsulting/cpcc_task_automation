@@ -1,0 +1,50 @@
+name: Dependabot Auto-Merge
+
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot:
+    runs-on: ubuntu-latest
+    # Only run for Dependabot PRs
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+      
+      - name: Auto-approve Dependabot PRs
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Enable auto-merge for patch and minor updates
+        # Auto-merge patch and minor updates, but not major updates
+        # The --auto flag ensures the PR will only merge after all required
+        # status checks pass (including unit-tests) and branch protection rules are met
+        if: |
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Comment on major updates
+        # For major updates, add a comment but don't auto-merge
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr comment "$PR_URL" --body "🚨 This is a **major version update**. Please review carefully before merging."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
