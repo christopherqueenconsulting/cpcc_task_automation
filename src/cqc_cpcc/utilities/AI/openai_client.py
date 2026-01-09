@@ -257,6 +257,11 @@ async def get_structured_completion(
     if max_retries < 0:
         raise ValueError(f"max_retries must be non-negative, got {max_retries}")
     
+    # Test mode: return deterministic mock response
+    from cqc_cpcc.utilities.env_constants import TEST_MODE
+    if TEST_MODE:
+        return _get_test_mode_response(schema_model)
+    
     # Get client instance
     client = await get_client()
     
@@ -428,6 +433,68 @@ async def get_structured_completion(
         ) from last_error
     
     raise OpenAITransportError("Unknown error occurred")
+
+
+def _get_test_mode_response(schema_model: Type[T]) -> T:
+    """Return deterministic mock response for testing.
+    
+    This function provides consistent structured outputs for E2E testing
+    without making real OpenAI API calls.
+    
+    Args:
+        schema_model: Pydantic model class to instantiate
+    
+    Returns:
+        Instance of schema_model with test data
+    """
+    from cqc_cpcc.rubric_models import RubricAssessmentResult, CriterionResult
+    from cqc_cpcc.exam_review import ErrorDefinitions, MajorError, MinorError, MajorErrorType, MinorErrorType
+    from cqc_cpcc.project_feedback import FeedbackGuide, Feedback, FeedbackType
+    
+    model_name = schema_model.__name__
+    
+    # RubricAssessmentResult for exam grading
+    if model_name == "RubricAssessmentResult":
+        return RubricAssessmentResult(
+            rubric_id="test_rubric",
+            rubric_version="1.0.0",
+            total_points_possible=100,
+            total_points_earned=85,
+            criteria_results=[
+                CriterionResult(
+                    criterion_id="criterion_1",
+                    points_earned=85,
+                    points_possible=100,
+                    feedback="Test criterion feedback: Code demonstrates good understanding."
+                )
+            ],
+            overall_feedback="Test mode: Overall the submission shows solid work with minor improvements needed.",
+            detected_errors=[],
+            error_counts_by_severity={}
+        )
+    
+    # ErrorDefinitions for exam review
+    elif model_name == "ErrorDefinitions":
+        return ErrorDefinitions(
+            major_errors=[],
+            minor_errors=[]
+        )
+    
+    # FeedbackGuide for project feedback
+    elif model_name == "FeedbackGuide":
+        return FeedbackGuide(
+            all_feedback=[
+                Feedback(
+                    error_type=FeedbackType.COMMENTS_MISSING,
+                    error_details="Test mode: Add more comments to explain the logic."
+                )
+            ]
+        )
+    
+    # Default: return empty instance
+    else:
+        logger.warning(f"No test mode response defined for {model_name}, returning empty instance")
+        return schema_model()
 
 
 async def close_client() -> None:

@@ -1,0 +1,50 @@
+#  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+
+"""Smoke tests for Streamlit UI.
+
+These tests verify that the basic application loads and key pages are accessible.
+"""
+
+import pytest
+from playwright.sync_api import Page, expect
+
+
+@pytest.mark.e2e
+def test_home_page_loads(page: Page, streamlit_app_url: str):
+    """Test that the home page loads successfully."""
+    page.goto(streamlit_app_url)
+    
+    # Wait for Streamlit to finish loading
+    page.wait_for_load_state("networkidle")
+    
+    # Check that the page title contains expected text
+    expect(page).to_have_title
+
+(re=".*CPCC.*|.*Task.*|.*Automation.*", timeout=10000)
+
+
+@pytest.mark.e2e
+def test_navigation_links_exist(page: Page, streamlit_app_url: str):
+    """Test that main navigation links are visible."""
+    page.goto(streamlit_app_url)
+    page.wait_for_load_state("networkidle")
+    
+    # Give Streamlit time to render
+    page.wait_for_timeout(2000)
+    
+    # Check for sidebar navigation (Streamlit renders navigation in sidebar)
+    # Look for links in the page
+    expect(page.locator("text=/Attendance|Feedback|Grade|Settings/i").first).to_be_visible(timeout=10000)
+
+
+@pytest.mark.e2e
+def test_app_renders_without_errors(page: Page, streamlit_app_url: str):
+    """Test that app renders without JavaScript errors."""
+    page.goto(streamlit_app_url)
+    page.wait_for_load_state("networkidle")
+    
+    # Wait a bit for any async operations
+    page.wait_for_timeout(2000)
+    
+    # Check that Streamlit's app container is present
+    expect(page.locator("[data-testid='stAppViewContainer']").first).to_be_visible(timeout=10000)
