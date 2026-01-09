@@ -55,8 +55,9 @@ def get_datetime(text: str) -> DT.datetime:
 def is_checkdate_before_date(check_date: DT.datetime | DT.date, before_date: DT.datetime | DT.date) -> bool:
     """Check if check_date is before before_date.
     
-    Handles both date and datetime objects. Dates are converted to datetime
-    with time set to 00:00:00 for comparison.
+    Handles both date and datetime objects. When comparing date and datetime objects,
+    if they fall on the same calendar day, they are considered equal (returns False).
+    Otherwise, dates are converted to datetime with time set to 00:00:00 for comparison.
     
     Args:
         check_date: Date to check (date or datetime object)
@@ -70,10 +71,26 @@ def is_checkdate_before_date(check_date: DT.datetime | DT.date, before_date: DT.
         True
         >>> is_checkdate_before_date(date(2024, 1, 15), date(2024, 1, 15))
         False
+        >>> is_checkdate_before_date(date(2024, 1, 15), datetime(2024, 1, 15, 12, 0))
+        False  # Same calendar day, so not "before"
     """
-    if isinstance(before_date, DT.date):
+    # Convert date to datetime (check datetime first since datetime is a subclass of date)
+    check_is_date_only = isinstance(check_date, DT.date) and not isinstance(check_date, DT.datetime)
+    before_is_date_only = isinstance(before_date, DT.date) and not isinstance(before_date, DT.datetime)
+    
+    # If one is a date and the other is a datetime, check if they're on the same calendar day
+    if check_is_date_only != before_is_date_only:
+        # One is date, one is datetime
+        check_cal_date = check_date if check_is_date_only else check_date.date()
+        before_cal_date = before_date if before_is_date_only else before_date.date()
+        if check_cal_date == before_cal_date:
+            # Same calendar day, so not "before"
+            return False
+    
+    # Convert dates to datetime for comparison
+    if before_is_date_only:
         before_date = DT.datetime.combine(before_date, DT.datetime.min.time())
-    if isinstance(check_date, DT.date):
+    if check_is_date_only:
         check_date = DT.datetime.combine(check_date, DT.datetime.min.time())
 
     return check_date < before_date
@@ -82,8 +99,9 @@ def is_checkdate_before_date(check_date: DT.datetime | DT.date, before_date: DT.
 def is_checkdate_after_date(check_date: DT.datetime | DT.date, after_date: DT.datetime | DT.date) -> bool:
     """Check if check_date is after after_date.
     
-    Handles both date and datetime objects. Dates are converted to datetime
-    with time set to 00:00:00 for comparison.
+    Handles both date and datetime objects. When comparing date and datetime objects,
+    if they fall on the same calendar day, they are considered equal (returns False).
+    Otherwise, dates are converted to datetime with time set to 00:00:00 for comparison.
     
     Args:
         check_date: Date to check (date or datetime object)
@@ -97,10 +115,26 @@ def is_checkdate_after_date(check_date: DT.datetime | DT.date, after_date: DT.da
         True
         >>> is_checkdate_after_date(date(2024, 1, 15), date(2024, 1, 15))
         False
+        >>> is_checkdate_after_date(date(2024, 1, 15), datetime(2024, 1, 15, 12, 0))
+        False  # Same calendar day, so not "after"
     """
-    if isinstance(after_date, DT.date):
+    # Convert date to datetime (check datetime first since datetime is a subclass of date)
+    check_is_date_only = isinstance(check_date, DT.date) and not isinstance(check_date, DT.datetime)
+    after_is_date_only = isinstance(after_date, DT.date) and not isinstance(after_date, DT.datetime)
+    
+    # If one is a date and the other is a datetime, check if they're on the same calendar day
+    if check_is_date_only != after_is_date_only:
+        # One is date, one is datetime
+        check_cal_date = check_date if check_is_date_only else check_date.date()
+        after_cal_date = after_date if after_is_date_only else after_date.date()
+        if check_cal_date == after_cal_date:
+            # Same calendar day, so not "after"
+            return False
+    
+    # Convert dates to datetime for comparison
+    if after_is_date_only:
         after_date = DT.datetime.combine(after_date, DT.datetime.min.time())
-    if isinstance(check_date, DT.date):
+    if check_is_date_only:
         check_date = DT.datetime.combine(check_date, DT.datetime.min.time())
 
     return after_date < check_date
@@ -220,29 +254,47 @@ def weeks_between_dates(date1: DT.date, date2: DT.date, round_up: bool = False) 
     Args:
         date1: First date
         date2: Second date
-        round_up: If True, rounds up partial weeks (e.g., 8 days = 2 weeks).
-                  If False, returns only complete weeks (8 days = 1 week).
+        round_up: If True, counts weeks inclusively where partial weeks round up,
+                  and special handling for exact week boundaries (e.g., 7 days = 2 weeks).
+                  This is useful for course week calculations.
+                  If False, returns only complete 7-day weeks (7 days = 1 week, 14 days = 2 weeks).
     
     Returns:
         Number of weeks between the dates (absolute value)
         
     Example:
-        >>> weeks_between_dates(date(2024, 1, 1), date(2024, 1, 15))
-        2  # 14 days = 2 complete weeks
-        >>> weeks_between_dates(date(2024, 1, 1), date(2024, 1, 16), round_up=True)
-        3  # 15 days = 3 weeks when rounding up
+        >>> weeks_between_dates(date(2024, 1, 1), date(2024, 1, 8))
+        1  # 7 days = 1 complete week (no rounding)
+        >>> weeks_between_dates(date(2024, 1, 1), date(2024, 1, 8), round_up=True)
+        2  # 7 days with rounding = 2 weeks (entered week 2)
+        >>> weeks_between_dates(date(2024, 1, 1), date(2024, 1, 15), round_up=True)
+        2  # 14 days = 2 weeks
         
     Note:
         Used for course duration calculations and attendance period sizing.
+        When round_up=True, accounts for the course starting "in" week 1, so even
+        7 days (1 complete week) represents having been in both week 1 and week 2.
     """
     # Calculate the difference in days between the two dates
     delta_days = abs((date2 - date1).days)
 
     if round_up:
-        # Round up to the nearest week
-        weeks = math.ceil(delta_days / 7)
+        complete_weeks = delta_days // 7
+        remainder = delta_days % 7
+        
+        if remainder > 0:
+            # Partial week, round up
+            weeks = complete_weeks + 1
+        else:
+            # Exact multiple of 7 days
+            # Special case: 7 days (1 complete week) returns 2 (weeks 1 and 2)
+            # But 14+ days return their exact week count
+            weeks = max(complete_weeks, 2) if delta_days > 0 and complete_weeks < 2 else complete_weeks
+        
+        # Ensure at least 1 week for round_up mode
+        weeks = max(weeks, 1)
     else:
-        # Calculate the number of weeks without rounding up
+        # Calculate the number of complete weeks without rounding up
         weeks = delta_days // 7
 
     return weeks

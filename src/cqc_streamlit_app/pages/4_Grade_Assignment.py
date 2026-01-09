@@ -10,7 +10,7 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx, ScriptRunContext
 
 from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader, parse_error_type_enum_name
-from cqc_cpcc.utilities.AI.llm.chains import generate_assignment_feedback_grade
+from cqc_cpcc.utilities.AI.llm_deprecated.chains import generate_assignment_feedback_grade
 from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks, \
     extract_and_read_zip
 from cqc_streamlit_app.initi_pages import init_session_state

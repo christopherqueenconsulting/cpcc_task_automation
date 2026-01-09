@@ -114,9 +114,18 @@ def build_rubric_grading_prompt(
             prompt_parts.append(f"- **{band.label}**: {band.score_min}-{band.score_max} points")
         prompt_parts.append("")
     
-    # Error definitions if provided (only include enabled ones)
+    # Error definitions if provided
     if error_definitions:
-        enabled_errors = [e for e in error_definitions if e.enabled]
+        # Filter to enabled errors if the objects have an 'enabled' attribute
+        # Handle both ErrorDefinition (with enabled) and DetectedError (without) types
+        enabled_errors = []
+        for e in error_definitions:
+            if hasattr(e, 'enabled'):
+                if e.enabled:
+                    enabled_errors.append(e)
+            else:
+                # No enabled field, include all
+                enabled_errors.append(e)
         
         if enabled_errors:
             prompt_parts.append("### Error Definitions to Check")
@@ -125,23 +134,31 @@ def build_rubric_grading_prompt(
             prompt_parts.append("2. Aggregated counts by severity in error_counts_by_severity")
             prompt_parts.append("")
             
-            # Group by severity
-            major_errors = [e for e in enabled_errors if e.severity_category.lower() == "major"]
-            minor_errors = [e for e in enabled_errors if e.severity_category.lower() == "minor"]
-            other_errors = [e for e in enabled_errors if e.severity_category.lower() not in ["major", "minor"]]
+            # Group by severity - handle both severity_category and severity fields
+            def get_severity(error):
+                return getattr(error, 'severity_category', getattr(error, 'severity', 'unknown')).lower()
+            
+            major_errors = [e for e in enabled_errors if get_severity(e) == "major"]
+            minor_errors = [e for e in enabled_errors if get_severity(e) == "minor"]
+            other_errors = [e for e in enabled_errors if get_severity(e) not in ["major", "minor"]]
             
             if major_errors:
                 prompt_parts.append("**Major Errors:**")
                 for error in major_errors:
-                    prompt_parts.append(f"- **{error.error_id}**: {error.description}")
-                    if error.examples:
+                    # Handle both error_id and code fields
+                    error_code = getattr(error, 'error_id', getattr(error, 'code', 'UNKNOWN'))
+                    error_desc = error.description
+                    prompt_parts.append(f"- **{error_code}**: {error_desc}")
+                    if hasattr(error, 'examples') and error.examples:
                         prompt_parts.append(f"  Examples: {'; '.join(error.examples)}")
             
             if minor_errors:
                 prompt_parts.append("\n**Minor Errors:**")
                 for error in minor_errors:
-                    prompt_parts.append(f"- **{error.error_id}**: {error.description}")
-                    if error.examples:
+                    error_code = getattr(error, 'error_id', getattr(error, 'code', 'UNKNOWN'))
+                    error_desc = error.description
+                    prompt_parts.append(f"- **{error_code}**: {error_desc}")
+                    if hasattr(error, 'examples') and error.examples:
                         prompt_parts.append(f"  Examples: {'; '.join(error.examples)}")
             
             if other_errors:

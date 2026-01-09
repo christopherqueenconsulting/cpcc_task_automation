@@ -12,7 +12,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 from cqc_cpcc.exam_review import JavaCode
 from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
-from cqc_cpcc.utilities.AI.llm.llms import get_default_llm_model
+from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm_model
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
@@ -316,7 +316,7 @@ class FeedbackGiver:
         Returns:
             None (sets self.feedback_list)
         """
-        from cqc_cpcc.utilities.AI.llm.prompts import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
+        from cqc_cpcc.utilities.AI.llm_deprecated.prompts import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
         
         # Build the prompt with all parameters
         feedback_types_str = "\n\t".join(self.feedback_type_list) if self.feedback_type_list else "N/A"

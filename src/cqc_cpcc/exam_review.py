@@ -6,9 +6,9 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from pydantic import Field, BaseModel, StrictStr
 
-from cqc_cpcc.utilities.AI.llm.chains import get_exam_error_definition_from_completion_chain, \
+from cqc_cpcc.utilities.AI.llm_deprecated.chains import get_exam_error_definition_from_completion_chain, \
     get_exam_error_definitions_completion_chain
-from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
+from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm
 from cqc_cpcc.utilities.AI.exam_grading_openai import grade_exam_submission
 from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
 from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
