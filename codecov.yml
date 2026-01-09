@@ -71,16 +71,13 @@ coverage:
 # Comment configuration for PR feedback
 comment:
   # Post coverage summary as PR comment
-  layout: "header, diff, files, footer"
+  layout: "condensed_header, condensed_files, condensed_footer"
   
   # Show both patch and project status in comment
   behavior: default
   
   # Require changes to post new comment
   require_changes: false
-  
-  # After this many files, collapse the file list
-  after_n_files: 10
 
 # Ignore patterns - exclude files from coverage analysis
 # These match the patterns in pyproject.toml [tool.coverage.run] omit
