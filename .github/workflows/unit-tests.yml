@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           echo "Running unit tests with pytest..."
-          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch -cov-report=xml
+          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
