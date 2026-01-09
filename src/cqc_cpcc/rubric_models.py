@@ -34,7 +34,7 @@ Usage:
     >>> print(rubric.total_points_possible)  # Auto-computed from criteria
 """
 
-from typing import Optional, Annotated
+from typing import Optional, Annotated, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator, computed_field
 
 
@@ -66,11 +66,38 @@ class PerformanceLevel(BaseModel):
         return score_max
 
 
+class ErrorCountScoringRules(BaseModel):
+    """Rules for computing criterion score based on error counts.
+    
+    Defines how to calculate points from detected major/minor errors.
+    Used when a criterion's scoring_mode is "error_count".
+    
+    Attributes:
+        major_weight: Points deducted per major error (positive value)
+        minor_weight: Points deducted per minor error (positive value)
+        max_deduction: Optional maximum total deduction (cap on losses)
+        floor_score: Optional minimum score (cannot go below this)
+    """
+    major_weight: Annotated[float, Field(ge=0, description="Points deducted per major error")]
+    minor_weight: Annotated[float, Field(ge=0, description="Points deducted per minor error")]
+    max_deduction: Annotated[
+        Optional[float],
+        Field(default=None, ge=0, description="Maximum total deduction cap")
+    ]
+    floor_score: Annotated[
+        Optional[float],
+        Field(default=None, ge=0, description="Minimum score (floor)")
+    ]
+
+
 class Criterion(BaseModel):
-    """A single grading criterion with optional performance levels.
+    """A single grading criterion with optional performance levels or error-based scoring.
     
     Each criterion represents one aspect of grading (e.g., "Understanding", "Code Quality").
     Criteria have a maximum point value and optionally define performance levels.
+    
+    New: Criteria can use error-based scoring where points are deducted based on
+    detected major/minor error counts.
     
     Attributes:
         criterion_id: Stable identifier for this criterion (used in overrides and results)
@@ -79,6 +106,8 @@ class Criterion(BaseModel):
         max_points: Maximum points possible for this criterion
         levels: Optional list of performance levels defining score ranges
         enabled: Whether this criterion is active (for overrides)
+        scoring_mode: How to score this criterion ("manual" or "error_count")
+        error_rules: Optional rules for error-based scoring (required if scoring_mode="error_count")
     """
     criterion_id: Annotated[str, Field(description="Stable identifier for this criterion")]
     name: Annotated[str, Field(description="Human-readable criterion name")]
@@ -89,6 +118,14 @@ class Criterion(BaseModel):
         Field(default=None, description="Optional performance levels for this criterion")
     ]
     enabled: Annotated[bool, Field(default=True, description="Whether this criterion is enabled")]
+    scoring_mode: Annotated[
+        Literal["manual", "error_count"],
+        Field(default="manual", description="Scoring mode: manual (LLM/human) or error_count (computed)")
+    ]
+    error_rules: Annotated[
+        Optional[ErrorCountScoringRules],
+        Field(default=None, description="Rules for error-based scoring (required if scoring_mode='error_count')")
+    ]
     
     @model_validator(mode='after')
     def validate_levels_fit_max_points(self) -> 'Criterion':
@@ -115,6 +152,16 @@ class Criterion(BaseModel):
                     # Overlapping ranges - this is a warning, not an error
                     # In production, you might want to log this
                     pass
+        return self
+    
+    @model_validator(mode='after')
+    def validate_error_rules_when_needed(self) -> 'Criterion':
+        """Validate that error_rules are provided when scoring_mode is error_count."""
+        if self.scoring_mode == "error_count" and self.error_rules is None:
+            raise ValueError(
+                f"Criterion '{self.criterion_id}' has scoring_mode='error_count' "
+                f"but error_rules is not provided"
+            )
         return self
 
 
@@ -260,7 +307,7 @@ class RubricAssessmentResult(BaseModel):
     """Complete assessment result using a rubric.
     
     Contains per-criterion scores and feedback, total score, overall band label,
-    and optionally detected errors.
+    and optionally detected errors with aggregated counts.
     
     Attributes:
         rubric_id: ID of the rubric used
@@ -271,6 +318,8 @@ class RubricAssessmentResult(BaseModel):
         overall_band_label: Optional overall performance band label
         overall_feedback: Summary feedback across all criteria
         detected_errors: Optional list of detected errors
+        error_counts_by_severity: Optional dict mapping severity (major/minor) to count
+        error_counts_by_id: Optional dict mapping error_id to occurrence count
     """
     rubric_id: Annotated[str, Field(description="ID of the rubric used")]
     rubric_version: Annotated[str, Field(description="Version of the rubric used")]
@@ -288,6 +337,14 @@ class RubricAssessmentResult(BaseModel):
     detected_errors: Annotated[
         Optional[list[DetectedError]], 
         Field(default=None, description="Detected errors from error definitions")
+    ]
+    error_counts_by_severity: Annotated[
+        Optional[dict[str, int]],
+        Field(default=None, description="Error counts grouped by severity (e.g., {'major': 2, 'minor': 5})")
+    ]
+    error_counts_by_id: Annotated[
+        Optional[dict[str, int]],
+        Field(default=None, description="Error counts grouped by error_id")
     ]
     
     @field_validator('total_points_earned')
