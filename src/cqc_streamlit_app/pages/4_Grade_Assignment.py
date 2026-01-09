@@ -46,6 +46,18 @@ NAME = "Name"
 DESCRIPTION = "Description"
 
 
+# Import error definitions system
+from cqc_cpcc.error_definitions_config import (
+    load_error_config_registry,
+    get_error_definitions,
+    get_distinct_course_ids_from_errors,
+    get_assignments_for_course,
+    add_assignment_to_course,
+    registry_to_json_string
+)
+from cqc_cpcc.error_definitions_models import ErrorDefinition
+
+
 def define_grading_rubric():
     st.header("Grading Rubric")
 
@@ -400,6 +412,206 @@ def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
     return RubricOverrides(criterion_overrides=criterion_overrides)
 
 
+def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[str | None, str | None, list[ErrorDefinition] | None]:
+    """Display assignment selector and error definitions editor.
+    
+    Returns:
+        Tuple of (selected_assignment_id, selected_assignment_name, effective_error_definitions)
+    """
+    # Initialize session state for error definitions
+    if "error_definitions_registry" not in st.session_state:
+        st.session_state.error_definitions_registry = load_error_config_registry()
+    
+    if "error_definitions_overrides" not in st.session_state:
+        st.session_state.error_definitions_overrides = {}  # {(course_id, assignment_id): list[ErrorDefinition]}
+    
+    registry = st.session_state.error_definitions_registry
+    
+    # Get assignments for this course
+    assignments = get_assignments_for_course(course_id)
+    
+    if not assignments:
+        st.warning(f"No assignments configured for course {course_id}. Create a new assignment below.")
+    
+    # Assignment selector
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        assignment_options = ["-- Select Assignment --"] + [
+            f"{a.assignment_name} ({a.assignment_id})"
+            for a in assignments
+        ]
+        
+        selected_assignment_display = st.selectbox(
+            "Select Assignment",
+            assignment_options,
+            key="assignment_selector"
+        )
+    
+    with col2:
+        create_new = st.checkbox("Create New", key="create_new_assignment_checkbox")
+    
+    # Handle new assignment creation
+    if create_new:
+        st.subheader("Create New Assignment")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            new_assignment_id = st.text_input(
+                "Assignment ID (stable key)",
+                placeholder="e.g., Exam1, Midterm, Final",
+                key="new_assignment_id_input"
+            )
+        
+        with col2:
+            new_assignment_name = st.text_input(
+                "Assignment Name (display label)",
+                placeholder="e.g., CSC 151 Exam 1",
+                key="new_assignment_name_input"
+            )
+        
+        if st.button("Create Assignment", key="create_assignment_button"):
+            if new_assignment_id and new_assignment_name:
+                try:
+                    add_assignment_to_course(
+                        course_id,
+                        new_assignment_id,
+                        new_assignment_name,
+                        registry
+                    )
+                    st.session_state.error_definitions_registry = registry
+                    st.success(f"Created assignment: {new_assignment_name}")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(str(e))
+            else:
+                st.warning("Please provide both Assignment ID and Name")
+        
+        return None, None, None
+    
+    # Extract selected assignment
+    if selected_assignment_display == "-- Select Assignment --":
+        return None, None, None
+    
+    # Parse assignment_id from display string
+    selected_assignment_idx = assignment_options.index(selected_assignment_display) - 1
+    selected_assignment = assignments[selected_assignment_idx]
+    selected_assignment_id = selected_assignment.assignment_id
+    selected_assignment_name = selected_assignment.assignment_name
+    
+    # Display error definitions editor
+    st.subheader(f"Error Definitions for {selected_assignment_name}")
+    
+    # Get base error definitions from config
+    base_error_definitions = registry.get_error_definitions(course_id, selected_assignment_id)
+    
+    # Check for overrides in session state
+    override_key = (course_id, selected_assignment_id)
+    if override_key in st.session_state.error_definitions_overrides:
+        effective_error_definitions = st.session_state.error_definitions_overrides[override_key]
+        st.info("📝 Using session overrides. Changes are temporary until you export.")
+    else:
+        effective_error_definitions = base_error_definitions
+    
+    if not effective_error_definitions:
+        st.warning("No error definitions found for this assignment. Add new error definitions below.")
+        effective_error_definitions = []
+    
+    # Convert to DataFrame for editing
+    error_data = []
+    for error in effective_error_definitions:
+        error_data.append({
+            "enabled": error.enabled,
+            "error_id": error.error_id,
+            "name": error.name,
+            "severity_category": error.severity_category,
+            "description": error.description,
+            "default_penalty_points": error.default_penalty_points or 0,
+        })
+    
+    error_df = pd.DataFrame(error_data) if error_data else pd.DataFrame(columns=[
+        "enabled", "error_id", "name", "severity_category", "description", "default_penalty_points"
+    ])
+    
+    # Editable data editor
+    edited_error_df = st.data_editor(
+        error_df,
+        hide_index=True,
+        num_rows="dynamic",
+        column_config={
+            "enabled": st.column_config.CheckboxColumn("Enabled", help="Enable/disable this error definition"),
+            "error_id": st.column_config.TextColumn("Error ID", help="Stable identifier (use uppercase and underscores)", required=True),
+            "name": st.column_config.TextColumn("Name", help="Short human-readable name", required=True),
+            "severity_category": st.column_config.SelectboxColumn(
+                "Severity",
+                options=["major", "minor", "critical"],
+                required=True,
+                help="Error severity level"
+            ),
+            "description": st.column_config.TextColumn("Description", help="Detailed description", required=True),
+            "default_penalty_points": st.column_config.NumberColumn(
+                "Penalty Points",
+                min_value=0,
+                help="Default point deduction"
+            ),
+        },
+        key=f"error_definitions_editor_{course_id}_{selected_assignment_id}"
+    )
+    
+    # Save and Export buttons
+    col1, col2, col3 = st.columns([2, 2, 3])
+    
+    with col1:
+        if st.button("💾 Save to Session", key="save_error_definitions_button"):
+            # Validate and save to session state
+            try:
+                updated_errors = []
+                for _, row in edited_error_df.iterrows():
+                    error = ErrorDefinition(
+                        error_id=str(row["error_id"]).strip(),
+                        name=str(row["name"]).strip(),
+                        description=str(row["description"]).strip(),
+                        severity_category=str(row["severity_category"]).strip(),
+                        enabled=bool(row["enabled"]),
+                        default_penalty_points=int(row["default_penalty_points"]) if pd.notna(row["default_penalty_points"]) else None
+                    )
+                    updated_errors.append(error)
+                
+                # Check for duplicate error_ids
+                error_ids = [e.error_id for e in updated_errors]
+                if len(error_ids) != len(set(error_ids)):
+                    st.error("Duplicate error_ids detected! Each error must have a unique error_id.")
+                else:
+                    st.session_state.error_definitions_overrides[override_key] = updated_errors
+                    st.success(f"Saved {len(updated_errors)} error definitions to session!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Validation failed: {e}")
+    
+    with col2:
+        if st.button("🔄 Reset to Config", key="reset_error_definitions_button"):
+            if override_key in st.session_state.error_definitions_overrides:
+                del st.session_state.error_definitions_overrides[override_key]
+                st.success("Reset to configuration defaults")
+                st.rerun()
+    
+    with col3:
+        if st.button("📋 Export JSON", key="export_error_definitions_button"):
+            # Update registry with current overrides
+            temp_registry = st.session_state.error_definitions_registry
+            course = temp_registry.get_course(course_id)
+            if course:
+                assignment = course.get_assignment(selected_assignment_id)
+                if assignment:
+                    assignment.error_definitions = effective_error_definitions
+            
+            json_str = registry_to_json_string(temp_registry)
+            st.code(json_str, language="json")
+            st.info("Copy the JSON above and paste it into error_definitions_config.py to persist changes.")
+    
+    return selected_assignment_id, selected_assignment_name, effective_error_definitions
+
+
 # Define a function to check if all required inputs are filled
 def all_required_inputs_filled(course_name, max_points, deduction_per_major_error, deduction_per_minor_error,
                                instructions_file_content, assignment_solution_contents,
@@ -726,9 +938,9 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
 
 
 async def get_rubric_based_exam_grading():
-    """New rubric-based exam grading workflow."""
+    """New rubric-based exam grading workflow with error definitions support."""
     st.title('Rubric-Based Exam Grading')
-    st.markdown("""Grade exam submissions using structured rubrics with course-specific filtering.""")
+    st.markdown("""Grade exam submissions using structured rubrics with course-specific filtering and error definitions.""")
     
     # Step 1: Course and Rubric Selection
     selected_course_id, selected_rubric = select_rubric_with_course_filter()
@@ -737,10 +949,20 @@ async def get_rubric_based_exam_grading():
         st.info("👆 Please select a course and rubric to begin grading.")
         return
     
-    # Step 2: Rubric Overrides Editor
+    # Step 2: Assignment Selection and Error Definitions
+    st.header("Assignment & Error Definitions")
+    selected_assignment_id, selected_assignment_name, effective_error_definitions = display_assignment_and_error_definitions_selector(
+        selected_course_id
+    )
+    
+    if not selected_assignment_id:
+        st.info("👆 Please select or create an assignment configuration.")
+        return
+    
+    # Step 3: Rubric Overrides Editor
     rubric_overrides = display_rubric_overrides_editor(selected_rubric)
     
-    # Step 3: Merge overrides with base rubric
+    # Step 4: Merge overrides with base rubric
     try:
         # Validate overrides first
         is_valid, errors = validate_overrides_compatible(selected_rubric, rubric_overrides)
@@ -760,7 +982,7 @@ async def get_rubric_based_exam_grading():
         st.error(f"Failed to merge rubric overrides: {e}")
         return
     
-    # Step 4: Assignment Instructions
+    # Step 5: Assignment Instructions
     st.header("Assignment Instructions")
     _orig_file_name, instructions_file_path = add_upload_file_element(
         "Upload Exam Instructions",
@@ -779,7 +1001,7 @@ async def get_rubric_based_exam_grading():
         if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
             st.markdown(assignment_instructions_content, unsafe_allow_html=True)
     
-    # Step 5: Solution File (Optional)
+    # Step 6: Solution File (Optional)
     st.header("Solution File (Optional)")
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
     solution_file_paths = add_upload_file_element(
@@ -804,15 +1026,6 @@ async def get_rubric_based_exam_grading():
             assignment_solution_contents.append(read_content)
         
         assignment_solution_contents = "\n\n".join(assignment_solution_contents)
-    
-    # Step 6: Error Definitions (Optional)
-    st.header("Error Definitions (Optional)")
-    use_error_definitions = st.checkbox("Include error definitions in grading", value=True)
-    
-    error_definitions = None
-    if use_error_definitions:
-        error_definitions = load_error_definitions_from_config()
-        st.info(f"Loaded {len(error_definitions)} error definitions from configuration")
     
     # Step 7: Model Configuration
     model_cfg = define_chatGPTModel("rubric_grade_exam", default_temp_value=0.2)
@@ -850,20 +1063,20 @@ async def get_rubric_based_exam_grading():
                 
                 status.update(label=f"Grading {base_student_filename} | Calling OpenAI...")
                 
-                # Grade with rubric
+                # Grade with rubric (pass error definitions)
                 result = await grade_with_rubric(
                     rubric=effective_rubric,
                     assignment_instructions=assignment_instructions_content,
                     student_submission=student_submission_content,
                     reference_solution=assignment_solution_contents,
-                    error_definitions=error_definitions,
+                    error_definitions=effective_error_definitions,
                     model_name=selected_model,
                     temperature=selected_temperature
                 )
                 
                 status.update(label=f"Grading {base_student_filename} | Complete")
                 
-                # Display results
+                # Display results (including error counts)
                 display_rubric_assessment_result(result, base_student_filename)
                 
                 graded_results.append((base_student_filename, result))
@@ -899,6 +1112,31 @@ def display_rubric_assessment_result(result, student_name: str):
         if result.overall_band_label:
             st.metric("Performance Band", result.overall_band_label)
     
+    # Display error counts if available
+    if result.error_counts_by_severity:
+        st.markdown("### 📋 Error Counts")
+        
+        # Create columns for error counts
+        severity_cols = st.columns(len(result.error_counts_by_severity))
+        for col, (severity, count) in zip(severity_cols, sorted(result.error_counts_by_severity.items())):
+            with col:
+                # Use different colors for different severities
+                if severity.lower() == "major":
+                    st.metric(f"🔴 {severity.capitalize()} Errors", count)
+                elif severity.lower() == "minor":
+                    st.metric(f"🟡 {severity.capitalize()} Errors", count)
+                else:
+                    st.metric(f"{severity.capitalize()} Errors", count)
+        
+        # Optionally show per-error breakdown
+        if result.error_counts_by_id:
+            with st.expander("📊 Error Breakdown by ID", expanded=False):
+                error_breakdown_df = pd.DataFrame([
+                    {"Error ID": error_id, "Count": count}
+                    for error_id, count in sorted(result.error_counts_by_id.items())
+                ])
+                st.dataframe(error_breakdown_df, hide_index=True)
+    
     # Per-criterion results
     st.markdown("### Criterion Breakdown")
     
@@ -931,6 +1169,8 @@ def display_rubric_assessment_result(result, student_name: str):
             for error in major_errors:
                 with st.expander(f"{error.name} ({error.code})", expanded=False):
                     st.markdown(error.description)
+                    if error.occurrences:
+                        st.markdown(f"*Occurrences:* {error.occurrences}")
                     if error.notes:
                         st.markdown(f"*Notes:* {error.notes}")
         
@@ -939,6 +1179,8 @@ def display_rubric_assessment_result(result, student_name: str):
             for error in minor_errors:
                 with st.expander(f"{error.name} ({error.code})", expanded=False):
                     st.markdown(error.description)
+                    if error.occurrences:
+                        st.markdown(f"*Occurrences:* {error.occurrences}")
                     if error.notes:
                         st.markdown(f"*Notes:* {error.notes}")
 
