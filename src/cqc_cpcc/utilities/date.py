@@ -1,5 +1,6 @@
 import datetime as DT
-import math
+from dateparser.conf import Settings as _DateParserSettings  # local import for compatibility
+from typing import Optional
 
 import dateparser
 
@@ -23,8 +24,52 @@ def format_year(year: str) -> str:
 
     return str(y)
 
+def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.datetime:
+    """
+    Parse a date/time string into a datetime. Supports natural language
+    (e.g. "yesterday") by providing dateparser with a RELATIVE_BASE
+    derived from the current (possibly frozen) system time.
 
-def get_datetime(text: str) -> DT.datetime:
+    Raises:
+        ValueError: if the string cannot be parsed.
+    """
+    if not isinstance(date_str, str):
+        raise ValueError("invalid datetime as string")
+
+    s = date_str.strip()
+    if not s:
+        raise ValueError("invalid datetime as string")
+
+    # Use the current datetime (will be frozen by freezegun in tests).
+    now = DT.datetime.now()
+
+    # If the caller wants a naive datetime, ensure RELATIVE_BASE is naive.
+    if not return_as_timezone_aware and now.tzinfo is not None:
+        try:
+            offset = now.utcoffset() or DT.timedelta(0)
+            now = (now - offset).replace(tzinfo=None)
+        except Exception:
+            now = now.replace(tzinfo=None)
+    # If they want timezone-aware results, keep `now` as-is.
+
+    settings_dict = {
+        "RELATIVE_BASE": now,
+        "RETURN_AS_TIMEZONE_AWARE": return_as_timezone_aware,
+    }
+
+    # Some versions of dateparser expect a Settings object; try to construct one
+    try:
+        dp_settings = _DateParserSettings(**settings_dict)
+    except Exception:
+        dp_settings = settings_dict
+
+    parsed: Optional[DT.datetime] = dateparser.parse(s, settings=dp_settings)
+
+    if parsed is None:
+        raise ValueError("invalid datetime as string")
+
+    return parsed
+def get_datetime_old(text: str) -> DT.datetime:
     """Parse a date/time string into a datetime object.
     
     Uses dateparser library for flexible parsing of various date formats.

@@ -6,6 +6,7 @@ These tests verify that the basic application loads and key pages are accessible
 """
 
 import pytest
+import re
 from playwright.sync_api import Page, expect
 
 
@@ -18,9 +19,7 @@ def test_home_page_loads(page: Page, streamlit_app_url: str):
     page.wait_for_load_state("networkidle")
     
     # Check that the page title contains expected text
-    expect(page).to_have_title
-
-(re=".*CPCC.*|.*Task.*|.*Automation.*", timeout=10000)
+    expect(page).to_have_title(re.compile(r".*CPCC.*|.*Task.*|.*Automation.*"), timeout=10000)
 
 
 @pytest.mark.e2e

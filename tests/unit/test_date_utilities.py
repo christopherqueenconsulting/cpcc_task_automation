@@ -90,7 +90,7 @@ def test_get_datetime_with_iso_format_parses_correctly():
 def test_get_datetime_with_natural_language_parses_correctly():
     """Test get_datetime handles natural language dates."""
     with freeze_time("2024-01-15"):
-        result = get_datetime("yesterday")
+        result = get_datetime("yesterday",False)
         assert result.date() == DT.date(2024, 1, 14)
 
 

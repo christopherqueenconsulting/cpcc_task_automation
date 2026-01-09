@@ -96,6 +96,7 @@ pytest-playwright = "^0.4.3"
 omit = [
     "tests/*",
     "src/cqc_cpcc/utilities/AI/llm_deprecated/*",  # Deprecated LangChain code
+    "src/cqc_streamlit_app/pages/*", # Streamlit app pages (not needed for unit test. Covered in e2e tests)
 ]
 
 [tool.ruff.lint]
