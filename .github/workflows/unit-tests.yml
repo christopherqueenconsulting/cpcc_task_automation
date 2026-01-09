@@ -32,7 +32,7 @@ jobs:
         shell: bash
         run: |
           echo "Installing dependencies for unit tests..."
-          poetry install --with test
+          poetry install --with test --no-interaction --no-ansi
 
       - name: Run unit tests
         shell: bash
