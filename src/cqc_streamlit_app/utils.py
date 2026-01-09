@@ -1076,7 +1076,7 @@ def add_upload_file_element(
 
     # Create compound widget key using both context-specific prefix and random value
     # This ensures global uniqueness even if random numbers collide across contexts
-    widget_key = reset_key + "_" + st.session_state[reset_key]
+    widget_key = f"{reset_key}_{st.session_state[reset_key]}"
     
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files, key=widget_key)

@@ -484,7 +484,7 @@ async def get_grade_exam_content():
                     if get_file_extension_from_filepath(orig_solution_file_path) in [".xlsx", ".xls", ".xlsm"]:
                         st.markdown(read_content)
                     else:
-                        st.text_area(read_content, key=f"legacy_exam_solution_{solution_file_name}")
+                        st.text_area(label="Solution Content", value=read_content, key=f"legacy_exam_solution_{solution_file_name}")
 
             # Append the content to the list
             assignment_solution_contents.append(read_content)
@@ -663,7 +663,7 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             else:
                 if show_contents:
                     # Display the code in a text area
-                    st.text_area(student_submission_file_path_contents, key=f"{base_student_filename}_{filename}_text_area")
+                    st.text_area(label="Student Submission Content", value=student_submission_file_path_contents, key=f"{base_student_filename}_{filename}_text_area")
                 student_submission_file_path_contents_final = student_submission_file_path_contents
             student_submission_file_path_contents_all.append(student_submission_file_path_contents_final)
 
