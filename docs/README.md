@@ -35,6 +35,14 @@ This documentation provides in-depth information about the architecture, compone
 | [ai-llm.md](ai-llm.md) | AI/LLM integration (LangChain, OpenAI, prompts, chains) |
 | [testing.md](testing.md) | Testing strategy, test structure, and how to run tests |
 
+### Historical Documentation
+
+| Document | Description |
+|----------|-------------|
+| [pr-summaries/](pr-summaries/) | Historical PR summaries and implementation notes |
+| [migrations/](migrations/) | Migration guides and testing documentation |
+| [notes/](notes/) | Development notes and miscellaneous documentation |
+
 ### GitHub Copilot Instructions
 
 | Document | Description |
