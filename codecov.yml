@@ -1,0 +1,103 @@
+# Codecov Configuration for CPCC Task Automation
+# Documentation: https://docs.codecov.com/docs/codecov-yaml
+
+# Global settings
+codecov:
+  # Require CI to pass before processing coverage
+  require_ci_to_pass: yes
+  
+  # Use master branch as the source of truth for YAML config
+  # This prevents rogue branches from changing coverage rules
+  strict_yaml_branch: master
+
+# Coverage analysis configuration
+coverage:
+  # Precision for coverage percentages (2 decimal places)
+  precision: 2
+  
+  # Round coverage to nearest decimal
+  round: down
+  
+  # Coverage range for color coding in UI
+  range: "70...100"
+  
+  # Status checks configuration
+  status:
+    # PROJECT status: Track overall repository coverage
+    # Set to INFORMATIONAL - won't block PRs but shows trend
+    project:
+      default:
+        # Target: 80% overall project coverage
+        target: 80%
+        
+        # Threshold: Allow up to 1% drop without failing
+        # (Even though informational, this sets expectations)
+        threshold: 1%
+        
+        # INFORMATIONAL MODE: This status will always pass
+        # We want to see project coverage and drive it upward,
+        # but not block PRs while repo is climbing from 49% → 80%
+        informational: true
+        
+        # Only evaluate on pull requests
+        only_pulls: true
+        
+        # Paths to include in project coverage calculation
+        paths:
+          - "src/cqc_cpcc/"
+    
+    # PATCH status: Enforce coverage on NEW code in PRs
+    # This is our PRIMARY enforcement gate
+    patch:
+      default:
+        # Target: 80% coverage on all new/modified code
+        target: 80%
+        
+        # Threshold: 0% - no drops allowed for new code
+        # New code must meet the 80% bar
+        threshold: 0%
+        
+        # Only evaluate on pull requests
+        only_pulls: true
+        
+        # Fail if coverage upload is missing
+        # This prevents bypassing the gate by not uploading coverage
+        if_not_found: failure
+        
+        # Paths to include in patch coverage calculation
+        paths:
+          - "src/cqc_cpcc/"
+
+# Comment configuration for PR feedback
+comment:
+  # Post coverage summary as PR comment
+  layout: "header, diff, files, footer"
+  
+  # Show both patch and project status in comment
+  behavior: default
+  
+  # Require changes to post new comment
+  require_changes: false
+  
+  # After this many files, collapse the file list
+  after_n_files: 10
+
+# Ignore patterns - exclude files from coverage analysis
+# These match the patterns in pyproject.toml [tool.coverage.run] omit
+ignore:
+  - "tests/**/*"
+  - "src/cqc_cpcc/utilities/AI/llm_deprecated/**/*"
+  - "src/cqc_streamlit_app/pages/**/*"
+  - "**/__pycache__/**"
+  - "**/*.pyc"
+  - "**/conftest.py"
+
+# Flag configuration for different test types
+# Currently we run unit tests; can expand to integration/e2e later
+flags:
+  unit:
+    # Coverage from unit tests
+    paths:
+      - "src/cqc_cpcc/"
+    # Join with other flags if they exist
+    carryforward: true
