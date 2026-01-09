@@ -87,6 +87,7 @@ dependencies = { }
 [tool.coverage.run]
 omit = [
     "tests/*",
+    "src/cqc_cpcc/utilities/AI/llm_deprecated/*",  # Deprecated LangChain code
 ]
 
 [tool.ruff.lint]
