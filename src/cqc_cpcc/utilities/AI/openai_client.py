@@ -22,9 +22,16 @@ Example usage:
         summary: str = Field(description="Brief summary")
         score: int = Field(description="Score 0-100")
     
+    # Default behavior (gpt-5-mini, no token limit)
     result = await get_structured_completion(
         prompt="Review this code: print('hello')",
-        model_name="gpt-4o",
+        schema_model=Feedback,
+    )
+    
+    # Explicit model and token limit
+    result = await get_structured_completion(
+        prompt="Review this code: print('hello')",
+        model_name="gpt-5",
         schema_model=Feedback,
         temperature=0.2,
         max_tokens=1000
@@ -228,7 +235,7 @@ async def get_structured_completion(
         # Explicit token limit and model
         result = await get_structured_completion(
             prompt="Analyze this code: ...",
-            model_name="gpt-4o",
+            model_name="gpt-5",
             schema_model=ErrorReport,
             max_tokens=2000,
             temperature=0.2

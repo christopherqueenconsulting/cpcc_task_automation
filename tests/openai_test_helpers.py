@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 def create_mock_chat_completion(
     content: str,
-    model: str = "gpt-4o",
+    model: str = "gpt-5-mini",
     finish_reason: str = "stop",
     role: str = "assistant"
 ) -> ChatCompletion:
@@ -30,7 +30,7 @@ def create_mock_chat_completion(
     
     Args:
         content: The response content (usually JSON string)
-        model: The model name to use in the response (default: "gpt-4o")
+        model: The model name to use in the response (default: "gpt-5-mini")
         finish_reason: The reason completion finished (default: "stop")
         role: The role of the message (default: "assistant")
         
@@ -62,7 +62,7 @@ def create_mock_chat_completion(
 
 def create_structured_response(
     data: Dict[str, Any],
-    model: str = "gpt-4o"
+    model: str = "gpt-5-mini"
 ) -> ChatCompletion:
     """
     Create a mock ChatCompletion with structured JSON data.
@@ -72,7 +72,7 @@ def create_structured_response(
     
     Args:
         data: Dictionary to convert to JSON and use as response content
-        model: The model name to use in the response (default: "gpt-4o")
+        model: The model name to use in the response (default: "gpt-5-mini")
         
     Returns:
         A ChatCompletion object with JSON-serialized data
@@ -120,7 +120,7 @@ def validate_structured_output(
 
 def create_error_response(
     error_message: str = "API Error",
-    model: str = "gpt-4o"
+    model: str = "gpt-5-mini"
 ) -> ChatCompletion:
     """
     Create a mock ChatCompletion that simulates an error response.
@@ -130,7 +130,7 @@ def create_error_response(
     
     Args:
         error_message: The error message to include
-        model: The model name to use in the response (default: "gpt-4o")
+        model: The model name to use in the response (default: "gpt-5-mini")
         
     Returns:
         A ChatCompletion object with error content
@@ -149,7 +149,7 @@ def create_error_response(
 
 def create_incomplete_response(
     partial_content: str,
-    model: str = "gpt-4o"
+    model: str = "gpt-5-mini"
 ) -> ChatCompletion:
     """
     Create a mock ChatCompletion with incomplete/truncated content.
@@ -159,7 +159,7 @@ def create_incomplete_response(
     
     Args:
         partial_content: The partial response content
-        model: The model name to use in the response (default: "gpt-4o")
+        model: The model name to use in the response (default: "gpt-5-mini")
         
     Returns:
         A ChatCompletion object with length finish reason
