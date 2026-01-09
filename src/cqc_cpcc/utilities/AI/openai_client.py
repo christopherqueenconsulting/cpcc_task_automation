@@ -22,9 +22,16 @@ Example usage:
         summary: str = Field(description="Brief summary")
         score: int = Field(description="Score 0-100")
     
+    # Default behavior (gpt-5-mini, no token limit)
     result = await get_structured_completion(
         prompt="Review this code: print('hello')",
-        model_name="gpt-4o",
+        schema_model=Feedback,
+    )
+    
+    # Explicit model and token limit
+    result = await get_structured_completion(
+        prompt="Review this code: print('hello')",
+        model_name="gpt-5",
         schema_model=Feedback,
         temperature=0.2,
         max_tokens=1000
@@ -58,9 +65,80 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 1.0  # seconds
 DEFAULT_BACKOFF_MULTIPLIER = 2.0
 
+# Default model configuration
+DEFAULT_MODEL = "gpt-5-mini"
+
+# Model token limits (based on OpenAI documentation)
+# max_output=None means no explicit limit should be set (let model decide)
+MODEL_TOKEN_LIMITS = {
+    "gpt-5": {
+        "context_window": 128_000,
+        "max_output": None,  # Not yet publicly specified, omit parameter
+    },
+    "gpt-5-mini": {
+        "context_window": 128_000,
+        "max_output": None,  # Not yet publicly specified, omit parameter
+    },
+    "gpt-5-nano": {
+        "context_window": 128_000,
+        "max_output": None,  # Not yet publicly specified, omit parameter
+    },
+    "gpt-4o": {
+        "context_window": 128_000,
+        "max_output": 16_384,
+    },
+    "gpt-4o-mini": {
+        "context_window": 128_000,
+        "max_output": 16_384,
+    },
+}
+
 # Global client instance for connection pooling
 _client: AsyncOpenAI | None = None
 _client_lock = asyncio.Lock()
+
+
+def get_token_param_for_model(model: str) -> str:
+    """Determine the correct token parameter name for a given model.
+    
+    OpenAI models use different token parameter names:
+    - GPT-5 family: 'max_completion_tokens' (newer parameter)
+    - GPT-4o and earlier: 'max_tokens' (legacy parameter)
+    
+    This ensures compatibility with the OpenAI API as it evolves.
+    
+    Args:
+        model: OpenAI model name (e.g., "gpt-5-mini", "gpt-4o")
+        
+    Returns:
+        Parameter name to use: 'max_completion_tokens' or 'max_tokens'
+    """
+    # GPT-5 family uses max_completion_tokens
+    if model.startswith("gpt-5"):
+        return "max_completion_tokens"
+    
+    # Older models (gpt-4o and earlier) use max_tokens
+    return "max_tokens"
+
+
+def get_max_tokens_for_model(model: str) -> int | None:
+    """Get the maximum output tokens for a model, if known.
+    
+    Returns None if the model's max output is not specified, indicating
+    that no explicit token limit should be set (let the model/API decide).
+    
+    Args:
+        model: OpenAI model name
+        
+    Returns:
+        Maximum output tokens, or None if not specified
+    """
+    model_info = MODEL_TOKEN_LIMITS.get(model)
+    if model_info:
+        return model_info["max_output"]
+    
+    # Unknown model - don't impose a limit
+    return None
 
 
 async def get_client() -> AsyncOpenAI:
@@ -94,10 +172,10 @@ async def get_client() -> AsyncOpenAI:
 
 async def get_structured_completion(
     prompt: str,
-    model_name: str,
-    schema_model: Type[T],
+    model_name: str = DEFAULT_MODEL,
+    schema_model: Type[T] = None,
     temperature: float = 0.2,
-    max_tokens: int = 4096,
+    max_tokens: int | None = None,
     max_retries: int = DEFAULT_MAX_RETRIES,
     retry_delay: float = DEFAULT_RETRY_DELAY,
     allow_repair: bool = False,
@@ -108,6 +186,17 @@ async def get_structured_completion(
     native JSON Schema response format enforcement. The response is automatically
     validated against the provided Pydantic model.
     
+    Token Parameter Behavior:
+    - By default, no token limit is imposed (max_tokens=None)
+    - This allows the model to use its natural output limit
+    - For gpt-5 family: uses 'max_completion_tokens' parameter
+    - For gpt-4o and earlier: uses 'max_tokens' parameter
+    - Token parameter is dynamically selected based on model
+    
+    Default Model:
+    - Default model is gpt-5-mini (optimized for cost/performance)
+    - Can be overridden by passing model_name parameter
+    
     Retry Logic:
     - Retries transient errors only (timeouts, 5xx, rate limits)
     - Uses exponential backoff with configurable base delay
@@ -116,10 +205,13 @@ async def get_structured_completion(
     
     Args:
         prompt: The prompt text to send to the LLM
-        model_name: OpenAI model name (e.g., "gpt-4o", "gpt-4o-mini")
+        model_name: OpenAI model name (default: "gpt-5-mini")
+                   Examples: "gpt-5", "gpt-5-mini", "gpt-4o", "gpt-4o-mini"
         schema_model: Pydantic BaseModel class defining the expected output structure
         temperature: Sampling temperature (0.0 = deterministic, 1.0 = creative)
-        max_tokens: Maximum tokens in the response
+        max_tokens: Maximum tokens in the response. If None (default), no explicit
+                   limit is set, allowing model to use its natural output capacity.
+                   Set this only if you need to restrict output length.
         max_retries: Maximum number of retry attempts for transient errors
         retry_delay: Base delay in seconds between retries (exponential backoff)
         allow_repair: If True, attempts one repair retry on schema validation failure
@@ -134,18 +226,20 @@ async def get_structured_completion(
         ValueError: For invalid input parameters
         
     Example:
-        class ErrorReport(BaseModel):
-            error_type: str
-            severity: str
-            line_number: int
-        
+        # Default behavior (no token limit, gpt-5-mini)
         result = await get_structured_completion(
-            prompt="Analyze this code for errors: ...",
-            model_name="gpt-4o",
+            prompt="Analyze this code: ...",
             schema_model=ErrorReport,
+        )
+        
+        # Explicit token limit and model
+        result = await get_structured_completion(
+            prompt="Analyze this code: ...",
+            model_name="gpt-5",
+            schema_model=ErrorReport,
+            max_tokens=2000,
             temperature=0.2
         )
-        print(result.error_type)  # Typed access to validated data
     """
     # Validate inputs
     if not prompt or not prompt.strip():
@@ -157,7 +251,7 @@ async def get_structured_completion(
     if temperature < 0 or temperature > 2:
         raise ValueError(f"Temperature must be between 0 and 2, got {temperature}")
     
-    if max_tokens < 1:
+    if max_tokens is not None and max_tokens < 1:
         raise ValueError(f"max_tokens must be positive, got {max_tokens}")
     
     if max_retries < 0:
@@ -173,6 +267,18 @@ async def get_structured_completion(
         "strict": True,
     }
     
+    # Determine correct token parameter and value
+    token_param = get_token_param_for_model(model_name)
+    
+    # If max_tokens not specified, don't impose a limit (let model decide)
+    # This avoids artificially truncating output for models with large capacity
+    token_kwargs = {}
+    if max_tokens is not None:
+        token_kwargs[token_param] = max_tokens
+        logger.debug(f"Using {token_param}={max_tokens} for model {model_name}")
+    else:
+        logger.debug(f"No token limit set for model {model_name} (using model default)")
+    
     # Retry loop for transient errors
     last_error: Exception | None = None
     
@@ -184,16 +290,21 @@ async def get_structured_completion(
             )
             
             # Make API call with structured output
-            response = await client.chat.completions.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format={
+            # Build request kwargs dynamically based on token parameter
+            api_kwargs = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+                "response_format": {
                     "type": "json_schema",
                     "json_schema": json_schema,
                 },
-            )
+            }
+            
+            # Add token limit parameter if specified
+            api_kwargs.update(token_kwargs)
+            
+            response = await client.chat.completions.create(**api_kwargs)
             
             # Extract JSON content from response
             json_output = response.choices[0].message.content

@@ -151,7 +151,9 @@ class TestGetStructuredCompletionSuccess:
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["model"] == "gpt-4o"
         assert call_kwargs["temperature"] == 0.2
+        # gpt-4o should use max_tokens parameter
         assert call_kwargs["max_tokens"] == 500
+        assert "max_completion_tokens" not in call_kwargs
         assert call_kwargs["messages"][0]["content"] == "Review this code"
         assert call_kwargs["response_format"]["type"] == "json_schema"
         assert call_kwargs["response_format"]["json_schema"]["name"] == "SimpleFeedback"
