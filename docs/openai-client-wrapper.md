@@ -2,7 +2,8 @@
 
 **Module:** `src/cqc_cpcc/utilities/AI/openai_client.py`  
 **Purpose:** Production-grade async wrapper for OpenAI structured outputs  
-**Status:** Foundation code (ready for use, existing graders not yet migrated)
+**Status:** Foundation code (ready for use, existing graders not yet migrated)  
+**Default Model:** `gpt-5-mini` (optimized for cost/performance balance)
 
 ---
 
@@ -18,6 +19,55 @@ This module provides a clean, production-ready async interface for making single
 - ✅ **Async concurrency safe** - Thread-safe singleton client pattern
 - ✅ **Optional validation repair** - Configurable retry for schema failures
 - ✅ **No parsing complexity** - OpenAI validates schema at API level
+- ✅ **Dynamic token parameters** - Automatically uses correct parameter for each model
+- ✅ **No artificial limits** - Default behavior allows full model output capacity
+
+---
+
+## Token Parameter Behavior (NEW)
+
+### Automatic Parameter Selection
+
+The wrapper automatically selects the correct token parameter based on the model:
+
+- **GPT-5 family** (`gpt-5`, `gpt-5-mini`, `gpt-5-nano`): Uses `max_completion_tokens`
+- **GPT-4o and earlier** (`gpt-4o`, `gpt-4o-mini`, older models): Uses `max_tokens`
+
+You don't need to know which parameter to use - the wrapper handles it automatically.
+
+### Default Behavior: No Token Limit
+
+**By default, no token limit is imposed** (`max_tokens=None`). This allows the model to use its natural output capacity without artificial truncation.
+
+```python
+# Default behavior - no token limit
+result = await get_structured_completion(
+    prompt="Analyze this code...",
+    schema_model=Feedback,
+)
+# Token limit NOT passed to API - model uses its natural capacity
+```
+
+### Setting an Explicit Token Limit
+
+If you need to restrict output length, set `max_tokens`:
+
+```python
+# Explicit token limit
+result = await get_structured_completion(
+    prompt="Analyze this code...",
+    schema_model=Feedback,
+    max_tokens=2000,  # Limit output to 2000 tokens
+)
+# Wrapper automatically uses correct parameter for model
+```
+
+### Why This Matters
+
+- **GPT-5 models**: Newer API, uses `max_completion_tokens` parameter
+- **GPT-4o and older**: Legacy API, uses `max_tokens` parameter
+- **No limits by default**: Prevents accidental output truncation
+- **Backward compatible**: Existing code works without changes
 
 ---
 
@@ -35,13 +85,20 @@ class Feedback(BaseModel):
     score: int = Field(description="Score from 0-100")
     suggestions: list[str] = Field(description="Improvement suggestions")
 
-# Make async call (in async function)
+# Make async call (in async function) - uses defaults
 result = await get_structured_completion(
     prompt="Review this code: print('hello world')",
-    model_name="gpt-4o",
+    schema_model=Feedback,
+)
+# Uses default: gpt-5-mini, no token limit
+
+# Or specify model and token limit explicitly
+result = await get_structured_completion(
+    prompt="Review this code: print('hello world')",
+    model_name="gpt-5",  # Higher quality
     schema_model=Feedback,
     temperature=0.2,
-    max_tokens=1000
+    max_tokens=2000  # Explicit limit
 )
 
 # Result is a validated Pydantic model

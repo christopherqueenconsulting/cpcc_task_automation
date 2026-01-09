@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound=BaseModel)
 
 # Default model configuration
-DEFAULT_GRADING_MODEL = "gpt-4o"
+DEFAULT_GRADING_MODEL = "gpt-5-mini"
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_MAX_TOKENS = 4096
 
@@ -61,7 +61,7 @@ async def grade_exam_submission(
         student_submission: Student's code to be graded
         major_error_type_list: List of major error type enum values
         minor_error_type_list: List of minor error type enum values
-        model_name: OpenAI model to use (default: gpt-4o)
+        model_name: OpenAI model to use (default: gpt-5-mini)
         temperature: Sampling temperature (default: 0.2)
         callback: Optional LangChain callback for compatibility (currently unused)
         
@@ -161,7 +161,7 @@ class ExamGraderOpenAI:
             exam_solution: Reference solution code
             major_error_type_list: List of major error type enum values
             minor_error_type_list: List of minor error type enum values
-            model_name: OpenAI model to use (default: gpt-4o)
+            model_name: OpenAI model to use (default: gpt-5-mini)
             temperature: Sampling temperature (default: 0.2)
         """
         self.exam_instructions = exam_instructions

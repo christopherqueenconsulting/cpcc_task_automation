@@ -39,7 +39,7 @@ from cqc_cpcc.utilities.logger import logger
 
 
 # Default model configuration
-DEFAULT_GRADING_MODEL = "gpt-4o"
+DEFAULT_GRADING_MODEL = "gpt-5-mini"
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_MAX_TOKENS = 4096
 
@@ -219,7 +219,7 @@ async def grade_with_rubric(
         student_submission: Student's code or work to grade
         reference_solution: Optional reference solution for comparison
         error_definitions: Optional list of ErrorDefinition objects to check
-        model_name: OpenAI model to use (default: gpt-4o)
+        model_name: OpenAI model to use (default: gpt-5-mini)
         temperature: Sampling temperature (default: 0.2)
         callback: Optional LangChain callback for compatibility
         
