@@ -44,3 +44,6 @@ BRIGHTSPACE_URL = "https://brightspace.cpcc.edu"
 MYCOLLEGE_URL = "https://mycollegess.cpcc.edu"
 MYCOLLEGE_FACULTY_TITLE = 'Faculty - MyCollege'
 BRIGHTSPACE_HOMEPAGE_TITLE = 'Homepage - Central Piedmont'
+
+# Test mode flag (for e2e testing with deterministic responses)
+TEST_MODE = get_constanct_from_env('CQC_TEST_MODE', default_value='false').lower() == 'true'

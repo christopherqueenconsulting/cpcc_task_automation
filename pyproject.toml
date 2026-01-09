@@ -84,6 +84,14 @@ pytest-profiling = "^1.7.0"
 optional = true
 dependencies = { }
 
+
+[tool.poetry.group.e2e]
+optional = true
+
+[tool.poetry.group.e2e.dependencies]
+playwright = "^1.40.0"
+pytest-playwright = "^0.4.3"
+
 [tool.coverage.run]
 omit = [
     "tests/*",
@@ -123,5 +131,6 @@ markers = [
     "compile: mark placeholder test used to compile integration tests without running them",
     "unit: mark a test as a unit test",
     "integration: mark a test as an integration test",
+    "e2e: mark a test as an end-to-end test",
 ]
 asyncio_mode = "auto"
