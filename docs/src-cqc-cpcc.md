@@ -607,7 +607,7 @@ All modules respect these environment variables (from `env_constants.py`):
 - [utilities.md](utilities.md) - Selenium helpers, date utilities, logging
 - [ai-llm.md](ai-llm.md) - LangChain integration details
 - [src-cqc-streamlit-app.md](src-cqc-streamlit-app.md) - UI that calls these modules
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - System architecture and data flows
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and data flows
 
 ---
 

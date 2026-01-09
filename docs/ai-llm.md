@@ -751,7 +751,7 @@ TEMPERATURE = 0.2
 
 - [src-cqc-cpcc.md](src-cqc-cpcc.md) - Modules that use AI features
 - [utilities.md](utilities.md) - Custom Pydantic parser details
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall AI architecture
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Overall AI architecture
 - [PRODUCT.md](../PRODUCT.md) - AI feature descriptions for users
 
 ---

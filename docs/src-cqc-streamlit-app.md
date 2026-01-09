@@ -721,7 +721,7 @@ Streamlit Community Cloud:
 
 - [src-cqc-cpcc.md](src-cqc-cpcc.md) - Core logic called by UI
 - [utilities.md](utilities.md) - Utilities used in UI
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Overall system design
 
 ---
 

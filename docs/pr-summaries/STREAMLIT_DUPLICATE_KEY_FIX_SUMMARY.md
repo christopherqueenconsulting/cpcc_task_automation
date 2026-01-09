@@ -69,11 +69,11 @@ Added keys using pattern: `f"{context}_{filename}_text_area"`
 | `utils.py` | +40, -4 | Enhanced key generation, added type alias, documentation |
 | `4_Grade_Assignment.py` | +28, -13 | Added prefixes, fixed text areas, improved labels |
 | `2_Give_Feedback.py` | +13, -5 | Added prefixes, fixed text areas, improved labels |
-| `DUPLICATE_KEY_FIX_TESTING.md` | +134 | Comprehensive testing guide |
+| `DUPLICATE_KEY_FIX_TESTING.md` (now in ../migrations/) | +134 | Comprehensive testing guide |
 
 ## 🧪 Testing
 
-Created comprehensive testing guide (`DUPLICATE_KEY_FIX_TESTING.md`) with:
+Created comprehensive testing guide (`../migrations/DUPLICATE_KEY_FIX_TESTING.md`) with:
 
 ### Test Cases
 1. **Multiple Tabs with File Uploaders** - Navigate between all tabs
@@ -122,7 +122,7 @@ All code review comments addressed:
 
 ### For Reviewer
 1. Review code changes for correctness and style
-2. Run manual tests using `DUPLICATE_KEY_FIX_TESTING.md` guide
+2. Run manual tests using `../migrations/DUPLICATE_KEY_FIX_TESTING.md` guide
 3. Verify no duplicate key errors occur in any workflow
 
 ### For Merge
@@ -141,7 +141,7 @@ No security vulnerabilities introduced:
 ## 📚 Documentation
 
 Created comprehensive documentation:
-- `DUPLICATE_KEY_FIX_TESTING.md` - Testing guide with 5 test cases
+- `../migrations/DUPLICATE_KEY_FIX_TESTING.md` - Testing guide with 5 test cases
 - Enhanced inline code comments explaining key generation strategy
 - Added docstring to `add_upload_file_element()` function
 

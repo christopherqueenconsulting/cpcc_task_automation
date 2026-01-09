@@ -58,4 +58,4 @@ result = await get_structured_completion(
 ## References
 - `MIGRATION_NOTES.md` - Project feedback migration details
 - `DEPENDENCY_CLEANUP.md` - Dependency changes
-- `ARCHITECTURE.md` - System architecture
+- `docs/ARCHITECTURE.md` - System architecture
