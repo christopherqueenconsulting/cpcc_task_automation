@@ -557,14 +557,15 @@ def load_rubrics_from_config() -> Dict[str, Rubric]:
     return rubrics
 
 
-def load_error_definitions_from_config() -> list[DetectedError]:
+def load_error_definitions_from_config() -> list:
     """Load error definitions from ERROR_DEFINITIONS_JSON configuration string.
     
-    Parses the JSON string, validates each error definition, and returns a list
-    of DetectedError objects.
+    Parses the JSON string and returns a list of error definition dictionaries.
+    Note: Returns DetectedError objects from JSON, which are used as error definitions
+    in the grading context. The JSON format uses DetectedError schema for simplicity.
     
     Returns:
-        List of validated DetectedError objects
+        List of DetectedError objects that serve as error definitions
         
     Raises:
         ValueError: If JSON is invalid or error definition validation fails

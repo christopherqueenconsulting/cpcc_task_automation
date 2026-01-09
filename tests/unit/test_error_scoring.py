@@ -158,19 +158,19 @@ class TestComputeErrorBasedScore:
         assert "scoring_mode is 'manual'" in str(exc_info.value)
     
     def test_missing_error_rules_raises_error(self):
-        """Test that missing error_rules raises error."""
-        criterion = Criterion(
-            criterion_id="test",
-            name="Test",
-            max_points=50,
-            scoring_mode="error_count",
-            error_rules=None  # Missing rules
-        )
+        """Test that missing error_rules raises error at construction time."""
+        from pydantic import ValidationError
         
-        with pytest.raises(ValueError) as exc_info:
-            compute_error_based_score(criterion, major_error_count=2, minor_error_count=3)
+        with pytest.raises(ValidationError) as exc_info:
+            criterion = Criterion(
+                criterion_id="test",
+                name="Test",
+                max_points=50,
+                scoring_mode="error_count",
+                error_rules=None  # Missing rules - should fail validation
+            )
         
-        assert "no error_rules defined" in str(exc_info.value)
+        assert "error_rules is not provided" in str(exc_info.value)
 
 
 @pytest.mark.unit

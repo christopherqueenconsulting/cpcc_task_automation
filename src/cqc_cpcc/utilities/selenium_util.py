@@ -306,7 +306,9 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
         wait_text: Human-readable description for logging (e.g., "Clicking submit button")
         find_by: Selenium By locator type (default: By.XPATH)
                  Options: By.XPATH, By.ID, By.CSS_SELECTOR, etc.
-        max_try: Maximum number of retry attempts (default: MAX_WAIT_RETRY from env)
+        max_try: Maximum number of retry attempts AFTER the initial attempt fails.
+                 For example, max_try=1 means: try once, if it fails, retry 1 more time (2 total attempts).
+                 Default: MAX_WAIT_RETRY from env (typically 2, meaning 3 total attempts).
     
     Returns:
         WebElement: The clicked element (after successful click)
@@ -322,7 +324,8 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
         ...     driver, wait,
         ...     find_by_value="//button[@id='submit']",
         ...     wait_text="Clicking submission form button",
-        ...     find_by=By.XPATH
+        ...     find_by=By.XPATH,
+        ...     max_try=2  # Will try 3 times total: initial + 2 retries
         ... )
         
     Note:
@@ -352,9 +355,11 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
         logger.debug(wait_text + " | Stale or Not Interactable | .....retrying")
         time.sleep(5)  # wait 5 seconds
         #driver.implicitly_wait(5)  # wait on driver 5 seconds
-        if max_try > 1:
+        if max_try > 0:
+            # Still have retries left, decrement and retry
             element = click_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
         else:
+            # No more retries, raise the exception
             # raise TimeoutException("Timeout while " + wait_text)
             raise se
 
