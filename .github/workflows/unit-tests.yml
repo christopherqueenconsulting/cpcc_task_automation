@@ -38,22 +38,11 @@ jobs:
         shell: bash
         run: |
           echo "Running unit tests with pytest..."
-          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-report=term-missing --cov-report=xml -v
+          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml
 
-      - name: Upload coverage reports
-        uses: actions/upload-artifact@v4
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
         if: always()
         with:
           name: coverage-report
-          path: coverage.xml
-          retention-days: 30
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results
-          path: |
-            .pytest_cache/
-            coverage.xml
-          retention-days: 30
+          token: ${{ secrets.CODECOV_TOKEN }}
