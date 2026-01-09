@@ -6,6 +6,7 @@ This document explains how to use the flexible rubric system for automated gradi
 
 The rubric system provides:
 - **Config-driven rubrics** stored as JSON strings in code
+- **Course-scoped rubrics** with filtering by course ID (e.g., CSC151, CSC152)
 - **Streamlit UI overrides** that take precedence over config values
 - **OpenAI-powered grading** returning structured rubric breakdowns
 - **Error detection** integration with existing error definitions
@@ -14,12 +15,14 @@ The rubric system provides:
 ## Table of Contents
 
 1. [Rubric Structure](#rubric-structure)
-2. [Adding a New Rubric](#adding-a-new-rubric)
-3. [Using Rubrics in Code](#using-rubrics-in-code)
-4. [Streamlit UI Overrides](#streamlit-ui-overrides)
-5. [Understanding Results](#understanding-results)
-6. [Error Definitions](#error-definitions)
-7. [Examples](#examples)
+2. [Course-Scoped Rubrics](#course-scoped-rubrics)
+3. [Adding a New Rubric](#adding-a-new-rubric)
+4. [Using Rubrics in Code](#using-rubrics-in-code)
+5. [Streamlit UI Workflow](#streamlit-ui-workflow)
+6. [Streamlit UI Overrides](#streamlit-ui-overrides)
+7. [Understanding Results](#understanding-results)
+8. [Error Definitions](#error-definitions)
+9. [Examples](#examples)
 
 ---
 
@@ -27,6 +30,7 @@ The rubric system provides:
 
 A rubric consists of:
 - **Metadata**: ID, version, title, description
+- **Course Association**: List of course IDs this rubric applies to
 - **Criteria**: Individual grading aspects with max points
 - **Performance Levels** (optional): Score ranges with descriptive anchors
 - **Overall Bands** (optional): Total score ranges for holistic performance labels
@@ -39,6 +43,7 @@ A rubric consists of:
     "rubric_version": "1.0",
     "title": "Human-Readable Title",
     "description": "Optional description of rubric purpose",
+    "course_ids": ["CSC151", "CSC152"],
     "criteria": [
         {
             "criterion_id": "stable_id",
@@ -81,6 +86,74 @@ A rubric consists of:
 
 ---
 
+## Course-Scoped Rubrics
+
+Rubrics can be associated with one or more courses, allowing course-specific filtering in the Streamlit UI.
+
+### Course IDs
+
+Course IDs are short identifiers like:
+- `"CSC151"` - Computer Science I
+- `"CSC152"` - Computer Science II  
+- `"CSC251"` - Advanced Computer Science
+
+### Defining Course Association
+
+In the rubric JSON, include the `course_ids` field:
+
+```json
+{
+    "rubric_id": "java_basics_100pt",
+    "rubric_version": "1.0",
+    "title": "Java Basics Rubric",
+    "course_ids": ["CSC151", "CSC152"],
+    "criteria": [...]
+}
+```
+
+### Multiple Courses
+
+A rubric can apply to multiple courses:
+
+```json
+"course_ids": ["CSC151", "CSC152", "CSC251"]
+```
+
+### Unassigned Rubrics
+
+If `course_ids` is omitted or empty, the rubric defaults to `["UNASSIGNED"]`.
+
+### Filtering by Course
+
+Use helper functions to work with course-scoped rubrics:
+
+```python
+from cqc_cpcc.rubric_config import (
+    get_distinct_course_ids,
+    get_rubrics_for_course
+)
+
+# Get all courses
+course_ids = get_distinct_course_ids()
+print(course_ids)  # ['CSC151', 'CSC152', 'CSC251']
+
+# Get rubrics for a specific course
+csc151_rubrics = get_rubrics_for_course("CSC151")
+for rubric_id, rubric in csc151_rubrics.items():
+    print(f"{rubric.title}: {rubric.total_points_possible} pts")
+```
+
+### Streamlit Course Selection
+
+In the Streamlit UI (Grade Assignment → Exams (Rubric) tab):
+
+1. **Course Dropdown**: Lists all distinct course IDs from rubrics
+2. **Rubric Dropdown**: Filtered to show only rubrics for selected course
+3. **Session Persistence**: Course selection persists across submissions
+4. **Automatic Reset**: Rubric selection resets when course changes
+
+---
+
 ## Adding a New Rubric
 
 ### Step 1: Edit Configuration File
@@ -99,6 +172,7 @@ RUBRICS_JSON = """{
         "rubric_version": "1.0",
         "title": "My Custom Rubric",
         "description": "Grading rubric for XYZ assignment",
+        "course_ids": ["CSC151"],
         "criteria": [
             {
                 "criterion_id": "understanding",
@@ -248,6 +322,64 @@ for student_submission in submissions:
     result = await grader.grade(student_submission)
     print(f"Score: {result.total_points_earned}")
 ```
+
+---
+
+## Streamlit UI Workflow
+
+The Streamlit UI provides a complete rubric-based grading workflow in the **Grade Assignment → Exams (Rubric)** tab.
+
+### Step-by-Step Process
+
+1. **Select Course**
+   - Choose from dropdown of available courses (CSC 151, CSC 152, etc.)
+   - Selection persists in session state for grading multiple students
+
+2. **Select Rubric**
+   - Dropdown automatically filters to rubrics for selected course
+   - Shows rubric title, version, and total points
+   - Selection persists until course changes
+
+3. **Edit Rubric Criteria** (Optional)
+   - View all criteria in editable table
+   - Toggle enabled/disabled per criterion
+   - Edit criterion names and max points
+   - Changes are applied as overrides (doesn't modify config)
+
+4. **Upload Assignment Instructions**
+   - Supported formats: .txt, .docx, .pdf
+   - Optional markdown conversion
+   - Can preview instructions before grading
+
+5. **Upload Solution** (Optional)
+   - Helps AI compare student work to expected solution
+   - Supports multiple files
+   - Auto-detects language for proper formatting
+
+6. **Enable Error Definitions** (Optional)
+   - Checkbox to include pre-defined error detection
+   - Loads errors from configuration
+   - Detected errors appear in results
+
+7. **Upload Student Submissions**
+   - Single or multiple files supported
+   - Processes each submission independently
+   - Shows progress for each student
+
+8. **View Results**
+   - Total score and percentage
+   - Performance band label
+   - Per-criterion breakdown with feedback
+   - Evidence snippets from code
+   - Detected errors (if enabled)
+
+### UI Features
+
+- **Real-time validation**: Overrides validated before grading
+- **Progress indicators**: Status updates for each grading operation
+- **Expandable sections**: Criterion details collapsed by default
+- **Error handling**: Clear error messages for validation failures
+- **Course persistence**: Selected course remembered across submissions
 
 ---
 
