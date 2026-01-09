@@ -230,9 +230,48 @@ For detailed technical documentation, see:
 - HTTPS for all web requests
 - No long-term storage of student data
 
+## Testing
+
+### Running Tests Locally
+
+The project uses pytest for testing. You can run tests using the provided script:
+
+```bash
+# Interactive mode - select test type from menu
+./scripts/run_tests.sh
+
+# Non-interactive mode - specify test type
+./scripts/run_tests.sh unit       # Run unit tests only
+./scripts/run_tests.sh all        # Run all tests
+./scripts/run_tests.sh integration # Run integration tests
+./scripts/run_tests.sh e2e        # Run end-to-end tests
+```
+
+Or use Poetry directly:
+
+```bash
+# Run unit tests with coverage
+poetry run pytest -m unit --ignore=tests/e2e --cov=src
+
+# Run all tests
+poetry run pytest
+```
+
+### Continuous Integration (CI)
+
+The project uses GitHub Actions for automated testing:
+
+- **unit-tests.yml**: Automatically runs unit tests on every pull request and push to `master`
+  - Ensures code quality before merging
+  - Generates coverage reports
+  - Blocks merge if tests fail (when branch protection is enabled)
+
+To enable required status checks for pull requests, see **[docs/ci-branch-protection.md](docs/ci-branch-protection.md)** for detailed setup instructions.
+
 ## GitHub Actions
 
 The project includes automated workflows:
+- **unit-tests.yml**: Unit test CI workflow (runs on PRs and pushes to master)
 - **Selenium_Action.yml**: Manual web scraping workflow
 - **Cron_Action.yml**: Scheduled automation workflow
 
