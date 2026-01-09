@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 
 # Test Pydantic model
-class TestModel(BaseModel):
+class TokenTestModel(BaseModel):
     """Simple test model."""
     result: str = Field(description="Test result")
     score: int = Field(description="Test score")
@@ -98,12 +98,12 @@ class TestDynamicTokenParameterInAPI:
         result = await get_structured_completion(
             prompt="Test prompt",
             model_name="gpt-5-mini",
-            schema_model=TestModel,
+            schema_model=TokenTestModel,
             max_tokens=1000
         )
         
         # Verify result
-        assert isinstance(result, TestModel)
+        assert isinstance(result, TokenTestModel)
         assert result.result == "success"
         
         # Verify API was called with max_completion_tokens
@@ -127,12 +127,12 @@ class TestDynamicTokenParameterInAPI:
         result = await get_structured_completion(
             prompt="Test prompt",
             model_name="gpt-4o",
-            schema_model=TestModel,
+            schema_model=TokenTestModel,
             max_tokens=2000
         )
         
         # Verify result
-        assert isinstance(result, TestModel)
+        assert isinstance(result, TokenTestModel)
         assert result.score == 95
         
         # Verify API was called with max_tokens
@@ -157,12 +157,12 @@ class TestDynamicTokenParameterInAPI:
         result = await get_structured_completion(
             prompt="Test prompt",
             model_name="gpt-5-mini",
-            schema_model=TestModel,
+            schema_model=TokenTestModel,
             max_tokens=None
         )
         
         # Verify result
-        assert isinstance(result, TestModel)
+        assert isinstance(result, TokenTestModel)
         
         # Verify neither token parameter was passed
         mock_client.chat.completions.create.assert_called_once()
@@ -184,11 +184,11 @@ class TestDynamicTokenParameterInAPI:
         # Call with default parameters (no max_tokens specified)
         result = await get_structured_completion(
             prompt="Test prompt",
-            schema_model=TestModel,
+            schema_model=TokenTestModel,
         )
         
         # Verify result
-        assert isinstance(result, TestModel)
+        assert isinstance(result, TokenTestModel)
         
         # Verify no token parameter was passed
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
@@ -218,10 +218,10 @@ class TestBackwardCompatibility:
         result = await get_structured_completion(
             prompt="Test",
             model_name="gpt-4o",
-            schema_model=TestModel,
+            schema_model=TokenTestModel,
         )
         
-        assert isinstance(result, TestModel)
+        assert isinstance(result, TokenTestModel)
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["model"] == "gpt-4o"
     
@@ -239,11 +239,11 @@ class TestBackwardCompatibility:
         result = await get_structured_completion(
             prompt="Test",
             model_name="gpt-4o",
-            schema_model=TestModel,
+            schema_model=TokenTestModel,
             max_tokens=500
         )
         
-        assert isinstance(result, TestModel)
+        assert isinstance(result, TokenTestModel)
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["max_tokens"] == 500
 
@@ -268,11 +268,11 @@ class TestInputValidation:
         result = await get_structured_completion(
             prompt="Test",
             model_name="gpt-5-mini",
-            schema_model=TestModel,
+            schema_model=TokenTestModel,
             max_tokens=None
         )
         
-        assert isinstance(result, TestModel)
+        assert isinstance(result, TokenTestModel)
     
     async def test_negative_max_tokens_raises_error(self, mocker):
         """Negative max_tokens should raise ValueError."""
@@ -282,7 +282,7 @@ class TestInputValidation:
             await get_structured_completion(
                 prompt="Test",
                 model_name="gpt-5-mini",
-                schema_model=TestModel,
+                schema_model=TokenTestModel,
                 max_tokens=-100
             )
     
@@ -294,6 +294,6 @@ class TestInputValidation:
             await get_structured_completion(
                 prompt="Test",
                 model_name="gpt-5-mini",
-                schema_model=TestModel,
+                schema_model=TokenTestModel,
                 max_tokens=0
             )

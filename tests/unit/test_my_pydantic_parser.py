@@ -27,7 +27,7 @@ class FeedbackType(str, Enum):
     FEEDBACK_2 = "Feedback Type 2"
 
 
-class TestModel(BaseModel):
+class ParserTestModel(BaseModel):
     """Test model for parser testing."""
     major_error: Optional[MajorErrorType] = Field(default=None, description="Major error type")
     minor_error: Optional[MinorErrorType] = Field(default=None, description="Minor error type")
@@ -41,7 +41,7 @@ class TestCustomPydanticOutputParser:
     
     def test_get_format_instructions_without_filtering(self):
         """Test format instructions without error type filtering."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         
         instructions = parser.get_format_instructions()
         
@@ -54,7 +54,7 @@ class TestCustomPydanticOutputParser:
     
     def test_get_format_instructions_with_major_error_filtering(self):
         """Test that major error types are filtered correctly."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         parser.major_error_type_list = ["Error Type 1", "Error Type 2"]
         
         instructions = parser.get_format_instructions()
@@ -68,7 +68,7 @@ class TestCustomPydanticOutputParser:
     
     def test_get_format_instructions_with_minor_error_filtering(self):
         """Test that minor error types are filtered correctly."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         parser.minor_error_type_list = ["Minor Type 1"]
         
         instructions = parser.get_format_instructions()
@@ -77,7 +77,7 @@ class TestCustomPydanticOutputParser:
     
     def test_get_format_instructions_with_feedback_filtering(self):
         """Test that feedback types are filtered correctly."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         parser.feedback_type_list = ["Feedback Type 1", "Feedback Type 2"]
         
         instructions = parser.get_format_instructions()
@@ -87,7 +87,7 @@ class TestCustomPydanticOutputParser:
     
     def test_get_format_instructions_with_all_filters(self):
         """Test with all error type lists provided."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         parser.major_error_type_list = ["Error Type 1"]
         parser.minor_error_type_list = ["Minor Type 1"]
         parser.feedback_type_list = ["Feedback Type 1"]
@@ -101,7 +101,7 @@ class TestCustomPydanticOutputParser:
     
     def test_format_instructions_removes_title_and_type(self):
         """Test that title and type fields are removed from schema."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         
         instructions = parser.get_format_instructions()
         
@@ -120,7 +120,7 @@ class TestCustomPydanticOutputParser:
     
     def test_format_instructions_produces_valid_json(self):
         """Test that format instructions contain valid JSON schema."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         
         instructions = parser.get_format_instructions()
         
@@ -136,7 +136,7 @@ class TestCustomPydanticOutputParser:
     
     def test_parser_without_filters_uses_full_enum(self):
         """Test that without filters, full enum is used."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         # Don't set any filter lists
         
         instructions = parser.get_format_instructions()
@@ -147,7 +147,7 @@ class TestCustomPydanticOutputParser:
     
     def test_parser_with_empty_filter_lists(self):
         """Test parser behavior with empty filter lists."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         parser.major_error_type_list = []
         parser.minor_error_type_list = []
         parser.feedback_type_list = []
@@ -159,7 +159,7 @@ class TestCustomPydanticOutputParser:
     
     def test_schema_contains_properties(self):
         """Test that generated schema contains properties."""
-        parser = CustomPydanticOutputParser(pydantic_object=TestModel)
+        parser = CustomPydanticOutputParser(pydantic_object=ParserTestModel)
         
         instructions = parser.get_format_instructions()
         

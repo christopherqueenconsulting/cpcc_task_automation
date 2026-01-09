@@ -135,3 +135,9 @@ markers = [
     "e2e: mark a test as an end-to-end test",
 ]
 asyncio_mode = "auto"
+# Filter third-party deprecation warnings that are outside our control
+filterwarnings = [
+    # Protobuf 3.x uses deprecated datetime.utcfromtimestamp() in well_known_types.py
+    # This is a known issue in the protobuf library and will be fixed when we can safely upgrade to protobuf 4+
+    "ignore:datetime.datetime.utcfromtimestamp.*:DeprecationWarning:google.protobuf.internal.well_known_types",
+]
