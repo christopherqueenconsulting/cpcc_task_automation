@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           echo "Running cron action, installing dependencies with poetry..."
-          poetry install --with=test_integration,test
+          poetry install --with=test_integration,test --no-interaction --no-ansi
 
       # Need to fetch reqs if needed from external libraries
       - name: Install deps outside pyproject
