@@ -1043,11 +1043,11 @@ def reset_session_key_value(key: str):
 
 
 def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True,
-                            accept_multiple_files: bool = False) -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
+                            accept_multiple_files: bool = False, key_prefix: str = "") -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
     None, None]:
     # Button to reset the multi file uploader
     reset_label = "Reset " + uploader_text + " File Uploader"
-    reset_key = reset_label.replace(" ", "_")
+    reset_key = key_prefix + reset_label.replace(" ", "_")
 
     if reset_key not in st.session_state:
         reset_session_key_value(reset_key)
