@@ -631,7 +631,7 @@ poetry run pytest tests/unit/test_date.py::test_specific_case -v -s
 - [src-cqc-cpcc.md](src-cqc-cpcc.md) - Core modules being tested
 - [utilities.md](utilities.md) - Utility functions being tested
 - [ai-llm.md](ai-llm.md) - AI components being tested
-- [CONTRIBUTING.md](../CONTRIBUTING.md) - Development workflow
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Development workflow
 
 ---
 

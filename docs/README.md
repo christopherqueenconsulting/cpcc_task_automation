@@ -9,9 +9,9 @@ This documentation provides in-depth information about the architecture, compone
 ## Where to Start
 
 - **New to the project?** Start with the [root README.md](../README.md) for a quick overview and setup instructions.
-- **Want to understand the architecture?** Read [ARCHITECTURE.md](../ARCHITECTURE.md) for system design and data flows.
-- **Want to know about features?** See [PRODUCT.md](../PRODUCT.md) for detailed feature descriptions and use cases.
-- **Ready to contribute?** Check [CONTRIBUTING.md](../CONTRIBUTING.md) for development guidelines.
+- **Want to understand the architecture?** Read [ARCHITECTURE.md](ARCHITECTURE.md) for system design and data flows.
+- **Want to know about features?** See [PRODUCT.md](PRODUCT.md) for detailed feature descriptions and use cases.
+- **Ready to contribute?** Check [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
 ## Documentation Index
 
@@ -20,9 +20,10 @@ This documentation provides in-depth information about the architecture, compone
 | Document | Description |
 |----------|-------------|
 | [../README.md](../README.md) | Project overview, quick start, and basic usage |
-| [../ARCHITECTURE.md](../ARCHITECTURE.md) | System architecture, design decisions, and data flows |
-| [../PRODUCT.md](../PRODUCT.md) | Product features, user personas, and roadmap |
-| [../CONTRIBUTING.md](../CONTRIBUTING.md) | Development guidelines and contribution process |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, design decisions, and data flows |
+| [PRODUCT.md](PRODUCT.md) | Product features, user personas, and roadmap |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development guidelines and contribution process |
+| [TESTING.md](TESTING.md) | Testing guide and best practices |
 
 ### Module Documentation
 
@@ -46,16 +47,20 @@ This documentation provides in-depth information about the architecture, compone
 ```
 cpcc_task_automation/
 ├── README.md                  # Project overview and quick start
-├── ARCHITECTURE.md            # System architecture
-├── PRODUCT.md                 # Product documentation
-├── CONTRIBUTING.md            # Development guidelines
 ├── docs/                      # Detailed technical documentation
 │   ├── README.md             # This file - documentation hub
+│   ├── ARCHITECTURE.md       # System architecture
+│   ├── PRODUCT.md            # Product documentation
+│   ├── CONTRIBUTING.md       # Development guidelines
+│   ├── TESTING.md            # Testing documentation
 │   ├── src-cqc-cpcc.md       # Core automation package docs
 │   ├── src-cqc-streamlit-app.md # UI package docs
 │   ├── utilities.md          # Utility modules docs
 │   ├── ai-llm.md             # AI/LLM integration docs
-│   └── testing.md            # Testing documentation
+│   ├── codecov_enforcement.md # Coverage requirements
+│   ├── pr-summaries/         # Historical PR summaries
+│   ├── migrations/           # Migration notes and guides
+│   └── notes/                # Development notes
 └── .github/
     ├── copilot-instructions.md # Copilot context
     └── instructions/           # Path-specific instructions
@@ -78,14 +83,14 @@ LangChain integration for AI-powered features. Includes LLM configuration, promp
 ## Common Tasks
 
 ### Understanding a Feature
-1. Read the feature description in [PRODUCT.md](../PRODUCT.md)
-2. Check the architecture overview in [ARCHITECTURE.md](../ARCHITECTURE.md)
+1. Read the feature description in [PRODUCT.md](PRODUCT.md)
+2. Check the architecture overview in [ARCHITECTURE.md](ARCHITECTURE.md)
 3. Review the module documentation for implementation details
 4. Look at the source code with context from the docs
 
 ### Adding a New Feature
-1. Review [CONTRIBUTING.md](../CONTRIBUTING.md) for development guidelines
-2. Check [ARCHITECTURE.md](../ARCHITECTURE.md) for design patterns
+1. Review [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines
+2. Check [ARCHITECTURE.md](ARCHITECTURE.md) for design patterns
 3. Study similar existing features in the module docs
 4. Follow the coding standards in [../.github/copilot-instructions.md](../.github/copilot-instructions.md)
 
@@ -128,7 +133,7 @@ When making code changes:
 
 ## Contributing to Documentation
 
-Documentation improvements are always welcome! See [CONTRIBUTING.md](../CONTRIBUTING.md) for:
+Documentation improvements are always welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
 - Documentation standards
 - How to submit documentation changes
 - Review process

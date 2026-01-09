@@ -201,9 +201,9 @@ Automates programming exam grading using AI to identify errors according to defi
 For detailed technical documentation, see:
 
 - **[docs/README.md](docs/README.md)** - Documentation hub and index
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and design decisions
-- **[PRODUCT.md](PRODUCT.md)** - Product features and user personas
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development guidelines
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture and design decisions
+- **[PRODUCT.md](docs/PRODUCT.md)** - Product features and user personas
+- **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines
 
 ## Important Notes
 

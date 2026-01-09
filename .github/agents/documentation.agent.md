@@ -188,7 +188,7 @@ Always include examples for:
 ### Links
 
 Link to related documentation:
-- Reference other files: `See [Architecture](ARCHITECTURE.md)`
+- Reference other files: `See [Architecture](docs/ARCHITECTURE.md)`
 - Link to external docs: `[Poetry](https://python-poetry.org/)`
 - Link to code: `See \`src/cqc_cpcc/attendance.py\``
 
