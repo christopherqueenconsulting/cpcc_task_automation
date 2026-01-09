@@ -3,7 +3,7 @@ import tempfile
 import threading
 import zipfile
 from random import randint
-from typing import TypeVar, cast, Union, Any, Tuple, List
+from typing import TypeVar, cast, Union, Any, Tuple
 
 import streamlit as st
 from langchain_core.callbacks import BaseCallbackHandler
@@ -1043,12 +1043,12 @@ def reset_session_key_value(key: str):
 
 
 # Type alias for return type
-UploadedFileResult = Union[List[Tuple[Any, str]], Tuple[Any, str], Tuple[None, None]]
+UploadedFileResult = Union[list[tuple[Any, str]], tuple[Any, str], tuple[None, None]]
 
 
 def add_upload_file_element(
     uploader_text: str, 
-    accepted_file_types: List[str], 
+    accepted_file_types: list[str], 
     success_message: bool = True,
     accept_multiple_files: bool = False, 
     key_prefix: str = ""

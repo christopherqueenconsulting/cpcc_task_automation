@@ -663,7 +663,7 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             else:
                 if show_contents:
                     # Display the code in a text area
-                    st.text_area(student_submission_file_path_contents, key=base_student_filename + "_" + filename + "_text_area")
+                    st.text_area(student_submission_file_path_contents, key=f"{base_student_filename}_{filename}_text_area")
                 student_submission_file_path_contents_final = student_submission_file_path_contents
             student_submission_file_path_contents_all.append(student_submission_file_path_contents_final)
 
