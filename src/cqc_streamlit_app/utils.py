@@ -3,7 +3,7 @@ import tempfile
 import threading
 import zipfile
 from random import randint
-from typing import TypeVar, cast
+from typing import TypeVar, cast, Union, Any, Tuple, List
 
 import streamlit as st
 from langchain_core.callbacks import BaseCallbackHandler
@@ -1042,9 +1042,31 @@ def reset_session_key_value(key: str):
     st.session_state[key] = str(randint(1000, 100000000))
 
 
-def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], success_message: bool = True,
-                            accept_multiple_files: bool = False, key_prefix: str = "") -> list[tuple[Any, str]] | tuple[Any, str] | tuple[
-    None, None]:
+# Type alias for return type
+UploadedFileResult = Union[List[Tuple[Any, str]], Tuple[Any, str], Tuple[None, None]]
+
+
+def add_upload_file_element(
+    uploader_text: str, 
+    accepted_file_types: List[str], 
+    success_message: bool = True,
+    accept_multiple_files: bool = False, 
+    key_prefix: str = ""
+) -> UploadedFileResult:
+    """Add a file uploader element with unique key generation.
+    
+    Args:
+        uploader_text: Label for the file uploader
+        accepted_file_types: List of accepted file extensions
+        success_message: Whether to show success message on upload
+        accept_multiple_files: Whether to accept multiple files
+        key_prefix: Prefix for widget keys to ensure uniqueness across contexts
+        
+    Returns:
+        If accept_multiple_files=True: List of (original_name, temp_path) tuples
+        If accept_multiple_files=False: Single (original_name, temp_path) tuple
+        If no files uploaded: (None, None)
+    """
     # Button to reset the multi file uploader
     reset_label = "Reset " + uploader_text + " File Uploader"
     reset_key = key_prefix + reset_label.replace(" ", "_")
@@ -1052,7 +1074,8 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
     if reset_key not in st.session_state:
         reset_session_key_value(reset_key)
 
-    # Use reset_key to ensure uniqueness instead of just the random value
+    # Create compound widget key using both context-specific prefix and random value
+    # This ensures global uniqueness even if random numbers collide across contexts
     widget_key = reset_key + "_" + st.session_state[reset_key]
     
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
