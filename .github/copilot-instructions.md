@@ -96,10 +96,40 @@ poetry run pytest -m unit            # Run by marker
 poetry run pytest --durations=5      # Show slowest tests
 ```
 
-### Coverage Goals
-- Aim for **60%+ coverage** on core automation logic
-- Prioritize testing complex logic (date calculations, parsing, AI chains)
-- UI code (Streamlit) may have lower coverage (manual testing acceptable)
+### Coverage Goals and PR Gates
+- **CRITICAL**: Patch coverage must be **≥80%** for all PRs (enforced by Codecov)
+- Overall project coverage target: **80%** (informational, not blocking)
+- Current project coverage: **~49%** (climbing toward 80% goal)
+
+#### Codecov Enforcement Rules
+When working on PRs, you MUST ensure:
+
+1. **Patch Coverage ≥80% (ENFORCED)**
+   - All new or modified code must have ≥80% test coverage
+   - The `codecov/patch` status check will FAIL if below 80%
+   - This check is REQUIRED in branch protection - PRs cannot merge without it
+   - If the check fails: add/update tests for uncovered lines until ≥80%
+
+2. **Project Coverage 80% (GOAL)**
+   - Overall repository coverage target is 80%
+   - Currently ~49%, climbing gradually over time
+   - The `codecov/project` check is INFORMATIONAL - won't block PRs
+   - Don't try to reach 80% project coverage in a single PR unless explicitly requested
+   - Focus on meeting patch requirements first
+
+3. **How to Handle Coverage Failures**
+   - Check Codecov PR comment for uncovered files and lines
+   - Add unit tests for new/modified code paths
+   - Run locally: `poetry run pytest -m unit --cov=src --cov-report=term-missing`
+   - Verify coverage before pushing: aim for patch coverage ≥80%
+   - Mark tests with `@pytest.mark.unit` decorator
+
+4. **Coverage Best Practices**
+   - Write tests BEFORE or ALONGSIDE code changes (TDD approach)
+   - Prioritize testing complex logic (date calculations, parsing, AI chains)
+   - Test both happy paths AND error cases
+   - UI code (Streamlit pages) is excluded from coverage (tested via E2E)
+   - See `docs/codecov_enforcement.md` for detailed guidance
 
 ---
 
