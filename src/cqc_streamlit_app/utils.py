@@ -1052,11 +1052,14 @@ def add_upload_file_element(uploader_text: str, accepted_file_types: list[str], 
     if reset_key not in st.session_state:
         reset_session_key_value(reset_key)
 
+    # Use reset_key to ensure uniqueness instead of just the random value
+    widget_key = reset_key + "_" + st.session_state[reset_key]
+    
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
-                                      accept_multiple_files=accept_multiple_files, key=st.session_state[reset_key])
+                                      accept_multiple_files=accept_multiple_files, key=widget_key)
 
     if accept_multiple_files:
-        if st.button("Remove All Files", key="Checkbox_" + st.session_state[reset_key]):
+        if st.button("Remove All Files", key="Checkbox_" + widget_key):
             reset_session_key_value(reset_key)
             st.rerun()
 
