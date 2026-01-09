@@ -60,13 +60,16 @@ Returns the default model name for primary LLM operations.
 
 **Current Configuration**:
 ```python
-model = "gpt-4o"  # Primary model (high quality, more expensive)
+model = "gpt-5-mini"  # Primary model (optimized for cost and performance)
 ```
 
-**Historical Models** (commented in code):
-- `gpt-4o-mini` - Faster, cheaper alternative
-- `gpt-4-turbo` - Previous generation
-- `gpt-3.5-turbo` - Older, less capable
+**Available GPT-5 Models**:
+- `gpt-5-mini` - Recommended for most tasks (default)
+- `gpt-5` - Higher quality, more expensive
+- `gpt-5-nano` - Most cost-effective option
+
+**Note on Temperature**:
+GPT-5 models only support `temperature=1` (default). Our code automatically filters out other temperature values to prevent API errors.
 
 **Selection Criteria**:
 - Quality of structured output
@@ -75,25 +78,38 @@ model = "gpt-4o"  # Primary model (high quality, more expensive)
 
 ---
 
-#### `get_default_retry_model() -> str`
-Returns the model name for retry attempts after parsing failures.
+#### Retry Model (Deprecated)
+The retry model concept is deprecated with the new OpenAI client wrapper. Retries now use the same model with exponential backoff.
 
-**Current Configuration**:
-```python
-model = "gpt-4o-mini"  # Cheaper model for retries
-```
-
-**Rationale**: Use cheaper model for retries to reduce costs while still getting valid output.
+**Historical Context**:
+- Legacy code used `gpt-4o-mini` for retries
+- New implementation handles retries transparently
 
 ---
 
-#### `get_default_llm() -> BaseChatModel`
-Creates and returns configured ChatOpenAI instance for primary use.
+#### Temperature Parameter
+**Important**: GPT-5 models have strict temperature constraints.
 
-**Configuration**:
+**Behavior**:
 ```python
-model = get_default_llm_model()  # "gpt-4o"
-temperature = 0.2  # More deterministic (0.0-1.0 scale)
+# For GPT-5 models, temperature != 1 is automatically filtered
+temperature = 0.2  # Will be omitted in API call for GPT-5
+# API uses default temperature=1 instead
+```
+
+**Legacy Models** (backward compatibility only):
+- Temperature parameter passes through unchanged for non-GPT-5 models
+- Not recommended for new code
+
+---
+
+#### `get_default_llm() -> BaseChatModel` (Deprecated)
+**Note**: This function is part of the deprecated LangChain integration. Use the new `get_structured_completion()` from `openai_client.py` instead.
+
+**Legacy Configuration**:
+```python
+model = "gpt-5-mini"  # Default model
+temperature = 0.2  # Automatically filtered for GPT-5
 llm = ChatOpenAI(temperature=temperature, model=model)
 ```
 
@@ -113,38 +129,53 @@ llm = get_default_llm()
 
 ---
 
-#### `get_model_from_chat_model(chat_model: BaseChatModel) -> str`
+#### `get_model_from_chat_model(chat_model: BaseChatModel) -> str` (Deprecated)
 Extracts model name from a ChatModel instance.
+
+**Note**: Part of deprecated LangChain integration.
 
 **Usage**:
 ```python
 llm = get_default_llm()
-model_name = get_model_from_chat_model(llm)  # "gpt-4o"
+model_name = get_model_from_chat_model(llm)  # "gpt-5-mini"
 ```
 
 ---
 
-#### `get_temperature_from_chat_model(chat_model: BaseChatModel) -> float`
+#### `get_temperature_from_chat_model(chat_model: BaseChatModel) -> float` (Deprecated)
 Extracts temperature setting from a ChatModel instance.
+
+**Note**: Part of deprecated LangChain integration.
 
 ---
 
 ### Model Selection Strategy
 
-**Primary Model (gpt-4o)**:
-- **Pros**: High quality, good structured output, reliable
-- **Cons**: More expensive (~$0.01-0.03 per 1K tokens)
-- **Use**: All initial requests (feedback, grading, error definitions)
+**Current: GPT-5 Family Only**
+- **Primary Model**: `gpt-5-mini` (default)
+  - **Pros**: Excellent quality, cost-effective, reliable structured outputs
+  - **Cost**: ~$0.25/1M input tokens, ~$2.00/1M output tokens (standard tier)
+  - **Use**: All AI tasks (feedback, grading, error definitions)
 
-**Retry Model (gpt-4o-mini)**:
-- **Pros**: Cheaper (~$0.001-0.003 per 1K tokens), still capable
-- **Cons**: Slightly less reliable for complex tasks
-- **Use**: Retry attempts when primary parsing fails
+- **Alternative**: `gpt-5` (when higher quality needed)
+  - **Pros**: Highest quality outputs
+  - **Cost**: ~$1.25/1M input tokens, ~$10.00/1M output tokens (standard tier)
+  - **Use**: Complex analysis requiring maximum accuracy
 
-**Why Not GPT-3.5?**
-- GPT-4 models significantly better at structured output
-- GPT-3.5 has higher parsing failure rate
-- Cost difference justified by time savings
+- **Budget Option**: `gpt-5-nano`
+  - **Pros**: Most cost-effective
+  - **Cost**: ~$0.05/1M input tokens, ~$0.40/1M output tokens (standard tier)
+  - **Use**: Simple tasks, high-volume processing
+
+**Temperature Constraint**:
+- GPT-5 models only support `temperature=1` (default)
+- Our code automatically filters temperature values to prevent 400 errors
+- For deterministic outputs, rely on structured output validation rather than low temperature
+
+**Legacy Models** (backward compatibility only):
+- GPT-4 and GPT-3.5 models still work if explicitly specified
+- Not recommended for new code
+- May be removed in future versions
 
 ---
 
