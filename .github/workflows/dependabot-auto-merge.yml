@@ -30,6 +30,8 @@ jobs:
       
       - name: Enable auto-merge for patch and minor updates
         # Auto-merge patch and minor updates, but not major updates
+        # The --auto flag ensures the PR will only merge after all required
+        # status checks pass (including unit-tests) and branch protection rules are met
         if: |
           steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
           steps.metadata.outputs.update-type == 'version-update:semver-minor'
