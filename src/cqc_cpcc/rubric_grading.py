@@ -32,6 +32,8 @@ from typing import Optional
 from langchain_core.callbacks import BaseCallbackHandler
 
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult, DetectedError
+from cqc_cpcc.error_definitions_models import ErrorDefinition
+from cqc_cpcc.error_scoring import compute_error_based_score, aggregate_error_counts, get_error_count_for_severity
 from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
 from cqc_cpcc.utilities.logger import logger
 
@@ -47,7 +49,7 @@ def build_rubric_grading_prompt(
     assignment_instructions: str,
     student_submission: str,
     reference_solution: Optional[str] = None,
-    error_definitions: Optional[list[DetectedError]] = None,
+    error_definitions: Optional[list[ErrorDefinition]] = None,
 ) -> str:
     """Build a deterministic prompt for rubric-based grading.
     
@@ -56,7 +58,7 @@ def build_rubric_grading_prompt(
         assignment_instructions: Assignment requirements and instructions
         student_submission: Student's code or work to grade
         reference_solution: Optional reference solution for comparison
-        error_definitions: Optional list of error definitions to check against
+        error_definitions: Optional list of ErrorDefinition objects to check against
         
     Returns:
         Formatted prompt string for OpenAI
@@ -112,23 +114,44 @@ def build_rubric_grading_prompt(
             prompt_parts.append(f"- **{band.label}**: {band.score_min}-{band.score_max} points")
         prompt_parts.append("")
     
-    # Error definitions if provided
+    # Error definitions if provided (only include enabled ones)
     if error_definitions:
-        prompt_parts.append("### Error Definitions to Check")
-        major_errors = [e for e in error_definitions if e.severity == "major"]
-        minor_errors = [e for e in error_definitions if e.severity == "minor"]
+        enabled_errors = [e for e in error_definitions if e.enabled]
         
-        if major_errors:
-            prompt_parts.append("**Major Errors:**")
-            for error in major_errors:
-                prompt_parts.append(f"- {error.code}: {error.description}")
-        
-        if minor_errors:
-            prompt_parts.append("\n**Minor Errors:**")
-            for error in minor_errors:
-                prompt_parts.append(f"- {error.code}: {error.description}")
-        
-        prompt_parts.append("")
+        if enabled_errors:
+            prompt_parts.append("### Error Definitions to Check")
+            prompt_parts.append("Detect the following errors in the student submission and provide:")
+            prompt_parts.append("1. A list of detected_errors with error code, severity, and occurrence count")
+            prompt_parts.append("2. Aggregated counts by severity in error_counts_by_severity")
+            prompt_parts.append("")
+            
+            # Group by severity
+            major_errors = [e for e in enabled_errors if e.severity_category.lower() == "major"]
+            minor_errors = [e for e in enabled_errors if e.severity_category.lower() == "minor"]
+            other_errors = [e for e in enabled_errors if e.severity_category.lower() not in ["major", "minor"]]
+            
+            if major_errors:
+                prompt_parts.append("**Major Errors:**")
+                for error in major_errors:
+                    prompt_parts.append(f"- **{error.error_id}**: {error.description}")
+                    if error.examples:
+                        prompt_parts.append(f"  Examples: {'; '.join(error.examples)}")
+            
+            if minor_errors:
+                prompt_parts.append("\n**Minor Errors:**")
+                for error in minor_errors:
+                    prompt_parts.append(f"- **{error.error_id}**: {error.description}")
+                    if error.examples:
+                        prompt_parts.append(f"  Examples: {'; '.join(error.examples)}")
+            
+            if other_errors:
+                prompt_parts.append("\n**Other Errors:**")
+                for error in other_errors:
+                    prompt_parts.append(f"- **{error.error_id}** ({error.severity_category}): {error.description}")
+                    if error.examples:
+                        prompt_parts.append(f"  Examples: {'; '.join(error.examples)}")
+            
+            prompt_parts.append("")
     
     # Student submission
     prompt_parts.append("## Student Submission to Grade")
@@ -140,16 +163,26 @@ def build_rubric_grading_prompt(
     # Grading instructions
     prompt_parts.append("## Grading Instructions")
     prompt_parts.append("1. Evaluate the student submission against each criterion in the rubric")
-    prompt_parts.append("2. Assign points earned for each criterion (0 to max_points)")
-    prompt_parts.append("3. Select the most appropriate performance level label if levels are defined")
+    prompt_parts.append("2. For criteria with scoring_mode='manual':")
+    prompt_parts.append("   - Assign points earned for each criterion (0 to max_points)")
+    prompt_parts.append("   - Select the most appropriate performance level label if levels are defined")
+    prompt_parts.append("3. For criteria with scoring_mode='error_count':")
+    prompt_parts.append("   - DO NOT assign points (backend will compute based on error counts)")
+    prompt_parts.append("   - Set points_earned to 0 as a placeholder")
+    prompt_parts.append("   - Still provide feedback describing detected errors")
     prompt_parts.append("4. Provide specific, actionable feedback for each criterion")
     prompt_parts.append("5. Include evidence from the submission to support your assessment")
-    prompt_parts.append("6. Calculate total points earned (sum of all criterion points)")
+    prompt_parts.append("6. Calculate total points earned (sum of all manual criterion points only)")
     prompt_parts.append("7. Determine overall performance band based on total score")
     prompt_parts.append("8. Provide overall summary feedback")
     
     if error_definitions:
         prompt_parts.append("9. Check for defined errors and include them in detected_errors field")
+        prompt_parts.append("   - For each detected error, set 'code' to the error_id (e.g., 'CSC_151_EXAM_1_SYNTAX_ERROR')")
+        prompt_parts.append("   - Set 'severity' to the severity_category (e.g., 'major', 'minor')")
+        prompt_parts.append("   - Set 'occurrences' to the count of times this error appears")
+        prompt_parts.append("10. Populate error_counts_by_severity with aggregated counts (e.g., {'major': 2, 'minor': 5})")
+        prompt_parts.append("11. Optionally populate error_counts_by_id with per-error counts")
     
     prompt_parts.append("")
     prompt_parts.append("Return your assessment as structured JSON matching the RubricAssessmentResult schema.")
@@ -163,7 +196,7 @@ async def grade_with_rubric(
     assignment_instructions: str,
     student_submission: str,
     reference_solution: Optional[str] = None,
-    error_definitions: Optional[list[DetectedError]] = None,
+    error_definitions: Optional[list[ErrorDefinition]] = None,
     model_name: str = DEFAULT_GRADING_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
     callback: Optional[BaseCallbackHandler] = None,
@@ -174,12 +207,18 @@ async def grade_with_rubric(
     a defined rubric. It returns a complete RubricAssessmentResult with per-criterion
     scores, feedback, and overall assessment.
     
+    If error_definitions are provided and the rubric has error_count criteria, this
+    function will:
+    1. Ask OpenAI to detect errors and return counts
+    2. Use backend deterministic scoring for error_count criteria
+    3. Recalculate total_points_earned including error-based scores
+    
     Args:
         rubric: The grading rubric to use
         assignment_instructions: Assignment requirements
         student_submission: Student's code or work to grade
         reference_solution: Optional reference solution for comparison
-        error_definitions: Optional list of error definitions to check
+        error_definitions: Optional list of ErrorDefinition objects to check
         model_name: OpenAI model to use (default: gpt-4o)
         temperature: Sampling temperature (default: 0.2)
         callback: Optional LangChain callback for compatibility
@@ -191,11 +230,15 @@ async def grade_with_rubric(
         ValueError: If rubric validation fails or LLM output is invalid
         
     Example:
+        >>> from cqc_cpcc.rubric_config import get_rubric_by_id
+        >>> from cqc_cpcc.error_definitions_config import get_error_definitions
         >>> rubric = get_rubric_by_id("default_100pt_rubric")
+        >>> errors = get_error_definitions("CSC151", "Exam1")
         >>> result = await grade_with_rubric(
         ...     rubric=rubric,
         ...     assignment_instructions="Write Hello World",
-        ...     student_submission="print('Hello World')"
+        ...     student_submission="print('Hello World')",
+        ...     error_definitions=errors
         ... )
         >>> print(f"Score: {result.total_points_earned}/{result.total_points_possible}")
     """
@@ -224,6 +267,9 @@ async def grade_with_rubric(
             max_tokens=DEFAULT_MAX_TOKENS,
         )
         
+        # Post-process: Apply backend scoring for error_count criteria
+        result = apply_error_based_scoring(rubric, result)
+        
         # Validate that result matches rubric
         if result.rubric_id != rubric.rubric_id:
             logger.warning(
@@ -251,6 +297,94 @@ async def grade_with_rubric(
         raise ValueError(f"Failed to grade with rubric: {e}")
 
 
+def apply_error_based_scoring(rubric: Rubric, result: RubricAssessmentResult) -> RubricAssessmentResult:
+    """Apply backend error-based scoring for criteria with scoring_mode='error_count'.
+    
+    This function:
+    1. Identifies criteria with scoring_mode='error_count'
+    2. Computes their scores using error counts from result
+    3. Updates the corresponding CriterionResult with computed points
+    4. Recalculates total_points_earned
+    
+    Args:
+        rubric: The rubric with potentially error_count criteria
+        result: The initial result from OpenAI (may have placeholder scores for error_count criteria)
+        
+    Returns:
+        Updated RubricAssessmentResult with backend-computed error-based scores
+    """
+    # Check if we have error counts and error_count criteria
+    has_error_counts = result.error_counts_by_severity is not None
+    error_count_criteria = [c for c in rubric.criteria if c.enabled and c.scoring_mode == "error_count"]
+    
+    if not error_count_criteria:
+        # No error_count criteria, return as-is
+        return result
+    
+    if not has_error_counts:
+        logger.warning(
+            f"Rubric has {len(error_count_criteria)} error_count criteria but no error counts in result. "
+            f"Using 0 errors for scoring."
+        )
+        # Default to 0 errors
+        major_count = 0
+        minor_count = 0
+    else:
+        # Extract error counts by severity
+        major_count = get_error_count_for_severity(result.error_counts_by_severity, "major")
+        minor_count = get_error_count_for_severity(result.error_counts_by_severity, "minor")
+    
+    logger.info(
+        f"Applying error-based scoring: {major_count} major errors, {minor_count} minor errors, "
+        f"{len(error_count_criteria)} error_count criteria"
+    )
+    
+    # Update criterion results with computed scores
+    updated_criteria_results = []
+    for criterion_result in result.criteria_results:
+        # Find corresponding rubric criterion
+        rubric_criterion = next(
+            (c for c in rubric.criteria if c.criterion_id == criterion_result.criterion_id),
+            None
+        )
+        
+        if rubric_criterion and rubric_criterion.scoring_mode == "error_count":
+            # Compute score using backend logic
+            computed_score = compute_error_based_score(
+                rubric_criterion,
+                major_count,
+                minor_count
+            )
+            
+            # Update the criterion result
+            criterion_result.points_earned = computed_score
+            
+            logger.debug(
+                f"Computed score for '{criterion_result.criterion_id}': "
+                f"{computed_score}/{criterion_result.points_possible} "
+                f"(was {criterion_result.points_earned} from LLM)"
+            )
+        
+        updated_criteria_results.append(criterion_result)
+    
+    # Recalculate total_points_earned
+    new_total_earned = sum(r.points_earned for r in updated_criteria_results)
+    
+    # Create updated result
+    updated_result = result.model_copy(update={
+        "criteria_results": updated_criteria_results,
+        "total_points_earned": new_total_earned
+    })
+    
+    logger.info(
+        f"Updated total score after error-based scoring: "
+        f"{updated_result.total_points_earned}/{updated_result.total_points_possible} "
+        f"(was {result.total_points_earned})"
+    )
+    
+    return updated_result
+
+
 class RubricGrader:
     """Reusable rubric grader with stored configuration.
     
@@ -271,7 +405,7 @@ class RubricGrader:
         rubric: Rubric,
         assignment_instructions: str,
         reference_solution: Optional[str] = None,
-        error_definitions: Optional[list[DetectedError]] = None,
+        error_definitions: Optional[list[ErrorDefinition]] = None,
         model_name: str = DEFAULT_GRADING_MODEL,
         temperature: float = DEFAULT_TEMPERATURE,
     ):
@@ -281,7 +415,7 @@ class RubricGrader:
             rubric: The grading rubric
             assignment_instructions: Assignment requirements
             reference_solution: Optional reference solution
-            error_definitions: Optional error definitions
+            error_definitions: Optional error definitions (list of ErrorDefinition objects)
             model_name: OpenAI model to use
             temperature: Sampling temperature
         """
