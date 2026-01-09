@@ -31,7 +31,7 @@ This module provides a clean, production-ready async interface for making single
 The wrapper automatically selects the correct token parameter based on the model:
 
 - **GPT-5 family** (`gpt-5`, `gpt-5-mini`, `gpt-5-nano`): Uses `max_completion_tokens`
-- **GPT-4o and earlier** (`gpt-4o`, `gpt-4o-mini`, older models): Uses `max_tokens`
+- **GPT-4o and earlier** (`gpt-5`, `gpt-5-mini`, older models): Uses `max_tokens`
 
 You don't need to know which parameter to use - the wrapper handles it automatically.
 
@@ -65,9 +65,55 @@ result = await get_structured_completion(
 ### Why This Matters
 
 - **GPT-5 models**: Newer API, uses `max_completion_tokens` parameter
-- **GPT-4o and older**: Legacy API, uses `max_tokens` parameter
+- **Legacy models**: Older API, uses `max_tokens` parameter (backward compatibility)
 - **No limits by default**: Prevents accidental output truncation
 - **Backward compatible**: Existing code works without changes
+
+---
+
+## Temperature Parameter Constraints (IMPORTANT)
+
+### GPT-5 Temperature Restriction
+
+**Critical**: GPT-5 models only support `temperature=1` (default). Other temperature values cause 400 errors:
+
+```
+Error 400: Unsupported value: 'temperature' does not support 0.2 with this model.
+Only the default (1) value is supported.
+```
+
+### Automatic Parameter Sanitization
+
+The wrapper automatically filters temperature for GPT-5 models:
+
+```python
+# Example: Using temperature=0.2 with GPT-5
+result = await get_structured_completion(
+    prompt="Analyze this code...",
+    model_name="gpt-5-mini",
+    schema_model=Feedback,
+    temperature=0.2,  # Will be filtered out automatically
+)
+# API call uses default temperature=1, no 400 error
+```
+
+### How It Works
+
+1. **GPT-5 models** (`gpt-5`, `gpt-5-mini`, `gpt-5-nano`):
+   - If `temperature != 1`: Parameter is **omitted** from API call
+   - If `temperature == 1`: Parameter is **included** (explicit default is allowed)
+   - API uses default `temperature=1` when omitted
+
+2. **Legacy models** (if explicitly specified):
+   - Temperature parameter passes through unchanged
+   - Backward compatibility maintained
+
+### Implications
+
+- **For determinism**: Rely on OpenAI's native JSON Schema validation instead of low temperature
+- **Structured outputs**: Already deterministic due to strict schema enforcement
+- **No code changes needed**: Wrapper handles filtering automatically
+- **No 400 errors**: Temperature conflicts prevented at request building stage
 
 ---
 
@@ -117,7 +163,7 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
 try:
     result = await get_structured_completion(
         prompt=prompt_text,
-        model_name="gpt-4o",
+        model_name="gpt-5",
         schema_model=YourModel,
     )
     # Use result...
@@ -160,9 +206,9 @@ async def get_structured_completion(
 - **`prompt`** (str, required): The prompt text to send to the LLM. Cannot be empty.
 
 - **`model_name`** (str, required): OpenAI model name. Examples:
-  - `"gpt-4o"` - Recommended for production (high quality)
-  - `"gpt-4o-mini"` - Faster/cheaper alternative
-  - `"gpt-4-turbo"` - Previous generation
+  - `"gpt-5"` - Recommended for production (high quality)
+  - `"gpt-5-mini"` - Faster/cheaper alternative
+  - `"gpt-5-mini"` - Previous generation
 
 - **`schema_model`** (Type[BaseModel], required): Pydantic model class defining expected output structure. Must be a subclass of `pydantic.BaseModel`.
 
@@ -296,7 +342,7 @@ async def grade_submission(instructions: str, solution: str, submission: str) ->
     
     result = await get_structured_completion(
         prompt=prompt,
-        model_name="gpt-4o",
+        model_name="gpt-5",
         schema_model=ErrorReport,
         temperature=0.2,  # Deterministic grading
         max_tokens=2000
@@ -318,7 +364,7 @@ async def grade_multiple_submissions(submissions: list[str]) -> list[ErrorReport
     tasks = [
         get_structured_completion(
             prompt=build_prompt(sub),
-            model_name="gpt-4o",
+            model_name="gpt-5",
             schema_model=ErrorReport
         )
         for sub in submissions
@@ -341,20 +387,20 @@ async def grade_with_fallback(submission: str) -> ErrorReport:
     """Try primary model, fallback to cheaper model on error."""
     
     try:
-        # Try gpt-4o first
+        # Try gpt-5 first
         return await get_structured_completion(
             prompt=prompt,
-            model_name="gpt-4o",
+            model_name="gpt-5",
             schema_model=ErrorReport,
             max_retries=2
         )
     except OpenAITransportError:
-        logger.warning("gpt-4o failed, trying gpt-4o-mini")
+        logger.warning("gpt-5 failed, trying gpt-5-mini")
         
         # Fallback to cheaper model
         return await get_structured_completion(
             prompt=prompt,
-            model_name="gpt-4o-mini",
+            model_name="gpt-5-mini",
             schema_model=ErrorReport,
             max_retries=1
         )
@@ -368,7 +414,7 @@ async def grade_with_fallback(submission: str) -> ErrorReport:
 # Use allow_repair for prompts that sometimes need a second try
 result = await get_structured_completion(
     prompt=complex_prompt,
-    model_name="gpt-4o",
+    model_name="gpt-5",
     schema_model=ComplexSchema,
     allow_repair=True,  # Retry once if validation fails
     max_retries=2       # Plus 2 retries for network errors
@@ -406,7 +452,7 @@ result = await get_structured_completion(
 ```python
 result = await get_structured_completion(
     prompt=prompt,
-    model_name="gpt-4o",
+    model_name="gpt-5",
     schema_model=YourModel,
     max_retries=3,      # Total: 4 attempts (1 initial + 3 retries)
     retry_delay=1.5,    # Base delay: 1.5s, then 3s, then 6s
@@ -528,7 +574,7 @@ OPENAI_API_KEY=sk-proj-...
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 
-llm = ChatOpenAI(model="gpt-4o", temperature=0.2)
+llm = ChatOpenAI(model="gpt-5", temperature=0.2)
 prompt = PromptTemplate(template="...", input_variables=["code"])
 chain = prompt | llm | parser
 
@@ -545,7 +591,7 @@ prompt_text = f"... {student_code} ..."
 
 result = await get_structured_completion(
     prompt=prompt_text,
-    model_name="gpt-4o",
+    model_name="gpt-5",
     schema_model=YourModel,
     temperature=0.2
 )
@@ -583,7 +629,7 @@ async def test_grading(mocker):
     # Test your function
     result = await get_structured_completion(
         prompt="Test",
-        model_name="gpt-4o",
+        model_name="gpt-5",
         schema_model=YourModel
     )
     
@@ -676,7 +722,7 @@ except Exception as e:
 
 ```python
 # Use cheaper model when appropriate
-model_name = "gpt-4o-mini"  # ~10x cheaper than gpt-4o
+model_name = "gpt-5-mini"  # ~10x cheaper than gpt-5
 
 # Reduce max_tokens for shorter responses
 max_tokens = 500  # Instead of 4096

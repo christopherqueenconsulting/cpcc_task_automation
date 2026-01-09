@@ -45,7 +45,8 @@ class TestTokenParameterSelection:
         assert get_token_param_for_model("gpt-4o-mini") == "max_tokens"
     
     def test_legacy_models_use_max_tokens(self):
-        """Older models should use max_tokens parameter."""
+        """Legacy models should use max_tokens parameter (backward compatibility)."""
+        # Note: These are for backward compatibility only, not recommended for new code
         assert get_token_param_for_model("gpt-4-turbo") == "max_tokens"
         assert get_token_param_for_model("gpt-3.5-turbo") == "max_tokens"
 
@@ -60,14 +61,12 @@ class TestModelTokenLimits:
         assert get_max_tokens_for_model("gpt-5-mini") is None
         assert get_max_tokens_for_model("gpt-5-nano") is None
     
-    def test_gpt4o_has_defined_limit(self):
-        """GPT-4o models should return defined max output tokens."""
-        assert get_max_tokens_for_model("gpt-4o") == 16_384
-        assert get_max_tokens_for_model("gpt-4o-mini") == 16_384
-    
     def test_unknown_model_returns_none(self):
         """Unknown models should return None (don't impose limit)."""
         assert get_max_tokens_for_model("unknown-model") is None
+        # Legacy models (GPT-4o) are no longer in MODEL_TOKEN_LIMITS
+        assert get_max_tokens_for_model("gpt-4o") is None
+        assert get_max_tokens_for_model("gpt-4o-mini") is None
 
 
 @pytest.mark.unit
@@ -114,7 +113,7 @@ class TestDynamicTokenParameterInAPI:
         assert "max_tokens" not in call_kwargs
     
     async def test_gpt4o_uses_max_tokens(self, mocker):
-        """API call with gpt-4o should use max_tokens."""
+        """API call with legacy model (gpt-4o) should use max_tokens for backward compatibility."""
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -135,7 +134,7 @@ class TestDynamicTokenParameterInAPI:
         assert isinstance(result, TokenTestModel)
         assert result.score == 95
         
-        # Verify API was called with max_tokens
+        # Verify API was called with max_tokens (legacy behavior)
         mock_client.chat.completions.create.assert_called_once()
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert "max_tokens" in call_kwargs
@@ -205,7 +204,7 @@ class TestBackwardCompatibility:
     """Test backward compatibility with existing code."""
     
     async def test_explicit_model_name_still_works(self, mocker):
-        """Explicitly passing model_name should work as before."""
+        """Explicitly passing model_name should work as before (including legacy models)."""
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -215,6 +214,7 @@ class TestBackwardCompatibility:
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.get_client', return_value=mock_client)
         
+        # Test with legacy model for backward compatibility
         result = await get_structured_completion(
             prompt="Test",
             model_name="gpt-4o",
@@ -236,16 +236,18 @@ class TestBackwardCompatibility:
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.get_client', return_value=mock_client)
         
+        # Test with GPT-5 model
         result = await get_structured_completion(
             prompt="Test",
-            model_name="gpt-4o",
+            model_name="gpt-5-mini",
             schema_model=TokenTestModel,
             max_tokens=500
         )
         
         assert isinstance(result, TokenTestModel)
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-        assert call_kwargs["max_tokens"] == 500
+        # For gpt-5-mini, should use max_completion_tokens
+        assert call_kwargs["max_completion_tokens"] == 500
 
 
 @pytest.mark.unit

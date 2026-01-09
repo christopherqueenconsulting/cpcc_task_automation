@@ -83,14 +83,6 @@ MODEL_TOKEN_LIMITS = {
         "context_window": 128_000,
         "max_output": None,  # Not yet publicly specified, omit parameter
     },
-    "gpt-4o": {
-        "context_window": 128_000,
-        "max_output": 16_384,
-    },
-    "gpt-4o-mini": {
-        "context_window": 128_000,
-        "max_output": 16_384,
-    },
 }
 
 # Global client instance for connection pooling
@@ -103,12 +95,12 @@ def get_token_param_for_model(model: str) -> str:
     
     OpenAI models use different token parameter names:
     - GPT-5 family: 'max_completion_tokens' (newer parameter)
-    - GPT-4o and earlier: 'max_tokens' (legacy parameter)
+    - Legacy models: 'max_tokens' (older parameter, not recommended)
     
     This ensures compatibility with the OpenAI API as it evolves.
     
     Args:
-        model: OpenAI model name (e.g., "gpt-5-mini", "gpt-4o")
+        model: OpenAI model name (e.g., "gpt-5-mini", "gpt-5")
         
     Returns:
         Parameter name to use: 'max_completion_tokens' or 'max_tokens'
@@ -117,7 +109,7 @@ def get_token_param_for_model(model: str) -> str:
     if model.startswith("gpt-5"):
         return "max_completion_tokens"
     
-    # Older models (gpt-4o and earlier) use max_tokens
+    # Legacy models use max_tokens (for backward compatibility only)
     return "max_tokens"
 
 
@@ -139,6 +131,60 @@ def get_max_tokens_for_model(model: str) -> int | None:
     
     # Unknown model - don't impose a limit
     return None
+
+
+def sanitize_openai_params(model: str, params: dict) -> dict:
+    """Sanitize OpenAI API parameters based on model capabilities.
+    
+    GPT-5 models have specific parameter constraints that differ from
+    earlier models. This function filters out unsupported parameters
+    to prevent 400 errors.
+    
+    Known GPT-5 constraints:
+    - temperature: Only supports default value (1). Non-default values cause:
+      "Unsupported value: 'temperature' does not support 0.2 with this model.
+       Only the default (1) value is supported."
+    
+    For GPT-5 family models:
+    - If temperature != 1: Remove it from params (let API use default)
+    - If temperature == 1: Keep it (explicit default is allowed)
+    
+    For non-GPT-5 models:
+    - Pass through all parameters unchanged (backward compatibility)
+    
+    Args:
+        model: OpenAI model name (e.g., "gpt-5-mini", "gpt-4o")
+        params: Dictionary of API parameters to sanitize
+        
+    Returns:
+        Sanitized parameter dictionary safe for the specified model
+        
+    Example:
+        >>> params = {"temperature": 0.2, "max_tokens": 1000}
+        >>> sanitize_openai_params("gpt-5-mini", params)
+        {"max_tokens": 1000}  # temperature removed for GPT-5
+        
+        >>> sanitize_openai_params("gpt-4o", params)
+        {"temperature": 0.2, "max_tokens": 1000}  # unchanged for GPT-4o
+    """
+    sanitized = params.copy()
+    
+    # GPT-5 family models have strict parameter constraints
+    if model.startswith("gpt-5"):
+        # Temperature constraint: only default (1) is supported
+        # Remove temperature if it's not the default to avoid 400 errors
+        if "temperature" in sanitized:
+            temp_value = sanitized["temperature"]
+            # Only allow explicit temperature if it's exactly 1 (the default)
+            # For any other value, omit it and let API use its default
+            if temp_value != 1:
+                logger.debug(
+                    f"Removing temperature={temp_value} for {model} "
+                    f"(GPT-5 only supports default temperature=1)"
+                )
+                del sanitized["temperature"]
+    
+    return sanitized
 
 
 async def get_client() -> AsyncOpenAI:
@@ -190,8 +236,13 @@ async def get_structured_completion(
     - By default, no token limit is imposed (max_tokens=None)
     - This allows the model to use its natural output limit
     - For gpt-5 family: uses 'max_completion_tokens' parameter
-    - For gpt-4o and earlier: uses 'max_tokens' parameter
+    - For legacy models: uses 'max_tokens' parameter (backward compatibility)
     - Token parameter is dynamically selected based on model
+    
+    Temperature Parameter Behavior:
+    - GPT-5 models only support temperature=1 (default)
+    - For GPT-5: temperature values other than 1 are automatically filtered out
+    - For non-GPT-5: temperature parameter is passed as-is (backward compatibility)
     
     Default Model:
     - Default model is gpt-5-mini (optimized for cost/performance)
@@ -206,9 +257,11 @@ async def get_structured_completion(
     Args:
         prompt: The prompt text to send to the LLM
         model_name: OpenAI model name (default: "gpt-5-mini")
-                   Examples: "gpt-5", "gpt-5-mini", "gpt-4o", "gpt-4o-mini"
+                   Recommended: "gpt-5", "gpt-5-mini", "gpt-5-nano"
         schema_model: Pydantic BaseModel class defining the expected output structure
-        temperature: Sampling temperature (0.0 = deterministic, 1.0 = creative)
+        temperature: Sampling temperature (0.0 = deterministic, 1.0 = creative).
+                    Note: GPT-5 models only support temperature=1, other values
+                    are automatically filtered out to prevent 400 errors.
         max_tokens: Maximum tokens in the response. If None (default), no explicit
                    limit is set, allowing model to use its natural output capacity.
                    Set this only if you need to restrict output length.
@@ -308,6 +361,10 @@ async def get_structured_completion(
             
             # Add token limit parameter if specified
             api_kwargs.update(token_kwargs)
+            
+            # Sanitize parameters for model-specific constraints
+            # (e.g., GPT-5 models don't support temperature != 1)
+            api_kwargs = sanitize_openai_params(model_name, api_kwargs)
             
             response = await client.chat.completions.create(**api_kwargs)
             

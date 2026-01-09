@@ -853,15 +853,10 @@ def define_chatGPTModel(unique_key: str | int,
 
     # === Models supporting structured output ===
     model_options = [
-        # GPT-5 family
+        # GPT-5 family only (standardized)
         "gpt-5",
         "gpt-5-mini",
         "gpt-5-nano",
-        # Optional keepers from 4.x that also support structured outputs
-        "gpt-4.1",
-        "gpt-4.1-mini",
-        "gpt-4o",
-        "gpt-4o-mini",
     ]
     if default_option not in model_options:
         default_option = "gpt-5"
@@ -872,11 +867,6 @@ def define_chatGPTModel(unique_key: str | int,
         "gpt-5": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
         "gpt-5-mini": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
         "gpt-5-nano": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
-        # Common baselines for 4.x
-        "gpt-4.1": {"context_window": 1_000_000, "max_input": None, "max_output": None},
-        "gpt-4.1-mini": {"context_window": 1_000_000, "max_input": None, "max_output": None},
-        "gpt-4o": {"context_window": 128_000, "max_input": None, "max_output": None},
-        "gpt-4o-mini": {"context_window": 128_000, "max_input": None, "max_output": None},
     }
 
     # === Standard pricing (per 1M tokens) ===
@@ -885,10 +875,6 @@ def define_chatGPTModel(unique_key: str | int,
         "gpt-5": {"input": 1.25, "cached": 0.125, "output": 10.00, "unit": "1M tokens"},
         "gpt-5-mini": {"input": 0.25, "cached": 0.025, "output": 2.00, "unit": "1M tokens"},
         "gpt-5-nano": {"input": 0.05, "cached": 0.005, "output": 0.40, "unit": "1M tokens"},
-        "gpt-4.1": {"input": 2.00, "cached": 0.50, "output": 8.00, "unit": "1M tokens"},
-        "gpt-4.1-mini": {"input": 0.40, "cached": 0.10, "output": 1.60, "unit": "1M tokens"},
-        "gpt-4o": {"input": 2.50, "cached": None, "output": 10.00, "unit": "1M tokens"},
-        "gpt-4o-mini": {"input": 0.60, "cached": 0.30, "output": 2.40, "unit": "1M tokens"},
     }
 
     # === Priority pricing (per 1M tokens) ===
@@ -896,10 +882,6 @@ def define_chatGPTModel(unique_key: str | int,
     priority_prices = {
         "gpt-5": {"input": 2.50, "cached": 0.250, "output": 20.00, "unit": "1M tokens"},
         "gpt-5-mini": {"input": 0.45, "cached": 0.045, "output": 3.60, "unit": "1M tokens"},
-        "gpt-4.1": {"input": 3.50, "cached": 0.875, "output": 14.00, "unit": "1M tokens"},
-        "gpt-4.1-mini": {"input": 0.70, "cached": 0.175, "output": 2.80, "unit": "1M tokens"},
-        "gpt-4o": {"input": 4.25, "cached": 2.125, "output": 17.00, "unit": "1M tokens"},
-        "gpt-4o-mini": {"input": 0.25, "cached": 0.125, "output": 1.00, "unit": "1M tokens"},
     }
 
     # === Flex pricing (per 1M tokens) — updated from your screenshot ===

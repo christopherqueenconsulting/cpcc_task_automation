@@ -1029,7 +1029,7 @@ async def get_rubric_based_exam_grading():
     
     # Step 7: Model Configuration
     model_cfg = define_chatGPTModel("rubric_grade_exam", default_temp_value=0.2)
-    selected_model = model_cfg.get("model", "gpt-4o")
+    selected_model = model_cfg.get("model", "gpt-5-mini")
     selected_temperature = float(model_cfg.get("temperature", 0.2))
     
     # Step 8: Student Submissions

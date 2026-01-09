@@ -178,10 +178,17 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 
 #### LangChain Integration (`utilities/AI/llm/`)
 
-**llms.py** - LLM Configuration
+**llms.py** - LLM Configuration (Deprecated - LangChain)
 - `get_default_llm()` - Returns configured ChatOpenAI instance
-- `get_default_retry_model()` - Returns model for retry attempts
-- Model selection: `gpt-4o` (primary), `gpt-4o-mini` (retry)
+- **Note**: Deprecated in favor of `openai_client.py`
+- Model: `gpt-5-mini` (when still used)
+
+**openai_client.py** - Modern OpenAI Client (Primary)
+- `get_structured_completion()` - Async structured output with native validation
+- `sanitize_openai_params()` - Filter unsupported parameters for GPT-5
+- Default model: `gpt-5-mini`
+- Temperature constraint: GPT-5 only supports temperature=1
+- Automatic parameter filtering prevents 400 errors
 
 **prompts.py** - Prompt Templates (~490 LOC)
 - Feedback generation prompts
@@ -189,11 +196,11 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 - Grading rubric prompts
 - Structured with placeholders: `{exam_instructions}`, `{student_code}`, etc.
 
-**chains.py** - Chain Construction (~490 LOC)
+**chains.py** - Chain Construction (Deprecated - LangChain)
 - `get_feedback_completion_chain()` - Create feedback chain
 - `generate_error_definitions()` - Generate error taxonomy
 - `retry_output()` - Retry failed parsing with different model
-- Combines: Prompt → LLM → Parser → Retry Logic
+- **Note**: Deprecated in favor of `openai_client.py` with built-in retries
 
 **Custom Parsers** (`my_pydantic_parser.py`)
 - `CustomPydanticOutputParser` - Enhanced Pydantic parser
@@ -201,12 +208,13 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 - Generates detailed format instructions
 - Better error messages with line numbers
 
-**Retry Strategy**:
-1. Initial attempt with primary model (gpt-4o)
-2. If parsing fails → retry with `RetryWithErrorOutputParser`
-3. Retry uses secondary model (gpt-4o-mini)
-4. Max retries: `RETRY_PARSER_MAX_RETRY` (default: 3)
-5. If still fails → log error, return partial result or error message
+**Retry Strategy (New Implementation)**:
+1. Initial attempt with configured model (default: gpt-5-mini)
+2. Automatic retry on transient errors (timeouts, 5xx, rate limits)
+3. Exponential backoff with configurable delay
+4. Max retries: `DEFAULT_MAX_RETRIES` (default: 3)
+5. Schema validation uses OpenAI's native JSON Schema enforcement
+6. Temperature automatically filtered for GPT-5 to prevent 400 errors
 
 ### 5. Utility Layer
 
@@ -305,16 +313,17 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
    3b. Parse content (Word/text/code)
    3c. Build context (instructions + rubric + code)
        ↓
-   3d. Create LangChain chain:
-       Prompt Template → ChatOpenAI → PydanticParser
+   3d. Call OpenAI structured completion:
+       get_structured_completion(prompt, schema_model, model="gpt-5-mini")
+       → Native JSON Schema validation
+       → Automatic parameter sanitization (temperature filtering for GPT-5)
        ↓
-   3e. Invoke chain with context
+   3e. Invoke API with sanitized params
        ↓
-   3f. If parsing succeeds:
-           → structured feedback (Pydantic model)
-       If parsing fails:
-           → retry with RetryOutputParser
-           → use gpt-4o-mini model
+   3f. If API succeeds:
+           → structured feedback (validated Pydantic model)
+       If transient error (timeout, 5xx, rate limit):
+           → automatic retry with exponential backoff (same model)
            → max 3 retries
        ↓
    3g. Generate Word document with feedback
