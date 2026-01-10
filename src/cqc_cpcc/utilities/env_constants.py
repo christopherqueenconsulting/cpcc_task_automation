@@ -47,3 +47,8 @@ BRIGHTSPACE_HOMEPAGE_TITLE = 'Homepage - Central Piedmont'
 
 # Test mode flag (for e2e testing with deterministic responses)
 TEST_MODE = get_constanct_from_env('CQC_TEST_MODE', default_value='false').lower() == 'true'
+
+# OpenAI Debug Mode Configuration
+CQC_OPENAI_DEBUG = isTrue(get_constanct_from_env('CQC_OPENAI_DEBUG', default_value='False'))
+CQC_OPENAI_DEBUG_REDACT = isTrue(get_constanct_from_env('CQC_OPENAI_DEBUG_REDACT', default_value='True'))
+CQC_OPENAI_DEBUG_SAVE_DIR = get_constanct_from_env('CQC_OPENAI_DEBUG_SAVE_DIR', default_value=None)

@@ -17,17 +17,20 @@ class OpenAITransportError(Exception):
         message: Human-readable error description
         status_code: HTTP status code if available
         retry_after: Seconds to wait before retry (for rate limits)
+        correlation_id: Optional correlation ID for debug tracking
     """
     
     def __init__(
         self,
         message: str,
         status_code: int | None = None,
-        retry_after: int | None = None
+        retry_after: int | None = None,
+        correlation_id: str | None = None
     ):
         self.message = message
         self.status_code = status_code
         self.retry_after = retry_after
+        self.correlation_id = correlation_id
         super().__init__(self.message)
     
     def __str__(self) -> str:
@@ -36,6 +39,8 @@ class OpenAITransportError(Exception):
             parts.append(f"(status: {self.status_code})")
         if self.retry_after:
             parts.append(f"(retry after: {self.retry_after}s)")
+        if self.correlation_id:
+            parts.append(f"(correlation_id: {self.correlation_id})")
         return " ".join(parts)
 
 
@@ -50,6 +55,8 @@ class OpenAISchemaValidationError(Exception):
         schema_name: Name of the Pydantic model that failed validation
         validation_errors: List of validation error details from Pydantic
         raw_output: The raw JSON string that failed validation
+        correlation_id: Optional correlation ID for debug tracking
+        decision_notes: Optional notes about why parsing failed
     """
     
     def __init__(
@@ -57,12 +64,16 @@ class OpenAISchemaValidationError(Exception):
         message: str, 
         schema_name: str | None = None, 
         validation_errors: list | None = None,
-        raw_output: str | None = None
+        raw_output: str | None = None,
+        correlation_id: str | None = None,
+        decision_notes: str | None = None
     ):
         self.message = message
         self.schema_name = schema_name
         self.validation_errors = validation_errors or []
         self.raw_output = raw_output
+        self.correlation_id = correlation_id
+        self.decision_notes = decision_notes
         super().__init__(self.message)
     
     def __str__(self) -> str:
@@ -71,4 +82,8 @@ class OpenAISchemaValidationError(Exception):
             parts.append(f"(schema: {self.schema_name})")
         if self.validation_errors:
             parts.append(f"({len(self.validation_errors)} validation errors)")
+        if self.correlation_id:
+            parts.append(f"(correlation_id: {self.correlation_id})")
+        if self.decision_notes:
+            parts.append(f"(notes: {self.decision_notes})")
         return " ".join(parts)

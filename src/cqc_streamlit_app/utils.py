@@ -1278,3 +1278,174 @@ class ChatGPTStatusCallbackHandler(BaseCallbackHandler):
     @with_streamlit_context
     def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
         self._status_container.update(label=self._prefix_label + "ChatGPT Error: " + str(error))
+
+
+def render_openai_debug_panel(
+    correlation_id: str | None = None,
+    error: Exception | None = None,
+) -> None:
+    """Render OpenAI debug panel in Streamlit UI when debug mode is enabled.
+    
+    Shows request/response details, correlation ID, and decision notes for
+    troubleshooting OpenAI API calls.
+    
+    Args:
+        correlation_id: Correlation ID for the request (if available)
+        error: Exception that occurred (if any)
+    """
+    from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
+    from cqc_cpcc.utilities.AI.openai_debug import get_debug_context
+    from cqc_cpcc.utilities.AI.openai_exceptions import (
+        OpenAISchemaValidationError,
+        OpenAITransportError,
+    )
+    import json
+    
+    # Only show debug panel if debug mode is enabled
+    if not CQC_OPENAI_DEBUG:
+        return
+    
+    # Create collapsible debug panel
+    with st.expander("🔍 OpenAI Debug Information", expanded=False):
+        st.markdown("**Debug Mode Enabled** - This panel shows OpenAI request/response details.")
+        
+        # Show correlation ID
+        if correlation_id:
+            st.code(f"Correlation ID: {correlation_id}", language="text")
+        else:
+            st.warning("No correlation ID available (debug mode may have been off during request)")
+        
+        # Show error details if present
+        if error:
+            st.error("**Error Occurred:**")
+            
+            if isinstance(error, OpenAISchemaValidationError):
+                st.markdown(f"**Type:** Schema Validation Error")
+                st.markdown(f"**Schema:** {error.schema_name}")
+                if error.decision_notes:
+                    st.markdown(f"**Decision Notes:** {error.decision_notes}")
+                if error.validation_errors:
+                    st.markdown(f"**Validation Errors:** {len(error.validation_errors)}")
+                    with st.expander("Show Validation Errors"):
+                        st.json(error.validation_errors)
+                if error.raw_output:
+                    with st.expander("Show Raw Output"):
+                        st.code(error.raw_output[:1000], language="json")  # Truncate to 1000 chars
+            
+            elif isinstance(error, OpenAITransportError):
+                st.markdown(f"**Type:** Transport Error")
+                if error.status_code:
+                    st.markdown(f"**Status Code:** {error.status_code}")
+                if error.retry_after:
+                    st.markdown(f"**Retry After:** {error.retry_after}s")
+            
+            else:
+                st.markdown(f"**Type:** {type(error).__name__}")
+                st.markdown(f"**Message:** {str(error)}")
+        
+        # Load and show debug context from files
+        if correlation_id:
+            debug_context = get_debug_context(correlation_id)
+            
+            if debug_context:
+                # Show request details
+                if "request" in debug_context:
+                    with st.expander("📤 Request Details"):
+                        req = debug_context["request"]
+                        st.markdown(f"**Model:** {req.get('model')}")
+                        st.markdown(f"**Schema:** {req.get('schema_name')}")
+                        st.markdown(f"**Timestamp:** {req.get('timestamp')}")
+                        
+                        # Show messages (prompts)
+                        if "request" in req and "messages" in req["request"]:
+                            st.markdown("**Messages:**")
+                            for msg in req["request"]["messages"]:
+                                role = msg.get("role", "unknown")
+                                content = msg.get("content", "")
+                                st.text_area(
+                                    f"Message ({role})",
+                                    content[:500],  # Truncate to 500 chars
+                                    height=150,
+                                    key=f"msg_{role}_{correlation_id}"
+                                )
+                        
+                        # Download request JSON
+                        request_json = json.dumps(req, indent=2)
+                        st.download_button(
+                            label="📥 Download Request JSON",
+                            data=request_json,
+                            file_name=f"request_{correlation_id}.json",
+                            mime="application/json",
+                            key=f"download_request_{correlation_id}"
+                        )
+                
+                # Show response details
+                if "response" in debug_context:
+                    with st.expander("📥 Response Details"):
+                        resp = debug_context["response"]
+                        st.markdown(f"**Schema:** {resp.get('schema_name')}")
+                        st.markdown(f"**Decision Notes:** {resp.get('decision_notes')}")
+                        st.markdown(f"**Timestamp:** {resp.get('timestamp')}")
+                        
+                        # Show metadata
+                        if "response_metadata" in resp:
+                            meta = resp["response_metadata"]
+                            st.markdown("**Response Metadata:**")
+                            st.json(meta)
+                        
+                        # Show usage
+                        if "usage" in resp:
+                            usage = resp["usage"]
+                            st.markdown("**Token Usage:**")
+                            st.json(usage)
+                        
+                        # Show refusal if present
+                        if "refusal" in resp:
+                            st.error(f"**Refusal:** {resp['refusal']}")
+                        
+                        # Show output
+                        if "output" in resp:
+                            output = resp["output"]
+                            st.markdown("**Output:**")
+                            st.markdown(f"- Parsed: {output.get('parsed_present')}")
+                            st.markdown(f"- Type: {output.get('parsed_type')}")
+                            if output.get("text"):
+                                st.text_area(
+                                    "Output Text (truncated)",
+                                    output["text"],
+                                    height=150,
+                                    key=f"output_{correlation_id}"
+                                )
+                        
+                        # Show error if present
+                        if "error" in resp:
+                            err = resp["error"]
+                            st.error(f"**Error:** {err.get('type')} - {err.get('message')}")
+                        
+                        # Download response JSON
+                        response_json = json.dumps(resp, indent=2)
+                        st.download_button(
+                            label="📥 Download Response JSON",
+                            data=response_json,
+                            file_name=f"response_{correlation_id}.json",
+                            mime="application/json",
+                            key=f"download_response_{correlation_id}"
+                        )
+                
+                # Show notes
+                if "notes" in debug_context:
+                    with st.expander("📝 Decision Notes"):
+                        notes = debug_context["notes"]
+                        st.json(notes)
+            
+            else:
+                st.info("No debug files found. Set `CQC_OPENAI_DEBUG_SAVE_DIR` environment variable to save debug files.")
+        
+        # Add instructions
+        st.markdown("---")
+        st.markdown("""
+        **Debug Mode Configuration:**
+        - `CQC_OPENAI_DEBUG=1` - Enable debug mode
+        - `CQC_OPENAI_DEBUG_REDACT=1` - Redact sensitive data (default: enabled)
+        - `CQC_OPENAI_DEBUG_SAVE_DIR=/path/to/dir` - Save debug files to directory
+        """)
