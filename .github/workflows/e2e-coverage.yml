@@ -14,7 +14,6 @@ env:
 
 jobs:
   e2e-tests:
-    name: E2E Test w/ Coverage
     runs-on: ubuntu-latest
     
     steps:
