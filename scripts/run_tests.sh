@@ -23,7 +23,7 @@ case $method in
         ;;
     unit)
         # Run unit tests
-        poetry run pytest --cov=src --cov-report=term-missing --cov-report=xml -m unit --ignore=tests/e2e
+        poetry run pytest --cov=src --cov-report=term-missing --cov-report=xml -m unit --ignore=tests/e2e --durations=25
         ;;
     integration)
         # Run integration tests

@@ -224,6 +224,9 @@ class TestGetStructuredCompletionValidation:
     
     async def test_schema_validation_failure_with_repair_succeeds(self, mocker):
         """Should retry once with allow_repair=True and succeed."""
+        # Mock asyncio.sleep to speed up the test
+        mocker.patch('asyncio.sleep', return_value=None)
+        
         mock_client = AsyncMock()
         
         # First call returns invalid JSON
@@ -255,6 +258,9 @@ class TestGetStructuredCompletionValidation:
     
     async def test_schema_validation_failure_with_repair_exhausted(self, mocker):
         """Should raise error after repair attempt fails."""
+        # Mock asyncio.sleep to speed up the test
+        mocker.patch('asyncio.sleep', return_value=None)
+        
         mock_client = AsyncMock()
         
         # Both calls return invalid JSON
