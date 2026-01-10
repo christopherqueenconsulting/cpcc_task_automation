@@ -398,7 +398,8 @@ async def get_structured_completion(
             # Check for refusal first
             if hasattr(response, 'choices') and response.choices:
                 message = response.choices[0].message
-                if hasattr(message, 'refusal') and message.refusal:
+                # Check if refusal is present and is a non-empty string
+                if hasattr(message, 'refusal') and isinstance(message.refusal, str) and message.refusal:
                     decision_notes = f"refusal returned: {message.refusal}"
                     if correlation_id:
                         record_response(
