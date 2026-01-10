@@ -10,30 +10,28 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-#python = ">=3.9,<3.9.7 || >3.9.7,<4.0"
 python = ">=3.12,<4.0"
-os-env = "^0.3"
+os-env = "^0"
 selenium = "^4"
 webdriver-manager = "^4"
-#google-drive = "^0.5.1"
 typing-extensions = "^4"
 bs4 = "^0"
 pandas = "^2"
 datetime = "^5"
 dateparser = "^1"
-langchain-core = "^1.2.5"
+langchain-core = "^1"
 langchain-community = "^0"
 langchain-openai = "^1"
 openai = "^2"
 ordered-set = "^4"
 chromadb = "^1"
-protobuf = "^6.33"
+protobuf = "^6"
 python-docx = "^1"
 #simplify_docx= { git = "https://github.com/gitchrisqueen/Simplify-Docx.git"}
 chromedriver-autoinstaller = "^0"
 pyvirtualdisplay = "^3"
 streamlit = "^1"
-textract = "*"
+textract = "^1"
 mammoth = "^1"
 markdownify = "^1"
 streamlit-ext = "^0"
@@ -42,24 +40,24 @@ watchdog = "^6"
 pexels-api = "^1"
 chromium = "^0"
 extra-streamlit-components = "^0"
-six = "^1.16"
-openpyxl = "^3.1.5"
-tabulate = "^0.9.0"
+six = "^1"
+openpyxl = "^3"
+tabulate = "^0"
 
 
 [tool.poetry.group.lint]
 optional = true
 
 [tool.poetry.group.lint.dependencies]
-ruff = "^0.14.11"
+ruff = "^0"
 
 [tool.poetry.group.dev]
 optional = true
 
 [tool.poetry.group.dev.dependencies]
-jupyter = "^1.0.0"
-setuptools = "^80.9.0"
-grandalf = "^0.8"
+jupyter = "^1"
+setuptools = "^80"
+grandalf = "^0"
 
 
 [tool.poetry.group.test]
@@ -69,15 +67,15 @@ optional = true
 # The only dependencies that should be added are
 # dependencies used for running tests (e.g., pytest, freezegun, response).
 # Any dependencies that do not meet that criteria will be removed.
-pytest = "^7.3.0"
-pytest-cov = "^7.0.0"
-freezegun = "^1.2.2"
-pytest-mock = "^3.10.0"
-syrupy = "^4.0.2"
-pytest-watcher = "^0.6.2"
-pytest-asyncio = "^0.23.8"
-grandalf = "^0.8"
-pytest-profiling = "^1.7.0"
+pytest = "^7"
+pytest-cov = "^7"
+freezegun = "^1"
+pytest-mock = "^3"
+syrupy = "^4"
+pytest-watcher = "^0"
+pytest-asyncio = "^0"
+grandalf = "^0"
+pytest-profiling = "^1"
 
 
 [tool.poetry.group.test_integration]
