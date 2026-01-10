@@ -85,7 +85,16 @@ def test_get_all_error_definitions_from_registry():
     assert len(all_errors) > 0
     
     # Check that we have errors from multiple assignments
-    assignment_ids = set(error.error_id.split('_')[2] for error in all_errors if '_' in error.error_id and len(error.error_id.split('_')) > 2)
+    # Extract assignment IDs from error_id format (e.g., CSC_151_EXAM_1_ERROR -> EXAM)
+    def get_assignment_id_from_error_id(error_id: str) -> str:
+        """Extract assignment ID from error_id string."""
+        parts = error_id.split('_')
+        if len(parts) > 2:
+            return parts[2]
+        return ""
+    
+    assignment_ids = {get_assignment_id_from_error_id(error.error_id) for error in all_errors if '_' in error.error_id}
+    assignment_ids.discard("")  # Remove empty strings
     assert len(assignment_ids) > 0
 
 
