@@ -42,7 +42,9 @@ jobs:
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
-        if: always()
+        # Skip Codecov upload for Dependabot PRs to reduce unnecessary uploads
+        # Still run if tests pass/fail (always()), but not for dependabot PRs
+        if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
         with:
           # Name for this upload
           name: unit-coverage
