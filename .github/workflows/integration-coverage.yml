@@ -1,4 +1,4 @@
-name: CI / Unit Tests
+name: CI / Integration Test w/ Coverage
 
 on:
   pull_request:
@@ -13,7 +13,8 @@ env:
   POETRY_VERSION: "1.7.1"
 
 jobs:
-  unit-tests:
+  integration-tests:
+    name: Integration Test w/ Coverage
     runs-on: ubuntu-latest
     
     steps:
@@ -26,39 +27,41 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           poetry-version: ${{ env.POETRY_VERSION }}
           working-directory: "."
-          cache-key: unit-tests
+          cache-key: integration-tests
 
       - name: Install dependencies
         shell: bash
         run: |
-          echo "Installing dependencies for unit tests..."
+          echo "Installing dependencies for integration tests..."
           poetry install --with test --no-interaction --no-ansi
 
-      - name: Run unit tests
+      - name: Run integration tests with coverage
         shell: bash
+        env:
+          # Set test API key for integration tests (not actually called)
+          OPENAI_API_KEY: "test-key-not-used"
         run: |
-          echo "Running unit tests with pytest..."
-          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml
+          echo "Running integration tests with coverage..."
+          poetry run pytest -m integration --cov=src --cov-branch --cov-report=xml:coverage-integration.xml --cov-report=term-missing
 
-      - name: Upload coverage reports to Codecov
+      - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@v5
-        # Skip Codecov upload for Dependabot PRs to reduce unnecessary uploads
-        # Still run if tests pass/fail (always()), but not for dependabot PRs
+        # Skip for Dependabot PRs
         if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
         with:
           # Name for this upload
-          name: unit-coverage
+          name: integration-coverage
           
           # Codecov token for authentication
           token: ${{ secrets.CODECOV_TOKEN }}
           
-          # Coverage file(s) to upload
-          files: ./coverage.xml
+          # Coverage file to upload
+          files: ./coverage-integration.xml
           
-          # Flags to categorize this upload
-          flags: unit
+          # Flag to categorize this upload
+          flags: integration
           
-          # Fail CI if upload fails (ensures patch gate is meaningful)
+          # Fail CI if upload fails
           fail_ci_if_error: true
           
           # Verbose output for debugging
