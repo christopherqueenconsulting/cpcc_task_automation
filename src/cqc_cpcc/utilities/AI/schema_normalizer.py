@@ -7,12 +7,19 @@ to be compatible with OpenAI's Structured Outputs strict mode requirements.
 
 OpenAI Structured Outputs Requirements:
 - All object schemas MUST have "additionalProperties": false
-- This applies to root objects, nested objects, and objects in $defs
+- All object schemas MUST have "required": [<all keys in properties>]
+  - The required array must include EVERY key in properties, even optional fields
+  - This differs from standard JSON Schema where optional fields can be omitted
+- These requirements apply to root objects, nested objects, and objects in $defs
 - Required for strict schema validation (strict: true)
 
-Without proper normalization, OpenAI API will return:
-    400 invalid_request_error: "Invalid schema for response_format '<Model>':
-    In context=(), 'additionalProperties' is required to be supplied and to be false."
+Without proper normalization, OpenAI API will return 400 errors such as:
+    "Invalid schema for response_format '<Model>': In context=(), 
+     'additionalProperties' is required to be supplied and to be false."
+    
+    "Invalid schema for response_format '<Model>': In context=(), 
+     'required' is required to be supplied and to be an array including 
+     every key in properties. Missing '<field_name>'."
 
 Usage:
     from pydantic import BaseModel
@@ -43,16 +50,16 @@ Usage:
     )
 """
 
-from typing import Any
 from copy import deepcopy
+from typing import Any
 
 
 def normalize_json_schema_for_openai(schema: dict[str, Any]) -> dict[str, Any]:
     """Normalize a JSON schema to be compatible with OpenAI Structured Outputs.
     
     This function recursively processes a JSON schema to ensure all object types
-    have "additionalProperties": false set, which is required by OpenAI's
-    strict schema validation mode.
+    have both "additionalProperties": false and "required" with all property keys,
+    which are required by OpenAI's strict schema validation mode.
     
     The function handles:
     - Root object schemas
@@ -61,30 +68,31 @@ def normalize_json_schema_for_openai(schema: dict[str, Any]) -> dict[str, Any]:
     - Objects in "$defs" (Pydantic-generated definitions)
     - Objects in "anyOf", "oneOf", "allOf" combinators
     
+    For each object schema, it:
+    - Sets "additionalProperties": false (if not already set)
+    - Sets "required": [<all keys in properties>] (overwrites existing required)
+    
     Args:
         schema: JSON schema dictionary (typically from Pydantic's model_json_schema())
         
     Returns:
-        Normalized schema with additionalProperties: false on all objects
+        Normalized schema with additionalProperties: false and complete required arrays
+        on all objects
         
     Example:
         >>> schema = {
         ...     "type": "object",
         ...     "properties": {
         ...         "name": {"type": "string"},
-        ...         "address": {
-        ...             "type": "object",
-        ...             "properties": {
-        ...                 "street": {"type": "string"}
-        ...             }
-        ...         }
-        ...     }
+        ...         "age": {"type": "integer"}
+        ...     },
+        ...     "required": ["name"]  # Pydantic only marked name as required
         ... }
         >>> normalized = normalize_json_schema_for_openai(schema)
         >>> normalized["additionalProperties"]
         False
-        >>> normalized["properties"]["address"]["additionalProperties"]
-        False
+        >>> normalized["required"]
+        ['age', 'name']  # Now includes ALL properties (sorted)
     """
     # Make a deep copy to avoid mutating the original schema
     normalized = deepcopy(schema)
@@ -99,7 +107,13 @@ def _normalize_schema_recursive(schema: dict[str, Any]) -> None:
     """Recursively normalize a schema node in-place.
     
     This is the internal recursive function that modifies the schema dict
-    in-place to add additionalProperties: false to all object nodes.
+    in-place to add additionalProperties: false and fix required arrays
+    for all object nodes.
+    
+    OpenAI Strict Mode Requirements:
+    - additionalProperties: false must be set on all objects
+    - required: must be present and include ALL keys in properties
+      (even optional fields that Pydantic marked as not required)
     
     Args:
         schema: Schema node to normalize (modified in-place)
@@ -107,13 +121,25 @@ def _normalize_schema_recursive(schema: dict[str, Any]) -> None:
     if not isinstance(schema, dict):
         return
     
-    # Rule 1: If this node has "type": "object" OR has "properties", set additionalProperties: false
-    # Exception: Skip if additionalProperties is already explicitly set (e.g., for dict fields)
+    # Rule 1: If this node has "type": "object" OR has "properties",
+    # set additionalProperties: false AND fix required array
+    # Exception: Skip additionalProperties if already explicitly set
+    # (e.g., for dict fields)
     is_object = schema.get("type") == "object" or "properties" in schema
     
-    if is_object and "additionalProperties" not in schema:
-        # This is an object schema without additionalProperties - add it
-        schema["additionalProperties"] = False
+    if is_object:
+        # Sub-rule 1a: Add additionalProperties: false if not present
+        if "additionalProperties" not in schema:
+            # This is an object schema without additionalProperties - add it
+            schema["additionalProperties"] = False
+        
+        # Sub-rule 1b: Fix required array to include ALL properties
+        # OpenAI strict mode requires this even for optional fields
+        if "properties" in schema and isinstance(schema["properties"], dict):
+            all_property_keys = sorted(schema["properties"].keys())
+            # Always set required to ALL properties,
+            # regardless of what Pydantic marked
+            schema["required"] = all_property_keys
     
     # Rule 2: Recurse into "properties" (nested object fields)
     if "properties" in schema and isinstance(schema["properties"], dict):
@@ -144,10 +170,13 @@ def _normalize_schema_recursive(schema: dict[str, Any]) -> None:
                 if isinstance(sub_schema, dict):
                     _normalize_schema_recursive(sub_schema)
     
-    # Rule 6: Recurse into "additionalProperties" if it's a schema (for dict fields)
-    # Don't set additionalProperties: false on the dict field itself, but normalize
-    # the value schema if it's an object
-    if "additionalProperties" in schema and isinstance(schema["additionalProperties"], dict):
+    # Rule 6: Recurse into "additionalProperties" if it's a schema
+    # (for dict fields)
+    # Don't set additionalProperties: false on the dict field itself,
+    # but normalize the value schema if it's an object
+    if "additionalProperties" in schema and isinstance(
+        schema["additionalProperties"], dict
+    ):
         _normalize_schema_recursive(schema["additionalProperties"])
     
     # Rule 7: Recurse into "patternProperties" (regex-matched properties)
@@ -165,6 +194,7 @@ def validate_schema_for_openai(schema: dict[str, Any]) -> list[str]:
     
     Validation checks:
     - All objects must have additionalProperties: false
+    - All objects must have required: [<all property keys>]
     - No unsupported JSON Schema features (depends on OpenAI's current support)
     
     Args:
@@ -174,10 +204,15 @@ def validate_schema_for_openai(schema: dict[str, Any]) -> list[str]:
         List of validation error messages. Empty list means schema is valid.
         
     Example:
-        >>> schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        >>> schema = {
+        ...     "type": "object", 
+        ...     "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+        ...     "required": ["name"]
+        ... }
         >>> errors = validate_schema_for_openai(schema)
         >>> errors
-        ['Root object missing additionalProperties: false']
+        ['Root object missing additionalProperties: false', 
+         "Root object required array missing keys: ['age']"]
     """
     errors: list[str] = []
     _validate_schema_recursive(schema, errors, path="root")
@@ -203,7 +238,7 @@ def _validate_schema_recursive(
     is_object = schema.get("type") == "object" or "properties" in schema
     
     if is_object:
-        # Object must have additionalProperties: false
+        # Check 1: Object must have additionalProperties: false
         additional_props = schema.get("additionalProperties")
         
         # Exception: If additionalProperties is a schema (dict field), that's OK
@@ -214,12 +249,48 @@ def _validate_schema_recursive(
                 f"{path}: Object has 'additionalProperties: {additional_props}' "
                 f"instead of false (unless it's a dict field)"
             )
+        
+        # Check 2: Object must have required array with ALL property keys
+        if "properties" in schema and isinstance(schema["properties"], dict):
+            all_props = set(schema["properties"].keys())
+            required = schema.get("required")
+            
+            if required is None:
+                errors.append(
+                    f"{path}: Object missing 'required' array. "
+                    f"Must include all properties: {sorted(all_props)}"
+                )
+            elif not isinstance(required, list):
+                errors.append(
+                    f"{path}: 'required' must be an array, "
+                    f"got {type(required).__name__}"
+                )
+            else:
+                required_set = set(required)
+                missing_keys = all_props - required_set
+                extra_keys = required_set - all_props
+                
+                if missing_keys:
+                    errors.append(
+                        f"{path}: 'required' array missing keys: "
+                        f"{sorted(missing_keys)}. "
+                        f"OpenAI strict mode requires ALL properties "
+                        f"to be in required."
+                    )
+                
+                if extra_keys:
+                    errors.append(
+                        f"{path}: 'required' array has keys not in "
+                        f"properties: {sorted(extra_keys)}"
+                    )
     
     # Recurse into nested schemas
     if "properties" in schema and isinstance(schema["properties"], dict):
         for prop_name, prop_schema in schema["properties"].items():
             if isinstance(prop_schema, dict):
-                _validate_schema_recursive(prop_schema, errors, f"{path}.properties.{prop_name}")
+                _validate_schema_recursive(
+                    prop_schema, errors, f"{path}.properties.{prop_name}"
+                )
     
     if "items" in schema and isinstance(schema["items"], dict):
         _validate_schema_recursive(schema["items"], errors, f"{path}.items")
@@ -227,15 +298,21 @@ def _validate_schema_recursive(
     if "$defs" in schema and isinstance(schema["$defs"], dict):
         for def_name, def_schema in schema["$defs"].items():
             if isinstance(def_schema, dict):
-                _validate_schema_recursive(def_schema, errors, f"{path}.$defs.{def_name}")
+                _validate_schema_recursive(
+                    def_schema, errors, f"{path}.$defs.{def_name}"
+                )
     
     for combinator in ["anyOf", "oneOf", "allOf"]:
         if combinator in schema and isinstance(schema[combinator], list):
             for i, sub_schema in enumerate(schema[combinator]):
                 if isinstance(sub_schema, dict):
-                    _validate_schema_recursive(sub_schema, errors, f"{path}.{combinator}[{i}]")
+                    _validate_schema_recursive(
+                        sub_schema, errors, f"{path}.{combinator}[{i}]"
+                    )
     
-    if "additionalProperties" in schema and isinstance(schema["additionalProperties"], dict):
+    if "additionalProperties" in schema and isinstance(
+        schema["additionalProperties"], dict
+    ):
         _validate_schema_recursive(
             schema["additionalProperties"], errors, f"{path}.additionalProperties"
         )
