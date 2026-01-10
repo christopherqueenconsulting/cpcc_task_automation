@@ -2,27 +2,120 @@
 
 **Applies to:** `src/cqc_cpcc/utilities/AI/**/*.py`
 
+## ⚠️ CRITICAL: OpenAI Structured Outputs
+
+**ALL OpenAI usage in this repository MUST follow:**
+- **Canonical Guide**: `docs/openai-structured-outputs-guide.md`
+- **Enforcement Rules**: `.github/instructions/openai.instructions.md`
+
+**Violating these rules causes OpenAI 400 errors and is NOT acceptable.**
+
+**Key Requirements:**
+- ✅ Use GPT-5 models ONLY (gpt-5, gpt-5-mini, gpt-5-nano)
+- ✅ Use `get_structured_completion()` from `openai_client.py`
+- ✅ Normalize ALL schemas with `normalize_json_schema_for_openai()`
+- ❌ NO ChatCompletions API without structured outputs
+- ❌ NO legacy models (gpt-4o, gpt-4, gpt-3.5-turbo)
+- ❌ NO manual JSON string parsing
+
+---
+
 ## Module Organization
 
-### llms.py
+### openai_client.py (PRIMARY - Use for new code)
+- Production-grade OpenAI async client wrapper
+- Strict JSON Schema validation using Pydantic models
+- Default model: `gpt-5-mini` (GPT-5 family only)
+- Bounded retry logic for transient errors
+- **THIS IS THE REQUIRED PATTERN FOR ALL NEW OPENAI CODE**
+
+### schema_normalizer.py (REQUIRED for OpenAI)
+- Normalizes JSON schemas for OpenAI Structured Outputs
+- Adds `additionalProperties: false` to all objects
+- Ensures `required` array includes all properties
+- **MUST be used before ALL OpenAI API calls**
+
+### llms.py (LEGACY - existing code only)
 - LLM configuration and instantiation
 - Default models: `gpt-4o` (main), `gpt-4o-mini` (retry)
-- Temperature, callback handlers, streaming settings
+- **NOTE**: Being migrated away from - prefer openai_client.py
 
-### prompts.py
+### prompts.py (LEGACY - existing code only)
 - Prompt templates for various tasks (~490 LOC)
-- Feedback generation prompts
-- Error definition prompts
-- Grading rubric prompts
+- Being replaced by direct prompt string building
 
-### chains.py
+### chains.py (LEGACY - existing code only)
 - LangChain chain construction (~490 LOC)
-- Combines LLMs + prompts + parsers
-- Retry logic for failed parsing
+- **NOTE**: Being migrated away from - prefer openai_client.py
 
-## LangChain Patterns
+---
 
-### Creating Chains
+## OpenAI Structured Outputs Pattern (REQUIRED for new code)
+
+### Basic Usage
+```python
+from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
+from cqc_cpcc.utilities.AI.openai_exceptions import (
+    OpenAISchemaValidationError,
+    OpenAITransportError
+)
+from pydantic import BaseModel, Field
+
+class MyResponse(BaseModel):
+    summary: str = Field(description="Brief summary")
+    score: int = Field(description="Score 0-100", ge=0, le=100)
+
+try:
+    result = await get_structured_completion(
+        prompt="Analyze this code: print('hello')",
+        model_name="gpt-5-mini",  # Default, can omit
+        schema_model=MyResponse,
+        max_tokens=2000  # Optional
+    )
+    print(result.summary)  # Typed Pydantic model access
+    
+except OpenAISchemaValidationError as e:
+    logger.error(f"Schema validation failed: {e}")
+    # Handle gracefully - don't retry
+    
+except OpenAITransportError as e:
+    logger.error(f"API error: {e}")
+    # Handle gracefully - maybe retry later
+```
+
+### Schema Normalization (REQUIRED)
+```python
+from pydantic import BaseModel
+from cqc_cpcc.utilities.AI.schema_normalizer import (
+    normalize_json_schema_for_openai,
+    validate_schema_for_openai
+)
+
+class MyModel(BaseModel):
+    name: str
+    data: dict[str, str]
+
+# Generate schema
+raw_schema = MyModel.model_json_schema()
+
+# REQUIRED: Normalize before using with OpenAI
+normalized = normalize_json_schema_for_openai(raw_schema)
+
+# Optional: Validate schema is correct
+errors = validate_schema_for_openai(normalized)
+assert len(errors) == 0, f"Schema errors: {errors}"
+```
+
+**Note**: The `get_structured_completion()` wrapper handles normalization automatically,
+but if you're building schemas manually, you MUST normalize them.
+
+---
+
+## LangChain Patterns (LEGACY - existing code only)
+
+**⚠️ WARNING: These patterns are DEPRECATED. Use OpenAI Structured Outputs instead.**
+
+### Creating Chains (LEGACY)
 ```python
 from langchain_core.prompts import PromptTemplate
 from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
@@ -38,7 +131,7 @@ chain = prompt | llm | parser
 result = chain.invoke({"variables": "values"})
 ```
 
-### Retry Logic
+### Retry Logic (LEGACY)
 - **Always use `RetryWithErrorOutputParser`** for LLM outputs
 - Default max retries: `RETRY_PARSER_MAX_RETRY` (from env)
 - Retry with a different model (usually `gpt-4o-mini`)
@@ -57,7 +150,7 @@ except OutputParserException as e:
     logger.error(f"Failed after retries: {e}")
 ```
 
-### Output Parsing
+### Output Parsing (LEGACY)
 - Use **Pydantic models** for structured output
 - Import `CustomPydanticOutputParser` from `my_pydantic_parser`
 - Parser generates format instructions automatically

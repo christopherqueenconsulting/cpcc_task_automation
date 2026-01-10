@@ -19,7 +19,9 @@
 ### Core Technologies
 - **Python**: 3.12+ (managed via Poetry)
 - **Web Scraping**: Selenium 4.x, webdriver-manager, chromedriver-autoinstaller
-- **AI/ML**: LangChain, LangChain-OpenAI, OpenAI API (GPT models)
+- **AI/ML**: OpenAI Structured Outputs (GPT-5 family), LangChain (legacy code only)
+  - **⚠️ REQUIRED**: Follow `docs/openai-structured-outputs-guide.md` for ALL OpenAI usage
+  - **⚠️ REQUIRED**: See `.github/instructions/openai.instructions.md` for enforcement rules
 - **UI Framework**: Streamlit 1.x (multi-page app)
 - **Testing**: pytest, pytest-mock, pytest-asyncio, freezegun
 
@@ -259,11 +261,14 @@ Required for automation features (set in `.streamlit/secrets.toml` or environmen
 - Attendance is recorded per course section with specific date ranges
 
 ### AI Feedback Generation
-- Uses **LangChain** chains with **OpenAI GPT models** (gpt-4o, gpt-4o-mini)
-- Custom **Pydantic parsers** for structured output
-- **Retry logic** with `RetryWithErrorOutputParser` for malformed responses
+- Uses **OpenAI Structured Outputs** with **GPT-5 models** (gpt-5, gpt-5-mini)
+- **⚠️ CRITICAL**: All OpenAI usage MUST follow `docs/openai-structured-outputs-guide.md`
+- **Required**: Use `get_structured_completion()` from `openai_client.py`
+- **Required**: Normalize schemas with `normalize_json_schema_for_openai()`
+- **Pydantic models** for structured output validation
 - Feedback types defined in enums (`FeedbackType`, `JavaFeedbackType`)
 - Context includes: exam instructions, solution, student submission
+- **See**: `.github/instructions/openai.instructions.md` for complete rules
 
 ### Date Handling
 - Courses have **term dates** (start/end), **drop dates** (first/final)
@@ -286,7 +291,25 @@ click_element_wait_retry(driver, wait, element)  # Retry on failure
 driver.quit()
 ```
 
-### LangChain Pattern
+### OpenAI Structured Output Pattern (REQUIRED for new code)
+```python
+from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
+from pydantic import BaseModel, Field
+
+class MyModel(BaseModel):
+    summary: str = Field(description="Brief summary")
+    score: int = Field(description="Score 0-100")
+
+# Make async call with structured output
+result = await get_structured_completion(
+    prompt="Analyze this submission...",
+    model_name="gpt-5-mini",  # Default, can omit
+    schema_model=MyModel,
+)
+print(result.summary)  # Typed Pydantic model
+```
+
+### LangChain Pattern (LEGACY - for existing code only)
 ```python
 from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
 from cqc_cpcc.utilities.AI.llm.chains import get_feedback_completion_chain
@@ -325,6 +348,11 @@ When GitHub Copilot suggests code in this repository:
 ## Notes for Copilot
 
 - This is a **production system** used by real instructors - prioritize **reliability**
+- **⚠️ OpenAI CRITICAL**: ALL OpenAI usage MUST follow `docs/openai-structured-outputs-guide.md` - violations cause 400 errors
+  - Use GPT-5 models ONLY (gpt-5, gpt-5-mini, gpt-5-nano)
+  - Use `get_structured_completion()` wrapper from `openai_client.py`
+  - Normalize ALL schemas with `normalize_json_schema_for_openai()`
+  - See `.github/instructions/openai.instructions.md` for complete enforcement rules
 - **Web scraping is fragile** - always include retry logic and error handling
 - **AI responses are non-deterministic** - validate outputs and use retry parsers
 - **Date calculations are critical** - use utilities in `date.py`, don't reinvent
