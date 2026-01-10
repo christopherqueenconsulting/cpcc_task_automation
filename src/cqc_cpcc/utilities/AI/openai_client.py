@@ -150,11 +150,11 @@ def sanitize_openai_params(model: str, params: dict) -> dict:
     - If temperature != 1: Remove it from params (let API use default)
     - If temperature == 1: Keep it (explicit default is allowed)
     
-    For non-GPT-5 models:
+    For non-GPT-5 models (legacy support only):
     - Pass through all parameters unchanged (backward compatibility)
     
     Args:
-        model: OpenAI model name (e.g., "gpt-5-mini", "gpt-4o")
+        model: OpenAI model name (e.g., "gpt-5-mini", "gpt-5", "gpt-5-nano")
         params: Dictionary of API parameters to sanitize
         
     Returns:
@@ -165,8 +165,8 @@ def sanitize_openai_params(model: str, params: dict) -> dict:
         >>> sanitize_openai_params("gpt-5-mini", params)
         {"max_tokens": 1000}  # temperature removed for GPT-5
         
-        >>> sanitize_openai_params("gpt-4o", params)
-        {"temperature": 0.2, "max_tokens": 1000}  # unchanged for GPT-4o
+        >>> sanitize_openai_params("gpt-4o", params)  # Legacy model
+        {"temperature": 0.2, "max_tokens": 1000}  # unchanged for backward compat
     """
     sanitized = params.copy()
     
