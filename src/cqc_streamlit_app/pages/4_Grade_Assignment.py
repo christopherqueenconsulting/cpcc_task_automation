@@ -1086,6 +1086,11 @@ async def get_rubric_based_exam_grading():
             except Exception as e:
                 st.error(f"Error grading {base_student_filename}: {e}")
                 status.update(label=f"❌ Error: {base_student_filename}", state="error")
+                
+                # Show debug panel if error has correlation_id
+                from cqc_streamlit_app.utils import render_openai_debug_panel
+                correlation_id = getattr(e, 'correlation_id', None)
+                render_openai_debug_panel(correlation_id=correlation_id, error=e)
     
     if graded_results:
         st.success(f"Graded {len(graded_results)} submission(s) successfully!")
