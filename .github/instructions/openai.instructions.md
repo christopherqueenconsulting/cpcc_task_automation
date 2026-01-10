@@ -19,15 +19,15 @@ Violating the rules in this guide will cause **OpenAI 400 errors** and is **NOT 
 
 ### ✅ REQUIRED API and Models
 
-- **ONLY use OpenAI Responses API** (not Chat Completions API)
+- **Use OpenAI Chat Completions API WITH structured outputs** (via `response_format`)
 - **Default model: `gpt-5-mini`** (optimized for cost/performance)
 - **ONLY GPT-5 family models:** `gpt-5`, `gpt-5-mini`, `gpt-5-nano`
 - **NO legacy models:** `gpt-4o`, `gpt-4o-mini`, `gpt-4`, `gpt-3.5-turbo`, etc.
 
 ### ❌ FORBIDDEN
 
-- **NO ChatCompletions API** (`client.chat.completions.create` without structured outputs)
-- **NO legacy JSON mode** (`response_format={"type": "json_object"}`)
+- **NO ChatCompletions without structured outputs** (i.e., without proper `response_format`)
+- **NO legacy JSON mode** (`response_format={"type": "json_object"}` without schema)
 - **NO models below GPT-5** (will cause errors or incorrect behavior)
 - **NO manual JSON string parsing** from model output
 
@@ -53,7 +53,7 @@ result = await get_structured_completion(
 response = client.chat.completions.create(
     model="gpt-4o",  # Wrong: not GPT-5
     messages=[...],
-    response_format={"type": "json_object"}  # Wrong: legacy JSON mode
+    response_format={"type": "json_object"}  # Wrong: legacy JSON mode (no schema)
 )
 json.loads(response.choices[0].message.content)  # Wrong: manual parsing
 ```
@@ -142,8 +142,13 @@ response_format = {
 - **temperature**: Only supports `1` (default). Other values cause 400 errors.
   - If you need deterministic output, omit temperature parameter
   - The `sanitize_openai_params()` function automatically handles this
+  - This constraint is documented in `openai_client.py` based on actual API behavior
 - **max_completion_tokens**: Use this parameter (NOT `max_tokens`) for GPT-5
+  - The wrapper automatically uses the correct parameter name
 - **max_tokens**: Legacy parameter, do NOT use with GPT-5
+
+**Note**: These constraints are specific to the GPT-5 family and are based on the actual
+OpenAI API implementation documented in our production code (`openai_client.py`).
 
 ### Code Pattern
 
@@ -364,6 +369,15 @@ def test_my_model_with_invalid_data():
 ---
 
 ## Migration from Legacy Code
+
+### Understanding "Responses API" Terminology
+
+**Note**: The canonical guide (`docs/openai-structured-outputs-guide.md`) refers to a "Responses API"
+which represents the conceptual interface for structured outputs. Our actual implementation uses
+`client.chat.completions.create()` (Chat Completions API) **WITH** the `response_format` parameter
+to enable structured outputs. The key difference from legacy usage is:
+- ✅ NEW: Chat Completions + `response_format={"type": "json_schema", ...}` with strict validation
+- ❌ OLD: Chat Completions + `response_format={"type": "json_object"}` with manual parsing
 
 ### If You Find Legacy Patterns
 
