@@ -14,6 +14,7 @@ Tests ensure that:
 
 import pytest
 from pydantic import BaseModel, Field
+
 from cqc_cpcc.utilities.AI.schema_normalizer import (
     normalize_json_schema_for_openai,
     validate_schema_for_openai,
@@ -533,13 +534,15 @@ class TestRequiredArrayNormalization:
         assert set(item_schema["required"]) == {"id", "metadata"}
     
     def test_rubric_assessment_result_has_complete_required(self):
-        """RubricAssessmentResult should have all properties in required after normalization."""
+        """RubricAssessmentResult should have all properties
+        in required after normalization."""
         from cqc_cpcc.rubric_models import RubricAssessmentResult
         
         schema = RubricAssessmentResult.model_json_schema()
         normalized = normalize_json_schema_for_openai(schema)
         
-        # Check CriterionResult in $defs has all properties including selected_level_label
+        # Check CriterionResult in $defs has all properties
+        # including selected_level_label
         if "$defs" in normalized and "CriterionResult" in normalized["$defs"]:
             criterion_schema = normalized["$defs"]["CriterionResult"]
             
@@ -555,7 +558,8 @@ class TestRequiredArrayNormalization:
                 
                 # Specifically check selected_level_label (the bug case)
                 assert "selected_level_label" in criterion_schema["required"], (
-                    "selected_level_label must be in required array for OpenAI strict mode"
+                    "selected_level_label must be in required array "
+                    "for OpenAI strict mode"
                 )
     
     def test_deeply_nested_required_arrays(self):
@@ -614,7 +618,10 @@ class TestRequiredArrayValidation:
         errors = validate_schema_for_openai(schema)
         
         # Should have error about missing required
-        assert any("required" in err.lower() and "missing" in err.lower() for err in errors)
+        assert any(
+            "required" in err.lower() and "missing" in err.lower()
+            for err in errors
+        )
     
     def test_validates_incomplete_required_array(self):
         """Validation should catch required arrays missing some properties."""
