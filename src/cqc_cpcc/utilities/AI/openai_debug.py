@@ -123,7 +123,7 @@ def _save_to_file(correlation_id: str, data_type: str, data: dict) -> None:
         save_dir.mkdir(parents=True, exist_ok=True)
         
         # Generate filename with timestamp and correlation ID
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{correlation_id}_{data_type}.json"
         filepath = save_dir / filename
         
@@ -167,7 +167,7 @@ def record_request(
         # Build request data
         request_data = {
             "correlation_id": correlation_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(datetime.UTC).isoformat(),
             "model": model,
             "schema_name": schema_name,
             "endpoint": "chat.completions.create (structured outputs)",
@@ -236,7 +236,7 @@ def record_response(
         # Build response data
         response_data = {
             "correlation_id": correlation_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(datetime.UTC).isoformat(),
             "schema_name": schema_name,
             "decision_notes": decision_notes,
         }
@@ -296,7 +296,7 @@ def record_response(
         # Save decision notes separately for easy access
         notes_data = {
             "correlation_id": correlation_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(datetime.UTC).isoformat(),
             "schema_name": schema_name,
             "decision_notes": decision_notes,
             "parsed_success": output_parsed is not None,

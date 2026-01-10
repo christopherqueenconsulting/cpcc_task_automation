@@ -21,8 +21,8 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
 )
 
 
-class TestSchema(BaseModel):
-    """Test schema for unit tests."""
+class SampleSchema(BaseModel):
+    """Sample schema for unit tests."""
     name: str = Field(description="Name field")
     value: int = Field(description="Value field")
 
@@ -36,7 +36,7 @@ class TestCorrelationIDPropagation:
         """Successful call should create correlation_id and log it."""
         # Mock dependencies
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         mock_client = AsyncMock()
@@ -56,7 +56,7 @@ class TestCorrelationIDPropagation:
         # Call function
         result = await get_structured_completion(
             prompt="test prompt",
-            schema_model=TestSchema
+            schema_model=SampleSchema
         )
         
         # Check that logger was called with correlation_id
@@ -70,7 +70,7 @@ class TestCorrelationIDPropagation:
     async def test_empty_response_includes_correlation_id(self, mocker):
         """Empty response error should include correlation_id."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         mock_client = AsyncMock()
@@ -88,7 +88,7 @@ class TestCorrelationIDPropagation:
         with pytest.raises(OpenAISchemaValidationError) as exc_info:
             await get_structured_completion(
                 prompt="test prompt",
-                schema_model=TestSchema
+                schema_model=SampleSchema
             )
         
         error = exc_info.value
@@ -100,7 +100,7 @@ class TestCorrelationIDPropagation:
     async def test_refusal_includes_correlation_id(self, mocker):
         """Refusal error should include correlation_id and decision_notes."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         mock_client = AsyncMock()
@@ -117,7 +117,7 @@ class TestCorrelationIDPropagation:
         with pytest.raises(OpenAISchemaValidationError) as exc_info:
             await get_structured_completion(
                 prompt="test prompt",
-                schema_model=TestSchema
+                schema_model=SampleSchema
             )
         
         error = exc_info.value
@@ -128,7 +128,7 @@ class TestCorrelationIDPropagation:
     async def test_validation_error_includes_correlation_id(self, mocker):
         """Validation error should include correlation_id and decision_notes."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         mock_client = AsyncMock()
@@ -147,7 +147,7 @@ class TestCorrelationIDPropagation:
         with pytest.raises(OpenAISchemaValidationError) as exc_info:
             await get_structured_completion(
                 prompt="test prompt",
-                schema_model=TestSchema
+                schema_model=SampleSchema
             )
         
         error = exc_info.value
@@ -161,7 +161,7 @@ class TestCorrelationIDPropagation:
         from openai import APITimeoutError
         
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         mock_client = AsyncMock()
@@ -174,7 +174,7 @@ class TestCorrelationIDPropagation:
         with pytest.raises(OpenAITransportError) as exc_info:
             await get_structured_completion(
                 prompt="test prompt",
-                schema_model=TestSchema,
+                schema_model=SampleSchema,
                 max_retries=0  # No retries for faster test
             )
         
@@ -191,7 +191,7 @@ class TestDebugRecording:
     async def test_record_request_called(self, mocker):
         """record_request should be called when debug is enabled."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         mock_client = AsyncMock()
@@ -209,7 +209,7 @@ class TestDebugRecording:
         
         await get_structured_completion(
             prompt="test prompt",
-            schema_model=TestSchema,
+            schema_model=SampleSchema,
             model_name="gpt-5-mini",
             temperature=0.2,
             max_tokens=1000
@@ -219,13 +219,13 @@ class TestDebugRecording:
         assert mock_record_request.call_count == 1
         call_kwargs = mock_record_request.call_args[1]
         assert call_kwargs['model'] == 'gpt-5-mini'
-        assert call_kwargs['schema_name'] == 'TestSchema'
+        assert call_kwargs['schema_name'] == 'SampleSchema'
         assert 'correlation_id' in call_kwargs
     
     async def test_record_response_called_on_success(self, mocker):
         """record_response should be called on successful parse."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         mock_client = AsyncMock()
@@ -243,7 +243,7 @@ class TestDebugRecording:
         
         await get_structured_completion(
             prompt="test prompt",
-            schema_model=TestSchema
+            schema_model=SampleSchema
         )
         
         # record_response should be called with success notes
@@ -255,7 +255,7 @@ class TestDebugRecording:
     async def test_record_response_called_on_validation_failure(self, mocker):
         """record_response should be called on validation failure."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         mock_client = AsyncMock()
@@ -273,7 +273,7 @@ class TestDebugRecording:
         with pytest.raises(OpenAISchemaValidationError):
             await get_structured_completion(
                 prompt="test prompt",
-                schema_model=TestSchema
+                schema_model=SampleSchema
             )
         
         # record_response should be called with failure notes
@@ -286,7 +286,7 @@ class TestDebugRecording:
     async def test_no_recording_when_debug_disabled(self, mocker):
         """Should not call recording functions when debug is disabled."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', 'test-key')
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.TEST_MODE', False)
+        mocker.patch('cqc_cpcc.utilities.env_constants.TEST_MODE', False)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', False)
         
         mock_client = AsyncMock()
@@ -304,7 +304,7 @@ class TestDebugRecording:
         
         await get_structured_completion(
             prompt="test prompt",
-            schema_model=TestSchema
+            schema_model=SampleSchema
         )
         
         # Recording functions should still be called (they check internally)

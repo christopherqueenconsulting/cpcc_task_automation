@@ -178,6 +178,7 @@ class TestRecordRequest:
         """Should record when debug is on."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.should_debug', return_value=True)
         mock_logger = mocker.patch('cqc_cpcc.utilities.AI.openai_debug.debug_logger')
+        mocker.patch('cqc_cpcc.utilities.AI.openai_debug._redact_sensitive_data', side_effect=lambda x: x)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug._save_to_file')
         
         record_request(
@@ -210,6 +211,7 @@ class TestRecordRequest:
         """Should save request to file when save dir is set."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.should_debug', return_value=True)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.debug_logger')
+        mocker.patch('cqc_cpcc.utilities.AI.openai_debug._redact_sensitive_data', side_effect=lambda x: x)
         mock_save = mocker.patch('cqc_cpcc.utilities.AI.openai_debug._save_to_file')
         
         record_request(
@@ -251,6 +253,7 @@ class TestRecordResponse:
         """Should record successful response."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.should_debug', return_value=True)
         mock_logger = mocker.patch('cqc_cpcc.utilities.AI.openai_debug.debug_logger')
+        mocker.patch('cqc_cpcc.utilities.AI.openai_debug._redact_sensitive_data', side_effect=lambda x: x)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug._save_to_file')
         
         # Mock response object
@@ -284,6 +287,7 @@ class TestRecordResponse:
         """Should record refusal information."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.should_debug', return_value=True)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.debug_logger')
+        mocker.patch('cqc_cpcc.utilities.AI.openai_debug._redact_sensitive_data', side_effect=lambda x: x)
         mock_save = mocker.patch('cqc_cpcc.utilities.AI.openai_debug._save_to_file')
         
         # Mock response with refusal
@@ -309,6 +313,7 @@ class TestRecordResponse:
         """Should record error information."""
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.should_debug', return_value=True)
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.debug_logger')
+        mocker.patch('cqc_cpcc.utilities.AI.openai_debug._redact_sensitive_data', side_effect=lambda x: x)
         mock_save = mocker.patch('cqc_cpcc.utilities.AI.openai_debug._save_to_file')
         
         test_error = ValueError("Test error")
@@ -426,6 +431,7 @@ class TestFileSaving:
             mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG_SAVE_DIR', str(save_dir))
             mocker.patch('cqc_cpcc.utilities.AI.openai_debug.should_debug', return_value=True)
             mocker.patch('cqc_cpcc.utilities.AI.openai_debug.debug_logger')
+            mocker.patch('cqc_cpcc.utilities.AI.openai_debug._redact_sensitive_data', side_effect=lambda x: x)
             
             assert not save_dir.exists()
             
