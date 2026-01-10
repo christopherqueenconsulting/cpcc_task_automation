@@ -139,16 +139,19 @@ response_format = {
 
 **GPT-5 Model Constraints:**
 
-- **temperature**: Only supports `1` (default). Other values cause 400 errors.
-  - If you need deterministic output, omit temperature parameter
-  - The `sanitize_openai_params()` function automatically handles this
-  - This constraint is documented in `openai_client.py` based on actual API behavior
+- **temperature**: Only supports `1` (default) for GPT-5 family. Other values cause 400 errors.
+  - This is a **real GPT-5 constraint** documented in our production code (`openai_client.py`)
+  - The error message from OpenAI: "Unsupported value: 'temperature' does not support 0.2 with this model. Only the default (1) value is supported."
+  - If you need deterministic output with GPT-5, omit the temperature parameter entirely
+  - The `sanitize_openai_params()` function automatically handles this by removing non-default values
+  - **Note**: This differs from GPT-4 family which supports temperature values 0-2
 - **max_completion_tokens**: Use this parameter (NOT `max_tokens`) for GPT-5
   - The wrapper automatically uses the correct parameter name
 - **max_tokens**: Legacy parameter, do NOT use with GPT-5
 
-**Note**: These constraints are specific to the GPT-5 family and are based on the actual
-OpenAI API implementation documented in our production code (`openai_client.py`).
+**Note**: These constraints are specific to the GPT-5 family and are based on actual
+API behavior observed and documented in our production code (`openai_client.py`).
+They differ from earlier model families (GPT-4, GPT-3.5) which have more flexible parameters.
 
 ### Code Pattern
 
@@ -423,7 +426,7 @@ result = await get_structured_completion(
 ## Summary
 
 **Remember:**
-1. ✅ **USE**: GPT-5 models, Responses API, Pydantic, schema normalization
+1. ✅ **USE**: GPT-5 models, Chat Completions API with structured outputs, Pydantic, schema normalization
 2. ❌ **AVOID**: ChatCompletions, legacy JSON mode, manual parsing, models below GPT-5
 3. 📖 **REFERENCE**: `docs/openai-structured-outputs-guide.md` is the authority
 4. 🧪 **TEST**: All new models need schema normalization tests
