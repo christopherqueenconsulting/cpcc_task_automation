@@ -27,7 +27,7 @@ langchain-openai = "^0"
 openai = "^2"
 ordered-set = "^4"
 chromadb = "^1"
-protobuf = "^4.25"
+protobuf = "^6.33"
 python-docx = "^1"
 #simplify_docx= { git = "https://github.com/gitchrisqueen/Simplify-Docx.git"}
 chromedriver-autoinstaller = "^0"
