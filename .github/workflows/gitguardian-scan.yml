@@ -13,7 +13,8 @@ jobs:
     name: GitGuardian Scan
     runs-on: ubuntu-latest
     # Skip this job entirely for Dependabot PRs
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    # Run for all push events and non-Dependabot PRs
+    if: github.event_name == 'push' || github.event.pull_request.user.login != 'dependabot[bot]'
     
     steps:
       - name: Checkout repository

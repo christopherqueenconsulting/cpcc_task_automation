@@ -11,16 +11,13 @@ on:
     # Run CodeQL analysis weekly on Mondays at 9:00 UTC
     - cron: '0 9 * * 1'
 
-env:
-  # Skip CodeQL for Dependabot PRs
-  SKIP_CODEQL: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
-
 jobs:
   analyze:
     name: Analyze Code
     runs-on: ubuntu-latest
     # Skip this job entirely for Dependabot PRs
-    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    # Run for all push events and non-Dependabot PRs
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event.pull_request.user.login != 'dependabot[bot]'
     
     permissions:
       # Required for all workflows
