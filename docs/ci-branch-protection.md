@@ -6,19 +6,50 @@ This project uses GitHub Actions to automatically run unit tests on every pull r
 
 ## Workflow Details
 
+### Unit Tests Workflow
 - **Workflow File**: `.github/workflows/unit-tests.yml`
-- **Workflow Name**: `Unit Tests`
+- **Workflow Name**: `CI / Unit Tests`
 - **Triggers**:
   - Pull requests targeting `master` branch
   - Direct pushes to `master` branch
 
-### What the Workflow Does
+### Integration Tests Workflow
+- **Workflow File**: `.github/workflows/integration-coverage.yml`
+- **Workflow Name**: `CI / Integration Test w/ Coverage`
+- **Triggers**:
+  - Pull requests targeting `master` branch
+  - Direct pushes to `master` branch
 
+### E2E Tests Workflow
+- **Workflow File**: `.github/workflows/e2e-coverage.yml`
+- **Workflow Name**: `CI / E2E Test w/ Coverage`
+- **Triggers**:
+  - Pull requests targeting `master` branch
+  - Direct pushes to `master` branch
+
+### What the Workflows Do
+
+**Unit Tests:**
 1. **Checkout**: Clones the repository code
 2. **Setup Python & Poetry**: Installs Python 3.12 and Poetry 1.7.1 using the reusable `.github/actions/poetry_setup` action
 3. **Install Dependencies**: Installs project dependencies with `poetry install --with test`
 4. **Run Unit Tests**: Executes `poetry run pytest -m unit --ignore=tests/e2e` with coverage reporting
-5. **Upload Artifacts**: Saves coverage reports and test results for review
+5. **Upload Coverage**: Uploads coverage to Codecov with `unit` flag
+
+**Integration Tests:**
+1. **Checkout**: Clones the repository code
+2. **Setup Python & Poetry**: Installs Python 3.12 and Poetry 1.7.1
+3. **Install Dependencies**: Installs project dependencies with `poetry install --with test`
+4. **Run Integration Tests**: Executes `poetry run pytest -m integration` with coverage reporting
+5. **Upload Coverage**: Uploads coverage to Codecov with `integration` flag
+
+**E2E Tests:**
+1. **Checkout**: Clones the repository code
+2. **Setup Python & Poetry**: Installs Python 3.12 and Poetry 1.7.1
+3. **Install Dependencies**: Installs project dependencies with `poetry install --with test,e2e`
+4. **Install Playwright**: Installs Playwright Chromium browser
+5. **Run E2E Tests**: Executes `poetry run pytest -m e2e` with coverage reporting
+6. **Upload Coverage**: Uploads coverage to Codecov with `e2e` flag
 
 ### Test Execution
 
@@ -45,7 +76,14 @@ To enforce that pull requests must pass the unit tests before merging into `mast
    - Check ☑️ **Require status checks to pass before merging**
    - Check ☑️ **Require branches to be up to date before merging** (recommended but optional)
    - In the search box under "Status checks that are required", search for and select:
-     - `unit-tests` (this is the job name from the workflow)
+     - `unit-tests` (this is the job name from the unit tests workflow)
+     - `integration-tests` (this is the job name from the integration tests workflow)
+     - `e2e-tests` (this is the job name from the e2e tests workflow)
+   
+   **Note**: The PR check labels will appear as:
+   - `CI / Unit Tests`
+   - `CI / Integration Test w/ Coverage`
+   - `CI / E2E Test w/ Coverage`
 
 4. **Additional Recommended Settings** (optional but recommended)
    - ☑️ **Require a pull request before merging**
@@ -61,9 +99,12 @@ To enforce that pull requests must pass the unit tests before merging into `mast
 After enabling branch protection:
 
 1. Create a test pull request to `master`
-2. You should see the "Unit Tests" check appear in the PR
-3. If tests fail, the "Merge" button will be blocked
-4. Once tests pass, the "Merge" button will become available
+2. You should see the CI checks appear in the PR:
+   - "CI / Unit Tests"
+   - "CI / Integration Test w/ Coverage"
+   - "CI / E2E Test w/ Coverage"
+3. If any tests fail, the "Merge" button will be blocked
+4. Once all tests pass, the "Merge" button will become available
 
 ### Alternative: Using GitHub API
 
@@ -74,6 +115,8 @@ gh api repos/:owner/:repo/branches/master/protection \
   --method PUT \
   --field required_status_checks[strict]=true \
   --field required_status_checks[contexts][]=unit-tests \
+  --field required_status_checks[contexts][]=integration-tests \
+  --field required_status_checks[contexts][]=e2e-tests \
   --field enforce_admins=true \
   --field required_pull_request_reviews[required_approving_review_count]=1
 ```
@@ -126,7 +169,10 @@ poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-report=term-missing
 
 ### Workflow Not Running
 
-- Ensure the workflow file exists at `.github/workflows/unit-tests.yml`
+- Ensure the workflow files exist at:
+  - `.github/workflows/unit-tests.yml`
+  - `.github/workflows/integration-coverage.yml`
+  - `.github/workflows/e2e-coverage.yml`
 - Check that the branch name is exactly `master` (not `main`)
 - Verify Actions are enabled in repository settings
 
@@ -138,16 +184,16 @@ poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-report=term-missing
 
 ### Status Check Not Appearing
 
-- Ensure the workflow has run at least once on the target branch
-- Check that the job name matches exactly: `unit-tests`
+- Ensure the workflows have run at least once on the target branch
+- Check that the job names match exactly: `unit-tests`, `integration-tests`, `e2e-tests`
 - Wait a few minutes after creating the branch protection rule
 
 ## Monitoring and Maintenance
 
 - **View Workflow Runs**: Go to the "Actions" tab in your repository
 - **Review Test Results**: Click on any workflow run to see detailed logs
-- **Download Artifacts**: Test results and coverage reports are available as artifacts on each run
-- **Update Workflow**: Edit `.github/workflows/unit-tests.yml` to modify behavior
+- **Download Coverage**: Coverage reports are uploaded to Codecov automatically
+- **Update Workflows**: Edit the workflow files in `.github/workflows/` to modify behavior
 
 ## Additional Resources
 

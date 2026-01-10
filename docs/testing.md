@@ -552,15 +552,21 @@ def test_attendance_page_logic(mocker):
 ### GitHub Actions Workflows
 
 #### 1. Unit Tests (`unit-tests.yml`)
+- **Workflow Name**: CI / Unit Tests
 - **Trigger**: On PR and push to master
 - **Coverage Upload**: Flag `unit`
 - **Codecov Check**: Patch coverage ≥80% (enforced)
 
-#### 2. Integration & E2E Tests (`integration-e2e-coverage.yml`)
+#### 2. Integration Tests (`integration-coverage.yml`)
+- **Workflow Name**: CI / Integration Test w/ Coverage
 - **Trigger**: On PR and push to master
-- **Jobs**:
-  - `integration-tests`: Runs integration tests, uploads with flag `integration`
-  - `e2e-tests`: Runs e2e tests with Playwright, uploads with flag `e2e`
+- **Coverage Upload**: Flag `integration`
+
+#### 3. E2E Tests (`e2e-coverage.yml`)
+- **Workflow Name**: CI / E2E Test w/ Coverage
+- **Trigger**: On PR and push to master
+- **Coverage Upload**: Flag `e2e`
+- **Special Setup**: Installs Playwright browsers
 
 ### Codecov Flags
 
