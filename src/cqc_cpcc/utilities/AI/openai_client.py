@@ -55,6 +55,7 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
     OpenAITransportError,
 )
+from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
 from cqc_cpcc.utilities.env_constants import OPENAI_API_KEY
 from cqc_cpcc.utilities.logger import logger
 
@@ -319,9 +320,14 @@ async def get_structured_completion(
     client = await get_client()
     
     # Build JSON schema from Pydantic model
+    # IMPORTANT: Normalize schema to add additionalProperties: false to all objects
+    # This is required by OpenAI Structured Outputs strict mode
+    raw_schema = schema_model.model_json_schema()
+    normalized_schema = normalize_json_schema_for_openai(raw_schema)
+    
     json_schema = {
         "name": schema_model.__name__,
-        "schema": schema_model.model_json_schema(),
+        "schema": normalized_schema,
         "strict": True,
     }
     
