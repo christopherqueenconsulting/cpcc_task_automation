@@ -276,7 +276,7 @@ class TestClickElementWaitRetry:
     
     @patch('cqc_cpcc.utilities.selenium_util.wait_for_ajax', return_value=None)  # Mock wait_for_ajax
     @patch('time.sleep', return_value=None)  # Patch sleep to speed up tests
-    def test_click_element_succeeds_on_first_try(self, mock_sleep, mock_wait_ajax):
+    def test_click_element_succeeds_on_first_try(self, mock_wait_ajax, mock_sleep):
         from cqc_cpcc.utilities.selenium_util import click_element_wait_retry
         from selenium.webdriver.common.by import By
         
@@ -298,7 +298,7 @@ class TestClickElementWaitRetry:
     
     @patch('cqc_cpcc.utilities.selenium_util.wait_for_ajax', return_value=None)  # Mock wait_for_ajax
     @patch('time.sleep', return_value=None)  # Patch sleep to speed up tests
-    def test_click_element_uses_xpath_by_default(self, mock_sleep, mock_wait_ajax):
+    def test_click_element_uses_xpath_by_default(self, mock_wait_ajax, mock_sleep):
         from cqc_cpcc.utilities.selenium_util import click_element_wait_retry
         from selenium.webdriver.common.by import By
         
@@ -319,7 +319,7 @@ class TestClickElementWaitRetry:
     
     @patch('cqc_cpcc.utilities.selenium_util.wait_for_ajax', return_value=None)  # Mock wait_for_ajax
     @patch('time.sleep', return_value=None)  # Patch sleep to speed up tests
-    def test_click_element_accepts_custom_find_by(self, mock_sleep, mock_wait_ajax):
+    def test_click_element_accepts_custom_find_by(self, mock_wait_ajax, mock_sleep):
         from cqc_cpcc.utilities.selenium_util import click_element_wait_retry
         from selenium.webdriver.common.by import By
         
@@ -341,7 +341,7 @@ class TestClickElementWaitRetry:
     
     @patch('cqc_cpcc.utilities.selenium_util.wait_for_ajax', return_value=None)  # Mock wait_for_ajax
     @patch('time.sleep', return_value=None)  # Patch sleep to speed up tests
-    def test_click_element_accepts_custom_max_try(self, mock_sleep, mock_wait_ajax):
+    def test_click_element_accepts_custom_max_try(self, mock_wait_ajax, mock_sleep):
         from cqc_cpcc.utilities.selenium_util import click_element_wait_retry
         
         mock_driver = MagicMock()
