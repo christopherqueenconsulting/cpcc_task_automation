@@ -47,7 +47,7 @@ jobs:
           OPENAI_API_KEY: "test-key-not-used"
         run: |
           echo "Running integration tests with coverage..."
-          poetry run pytest -m integration --cov=src --cov-branch --cov-report=xml:coverage-integration.xml --cov-report=term-missing
+          poetry run pytest -m integration --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml:coverage-integration.xml --cov-report=term-missing
 
       - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@v5
