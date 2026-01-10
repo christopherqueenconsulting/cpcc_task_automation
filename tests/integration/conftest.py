@@ -167,24 +167,32 @@ def create_mock_openai_response(data: Dict[str, Any]) -> ChatCompletion:
 def mock_rubric_assessment_response():
     """Sample rubric assessment response for mocking OpenAI calls."""
     return {
-        "criteria_assessments": [
+        "criteria_results": [
             {
                 "criterion_id": "understanding",
+                "criterion_name": "Understanding & Correctness",
+                "points_possible": 25,
                 "points_earned": 23,
                 "feedback": "Excellent understanding of Java basics and OOP concepts. All methods are correctly implemented."
             },
             {
                 "criterion_id": "completeness",
+                "criterion_name": "Completeness / Requirements Coverage",
+                "points_possible": 30,
                 "points_earned": 28,
                 "feedback": "All requirements met. Good error handling for division by zero."
             },
             {
                 "criterion_id": "code_quality",
+                "criterion_name": "Code Quality / Efficiency",
+                "points_possible": 30,
                 "points_earned": 18,
                 "feedback": "Well-structured code with good naming conventions. Documentation is thorough."
             },
             {
                 "criterion_id": "documentation",
+                "criterion_name": "Documentation & Comments",
+                "points_possible": 15,
                 "points_earned": 14,
                 "feedback": "Excellent JavaDoc comments for all methods with proper parameter and return descriptions."
             }
@@ -192,12 +200,7 @@ def mock_rubric_assessment_response():
         "detected_errors": [],
         "total_points_earned": 83,
         "total_points_possible": 100,
-        "percentage_score": 83.0,
         "overall_feedback": "Strong submission demonstrating solid understanding of Java programming. All requirements met with good code quality and documentation.",
-        "recommendations": [
-            "Consider adding more edge case handling",
-            "Could add input validation in main method"
-        ]
     }
 
 
