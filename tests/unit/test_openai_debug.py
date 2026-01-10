@@ -179,28 +179,24 @@ class TestRecordRequest:
         mocker.patch('cqc_cpcc.utilities.AI.openai_debug.CQC_OPENAI_DEBUG', True)
         
         # Don't mock logger or save - test actual execution
-        # Just verify no exception is raised
-        try:
-            record_request(
-                correlation_id="test123",
-                model="gpt-5-mini",
-                messages=[{"role": "user", "content": "test prompt"}],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "TestSchema",
-                        "strict": True,
-                        "schema": {}
-                    }
-                },
-                schema_name="TestSchema",
-                temperature=0.2,
-                max_tokens=1000
-            )
-            # If we get here without exception, the function executed
-            assert True
-        except Exception as e:
-            pytest.fail(f"record_request raised exception: {e}")
+        # Verify no exception is raised
+        record_request(
+            correlation_id="test123",
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "test prompt"}],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "TestSchema",
+                    "strict": True,
+                    "schema": {}
+                }
+            },
+            schema_name="TestSchema",
+            temperature=0.2,
+            max_tokens=1000
+        )
+        # Function executed successfully without raising exception
     
     def test_record_request_saves_to_file(self, mocker):
         """Should save request to file when save dir is set."""
@@ -258,20 +254,16 @@ class TestRecordResponse:
         mock_response.usage.completion_tokens = 50
         mock_response.usage.total_tokens = 150
         
-        # Test actual execution
-        try:
-            record_response(
-                correlation_id="test123",
-                response=mock_response,
-                schema_name="TestSchema",
-                decision_notes="parsed successfully",
-                output_text='{"test": "data"}',
-                output_parsed=MagicMock()
-            )
-            # If we get here without exception, the function executed
-            assert True
-        except Exception as e:
-            pytest.fail(f"record_response raised exception: {e}")
+        # Test actual execution - verify no exception is raised
+        record_response(
+            correlation_id="test123",
+            response=mock_response,
+            schema_name="TestSchema",
+            decision_notes="parsed successfully",
+            output_text='{"test": "data"}',
+            output_parsed=MagicMock()
+        )
+        # Function executed successfully without raising exception
     
     def test_record_response_with_refusal(self, mocker):
         """Should record refusal information."""
