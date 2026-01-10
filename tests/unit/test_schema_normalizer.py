@@ -676,3 +676,210 @@ class TestRequiredArrayValidation:
         
         # Should have no errors
         assert len(errors) == 0
+
+
+@pytest.mark.unit
+class TestEdgeCaseCoverage:
+    """Test edge cases to improve coverage."""
+    
+    def test_normalize_non_dict_schema(self):
+        """Normalizer should handle non-dict schemas gracefully."""
+        # Non-dict inputs should be handled without errors
+        result = normalize_json_schema_for_openai(None)
+        assert result is None
+        
+        result = normalize_json_schema_for_openai("string")
+        assert result == "string"
+        
+        result = normalize_json_schema_for_openai([])
+        assert result == []
+    
+    def test_validate_non_dict_schema(self):
+        """Validator should handle non-dict schemas gracefully."""
+        errors = validate_schema_for_openai(None)
+        assert len(errors) == 0
+        
+        errors = validate_schema_for_openai("string")
+        assert len(errors) == 0
+    
+    def test_array_items_as_list_tuple_validation(self):
+        """Test normalization of array items as list (tuple validation)."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "tuple_field": {
+                    "type": "array",
+                    "items": [
+                        {"type": "object", "properties": {"a": {"type": "string"}}},
+                        {"type": "object", "properties": {"b": {"type": "integer"}}}
+                    ]
+                }
+            }
+        }
+        
+        normalized = normalize_json_schema_for_openai(schema)
+        
+        # Root should be normalized
+        assert normalized["additionalProperties"] is False
+        
+        # Both tuple items should be normalized
+        items_list = normalized["properties"]["tuple_field"]["items"]
+        assert items_list[0]["additionalProperties"] is False
+        assert items_list[1]["additionalProperties"] is False
+    
+    def test_pattern_properties_normalized(self):
+        """Test normalization of patternProperties."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "patternProperties": {
+                "^meta_": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string"}
+                    }
+                }
+            }
+        }
+        
+        normalized = normalize_json_schema_for_openai(schema)
+        
+        # Root should be normalized
+        assert normalized["additionalProperties"] is False
+        
+        # Pattern property schema should be normalized
+        pattern_schema = normalized["patternProperties"]["^meta_"]
+        assert pattern_schema["additionalProperties"] is False
+    
+    def test_validation_detects_invalid_additional_properties_type(self):
+        """Test validation catches invalid additionalProperties values."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "additionalProperties": "invalid",  # Should be False or a dict
+            "required": ["name"]
+        }
+        
+        errors = validate_schema_for_openai(schema)
+        
+        # Should have error about invalid additionalProperties
+        assert any("additionalProperties" in err and "invalid" in err for err in errors)
+    
+    def test_validation_detects_required_not_array(self):
+        """Test validation catches required field that's not an array."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"}
+            },
+            "additionalProperties": False,
+            "required": "name"  # Should be an array, not a string
+        }
+        
+        errors = validate_schema_for_openai(schema)
+        
+        # Should have error about required not being an array
+        assert any("'required' must be an array" in err for err in errors)
+    
+    def test_validation_recurses_into_items(self):
+        """Test validation recurses into array items."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"}
+                        }
+                        # Missing additionalProperties and required
+                    }
+                }
+            },
+            "additionalProperties": False,
+            "required": ["items"]
+        }
+        
+        errors = validate_schema_for_openai(schema)
+        
+        # Should have errors about nested item schema
+        assert any(".items" in err and "additionalProperties" in err for err in errors)
+    
+    def test_validation_recurses_into_combinators(self):
+        """Test validation recurses into anyOf/oneOf/allOf."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {"text": {"type": "string"}}
+                            # Missing additionalProperties and required
+                        }
+                    ]
+                }
+            },
+            "additionalProperties": False,
+            "required": ["value"]
+        }
+        
+        errors = validate_schema_for_openai(schema)
+        
+        # Should have errors about combinator schema
+        assert any("anyOf" in err and "additionalProperties" in err for err in errors)
+    
+    def test_validation_recurses_into_additional_properties_schema(self):
+        """Test validation recurses into additionalProperties when it's a schema."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "string"}
+                        }
+                        # Missing additionalProperties and required
+                    }
+                }
+            },
+            "additionalProperties": False,
+            "required": ["metadata"]
+        }
+        
+        errors = validate_schema_for_openai(schema)
+        
+        # Should have errors about additionalProperties schema
+        assert any("additionalProperties" in err for err in errors)
+    
+    def test_validation_recurses_into_defs(self):
+        """Test validation recurses into $defs."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "user": {"$ref": "#/$defs/User"}
+            },
+            "$defs": {
+                "User": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"}
+                    }
+                    # Missing additionalProperties and required
+                }
+            },
+            "additionalProperties": False,
+            "required": ["user"]
+        }
+        
+        errors = validate_schema_for_openai(schema)
+        
+        # Should have errors about $defs schema
+        assert any("$defs.User" in err and "additionalProperties" in err for err in errors)
