@@ -61,4 +61,27 @@ file_handler.setFormatter(fmt)
 logger.addHandler(file_handler)
 
 
+# Setup OpenAI debug logger (separate channel)
+openai_debug_logger = logging.getLogger("openai.debug")
+openai_debug_logger.setLevel(logging.DEBUG)
+
+# Add file handler for OpenAI debug logs (separate file)
+OPENAI_DEBUG_FILENAME = f'logs/openai_debug_{today.strftime("%Y_%m_%d")}.log'
+openai_debug_handler = RotatingFileHandler(
+    OPENAI_DEBUG_FILENAME, 
+    maxBytes=250000000, 
+    backupCount=10
+)
+
+# Use detailed format for debug logs
+debug_format = logging.Formatter(
+    "[%(asctime)s %(filename)s->%(funcName)s():%(lineno)s]%(levelname)s: %(message)s"
+)
+openai_debug_handler.setFormatter(debug_format)
+openai_debug_logger.addHandler(openai_debug_handler)
+
+# Prevent propagation to root logger (keep debug logs separate)
+openai_debug_logger.propagate = False
+
+
 

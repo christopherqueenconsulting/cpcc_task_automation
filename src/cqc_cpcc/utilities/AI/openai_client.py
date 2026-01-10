@@ -56,6 +56,12 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAITransportError,
 )
 from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
+from cqc_cpcc.utilities.AI.openai_debug import (
+    should_debug,
+    create_correlation_id,
+    record_request,
+    record_response,
+)
 from cqc_cpcc.utilities.env_constants import OPENAI_API_KEY
 from cqc_cpcc.utilities.logger import logger
 
@@ -316,6 +322,9 @@ async def get_structured_completion(
     if TEST_MODE:
         return _get_test_mode_response(schema_model)
     
+    # Create correlation ID for debug tracking
+    correlation_id = create_correlation_id() if should_debug() else None
+    
     # Get client instance
     client = await get_client()
     
@@ -372,34 +381,108 @@ async def get_structured_completion(
             # (e.g., GPT-5 models don't support temperature != 1)
             api_kwargs = sanitize_openai_params(model_name, api_kwargs)
             
+            # Record request for debugging
+            if correlation_id:
+                record_request(
+                    correlation_id=correlation_id,
+                    model=model_name,
+                    messages=api_kwargs["messages"],
+                    response_format=api_kwargs["response_format"],
+                    schema_name=schema_model.__name__,
+                    temperature=api_kwargs.get("temperature"),
+                    max_tokens=api_kwargs.get(token_param),
+                )
+            
             response = await client.chat.completions.create(**api_kwargs)
+            
+            # Check for refusal first
+            if hasattr(response, 'choices') and response.choices:
+                message = response.choices[0].message
+                # Check if refusal is present and is a non-empty string
+                if hasattr(message, 'refusal') and isinstance(message.refusal, str) and message.refusal:
+                    decision_notes = f"refusal returned: {message.refusal}"
+                    if correlation_id:
+                        record_response(
+                            correlation_id=correlation_id,
+                            response=response,
+                            schema_name=schema_model.__name__,
+                            decision_notes=decision_notes,
+                            output_text=None,
+                            output_parsed=None,
+                        )
+                    raise OpenAISchemaValidationError(
+                        f"OpenAI refused to generate response: {message.refusal}",
+                        schema_name=schema_model.__name__,
+                        correlation_id=correlation_id,
+                        decision_notes=decision_notes,
+                    )
             
             # Extract JSON content from response
             json_output = response.choices[0].message.content
             
             if not json_output:
+                decision_notes = "no content in response.choices[0].message.content"
+                if correlation_id:
+                    record_response(
+                        correlation_id=correlation_id,
+                        response=response,
+                        schema_name=schema_model.__name__,
+                        decision_notes=decision_notes,
+                        output_text=None,
+                        output_parsed=None,
+                    )
                 raise OpenAISchemaValidationError(
                     "Empty response from OpenAI API",
                     schema_name=schema_model.__name__,
+                    correlation_id=correlation_id,
+                    decision_notes=decision_notes,
                 )
             
             # Validate against Pydantic model
             try:
                 validated_model = schema_model.model_validate_json(json_output)
+                
+                # Record successful response
+                if correlation_id:
+                    record_response(
+                        correlation_id=correlation_id,
+                        response=response,
+                        schema_name=schema_model.__name__,
+                        decision_notes="parsed successfully",
+                        output_text=json_output,
+                        output_parsed=validated_model,
+                    )
+                
                 logger.info(
                     f"Successfully generated structured completion "
                     f"(model={model_name}, schema={schema_model.__name__}, "
                     f"tokens="
-                    f"{response.usage.total_tokens if response.usage else 'unknown'})"
+                    f"{response.usage.total_tokens if response.usage else 'unknown'}"
+                    f"{f', correlation_id={correlation_id}' if correlation_id else ''})"
                 )
                 return validated_model
                 
             except ValidationError as e:
                 # Schema validation failed
                 error_details = e.errors()
+                decision_notes = f"pydantic validation failed: {len(error_details)} errors"
+                
+                # Record failed validation
+                if correlation_id:
+                    record_response(
+                        correlation_id=correlation_id,
+                        response=response,
+                        schema_name=schema_model.__name__,
+                        decision_notes=decision_notes,
+                        output_text=json_output,
+                        output_parsed=None,
+                        error=e,
+                    )
+                
                 logger.error(
                     f"Schema validation failed for {schema_model.__name__}: "
                     f"{len(error_details)} errors"
+                    f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
                 )
                 
                 # If repair is allowed and this is our first attempt, retry once
@@ -415,6 +498,8 @@ async def get_structured_completion(
                     schema_name=schema_model.__name__,
                     validation_errors=error_details,
                     raw_output=json_output,
+                    correlation_id=correlation_id,
+                    decision_notes=decision_notes,
                 )
         
         except (APITimeoutError, APIConnectionError) as e:
@@ -434,6 +519,7 @@ async def get_structured_completion(
             raise OpenAITransportError(
                 f"Failed after {max_retries + 1} attempts: {str(e)}",
                 status_code=getattr(e, "status_code", None),
+                correlation_id=correlation_id,
             ) from e
         
         except RateLimitError as e:
@@ -457,6 +543,7 @@ async def get_structured_completion(
                 f"Rate limit exceeded after {max_retries + 1} attempts",
                 status_code=429,
                 retry_after=getattr(e, "retry_after", None),
+                correlation_id=correlation_id,
             ) from e
         
         except APIError as e:
@@ -480,6 +567,7 @@ async def get_structured_completion(
                 raise OpenAITransportError(
                     f"Server error after {max_retries + 1} attempts: {str(e)}",
                     status_code=status_code,
+                    correlation_id=correlation_id,
                 ) from e
             
             # Don't retry 4xx errors (client errors)
@@ -487,15 +575,20 @@ async def get_structured_completion(
             raise OpenAITransportError(
                 f"API error: {str(e)}",
                 status_code=status_code,
+                correlation_id=correlation_id,
             ) from e
     
     # Should never reach here, but handle just in case
     if last_error:
         raise OpenAITransportError(
             f"Failed after {max_retries + 1} attempts",
+            correlation_id=correlation_id,
         ) from last_error
     
-    raise OpenAITransportError("Unknown error occurred")
+    raise OpenAITransportError(
+        "Unknown error occurred",
+        correlation_id=correlation_id,
+    )
 
 
 def _get_test_mode_response(schema_model: Type[T]) -> T:
