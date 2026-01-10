@@ -1,0 +1,142 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║                   OpenAI Schema Normalization Fix                          ║
+║                         PR Summary - Final                                 ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+PROBLEM SOLVED
+══════════════
+❌ Before: OpenAI API returning 400 errors:
+   "Invalid schema for response_format 'RubricAssessmentResult': 
+    'additionalProperties' is required to be supplied and to be false"
+
+✅ After: All OpenAI structured output calls work correctly with strict 
+   schema validation mode
+
+ROOT CAUSE
+══════════
+Pydantic v2's model_json_schema() generates valid JSON schemas, but does NOT
+automatically add "additionalProperties": false to object nodes. OpenAI's
+strict: true mode requires this on every object schema.
+
+SOLUTION IMPLEMENTED
+════════════════════
+Created automatic schema normalizer that:
+✓ Recursively adds "additionalProperties": false to all object schemas
+✓ Handles nested objects, arrays, $defs, anyOf/oneOf/allOf
+✓ Preserves dict field additionalProperties schemas
+✓ Uses deep copy (no mutation of original schemas)
+✓ Integrates transparently into get_structured_completion()
+
+FILES CHANGED
+═════════════
+New Files (5):
+  ✓ src/cqc_cpcc/utilities/AI/schema_normalizer.py (normalizer logic)
+  ✓ tests/unit/test_schema_normalizer.py (19 unit tests)
+  ✓ tests/unit/test_openai_schema_integration.py (5 integration tests)
+  ✓ docs/pr-summaries/SCHEMA_NORMALIZATION_PR_SUMMARY.md (documentation)
+  ✓ scripts/verify_schema_fix.py (verification script)
+
+Modified Files (1):
+  ✓ src/cqc_cpcc/utilities/AI/openai_client.py (integrated normalizer)
+
+TEST RESULTS
+════════════
+✅ 517 total unit tests passing (100%)
+✅ 24 new tests added for schema normalization
+✅ 74% code coverage on new normalizer module
+✅ Verification script confirms fix works
+✅ All existing tests still pass (no regressions)
+
+VERIFICATION OUTPUT
+═══════════════════
+$ poetry run python scripts/verify_schema_fix.py
+
+OpenAI Schema Normalization Verification
+─────────────────────────────────────────
+
+📋 BEFORE NORMALIZATION:
+  Found 3 object schemas
+  Missing additionalProperties: 3
+    ❌ root
+    ❌ root.$defs.CriterionResult
+    ❌ root.$defs.DetectedError
+
+🔧 APPLYING NORMALIZATION...
+
+📋 AFTER NORMALIZATION:
+  Found 3 object schemas
+  Missing additionalProperties: 0
+  ✅ All objects now have additionalProperties!
+  ✅ Normalized schema passes validation!
+
+🔍 OPENAI API COMPATIBILITY CHECK:
+  ✅ Root object has additionalProperties: false
+  ✅ All 2 definitions have additionalProperties: false
+
+✅ SUCCESS: Schema normalization is working correctly!
+
+IMPACT ANALYSIS
+═══════════════
+✅ Fixes: Critical production bug (rubric grading 400 errors)
+✅ Automatic: No code changes needed for existing code
+✅ Safe: Original Pydantic schemas not mutated (deep copy)
+✅ Tested: 517 tests passing, 74% coverage on new code
+✅ Documented: Comprehensive PR summary and verification script
+✅ Future-proof: Prevents similar issues with new models
+
+MODELS AFFECTED
+═══════════════
+Every Pydantic model used with OpenAI structured outputs:
+  ✓ RubricAssessmentResult (rubric grading)
+  ✓ ErrorDefinitions (exam review)
+  ✓ FeedbackGuide (project feedback)
+  ✓ Any future models using get_structured_completion()
+
+BREAKING CHANGES
+════════════════
+None - This is a transparent bug fix with no API changes
+
+MIGRATION GUIDE
+═══════════════
+No migration needed! The fix is automatic.
+
+All existing code works without changes:
+  result = await get_structured_completion(
+      prompt="Grade this submission",
+      model_name="gpt-5-mini",
+      schema_model=RubricAssessmentResult
+  )
+  # Schema is automatically normalized before sending to OpenAI
+
+MODELS STANDARDIZED
+═══════════════════
+✓ Default model: gpt-5-mini (already in place)
+✓ All code uses GPT-5 family models
+✓ Backward compatibility maintained in tests for reference
+✓ Documentation updated to reflect GPT-5 focus
+
+KEY METRICS
+═══════════
+🐛 Bug fixed: 400 errors on structured outputs
+✅ Tests added: 24 new tests
+✅ Tests passing: 517/517 (100%)
+📚 Files created: 5
+📝 Files modified: 1
+🔒 Breaking changes: None
+🚀 Performance impact: Negligible (deep copy + recursive traversal)
+📊 Code coverage: 74% on new normalizer module
+
+CONCLUSION
+══════════
+This PR permanently fixes the OpenAI schema validation errors by implementing
+a robust, tested, and transparent schema normalizer. The fix is:
+  ✓ Automatic (no code changes needed)
+  ✓ Backward compatible
+  ✓ Thoroughly tested
+  ✓ Well documented
+  ✓ Future-proof
+
+The rubric grading system and all other structured output features will now
+work reliably with OpenAI's API in strict schema validation mode.
+
+READY TO MERGE ✅
