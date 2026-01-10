@@ -90,11 +90,27 @@ ignore:
   - "**/conftest.py"
 
 # Flag configuration for different test types
-# Currently we run unit tests; can expand to integration/e2e later
+# We upload coverage separately for unit, integration, and e2e tests
 flags:
   unit:
     # Coverage from unit tests
     paths:
       - "src/cqc_cpcc/"
     # Join with other flags if they exist
+    carryforward: true
+  
+  integration:
+    # Coverage from integration tests (backend only, no UI)
+    paths:
+      - "src/cqc_cpcc/"
+    # Join with other flags
+    carryforward: true
+  
+  e2e:
+    # Coverage from end-to-end tests (includes Streamlit UI)
+    # E2E tests exercise both backend and frontend code
+    paths:
+      - "src/cqc_cpcc/"
+      - "src/cqc_streamlit_app/"
+    # Join with other flags
     carryforward: true
