@@ -90,7 +90,7 @@ optional = true
 
 [tool.poetry.group.e2e.dependencies]
 playwright = "^1.40.0"
-pytest-playwright = "^0.4.3"
+pytest-playwright = "^0.7.2"
 
 [tool.coverage.run]
 omit = [
