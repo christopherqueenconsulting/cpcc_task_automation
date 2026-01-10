@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           echo "Running unit tests with pytest..."
-          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml
+          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml --durations=25
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
