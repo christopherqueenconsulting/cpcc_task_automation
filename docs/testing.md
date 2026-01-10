@@ -4,27 +4,38 @@ This document provides comprehensive information about testing in the CPCC Task 
 
 ## Overview
 
-The project uses **pytest** as the primary testing framework with various plugins for enhanced functionality. Tests are organized into unit tests and integration tests, with clear markers and fixtures.
+The project uses **pytest** as the primary testing framework with various plugins for enhanced functionality. Tests are organized into three types:
+
+1. **Unit Tests**: Fast, isolated tests of individual functions/classes with mocked dependencies
+2. **Integration Tests**: Backend tests that exercise larger code flows without UI
+3. **E2E Tests**: End-to-end tests using Playwright to test the Streamlit UI
 
 **Test Directory**: `tests/`
 
-**Coverage Goal**: 60%+ overall, with higher coverage for core business logic.
+**Coverage Goal**: 80% patch coverage (enforced), 80% overall project coverage (target).
 
 ## Test Structure
 
 ```
 tests/
-├── conftest.py              # Shared fixtures and configuration
-├── unit/                    # Unit tests (isolated functions/classes)
+├── conftest.py                     # Shared fixtures and configuration
+├── openai_test_helpers.py          # OpenAI mocking utilities
+├── unit/                           # Unit tests (isolated functions/classes)
 │   ├── test_attendance.py
 │   ├── test_brightspace.py
 │   ├── test_my_colleges.py
-│   ├── test_date.py
+│   ├── test_date_utilities.py
 │   ├── test_selenium_util.py
 │   └── ...
-└── integration/             # Integration tests (cross-module)
-    ├── test_attendance_workflow.py
-    ├── test_feedback_workflow.py
+├── integration/                    # Integration tests (backend only, no UI)
+│   ├── conftest.py                 # Integration-specific fixtures
+│   ├── test_error_definitions_integration.py
+│   ├── test_rubric_integration.py
+│   ├── test_rubric_grading_integration.py
+│   └── ...
+└── e2e/                            # E2E tests (Playwright, full UI)
+    ├── conftest.py                 # E2E-specific fixtures (Streamlit app)
+    ├── test_smoke.py               # Basic smoke tests
     └── ...
 ```
 
@@ -37,17 +48,16 @@ tests/
 poetry run pytest
 
 # Run only unit tests
-poetry run pytest tests/unit/
-
-# Run only integration tests
-poetry run pytest tests/integration/
-
-# Run by marker
 poetry run pytest -m unit
-poetry run pytest -m integration
+
+# Run only integration tests (backend, no UI)
+OPENAI_API_KEY=test-key poetry run pytest -m integration
+
+# Run only e2e tests (with Playwright UI)
+CQC_TEST_MODE=true OPENAI_API_KEY=test-key poetry run pytest -m e2e
 
 # Run specific test file
-poetry run pytest tests/unit/test_date.py
+poetry run pytest tests/unit/test_date_utilities.py
 
 # Run specific test function
 poetry run pytest tests/unit/test_date.py::test_is_date_in_range
@@ -84,6 +94,7 @@ markers = [
     "compile: mark placeholder test used to compile integration tests without running them",
     "unit: mark a test as a unit test",
     "integration: mark a test as an integration test",
+    "e2e: mark a test as an end-to-end test",
 ]
 asyncio_mode = "auto"
 ```
@@ -129,13 +140,37 @@ async def test_async_operation():
     assert result
 ```
 
-### Expensive Tests (Optional)
+### E2E Tests
 ```python
-@pytest.mark.expensive  # Custom marker for real API calls
-def test_real_openai_call():
-    """Integration test with real OpenAI API"""
-    # Only run when explicitly requested
-    pass
+@pytest.mark.e2e
+def test_streamlit_page_loads(page: Page, streamlit_app_url: str):
+    """Test Streamlit page loads"""
+    page.goto(streamlit_app_url)
+    page.wait_for_load_state("networkidle")
+    expect(page).to_have_title(re.compile(r".*CPCC.*"))
+```
+
+## Test Mode
+
+The `CQC_TEST_MODE` environment variable enables deterministic testing:
+
+```bash
+export CQC_TEST_MODE=true
+```
+
+**When enabled:**
+- OpenAI API calls return fake deterministic responses
+- No real network calls to external services
+- Streamlit app runs in isolated test mode
+
+**Usage in code:**
+```python
+from cqc_cpcc.utilities.env_constants import TEST_MODE
+
+if TEST_MODE:
+    return mock_response()  # Deterministic fake data
+else:
+    return openai.ChatCompletion.create(...)  # Real API call
 ```
 
 ## Fixtures
@@ -514,26 +549,43 @@ def test_attendance_page_logic(mocker):
 
 ## Continuous Integration
 
-### GitHub Actions
+### GitHub Actions Workflows
 
-Tests run automatically on push/PR via GitHub Actions (if configured).
+#### 1. Unit Tests (`unit-tests.yml`)
+- **Trigger**: On PR and push to master
+- **Coverage Upload**: Flag `unit`
+- **Codecov Check**: Patch coverage ≥80% (enforced)
 
-**Typical workflow**:
-```yaml
-name: Tests
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install Poetry
-        # ...
-      - name: Install dependencies
-        run: poetry install
-      - name: Run tests
-        run: poetry run pytest --cov=src
-```
+#### 2. Integration & E2E Tests (`integration-e2e-coverage.yml`)
+- **Trigger**: On PR and push to master
+- **Jobs**:
+  - `integration-tests`: Runs integration tests, uploads with flag `integration`
+  - `e2e-tests`: Runs e2e tests with Playwright, uploads with flag `e2e`
+
+### Codecov Flags
+
+Coverage is uploaded separately for each test type:
+
+| Flag | Test Type | Coverage Paths |
+|------|-----------|---------------|
+| `unit` | Unit tests | `src/cqc_cpcc/` |
+| `integration` | Integration tests | `src/cqc_cpcc/` |
+| `e2e` | E2E tests | `src/cqc_cpcc/`, `src/cqc_streamlit_app/` |
+
+**Viewing Coverage by Flag:**
+1. Go to Codecov PR comment
+2. Click "Flags" tab to see coverage breakdown per test type
+3. Overall coverage combines all flags
+
+### Codecov Enforcement
+
+- **Project Coverage**: Target 80% (informational, doesn't block PRs)
+- **Patch Coverage**: ≥80% required for new/modified code (enforced, blocks PRs)
+
+If patch coverage fails:
+1. Check Codecov comment for uncovered lines
+2. Add tests for new code paths
+3. Run locally: `poetry run pytest -m unit --cov=src --cov-report=term-missing`
 
 ## Best Practices
 
@@ -612,12 +664,12 @@ poetry run pytest tests/unit/test_date.py::test_specific_case -v -s
 
 ## Future Improvements
 
-1. **Increase coverage** - Target 70%+ for core logic
-2. **Add E2E tests** - Full workflows with real browser (Playwright)
-3. **Performance tests** - Ensure operations complete within time limits
-4. **Property-based tests** - Use Hypothesis for edge case generation
-5. **Visual regression tests** - For Streamlit UI changes
-6. **Mutation testing** - Verify tests actually catch bugs
+1. **Add more integration tests** - Test complex backend workflows
+2. **Add more E2E tests** - Cover grading, feedback, and settings pages
+3. **Property-based tests** - Use Hypothesis for edge case generation
+4. **Visual regression tests** - For Streamlit UI changes
+5. **Mutation testing** - Verify tests actually catch bugs
+6. **Performance tests** - Ensure operations complete within time limits
 
 ## Resources
 

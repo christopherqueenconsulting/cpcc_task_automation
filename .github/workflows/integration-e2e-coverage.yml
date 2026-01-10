@@ -1,0 +1,129 @@
+name: Integration & E2E Tests with Coverage
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+
+jobs:
+  integration-tests:
+    name: Integration Tests with Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          cache-key: integration-tests
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          echo "Installing dependencies for integration tests..."
+          poetry install --with test --no-interaction --no-ansi
+
+      - name: Run integration tests with coverage
+        shell: bash
+        env:
+          # Set test API key for integration tests (not actually called)
+          OPENAI_API_KEY: "test-key-not-used"
+        run: |
+          echo "Running integration tests with coverage..."
+          poetry run pytest -m integration --cov=src --cov-branch --cov-report=xml:coverage-integration.xml --cov-report=term-missing
+
+      - name: Upload integration coverage to Codecov
+        uses: codecov/codecov-action@v5
+        # Skip for Dependabot PRs
+        if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
+        with:
+          # Name for this upload
+          name: integration-coverage
+          
+          # Codecov token for authentication
+          token: ${{ secrets.CODECOV_TOKEN }}
+          
+          # Coverage file to upload
+          files: ./coverage-integration.xml
+          
+          # Flag to categorize this upload
+          flags: integration
+          
+          # Fail CI if upload fails
+          fail_ci_if_error: true
+          
+          # Verbose output for debugging
+          verbose: true
+
+  e2e-tests:
+    name: E2E Tests with Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          cache-key: e2e-tests
+
+      - name: Install dependencies including Playwright
+        shell: bash
+        run: |
+          echo "Installing dependencies for e2e tests..."
+          poetry install --with test,e2e --no-interaction --no-ansi
+
+      - name: Install Playwright browsers
+        shell: bash
+        run: |
+          echo "Installing Playwright Chromium browser..."
+          poetry run playwright install chromium --with-deps
+
+      - name: Run E2E tests with coverage
+        shell: bash
+        env:
+          # Set test mode to avoid real OpenAI calls
+          CQC_TEST_MODE: "true"
+          OPENAI_API_KEY: "test-key-not-used-in-test-mode"
+        run: |
+          echo "Running E2E tests with coverage..."
+          poetry run pytest -m e2e --cov=src --cov-branch --cov-report=xml:coverage-e2e.xml --cov-report=term-missing
+
+      - name: Upload E2E coverage to Codecov
+        uses: codecov/codecov-action@v5
+        # Skip for Dependabot PRs
+        if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
+        with:
+          # Name for this upload
+          name: e2e-coverage
+          
+          # Codecov token for authentication
+          token: ${{ secrets.CODECOV_TOKEN }}
+          
+          # Coverage file to upload
+          files: ./coverage-e2e.xml
+          
+          # Flag to categorize this upload
+          flags: e2e
+          
+          # Fail CI if upload fails
+          fail_ci_if_error: true
+          
+          # Verbose output for debugging
+          verbose: true
