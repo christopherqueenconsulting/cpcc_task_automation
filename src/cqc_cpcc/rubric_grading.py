@@ -318,10 +318,12 @@ def apply_error_based_scoring(rubric: Rubric, result: RubricAssessmentResult) ->
     """Apply backend error-based scoring for criteria with scoring_mode='error_count'.
     
     This function:
-    1. Identifies criteria with scoring_mode='error_count'
-    2. Computes their scores using error counts from result
-    3. Updates the corresponding CriterionResult with computed points
-    4. Recalculates total_points_earned
+    1. Applies Minor→Major error normalization (for CSC151 v2.0 rubric)
+    2. Identifies criteria with scoring_mode='error_count'
+    3. Computes their scores using error counts from result
+    4. Updates the corresponding CriterionResult with computed points
+    5. Recalculates total_points_earned
+    6. Stores original and effective error counts for transparency
     
     Args:
         rubric: The rubric with potentially error_count criteria
@@ -330,30 +332,44 @@ def apply_error_based_scoring(rubric: Rubric, result: RubricAssessmentResult) ->
     Returns:
         Updated RubricAssessmentResult with backend-computed error-based scores
     """
+    # Import normalize_errors and select_program_performance_level
+    from cqc_cpcc.error_scoring import normalize_errors, select_program_performance_level
+    
     # Check if we have error counts and error_count criteria
     has_error_counts = result.error_counts_by_severity is not None
     error_count_criteria = [c for c in rubric.criteria if c.enabled and c.scoring_mode == "error_count"]
     
-    if not error_count_criteria:
-        # No error_count criteria, return as-is
+    # Check if this is CSC151 v2.0 rubric (has program_performance criterion)
+    has_program_performance = any(
+        c.criterion_id == "program_performance" for c in rubric.criteria if c.enabled
+    )
+    
+    if not error_count_criteria and not has_program_performance:
+        # No error_count criteria and not CSC151 v2.0, return as-is
         return result
     
     if not has_error_counts:
         logger.warning(
-            f"Rubric has {len(error_count_criteria)} error_count criteria but no error counts in result. "
+            f"Rubric has error-based criteria but no error counts in result. "
             f"Using 0 errors for scoring."
         )
         # Default to 0 errors
-        major_count = 0
-        minor_count = 0
+        original_major = 0
+        original_minor = 0
     else:
         # Extract error counts by severity
-        major_count = get_error_count_for_severity(result.error_counts_by_severity, "major")
-        minor_count = get_error_count_for_severity(result.error_counts_by_severity, "minor")
+        original_major = get_error_count_for_severity(result.error_counts_by_severity, "major")
+        original_minor = get_error_count_for_severity(result.error_counts_by_severity, "minor")
     
     logger.info(
-        f"Applying error-based scoring: {major_count} major errors, {minor_count} minor errors, "
-        f"{len(error_count_criteria)} error_count criteria"
+        f"Original error counts: {original_major} major, {original_minor} minor"
+    )
+    
+    # Apply error normalization (4 minor = 1 major for CSC151)
+    effective_major, effective_minor = normalize_errors(original_major, original_minor)
+    
+    logger.info(
+        f"Effective error counts after normalization: {effective_major} major, {effective_minor} minor"
     )
     
     # Update criterion results with computed scores
@@ -365,12 +381,30 @@ def apply_error_based_scoring(rubric: Rubric, result: RubricAssessmentResult) ->
             None
         )
         
-        if rubric_criterion and rubric_criterion.scoring_mode == "error_count":
-            # Compute score using backend logic
+        if rubric_criterion and rubric_criterion.criterion_id == "program_performance":
+            # Special handling for CSC151 v2.0 program_performance criterion
+            # Use the select_program_performance_level function
+            level_label, score = select_program_performance_level(
+                effective_major,
+                effective_minor,
+                assignment_submitted=True  # Assume submitted if we have a result
+            )
+            
+            # Update the criterion result
+            criterion_result.points_earned = score
+            criterion_result.selected_level_label = level_label
+            
+            logger.info(
+                f"CSC151 program_performance: {level_label} = {score}/100 points "
+                f"(effective: {effective_major} major, {effective_minor} minor)"
+            )
+        
+        elif rubric_criterion and rubric_criterion.scoring_mode == "error_count":
+            # Standard error_count scoring using error_rules
             computed_score = compute_error_based_score(
                 rubric_criterion,
-                major_count,
-                minor_count
+                effective_major,  # Use effective counts
+                effective_minor
             )
             
             # Update the criterion result
@@ -387,10 +421,14 @@ def apply_error_based_scoring(rubric: Rubric, result: RubricAssessmentResult) ->
     # Recalculate total_points_earned
     new_total_earned = sum(r.points_earned for r in updated_criteria_results)
     
-    # Create updated result
+    # Create updated result with error count metadata
     updated_result = result.model_copy(update={
         "criteria_results": updated_criteria_results,
-        "total_points_earned": new_total_earned
+        "total_points_earned": new_total_earned,
+        "original_major_errors": original_major,
+        "original_minor_errors": original_minor,
+        "effective_major_errors": effective_major,
+        "effective_minor_errors": effective_minor
     })
     
     logger.info(

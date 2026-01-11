@@ -320,6 +320,10 @@ class RubricAssessmentResult(BaseModel):
         detected_errors: Optional list of detected errors
         error_counts_by_severity: Optional dict mapping severity (major/minor) to count
         error_counts_by_id: Optional dict mapping error_id to occurrence count
+        original_major_errors: Original major error count before normalization
+        original_minor_errors: Original minor error count before normalization
+        effective_major_errors: Effective major error count after Minor→Major conversion
+        effective_minor_errors: Effective minor error count after Minor→Major conversion
     """
     rubric_id: Annotated[str, Field(description="ID of the rubric used")]
     rubric_version: Annotated[str, Field(description="Version of the rubric used")]
@@ -345,6 +349,22 @@ class RubricAssessmentResult(BaseModel):
     error_counts_by_id: Annotated[
         Optional[dict[str, int]],
         Field(default=None, description="Error counts grouped by error_id")
+    ]
+    original_major_errors: Annotated[
+        Optional[int],
+        Field(default=None, description="Original major error count before normalization")
+    ]
+    original_minor_errors: Annotated[
+        Optional[int],
+        Field(default=None, description="Original minor error count before normalization")
+    ]
+    effective_major_errors: Annotated[
+        Optional[int],
+        Field(default=None, description="Effective major error count after Minor→Major conversion")
+    ]
+    effective_minor_errors: Annotated[
+        Optional[int],
+        Field(default=None, description="Effective minor error count after Minor→Major conversion")
     ]
     
     @field_validator('total_points_earned')

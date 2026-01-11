@@ -306,3 +306,101 @@ class TestConfigReloading:
         errors2 = load_error_definitions_from_config()
         
         assert len(errors1) == len(errors2)
+
+
+@pytest.mark.unit
+class TestCSC151V2Rubric:
+    """Test CSC151 v2.0 rubric configuration."""
+    
+    def test_csc151_v2_rubric_exists(self):
+        """Test that CSC151 v2.0 rubric loads correctly."""
+        rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        
+        assert rubric.rubric_id == "csc151_java_exam_rubric"
+        assert rubric.rubric_version == "2.0"
+        assert rubric.title == "CSC 151 Java Exam Rubric (Brightspace-aligned)"
+        assert "CSC151" in rubric.course_ids
+    
+    def test_csc151_v2_has_program_performance_criterion(self):
+        """Test that CSC151 v2.0 has program_performance criterion."""
+        rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        
+        # Should have exactly one criterion
+        assert len(rubric.criteria) == 1
+        
+        criterion = rubric.criteria[0]
+        assert criterion.criterion_id == "program_performance"
+        assert criterion.name == "Program Performance"
+        assert criterion.max_points == 100
+        assert criterion.enabled is True
+    
+    def test_csc151_v2_has_correct_levels(self):
+        """Test that CSC151 v2.0 has all 9 performance levels."""
+        rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        criterion = rubric.criteria[0]
+        
+        # Should have 9 levels
+        assert len(criterion.levels) == 9
+        
+        # Check level labels match specification
+        expected_labels = [
+            "A+ (0 errors)",
+            "A (1 minor error)",
+            "A- (2 minor errors)",
+            "B (3 minor errors)",
+            "B- (1 major error)",
+            "C (2 major errors)",
+            "D (3 major errors)",
+            "F (4+ major errors)",
+            "0 (Not submitted or incomplete)"
+        ]
+        
+        actual_labels = [level.label for level in criterion.levels]
+        assert actual_labels == expected_labels
+    
+    def test_csc151_v2_level_score_ranges(self):
+        """Test that CSC151 v2.0 levels have correct score ranges."""
+        rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        criterion = rubric.criteria[0]
+        
+        # Check specific score ranges
+        levels_by_label = {level.label: level for level in criterion.levels}
+        
+        assert levels_by_label["A+ (0 errors)"].score_min == 96
+        assert levels_by_label["A+ (0 errors)"].score_max == 100
+        
+        assert levels_by_label["A (1 minor error)"].score_min == 91
+        assert levels_by_label["A (1 minor error)"].score_max == 95
+        
+        assert levels_by_label["B- (1 major error)"].score_min == 71
+        assert levels_by_label["B- (1 major error)"].score_max == 80
+        
+        assert levels_by_label["F (4+ major errors)"].score_min == 1
+        assert levels_by_label["F (4+ major errors)"].score_max == 15
+        
+        assert levels_by_label["0 (Not submitted or incomplete)"].score_min == 0
+        assert levels_by_label["0 (Not submitted or incomplete)"].score_max == 0
+    
+    def test_csc151_v2_total_points(self):
+        """Test that CSC151 v2.0 has correct total points."""
+        rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        
+        # Total should be 100 (single criterion worth 100 points)
+        assert rubric.total_points_possible == 100
+    
+    def test_csc151_v2_description_mentions_conversion(self):
+        """Test that CSC151 v2.0 description mentions error conversion rule."""
+        rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        
+        # Description should mention the 4:1 conversion rule
+        assert "4 Minor Errors" in rubric.description
+        assert "1 Major Error" in rubric.description
+    
+    def test_csc151_v2_criterion_description_mentions_conversion(self):
+        """Test that program_performance criterion mentions conversion."""
+        rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        criterion = rubric.criteria[0]
+        
+        # Criterion description should mention conversion
+        assert "Minor→Major conversion" in criterion.description or "4 Minor Errors" in criterion.description
+

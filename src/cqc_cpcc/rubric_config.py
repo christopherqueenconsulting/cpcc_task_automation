@@ -195,112 +195,73 @@ RUBRICS_JSON = """{
     },
     "csc151_java_exam_rubric": {
         "rubric_id": "csc151_java_exam_rubric",
-        "rubric_version": "1.0",
-        "title": "CSC 151 Java Exam Rubric",
-        "description": "Specialized rubric for CSC 151 Java programming exams",
+        "rubric_version": "2.0",
+        "title": "CSC 151 Java Exam Rubric (Brightspace-aligned)",
+        "description": "Aligned to the official Brightspace Exam Grading Rubric for CSC151. Program Performance is scored strictly by error counts. Rule: Every 4 Minor Errors convert into 1 Major Error before scoring.",
         "course_ids": ["CSC151"],
         "criteria": [
             {
-                "criterion_id": "correctness",
-                "name": "Correctness & Logic",
-                "description": "Program produces correct output and implements proper logic",
-                "max_points": 50,
+                "criterion_id": "program_performance",
+                "name": "Program Performance",
+                "description": "Apply Minor→Major conversion first. Every 4 Minor Errors become 1 Major Error (remainder stays Minor). Then select the score band.",
+                "max_points": 100,
                 "enabled": true,
                 "levels": [
                     {
-                        "label": "Exemplary",
-                        "score_min": 45,
-                        "score_max": 50,
-                        "description": "All requirements met perfectly with correct logic throughout"
+                        "label": "A+ (0 errors)",
+                        "score_min": 96,
+                        "score_max": 100,
+                        "description": "Perfect - no errors detected"
                     },
                     {
-                        "label": "Proficient",
-                        "score_min": 35,
-                        "score_max": 44,
-                        "description": "Most requirements met with minor logic issues"
+                        "label": "A (1 minor error)",
+                        "score_min": 91,
+                        "score_max": 95,
+                        "description": "Excellent - only 1 minor error"
                     },
                     {
-                        "label": "Developing",
-                        "score_min": 25,
-                        "score_max": 34,
-                        "description": "Some requirements met but significant logic errors"
+                        "label": "A- (2 minor errors)",
+                        "score_min": 86,
+                        "score_max": 90,
+                        "description": "Very good - 2 minor errors"
                     },
                     {
-                        "label": "Beginning",
+                        "label": "B (3 minor errors)",
+                        "score_min": 81,
+                        "score_max": 85,
+                        "description": "Good - 3 minor errors"
+                    },
+                    {
+                        "label": "B- (1 major error)",
+                        "score_min": 71,
+                        "score_max": 80,
+                        "description": "Satisfactory - 1 major error"
+                    },
+                    {
+                        "label": "C (2 major errors)",
+                        "score_min": 61,
+                        "score_max": 70,
+                        "description": "Acceptable - 2 major errors"
+                    },
+                    {
+                        "label": "D (3 major errors)",
+                        "score_min": 16,
+                        "score_max": 60,
+                        "description": "Poor - 3 major errors"
+                    },
+                    {
+                        "label": "F (4+ major errors)",
+                        "score_min": 1,
+                        "score_max": 15,
+                        "description": "Failing - 4 or more major errors"
+                    },
+                    {
+                        "label": "0 (Not submitted or incomplete)",
                         "score_min": 0,
-                        "score_max": 24,
-                        "description": "Major logic errors or minimal functionality"
+                        "score_max": 0,
+                        "description": "Not submitted or incomplete"
                     }
                 ]
-            },
-            {
-                "criterion_id": "syntax_compilation",
-                "name": "Syntax & Compilation",
-                "description": "Code compiles without errors and follows Java syntax",
-                "max_points": 20,
-                "enabled": true,
-                "levels": [
-                    {
-                        "label": "Exemplary",
-                        "score_min": 18,
-                        "score_max": 20,
-                        "description": "Compiles perfectly with no syntax errors"
-                    },
-                    {
-                        "label": "Proficient",
-                        "score_min": 14,
-                        "score_max": 17,
-                        "description": "Compiles with only minor syntax issues"
-                    },
-                    {
-                        "label": "Developing",
-                        "score_min": 10,
-                        "score_max": 13,
-                        "description": "Multiple syntax errors prevent compilation"
-                    },
-                    {
-                        "label": "Beginning",
-                        "score_min": 0,
-                        "score_max": 9,
-                        "description": "Significant syntax errors throughout"
-                    }
-                ]
-            },
-            {
-                "criterion_id": "documentation",
-                "name": "Documentation & Comments",
-                "description": "Code includes appropriate comments and documentation",
-                "max_points": 15,
-                "enabled": true
-            },
-            {
-                "criterion_id": "style",
-                "name": "Code Style & Conventions",
-                "description": "Follows Java naming conventions and style guidelines",
-                "max_points": 15,
-                "enabled": true
-            }
-        ],
-        "overall_bands": [
-            {
-                "label": "Excellent",
-                "score_min": 90,
-                "score_max": 100
-            },
-            {
-                "label": "Good",
-                "score_min": 80,
-                "score_max": 89
-            },
-            {
-                "label": "Satisfactory",
-                "score_min": 70,
-                "score_max": 79
-            },
-            {
-                "label": "Needs Improvement",
-                "score_min": 0,
-                "score_max": 69
             }
         ]
     }
