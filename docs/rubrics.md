@@ -15,14 +15,16 @@ The rubric system provides:
 ## Table of Contents
 
 1. [Rubric Structure](#rubric-structure)
-2. [Course-Scoped Rubrics](#course-scoped-rubrics)
-3. [Adding a New Rubric](#adding-a-new-rubric)
-4. [Using Rubrics in Code](#using-rubrics-in-code)
-5. [Streamlit UI Workflow](#streamlit-ui-workflow)
-6. [Streamlit UI Overrides](#streamlit-ui-overrides)
-7. [Understanding Results](#understanding-results)
-8. [Error Definitions](#error-definitions)
-9. [Examples](#examples)
+2. [Scoring Modes](#scoring-modes)
+3. [Course-Scoped Rubrics](#course-scoped-rubrics)
+4. [Adding a New Rubric](#adding-a-new-rubric)
+5. [Using Rubrics in Code](#using-rubrics-in-code)
+6. [Streamlit UI Workflow](#streamlit-ui-workflow)
+7. [Streamlit UI Overrides](#streamlit-ui-overrides)
+8. [Understanding Results](#understanding-results)
+9. [Error Definitions](#error-definitions)
+10. [Examples](#examples)
+11. [Built-in Rubrics](#built-in-rubrics)
 
 ---
 
@@ -83,6 +85,164 @@ A rubric consists of:
 2. **Level Ranges**: `0 <= score_min <= score_max <= criterion.max_points`
 3. **Overall Bands**: `band.score_max <= total_points_possible`
 4. **Non-overlapping**: Levels should ideally not overlap (validated with warnings)
+
+---
+
+## Scoring Modes
+
+The rubric system supports three scoring modes for criteria, allowing flexible grading strategies:
+
+### Manual Scoring (`scoring_mode: "manual"`)
+
+**Use when**: The LLM or human directly assigns points.
+
+In manual mode, the grader (LLM or human) assigns points directly within the criterion's range (0 to max_points). The backend does not modify these points.
+
+```json
+{
+    "criterion_id": "creativity",
+    "name": "Creativity & Originality",
+    "max_points": 20,
+    "enabled": true,
+    "scoring_mode": "manual"
+}
+```
+
+**How it works**:
+- LLM evaluates the submission and assigns points (e.g., 17/20)
+- Backend uses the LLM-assigned points as-is
+- Best for subjective criteria where precise scoring rules are difficult to define
+
+---
+
+### Level-Band Scoring (`scoring_mode: "level_band"`)
+
+**Use when**: You want the LLM to select a performance level, but the backend computes exact points deterministically.
+
+In level-band mode, the LLM selects which performance level the submission achieves (e.g., "Proficient", "Exemplary"), and the backend computes the exact points using a strategy (min, mid, or max of the level's range).
+
+```json
+{
+    "criterion_id": "analysis",
+    "name": "Intelligence Analysis",
+    "max_points": 30,
+    "enabled": true,
+    "scoring_mode": "level_band",
+    "points_strategy": "min",
+    "levels": [
+        {
+            "label": "Exemplary",
+            "score_min": 27,
+            "score_max": 30,
+            "description": "Insightful and nuanced analysis"
+        },
+        {
+            "label": "Proficient",
+            "score_min": 23,
+            "score_max": 26,
+            "description": "Good analysis with relevant examples"
+        },
+        {
+            "label": "Developing",
+            "score_min": 18,
+            "score_max": 22,
+            "description": "Basic analysis with limited depth"
+        },
+        {
+            "label": "Beginning",
+            "score_min": 0,
+            "score_max": 17,
+            "description": "Superficial or missing analysis"
+        }
+    ]
+}
+```
+
+**How it works**:
+1. LLM evaluates the submission and selects a level label (e.g., "Proficient")
+2. Backend finds the matching level (Proficient = 23-26 points)
+3. Backend computes exact points using the `points_strategy`:
+   - `"min"`: Award `score_min` (23 points) - **default, most conservative**
+   - `"mid"`: Award midpoint `(score_min + score_max) // 2` (24 points)
+   - `"max"`: Award `score_max` (26 points) - most generous
+
+**Benefits**:
+- **Prevents "math drift"**: LLM doesn't compute totals or do arithmetic
+- **Consistent scoring**: Same level always maps to same points (given strategy)
+- **Traceable**: Easy to see which level was selected and how points were computed
+- **Flexible**: Can adjust strategy (min/mid/max) without changing the rubric structure
+
+**When to use**:
+- Reflection papers, essays, or written assignments with descriptive performance levels
+- Any assignment where you want human-readable performance labels
+- When you trust the LLM's judgment on *quality* but not on *arithmetic*
+
+---
+
+### Error-Count Scoring (`scoring_mode: "error_count"`)
+
+**Use when**: Points are computed by deducting for detected errors (e.g., programming exams).
+
+In error-count mode, the LLM detects errors (major and minor), and the backend computes points by applying deductions based on error counts.
+
+```json
+{
+    "criterion_id": "correctness",
+    "name": "Program Correctness",
+    "max_points": 50,
+    "enabled": true,
+    "scoring_mode": "error_count",
+    "error_rules": {
+        "major_weight": 10,
+        "minor_weight": 2,
+        "floor_score": 0,
+        "max_deduction": 50,
+        "error_conversion": {
+            "minor_to_major_ratio": 4
+        }
+    }
+}
+```
+
+**How it works**:
+1. LLM detects errors and categorizes them (major vs. minor)
+2. Backend applies optional error conversion (e.g., 4 minor = 1 major)
+3. Backend computes deductions: `deduction = (major_count * major_weight) + (minor_count * minor_weight)`
+4. Backend computes points: `points = max_points - deduction`
+5. Backend applies optional caps: `floor_score` (minimum) and `max_deduction` (cap on losses)
+
+**Error Conversion Rules**:
+
+The `error_conversion` field allows you to normalize error counts before scoring. This is useful for rubrics like CSC151 where "4 minor errors = 1 major error".
+
+```json
+"error_conversion": {
+    "minor_to_major_ratio": 4
+}
+```
+
+**Example**:
+- Original counts: 1 major, 5 minor
+- After conversion: 2 major, 1 minor (5 minor ÷ 4 = 1 major + 1 minor remainder)
+- Deduction: `2*10 + 1*2 = 22 points`
+- Final score: `50 - 22 = 28 points`
+
+**When to use**:
+- Programming exams with clear error categories
+- Any assignment where grading is based on counting mistakes
+- When you want consistent, objective scoring based on error counts
+
+---
+
+### Choosing a Scoring Mode
+
+| Scoring Mode    | LLM Role                          | Backend Role                 | Best For                          |
+|-----------------|-----------------------------------|------------------------------|-----------------------------------|
+| **manual**      | Assigns points directly           | Uses LLM points as-is        | Subjective criteria               |
+| **level_band**  | Selects performance level         | Computes points from level   | Essays, reflections, analysis     |
+| **error_count** | Detects and counts errors         | Computes points via deductions| Programming exams, technical work |
+
+**General Principle**: Use `level_band` or `error_count` whenever you want the backend to handle arithmetic. This prevents "math drift" where the LLM computes incorrect totals.
 
 ---
 
@@ -708,6 +868,136 @@ See inline documentation in:
 
 ---
 
+## Built-in Rubrics
+
+The system includes several pre-configured rubrics for common use cases:
+
+### 1. Default 100-Point Rubric (`default_100pt_rubric`)
+
+**Purpose**: General-purpose rubric for programming assignments
+
+**Scoring Mode**: Manual (all criteria)
+
+**Total Points**: 100
+
+**Criteria**:
+- **Understanding & Correctness** (25 points): Demonstrates understanding of concepts with correct implementation
+- **Completeness / Requirements Coverage** (30 points): Addresses all assignment requirements
+- **Code Quality / Clarity** (25 points): Code is clear, well-structured, and maintainable
+- **Style / Conventions** (20 points): Follows language conventions and coding standards
+
+**Performance Levels**: 4 levels per criterion (Exemplary, Proficient, Developing, Beginning)
+
+**Overall Bands**: Exemplary (90-100), Proficient (75-89), Developing (60-74), Beginning (0-59)
+
+**When to use**: General programming assignments, projects, or labs where you want balanced assessment across multiple dimensions.
+
+---
+
+### 2. CSC 151 Java Exam Rubric (`csc151_java_exam_rubric`)
+
+**Purpose**: Brightspace-aligned rubric for CSC151 Java programming exams
+
+**Scoring Mode**: Special (uses CSC151 v2.0 program_performance criterion)
+
+**Total Points**: 100
+
+**Criteria**:
+- **Program Performance** (100 points): Single criterion scored entirely by error counts
+
+**Error Conversion Rule**: **4 minor errors = 1 major error** (applied before scoring)
+
+**Performance Levels**: 9 levels based on effective error counts:
+- A+ (0 errors): 96-100 points
+- A (1 minor error): 91-95 points
+- A- (2 minor errors): 86-90 points
+- B (3 minor errors): 81-85 points
+- B- (1 major error): 71-80 points
+- C (2 major errors): 61-70 points
+- D (3 major errors): 16-60 points
+- F (4+ major errors): 1-15 points
+- 0 (Not submitted): 0 points
+
+**How it works**:
+1. LLM detects major and minor errors
+2. Backend converts 4 minor errors to 1 major error
+3. Backend selects level based on effective error counts
+4. Backend awards midpoint score for the level
+
+**When to use**: CSC151 programming exams requiring strict Brightspace-aligned grading
+
+---
+
+### 3. AI Assignment Reflection Rubric (`ai_assignment_reflection_rubric`)
+
+**Purpose**: Rubric for grading AI tool reflection assignments
+
+**Scoring Mode**: Level-band (all criteria)
+
+**Total Points**: 100
+
+**Criteria**:
+- **Tool Description & Usage** (25 points): Understanding of AI tool's purpose, features, and usage
+- **Intelligence Analysis** (30 points): Analysis of AI intelligence, capabilities, and limitations
+- **Personal Goals & Application** (25 points): Connection to personal learning goals and future applications
+- **Presentation & Requirements** (20 points): Format, organization, writing quality, and completeness
+
+**Performance Levels**: 4 levels per criterion (Exemplary, Proficient, Developing, Beginning)
+
+**Points Strategy**: `min` (uses minimum of level range for conservative grading)
+
+**Overall Bands**: Exemplary (90-100), Proficient (75-89), Developing (60-74), Beginning (0-59)
+
+**Example Level Ranges** (Tool Description & Usage):
+- Exemplary: 23-25 points (with `min` strategy, awards 23)
+- Proficient: 19-22 points (with `min` strategy, awards 19)
+- Developing: 15-18 points (with `min` strategy, awards 15)
+- Beginning: 0-14 points (with `min` strategy, awards actual score_min which varies)
+
+**How it works**:
+1. LLM evaluates the reflection paper and selects a level for each criterion (e.g., "Proficient")
+2. Backend computes exact points using the `min` strategy (e.g., Proficient → 19 points)
+3. Backend sums criterion points to get total (e.g., 19 + 23 + 19 + 12 = 73)
+4. Backend computes percentage (73/100 = 73%)
+5. Backend selects overall band (73% → "Developing")
+
+**When to use**: Reflection papers on AI tool usage, writing assignments with descriptive performance levels, or any assignment where you want level-based assessment without manual math.
+
+**Benefits**:
+- LLM focuses on quality assessment, not arithmetic
+- Consistent scoring (same level always maps to same points)
+- Transparent scoring (students can see exactly which level they achieved)
+- No "math drift" (LLM can't compute incorrect totals)
+
+---
+
+### Using Built-in Rubrics
+
+```python
+from cqc_cpcc.rubric_config import list_available_rubrics, get_rubric_by_id
+
+# List all available rubrics
+rubric_ids = list_available_rubrics()
+print(rubric_ids)
+# Output: ['default_100pt_rubric', 'csc151_java_exam_rubric', 'ai_assignment_reflection_rubric']
+
+# Load a specific rubric
+ai_rubric = get_rubric_by_id("ai_assignment_reflection_rubric")
+print(f"{ai_rubric.title}: {ai_rubric.total_points_possible} points")
+# Output: AI Assignment Reflection Rubric: 100 points
+
+# Grade with the rubric
+result = await grade_with_rubric(
+    rubric=ai_rubric,
+    assignment_instructions="Write a reflection on using GitHub Copilot...",
+    student_submission="I used GitHub Copilot to help me write code...",
+)
+print(f"Score: {result.total_points_earned}/{result.total_points_possible}")
+print(f"Band: {result.overall_band_label}")
+```
+
+---
+
 ## Testing
 
 Run rubric tests:
@@ -721,6 +1011,10 @@ poetry run pytest tests/unit/test_rubric_models.py -v
 poetry run pytest tests/unit/test_rubric_config.py -v
 poetry run pytest tests/unit/test_rubric_overrides.py -v
 poetry run pytest tests/unit/test_rubric_grading.py -v
+
+# Scoring engine tests (new)
+poetry run pytest tests/unit/test_scoring_engine.py -v
+poetry run pytest tests/unit/test_ai_reflection_rubric.py -v
 ```
 
 ---

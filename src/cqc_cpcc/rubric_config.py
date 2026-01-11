@@ -206,6 +206,7 @@ RUBRICS_JSON = """{
                 "description": "Apply Minor→Major conversion first. Every 4 Minor Errors become 1 Major Error (remainder stays Minor). Then select the score band.",
                 "max_points": 100,
                 "enabled": true,
+                "scoring_mode": "manual",
                 "levels": [
                     {
                         "label": "A+ (0 errors)",
@@ -262,6 +263,177 @@ RUBRICS_JSON = """{
                         "description": "Not submitted or incomplete"
                     }
                 ]
+            }
+        ]
+    },
+    "ai_assignment_reflection_rubric": {
+        "rubric_id": "ai_assignment_reflection_rubric",
+        "rubric_version": "1.0",
+        "title": "AI Assignment Reflection Rubric",
+        "description": "Rubric for grading AI tool reflection assignments. Uses level-band scoring where LLM selects performance levels and backend computes exact points.",
+        "course_ids": ["CSC151", "CSC251"],
+        "criteria": [
+            {
+                "criterion_id": "tool_description_usage",
+                "name": "Tool Description & Usage",
+                "description": "Demonstrates clear understanding of the AI tool's purpose, features, and how it was used in the assignment",
+                "max_points": 25,
+                "enabled": true,
+                "scoring_mode": "level_band",
+                "points_strategy": "min",
+                "levels": [
+                    {
+                        "label": "Exemplary",
+                        "score_min": 23,
+                        "score_max": 25,
+                        "description": "Comprehensive description of the AI tool with detailed explanation of features used; demonstrates sophisticated understanding of tool capabilities"
+                    },
+                    {
+                        "label": "Proficient",
+                        "score_min": 19,
+                        "score_max": 22,
+                        "description": "Clear description of the AI tool and its main features; explains how the tool was used effectively"
+                    },
+                    {
+                        "label": "Developing",
+                        "score_min": 15,
+                        "score_max": 18,
+                        "description": "Basic description of the AI tool; mentions some features but lacks detail on usage or effectiveness"
+                    },
+                    {
+                        "label": "Beginning",
+                        "score_min": 0,
+                        "score_max": 14,
+                        "description": "Minimal or unclear description of the AI tool; does not adequately explain usage or features"
+                    }
+                ]
+            },
+            {
+                "criterion_id": "intelligence_analysis",
+                "name": "Intelligence Analysis",
+                "description": "Analyzes the intelligence and limitations of the AI tool; provides thoughtful reflection on its capabilities and constraints",
+                "max_points": 30,
+                "enabled": true,
+                "scoring_mode": "level_band",
+                "points_strategy": "min",
+                "levels": [
+                    {
+                        "label": "Exemplary",
+                        "score_min": 27,
+                        "score_max": 30,
+                        "description": "Insightful and nuanced analysis of AI intelligence; identifies both capabilities and limitations with specific examples; demonstrates critical thinking"
+                    },
+                    {
+                        "label": "Proficient",
+                        "score_min": 23,
+                        "score_max": 26,
+                        "description": "Good analysis of AI intelligence; identifies key capabilities and some limitations; provides relevant examples"
+                    },
+                    {
+                        "label": "Developing",
+                        "score_min": 18,
+                        "score_max": 22,
+                        "description": "Basic analysis of AI intelligence; mentions capabilities or limitations but lacks depth; few or generic examples"
+                    },
+                    {
+                        "label": "Beginning",
+                        "score_min": 0,
+                        "score_max": 17,
+                        "description": "Superficial or missing analysis; does not adequately explore AI capabilities or limitations"
+                    }
+                ]
+            },
+            {
+                "criterion_id": "personal_goals_application",
+                "name": "Personal Goals & Application",
+                "description": "Connects AI tool usage to personal learning goals and future applications; reflects on learning and growth",
+                "max_points": 25,
+                "enabled": true,
+                "scoring_mode": "level_band",
+                "points_strategy": "min",
+                "levels": [
+                    {
+                        "label": "Exemplary",
+                        "score_min": 23,
+                        "score_max": 25,
+                        "description": "Thoughtful connection between AI tool and personal goals; detailed reflection on learning; specific plans for future application"
+                    },
+                    {
+                        "label": "Proficient",
+                        "score_min": 19,
+                        "score_max": 22,
+                        "description": "Clear connection to personal goals; reflects on learning experience; mentions future applications"
+                    },
+                    {
+                        "label": "Developing",
+                        "score_min": 15,
+                        "score_max": 18,
+                        "description": "Basic connection to goals; limited reflection; vague about future applications"
+                    },
+                    {
+                        "label": "Beginning",
+                        "score_min": 0,
+                        "score_max": 14,
+                        "description": "Minimal or no connection to personal goals; lacks reflection or future application plans"
+                    }
+                ]
+            },
+            {
+                "criterion_id": "presentation_requirements",
+                "name": "Presentation & Requirements",
+                "description": "Meets assignment requirements including format, length, organization, and writing quality",
+                "max_points": 20,
+                "enabled": true,
+                "scoring_mode": "level_band",
+                "points_strategy": "min",
+                "levels": [
+                    {
+                        "label": "Exemplary",
+                        "score_min": 18,
+                        "score_max": 20,
+                        "description": "Exceeds all requirements; well-organized; excellent writing quality; professional presentation"
+                    },
+                    {
+                        "label": "Proficient",
+                        "score_min": 15,
+                        "score_max": 17,
+                        "description": "Meets all requirements; good organization; clear writing; appropriate presentation"
+                    },
+                    {
+                        "label": "Developing",
+                        "score_min": 12,
+                        "score_max": 14,
+                        "description": "Meets most requirements; some organizational or writing issues; adequate presentation"
+                    },
+                    {
+                        "label": "Beginning",
+                        "score_min": 0,
+                        "score_max": 11,
+                        "description": "Missing requirements; poor organization or writing quality; inadequate presentation"
+                    }
+                ]
+            }
+        ],
+        "overall_bands": [
+            {
+                "label": "Exemplary",
+                "score_min": 90,
+                "score_max": 100
+            },
+            {
+                "label": "Proficient",
+                "score_min": 75,
+                "score_max": 89
+            },
+            {
+                "label": "Developing",
+                "score_min": 60,
+                "score_max": 74
+            },
+            {
+                "label": "Beginning",
+                "score_min": 0,
+                "score_max": 59
             }
         ]
     }

@@ -66,6 +66,21 @@ class PerformanceLevel(BaseModel):
         return score_max
 
 
+class ErrorConversionRules(BaseModel):
+    """Rules for converting minor errors to major errors.
+    
+    Used in error-count scoring to normalize error counts before
+    selecting performance level or computing score.
+    
+    Attributes:
+        minor_to_major_ratio: How many minor errors equal 1 major error (default: 4)
+    """
+    minor_to_major_ratio: Annotated[
+        int,
+        Field(default=4, ge=1, description="How many minor errors equal 1 major error (e.g., 4)")
+    ]
+
+
 class ErrorCountScoringRules(BaseModel):
     """Rules for computing criterion score based on error counts.
     
@@ -77,6 +92,7 @@ class ErrorCountScoringRules(BaseModel):
         minor_weight: Points deducted per minor error (positive value)
         max_deduction: Optional maximum total deduction (cap on losses)
         floor_score: Optional minimum score (cannot go below this)
+        error_conversion: Optional rules for converting minor errors to major errors
     """
     major_weight: Annotated[float, Field(ge=0, description="Points deducted per major error")]
     minor_weight: Annotated[float, Field(ge=0, description="Points deducted per minor error")]
@@ -88,6 +104,10 @@ class ErrorCountScoringRules(BaseModel):
         Optional[float],
         Field(default=None, ge=0, description="Minimum score (floor)")
     ]
+    error_conversion: Annotated[
+        Optional[ErrorConversionRules],
+        Field(default=None, description="Optional rules for minor to major error conversion")
+    ]
 
 
 class Criterion(BaseModel):
@@ -96,8 +116,10 @@ class Criterion(BaseModel):
     Each criterion represents one aspect of grading (e.g., "Understanding", "Code Quality").
     Criteria have a maximum point value and optionally define performance levels.
     
-    New: Criteria can use error-based scoring where points are deducted based on
-    detected major/minor error counts.
+    Supports three scoring modes:
+    - "manual": LLM or human assigns points directly (0 to max_points)
+    - "level_band": LLM selects performance level label, backend computes points from range
+    - "error_count": LLM detects errors, backend computes points via deductions
     
     Attributes:
         criterion_id: Stable identifier for this criterion (used in overrides and results)
@@ -106,8 +128,9 @@ class Criterion(BaseModel):
         max_points: Maximum points possible for this criterion
         levels: Optional list of performance levels defining score ranges
         enabled: Whether this criterion is active (for overrides)
-        scoring_mode: How to score this criterion ("manual" or "error_count")
+        scoring_mode: How to score this criterion ("manual", "level_band", or "error_count")
         error_rules: Optional rules for error-based scoring (required if scoring_mode="error_count")
+        points_strategy: Strategy for selecting points within a level range (for level_band mode)
     """
     criterion_id: Annotated[str, Field(description="Stable identifier for this criterion")]
     name: Annotated[str, Field(description="Human-readable criterion name")]
@@ -119,12 +142,16 @@ class Criterion(BaseModel):
     ]
     enabled: Annotated[bool, Field(default=True, description="Whether this criterion is enabled")]
     scoring_mode: Annotated[
-        Literal["manual", "error_count"],
-        Field(default="manual", description="Scoring mode: manual (LLM/human) or error_count (computed)")
+        Literal["manual", "level_band", "error_count"],
+        Field(default="manual", description="Scoring mode: manual, level_band (LLM selects level), or error_count (computed from errors)")
     ]
     error_rules: Annotated[
         Optional[ErrorCountScoringRules],
         Field(default=None, description="Rules for error-based scoring (required if scoring_mode='error_count')")
+    ]
+    points_strategy: Annotated[
+        Literal["min", "mid", "max"],
+        Field(default="min", description="Strategy for selecting points within level range (for level_band mode)")
     ]
     
     @model_validator(mode='after')
@@ -161,6 +188,16 @@ class Criterion(BaseModel):
             raise ValueError(
                 f"Criterion '{self.criterion_id}' has scoring_mode='error_count' "
                 f"but error_rules is not provided"
+            )
+        return self
+    
+    @model_validator(mode='after')
+    def validate_levels_when_level_band(self) -> 'Criterion':
+        """Validate that levels are provided when scoring_mode is level_band."""
+        if self.scoring_mode == "level_band" and (not self.levels or len(self.levels) == 0):
+            raise ValueError(
+                f"Criterion '{self.criterion_id}' has scoring_mode='level_band' "
+                f"but no levels are defined"
             )
         return self
 
