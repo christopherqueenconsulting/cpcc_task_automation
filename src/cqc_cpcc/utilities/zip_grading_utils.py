@@ -1,12 +1,15 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
-"""Utilities for ZIP-based student batch grading with token safety.
+"""Utilities for ZIP-based student batch grading.
 
 This module provides utilities for:
 1. Extracting student submissions from ZIP files (folder-based)
-2. Token estimation and budgeting to prevent context_length_exceeded
-3. File prioritization and safe truncation
-4. Building submission text with token limits
+2. Token estimation for preprocessing detection
+3. File prioritization
+4. Building submission text for grading
+
+IMPORTANT: This module does NOT truncate student code. Large submissions
+are handled via preprocessing (see openai_client.py).
 
 Used by both legacy and rubric-based exam grading tabs.
 """
@@ -105,26 +108,21 @@ class StudentSubmission:
         files: Dict mapping filename to temp file path (created with delete=False)
         total_chars: Total character count across all files
         estimated_tokens: Estimated token count
-        is_truncated: Whether files were omitted due to size
-        omitted_files: List of filenames that were omitted
     
     Note:
         Temporary files in the `files` dict are created with `delete=False` and must
         be manually cleaned up by the caller after use. This is by design to allow
         the files to be read multiple times during grading. Callers should use
         `os.unlink(filepath)` to remove temp files when done.
+        
+        IMPORTANT: This class no longer tracks truncation. Large submissions are
+        handled via preprocessing (see openai_client.py), not truncation.
     """
     student_id: str
     student_name: str
     files: dict[str, str]  # filename -> temp_file_path
     total_chars: int = 0
     estimated_tokens: int = 0
-    is_truncated: bool = False
-    omitted_files: list[str] = None
-    
-    def __post_init__(self):
-        if self.omitted_files is None:
-            self.omitted_files = []
 
 
 def estimate_tokens(text: str) -> int:
@@ -192,10 +190,11 @@ def extract_student_submissions_from_zip(
     accepted_file_types: list[str],
     max_tokens_per_student: int = DEFAULT_MAX_INPUT_TOKENS,
 ) -> dict[str, StudentSubmission]:
-    """Extract student submissions from a ZIP file with token budgeting.
+    """Extract student submissions from a ZIP file with token estimation.
     
     Parses ZIP into per-student submission units based on folder structure.
-    Applies token budgeting to prevent context overflow.
+    Provides token estimates but does NOT truncate files. Large submissions
+    are handled via preprocessing (see openai_client.py).
     
     Expected ZIP structure:
         submission.zip/
@@ -214,13 +213,17 @@ def extract_student_submissions_from_zip(
     Args:
         zip_path: Path to ZIP file
         accepted_file_types: List of acceptable file extensions (e.g., ['.java', '.txt'])
-        max_tokens_per_student: Maximum tokens to extract per student
+        max_tokens_per_student: Token limit (used for logging only, not enforced)
         
     Returns:
         Dict mapping student_id to StudentSubmission
         
     Raises:
         ValueError: If ZIP is empty or malformed
+        
+    Note:
+        This function no longer truncates. The max_tokens_per_student parameter
+        is kept for backward compatibility but only used for warnings.
     """
     if not zip_path.endswith('.zip'):
         raise ValueError(f"Not a ZIP file: {zip_path}")
@@ -372,20 +375,15 @@ def extract_student_submissions_from_zip(
                     file_content = read_file(temp_file_path, convert_to_markdown=False)
                     file_tokens = estimate_tokens(file_content)
                     
-                    # Check if adding this file would exceed budget
+                    # NO TRUNCATION: Just warn if submission is large
                     if total_tokens + file_tokens > max_tokens_per_student:
-                        # Budget exceeded - mark as truncated
-                        submission.is_truncated = True
-                        submission.omitted_files.append(file_name)
                         logger.warning(
-                            f"Student {student_id}: Omitting {file_name} "
-                            f"({file_tokens} tokens) to stay within budget"
+                            f"Student {student_id}: Large submission detected "
+                            f"(~{total_tokens + file_tokens} tokens). "
+                            f"Preprocessing will be used automatically during grading."
                         )
-                        # Clean up temp file since we're not using it
-                        os.unlink(temp_file_path)
-                        continue
                     
-                    # Add file to submission
+                    # Add file to submission (no budget enforcement)
                     submission.files[file_name] = temp_file_path
                     submission.total_chars += len(file_content)
                     total_tokens += file_tokens
@@ -403,7 +401,6 @@ def extract_student_submissions_from_zip(
                 logger.info(
                     f"Extracted student '{student_id}': {len(submission.files)} files, "
                     f"~{submission.estimated_tokens} tokens"
-                    + (f" (truncated, {len(submission.omitted_files)} files omitted)" if submission.is_truncated else "")
                 )
             else:
                 logger.warning(f"No valid files found for student: {student_id}")
@@ -436,22 +433,23 @@ def extract_student_submissions_from_zip(
 def build_submission_text_with_token_limit(
     files: dict[str, str],
     max_tokens: int = DEFAULT_MAX_INPUT_TOKENS,
-    is_truncated: bool = False,
-    omitted_files: Optional[list[str]] = None,
 ) -> str:
-    """Build combined submission text from multiple files with token limit.
+    """Build combined submission text from multiple files.
     
-    Reads files and combines them with filename headers. Adds truncation notice
-    if files were omitted.
+    Reads files and combines them with filename headers. No longer enforces
+    token limits - large submissions are handled via preprocessing in the
+    grading layer.
     
     Args:
         files: Dict mapping filename to temp file path
-        max_tokens: Maximum token budget
-        is_truncated: Whether files were omitted
-        omitted_files: List of omitted filenames
+        max_tokens: Token limit (used for logging only, not enforced)
         
     Returns:
         Combined submission text
+        
+    Note:
+        This function no longer truncates. The max_tokens parameter is kept
+        for backward compatibility but only used for warnings.
     """
     parts = []
     total_tokens = 0
@@ -464,12 +462,14 @@ def build_submission_text_with_token_limit(
             content = read_file(filepath, convert_to_markdown=False)
             file_tokens = estimate_tokens(content)
             
-            # Check budget
+            # Warn if large, but don't truncate
             if total_tokens + file_tokens > max_tokens:
-                logger.warning(f"Stopping at {filename} due to token budget")
-                break
+                logger.warning(
+                    f"Large submission detected (~{total_tokens + file_tokens} tokens). "
+                    f"Preprocessing will be used automatically."
+                )
             
-            # Add file with header
+            # Add file with header (no budget check)
             file_section = f"\n\n{'='*60}\n"
             file_section += f"FILE: {filename}\n"
             file_section += f"{'='*60}\n\n"
@@ -481,14 +481,5 @@ def build_submission_text_with_token_limit(
         except Exception as e:
             logger.error(f"Error reading {filename}: {e}")
             continue
-    
-    # Add truncation notice if applicable
-    if is_truncated and omitted_files:
-        notice = f"\n\n{'='*60}\n"
-        notice += "NOTE: Some files were omitted due to size constraints:\n"
-        for fname in omitted_files:
-            notice += f"  - {fname}\n"
-        notice += f"{'='*60}\n"
-        parts.append(notice)
     
     return "\n".join(parts)

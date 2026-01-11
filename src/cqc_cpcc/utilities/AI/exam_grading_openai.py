@@ -49,11 +49,16 @@ async def grade_exam_submission(
     model_name: str = DEFAULT_GRADING_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
     callback: BaseCallbackHandler | None = None,
+    use_preprocessing: bool | None = None,
 ) -> "ErrorDefinitions":
     """Grade an exam submission using OpenAI structured outputs.
     
     This function replaces the LangChain-based grading flow. It builds a prompt,
     calls OpenAI with strict schema validation, and returns validated ErrorDefinitions.
+    
+    For large submissions, this function automatically uses preprocessing to generate
+    a grading digest instead of sending raw code, preventing context_length_exceeded
+    errors while preserving grading accuracy.
     
     Args:
         exam_instructions: The exam assignment instructions
@@ -64,6 +69,7 @@ async def grade_exam_submission(
         model_name: OpenAI model to use (default: gpt-5-mini)
         temperature: Sampling temperature (default: 0.2)
         callback: Optional LangChain callback for compatibility (currently unused)
+        use_preprocessing: Force preprocessing on/off. If None, auto-detect based on size.
         
     Returns:
         ErrorDefinitions object with validated major and minor errors
@@ -86,23 +92,66 @@ async def grade_exam_submission(
     """
     # Import here to avoid circular dependency
     from cqc_cpcc.exam_review import ErrorDefinitions
-    
-    # Build the prompt without format_instructions
-    prompt = build_exam_grading_prompt(
-        exam_instructions=exam_instructions,
-        exam_solution=exam_solution,
-        student_submission=student_submission,
-        major_error_types=major_error_type_list,
-        minor_error_types=minor_error_type_list,
+    from cqc_cpcc.utilities.AI.openai_client import (
+        should_use_preprocessing,
+        generate_preprocessing_digest,
     )
+    
+    # Auto-detect if preprocessing should be used (unless explicitly specified)
+    if use_preprocessing is None:
+        use_preprocessing = should_use_preprocessing(student_submission)
+    
+    # Generate preprocessing digest if needed
+    preprocessing_digest_json = None
+    if use_preprocessing:
+        logger.info("Using preprocessing to generate grading digest (large submission)")
+        
+        # Build rubric config string for preprocessing
+        rubric_config = f"Major Errors:\n" + "\n".join(f"- {e}" for e in major_error_type_list)
+        rubric_config += f"\n\nMinor Errors:\n" + "\n".join(f"- {e}" for e in minor_error_type_list)
+        
+        # Generate digest (this has its own 2-attempt retry)
+        digest = await generate_preprocessing_digest(
+            student_code=student_submission,
+            assignment_instructions=exam_instructions,
+            rubric_config=rubric_config,
+            model_name=model_name,
+        )
+        
+        # Convert digest to JSON for grading prompt
+        preprocessing_digest_json = digest.model_dump_json(indent=2)
+        logger.info(
+            f"Preprocessing digest generated: {len(preprocessing_digest_json)} chars "
+            f"(reduced from {len(student_submission)} chars)"
+        )
+    
+    # Build the grading prompt
+    # If preprocessing was used, pass digest instead of raw code
+    if preprocessing_digest_json:
+        prompt = build_exam_grading_prompt(
+            exam_instructions=exam_instructions,
+            exam_solution=exam_solution,
+            student_submission=f"GRADING DIGEST (preprocessed):\n{preprocessing_digest_json}",
+            major_error_types=major_error_type_list,
+            minor_error_types=minor_error_type_list,
+        )
+    else:
+        prompt = build_exam_grading_prompt(
+            exam_instructions=exam_instructions,
+            exam_solution=exam_solution,
+            student_submission=student_submission,
+            major_error_types=major_error_type_list,
+            minor_error_types=minor_error_type_list,
+        )
     
     logger.info(
         f"Grading exam submission with {model_name} "
-        f"({len(major_error_type_list)} major, {len(minor_error_type_list)} minor error types)"
+        f"({len(major_error_type_list)} major, {len(minor_error_type_list)} minor error types, "
+        f"preprocessing={'YES' if use_preprocessing else 'NO'})"
     )
     
     try:
-        # Call OpenAI with structured output validation
+        # Call OpenAI with structured output validation (with own 2-attempt retry)
         result = await get_structured_completion(
             prompt=prompt,
             model_name=model_name,

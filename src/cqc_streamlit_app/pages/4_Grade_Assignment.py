@@ -1008,8 +1008,6 @@ async def grade_single_rubric_student(
             
             submission_text = build_submission_text_with_token_limit(
                 files=student_submission.files,
-                is_truncated=student_submission.is_truncated,
-                omitted_files=student_submission.omitted_files,
             )
             
             # Show file list
@@ -1017,16 +1015,10 @@ async def grade_single_rubric_student(
             for filename in student_submission.files.keys():
                 st.markdown(f"  - {filename}")
             
-            if student_submission.is_truncated:
-                st.warning(
-                    f"⚠️ Submission truncated: {len(student_submission.omitted_files)} file(s) omitted "
-                    f"due to token budget (~{student_submission.estimated_tokens} tokens)"
-                )
-                with st.expander("View omitted files"):
-                    for fname in student_submission.omitted_files:
-                        st.text(f"  - {fname}")
-            else:
-                st.info(f"📊 Estimated tokens: ~{student_submission.estimated_tokens}")
+            # Show token estimate (preprocessing used if large)
+            st.info(f"📊 Estimated tokens: ~{student_submission.estimated_tokens}")
+            if student_submission.estimated_tokens > 70000:  # 70% of 128K context
+                st.info("🔄 Large submission detected - preprocessing will be used automatically")
             
             # Grade with rubric
             status.update(label=f"{status_label} | Calling OpenAI...")

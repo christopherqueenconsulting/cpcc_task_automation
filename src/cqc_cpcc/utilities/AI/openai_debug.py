@@ -146,6 +146,7 @@ def record_request(
     schema_name: str,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    request_type: str = "grading_structured",
     **other_params
 ) -> None:
     """Record an OpenAI API request for debugging.
@@ -158,18 +159,24 @@ def record_request(
         schema_name: Name of the Pydantic schema model
         temperature: Optional temperature parameter
         max_tokens: Optional max tokens parameter
+        request_type: Type of request (grading_structured, grading_fallback_plain_json, preprocess_digest)
         **other_params: Any other API parameters
     """
     if not should_debug():
         return
     
     try:
+        # Estimate input tokens from messages
+        total_chars = sum(len(str(msg.get("content", ""))) for msg in messages)
+        estimated_tokens = total_chars // 4  # Rough estimate: 4 chars per token
+        
         # Build request data
         request_data = {
             "correlation_id": correlation_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "model": model,
             "schema_name": schema_name,
+            "request_type": request_type,
             "endpoint": "chat.completions.create (structured outputs)",
             "request": {
                 "messages": messages,
@@ -180,8 +187,10 @@ def record_request(
                         "strict": response_format.get("json_schema", {}).get("strict"),
                         # Include schema structure summary but not full schema (too verbose)
                         "schema_summary": f"Normalized schema with {len(str(response_format.get('json_schema', {}).get('schema', {})))} chars"
-                    }
+                    } if response_format.get("type") == "json_schema" else "plain JSON mode"
                 },
+                "estimated_input_tokens": estimated_tokens,
+                "message_chars": total_chars,
             },
         }
         
@@ -198,7 +207,8 @@ def record_request(
         
         # Log to console/file
         debug_logger.info(
-            f"[{correlation_id}] OpenAI Request: model={model}, schema={schema_name}"
+            f"[{correlation_id}] OpenAI Request: type={request_type}, model={model}, "
+            f"schema={schema_name}, est_tokens={estimated_tokens}"
         )
         debug_logger.debug(f"[{correlation_id}] Full request: {json.dumps(redacted_data, indent=2, default=str)}")
         
@@ -258,17 +268,29 @@ def record_response(
                     "total_tokens": response.usage.total_tokens,
                 }
             
-            # Check for refusal
+            # Add finish_reason and other choice metadata
             if hasattr(response, 'choices') and response.choices:
                 choice = response.choices[0]
+                response_data["finish_reason"] = getattr(choice, 'finish_reason', None)
+                
                 if hasattr(choice, 'message'):
                     message = choice.message
+                    # Check for refusal
                     if hasattr(message, 'refusal') and message.refusal:
                         response_data["refusal"] = message.refusal
         
-        # Add output data
+        # Add output data with length metrics
+        if output_text:
+            output_chars = len(output_text)
+            output_tokens_est = output_chars // 4  # Rough estimate
+        else:
+            output_chars = 0
+            output_tokens_est = 0
+            
         response_data["output"] = {
-            "text": output_text[:500] if output_text else None,  # Truncate to 500 chars
+            "text": output_text[:500] if output_text else None,  # Truncate to 500 chars for display
+            "text_length_chars": output_chars,
+            "text_length_tokens_est": output_tokens_est,
             "parsed_present": output_parsed is not None,
             "parsed_type": type(output_parsed).__name__ if output_parsed else None,
         }
@@ -283,10 +305,15 @@ def record_response(
         # Redact sensitive data
         redacted_data = _redact_sensitive_data(response_data)
         
-        # Log to console/file
+        # Log to console/file with enhanced diagnostics
+        finish_reason = response_data.get("finish_reason", "unknown")
+        usage_summary = "no usage" if not response or not hasattr(response, 'usage') or not response.usage else \
+                       f"{response.usage.total_tokens} tokens"
+        
         debug_logger.info(
             f"[{correlation_id}] OpenAI Response: schema={schema_name}, "
-            f"parsed={output_parsed is not None}, notes={decision_notes}"
+            f"parsed={output_parsed is not None}, finish_reason={finish_reason}, "
+            f"usage={usage_summary}, notes={decision_notes}"
         )
         debug_logger.debug(f"[{correlation_id}] Full response: {json.dumps(redacted_data, indent=2, default=str)}")
         
@@ -300,6 +327,7 @@ def record_response(
             "schema_name": schema_name,
             "decision_notes": decision_notes,
             "parsed_success": output_parsed is not None,
+            "finish_reason": finish_reason,
         }
         _save_to_file(correlation_id, "notes", notes_data)
         
