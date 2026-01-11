@@ -20,6 +20,10 @@ from cqc_cpcc.exam_review import (
     MinorErrorType,
     parse_error_type_enum_name,
 )
+from cqc_cpcc.feedback_doc_generator import (
+    generate_student_feedback_doc,
+    sanitize_filename,
+)
 
 # Import rubric system
 from cqc_cpcc.rubric_config import (
@@ -1214,6 +1218,16 @@ async def process_rubric_grading_batch(
             else:
                 logger.warning("Effective rubric has zero total_points_possible; skipping average percentage calculation.")
                 st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
+        
+        # Generate Word docs and ZIP download
+        st.markdown("---")
+        _generate_feedback_docs_and_zip(
+            all_results=all_results,
+            course_name=course_name,
+            effective_rubric=effective_rubric,
+            model_name=model_name,
+            temperature=temperature
+        )
     
     if failure_count > 0:
         st.error(f"❌ {failure_count} submission(s) failed to grade")
@@ -1466,6 +1480,88 @@ def display_rubric_assessment_result(result, student_name: str):
                         st.markdown(f"*Occurrences:* {error.occurrences}")
                     if error.notes:
                         st.markdown(f"*Notes:* {error.notes}")
+
+
+def _generate_feedback_docs_and_zip(
+    all_results: list[tuple[str, RubricAssessmentResult]],
+    course_name: str,
+    effective_rubric: Rubric,
+    model_name: str,
+    temperature: float
+) -> None:
+    """Generate Word documents for all students and create a ZIP download.
+    
+    Creates CPCC-branded Word documents for each student's feedback and
+    packages them into a downloadable ZIP file. Documents contain only
+    student-facing feedback (no numeric scores or grade bands).
+    
+    Args:
+        all_results: List of (student_id, RubricAssessmentResult) tuples
+        course_name: Course name for file naming
+        effective_rubric: Rubric used for grading
+        model_name: Model name for file naming
+        temperature: Temperature for file naming
+    """
+    st.subheader("📥 Download Feedback Documents")
+    st.markdown("*CPCC-branded Word documents containing student feedback (no scores)*")
+    
+    with st.spinner("Generating Word documents..."):
+        try:
+            # Generate Word docs for each student
+            doc_files: list[tuple[str, str]] = []  # (filename, temp_file_path)
+            
+            # Extract course ID from course_name (e.g., "CSC151_Exam1" -> "CSC151")
+            course_parts = course_name.split('_')
+            course_id = course_parts[0] if course_parts else course_name
+            assignment_name = '_'.join(course_parts[1:]) if len(course_parts) > 1 else "Assignment"
+            
+            for student_id, result in all_results:
+                # Generate sanitized filename
+                # Try to parse student_id as "LastName_FirstName" or use as-is
+                sanitized_name = sanitize_filename(student_id)
+                doc_filename = f"{sanitized_name}_Feedback.docx"
+                
+                # Generate Word document bytes
+                doc_bytes = generate_student_feedback_doc(
+                    student_name=student_id,
+                    course_id=course_id,
+                    assignment_name=assignment_name,
+                    feedback_result=result,
+                    metadata={'date': datetime.now().strftime('%Y-%m-%d')}
+                )
+                
+                # Save to temp file
+                temp_doc = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+                temp_doc.write(doc_bytes)
+                temp_doc.close()
+                
+                doc_files.append((doc_filename, temp_doc.name))
+            
+            # Create ZIP file
+            st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
+            zip_file_path = create_zip_file(doc_files)
+            
+            # Generate ZIP filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            zip_filename = f"{course_name}_Feedback_{timestamp}.zip"
+            
+            # Add download button
+            download_placeholder = st.empty()
+            on_download_click(
+                download_placeholder,
+                zip_file_path,
+                "📥 Download All Feedback (.zip)",
+                zip_filename
+            )
+            
+            st.success(f"✅ Generated {len(doc_files)} Word document(s)")
+            st.info(f"📄 Files included: {', '.join([fn for fn, _ in doc_files])}")
+            
+        except Exception as e:
+            logger.error(f"Error generating feedback documents: {e}", exc_info=True)
+            st.error(f"❌ Error generating documents: {str(e)}")
+
+
 
 
 def main():
