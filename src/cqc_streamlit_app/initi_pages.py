@@ -21,3 +21,26 @@ def init_session_state():
 
     if 'attendance_tracker_url' not in st.session_state:
         st.session_state.attendance_tracker_url = ATTENDANCE_TRACKER_URL
+    
+    # Initialize grading results caching state
+    if 'grading_run_key' not in st.session_state:
+        st.session_state.grading_run_key = None
+    
+    if 'grading_results_by_key' not in st.session_state:
+        st.session_state.grading_results_by_key = {}
+    
+    if 'grading_status_by_key' not in st.session_state:
+        st.session_state.grading_status_by_key = {}
+    
+    if 'grading_errors_by_key' not in st.session_state:
+        st.session_state.grading_errors_by_key = {}
+    
+    if 'feedback_zip_bytes_by_key' not in st.session_state:
+        st.session_state.feedback_zip_bytes_by_key = {}
+    
+    # Action flags for grading
+    if 'do_grade' not in st.session_state:
+        st.session_state.do_grade = False
+    
+    if 'expand_all_students' not in st.session_state:
+        st.session_state.expand_all_students = False

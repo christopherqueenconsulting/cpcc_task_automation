@@ -1079,11 +1079,13 @@ async def process_rubric_grading_batch(
     temperature: float,
     course_name: str,
     accepted_file_types: list[str],
+    run_key: str,
 ) -> None:
     """Process a batch of student submissions with async grading.
     
     Handles both single files and ZIP archives with multiple students.
     Uses asyncio.TaskGroup for concurrent grading with error handling.
+    Stores results in session state keyed by run_key.
     
     Args:
         submission_file_paths: List of (original_path, temp_path) tuples
@@ -1095,6 +1097,7 @@ async def process_rubric_grading_batch(
         temperature: Sampling temperature
         course_name: Course name for output files
         accepted_file_types: List of acceptable file extensions
+        run_key: Stable key for caching results in session state
     """
     ctx = get_script_run_ctx()
     all_results: list[tuple[str, RubricAssessmentResult]] = []
@@ -1178,6 +1181,9 @@ async def process_rubric_grading_batch(
         # Successful result
         all_results.append(result)
     
+    # Store results in session state for this run_key
+    st.session_state.grading_results_by_key[run_key] = all_results
+    
     # Display summary
     success_count = len(all_results)
     failure_count = total_students - success_count
@@ -1226,7 +1232,8 @@ async def process_rubric_grading_batch(
             course_name=course_name,
             effective_rubric=effective_rubric,
             model_name=model_name,
-            temperature=temperature
+            temperature=temperature,
+            run_key=run_key
         )
     
     if failure_count > 0:
@@ -1343,25 +1350,125 @@ async def get_rubric_based_exam_grading():
         key_prefix="rubric_exam_"
     )
     
-    # Step 9: Process Grading
+    # Step 9: Generate Run Key and Check Cache
     if not all([assignment_instructions_content, student_submission_file_paths]):
         st.info("📝 Please upload assignment instructions and student submissions to begin grading.")
         return
     
-    st.success("All required inputs provided. Ready to grade!")
+    # Import run key generation
+    from cqc_cpcc.grading_run_key import generate_grading_run_key, generate_file_metadata
     
-    # Process submissions with async batching
-    await process_rubric_grading_batch(
-        submission_file_paths=student_submission_file_paths,
-        effective_rubric=effective_rubric,
-        assignment_instructions=assignment_instructions_content,
-        reference_solution=assignment_solution_contents,
-        error_definitions=effective_error_definitions,
+    # Generate stable run key from inputs
+    file_metadata = generate_file_metadata(student_submission_file_paths)
+    error_definition_ids = [ed.error_id for ed in (effective_error_definitions or []) if ed.enabled]
+    
+    current_run_key = generate_grading_run_key(
+        course_id=selected_course_id,
+        assignment_id=selected_assignment_id,
+        rubric_id=selected_rubric.rubric_id,
+        rubric_version=selected_rubric.rubric_version,
+        error_definition_ids=error_definition_ids,
+        file_metadata=file_metadata,
         model_name=selected_model,
         temperature=selected_temperature,
-        course_name=f"{selected_course_id}_{selected_assignment_name}",
-        accepted_file_types=student_submission_accepted_file_types,
+        debug_mode=False,
     )
+    
+    # Check if we have cached results for this run key
+    has_cached_results = current_run_key in st.session_state.grading_results_by_key
+    is_grading_in_progress = st.session_state.grading_status_by_key.get(current_run_key) == "running"
+    
+    st.success("All required inputs provided. Ready to grade!")
+    
+    # Display run key for debugging (optional)
+    with st.expander("🔑 Run Key (for debugging)", expanded=False):
+        st.code(current_run_key, language="text")
+        if has_cached_results:
+            st.info("✅ Cached results available for this configuration")
+    
+    # Step 10: Grade Button and Action Guard
+    col1, col2, col3 = st.columns([2, 2, 3])
+    
+    with col1:
+        grade_button_clicked = st.button(
+            "🎯 Grade Submissions",
+            key="grade_submissions_button",
+            disabled=is_grading_in_progress,
+            type="primary",
+            help="Click to start grading (or re-grade if inputs changed)"
+        )
+    
+    with col2:
+        if has_cached_results:
+            if st.button("🔄 Clear Results", key="clear_results_button"):
+                # Clear cached results for this run key
+                if current_run_key in st.session_state.grading_results_by_key:
+                    del st.session_state.grading_results_by_key[current_run_key]
+                if current_run_key in st.session_state.grading_status_by_key:
+                    del st.session_state.grading_status_by_key[current_run_key]
+                if current_run_key in st.session_state.grading_errors_by_key:
+                    del st.session_state.grading_errors_by_key[current_run_key]
+                if current_run_key in st.session_state.feedback_zip_bytes_by_key:
+                    del st.session_state.feedback_zip_bytes_by_key[current_run_key]
+                st.success("Results cleared! Click Grade to re-run.")
+                st.rerun()
+    
+    with col3:
+        if has_cached_results:
+            st.info("📦 Using cached results (click Clear to re-grade)")
+        elif is_grading_in_progress:
+            st.warning("⏳ Grading in progress...")
+    
+    # Set do_grade flag when button is clicked
+    if grade_button_clicked:
+        st.session_state.do_grade = True
+        st.session_state.grading_run_key = current_run_key
+    
+    # Step 11: Execute Grading (only if flag is set and not cached)
+    should_grade = (
+        st.session_state.do_grade 
+        and st.session_state.grading_run_key == current_run_key
+        and not has_cached_results
+    )
+    
+    if should_grade:
+        # Mark as running
+        st.session_state.grading_status_by_key[current_run_key] = "running"
+        
+        try:
+            # Process submissions with async batching
+            await process_rubric_grading_batch(
+                submission_file_paths=student_submission_file_paths,
+                effective_rubric=effective_rubric,
+                assignment_instructions=assignment_instructions_content,
+                reference_solution=assignment_solution_contents,
+                error_definitions=effective_error_definitions,
+                model_name=selected_model,
+                temperature=selected_temperature,
+                course_name=f"{selected_course_id}_{selected_assignment_name}",
+                accepted_file_types=student_submission_accepted_file_types,
+                run_key=current_run_key,
+            )
+            
+            # Mark as complete
+            st.session_state.grading_status_by_key[current_run_key] = "done"
+            
+        except Exception as e:
+            # Mark as failed
+            st.session_state.grading_status_by_key[current_run_key] = "failed"
+            st.session_state.grading_errors_by_key[current_run_key] = str(e)
+            st.error(f"❌ Grading failed: {e}")
+            logger.error(f"Grading failed for run_key {current_run_key}: {e}", exc_info=True)
+        
+        finally:
+            # Reset flag
+            st.session_state.do_grade = False
+    
+    # Step 12: Display Results (from cache or fresh)
+    elif has_cached_results:
+        # Display cached results
+        st.info("📦 Displaying cached results")
+        display_cached_grading_results(current_run_key, f"{selected_course_id}_{selected_assignment_name}")
 
 
 def display_rubric_assessment_result(result, student_name: str):
@@ -1482,12 +1589,107 @@ def display_rubric_assessment_result(result, student_name: str):
                         st.markdown(f"*Notes:* {error.notes}")
 
 
+def display_cached_grading_results(run_key: str, course_name: str) -> None:
+    """Display cached grading results from session state.
+    
+    Args:
+        run_key: The run key to retrieve cached results
+        course_name: Course name for display and file naming
+    """
+    if run_key not in st.session_state.grading_results_by_key:
+        st.error("❌ No cached results found for this configuration")
+        return
+    
+    all_results = st.session_state.grading_results_by_key[run_key]
+    
+    if not all_results:
+        st.warning("⚠️ No successful grading results to display")
+        return
+    
+    total_students = len(all_results)
+    st.success(f"✅ Displaying cached results for {total_students} student(s)")
+    
+    # Add "Expand All" button (passive - doesn't trigger re-grading)
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔽 Expand All Student Results", key="expand_all_cached_button"):
+            st.session_state.expand_all_students = True
+            st.rerun()
+    
+    # Display summary table
+    summary_data = []
+    for student_id, result in all_results:
+        # Calculate percentage safely
+        if result.total_points_possible > 0:
+            percentage = f"{(result.total_points_earned / result.total_points_possible * 100):.1f}%"
+        else:
+            percentage = "N/A"
+        
+        summary_data.append({
+            "Student": student_id,
+            "Points Earned": result.total_points_earned,
+            "Points Possible": result.total_points_possible,
+            "Percentage": percentage,
+            "Band": result.overall_band_label or "N/A",
+        })
+    
+    if summary_data:
+        st.subheader("📊 Grading Summary")
+        summary_df = pd.DataFrame(summary_data)
+        st.dataframe(summary_df, hide_index=True)
+        
+        # Calculate statistics
+        avg_score = summary_df["Points Earned"].mean()
+        total_possible = all_results[0][1].total_points_possible  # Get from first result
+        if total_possible > 0:
+            avg_pct = (avg_score / total_possible * 100)
+            st.metric("Average Score", f"{avg_score:.1f}/{total_possible} ({avg_pct:.1f}%)")
+        else:
+            st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
+    
+    # Display individual student results
+    st.markdown("---")
+    st.subheader("Individual Student Results")
+    
+    for student_id, result in all_results:
+        # Use expand_all_students flag from session state
+        expanded_state = st.session_state.get('expand_all_students', False)
+        
+        with st.expander(f"📝 {student_id}", expanded=expanded_state):
+            display_rubric_assessment_result(result, student_id)
+    
+    # Generate Word docs and ZIP download (uses cached ZIP if available)
+    # Note: We need to pass a minimal rubric object for compatibility
+    # In cached mode, we don't need the full rubric since results are already computed
+    st.markdown("---")
+    
+    # Create a minimal placeholder rubric (won't be used for grading, just for file naming)
+    from cqc_cpcc.rubric_models import Rubric as RubricModel
+    placeholder_rubric = RubricModel(
+        rubric_id="cached",
+        title="Cached Results",
+        rubric_version=1,
+        total_points_possible=all_results[0][1].total_points_possible if all_results else 100,
+        criteria=[]
+    )
+    
+    _generate_feedback_docs_and_zip(
+        all_results=all_results,
+        course_name=course_name,
+        effective_rubric=placeholder_rubric,
+        model_name="cached",
+        temperature=0.0,
+        run_key=run_key
+    )
+
+
 def _generate_feedback_docs_and_zip(
     all_results: list[tuple[str, RubricAssessmentResult]],
     course_name: str,
     effective_rubric: Rubric,
     model_name: str,
-    temperature: float
+    temperature: float,
+    run_key: str
 ) -> None:
     """Generate Word documents for all students and create a ZIP download.
     
@@ -1495,15 +1697,37 @@ def _generate_feedback_docs_and_zip(
     packages them into a downloadable ZIP file. Documents contain only
     student-facing feedback (no numeric scores or grade bands).
     
+    Results are cached in session state to prevent regeneration on UI interactions.
+    
     Args:
         all_results: List of (student_id, RubricAssessmentResult) tuples
         course_name: Course name for file naming
         effective_rubric: Rubric used for grading
         model_name: Model name for file naming
         temperature: Temperature for file naming
+        run_key: Stable key for caching ZIP bytes
     """
     st.subheader("📥 Download Feedback Documents")
     st.markdown("*CPCC-branded Word documents containing student feedback (no scores)*")
+    
+    # Check if we have cached ZIP bytes for this run_key
+    if run_key in st.session_state.feedback_zip_bytes_by_key:
+        st.info("📦 Using cached ZIP file")
+        zip_file_path = st.session_state.feedback_zip_bytes_by_key[run_key]
+        
+        # Generate ZIP filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        zip_filename = f"{course_name}_Feedback_{timestamp}.zip"
+        
+        # Add download button
+        download_placeholder = st.empty()
+        on_download_click(
+            download_placeholder,
+            zip_file_path,
+            "📥 Download All Feedback (.zip)",
+            zip_filename
+        )
+        return
     
     with st.spinner("Generating Word documents..."):
         try:
@@ -1540,6 +1764,9 @@ def _generate_feedback_docs_and_zip(
             # Create ZIP file
             st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
             zip_file_path = create_zip_file(doc_files)
+            
+            # Cache the ZIP file path in session state
+            st.session_state.feedback_zip_bytes_by_key[run_key] = zip_file_path
             
             # Generate ZIP filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
