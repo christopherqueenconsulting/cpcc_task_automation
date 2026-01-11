@@ -3,6 +3,7 @@ import asyncio
 import os
 import tempfile
 from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -13,6 +14,12 @@ from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader, par
 from cqc_cpcc.utilities.AI.llm_deprecated.chains import generate_assignment_feedback_grade
 from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks, \
     extract_and_read_zip
+from cqc_cpcc.utilities.zip_grading_utils import (
+    extract_student_submissions_from_zip,
+    build_submission_text_with_token_limit,
+    StudentSubmission,
+)
+from cqc_cpcc.utilities.logger import logger
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
     get_language_from_file_path, on_download_click, create_zip_file, prefix_content_file_name, \
@@ -25,7 +32,7 @@ from cqc_cpcc.rubric_config import (
     get_rubric_by_id,
     load_error_definitions_from_config
 )
-from cqc_cpcc.rubric_models import Rubric, DetectedError
+from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
 from cqc_cpcc.rubric_overrides import (
     RubricOverrides,
     CriterionOverride,
@@ -34,6 +41,7 @@ from cqc_cpcc.rubric_overrides import (
     validate_overrides_compatible
 )
 from cqc_cpcc.rubric_grading import grade_with_rubric
+from cqc_cpcc.error_definitions_models import ErrorDefinition
 
 # Initialize session state variables
 init_session_state()
@@ -937,10 +945,268 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
         return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
 
 
+async def grade_single_rubric_student(
+    ctx: ScriptRunContext,
+    student_id: str,
+    student_submission: StudentSubmission,
+    effective_rubric: Rubric,
+    assignment_instructions: str,
+    reference_solution: Optional[str],
+    error_definitions: Optional[list[ErrorDefinition]],
+    model_name: str,
+    temperature: float,
+    course_name: str,
+) -> tuple[str, RubricAssessmentResult]:
+    """Grade a single student submission with rubric using async OpenAI call.
+    
+    This function is executed as an async task for concurrent grading.
+    It manages its own status display and error handling.
+    
+    Args:
+        ctx: Streamlit script run context for UI updates
+        student_id: Student identifier
+        student_submission: StudentSubmission with files and metadata
+        effective_rubric: Rubric to use for grading
+        assignment_instructions: Assignment requirements
+        reference_solution: Optional reference solution
+        error_definitions: Optional error definitions
+        model_name: OpenAI model name
+        temperature: Sampling temperature
+        course_name: Course identifier for output naming
+        
+    Returns:
+        Tuple of (student_id, RubricAssessmentResult)
+    """
+    add_script_run_ctx(ctx=ctx)
+    
+    status_label = f"Grading: {student_id}"
+    
+    with st.status(status_label, expanded=False) as status:
+        try:
+            # Build submission text from files
+            status.update(label=f"{status_label} | Building submission text...")
+            
+            submission_text = build_submission_text_with_token_limit(
+                files=student_submission.files,
+                is_truncated=student_submission.is_truncated,
+                omitted_files=student_submission.omitted_files,
+            )
+            
+            # Show file list
+            st.markdown(f"**Files included:** {len(student_submission.files)}")
+            for filename in student_submission.files.keys():
+                st.markdown(f"  - {filename}")
+            
+            if student_submission.is_truncated:
+                st.warning(
+                    f"⚠️ Submission truncated: {len(student_submission.omitted_files)} file(s) omitted "
+                    f"due to token budget (~{student_submission.estimated_tokens} tokens)"
+                )
+                with st.expander("View omitted files"):
+                    for fname in student_submission.omitted_files:
+                        st.text(f"  - {fname}")
+            else:
+                st.info(f"📊 Estimated tokens: ~{student_submission.estimated_tokens}")
+            
+            # Grade with rubric
+            status.update(label=f"{status_label} | Calling OpenAI...")
+            
+            result = await grade_with_rubric(
+                rubric=effective_rubric,
+                assignment_instructions=assignment_instructions,
+                student_submission=submission_text,
+                reference_solution=reference_solution,
+                error_definitions=error_definitions,
+                model_name=model_name,
+                temperature=temperature,
+            )
+            
+            status.update(label=f"{status_label} | Processing results...")
+            
+            # Display results
+            display_rubric_assessment_result(result, student_id)
+            
+            status.update(label=f"✅ {student_id} graded", state="complete")
+            
+            return (student_id, result)
+            
+        except Exception as e:
+            logger.error(f"Error grading student {student_id}: {e}", exc_info=True)
+            st.error(f"❌ Error grading {student_id}: {str(e)}")
+            
+            # Show debug panel if available
+            from cqc_streamlit_app.utils import render_openai_debug_panel
+            correlation_id = getattr(e, 'correlation_id', None)
+            if correlation_id:
+                render_openai_debug_panel(correlation_id=correlation_id, error=e)
+            
+            status.update(label=f"❌ Error: {student_id}", state="error")
+            
+            # Re-raise to mark task as failed
+            raise
+
+
+async def process_rubric_grading_batch(
+    submission_file_paths: list[tuple[str, str]],
+    effective_rubric: Rubric,
+    assignment_instructions: str,
+    reference_solution: Optional[str],
+    error_definitions: Optional[list[ErrorDefinition]],
+    model_name: str,
+    temperature: float,
+    course_name: str,
+    accepted_file_types: list[str],
+) -> None:
+    """Process a batch of student submissions with async grading.
+    
+    Handles both single files and ZIP archives with multiple students.
+    Uses asyncio.TaskGroup for concurrent grading with error handling.
+    
+    Args:
+        submission_file_paths: List of (original_path, temp_path) tuples
+        effective_rubric: Rubric for grading
+        assignment_instructions: Assignment requirements
+        reference_solution: Optional reference solution
+        error_definitions: Optional error definitions
+        model_name: OpenAI model name
+        temperature: Sampling temperature
+        course_name: Course name for output files
+        accepted_file_types: List of acceptable file extensions
+    """
+    ctx = get_script_run_ctx()
+    all_results: list[tuple[str, RubricAssessmentResult]] = []
+    
+    # Collect all student submissions (from single files or ZIPs)
+    student_submissions: dict[str, StudentSubmission] = {}
+    
+    for original_path, temp_path in submission_file_paths:
+        base_filename = os.path.basename(original_path)
+        
+        if original_path.endswith('.zip'):
+            # Extract students from ZIP
+            st.info(f"📦 Extracting students from ZIP: {base_filename}")
+            
+            try:
+                zip_students = extract_student_submissions_from_zip(
+                    temp_path,
+                    accepted_file_types,
+                )
+                
+                st.success(f"✅ Extracted {len(zip_students)} student(s) from {base_filename}")
+                student_submissions.update(zip_students)
+                
+            except Exception as e:
+                st.error(f"❌ Error extracting ZIP {base_filename}: {e}")
+                logger.error(f"ZIP extraction failed for {base_filename}: {e}", exc_info=True)
+                continue
+        else:
+            # Single file = one student
+            student_id = os.path.splitext(base_filename)[0]
+            
+            student_submissions[student_id] = StudentSubmission(
+                student_id=student_id,
+                student_name=student_id,
+                files={base_filename: temp_path},
+            )
+    
+    if not student_submissions:
+        st.error("❌ No valid student submissions found")
+        return
+    
+    total_students = len(student_submissions)
+    st.info(f"📊 Grading {total_students} student submission(s)...")
+    
+    # Create async tasks for concurrent grading
+    tasks = []
+    
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for student_id, submission in student_submissions.items():
+                task = tg.create_task(
+                    grade_single_rubric_student(
+                        ctx=ctx,
+                        student_id=student_id,
+                        student_submission=submission,
+                        effective_rubric=effective_rubric,
+                        assignment_instructions=assignment_instructions,
+                        reference_solution=reference_solution,
+                        error_definitions=error_definitions,
+                        model_name=model_name,
+                        temperature=temperature,
+                        course_name=course_name,
+                    )
+                )
+                tasks.append(task)
+    
+    except* Exception as eg:
+        # TaskGroup collects exceptions from all tasks
+        st.error(f"⚠️ Some grading tasks failed")
+        for exc in eg.exceptions:
+            logger.error(f"Task exception: {exc}")
+    
+    # Collect results from completed tasks
+    for task in tasks:
+        try:
+            result = task.result()
+            all_results.append(result)
+        except Exception as e:
+            # Task failed, already logged
+            logger.debug(f"Skipping failed task result: {e}")
+    
+    # Display summary
+    success_count = len(all_results)
+    failure_count = total_students - success_count
+    
+    if success_count > 0:
+        st.success(f"✅ Successfully graded {success_count}/{total_students} submission(s)")
+        
+        # TODO: Generate aggregate report (CSV/JSON)
+        # For now, results are displayed in individual status blocks
+        
+        # Display summary table
+        summary_data = []
+        for student_id, result in all_results:
+            # Calculate percentage safely
+            if result.total_points_possible > 0:
+                percentage = f"{(result.total_points_earned / result.total_points_possible * 100):.1f}%"
+            else:
+                percentage = "N/A"
+            
+            summary_data.append({
+                "Student": student_id,
+                "Points Earned": result.total_points_earned,
+                "Points Possible": result.total_points_possible,
+                "Percentage": percentage,
+                "Band": result.overall_band_label or "N/A",
+            })
+        
+        if summary_data:
+            st.subheader("📊 Grading Summary")
+            summary_df = pd.DataFrame(summary_data)
+            st.dataframe(summary_df, hide_index=True)
+            
+            # Calculate statistics
+            avg_score = summary_df["Points Earned"].mean()
+            if effective_rubric.total_points_possible > 0:
+                avg_pct = (avg_score / effective_rubric.total_points_possible * 100)
+                st.metric("Average Score", f"{avg_score:.1f}/{effective_rubric.total_points_possible} ({avg_pct:.1f}%)")
+            else:
+                logger.warning("Effective rubric has zero total_points_possible; skipping average percentage calculation.")
+                st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
+    
+    if failure_count > 0:
+        st.error(f"❌ {failure_count} submission(s) failed to grade")
+
+
 async def get_rubric_based_exam_grading():
-    """New rubric-based exam grading workflow with error definitions support."""
+    """New rubric-based exam grading workflow with error definitions support and ZIP batching."""
     st.title('Rubric-Based Exam Grading')
-    st.markdown("""Grade exam submissions using structured rubrics with course-specific filtering and error definitions.""")
+    st.markdown("""Grade exam submissions using structured rubrics with course-specific filtering and error definitions.
+    
+    **Supports:**
+    - Single file uploads (one student per file)
+    - ZIP uploads (multiple students, folder-based structure)
+    """)
     
     # Step 1: Course and Rubric Selection
     selected_course_id, selected_rubric = select_rubric_with_course_filter()
@@ -1049,51 +1315,18 @@ async def get_rubric_based_exam_grading():
     
     st.success("All required inputs provided. Ready to grade!")
     
-    # Process each student submission
-    graded_results = []
-    
-    for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
-        base_student_filename = os.path.basename(student_submission_file_path)
-        
-        with st.status(f"Grading: {base_student_filename}", expanded=True) as status:
-            try:
-                # Read student submission
-                student_submission_content = read_file(student_submission_temp_file_path, False)
-                student_submission_content = prefix_content_file_name(base_student_filename, student_submission_content)
-                
-                status.update(label=f"Grading {base_student_filename} | Calling OpenAI...")
-                
-                # Grade with rubric (pass error definitions)
-                result = await grade_with_rubric(
-                    rubric=effective_rubric,
-                    assignment_instructions=assignment_instructions_content,
-                    student_submission=student_submission_content,
-                    reference_solution=assignment_solution_contents,
-                    error_definitions=effective_error_definitions,
-                    model_name=selected_model,
-                    temperature=selected_temperature
-                )
-                
-                status.update(label=f"Grading {base_student_filename} | Complete")
-                
-                # Display results (including error counts)
-                display_rubric_assessment_result(result, base_student_filename)
-                
-                graded_results.append((base_student_filename, result))
-                
-                status.update(label=f"✅ {base_student_filename} graded", state="complete")
-                
-            except Exception as e:
-                st.error(f"Error grading {base_student_filename}: {e}")
-                status.update(label=f"❌ Error: {base_student_filename}", state="error")
-                
-                # Show debug panel if error has correlation_id
-                from cqc_streamlit_app.utils import render_openai_debug_panel
-                correlation_id = getattr(e, 'correlation_id', None)
-                render_openai_debug_panel(correlation_id=correlation_id, error=e)
-    
-    if graded_results:
-        st.success(f"Graded {len(graded_results)} submission(s) successfully!")
+    # Process submissions with async batching
+    await process_rubric_grading_batch(
+        submission_file_paths=student_submission_file_paths,
+        effective_rubric=effective_rubric,
+        assignment_instructions=assignment_instructions_content,
+        reference_solution=assignment_solution_contents,
+        error_definitions=effective_error_definitions,
+        model_name=selected_model,
+        temperature=selected_temperature,
+        course_name=f"{selected_course_id}_{selected_assignment_name}",
+        accepted_file_types=student_submission_accepted_file_types,
+    )
 
 
 def display_rubric_assessment_result(result, student_name: str):
