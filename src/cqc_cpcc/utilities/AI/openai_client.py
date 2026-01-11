@@ -9,7 +9,7 @@ JSON Schema response format validation.
 Key Features:
 - AsyncOpenAI client for concurrent processing
 - Strict JSON Schema validation using Pydantic models
-- Bounded retry logic for transient errors (timeouts, 5xx, rate limits)
+- Bounded retry logic for transient errors (timeouts, 5xx, rate limits, empty responses)
 - Clear custom exceptions for different failure modes
 - Optional validation repair attempt flag
 - Thread-safe and async-safe design
@@ -40,6 +40,7 @@ Example usage:
 """
 
 import asyncio
+import random
 from typing import Type, TypeVar
 
 from openai import (
@@ -51,17 +52,17 @@ from openai import (
 )
 from pydantic import BaseModel, ValidationError
 
+from cqc_cpcc.utilities.AI.openai_debug import (
+    create_correlation_id,
+    record_request,
+    record_response,
+    should_debug,
+)
 from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
     OpenAITransportError,
 )
 from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
-from cqc_cpcc.utilities.AI.openai_debug import (
-    should_debug,
-    create_correlation_id,
-    record_request,
-    record_response,
-)
 from cqc_cpcc.utilities.env_constants import OPENAI_API_KEY
 from cqc_cpcc.utilities.logger import logger
 
@@ -72,8 +73,27 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 1.0  # seconds
 DEFAULT_BACKOFF_MULTIPLIER = 2.0
 
+# Jitter configuration for retry delays (to avoid thundering herd)
+JITTER_MIN = 0.5  # seconds
+JITTER_MAX = 1.5  # seconds
+
 # Default model configuration
 DEFAULT_MODEL = "gpt-5-mini"
+
+
+def _calculate_jittered_delay(base_delay: float) -> float:
+    """Calculate delay with jitter to avoid thundering herd problem.
+    
+    Adds random jitter between JITTER_MIN and JITTER_MAX seconds to base delay.
+    
+    Args:
+        base_delay: Base delay in seconds
+        
+    Returns:
+        Delay with added jitter
+    """
+    jitter = random.uniform(JITTER_MIN, JITTER_MAX)
+    return base_delay + jitter
 
 # Model token limits (based on OpenAI documentation)
 # max_output=None means no explicit limit should be set (let model decide)
@@ -232,6 +252,7 @@ async def get_structured_completion(
     max_retries: int = DEFAULT_MAX_RETRIES,
     retry_delay: float = DEFAULT_RETRY_DELAY,
     allow_repair: bool = False,
+    retry_empty_response: bool = True,
 ) -> T:
     """Get a structured completion from OpenAI with strict schema validation.
     
@@ -275,6 +296,7 @@ async def get_structured_completion(
         max_retries: Maximum number of retry attempts for transient errors
         retry_delay: Base delay in seconds between retries (exponential backoff)
         allow_repair: If True, attempts one repair retry on schema validation failure
+        retry_empty_response: If True (default), retries once on empty response errors
         
     Returns:
         Validated instance of schema_model with structured data from LLM
@@ -415,6 +437,7 @@ async def get_structured_completion(
                         schema_name=schema_model.__name__,
                         correlation_id=correlation_id,
                         decision_notes=decision_notes,
+                        attempt_count=attempt + 1,
                     )
             
             # Extract JSON content from response
@@ -431,11 +454,25 @@ async def get_structured_completion(
                         output_text=None,
                         output_parsed=None,
                     )
+                
+                # Empty response is retryable if retry_empty_response is True
+                if retry_empty_response and attempt < max_retries:
+                    logger.warning(
+                        f"Empty response on attempt {attempt + 1}/{max_retries + 1}, retrying..."
+                        f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
+                    )
+                    delay = _calculate_jittered_delay(retry_delay)
+                    logger.debug(f"Retrying in {delay:.2f} seconds...")
+                    await asyncio.sleep(delay)
+                    continue
+                
+                # Final attempt or retry disabled, raise error
                 raise OpenAISchemaValidationError(
                     "Empty response from OpenAI API",
                     schema_name=schema_model.__name__,
                     correlation_id=correlation_id,
                     decision_notes=decision_notes,
+                    attempt_count=attempt + 1,
                 )
             
             # Validate against Pydantic model
@@ -500,6 +537,7 @@ async def get_structured_completion(
                     raw_output=json_output,
                     correlation_id=correlation_id,
                     decision_notes=decision_notes,
+                    attempt_count=attempt + 1,
                 )
         
         except (APITimeoutError, APIConnectionError) as e:
@@ -520,6 +558,7 @@ async def get_structured_completion(
                 f"Failed after {max_retries + 1} attempts: {str(e)}",
                 status_code=getattr(e, "status_code", None),
                 correlation_id=correlation_id,
+                attempt_count=max_retries + 1,
             ) from e
         
         except RateLimitError as e:
@@ -544,6 +583,7 @@ async def get_structured_completion(
                 status_code=429,
                 retry_after=getattr(e, "retry_after", None),
                 correlation_id=correlation_id,
+                attempt_count=max_retries + 1,
             ) from e
         
         except APIError as e:
@@ -568,6 +608,7 @@ async def get_structured_completion(
                     f"Server error after {max_retries + 1} attempts: {str(e)}",
                     status_code=status_code,
                     correlation_id=correlation_id,
+                    attempt_count=max_retries + 1,
                 ) from e
             
             # Don't retry 4xx errors (client errors)
@@ -576,6 +617,7 @@ async def get_structured_completion(
                 f"API error: {str(e)}",
                 status_code=status_code,
                 correlation_id=correlation_id,
+                attempt_count=attempt + 1,
             ) from e
     
     # Should never reach here, but handle just in case
@@ -583,11 +625,13 @@ async def get_structured_completion(
         raise OpenAITransportError(
             f"Failed after {max_retries + 1} attempts",
             correlation_id=correlation_id,
+            attempt_count=max_retries + 1,
         ) from last_error
     
     raise OpenAITransportError(
         "Unknown error occurred",
         correlation_id=correlation_id,
+        attempt_count=max_retries + 1,
     )
 
 
@@ -603,9 +647,11 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
     Returns:
         Instance of schema_model with test data
     """
-    from cqc_cpcc.rubric_models import RubricAssessmentResult, CriterionResult
-    from cqc_cpcc.exam_review import ErrorDefinitions, MajorError, MinorError, MajorErrorType, MinorErrorType
-    from cqc_cpcc.project_feedback import FeedbackGuide, Feedback, FeedbackType
+    from cqc_cpcc.exam_review import (
+        ErrorDefinitions,
+    )
+    from cqc_cpcc.project_feedback import Feedback, FeedbackGuide, FeedbackType
+    from cqc_cpcc.rubric_models import CriterionResult, RubricAssessmentResult
     
     model_name = schema_model.__name__
     

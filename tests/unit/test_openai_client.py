@@ -16,6 +16,8 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import BaseModel, Field
+
 from cqc_cpcc.utilities.AI.openai_client import (
     close_client,
     get_client,
@@ -25,7 +27,6 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
     OpenAITransportError,
 )
-from pydantic import BaseModel, Field
 
 
 # Test Pydantic models
@@ -284,11 +285,12 @@ class TestGetStructuredCompletionValidation:
         assert mock_client.chat.completions.create.call_count == 2
     
     async def test_empty_response_raises_validation_error(self, mocker):
-        """Should handle empty/null responses."""
+        """Should handle empty/null responses (with retry disabled)."""
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = None  # Empty response
+        mock_response.choices[0].message.refusal = None
         
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.get_client', return_value=mock_client)
@@ -297,7 +299,8 @@ class TestGetStructuredCompletionValidation:
             await get_structured_completion(
                 prompt="Review code",
                 model_name="gpt-4o",
-                schema_model=SimpleFeedback
+                schema_model=SimpleFeedback,
+                retry_empty_response=False,  # Disable retry for faster test
             )
 
 

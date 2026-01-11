@@ -18,6 +18,7 @@ class OpenAITransportError(Exception):
         status_code: HTTP status code if available
         retry_after: Seconds to wait before retry (for rate limits)
         correlation_id: Optional correlation ID for debug tracking
+        attempt_count: Number of attempts made before failure
     """
     
     def __init__(
@@ -25,12 +26,14 @@ class OpenAITransportError(Exception):
         message: str,
         status_code: int | None = None,
         retry_after: int | None = None,
-        correlation_id: str | None = None
+        correlation_id: str | None = None,
+        attempt_count: int | None = None
     ):
         self.message = message
         self.status_code = status_code
         self.retry_after = retry_after
         self.correlation_id = correlation_id
+        self.attempt_count = attempt_count
         super().__init__(self.message)
     
     def __str__(self) -> str:
@@ -41,6 +44,8 @@ class OpenAITransportError(Exception):
             parts.append(f"(retry after: {self.retry_after}s)")
         if self.correlation_id:
             parts.append(f"(correlation_id: {self.correlation_id})")
+        if self.attempt_count:
+            parts.append(f"(attempts: {self.attempt_count})")
         return " ".join(parts)
 
 
@@ -57,6 +62,7 @@ class OpenAISchemaValidationError(Exception):
         raw_output: The raw JSON string that failed validation
         correlation_id: Optional correlation ID for debug tracking
         decision_notes: Optional notes about why parsing failed
+        attempt_count: Number of attempts made before failure
     """
     
     def __init__(
@@ -66,7 +72,8 @@ class OpenAISchemaValidationError(Exception):
         validation_errors: list | None = None,
         raw_output: str | None = None,
         correlation_id: str | None = None,
-        decision_notes: str | None = None
+        decision_notes: str | None = None,
+        attempt_count: int | None = None
     ):
         self.message = message
         self.schema_name = schema_name
@@ -74,6 +81,7 @@ class OpenAISchemaValidationError(Exception):
         self.raw_output = raw_output
         self.correlation_id = correlation_id
         self.decision_notes = decision_notes
+        self.attempt_count = attempt_count
         super().__init__(self.message)
     
     def __str__(self) -> str:
@@ -86,4 +94,6 @@ class OpenAISchemaValidationError(Exception):
             parts.append(f"(correlation_id: {self.correlation_id})")
         if self.decision_notes:
             parts.append(f"(notes: {self.decision_notes})")
+        if self.attempt_count:
+            parts.append(f"(attempts: {self.attempt_count})")
         return " ".join(parts)

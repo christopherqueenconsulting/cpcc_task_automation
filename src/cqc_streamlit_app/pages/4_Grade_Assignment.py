@@ -1032,7 +1032,14 @@ async def grade_single_rubric_student(
             
         except Exception as e:
             logger.error(f"Error grading student {student_id}: {e}", exc_info=True)
-            st.error(f"❌ Error grading {student_id}: {str(e)}")
+            
+            # Build error message with attempt count if available
+            error_msg = str(e)
+            attempt_count = getattr(e, 'attempt_count', None)
+            if attempt_count:
+                error_msg = f"{error_msg} (after {attempt_count} attempt(s))"
+            
+            st.error(f"❌ Error grading {student_id}: {error_msg}")
             
             # Show debug panel if available
             from cqc_streamlit_app.utils import render_openai_debug_panel
@@ -1042,7 +1049,7 @@ async def grade_single_rubric_student(
             
             status.update(label=f"❌ Error: {student_id}", state="error")
             
-            # Re-raise to mark task as failed
+            # Re-raise to let gather() capture it as an exception
             raise
 
 
@@ -1117,41 +1124,36 @@ async def process_rubric_grading_batch(
     st.info(f"📊 Grading {total_students} student submission(s)...")
     
     # Create async tasks for concurrent grading
+    # Use gather with return_exceptions=True to ensure one failure doesn't stop others
     tasks = []
     
-    try:
-        async with asyncio.TaskGroup() as tg:
-            for student_id, submission in student_submissions.items():
-                task = tg.create_task(
-                    grade_single_rubric_student(
-                        ctx=ctx,
-                        student_id=student_id,
-                        student_submission=submission,
-                        effective_rubric=effective_rubric,
-                        assignment_instructions=assignment_instructions,
-                        reference_solution=reference_solution,
-                        error_definitions=error_definitions,
-                        model_name=model_name,
-                        temperature=temperature,
-                        course_name=course_name,
-                    )
-                )
-                tasks.append(task)
+    for student_id, submission in student_submissions.items():
+        task = grade_single_rubric_student(
+            ctx=ctx,
+            student_id=student_id,
+            student_submission=submission,
+            effective_rubric=effective_rubric,
+            assignment_instructions=assignment_instructions,
+            reference_solution=reference_solution,
+            error_definitions=error_definitions,
+            model_name=model_name,
+            temperature=temperature,
+            course_name=course_name,
+        )
+        tasks.append(task)
     
-    except* Exception as eg:
-        # TaskGroup collects exceptions from all tasks
-        st.error(f"⚠️ Some grading tasks failed")
-        for exc in eg.exceptions:
-            logger.error(f"Task exception: {exc}")
+    # Execute all tasks concurrently, collecting both successes and exceptions
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # Collect results from completed tasks
-    for task in tasks:
-        try:
-            result = task.result()
-            all_results.append(result)
-        except Exception as e:
-            # Task failed, already logged
-            logger.debug(f"Skipping failed task result: {e}")
+    # Separate successful results from failures
+    for result in results:
+        if isinstance(result, Exception):
+            # Task failed - exception is already logged in grade_single_rubric_student
+            logger.debug(f"Skipping failed task: {type(result).__name__}")
+            continue
+        
+        # Successful result
+        all_results.append(result)
     
     # Display summary
     success_count = len(all_results)
