@@ -8,40 +8,60 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx
-from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx, ScriptRunContext
-
-from cqc_cpcc.exam_review import MajorErrorType, MinorErrorType, CodeGrader, parse_error_type_enum_name
-from cqc_cpcc.utilities.AI.llm_deprecated.chains import generate_assignment_feedback_grade
-from cqc_cpcc.utilities.utils import dict_to_markdown_table, read_file, wrap_code_in_markdown_backticks, \
-    extract_and_read_zip
-from cqc_cpcc.utilities.zip_grading_utils import (
-    extract_student_submissions_from_zip,
-    build_submission_text_with_token_limit,
-    StudentSubmission,
+from streamlit.runtime.scriptrunner_utils.script_run_context import (
+    ScriptRunContext,
+    get_script_run_ctx,
 )
-from cqc_cpcc.utilities.logger import logger
-from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, get_custom_llm, add_upload_file_element, \
-    get_language_from_file_path, on_download_click, create_zip_file, prefix_content_file_name, \
-    ChatGPTStatusCallbackHandler, get_file_extension_from_filepath
+
+from cqc_cpcc.error_definitions_models import ErrorDefinition
+from cqc_cpcc.exam_review import (
+    CodeGrader,
+    MajorErrorType,
+    MinorErrorType,
+    parse_error_type_enum_name,
+)
 
 # Import rubric system
 from cqc_cpcc.rubric_config import (
     get_distinct_course_ids,
     get_rubrics_for_course,
-    get_rubric_by_id,
-    load_error_definitions_from_config
-)
-from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
-from cqc_cpcc.rubric_overrides import (
-    RubricOverrides,
-    CriterionOverride,
-    PerformanceLevelOverride,
-    merge_rubric_overrides,
-    validate_overrides_compatible
 )
 from cqc_cpcc.rubric_grading import grade_with_rubric
-from cqc_cpcc.error_definitions_models import ErrorDefinition
+from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
+from cqc_cpcc.rubric_overrides import (
+    CriterionOverride,
+    RubricOverrides,
+    merge_rubric_overrides,
+    validate_overrides_compatible,
+)
+from cqc_cpcc.utilities.AI.llm_deprecated.chains import (
+    generate_assignment_feedback_grade,
+)
+from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.utils import (
+    dict_to_markdown_table,
+    extract_and_read_zip,
+    read_file,
+    wrap_code_in_markdown_backticks,
+)
+from cqc_cpcc.utilities.zip_grading_utils import (
+    StudentSubmission,
+    build_submission_text_with_token_limit,
+    extract_student_submissions_from_zip,
+)
+from cqc_streamlit_app.initi_pages import init_session_state
+from cqc_streamlit_app.utils import (
+    ChatGPTStatusCallbackHandler,
+    add_upload_file_element,
+    create_zip_file,
+    define_chatGPTModel,
+    get_cpcc_css,
+    get_custom_llm,
+    get_file_extension_from_filepath,
+    get_language_from_file_path,
+    on_download_click,
+    prefix_content_file_name,
+)
 
 # Initialize session state variables
 init_session_state()
@@ -56,14 +76,11 @@ DESCRIPTION = "Description"
 
 # Import error definitions system
 from cqc_cpcc.error_definitions_config import (
-    load_error_config_registry,
-    get_error_definitions,
-    get_distinct_course_ids_from_errors,
-    get_assignments_for_course,
     add_assignment_to_course,
-    registry_to_json_string
+    get_assignments_for_course,
+    load_error_config_registry,
+    registry_to_json_string,
 )
-from cqc_cpcc.error_definitions_models import ErrorDefinition
 
 
 def define_grading_rubric():
@@ -981,7 +998,10 @@ async def grade_single_rubric_student(
     
     status_label = f"Grading: {student_id}"
     
-    with st.status(status_label, expanded=False) as status:
+    # Check if "Expand All" was clicked
+    expanded_state = st.session_state.get('expand_all_students', False)
+    
+    with st.status(status_label, expanded=expanded_state) as status:
         try:
             # Build submission text from files
             status.update(label=f"{status_label} | Building submission text...")
@@ -1122,6 +1142,13 @@ async def process_rubric_grading_batch(
     
     total_students = len(student_submissions)
     st.info(f"📊 Grading {total_students} student submission(s)...")
+    
+    # Add "Expand All" button for student status blocks
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔽 Expand All Student Results", key="expand_all_students_button"):
+            st.session_state.expand_all_students = True
+            st.rerun()
     
     # Create async tasks for concurrent grading
     # Use gather with return_exceptions=True to ensure one failure doesn't stop others
@@ -1338,9 +1365,33 @@ def display_rubric_assessment_result(result, student_name: str):
         result: RubricAssessmentResult from grading
         student_name: Name of the student for display
     """
+    from cqc_cpcc.student_feedback_builder import build_student_feedback
+    
     st.subheader(f"📊 Results for {student_name}")
     
-    # Overall score
+    # Add Student Feedback section at the top (copy/paste-able)
+    st.markdown("### 📝 Student Feedback (Copy/Paste)")
+    st.markdown("*This feedback is formatted for students and does not include numeric scores.*")
+    
+    # Build student-facing feedback
+    student_feedback = build_student_feedback(result, student_name=student_name)
+    
+    # Display in a text area for easy copying
+    st.text_area(
+        label="Copy this feedback to paste to the student:",
+        value=student_feedback,
+        height=300,
+        key=f"student_feedback_{student_name}",
+        help="Select all text (Ctrl+A or Cmd+A) and copy (Ctrl+C or Cmd+C) to paste into your LMS"
+    )
+    
+    st.markdown("---")  # Visual separator
+    
+    # Instructor View - Detailed Scoring Breakdown
+    st.markdown("### 📊 Instructor View - Detailed Breakdown")
+    st.markdown("*The sections below show detailed scoring information for instructor reference only.*")
+    
+    # Overall score (instructor view)
     score_percentage = (result.total_points_earned / result.total_points_possible * 100) if result.total_points_possible > 0 else 0
     
     col1, col2, col3 = st.columns(3)
@@ -1354,7 +1405,7 @@ def display_rubric_assessment_result(result, student_name: str):
     
     # Display error counts if available
     if result.error_counts_by_severity:
-        st.markdown("### 📋 Error Counts")
+        st.markdown("#### 📋 Error Counts")
         
         # Create columns for error counts
         severity_cols = st.columns(len(result.error_counts_by_severity))
@@ -1378,7 +1429,7 @@ def display_rubric_assessment_result(result, student_name: str):
                 st.dataframe(error_breakdown_df, hide_index=True)
     
     # Per-criterion results
-    st.markdown("### Criterion Breakdown")
+    st.markdown("#### Criterion Breakdown")
     
     for criterion_result in result.criteria_results:
         with st.expander(f"**{criterion_result.criterion_name}** - {criterion_result.points_earned}/{criterion_result.points_possible} pts", expanded=False):
@@ -1394,12 +1445,12 @@ def display_rubric_assessment_result(result, student_name: str):
                     st.code(evidence, language="text")
     
     # Overall feedback
-    st.markdown("### Overall Feedback")
+    st.markdown("#### Overall Feedback (Instructor Notes)")
     st.markdown(result.overall_feedback)
     
     # Detected errors
     if result.detected_errors:
-        st.markdown("### Detected Errors")
+        st.markdown("#### Detected Errors (Detailed)")
         
         major_errors = [e for e in result.detected_errors if e.severity == "major"]
         minor_errors = [e for e in result.detected_errors if e.severity == "minor"]
