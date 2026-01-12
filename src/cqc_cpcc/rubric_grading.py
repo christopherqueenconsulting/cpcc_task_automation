@@ -292,6 +292,18 @@ async def grade_with_rubric(
             max_tokens=DEFAULT_MAX_TOKENS,
         )
         
+        # Log raw OpenAI response for debugging
+        logger.info(
+            f"OpenAI raw response: total_points_earned={result.total_points_earned}, "
+            f"rubric_id='{result.rubric_id}', rubric_version='{result.rubric_version}'"
+        )
+        logger.debug(f"OpenAI criteria count: {len(result.criteria_results)}")
+        for i, cr in enumerate(result.criteria_results):
+            logger.debug(
+                f"  Criterion {i+1}/{len(result.criteria_results)}: {cr.criterion_id} = "
+                f"{cr.points_earned}/{cr.points_possible} (level: {cr.selected_level_label or 'N/A'})"
+            )
+        
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
         
@@ -514,6 +526,15 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     aggregation = aggregate_rubric_result(rubric, updated_criteria_results, recalculate_overall_band=True)
     
     logger.info(f"Aggregation result: total_points_earned={aggregation['total_points_earned']}, percentage={aggregation['percentage']}, overall_band={aggregation['overall_band_label']}")
+    
+    # Log detailed breakdown for debugging
+    logger.debug("=== Criterion Scoring Breakdown ===")
+    for cr in updated_criteria_results:
+        logger.debug(
+            f"  {cr.criterion_id}: {cr.points_earned}/{cr.points_possible} pts "
+            f"(level: {cr.selected_level_label or 'N/A'})"
+        )
+    logger.debug(f"=== Total: {aggregation['total_points_earned']}/{aggregation['total_points_possible']} ===")
     
     # Create updated result with backend-computed scores
     updated_result = result.model_copy(update={
