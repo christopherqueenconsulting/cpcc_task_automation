@@ -17,10 +17,12 @@ from io import BytesIO
 
 import pytest
 from docx import Document
+from docx.shared import RGBColor
 
 from cqc_cpcc.feedback_doc_generator import (
     generate_student_feedback_doc,
     sanitize_filename,
+    normalize_color_to_hex,
     _parse_feedback_sections,
 )
 from cqc_cpcc.rubric_models import (
@@ -28,6 +30,94 @@ from cqc_cpcc.rubric_models import (
     DetectedError,
     RubricAssessmentResult,
 )
+
+
+@pytest.mark.unit
+def test_normalize_color_to_hex_with_rgbcolor():
+    """Test that normalize_color_to_hex handles RGBColor objects correctly."""
+    # Test various RGBColor values
+    assert normalize_color_to_hex(RGBColor(0x12, 0x34, 0x56)) == "123456"
+    assert normalize_color_to_hex(RGBColor(0, 90, 163)) == "005AA3"  # CPCC Blue
+    assert normalize_color_to_hex(RGBColor(123, 175, 212)) == "7BAFD4"  # CPCC Light Blue
+    assert normalize_color_to_hex(RGBColor(255, 255, 255)) == "FFFFFF"  # White
+    assert normalize_color_to_hex(RGBColor(0, 0, 0)) == "000000"  # Black
+
+
+@pytest.mark.unit
+def test_normalize_color_to_hex_with_tuple():
+    """Test that normalize_color_to_hex handles tuple (r, g, b) correctly."""
+    assert normalize_color_to_hex((18, 52, 86)) == "123456"
+    assert normalize_color_to_hex((0, 90, 163)) == "005AA3"
+    assert normalize_color_to_hex((255, 255, 255)) == "FFFFFF"
+    assert normalize_color_to_hex((0, 0, 0)) == "000000"
+
+
+@pytest.mark.unit
+def test_normalize_color_to_hex_with_list():
+    """Test that normalize_color_to_hex handles list [r, g, b] correctly."""
+    assert normalize_color_to_hex([18, 52, 86]) == "123456"
+    assert normalize_color_to_hex([0, 90, 163]) == "005AA3"
+    assert normalize_color_to_hex([255, 255, 255]) == "FFFFFF"
+
+
+@pytest.mark.unit
+def test_normalize_color_to_hex_with_hex_string():
+    """Test that normalize_color_to_hex handles hex strings correctly."""
+    # With '#' prefix
+    assert normalize_color_to_hex("#123456") == "123456"
+    assert normalize_color_to_hex("#005AA3") == "005AA3"
+    assert normalize_color_to_hex("#FFFFFF") == "FFFFFF"
+    
+    # Without '#' prefix
+    assert normalize_color_to_hex("123456") == "123456"
+    assert normalize_color_to_hex("005AA3") == "005AA3"
+    assert normalize_color_to_hex("ffffff") == "FFFFFF"  # Lowercase to uppercase
+
+
+@pytest.mark.unit
+def test_normalize_color_to_hex_invalid_tuple_length():
+    """Test that normalize_color_to_hex raises error for invalid tuple length."""
+    with pytest.raises(ValueError, match="must have exactly 3 values"):
+        normalize_color_to_hex((255, 255))
+    
+    with pytest.raises(ValueError, match="must have exactly 3 values"):
+        normalize_color_to_hex((255, 255, 255, 255))
+
+
+@pytest.mark.unit
+def test_normalize_color_to_hex_invalid_component_range():
+    """Test that normalize_color_to_hex raises error for out-of-range components."""
+    with pytest.raises(ValueError, match="must be an integer between 0 and 255"):
+        normalize_color_to_hex((256, 0, 0))
+    
+    with pytest.raises(ValueError, match="must be an integer between 0 and 255"):
+        normalize_color_to_hex((0, -1, 0))
+    
+    with pytest.raises(ValueError, match="must be an integer between 0 and 255"):
+        normalize_color_to_hex((1.5, 0, 0))
+
+
+@pytest.mark.unit
+def test_normalize_color_to_hex_invalid_hex_string():
+    """Test that normalize_color_to_hex raises error for invalid hex strings."""
+    with pytest.raises(ValueError, match="must be 6 characters"):
+        normalize_color_to_hex("123")
+    
+    with pytest.raises(ValueError, match="must be 6 characters"):
+        normalize_color_to_hex("#12345")
+    
+    with pytest.raises(ValueError, match="contains non-hex characters"):
+        normalize_color_to_hex("GGGGGG")
+
+
+@pytest.mark.unit
+def test_normalize_color_to_hex_unsupported_type():
+    """Test that normalize_color_to_hex raises error for unsupported types."""
+    with pytest.raises(TypeError, match="Unsupported color type"):
+        normalize_color_to_hex(123456)
+    
+    with pytest.raises(TypeError, match="Unsupported color type"):
+        normalize_color_to_hex(None)
 
 
 @pytest.mark.unit
@@ -62,8 +152,10 @@ def test_generate_student_feedback_doc_returns_bytes():
     """Test that generate_student_feedback_doc returns non-empty bytes."""
     # Create minimal feedback result
     result = RubricAssessmentResult(
-        total_points_earned=85,
-        total_points_possible=100,
+        rubric_id="test_rubric",
+        rubric_version="1.0",
+        total_points_earned=40,
+        total_points_possible=50,
         overall_feedback="Good work overall.",
         criteria_results=[
             CriterionResult(
@@ -93,12 +185,30 @@ def test_generate_student_feedback_doc_returns_bytes():
     doc_stream = BytesIO(doc_bytes)
     doc = Document(doc_stream)
     assert doc is not None
+    
+    doc_bytes = generate_student_feedback_doc(
+        student_name="John Doe",
+        course_id="CSC151",
+        assignment_name="Exam 1",
+        feedback_result=result
+    )
+    
+    # Verify bytes returned
+    assert isinstance(doc_bytes, bytes)
+    assert len(doc_bytes) > 0
+    
+    # Verify it's a valid DOCX
+    doc_stream = BytesIO(doc_bytes)
+    doc = Document(doc_stream)
+    assert doc is not None
 
 
 @pytest.mark.unit
 def test_generate_student_feedback_doc_contains_required_headings():
     """Test that generated doc contains required section headings."""
     result = RubricAssessmentResult(
+        rubric_id="test_rubric",
+        rubric_version="1.0",
         total_points_earned=75,
         total_points_possible=100,
         overall_feedback="Room for improvement in several areas.",
@@ -147,6 +257,8 @@ def test_generate_student_feedback_doc_contains_required_headings():
 def test_generate_student_feedback_doc_no_numeric_grading():
     """Test that generated doc does NOT contain numeric grading patterns."""
     result = RubricAssessmentResult(
+        rubric_id="test_rubric",
+        rubric_version="1.0",
         total_points_earned=85,
         total_points_possible=100,
         overall_feedback="Strong submission.",
@@ -181,7 +293,7 @@ def test_generate_student_feedback_doc_no_numeric_grading():
         r'\d+\s*points',  # e.g., "85 points"
         r'score:\s*\d+',  # e.g., "Score: 85"
         r'earned:\s*\d+',  # e.g., "Earned: 85"
-        r'[A-F][+-]?',  # Grade bands like "A+", "B-"
+        r'\b[A-F][+-]?\b',  # Grade bands like "A+", "B-" (word boundary to avoid matching single letters in words)
     ]
     
     for pattern in forbidden_patterns:
@@ -195,6 +307,8 @@ def test_generate_student_feedback_doc_no_numeric_grading():
 def test_generate_student_feedback_doc_includes_error_titles():
     """Test that generated doc includes error titles when errors are present."""
     result = RubricAssessmentResult(
+        rubric_id="test_rubric",
+        rubric_version="1.0",
         total_points_earned=70,
         total_points_possible=100,
         overall_feedback="Several issues identified.",
@@ -259,6 +373,8 @@ def test_generate_student_feedback_doc_includes_error_titles():
 def test_generate_student_feedback_doc_handles_no_errors():
     """Test that generated doc handles case when no errors are present."""
     result = RubricAssessmentResult(
+        rubric_id="test_rubric",
+        rubric_version="1.0",
         total_points_earned=95,
         total_points_possible=100,
         overall_feedback="Excellent work with no major issues.",
@@ -294,10 +410,21 @@ def test_generate_student_feedback_doc_handles_no_errors():
 def test_generate_student_feedback_doc_includes_metadata():
     """Test that generated doc includes metadata when provided."""
     result = RubricAssessmentResult(
-        total_points_earned=80,
-        total_points_possible=100,
+        rubric_id="test_rubric",
+        rubric_version="1.0",
+        total_points_earned=10,
+        total_points_possible=10,
         overall_feedback="Good work.",
-        criteria_results=[],
+        criteria_results=[
+            CriterionResult(
+                criterion_id="c1",
+                criterion_name="Test",
+                points_earned=10,
+                points_possible=10,
+                feedback="Good.",
+                selected_level_label=None
+            )
+        ],
         detected_errors=[]
     )
     
@@ -420,12 +547,23 @@ def test_parse_feedback_sections_extracts_errors():
 
 @pytest.mark.unit
 def test_generate_student_feedback_doc_handles_empty_criteria():
-    """Test that doc generation handles empty criteria results."""
+    """Test that doc generation handles minimal criteria results."""
     result = RubricAssessmentResult(
+        rubric_id="test_rubric",
+        rubric_version="1.0",
         total_points_earned=0,
-        total_points_possible=100,
+        total_points_possible=10,
         overall_feedback="No criteria assessed.",
-        criteria_results=[],
+        criteria_results=[
+            CriterionResult(
+                criterion_id="c1",
+                criterion_name="Placeholder",
+                points_earned=0,
+                points_possible=10,
+                feedback="No assessment performed.",
+                selected_level_label=None
+            )
+        ],
         detected_errors=[]
     )
     
@@ -449,6 +587,8 @@ def test_generate_student_feedback_doc_handles_empty_criteria():
 def test_generate_student_feedback_doc_cpcc_branding():
     """Test that generated doc follows CPCC branding (basic verification)."""
     result = RubricAssessmentResult(
+        rubric_id="test_rubric",
+        rubric_version="1.0",
         total_points_earned=90,
         total_points_possible=100,
         overall_feedback="Excellent submission.",

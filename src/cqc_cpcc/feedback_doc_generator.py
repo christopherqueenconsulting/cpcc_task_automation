@@ -35,6 +35,82 @@ NEUTRAL_GRAY = RGBColor(107, 114, 128)  # #6B7280
 ACCENT_GRAY = RGBColor(209, 213, 219)  # #D1D5DB
 
 
+def normalize_color_to_hex(color) -> str:
+    """Normalize various color input formats to a 6-character uppercase hex string.
+    
+    This function accepts multiple color input formats and converts them to a
+    consistent hex string format suitable for use in Word document XML.
+    
+    Supported input formats:
+    - python-docx RGBColor objects (which are tuples of (r, g, b))
+    - tuple/list of (r, g, b) values (0-255 range)
+    - hex string with or without '#' prefix ("AABBCC" or "#AABBCC")
+    
+    Args:
+        color: Color in one of the supported formats
+        
+    Returns:
+        6-character uppercase hex string without '#' prefix (e.g., "005AA3")
+        
+    Raises:
+        ValueError: If color format is not recognized or values are out of range
+        TypeError: If color type is not supported
+        
+    Examples:
+        >>> normalize_color_to_hex(RGBColor(0x12, 0x34, 0x56))
+        '123456'
+        >>> normalize_color_to_hex((18, 52, 86))
+        '123456'
+        >>> normalize_color_to_hex([18, 52, 86])
+        '123456'
+        >>> normalize_color_to_hex("#123456")
+        '123456'
+        >>> normalize_color_to_hex("123456")
+        '123456'
+    """
+    # Handle RGBColor objects (which are tuples) and regular tuples/lists
+    if isinstance(color, (RGBColor, tuple, list)):
+        if len(color) != 3:
+            raise ValueError(f"Color tuple/list must have exactly 3 values (r, g, b), got {len(color)}")
+        
+        r, g, b = color
+        
+        # Validate range
+        for component, name in [(r, 'r'), (g, 'g'), (b, 'b')]:
+            if not isinstance(component, int) or not (0 <= component <= 255):
+                raise ValueError(
+                    f"Color component '{name}' must be an integer between 0 and 255, got {component}"
+                )
+        
+        return f"{r:02X}{g:02X}{b:02X}"
+    
+    # Handle hex string
+    elif isinstance(color, str):
+        # Remove '#' prefix if present
+        hex_str = color.lstrip('#')
+        
+        # Validate hex string length
+        if len(hex_str) != 6:
+            raise ValueError(
+                f"Hex color string must be 6 characters (without '#'), got '{hex_str}' ({len(hex_str)} chars)"
+            )
+        
+        # Validate hex characters
+        try:
+            int(hex_str, 16)
+        except ValueError:
+            raise ValueError(f"Invalid hex color string: '{hex_str}' contains non-hex characters")
+        
+        # Return uppercase
+        return hex_str.upper()
+    
+    else:
+        raise TypeError(
+            f"Unsupported color type: {type(color).__name__}. "
+            f"Expected RGBColor, tuple/list (r,g,b), or hex string."
+        )
+
+
 def sanitize_filename(name: str) -> str:
     """Sanitize a string for use in a filename.
     
@@ -53,9 +129,9 @@ def sanitize_filename(name: str) -> str:
     sanitized = re.sub(r'[<>:"/\\|?*]', '', name)
     # Replace spaces with underscores
     sanitized = sanitized.replace(' ', '_')
-    # Remove leading/trailing periods and spaces
-    sanitized = sanitized.strip('. ')
-    # Ensure it's not empty
+    # Remove leading/trailing periods, spaces, and underscores
+    sanitized = sanitized.strip('. _')
+    # Ensure it's not empty (after stripping all the above)
     if not sanitized:
         sanitized = "Feedback"
     return sanitized
@@ -66,7 +142,7 @@ def add_horizontal_line(paragraph, color: RGBColor = CPCC_LIGHT_BLUE, height: in
     
     Args:
         paragraph: docx Paragraph object
-        color: RGB color for the line
+        color: RGB color for the line (RGBColor, tuple, or hex string)
         height: Line thickness in EMUs (15000 = ~1.5pt)
     """
     p = paragraph._p
@@ -77,13 +153,9 @@ def add_horizontal_line(paragraph, color: RGBColor = CPCC_LIGHT_BLUE, height: in
     bottom.set(qn('w:val'), 'single')
     bottom.set(qn('w:sz'), str(height // 1000))  # Convert to eighths of a point
     bottom.set(qn('w:space'), '1')
-    # Convert RGBColor to hex string (color is an integer in python-docx)
-    if isinstance(color, RGBColor):
-        # RGBColor stores color as an integer, convert to hex
-        color_hex = f'{color:06X}'
-    else:
-        # Fallback for raw integer
-        color_hex = f'{color:06X}'
+    
+    # Normalize color to hex string using our utility function
+    color_hex = normalize_color_to_hex(color)
     bottom.set(qn('w:color'), color_hex)
     
     pBdr.append(bottom)
