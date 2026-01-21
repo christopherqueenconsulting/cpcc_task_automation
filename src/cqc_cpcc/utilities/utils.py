@@ -342,6 +342,7 @@ def convert_xlsx_to_markdown(file_path: str) -> str:
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format."""
     file_name, file_extension = os.path.splitext(file_path)
+    file_extension = file_extension.lower()
 
     if convert_to_markdown:
         with open(file_path, mode='rb') as f:
@@ -349,6 +350,31 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
             results = mammoth.convert_to_html(f)
             contents = convert_content_to_markdown(results.value)
         # contents = results.value
+    # If file is HTML, extract text content
+    elif file_extension in ['.html', '.htm']:
+        with open(file_path, mode='r', encoding='utf-8') as f:
+            html_content = f.read()
+        # Parse HTML and extract text
+        soup = BeautifulSoup(html_content, 'html.parser')
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+        # Get text content
+        text = soup.get_text()
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        contents = '\n'.join(chunk for chunk in chunks if chunk)
+    # If file is audio or video, return metadata description
+    elif file_extension in ['.mp3', '.wav', '.m4a', '.ogg', '.mp4', '.avi', '.mov', '.webm']:
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # Size in MB
+        file_type = "audio" if file_extension in ['.mp3', '.wav', '.m4a', '.ogg'] else "video"
+        contents = f"""[{file_type.upper()} FILE: {os.path.basename(file_path)}]
+File type: {file_extension[1:].upper()}
+File size: {file_size:.2f} MB
+
+Note: This is a {file_type} file. The content cannot be transcribed automatically.
+Please manually review this {file_type} file for grading."""
     # If file ends in .xlsx, convert it to markdown
     elif file_extension in ['.xlsx', '.xls', '.xlsm']:
         contents = convert_xlsx_to_markdown(file_path)

@@ -371,6 +371,56 @@ class TestReadFiles:
         
         result = read_files(123)  # Invalid type
         assert "Invalid input" in result
+    
+    def test_read_html_file(self, tmp_path):
+        """Test reading HTML file extracts text content."""
+        from cqc_cpcc.utilities.utils import read_file
+        
+        html_content = """
+        <html>
+        <head><title>Test Page</title></head>
+        <body>
+            <script>alert('script');</script>
+            <h1>Hello World</h1>
+            <p>This is a test paragraph.</p>
+        </body>
+        </html>
+        """
+        test_file = tmp_path / "test.html"
+        test_file.write_text(html_content)
+        
+        result = read_file(str(test_file))
+        assert "Hello World" in result
+        assert "This is a test paragraph" in result
+        assert "script" not in result.lower() or "alert" not in result  # Scripts should be removed
+    
+    def test_read_audio_file(self, tmp_path):
+        """Test reading audio file returns metadata description."""
+        from cqc_cpcc.utilities.utils import read_file
+        
+        # Create a dummy audio file
+        test_file = tmp_path / "test.mp3"
+        test_file.write_bytes(b"dummy audio content")
+        
+        result = read_file(str(test_file))
+        assert "AUDIO FILE" in result
+        assert "test.mp3" in result
+        assert "MP3" in result
+        assert "cannot be transcribed automatically" in result
+    
+    def test_read_video_file(self, tmp_path):
+        """Test reading video file returns metadata description."""
+        from cqc_cpcc.utilities.utils import read_file
+        
+        # Create a dummy video file
+        test_file = tmp_path / "test.mp4"
+        test_file.write_bytes(b"dummy video content")
+        
+        result = read_file(str(test_file))
+        assert "VIDEO FILE" in result
+        assert "test.mp4" in result
+        assert "MP4" in result
+        assert "cannot be transcribed automatically" in result
 
 
 @pytest.mark.unit  

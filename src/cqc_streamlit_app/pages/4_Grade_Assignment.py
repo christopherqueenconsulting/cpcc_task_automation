@@ -536,6 +536,13 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
     if not assignments:
         st.warning(f"No assignments configured for course {course_id}. Create a new assignment below.")
     
+    # Check if we just created an assignment (success flag in session state)
+    if st.session_state.get('assignment_just_created', False):
+        # Clear the flag and reload assignments
+        st.session_state.assignment_just_created = False
+        assignments = get_assignments_for_course(course_id)
+        st.success(f"Assignment created successfully! Select it from the dropdown below.")
+    
     # Assignment selector
     col1, col2 = st.columns([3, 1])
     
@@ -552,10 +559,12 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
         )
     
     with col2:
-        create_new = st.checkbox("Create New", key="create_new_assignment_checkbox")
+        # Use a button instead of checkbox to avoid state modification issues
+        if st.button("+ Create New", key="show_create_assignment_button"):
+            st.session_state.show_create_assignment_form = True
     
     # Handle new assignment creation
-    if create_new:
+    if st.session_state.get('show_create_assignment_form', False):
         st.subheader("Create New Assignment")
         col1, col2 = st.columns(2)
         
@@ -573,27 +582,34 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
                 key="new_assignment_name_input"
             )
         
-        if st.button("Create Assignment", key="create_assignment_button"):
-            if new_assignment_id and new_assignment_name:
-                try:
-                    add_assignment_to_course(
-                        course_id,
-                        new_assignment_id,
-                        new_assignment_name,
-                        registry
-                    )
-                    st.session_state.error_definitions_registry = registry
-                    # Clear the checkbox state to allow normal selection after creation
-                    st.session_state.create_new_assignment_checkbox = False
-                    st.success(f"Created assignment: {new_assignment_name}")
-                    st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
-                    # Don't return - allow user to correct the error and retry
-            else:
-                st.warning("Please provide both Assignment ID and Name")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✓ Create Assignment", key="create_assignment_button", type="primary"):
+                if new_assignment_id and new_assignment_name:
+                    try:
+                        add_assignment_to_course(
+                            course_id,
+                            new_assignment_id,
+                            new_assignment_name,
+                            registry
+                        )
+                        st.session_state.error_definitions_registry = registry
+                        # Set success flag and hide form
+                        st.session_state.assignment_just_created = True
+                        st.session_state.show_create_assignment_form = False
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
+                        # Don't return - allow user to correct the error and retry
+                else:
+                    st.warning("Please provide both Assignment ID and Name")
         
-        # Only return None if we're still in create mode (button not clicked or validation failed)
+        with col2:
+            if st.button("✕ Cancel", key="cancel_create_assignment_button"):
+                st.session_state.show_create_assignment_form = False
+                st.rerun()
+        
+        # Return None while in create mode
         return None, None, None
     
     # Extract selected assignment
@@ -830,7 +846,13 @@ async def get_grade_exam_content():
     selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
     st.header("Student Submission File(s)")
-    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip", "xlsx", "xls", "xlsm"]
+    # Added support for HTML, audio, and video files
+    student_submission_accepted_file_types = [
+        "txt", "docx", "pdf", "java", "cpp", "sas", "zip", "xlsx", "xls", "xlsm",
+        "html", "htm",  # HTML files
+        "mp3", "wav", "m4a", "ogg",  # Audio files
+        "mp4", "avi", "mov", "webm"  # Video files
+    ]
     student_submission_file_paths = add_upload_file_element("Upload Student Exam Submission",
                                                             student_submission_accepted_file_types,
                                                             accept_multiple_files=True,
@@ -1440,7 +1462,13 @@ async def get_rubric_based_exam_grading():
     
     # Step 8: Student Submissions
     st.header("Student Submission File(s)")
-    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
+    # Added support for HTML, audio, and video files
+    student_submission_accepted_file_types = [
+        "txt", "docx", "pdf", "java", "cpp", "sas", "zip",
+        "html", "htm",  # HTML files
+        "mp3", "wav", "m4a", "ogg",  # Audio files
+        "mp4", "avi", "mov", "webm"  # Video files
+    ]
     student_submission_file_paths = add_upload_file_element(
         "Upload Student Exam Submission",
         student_submission_accepted_file_types,
