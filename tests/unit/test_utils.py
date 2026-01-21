@@ -371,6 +371,118 @@ class TestReadFiles:
         
         result = read_files(123)  # Invalid type
         assert "Invalid input" in result
+    
+    def test_read_html_file(self, tmp_path):
+        """Test reading HTML file extracts text content."""
+        from cqc_cpcc.utilities.utils import read_file
+        
+        html_content = """
+        <html>
+        <head><title>Test Page</title></head>
+        <body>
+            <script>alert('script');</script>
+            <h1>Hello World</h1>
+            <p>This is a test paragraph.</p>
+        </body>
+        </html>
+        """
+        test_file = tmp_path / "test.html"
+        test_file.write_text(html_content)
+        
+        result = read_file(str(test_file))
+        assert "Hello World" in result
+        assert "This is a test paragraph" in result
+        # Scripts and their content should be removed
+        assert "script" not in result.lower() and "alert" not in result.lower()
+    
+    def test_read_audio_file(self, tmp_path, mocker):
+        """Test reading audio file transcribes using OpenAI Whisper."""
+        from cqc_cpcc.utilities.utils import read_file
+        
+        # Create a dummy audio file
+        test_file = tmp_path / "test.mp3"
+        test_file.write_bytes(b"dummy audio content")
+        
+        # Mock the transcribe_audio function to avoid actual API call
+        mock_transcription = {
+            "text": "This is a test audio transcription.",
+            "duration": 30.5,
+            "language": "english",
+            "file_info": {
+                "name": "test.mp3",
+                "size_mb": 0.0,
+                "type": "MP3"
+            }
+        }
+        
+        mocker.patch(
+            "cqc_cpcc.utilities.AI.openai_client.transcribe_audio",
+            return_value=mock_transcription
+        )
+        
+        result = read_file(str(test_file))
+        
+        # Should include transcription
+        assert "AUDIO FILE" in result
+        assert "test.mp3" in result
+        assert "This is a test audio transcription" in result
+        assert "30.5 seconds" in result
+        assert "english" in result
+    
+    def test_read_audio_file_fallback_on_error(self, tmp_path, mocker):
+        """Test reading audio file falls back gracefully on transcription error."""
+        from cqc_cpcc.utilities.utils import read_file
+        
+        # Create a dummy audio file
+        test_file = tmp_path / "test.mp3"
+        test_file.write_bytes(b"dummy audio content")
+        
+        # Mock transcribe_audio to raise an error
+        mocker.patch(
+            "cqc_cpcc.utilities.AI.openai_client.transcribe_audio",
+            side_effect=Exception("API error")
+        )
+        
+        result = read_file(str(test_file))
+        
+        # Should include error message with file info
+        assert "AUDIO FILE" in result
+        assert "test.mp3" in result
+        assert "Failed to transcribe" in result or "Error" in result
+        assert "MP3" in result
+    
+    def test_read_video_file(self, tmp_path, mocker):
+        """Test reading video file transcribes audio track."""
+        from cqc_cpcc.utilities.utils import read_file
+        
+        # Create a dummy video file
+        test_file = tmp_path / "test.mp4"
+        test_file.write_bytes(b"dummy video content")
+        
+        # Mock the process_video_file function to return transcription
+        mock_video_info = """[VIDEO FILE: test.mp4]
+File type: MP4
+File size: 0.00 MB
+Duration: 45.0 seconds
+Detected language: english
+
+Audio Transcription:
+This is the narration from the video explaining the concepts.
+
+Note: This is a video submission. The transcription above is from the audio track."""
+        
+        mocker.patch(
+            "cqc_cpcc.utilities.AI.openai_client.process_video_file",
+            return_value=mock_video_info
+        )
+        
+        result = read_file(str(test_file))
+        
+        # Should include video metadata and transcription
+        assert "VIDEO FILE" in result
+        assert "test.mp4" in result
+        assert "MP4" in result
+        assert "Audio Transcription:" in result or "transcription" in result.lower()
 
 
 @pytest.mark.unit  

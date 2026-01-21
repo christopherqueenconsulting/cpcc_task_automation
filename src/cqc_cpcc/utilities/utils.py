@@ -340,8 +340,15 @@ def convert_xlsx_to_markdown(file_path: str) -> str:
 
 @streamlit.cache_data
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
-    """ Return the file contents in string format."""
+    """ Return the file contents in string format.
+    
+    For audio files (.mp3, .wav, .m4a, .ogg): Transcribes using OpenAI Whisper
+    For video files (.mp4, .avi, .mov, .webm): Returns metadata and grading instructions
+    For HTML files: Extracts text content (removes scripts/styles)
+    For other files: Returns text content as-is
+    """
     file_name, file_extension = os.path.splitext(file_path)
+    file_extension = file_extension.lower()
 
     if convert_to_markdown:
         with open(file_path, mode='rb') as f:
@@ -349,6 +356,99 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
             results = mammoth.convert_to_html(f)
             contents = convert_content_to_markdown(results.value)
         # contents = results.value
+    # If file is HTML, extract text content
+    elif file_extension in ['.html', '.htm']:
+        with open(file_path, mode='r', encoding='utf-8') as f:
+            html_content = f.read()
+        # Parse HTML and extract text
+        soup = BeautifulSoup(html_content, 'html.parser')
+        # Remove script and style elements
+        for script in soup(["script", "style"]):
+            script.decompose()
+        # Get text content
+        text = soup.get_text()
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        contents = '\n'.join(chunk for chunk in chunks if chunk)
+    # If file is audio, transcribe it using OpenAI Whisper
+    elif file_extension in ['.mp3', '.wav', '.m4a', '.ogg']:
+        try:
+            # Import asyncio to run the async transcription
+            import asyncio
+            from cqc_cpcc.utilities.AI.openai_client import transcribe_audio, format_transcription_for_grading
+            
+            # Run the async transcription - handle event loop properly
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = None
+            
+            if loop is not None and loop.is_running():
+                # We're in an async context - create new loop in thread
+                import concurrent.futures
+                def run_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        return new_loop.run_until_complete(transcribe_audio(file_path))
+                    finally:
+                        new_loop.close()
+                
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(run_in_thread)
+                    transcription = future.result()
+            else:
+                # No running loop - create and use one
+                transcription = asyncio.run(transcribe_audio(file_path))
+            
+            contents = format_transcription_for_grading(transcription)
+        except Exception as e:
+            # If transcription fails, return error message with file info
+            file_size = os.path.getsize(file_path) / (1024 * 1024)
+            contents = f"""[AUDIO FILE: {os.path.basename(file_path)}]
+File type: {file_extension[1:].upper()}
+File size: {file_size:.2f} MB
+
+Error: Failed to transcribe audio file: {str(e)}
+Please manually review this audio file for grading."""
+    # If file is video, return metadata and instructions
+    elif file_extension in ['.mp4', '.avi', '.mov', '.webm']:
+        try:
+            import asyncio
+            from cqc_cpcc.utilities.AI.openai_client import process_video_file
+            
+            # Run the async video processing - handle event loop properly
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = None
+            
+            if loop is not None and loop.is_running():
+                # We're in an async context - create new loop in thread
+                import concurrent.futures
+                def run_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        return new_loop.run_until_complete(process_video_file(file_path))
+                    finally:
+                        new_loop.close()
+                
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(run_in_thread)
+                    contents = future.result()
+            else:
+                # No running loop - create and use one
+                contents = asyncio.run(process_video_file(file_path))
+        except Exception as e:
+            file_size = os.path.getsize(file_path) / (1024 * 1024)
+            contents = f"""[VIDEO FILE: {os.path.basename(file_path)}]
+File type: {file_extension[1:].upper()}
+File size: {file_size:.2f} MB
+
+Error: Failed to process video file: {str(e)}
+Please manually review this video file for grading."""
     # If file ends in .xlsx, convert it to markdown
     elif file_extension in ['.xlsx', '.xls', '.xlsm']:
         contents = convert_xlsx_to_markdown(file_path)

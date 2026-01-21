@@ -360,3 +360,110 @@ class TestPromptQuality:
         
         assert f"{base_rubric.total_points_possible}" in prompt
         assert "Total Points" in prompt
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestRubricGradingOptionalParameters:
+    """Test rubric grading with optional parameters (error definitions, reference solution)."""
+    
+    async def test_grade_without_error_definitions(self, base_rubric, mocker):
+        """Test grading succeeds when error_definitions is None (courses like CSC 113)."""
+        # Mock OpenAI response without error definitions
+        mock_response = create_valid_rubric_assessment()
+        mock_get_completion = mocker.patch(
+            "cqc_cpcc.rubric_grading.get_structured_completion",
+            new_callable=AsyncMock,
+        )
+        mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
+        
+        # Grade with error_definitions=None (not provided)
+        result = await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            error_definitions=None,
+        )
+        
+        # Verify grading succeeded
+        assert isinstance(result, RubricAssessmentResult)
+        assert result.total_points_earned == 85
+        assert result.total_points_possible == 100
+        assert len(result.criteria_results) == 4
+        
+        # Verify OpenAI was called successfully
+        assert mock_get_completion.called
+        call_args = mock_get_completion.call_args
+        prompt = call_args.kwargs['prompt']
+        
+        # Verify error definitions section NOT in prompt when None
+        assert "Error Definitions to Check" not in prompt
+    
+    async def test_grade_without_reference_solution(self, base_rubric, mocker):
+        """Test grading succeeds when reference_solution is None."""
+        # Mock OpenAI response
+        mock_response = create_valid_rubric_assessment()
+        mock_get_completion = mocker.patch(
+            "cqc_cpcc.rubric_grading.get_structured_completion",
+            new_callable=AsyncMock,
+        )
+        mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
+        
+        # Grade with reference_solution=None (not provided)
+        result = await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            reference_solution=None,
+        )
+        
+        # Verify grading succeeded
+        assert isinstance(result, RubricAssessmentResult)
+        assert result.total_points_earned == 85
+        assert result.total_points_possible == 100
+        
+        # Verify OpenAI was called successfully
+        assert mock_get_completion.called
+        call_args = mock_get_completion.call_args
+        prompt = call_args.kwargs['prompt']
+        
+        # Verify reference solution section NOT in prompt when None
+        assert "Reference Solution" not in prompt
+    
+    async def test_grade_with_neither_errors_nor_solution(self, base_rubric, mocker):
+        """Test grading succeeds with ONLY rubric (no error definitions, no solution)."""
+        # Mock OpenAI response
+        mock_response = create_valid_rubric_assessment()
+        mock_get_completion = mocker.patch(
+            "cqc_cpcc.rubric_grading.get_structured_completion",
+            new_callable=AsyncMock,
+        )
+        mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
+        
+        # Grade with ONLY rubric - both optional params are None
+        result = await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            error_definitions=None,
+            reference_solution=None,
+        )
+        
+        # Verify grading succeeded with rubric only
+        assert isinstance(result, RubricAssessmentResult)
+        assert result.total_points_earned == 85
+        assert result.total_points_possible == 100
+        
+        # Verify OpenAI was called with minimal prompt (rubric + instructions + submission only)
+        assert mock_get_completion.called
+        call_args = mock_get_completion.call_args
+        prompt = call_args.kwargs['prompt']
+        
+        # Verify optional sections NOT in prompt
+        assert "Error Definitions to Check" not in prompt
+        assert "Reference Solution" not in prompt
+        
+        # Verify required sections ARE in prompt
+        assert "Assignment Instructions" in prompt
+        assert "Student Submission" in prompt
+        assert base_rubric.title in prompt

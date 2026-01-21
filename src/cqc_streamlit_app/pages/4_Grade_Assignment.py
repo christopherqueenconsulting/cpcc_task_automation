@@ -530,8 +530,19 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
     
     registry = st.session_state.error_definitions_registry
     
-    # Get assignments for this course
-    assignments = get_assignments_for_course(course_id)
+    # Check if we just created an assignment (success flag in session state)
+    newly_created_assignment_id = None
+    if st.session_state.get('assignment_just_created', False):
+        # Get the newly created assignment ID before clearing the flag
+        newly_created_assignment_id = st.session_state.get('newly_created_assignment_id')
+        # Clear the flags
+        st.session_state.assignment_just_created = False
+        st.session_state.newly_created_assignment_id = None
+        st.success(f"✅ Assignment created successfully and selected below!")
+    
+    # Get assignments for this course from session state registry (not from file!)
+    # This ensures newly created assignments are visible immediately
+    assignments = registry.get_assignments_for_course(course_id)
     
     if not assignments:
         st.warning(f"No assignments configured for course {course_id}. Create a new assignment below.")
@@ -545,6 +556,17 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
             for a in assignments
         ]
         
+        # Auto-select newly created assignment if available
+        # We need to set the session state value directly because the index parameter
+        # is ignored when the key already exists in session state
+        if newly_created_assignment_id:
+            for idx, a in enumerate(assignments):
+                if a.assignment_id == newly_created_assignment_id:
+                    # Set the session state value to the display string
+                    auto_select_value = f"{a.assignment_name} ({a.assignment_id})"
+                    st.session_state.assignment_selector = auto_select_value
+                    break
+        
         selected_assignment_display = st.selectbox(
             "Select Assignment",
             assignment_options,
@@ -552,10 +574,12 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
         )
     
     with col2:
-        create_new = st.checkbox("Create New", key="create_new_assignment_checkbox")
+        # Use a button instead of checkbox to avoid state modification issues
+        if st.button("+ Create New", key="show_create_assignment_button"):
+            st.session_state.show_create_assignment_form = True
     
     # Handle new assignment creation
-    if create_new:
+    if st.session_state.get('show_create_assignment_form', False):
         st.subheader("Create New Assignment")
         col1, col2 = st.columns(2)
         
@@ -573,23 +597,36 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
                 key="new_assignment_name_input"
             )
         
-        if st.button("Create Assignment", key="create_assignment_button"):
-            if new_assignment_id and new_assignment_name:
-                try:
-                    add_assignment_to_course(
-                        course_id,
-                        new_assignment_id,
-                        new_assignment_name,
-                        registry
-                    )
-                    st.session_state.error_definitions_registry = registry
-                    st.success(f"Created assignment: {new_assignment_name}")
-                    st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
-            else:
-                st.warning("Please provide both Assignment ID and Name")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✓ Create Assignment", key="create_assignment_button", type="primary"):
+                if new_assignment_id and new_assignment_name:
+                    try:
+                        add_assignment_to_course(
+                            course_id,
+                            new_assignment_id,
+                            new_assignment_name,
+                            registry
+                        )
+                        st.session_state.error_definitions_registry = registry
+                        # Store the newly created assignment ID for auto-selection
+                        st.session_state.newly_created_assignment_id = new_assignment_id
+                        # Set success flag and hide form
+                        st.session_state.assignment_just_created = True
+                        st.session_state.show_create_assignment_form = False
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
+                        # Don't return - allow user to correct the error and retry
+                else:
+                    st.warning("Please provide both Assignment ID and Name")
         
+        with col2:
+            if st.button("✕ Cancel", key="cancel_create_assignment_button"):
+                st.session_state.show_create_assignment_form = False
+                st.rerun()
+        
+        # Return None while in create mode
         return None, None, None
     
     # Extract selected assignment
@@ -616,8 +653,18 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
     else:
         effective_error_definitions = base_error_definitions
     
+    # Add option to skip error definitions
     if not effective_error_definitions:
-        st.warning("No error definitions found for this assignment. Add new error definitions below.")
+        st.info("ℹ️ No error definitions found for this assignment. You can either add error definitions below or skip this step to proceed with grading using only the rubric.")
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("⏭️ Skip Error Definitions", key=f"skip_error_defs_{course_id}_{selected_assignment_id}", type="primary"):
+                # Return with None for error definitions to allow grading with rubric only
+                return selected_assignment_id, selected_assignment_name, None
+        with col2:
+            st.caption("Click to proceed with rubric-only grading (error definitions optional)")
+        
         effective_error_definitions = []
     
     # Convert to DataFrame for editing
@@ -711,6 +758,14 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
             json_str = registry_to_json_string(temp_registry)
             st.code(json_str, language="json")
             st.info("Copy the JSON above and paste it into error_definitions_config.py to persist changes.")
+    
+    # Add a "Skip Error Definitions" button to proceed without configuring error definitions
+    col_skip = st.columns([2, 3])[0]
+    with col_skip:
+        if st.button("⏭️ Skip Error Definitions & Continue", key=f"skip_error_defs_continue_{course_id}_{selected_assignment_id}", 
+                     type="secondary", help="Proceed with rubric-only grading (error definitions are optional)"):
+            # Return with None for error definitions to allow grading with rubric only
+            return selected_assignment_id, selected_assignment_name, None
     
     return selected_assignment_id, selected_assignment_name, effective_error_definitions
 
@@ -826,7 +881,13 @@ async def get_grade_exam_content():
     selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
     st.header("Student Submission File(s)")
-    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip", "xlsx", "xls", "xlsm"]
+    # Added support for HTML, audio, and video files
+    student_submission_accepted_file_types = [
+        "txt", "docx", "pdf", "java", "cpp", "sas", "zip", "xlsx", "xls", "xlsm",
+        "html", "htm",  # HTML files
+        "mp3", "wav", "m4a", "ogg",  # Audio files
+        "mp4", "avi", "mov", "webm"  # Video files
+    ]
     student_submission_file_paths = add_upload_file_element("Upload Student Exam Submission",
                                                             student_submission_accepted_file_types,
                                                             accept_multiple_files=True,
@@ -1436,7 +1497,13 @@ async def get_rubric_based_exam_grading():
     
     # Step 8: Student Submissions
     st.header("Student Submission File(s)")
-    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
+    # Added support for HTML, audio, and video files
+    student_submission_accepted_file_types = [
+        "txt", "docx", "pdf", "java", "cpp", "sas", "zip",
+        "html", "htm",  # HTML files
+        "mp3", "wav", "m4a", "ogg",  # Audio files
+        "mp4", "avi", "mov", "webm"  # Video files
+    ]
     student_submission_file_paths = add_upload_file_element(
         "Upload Student Exam Submission",
         student_submission_accepted_file_types,
