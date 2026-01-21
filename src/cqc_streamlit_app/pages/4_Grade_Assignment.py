@@ -583,13 +583,17 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
                         registry
                     )
                     st.session_state.error_definitions_registry = registry
+                    # Clear the checkbox state to allow normal selection after creation
+                    st.session_state.create_new_assignment_checkbox = False
                     st.success(f"Created assignment: {new_assignment_name}")
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
+                    return None, None, None
             else:
                 st.warning("Please provide both Assignment ID and Name")
         
+        # Only return None if we're still in create mode (button not clicked or validation failed)
         return None, None, None
     
     # Extract selected assignment
