@@ -1190,3 +1190,132 @@ async def close_client() -> None:
             await _client.close()
             _client = None
             logger.info("Closed AsyncOpenAI client")
+
+
+async def transcribe_audio(file_path: str) -> dict:
+    """Transcribe audio file using OpenAI Whisper API.
+    
+    Supports: mp3, mp4, mpeg, mpga, m4a, wav, webm
+    Max file size: 25 MB
+    
+    Args:
+        file_path: Path to the audio file
+        
+    Returns:
+        Dictionary with:
+        - text: Transcribed text
+        - duration: Audio duration in seconds (if available)
+        - language: Detected language
+        - file_info: File metadata (name, size, type)
+        
+    Raises:
+        OpenAITransportError: If transcription fails
+    """
+    import os
+    from pathlib import Path
+    
+    client = await get_client()
+    file_name = os.path.basename(file_path)
+    file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+    file_ext = Path(file_path).suffix.lower()
+    
+    logger.info(f"Transcribing audio file: {file_name} ({file_size:.2f} MB)")
+    
+    try:
+        # Check file size (OpenAI limit is 25 MB)
+        if file_size > 25:
+            logger.warning(f"Audio file {file_name} exceeds 25 MB limit, truncating or compressing may be needed")
+        
+        # Open and transcribe the audio file
+        with open(file_path, "rb") as audio_file:
+            transcription = await client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="verbose_json"  # Includes duration, language
+            )
+        
+        result = {
+            "text": transcription.text,
+            "duration": getattr(transcription, 'duration', None),
+            "language": getattr(transcription, 'language', 'unknown'),
+            "file_info": {
+                "name": file_name,
+                "size_mb": round(file_size, 2),
+                "type": file_ext[1:].upper() if file_ext else "unknown"
+            }
+        }
+        
+        logger.info(f"Successfully transcribed {file_name}: {len(result['text'])} characters, "
+                   f"duration: {result['duration']}s, language: {result['language']}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to transcribe audio file {file_name}: {e}")
+        raise OpenAITransportError(f"Audio transcription failed: {str(e)}")
+
+
+def format_transcription_for_grading(transcription: dict) -> str:
+    """Format audio transcription for inclusion in grading prompt.
+    
+    Args:
+        transcription: Result from transcribe_audio()
+        
+    Returns:
+        Formatted string for grading prompt
+    """
+    file_info = transcription["file_info"]
+    duration = transcription.get("duration")
+    language = transcription.get("language", "unknown")
+    text = transcription["text"]
+    
+    duration_str = f"{duration:.1f} seconds" if duration else "unknown"
+    
+    formatted = f"""[AUDIO FILE: {file_info['name']}]
+File type: {file_info['type']}
+File size: {file_info['size_mb']} MB
+Duration: {duration_str}
+Detected language: {language}
+
+Transcription:
+{text}
+"""
+    return formatted
+
+
+async def process_video_file(file_path: str) -> str:
+    """Process video file for grading.
+    
+    For video files, we extract basic metadata and provide instructions.
+    Future enhancement: Could extract frames or audio track for analysis.
+    
+    Args:
+        file_path: Path to the video file
+        
+    Returns:
+        Formatted string with video metadata
+    """
+    import os
+    from pathlib import Path
+    
+    file_name = os.path.basename(file_path)
+    file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
+    file_ext = Path(file_path).suffix.lower()
+    
+    logger.info(f"Processing video file: {file_name} ({file_size:.2f} MB)")
+    
+    # For now, return metadata with note about video content
+    # Future: Could extract audio track and transcribe, or extract frames
+    formatted = f"""[VIDEO FILE: {file_name}]
+File type: {file_ext[1:].upper() if file_ext else 'unknown'}
+File size: {file_size:.2f} MB
+
+Note: This is a video submission. The grader should evaluate the video content based on:
+- Visual presentation and clarity
+- Audio narration (if present)
+- Demonstration of required concepts
+- Overall quality and professionalism
+
+Please review the video file to assess the student's work."""
+    
+    return formatted
