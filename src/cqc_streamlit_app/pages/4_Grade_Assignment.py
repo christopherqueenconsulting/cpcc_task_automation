@@ -540,8 +540,9 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
         st.session_state.newly_created_assignment_id = None
         st.success(f"✅ Assignment created successfully and selected below!")
     
-    # Get assignments for this course (reload after creation if needed)
-    assignments = get_assignments_for_course(course_id)
+    # Get assignments for this course from session state registry (not from file!)
+    # This ensures newly created assignments are visible immediately
+    assignments = registry.get_assignments_for_course(course_id)
     
     if not assignments:
         st.warning(f"No assignments configured for course {course_id}. Create a new assignment below.")
