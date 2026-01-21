@@ -35,7 +35,11 @@ from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult, DetectedError
 from cqc_cpcc.error_definitions_models import ErrorDefinition
 from cqc_cpcc.error_scoring import compute_error_based_score, aggregate_error_counts, get_error_count_for_severity
 from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
+from cqc_cpcc.utilities.AI.structured_outputs import LLMRubricOutput
+from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
 from cqc_cpcc.utilities.logger import logger
+from pydantic import ValidationError
+from typing import cast
 
 
 # Default model configuration
@@ -284,51 +288,162 @@ async def grade_with_rubric(
     
     try:
         # Call OpenAI with structured output validation
-        result = await get_structured_completion(
-            prompt=prompt,
-            model_name=model_name,
-            schema_model=RubricAssessmentResult,
-            temperature=temperature,
-            max_tokens=DEFAULT_MAX_TOKENS,
-        )
-        
-        # Log raw OpenAI response for debugging
-        logger.info(
-            f"OpenAI raw response: total_points_earned={result.total_points_earned}, "
-            f"rubric_id='{result.rubric_id}', rubric_version='{result.rubric_version}'"
-        )
-        logger.debug(f"OpenAI criteria count: {len(result.criteria_results)}")
-        for i, cr in enumerate(result.criteria_results):
-            logger.debug(
-                f"  Criterion {i+1}/{len(result.criteria_results)}: {cr.criterion_id} = "
-                f"{cr.points_earned}/{cr.points_possible} (level: {cr.selected_level_label or 'N/A'})"
+        # Use a small retry loop: try up to 3 attempts, and adjust the prompt slightly on parse failures
+        max_attempts = 3
+        attempt = 0
+        llm_output: LLMRubricOutput | None = None
+        last_exc: Exception | None = None
+
+        # Prepare normalized schema (openai_client also normalizes but do it here explicitly to follow conventions)
+        # Note: normalize_json_schema_for_openai expects a dict schema, we use LLMRubricOutput's model_json_schema
+        raw_schema = LLMRubricOutput.model_json_schema()
+        normalized_schema = normalize_json_schema_for_openai(raw_schema)
+
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                # On second+ attempts, add an instruction to be strictly JSON and concise to improve parse reliability
+                prompt_to_send = prompt
+                if attempt > 1:
+                    prompt_to_send = (
+                        "Please respond ONLY with a JSON object matching the schema. "
+                        "Do not include any explanatory text.\n" + prompt
+                    )
+
+                llm_output = await get_structured_completion(
+                    prompt=prompt_to_send,
+                    model_name=model_name,
+                    schema_model=LLMRubricOutput,
+                    temperature=temperature,
+                    max_tokens=DEFAULT_MAX_TOKENS,
+                    max_retries=1,  # Allow the client to do its own small retry
+                )
+
+                # Successfully parsed LLM output
+                break
+
+            except ValidationError as ve:
+                # Pydantic validation from our local model (unlikely because openai_client validates against model)
+                logger.error(f"LLM output validation error on attempt {attempt}: {ve}")
+                last_exc = ve
+                # continue to retry with stricter instruction
+                continue
+
+            except Exception as e:
+                # Capture exceptions (including OpenAISchemaValidationError) and retry a few times
+                logger.warning(f"OpenAI call failed on attempt {attempt}/{max_attempts}: {e}")
+                last_exc = e
+                if attempt < max_attempts:
+                    logger.info(f"Retrying rubric grading (attempt {attempt+1}/{max_attempts})")
+                    continue
+                raise
+
+        if llm_output is None:
+            # No successful parse
+            logger.error(f"Failed to parse LLM rubric output after {max_attempts} attempts")
+            raise ValueError(f"Failed to obtain valid rubric output from LLM: {last_exc}")
+
+        # Convert LLMRubricOutput into internal RubricAssessmentResult
+        # Build CriterionResult list
+        from cqc_cpcc.rubric_models import CriterionResult, DetectedError as RMDetectedError
+        from cqc_cpcc.scoring.rubric_scoring_engine import aggregate_rubric_result
+
+        criteria_results: list[CriterionResult] = []
+        for cs in llm_output.criteria_scores:
+            # Guard: ensure points do not exceed rubric's criterion max (backend will recompute where needed)
+            # Find rubric criterion to get points_possible and name
+            rubric_criterion = next((c for c in rubric.criteria if c.criterion_id == cs.criterion_id), None)
+            if rubric_criterion:
+                points_possible = rubric_criterion.max_points
+                criterion_name = rubric_criterion.name
+            else:
+                points_possible = cs.points
+                criterion_name = cs.criterion_id
+
+            # Ensure non-negative integer points
+            points_earned = int(max(0, cs.points))
+
+            cr = CriterionResult(
+                criterion_id=cs.criterion_id,
+                criterion_name=criterion_name,
+                points_possible=points_possible,
+                points_earned=points_earned,
+                selected_level_label=None,
+                feedback=cs.feedback or "",
+                evidence=None,
             )
-        
-        # Post-process: Apply backend scoring for non-manual criteria
-        result = apply_backend_scoring(rubric, result)
-        
+            criteria_results.append(cr)
+
+        # Build detected_errors list if present
+        detected_errors_list: list[RMDetectedError] = []
+        if llm_output.detected_errors:
+            for d in llm_output.detected_errors:
+                try:
+                    de = RMDetectedError(
+                        code=str(d.get("code") or d.get("error_id") or d.get("id") or "UNKNOWN"),
+                        name=str(d.get("name") or d.get("title") or de.get("code", "")),
+                        severity=str(d.get("severity") or d.get("severity_category") or "unknown"),
+                        description=str(d.get("description") or d.get("details") or ""),
+                        occurrences=int(d.get("occurrences") or d.get("count") or 1),
+                        notes=str(d.get("notes") or d.get("notes", "")),
+                    )
+                    detected_errors_list.append(de)
+                except Exception:
+                    # Skip malformed detected error entries but log
+                    logger.warning(f"Skipping malformed detected_error entry: {d}")
+
+        # Create a base RubricAssessmentResult; backend scoring will recalc totals
+        # Compute totals from criteria to satisfy Pydantic validators (backend may still recalc)
+        computed_total_possible = sum(cr.points_possible for cr in criteria_results)
+        computed_total_earned = sum(cr.points_earned for cr in criteria_results)
+
+        result_model = RubricAssessmentResult(
+            rubric_id=rubric.rubric_id,
+            rubric_version=rubric.rubric_version,
+            total_points_possible=computed_total_possible,
+            total_points_earned=computed_total_earned,
+            criteria_results=criteria_results,
+            overall_band_label=None,
+            overall_feedback=llm_output.overall_feedback or "",
+            detected_errors=detected_errors_list or None,
+            error_counts_by_severity=None,
+            error_counts_by_id=None,
+            original_major_errors=None,
+            original_minor_errors=None,
+            effective_major_errors=None,
+            effective_minor_errors=None,
+        )
+
+        # Apply backend scoring to compute totals and handle error/level-based criteria
+        result = apply_backend_scoring(rubric, result_model)
+
+        # Log raw OpenAI-ish info for debugging
+        logger.info(
+            f"LLM reported total_points_earned={llm_output.total_points_earned}, converted to backend total={result.total_points_earned}"
+        )
+
         # Validate that result matches rubric
         if result.rubric_id != rubric.rubric_id:
             logger.warning(
                 f"Result rubric_id '{result.rubric_id}' does not match input rubric_id '{rubric.rubric_id}'"
             )
-        
+
         if result.total_points_possible != rubric.total_points_possible:
             logger.warning(
                 f"Result total_points_possible ({result.total_points_possible}) "
                 f"does not match rubric ({rubric.total_points_possible})"
             )
-        
+
         logger.info(
             f"Grading complete: {result.total_points_earned}/{result.total_points_possible} points "
             f"({len(result.criteria_results)} criteria assessed)"
         )
-        
+
         if result.detected_errors:
             logger.info(f"Detected {len(result.detected_errors)} errors")
-        
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Rubric grading failed: {e}")
         raise ValueError(f"Failed to grade with rubric: {e}")
