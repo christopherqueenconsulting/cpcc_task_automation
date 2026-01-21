@@ -382,7 +382,7 @@ class TestRubricGradingOptionalParameters:
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
-            error_definitions=None,  # Explicitly None - courses without error definitions
+            error_definitions=None,
         )
         
         # Verify grading succeeded
@@ -414,7 +414,7 @@ class TestRubricGradingOptionalParameters:
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
-            reference_solution=None,  # Explicitly None - no solution provided
+            reference_solution=None,
         )
         
         # Verify grading succeeded
@@ -445,8 +445,8 @@ class TestRubricGradingOptionalParameters:
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
-            error_definitions=None,  # No error definitions
-            reference_solution=None,  # No solution
+            error_definitions=None,
+            reference_solution=None,
         )
         
         # Verify grading succeeded with rubric only
