@@ -39,6 +39,7 @@ class MyColleges:
         faculty_url = MYCOLLEGE_URL + "/Student/Student/Faculty"
 
         self.driver.get(faculty_url)
+        logger.info("Navigated to MyColleges Faculty Page: "+faculty_url)
 
         # Login if necessary
         login_if_needed(self.driver)

@@ -215,6 +215,12 @@ def getBaseOptions(base_download_directory:str = None):
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
 
+    # Options to prevent detection
+    #options.add_argument("--disable-blink-features=AutomationControlled")
+    #options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    #options.add_experimental_option("useAutomationExtension", False)
+    # TODO: Make sure options above are working as expected
+
     # Options to make us undetectable (Review https://amiunique.org/fingerprint from the browser to verify)
     options.add_argument("window-size=1920x1080")
     options.add_argument(

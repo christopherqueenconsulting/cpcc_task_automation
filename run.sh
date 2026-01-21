@@ -11,7 +11,7 @@ if [ -f .env ]; then
 fi
 
 # Define the options
-options=("streamlit" "poetry")
+options=("Web_App" "Command_Line")
 
 # Simple prompt generator (no comma list)
 generate_prompt() {
