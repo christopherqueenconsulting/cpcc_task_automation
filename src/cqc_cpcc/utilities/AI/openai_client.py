@@ -43,6 +43,7 @@ Example usage:
 
 import asyncio
 import json
+import os
 import random
 from typing import Type, TypeVar
 
@@ -1224,7 +1225,10 @@ async def transcribe_audio(file_path: str) -> dict:
     try:
         # Check file size (OpenAI limit is 25 MB)
         if file_size > 25:
-            logger.warning(f"Audio file {file_name} exceeds 25 MB limit, truncating or compressing may be needed")
+            raise OpenAITransportError(
+                f"Audio file {file_name} exceeds OpenAI's 25 MB limit ({file_size:.2f} MB). "
+                f"Please compress or split the file before transcription."
+            )
         
         # Open and transcribe the audio file
         with open(file_path, "rb") as audio_file:
@@ -1283,17 +1287,67 @@ Transcription:
     return formatted
 
 
-async def process_video_file(file_path: str) -> str:
-    """Process video file for grading.
+async def extract_audio_from_video(video_path: str) -> str | None:
+    """Extract audio track from video file using ffmpeg.
     
-    For video files, we extract basic metadata and provide instructions.
-    Future enhancement: Could extract frames or audio track for analysis.
+    Args:
+        video_path: Path to the video file
+        
+    Returns:
+        Path to extracted audio file, or None if extraction fails
+    """
+    import os
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    
+    video_name = Path(video_path).stem
+    
+    # Create temp file for audio
+    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3', prefix=f"{video_name}_audio_")
+    temp_audio_path = temp_audio.name
+    temp_audio.close()
+    
+    try:
+        # Try to extract audio using ffmpeg
+        result = subprocess.run(
+            ['ffmpeg', '-i', video_path, '-vn', '-acodec', 'libmp3lame', '-y', temp_audio_path],
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+        
+        if result.returncode == 0 and os.path.exists(temp_audio_path):
+            file_size = os.path.getsize(temp_audio_path)
+            if file_size > 0:
+                logger.info(f"Successfully extracted audio from {video_name} ({file_size} bytes)")
+                return temp_audio_path
+        
+        logger.warning(f"ffmpeg extraction failed for {video_name}: {result.stderr}")
+        return None
+        
+    except FileNotFoundError:
+        logger.info("ffmpeg not found - video audio extraction not available")
+        return None
+    except subprocess.TimeoutExpired:
+        logger.error(f"ffmpeg timeout extracting audio from {video_name}")
+        return None
+    except Exception as e:
+        logger.error(f"Error extracting audio from video {video_name}: {e}")
+        return None
+
+
+async def process_video_file(file_path: str) -> str:
+    """Process video file for grading by transcribing audio track.
+    
+    Extracts audio track from video and transcribes it using Whisper.
+    Falls back to metadata-only if audio extraction fails.
     
     Args:
         file_path: Path to the video file
         
     Returns:
-        Formatted string with video metadata
+        Formatted string with video transcription or metadata
     """
     import os
     from pathlib import Path
@@ -1304,15 +1358,56 @@ async def process_video_file(file_path: str) -> str:
     
     logger.info(f"Processing video file: {file_name} ({file_size:.2f} MB)")
     
-    # For now, return metadata with note about video content
-    # Future: Could extract audio track and transcribe, or extract frames
+    # Try to extract and transcribe audio track
+    audio_path = await extract_audio_from_video(file_path)
+    
+    if audio_path:
+        try:
+            # Transcribe the extracted audio
+            transcription = await transcribe_audio(audio_path)
+            
+            # Clean up temp audio file
+            try:
+                os.unlink(audio_path)
+            except:
+                pass
+            
+            # Format for grading with video context
+            duration_str = f"{transcription['duration']:.1f} seconds" if transcription.get('duration') else "unknown"
+            
+            formatted = f"""[VIDEO FILE: {file_name}]
+File type: {file_ext[1:].upper() if file_ext else 'unknown'}
+File size: {file_size:.2f} MB
+Duration: {duration_str}
+Detected language: {transcription.get('language', 'unknown')}
+
+Audio Transcription:
+{transcription['text']}
+
+Note: This is a video submission. The transcription above is from the audio track.
+Please evaluate the content based on the transcribed narration/explanation."""
+            
+            logger.info(f"Successfully transcribed video audio for {file_name}")
+            return formatted
+            
+        except Exception as e:
+            logger.error(f"Failed to transcribe video audio for {file_name}: {e}")
+            # Clean up temp file on error
+            try:
+                if audio_path:
+                    os.unlink(audio_path)
+            except:
+                pass
+    
+    # Fallback: Return metadata with manual review instruction
     formatted = f"""[VIDEO FILE: {file_name}]
 File type: {file_ext[1:].upper() if file_ext else 'unknown'}
 File size: {file_size:.2f} MB
 
-Note: This is a video submission. The grader should evaluate the video content based on:
+Note: This is a video submission. Audio transcription was not available.
+The video content should be evaluated based on:
 - Visual presentation and clarity
-- Audio narration (if present)
+- Audio narration (if present - please review manually)
 - Demonstration of required concepts
 - Overall quality and professionalism
 

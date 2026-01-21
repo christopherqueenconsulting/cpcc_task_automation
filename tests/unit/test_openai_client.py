@@ -782,21 +782,114 @@ class TestAudioTranscription:
 @pytest.mark.unit
 @pytest.mark.asyncio
 class TestVideoProcessing:
-    """Test video file processing."""
+    """Test video file processing with audio transcription."""
     
-    async def test_process_video_file(self, tmp_path):
-        """Test video file processing returns metadata."""
+    async def test_process_video_file_with_audio_transcription(self, mocker, tmp_path):
+        """Test video processing extracts and transcribes audio."""
         from cqc_cpcc.utilities.AI.openai_client import process_video_file
         
         # Create a dummy video file
         video_file = tmp_path / "demo.mp4"
         video_file.write_bytes(b"dummy video content for testing")
         
+        # Mock audio extraction to return a temp audio file
+        audio_file = tmp_path / "demo_audio.mp3"
+        audio_file.write_bytes(b"extracted audio")
+        
+        mocker.patch(
+            "cqc_cpcc.utilities.AI.openai_client.extract_audio_from_video",
+            return_value=str(audio_file)
+        )
+        
+        # Mock transcription
+        mock_transcription = {
+            "text": "This is the audio narration from the video explaining the project.",
+            "duration": 60.0,
+            "language": "english",
+            "file_info": {
+                "name": "demo_audio.mp3",
+                "size_mb": 0.5,
+                "type": "MP3"
+            }
+        }
+        mocker.patch(
+            "cqc_cpcc.utilities.AI.openai_client.transcribe_audio",
+            return_value=mock_transcription
+        )
+        
         result = await process_video_file(str(video_file))
         
-        # Check result contains video metadata
+        # Check result contains video metadata AND transcription
         assert "[VIDEO FILE: demo.mp4]" in result
         assert "MP4" in result
-        assert "MB" in result
-        assert "video" in result.lower()
-        assert "review" in result.lower()
+        assert "Audio Transcription:" in result
+        assert "This is the audio narration" in result
+        assert "60.0 seconds" in result
+        assert "english" in result
+    
+    async def test_process_video_file_fallback_no_audio(self, mocker, tmp_path):
+        """Test video processing falls back to metadata if audio extraction fails."""
+        from cqc_cpcc.utilities.AI.openai_client import process_video_file
+        
+        video_file = tmp_path / "demo.mp4"
+        video_file.write_bytes(b"dummy video content")
+        
+        # Mock audio extraction to fail
+        mocker.patch(
+            "cqc_cpcc.utilities.AI.openai_client.extract_audio_from_video",
+            return_value=None
+        )
+        
+        result = await process_video_file(str(video_file))
+        
+        # Check result contains metadata and manual review note
+        assert "[VIDEO FILE: demo.mp4]" in result
+        assert "MP4" in result
+        assert "Audio transcription was not available" in result
+        assert "Please review the video file" in result
+    
+    async def test_extract_audio_from_video_success(self, mocker, tmp_path):
+        """Test successful audio extraction from video."""
+        from cqc_cpcc.utilities.AI.openai_client import extract_audio_from_video
+        
+        video_file = tmp_path / "test.mp4"
+        video_file.write_bytes(b"video content")
+        
+        # Mock subprocess.run to simulate successful ffmpeg extraction
+        mock_result = mocker.MagicMock()
+        mock_result.returncode = 0
+        mock_result.stderr = ""
+        
+        mock_run = mocker.patch("subprocess.run", return_value=mock_result)
+        
+        # Mock os.path.exists and os.path.getsize
+        mocker.patch("os.path.exists", return_value=True)
+        mocker.patch("os.path.getsize", return_value=1000000)  # 1MB
+        
+        result = await extract_audio_from_video(str(video_file))
+        
+        # Should return a path to the audio file
+        assert result is not None
+        assert ".mp3" in result
+        
+        # Verify ffmpeg was called
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert "ffmpeg" in call_args
+        assert "-i" in call_args
+        assert str(video_file) in call_args
+    
+    async def test_extract_audio_from_video_no_ffmpeg(self, mocker, tmp_path):
+        """Test audio extraction handles missing ffmpeg gracefully."""
+        from cqc_cpcc.utilities.AI.openai_client import extract_audio_from_video
+        
+        video_file = tmp_path / "test.mp4"
+        video_file.write_bytes(b"video content")
+        
+        # Mock subprocess.run to raise FileNotFoundError (ffmpeg not found)
+        mocker.patch("subprocess.run", side_effect=FileNotFoundError("ffmpeg not found"))
+        
+        result = await extract_audio_from_video(str(video_file))
+        
+        # Should return None gracefully
+        assert result is None

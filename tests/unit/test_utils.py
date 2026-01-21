@@ -452,19 +452,24 @@ class TestReadFiles:
         assert "MP3" in result
     
     def test_read_video_file(self, tmp_path, mocker):
-        """Test reading video file returns processing info."""
+        """Test reading video file transcribes audio track."""
         from cqc_cpcc.utilities.utils import read_file
         
         # Create a dummy video file
         test_file = tmp_path / "test.mp4"
         test_file.write_bytes(b"dummy video content")
         
-        # Mock the process_video_file function
+        # Mock the process_video_file function to return transcription
         mock_video_info = """[VIDEO FILE: test.mp4]
 File type: MP4
 File size: 0.00 MB
+Duration: 45.0 seconds
+Detected language: english
 
-Note: This is a video submission."""
+Audio Transcription:
+This is the narration from the video explaining the concepts.
+
+Note: This is a video submission. The transcription above is from the audio track."""
         
         mocker.patch(
             "cqc_cpcc.utilities.AI.openai_client.process_video_file",
@@ -473,10 +478,11 @@ Note: This is a video submission."""
         
         result = read_file(str(test_file))
         
-        # Should include video metadata
+        # Should include video metadata and transcription
         assert "VIDEO FILE" in result
         assert "test.mp4" in result
         assert "MP4" in result
+        assert "Audio Transcription:" in result or "transcription" in result.lower()
 
 
 @pytest.mark.unit  

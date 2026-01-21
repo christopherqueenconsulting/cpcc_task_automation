@@ -378,22 +378,28 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
             import asyncio
             from cqc_cpcc.utilities.AI.openai_client import transcribe_audio, format_transcription_for_grading
             
-            # Run the async transcription
+            # Run the async transcription - handle event loop properly
             try:
                 loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # We're already in an async context, use run_until_complete on new event loop
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        transcription = loop.run_in_executor(
-                            pool, 
-                            lambda: asyncio.run(transcribe_audio(file_path))
-                        )
-                        transcription = loop.run_until_complete(transcription)
-                else:
-                    transcription = asyncio.run(transcribe_audio(file_path))
             except RuntimeError:
-                # No event loop, create one
+                loop = None
+            
+            if loop is not None and loop.is_running():
+                # We're in an async context - create new loop in thread
+                import concurrent.futures
+                def run_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        return new_loop.run_until_complete(transcribe_audio(file_path))
+                    finally:
+                        new_loop.close()
+                
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(run_in_thread)
+                    transcription = future.result()
+            else:
+                # No running loop - create and use one
                 transcription = asyncio.run(transcribe_audio(file_path))
             
             contents = format_transcription_for_grading(transcription)
@@ -412,20 +418,28 @@ Please manually review this audio file for grading."""
             import asyncio
             from cqc_cpcc.utilities.AI.openai_client import process_video_file
             
-            # Run the async video processing
+            # Run the async video processing - handle event loop properly
             try:
                 loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        video_info = loop.run_in_executor(
-                            pool,
-                            lambda: asyncio.run(process_video_file(file_path))
-                        )
-                        contents = loop.run_until_complete(video_info)
-                else:
-                    contents = asyncio.run(process_video_file(file_path))
             except RuntimeError:
+                loop = None
+            
+            if loop is not None and loop.is_running():
+                # We're in an async context - create new loop in thread
+                import concurrent.futures
+                def run_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        return new_loop.run_until_complete(process_video_file(file_path))
+                    finally:
+                        new_loop.close()
+                
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(run_in_thread)
+                    contents = future.result()
+            else:
+                # No running loop - create and use one
                 contents = asyncio.run(process_video_file(file_path))
         except Exception as e:
             file_size = os.path.getsize(file_path) / (1024 * 1024)
