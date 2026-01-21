@@ -530,12 +530,6 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
     
     registry = st.session_state.error_definitions_registry
     
-    # Get assignments for this course
-    assignments = get_assignments_for_course(course_id)
-    
-    if not assignments:
-        st.warning(f"No assignments configured for course {course_id}. Create a new assignment below.")
-    
     # Check if we just created an assignment (success flag in session state)
     newly_created_assignment_id = None
     if st.session_state.get('assignment_just_created', False):
@@ -544,8 +538,13 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
         # Clear the flags
         st.session_state.assignment_just_created = False
         st.session_state.newly_created_assignment_id = None
-        assignments = get_assignments_for_course(course_id)
         st.success(f"✅ Assignment created successfully and selected below!")
+    
+    # Get assignments for this course (reload after creation if needed)
+    assignments = get_assignments_for_course(course_id)
+    
+    if not assignments:
+        st.warning(f"No assignments configured for course {course_id}. Create a new assignment below.")
     
     # Assignment selector
     col1, col2 = st.columns([3, 1])
@@ -651,8 +650,18 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
     else:
         effective_error_definitions = base_error_definitions
     
+    # Add option to skip error definitions
     if not effective_error_definitions:
-        st.warning("No error definitions found for this assignment. Add new error definitions below.")
+        st.info("ℹ️ No error definitions found for this assignment. You can either add error definitions below or skip this step to proceed with grading using only the rubric.")
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("⏭️ Skip Error Definitions", key=f"skip_error_defs_{course_id}_{selected_assignment_id}", type="primary"):
+                # Return with None for error definitions to allow grading with rubric only
+                return selected_assignment_id, selected_assignment_name, None
+        with col2:
+            st.caption("Click to proceed with rubric-only grading (error definitions optional)")
+        
         effective_error_definitions = []
     
     # Convert to DataFrame for editing
@@ -746,6 +755,14 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
             json_str = registry_to_json_string(temp_registry)
             st.code(json_str, language="json")
             st.info("Copy the JSON above and paste it into error_definitions_config.py to persist changes.")
+    
+    # Add a "Skip Error Definitions" button to proceed without configuring error definitions
+    col_skip = st.columns([2, 3])[0]
+    with col_skip:
+        if st.button("⏭️ Skip Error Definitions & Continue", key=f"skip_error_defs_continue_{course_id}_{selected_assignment_id}", 
+                     type="secondary", help="Proceed with rubric-only grading (error definitions are optional)"):
+            # Return with None for error definitions to allow grading with rubric only
+            return selected_assignment_id, selected_assignment_name, None
     
     return selected_assignment_id, selected_assignment_name, effective_error_definitions
 
