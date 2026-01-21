@@ -392,7 +392,8 @@ class TestReadFiles:
         result = read_file(str(test_file))
         assert "Hello World" in result
         assert "This is a test paragraph" in result
-        assert "script" not in result.lower() or "alert" not in result  # Scripts should be removed
+        # Scripts and their content should be removed
+        assert "script" not in result.lower() and "alert" not in result.lower()
     
     def test_read_audio_file(self, tmp_path):
         """Test reading audio file returns metadata description."""
