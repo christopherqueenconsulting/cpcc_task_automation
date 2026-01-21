@@ -537,11 +537,15 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
         st.warning(f"No assignments configured for course {course_id}. Create a new assignment below.")
     
     # Check if we just created an assignment (success flag in session state)
+    newly_created_assignment_id = None
     if st.session_state.get('assignment_just_created', False):
-        # Clear the flag and reload assignments
+        # Get the newly created assignment ID before clearing the flag
+        newly_created_assignment_id = st.session_state.get('newly_created_assignment_id')
+        # Clear the flags
         st.session_state.assignment_just_created = False
+        st.session_state.newly_created_assignment_id = None
         assignments = get_assignments_for_course(course_id)
-        st.success(f"Assignment created successfully! Select it from the dropdown below.")
+        st.success(f"✅ Assignment created successfully and selected below!")
     
     # Assignment selector
     col1, col2 = st.columns([3, 1])
@@ -552,9 +556,18 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
             for a in assignments
         ]
         
+        # Auto-select newly created assignment if available
+        default_index = 0
+        if newly_created_assignment_id:
+            for idx, a in enumerate(assignments):
+                if a.assignment_id == newly_created_assignment_id:
+                    default_index = idx + 1  # +1 because of "-- Select Assignment --"
+                    break
+        
         selected_assignment_display = st.selectbox(
             "Select Assignment",
             assignment_options,
+            index=default_index,
             key="assignment_selector"
         )
     
@@ -594,6 +607,8 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
                             registry
                         )
                         st.session_state.error_definitions_registry = registry
+                        # Store the newly created assignment ID for auto-selection
+                        st.session_state.newly_created_assignment_id = new_assignment_id
                         # Set success flag and hide form
                         st.session_state.assignment_just_created = True
                         st.session_state.show_create_assignment_form = False
