@@ -557,17 +557,19 @@ def display_assignment_and_error_definitions_selector(course_id: str) -> tuple[s
         ]
         
         # Auto-select newly created assignment if available
-        default_index = 0
+        # We need to set the session state value directly because the index parameter
+        # is ignored when the key already exists in session state
         if newly_created_assignment_id:
             for idx, a in enumerate(assignments):
                 if a.assignment_id == newly_created_assignment_id:
-                    default_index = idx + 1  # +1 because of "-- Select Assignment --"
+                    # Set the session state value to the display string
+                    auto_select_value = f"{a.assignment_name} ({a.assignment_id})"
+                    st.session_state.assignment_selector = auto_select_value
                     break
         
         selected_assignment_display = st.selectbox(
             "Select Assignment",
             assignment_options,
-            index=default_index,
             key="assignment_selector"
         )
     
