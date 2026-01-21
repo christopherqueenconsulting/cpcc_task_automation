@@ -206,7 +206,14 @@ RUBRICS_JSON = """{
                 "description": "Apply Minor→Major conversion first. Every 4 Minor Errors become 1 Major Error (remainder stays Minor). Then select the score band.",
                 "max_points": 100,
                 "enabled": true,
-                "scoring_mode": "manual",
+                "scoring_mode": "error_count",
+                "error_rules": {
+                    "major_weight": 0,
+                    "minor_weight": 0,
+                    "error_conversion": {
+                        "minor_to_major_ratio": 4
+                    }
+                },
                 "levels": [
                     {
                         "label": "A+ (0 errors)",

@@ -261,12 +261,102 @@ def sanitize_openai_params(model: str, params: dict) -> dict:
     return sanitized
 
 
+def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
+    """Normalize fallback JSON to match schema field names and types.
+    
+    Handles common issues from plain JSON mode responses:
+    - Wrong field names (rubric_criterion_id -> criterion_id, criterion_title -> criterion_name)
+    - Stringified JSON (detected_errors as string -> list, error_counts as string -> dict)
+    - String numbers (original_major_errors: "2" -> 2)
+    
+    Args:
+        data: Raw JSON dict from fallback response
+        schema_model: Target Pydantic model for validation
+        
+    Returns:
+        Normalized dict ready for schema validation
+    """
+    normalized = data.copy()
+    
+    # Normalize criteria_results if present
+    if "criteria_results" in normalized and isinstance(normalized["criteria_results"], list):
+        for i, criterion in enumerate(normalized["criteria_results"]):
+            if isinstance(criterion, dict):
+                # Map wrong field names to correct ones
+                if "rubric_criterion_id" in criterion and "criterion_id" not in criterion:
+                    criterion["criterion_id"] = criterion.pop("rubric_criterion_id")
+                if "criterion_title" in criterion and "criterion_name" not in criterion:
+                    criterion["criterion_name"] = criterion.pop("criterion_title")
+                if "level_label" in criterion and "selected_level_label" not in criterion:
+                    criterion["selected_level_label"] = criterion.pop("level_label")
+                
+                # Ensure evidence is a list if present
+                if "evidence" in criterion and isinstance(criterion["evidence"], str):
+                    try:
+                        criterion["evidence"] = json.loads(criterion["evidence"])
+                    except (json.JSONDecodeError, ValueError):
+                        # If it's not JSON, wrap it in a list
+                        criterion["evidence"] = [criterion["evidence"]] if criterion["evidence"] else None
+    
+    # Normalize detected_errors if it's a stringified JSON array
+    if "detected_errors" in normalized:
+        if isinstance(normalized["detected_errors"], str):
+            try:
+                normalized["detected_errors"] = json.loads(normalized["detected_errors"])
+            except (json.JSONDecodeError, ValueError):
+                logger.warning(f"Failed to parse detected_errors as JSON, setting to None")
+                normalized["detected_errors"] = None
+    
+    # Normalize error_counts_by_severity if it's a stringified JSON object
+    if "error_counts_by_severity" in normalized:
+        if isinstance(normalized["error_counts_by_severity"], str):
+            try:
+                parsed = json.loads(normalized["error_counts_by_severity"])
+                # Ensure values are integers, not strings
+                normalized["error_counts_by_severity"] = {
+                    k: int(v) if isinstance(v, str) else v 
+                    for k, v in parsed.items()
+                }
+            except (json.JSONDecodeError, ValueError, TypeError):
+                logger.warning(f"Failed to parse error_counts_by_severity as JSON, setting to None")
+                normalized["error_counts_by_severity"] = None
+    
+    # Normalize error_counts_by_id if it's a stringified JSON object
+    if "error_counts_by_id" in normalized:
+        if isinstance(normalized["error_counts_by_id"], str):
+            try:
+                parsed = json.loads(normalized["error_counts_by_id"])
+                # Ensure values are integers, not strings
+                normalized["error_counts_by_id"] = {
+                    k: int(v) if isinstance(v, str) else v 
+                    for k, v in parsed.items()
+                }
+            except (json.JSONDecodeError, ValueError, TypeError):
+                logger.warning(f"Failed to parse error_counts_by_id as JSON, setting to None")
+                normalized["error_counts_by_id"] = None
+    
+    # Normalize integer fields that might be strings
+    int_fields = [
+        "original_major_errors", "original_minor_errors",
+        "effective_major_errors", "effective_minor_errors",
+        "total_points_possible", "total_points_earned"
+    ]
+    for field in int_fields:
+        if field in normalized and isinstance(normalized[field], str):
+            try:
+                normalized[field] = int(normalized[field])
+            except (ValueError, TypeError):
+                logger.warning(f"Failed to convert {field} to int, leaving as is")
+    
+    return normalized
+
+
 def _build_fallback_prompt(original_prompt: str, schema_model: Type[BaseModel]) -> str:
     """Build a fallback prompt for smart retry that requests plain JSON.
     
     When strict schema validation fails or returns empty, we retry with a simpler
     request that asks for plain JSON without schema enforcement. This increases
-    the chance of getting a valid response.
+    the chance of getting a valid response with explicit field requirements.
     
     Args:
         original_prompt: The original prompt text
@@ -277,32 +367,86 @@ def _build_fallback_prompt(original_prompt: str, schema_model: Type[BaseModel]) 
     """
     # Get schema info from Pydantic model
     schema = schema_model.model_json_schema()
+    schema_name = schema_model.__name__
+    
+    # Build detailed schema description with nested types
+    def describe_type(field_info: dict, indent: str = "") -> str:
+        """Recursively describe field types."""
+        field_type = field_info.get("type", "any")
+        
+        if field_type == "array":
+            items = field_info.get("items", {})
+            if "$ref" in items:
+                # Reference to another model
+                ref_name = items["$ref"].split("/")[-1]
+                return f"array of {ref_name} objects"
+            elif items.get("type") == "object":
+                return "array of objects"
+            else:
+                return f"array of {items.get('type', 'any')}"
+        elif field_type == "object":
+            additional_props = field_info.get("additionalProperties")
+            if additional_props:
+                if isinstance(additional_props, dict):
+                    value_type = additional_props.get("type", "any")
+                    return f"object (dict with {value_type} values)"
+                return "object (dict)"
+            return "object"
+        else:
+            return field_type
+    
+    # Build field requirements from top-level properties
     properties = schema.get("properties", {})
     required = schema.get("required", [])
+    defs = schema.get("$defs", {})
     
-    # Build list of required fields with types
     field_descriptions = []
+    field_descriptions.append(f"Schema: {schema_name}")
+    field_descriptions.append("")
+    field_descriptions.append("CRITICAL - Use these EXACT field names and types:")
+    
     for field_name, field_info in properties.items():
-        field_type = field_info.get("type", "string")
+        field_type_desc = describe_type(field_info)
         description = field_info.get("description", "")
-        required_marker = " (required)" if field_name in required else ""
-        field_descriptions.append(
-            f"  - {field_name}: {field_type}{required_marker} - {description}"
-        )
+        required_marker = " [REQUIRED]" if field_name in required else " [optional]"
+        
+        # Add special notes for nested structures
+        if field_name == "criteria_results":
+            field_descriptions.append(
+                f"  • {field_name}: {field_type_desc}{required_marker}"
+            )
+            field_descriptions.append("    Each criterion result MUST have:")
+            field_descriptions.append("      - criterion_id (string) - NOT rubric_criterion_id")
+            field_descriptions.append("      - criterion_name (string) - NOT criterion_title")
+            field_descriptions.append("      - points_possible (integer)")
+            field_descriptions.append("      - points_earned (integer)")
+            field_descriptions.append("      - selected_level_label (string or null)")
+            field_descriptions.append("      - feedback (string)")
+            field_descriptions.append("      - evidence (array of strings or null)")
+        elif field_name == "detected_errors":
+            field_descriptions.append(
+                f"  • {field_name}: {field_type_desc}{required_marker} - MUST be JSON array, NOT string"
+            )
+        elif field_name in ["error_counts_by_severity", "error_counts_by_id"]:
+            field_descriptions.append(
+                f"  • {field_name}: {field_type_desc}{required_marker} - MUST be JSON object with integer values, NOT string"
+            )
+        else:
+            field_descriptions.append(
+                f"  • {field_name}: {field_type_desc}{required_marker} - {description}"
+            )
     
     fields_text = "\n".join(field_descriptions)
     
     fallback_prompt = f"""{original_prompt}
 
-IMPORTANT - Response Format:
-Return ONLY valid JSON with these exact fields (no markdown, no code blocks):
+IMPORTANT - Response Format Requirements:
 {fields_text}
 
-Example format:
-{{
-  "field1": "value1",
-  "field2": 123
-}}
+Return ONLY valid JSON (no markdown, no code blocks, no explanations).
+All arrays must be JSON arrays: [...], NOT strings containing JSON.
+All objects must be JSON objects: {{"key": "value"}}, NOT strings containing JSON.
+All integer fields must be integers: 42, NOT strings: "42".
 """
     return fallback_prompt
 
@@ -722,8 +866,20 @@ async def get_structured_completion(
             # Extract JSON content from response
             json_output = response.choices[0].message.content
             
+            # Check finish_reason for truncation
+            finish_reason = getattr(response.choices[0], 'finish_reason', None) if response.choices else None
+            
             if not json_output:
-                decision_notes = "no content in response.choices[0].message.content"
+                # Handle empty response or truncation
+                if finish_reason == "length":
+                    decision_notes = "output truncated (finish_reason=length), no content returned"
+                    logger.warning(
+                        f"Response truncated due to length limit on attempt {attempt + 1}"
+                        f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
+                    )
+                else:
+                    decision_notes = "no content in response.choices[0].message.content"
+                
                 if correlation_id:
                     record_response(
                         correlation_id=correlation_id,
@@ -734,7 +890,7 @@ async def get_structured_completion(
                         output_parsed=None,
                     )
                 
-                # Empty response is retryable with smart retry
+                # Empty response or truncation is retryable with smart retry
                 if retry_empty_response and attempt < max_retries:
                     logger.warning(
                         f"Empty response on attempt {attempt + 1} of {max_retries + 1}, "
@@ -749,7 +905,7 @@ async def get_structured_completion(
                 
                 # Final attempt or retry disabled, raise error
                 raise OpenAISchemaValidationError(
-                    "Empty response from OpenAI API",
+                    "Empty response from OpenAI API" if finish_reason != "length" else "Response truncated due to length limit",
                     schema_name=schema_model.__name__,
                     correlation_id=correlation_id,
                     decision_notes=decision_notes,
@@ -758,7 +914,20 @@ async def get_structured_completion(
             
             # Validate against Pydantic model
             try:
-                validated_model = schema_model.model_validate_json(json_output)
+                # If using fallback plain JSON mode, apply normalization first
+                if is_smart_retry and api_kwargs.get("response_format", {}).get("type") == "json_object":
+                    logger.debug("Applying normalization to fallback JSON response")
+                    try:
+                        parsed_json = json.loads(json_output)
+                        normalized_json = _normalize_fallback_json(parsed_json, schema_model)
+                        # Validate with normalized dict (not JSON string)
+                        validated_model = schema_model.model_validate(normalized_json)
+                    except json.JSONDecodeError as json_err:
+                        logger.error(f"Failed to parse fallback JSON: {json_err}")
+                        raise ValidationError(f"Invalid JSON in fallback response: {json_err}", schema_model)
+                else:
+                    # Normal strict schema path - validate directly from JSON string
+                    validated_model = schema_model.model_validate_json(json_output)
                 
                 # Record successful response
                 if correlation_id:
@@ -766,7 +935,7 @@ async def get_structured_completion(
                         correlation_id=correlation_id,
                         response=response,
                         schema_name=schema_model.__name__,
-                        decision_notes="parsed successfully",
+                        decision_notes="parsed successfully" + (" (normalized)" if is_smart_retry else ""),
                         output_text=json_output,
                         output_parsed=validated_model,
                     )
@@ -785,6 +954,26 @@ async def get_structured_completion(
                 error_details = e.errors()
                 decision_notes = f"pydantic validation failed: {len(error_details)} errors"
                 
+                # Log validation errors with helpful details
+                logger.error(
+                    f"Schema validation failed for {schema_model.__name__}: "
+                    f"{len(error_details)} errors"
+                    f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
+                )
+                
+                # Log first few errors for debugging
+                for i, err in enumerate(error_details[:5]):
+                    loc = ".".join(str(x) for x in err.get("loc", []))
+                    msg = err.get("msg", "")
+                    logger.error(f"  Error {i+1}: {loc} - {msg}")
+                
+                if len(error_details) > 5:
+                    logger.error(f"  ... and {len(error_details) - 5} more errors")
+                
+                # Include first 500 chars of output in error for context
+                output_preview = json_output[:500] if json_output else "None"
+                logger.debug(f"Output preview (first 500 chars): {output_preview}")
+                
                 # Record failed validation
                 if correlation_id:
                     record_response(
@@ -796,12 +985,6 @@ async def get_structured_completion(
                         output_parsed=None,
                         error=e,
                     )
-                
-                logger.error(
-                    f"Schema validation failed for {schema_model.__name__}: "
-                    f"{len(error_details)} errors"
-                    f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
-                )
                 
                 # Smart retry for parse failures (if not already using fallback)
                 if not is_smart_retry and attempt < max_retries:

@@ -288,7 +288,7 @@ def record_response(
             output_tokens_est = 0
             
         response_data["output"] = {
-            "text": output_text[:500] if output_text else None,  # Truncate to 500 chars for display
+            "text": output_text[:500] if output_text else None,  # Truncate to 500 chars for console/log display
             "text_length_chars": output_chars,
             "text_length_tokens_est": output_tokens_est,
             "parsed_present": output_parsed is not None,
@@ -302,7 +302,7 @@ def record_response(
                 "message": str(error),
             }
         
-        # Redact sensitive data
+        # Redact sensitive data for console/log display
         redacted_data = _redact_sensitive_data(response_data)
         
         # Log to console/file with enhanced diagnostics
@@ -317,8 +317,40 @@ def record_response(
         )
         debug_logger.debug(f"[{correlation_id}] Full response: {json.dumps(redacted_data, indent=2, default=str)}")
         
-        # Save to file if configured
-        _save_to_file(correlation_id, "response", redacted_data)
+        # Save raw response with FULL output text (not truncated) to response_raw.json
+        response_raw_data = response_data.copy()
+        response_raw_data["output"] = {
+            "text": output_text,  # Full text, not truncated
+            "text_length_chars": output_chars,
+            "text_length_tokens_est": output_tokens_est,
+            "parsed_present": output_parsed is not None,
+            "parsed_type": type(output_parsed).__name__ if output_parsed else None,
+        }
+        redacted_raw_data = _redact_sensitive_data(response_raw_data)
+        _save_to_file(correlation_id, "response_raw", redacted_raw_data)
+        
+        # Save parsed output to response_parsed.json
+        if output_parsed is not None:
+            try:
+                # Convert Pydantic model to dict, preserving structural fields
+                if hasattr(output_parsed, 'model_dump'):
+                    parsed_dict = output_parsed.model_dump(mode='json')
+                elif hasattr(output_parsed, 'dict'):
+                    parsed_dict = output_parsed.dict()
+                else:
+                    parsed_dict = {"raw": str(output_parsed)}
+                
+                parsed_data = {
+                    "correlation_id": correlation_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "schema_name": schema_name,
+                    "parsed_model": parsed_dict,
+                }
+                
+                redacted_parsed_data = _redact_sensitive_data(parsed_data)
+                _save_to_file(correlation_id, "response_parsed", redacted_parsed_data)
+            except Exception as e:
+                debug_logger.warning(f"Failed to save parsed output: {e}")
         
         # Save decision notes separately for easy access
         notes_data = {
