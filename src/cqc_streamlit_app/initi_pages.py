@@ -37,6 +37,15 @@ def init_session_state():
     
     if 'feedback_zip_bytes_by_key' not in st.session_state:
         st.session_state.feedback_zip_bytes_by_key = {}
+
+    if 'error_only_results_by_key' not in st.session_state:
+        st.session_state.error_only_results_by_key = {}
+
+    if 'error_only_feedback_zip_by_key' not in st.session_state:
+        st.session_state.error_only_feedback_zip_by_key = {}
+
+    if 'error_definitions_skipped' not in st.session_state:
+        st.session_state.error_definitions_skipped = {}
     
     # Action flags for grading
     if 'do_grade' not in st.session_state:

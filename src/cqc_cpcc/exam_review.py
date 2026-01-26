@@ -9,7 +9,11 @@ from pydantic import Field, BaseModel, StrictStr
 from cqc_cpcc.utilities.AI.llm_deprecated.chains import get_exam_error_definition_from_completion_chain, \
     get_exam_error_definitions_completion_chain
 from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm
-from cqc_cpcc.utilities.AI.exam_grading_openai import grade_exam_submission
+from cqc_cpcc.utilities.AI.exam_grading_openai import (
+    DEFAULT_GRADING_MODEL,
+    DEFAULT_TEMPERATURE,
+    grade_exam_submission,
+)
 from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
 from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
 
@@ -333,6 +337,8 @@ class CodeGrader:
     major_error_type_list: list = None
     minor_error_type_list: list = None
     use_openai_wrapper: bool = True  # Default to new implementation
+    model_name: str = DEFAULT_GRADING_MODEL
+    temperature: float = DEFAULT_TEMPERATURE
 
     def __init__(self, max_points: int, exam_instructions: str, exam_solution: str,
                  deduction_per_major_error: int = 20,
@@ -340,13 +346,17 @@ class CodeGrader:
                  major_error_type_list: list = None,
                  minor_error_type_list: list = None,
                  grader_llm: BaseChatModel = None,
-                 use_openai_wrapper: bool = True):
+                 use_openai_wrapper: bool = True,
+                 model_name: str = DEFAULT_GRADING_MODEL,
+                 temperature: float = DEFAULT_TEMPERATURE):
         self.max_points = max_points
         self.deduction_per_major_error = deduction_per_major_error
         self.deduction_per_minor_error = deduction_per_minor_error
         self.exam_instructions = exam_instructions
         self.exam_solution = exam_solution
         self.use_openai_wrapper = use_openai_wrapper
+        self.model_name = model_name
+        self.temperature = temperature
         
         if major_error_type_list is None:
             major_error_type_list = MajorErrorType.list()
@@ -430,6 +440,8 @@ class CodeGrader:
                 student_submission=student_submission,
                 major_error_type_list=self.major_error_type_list,
                 minor_error_type_list=self.minor_error_type_list,
+                model_name=self.model_name,
+                temperature=self.temperature,
                 callback=callback
             )
         else:
