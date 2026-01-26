@@ -143,22 +143,26 @@ class TestSmartRetry:
             )
         
         error = exc_info.value
-        assert error.attempt_count == 2  # Should be exactly 2
-        assert mock_client.chat.completions.create.call_count == 2  # Never more than 2
+        assert error.attempt_count == 4  # Should be exactly 4 (initial + 3 retries)
+        assert mock_client.chat.completions.create.call_count == 4  # Never more than 4
     
-    async def test_verify_default_max_retries_is_one(self):
-        """Verify DEFAULT_MAX_RETRIES is set to 1 (total 2 attempts)."""
-        assert DEFAULT_MAX_RETRIES == 1, \
-            "DEFAULT_MAX_RETRIES must be 1 for single-layer retry (2 attempts total)"
+    async def test_verify_default_max_retries_is_three(self):
+        """Verify DEFAULT_MAX_RETRIES is set to 3 (total 4 attempts)."""
+        assert DEFAULT_MAX_RETRIES == 3, \
+            "DEFAULT_MAX_RETRIES must be 3 for rubric grading robustness (4 attempts total)"
     
     async def test_400_error_is_not_retryable(self, mocker):
         """400 invalid_request_error should not be retried."""
         from openai import APIError
+        from httpx import Request
         
         mock_client = AsyncMock()
         
+        # Create a mock request for the APIError
+        mock_request = Request("POST", "https://api.openai.com/v1/chat/completions")
+        
         # Simulate 400 error
-        api_error = APIError("Invalid request")
+        api_error = APIError("Invalid request", request=mock_request, body=None)
         api_error.status_code = 400
         
         mock_client.chat.completions.create = AsyncMock(side_effect=api_error)

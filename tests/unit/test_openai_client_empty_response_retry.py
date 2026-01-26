@@ -170,11 +170,14 @@ class TestEmptyResponseRetry:
         # Should have made only 1 API call
         assert mock_client.chat.completions.create.call_count == 1
     
-    async def test_validation_error_is_not_retryable_by_default(self, mocker):
-        """Schema validation errors should not be retried by default."""
+    async def test_validation_error_triggers_smart_retry(self, mocker):
+        """Schema validation errors should trigger smart retry with fallback."""
+        # Mock asyncio.sleep to speed up test
+        mocker.patch('asyncio.sleep', return_value=None)
+        
         mock_client = AsyncMock()
         
-        # Invalid JSON (missing required field)
+        # Invalid JSON (missing required field) on all attempts
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = '{"message": "test"}'  # Missing score
@@ -184,7 +187,7 @@ class TestEmptyResponseRetry:
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.get_client', return_value=mock_client)
         
-        # Should raise without retry (unless allow_repair=True)
+        # Should retry with smart fallback before raising
         with pytest.raises(OpenAISchemaValidationError) as exc_info:
             await get_structured_completion(
                 prompt="Test prompt",
@@ -192,15 +195,16 @@ class TestEmptyResponseRetry:
                 schema_model=GradingTestResult,
                 retry_empty_response=True,
                 allow_repair=False,
+                max_retries=1,  # Limit to 2 attempts for faster test
             )
         
         error = exc_info.value
         assert "failed Pydantic validation" in str(error)
         assert len(error.validation_errors) > 0
-        assert error.attempt_count == 1  # Only one attempt
+        assert error.attempt_count == 2  # Initial + 1 smart retry
         
-        # Should have made only 1 API call
-        assert mock_client.chat.completions.create.call_count == 1
+        # Should have made 2 API calls (initial + smart retry)
+        assert mock_client.chat.completions.create.call_count == 2
     
     async def test_attempt_count_tracked_in_transport_errors(self, mocker):
         """Transport errors should track attempt count."""

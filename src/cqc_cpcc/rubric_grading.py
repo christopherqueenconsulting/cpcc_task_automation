@@ -284,12 +284,14 @@ async def grade_with_rubric(
     
     try:
         # Call OpenAI with structured output validation
+        # Uses 3 retries (4 total attempts) with smart fallback for robustness
         result = await get_structured_completion(
             prompt=prompt,
             model_name=model_name,
             schema_model=RubricAssessmentResult,
             temperature=temperature,
             max_tokens=DEFAULT_MAX_TOKENS,
+            max_retries=3,  # 3 retries = 4 total attempts (initial + 3 fallback)
         )
         
         # Log raw OpenAI response for debugging
@@ -304,13 +306,64 @@ async def grade_with_rubric(
                 f"{cr.points_earned}/{cr.points_possible} (level: {cr.selected_level_label or 'N/A'})"
             )
         
+        # CRITICAL: Correct rubric_id and rubric_version if LLM returned incorrect/default values
+        # This commonly happens in fallback JSON mode where the model might return generic values
+        if result.rubric_id != rubric.rubric_id:
+            logger.warning(
+                f"Correcting rubric_id from '{result.rubric_id}' to '{rubric.rubric_id}' "
+                f"(LLM returned incorrect/generic rubric ID)"
+            )
+            # Create a new result with corrected rubric_id
+            result = RubricAssessmentResult(
+                rubric_id=rubric.rubric_id,  # Use input rubric's ID
+                rubric_version=rubric.rubric_version,  # Use input rubric's version
+                total_points_possible=result.total_points_possible,
+                total_points_earned=result.total_points_earned,
+                criteria_results=result.criteria_results,
+                overall_band_label=result.overall_band_label,
+                overall_feedback=result.overall_feedback,
+                detected_errors=result.detected_errors,
+                error_counts_by_severity=result.error_counts_by_severity,
+                error_counts_by_id=result.error_counts_by_id,
+                original_major_errors=result.original_major_errors,
+                original_minor_errors=result.original_minor_errors,
+                effective_major_errors=result.effective_major_errors,
+                effective_minor_errors=result.effective_minor_errors,
+            )
+        elif result.rubric_version != rubric.rubric_version:
+            # If only version mismatch, correct it too
+            logger.warning(
+                f"Correcting rubric_version from '{result.rubric_version}' to '{rubric.rubric_version}'"
+            )
+            result = RubricAssessmentResult(
+                rubric_id=rubric.rubric_id,
+                rubric_version=rubric.rubric_version,  # Use input rubric's version
+                total_points_possible=result.total_points_possible,
+                total_points_earned=result.total_points_earned,
+                criteria_results=result.criteria_results,
+                overall_band_label=result.overall_band_label,
+                overall_feedback=result.overall_feedback,
+                detected_errors=result.detected_errors,
+                error_counts_by_severity=result.error_counts_by_severity,
+                error_counts_by_id=result.error_counts_by_id,
+                original_major_errors=result.original_major_errors,
+                original_minor_errors=result.original_minor_errors,
+                effective_major_errors=result.effective_major_errors,
+                effective_minor_errors=result.effective_minor_errors,
+            )
+        
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
         
-        # Validate that result matches rubric
+        # Final validation checks
         if result.rubric_id != rubric.rubric_id:
-            logger.warning(
-                f"Result rubric_id '{result.rubric_id}' does not match input rubric_id '{rubric.rubric_id}'"
+            logger.error(
+                f"ASSERTION FAILED: Result rubric_id '{result.rubric_id}' still does not match "
+                f"input rubric_id '{rubric.rubric_id}' after correction"
+            )
+            raise ValueError(
+                f"Rubric ID mismatch after correction: expected '{rubric.rubric_id}', "
+                f"got '{result.rubric_id}'"
             )
         
         if result.total_points_possible != rubric.total_points_possible:

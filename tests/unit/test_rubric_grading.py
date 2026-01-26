@@ -241,7 +241,7 @@ class TestRubricGrading:
         assert len(result.detected_errors) > 0
     
     async def test_grade_validates_result_rubric_id(self, base_rubric, mocker):
-        """Test that result validation checks rubric_id match."""
+        """Test that rubric_id is corrected when LLM returns wrong value."""
         # Mock response with mismatched rubric_id
         mock_response = create_valid_rubric_assessment()
         mock_response["rubric_id"] = "wrong_rubric"
@@ -252,14 +252,15 @@ class TestRubricGrading:
         )
         mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
         
-        # Should still succeed but log warning
+        # Should correct the rubric_id to match input rubric
         result = await grade_with_rubric(
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
         )
         
-        assert result.rubric_id == "wrong_rubric"  # Returns what OpenAI gave us
+        # Result should have corrected rubric_id, not the wrong one from LLM
+        assert result.rubric_id == base_rubric.rubric_id  # Corrected to match input
     
     async def test_grade_handles_openai_error(self, base_rubric, mocker):
         """Test graceful handling of OpenAI errors."""

@@ -197,12 +197,16 @@ class TestGetStructuredCompletionValidation:
     """Test schema validation error handling."""
     
     async def test_schema_validation_failure_without_repair(self, mocker):
-        """Should raise OpenAISchemaValidationError on invalid response."""
+        """Should retry with smart fallback on invalid response."""
+        # Mock asyncio.sleep to speed up test
+        mocker.patch('asyncio.sleep', return_value=None)
+        
         mock_client = AsyncMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         # Invalid JSON - missing required field 'score'
         mock_response.choices[0].message.content = '{"summary": "Good"}'
+        mock_response.choices[0].message.refusal = None
         mock_response.usage.total_tokens = 50
         
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
@@ -212,7 +216,8 @@ class TestGetStructuredCompletionValidation:
             await get_structured_completion(
                 prompt="Review code",
                 model_name="gpt-4o",
-                schema_model=SimpleFeedback
+                schema_model=SimpleFeedback,
+                max_retries=1,  # Limit to 2 attempts for faster test
             )
         
         error = exc_info.value
@@ -220,8 +225,8 @@ class TestGetStructuredCompletionValidation:
         assert len(error.validation_errors) > 0
         assert error.raw_output == '{"summary": "Good"}'
         
-        # Should not retry by default
-        assert mock_client.chat.completions.create.call_count == 1
+        # Should retry once with smart fallback (2 attempts total)
+        assert mock_client.chat.completions.create.call_count == 2
     
     async def test_schema_validation_failure_with_repair_succeeds(self, mocker):
         """Should retry once with allow_repair=True and succeed."""

@@ -113,11 +113,11 @@ class PreprocessingDigest(BaseModel):
 
 
 # Default retry configuration
-# IMPORTANT: Single-layer retry strategy
+# IMPORTANT: Single-layer retry strategy with multiple fallback attempts
 # - Attempt 1: Normal request with strict schema
-# - Attempt 2 (if retryable): Smart retry with fallback strategy
+# - Attempt 2-4 (if retryable): Smart retry with fallback strategy
 # - NO SDK-level retries (max_retries=0 in AsyncOpenAI client)
-DEFAULT_MAX_RETRIES = 1  # Total of 2 attempts (initial + 1 retry)
+DEFAULT_MAX_RETRIES = 3  # Total of 4 attempts (initial + 3 retries) for rubric grading
 DEFAULT_RETRY_DELAY = 1.0  # seconds
 DEFAULT_BACKOFF_MULTIPLIER = 2.0
 
@@ -269,6 +269,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
     - Wrong field names (rubric_criterion_id -> criterion_id, criterion_title -> criterion_name)
     - Stringified JSON (detected_errors as string -> list, error_counts as string -> dict)
     - String numbers (original_major_errors: "2" -> 2)
+    - Inconsistent totals (recomputes total_points_earned from criteria_results for RubricAssessmentResult)
     
     Args:
         data: Raw JSON dict from fallback response
@@ -299,7 +300,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                         # If it's not JSON, wrap it in a list
                         criterion["evidence"] = [criterion["evidence"]] if criterion["evidence"] else None
     
-    # Normalize detected_errors if it's a stringified JSON array
+    # Normalize detected_errors if it's a stringified JSON array or list of strings
     if "detected_errors" in normalized:
         if isinstance(normalized["detected_errors"], str):
             try:
@@ -307,6 +308,46 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
             except (json.JSONDecodeError, ValueError):
                 logger.warning(f"Failed to parse detected_errors as JSON, setting to None")
                 normalized["detected_errors"] = None
+        
+        # If detected_errors is a list of strings instead of DetectedError objects, convert them
+        if isinstance(normalized["detected_errors"], list):
+            converted_errors = []
+            for i, error in enumerate(normalized["detected_errors"]):
+                if isinstance(error, str):
+                    # Convert string to DetectedError object
+                    # Parse error_id from error_counts_by_id keys if available
+                    error_id = f"error_{i+1}"
+                    if "error_counts_by_id" in normalized and isinstance(normalized["error_counts_by_id"], dict):
+                        # Try to match error description with error_id keys
+                        for eid in normalized["error_counts_by_id"].keys():
+                            if eid.lower() in error.lower() or error.lower() in eid.lower():
+                                error_id = eid
+                                break
+                    
+                    # Determine severity from error_counts_by_severity or default to "minor"
+                    severity = "minor"  # default
+                    if "error_counts_by_severity" in normalized and isinstance(normalized["error_counts_by_severity"], dict):
+                        # If we have more major errors, assume this is major; otherwise minor
+                        major_count = normalized["error_counts_by_severity"].get("major", 0)
+                        minor_count = normalized["error_counts_by_severity"].get("minor", 0)
+                        if i < major_count:
+                            severity = "major"
+                    
+                    converted_errors.append({
+                        "code": error_id,
+                        "name": error.split('.')[0].strip() if '.' in error else error[:50],  # Use first sentence or first 50 chars as name
+                        "severity": severity,
+                        "description": error,
+                        "occurrences": 1,
+                        "notes": None
+                    })
+                elif isinstance(error, dict):
+                    # Already a dict, keep it
+                    converted_errors.append(error)
+            
+            if converted_errors:
+                normalized["detected_errors"] = converted_errors
+                logger.info(f"Converted {len(converted_errors)} string errors to DetectedError objects")
     
     # Normalize error_counts_by_severity if it's a stringified JSON object
     if "error_counts_by_severity" in normalized:
@@ -348,6 +389,37 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                 normalized[field] = int(normalized[field])
             except (ValueError, TypeError):
                 logger.warning(f"Failed to convert {field} to int, leaving as is")
+    
+    # CRITICAL: For RubricAssessmentResult, ensure total_points_earned matches sum of criteria
+    # This fixes validation errors like "total_points_earned (0) does not match sum of criteria (100)"
+    if schema_model.__name__ == "RubricAssessmentResult":
+        if "criteria_results" in normalized and isinstance(normalized["criteria_results"], list):
+            # Compute total from criteria
+            computed_total = 0
+            for criterion in normalized["criteria_results"]:
+                if isinstance(criterion, dict) and "points_earned" in criterion:
+                    try:
+                        points = criterion["points_earned"]
+                        if isinstance(points, (int, float)):
+                            computed_total += int(points)
+                        elif isinstance(points, str):
+                            computed_total += int(points)
+                    except (ValueError, TypeError):
+                        logger.warning(f"Failed to parse points_earned: {criterion.get('points_earned')}")
+            
+            # Override total_points_earned with computed value
+            if "total_points_earned" in normalized:
+                original_total = normalized["total_points_earned"]
+                if original_total != computed_total:
+                    logger.warning(
+                        f"Correcting total_points_earned from {original_total} to {computed_total} "
+                        f"(computed from criteria_results)"
+                    )
+                    normalized["total_points_earned"] = computed_total
+            else:
+                # Total wasn't provided at all - set it
+                logger.info(f"Setting total_points_earned to {computed_total} (computed from criteria_results)")
+                normalized["total_points_earned"] = computed_total
     
     return normalized
 
@@ -806,6 +878,7 @@ async def get_structured_completion(
                     "model": model_name,
                     "messages": [{"role": "user", "content": fallback_prompt}],
                     "response_format": {"type": "json_object"},  # Plain JSON, no schema
+                    "temperature": temperature,
                 }
                 logger.info("Using smart retry with fallback plain JSON (no strict schema)")
             else:
@@ -817,6 +890,7 @@ async def get_structured_completion(
                         "type": "json_schema",
                         "json_schema": json_schema,
                     },
+                    "temperature": temperature,
                 }
             
             # Add token limit parameter if specified
@@ -825,6 +899,26 @@ async def get_structured_completion(
             # Sanitize parameters for model-specific constraints
             # (e.g., GPT-5 models don't support temperature != 1)
             api_kwargs = sanitize_openai_params(model_name, api_kwargs)
+            
+            # DEBUG: Log the exact schema being sent to OpenAI for troubleshooting
+            if attempt == 0:  # Only log on first attempt to avoid spam
+                import json
+                if "response_format" in api_kwargs and "json_schema" in api_kwargs["response_format"]:
+                    schema_to_send = api_kwargs["response_format"]["json_schema"]
+                    logger.debug(f"Sending schema to OpenAI: {json.dumps(schema_to_send, indent=2)}")
+                    # Validate properties vs required one more time
+                    if "schema" in schema_to_send:
+                        s = schema_to_send["schema"]
+                        if "properties" in s and "required" in s:
+                            props_set = set(s["properties"].keys())
+                            req_set = set(s["required"])
+                            if props_set != req_set:
+                                logger.error(
+                                    f"SCHEMA MISMATCH DETECTED: properties={sorted(props_set)}, "
+                                    f"required={sorted(req_set)}, "
+                                    f"extra_in_required={req_set - props_set}, "
+                                    f"missing_from_required={props_set - req_set}"
+                                )
             
             # Record request for debugging
             if correlation_id:
