@@ -282,10 +282,10 @@ class TestZIPBatchGrading:
         # Verify some files were included
         assert len(student.files) >= 2
         
-        # Verify budget was respected
-        assert student.is_truncated
-        assert len(student.omitted_files) > 0
-        assert student.estimated_tokens <= max_tokens
+        # No truncation - preprocessing handles large submissions
+        assert not student.is_truncated
+        assert student.omitted_files == []
+        assert student.estimated_tokens > max_tokens
     
     @pytest.mark.asyncio
     async def test_concurrent_tasks_use_taskgroup(self, sample_assessment_result):

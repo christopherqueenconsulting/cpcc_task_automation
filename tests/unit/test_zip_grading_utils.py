@@ -270,11 +270,11 @@ class TestZIPExtraction:
         
         student = students["Student1"]
         
-        # Should have some files but not all
-        assert len(student.files) < 4
-        assert student.is_truncated
-        assert len(student.omitted_files) > 0
-        assert student.estimated_tokens <= max_tokens
+        # No truncation - preprocessing handles large submissions
+        assert len(student.files) == 4
+        assert not student.is_truncated
+        assert student.omitted_files == []
+        assert student.estimated_tokens > max_tokens
 
 
 @pytest.mark.unit
@@ -334,7 +334,7 @@ class TestSubmissionTextBuilding:
         assert "omitted2.java" in text
     
     def test_build_submission_text_respects_token_limit(self, tmp_path):
-        """Test that token limit is respected."""
+        """Test that token limit warning does not truncate content."""
         # Create files with known size
         large_content = "x" * 1000  # ~250 tokens
         
@@ -349,8 +349,9 @@ class TestSubmissionTextBuilding:
             "file2.txt": str(file2),
         }
         
-        # Set limit that should exclude second file
+        # Set limit that would previously exclude second file
         text = build_submission_text_with_token_limit(files, max_tokens=300)
         
-        # Should include first file but might not include second
+        # Should include both files (no truncation)
         assert "FILE: file1.txt" in text
+        assert "FILE: file2.txt" in text

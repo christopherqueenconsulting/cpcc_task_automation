@@ -1223,10 +1223,10 @@ def with_streamlit_context(fn: T) -> T:
     ctx = get_script_run_ctx()
 
     if ctx is None:
-        raise NoSessionContext(
-            "with_streamlit_context must be called inside a context; "
-            "construct your function on the fly, not earlier."
-        )
+        # Allow usage outside Streamlit (tests, CLI scripts) without raising.
+        def _cb(*args: Any, **kwargs: Any) -> Any:
+            return fn(*args, **kwargs)
+        return cast(T, _cb)
 
     def _cb(*args: Any, **kwargs: Any) -> Any:
         """Do it."""

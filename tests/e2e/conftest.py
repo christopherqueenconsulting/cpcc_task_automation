@@ -12,7 +12,8 @@ import os
 import subprocess
 import time
 import pytest
-from playwright.sync_api import Page, Browser, Playwright
+import pytest_asyncio
+from playwright.async_api import Browser, Page, async_playwright
 
 
 @pytest.fixture(scope="session")
@@ -71,24 +72,26 @@ def streamlit_app_url():
     print("Streamlit app stopped")
 
 
-@pytest.fixture(scope="session")
-def browser(playwright: Playwright):
+@pytest_asyncio.fixture
+async def browser() -> Browser:
     """Create a Playwright browser instance for the session."""
-    browser = playwright.chromium.launch(
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.launch(
         headless=True,
         args=['--disable-dev-shm-usage']  # Prevent issues in CI
     )
     yield browser
-    browser.close()
+    await browser.close()
+    await playwright.stop()
 
 
-@pytest.fixture
-def page(browser: Browser):
+@pytest_asyncio.fixture
+async def page(browser: Browser) -> Page:
     """Create a new browser page for each test."""
-    context = browser.new_context(
+    context = await browser.new_context(
         viewport={'width': 1280, 'height': 720},
         locale='en-US'
     )
-    page = context.new_page()
+    page = await context.new_page()
     yield page
-    context.close()
+    await context.close()

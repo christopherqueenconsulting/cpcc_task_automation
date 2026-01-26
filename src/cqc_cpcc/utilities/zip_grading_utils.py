@@ -17,7 +17,7 @@ Used by both legacy and rubric-based exam grading tabs.
 import os
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 from random import randint
@@ -123,6 +123,8 @@ class StudentSubmission:
     files: dict[str, str]  # filename -> temp_file_path
     total_chars: int = 0
     estimated_tokens: int = 0
+    is_truncated: bool = False
+    omitted_files: list[str] = field(default_factory=list)
 
 
 def estimate_tokens(text: str) -> int:
@@ -433,6 +435,8 @@ def extract_student_submissions_from_zip(
 def build_submission_text_with_token_limit(
     files: dict[str, str],
     max_tokens: int = DEFAULT_MAX_INPUT_TOKENS,
+    is_truncated: bool = False,
+    omitted_files: Optional[list[str]] = None,
 ) -> str:
     """Build combined submission text from multiple files.
     
@@ -443,6 +447,8 @@ def build_submission_text_with_token_limit(
     Args:
         files: Dict mapping filename to temp file path
         max_tokens: Token limit (used for logging only, not enforced)
+        is_truncated: Whether files were omitted (adds notice)
+        omitted_files: List of omitted filenames to include in notice
         
     Returns:
         Combined submission text
@@ -452,6 +458,15 @@ def build_submission_text_with_token_limit(
         for backward compatibility but only used for warnings.
     """
     parts = []
+    
+    if is_truncated:
+        omitted_list = omitted_files or []
+        omitted_text = "\n".join(f"- {name}" for name in omitted_list)
+        notice = (
+            "NOTE: Some files were omitted due to size limits.\n"
+            f"{omitted_text}\n"
+        )
+        parts.append(notice)
     total_tokens = 0
     
     # Sort files by priority for consistent ordering

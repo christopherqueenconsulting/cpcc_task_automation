@@ -2766,6 +2766,14 @@ def load_rubrics_from_config() -> Dict[str, Rubric]:
     
     if not isinstance(rubrics_data, dict):
         raise ValueError("RUBRICS_JSON must be a JSON object (dict)")
+
+    # Merge any legacy rubrics for backward compatibility.
+    try:
+        legacy_rubrics_data = json.loads(RUBRICS_JSON_v1_old)
+        if isinstance(legacy_rubrics_data, dict):
+            rubrics_data = {**legacy_rubrics_data, **rubrics_data}
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse RUBRICS_JSON_v1_old: {e}")
     
     rubrics = {}
     for rubric_id, rubric_dict in rubrics_data.items():

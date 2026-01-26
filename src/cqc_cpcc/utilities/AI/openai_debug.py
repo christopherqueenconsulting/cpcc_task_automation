@@ -317,6 +317,9 @@ def record_response(
         )
         debug_logger.debug(f"[{correlation_id}] Full response: {json.dumps(redacted_data, indent=2, default=str)}")
         
+        # Save redacted response summary for backward compatibility
+        _save_to_file(correlation_id, "response", redacted_data)
+        
         # Save raw response with FULL output text (not truncated) to response_raw.json
         response_raw_data = response_data.copy()
         response_raw_data["output"] = {
