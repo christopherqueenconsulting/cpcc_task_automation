@@ -188,6 +188,28 @@ def test_generate_grading_run_key_debug_mode():
 
 
 @pytest.mark.unit
+def test_generate_grading_run_key_different_grading_modes():
+    """Test that different grading modes produce different keys."""
+    key1 = generate_grading_run_key(
+        course_id="CSC151",
+        assignment_id="Exam1",
+        rubric_id="default_rubric",
+        rubric_version=1,
+        grading_mode="rubric_and_errors",
+    )
+    
+    key2 = generate_grading_run_key(
+        course_id="CSC151",
+        assignment_id="Exam1",
+        rubric_id="default_rubric",
+        rubric_version=1,
+        grading_mode="errors_only",
+    )
+    
+    assert key1 != key2
+
+
+@pytest.mark.unit
 def test_generate_file_metadata(tmp_path):
     """Test file metadata extraction from file paths."""
     # Create test files
