@@ -1204,13 +1204,75 @@ async def grade_single_rubric_student(
             if not grading_correlation_id:
                 grading_correlation_id = getattr(e, 'correlation_id', None)
             
-            # Build error message with attempt count if available
+            # Build detailed error message based on exception type
             error_msg = str(e)
             attempt_count = getattr(e, 'attempt_count', None)
-            if attempt_count:
-                error_msg = f"{error_msg} (after {attempt_count} attempt(s))"
             
-            st.error(f"❌ Error grading {student_id}: {error_msg}")
+            # Check if this is a validation error (schema mismatch)
+            from cqc_cpcc.utilities.AI.openai_exceptions import (
+                OpenAISchemaValidationError,
+                OpenAITransportError,
+            )
+            
+            if isinstance(e, OpenAISchemaValidationError):
+                # Validation error - provide specific guidance
+                error_type = "🔍 **Validation Error**"
+                if attempt_count:
+                    error_msg = f"LLM output failed schema validation after {attempt_count} attempt(s)"
+                else:
+                    error_msg = "LLM output does not match expected schema"
+                
+                st.error(f"❌ {error_type}: {student_id}")
+                st.markdown(f"""
+                **Issue:** {error_msg}
+                
+                **What happened:** The AI returned a response that doesn't match the required rubric format.
+                
+                **Troubleshooting:**
+                - The system automatically retried {attempt_count or 'multiple'} times
+                - Check the debug panel below for details
+                - Consider simplifying the rubric or submission
+                - Try re-running the grading
+                """)
+                
+                # Show validation errors if available
+                validation_errors = getattr(e, 'validation_errors', None)
+                if validation_errors and len(validation_errors) > 0:
+                    st.markdown(f"**Validation Issues ({len(validation_errors)}):**")
+                    for i, err in enumerate(validation_errors[:5]):  # Show first 5
+                        loc = ".".join(str(x) for x in err.get("loc", []))
+                        msg = err.get("msg", "")
+                        st.markdown(f"  {i+1}. `{loc}`: {msg}")
+                    if len(validation_errors) > 5:
+                        st.markdown(f"  ... and {len(validation_errors) - 5} more")
+            
+            elif isinstance(e, OpenAITransportError):
+                # Transport/network error
+                error_type = "🌐 **API Error**"
+                if attempt_count:
+                    error_msg = f"OpenAI API error after {attempt_count} attempt(s)"
+                else:
+                    error_msg = "OpenAI API connection failed"
+                
+                st.error(f"❌ {error_type}: {student_id}")
+                st.markdown(f"""
+                **Issue:** {error_msg}
+                
+                **What happened:** Network or API issue prevented grading completion.
+                
+                **Troubleshooting:**
+                - Check your internet connection
+                - Verify OpenAI API key is valid
+                - Check OpenAI status: https://status.openai.com
+                - Wait a moment and try again
+                """)
+            
+            else:
+                # Generic error
+                if attempt_count:
+                    error_msg = f"{error_msg} (after {attempt_count} attempt(s))"
+                
+                st.error(f"❌ Error grading {student_id}: {error_msg}")
             
             # Show debug panel if available
             from cqc_streamlit_app.utils import render_openai_debug_panel
