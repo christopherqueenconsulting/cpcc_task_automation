@@ -250,3 +250,36 @@ class TestGenerateFeedbackDocsAndZip:
                                 "_generate_feedback_docs_and_zip still requires effective_rubric parameter"
                             )
                         raise
+
+
+@pytest.mark.unit
+class TestCachedErrorOnlyDisplay:
+    """Test cached error-only grading results display."""
+    
+    def test_cached_error_only_display(self):
+        """Test that error-only cached display renders without exceptions."""
+        cached_results = [
+            ("Student1", {
+                "points_earned": 150,
+                "max_points": 200,
+                "major_count": 2,
+                "minor_count": 1,
+                "feedback_text": "Test feedback"
+            }),
+        ]
+        
+        with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.st') as mock_st:
+            mock_st.session_state = {
+                'error_only_results_by_key': {'test_key': cached_results},
+                'error_only_feedback_zip_by_key': {'test_key': '/tmp/test.zip'},
+                'expand_all_students': False,
+            }
+            mock_st.columns.return_value = [MagicMock(), MagicMock()]
+            
+            from src.cqc_streamlit_app.pages.4_Grade_Assignment import display_cached_error_only_results
+            
+            try:
+                display_cached_error_only_results('test_key', 'TestCourse_Exam1')
+                assert True
+            except Exception as e:
+                pytest.fail(f"display_cached_error_only_results raised unexpected exception: {e}")
