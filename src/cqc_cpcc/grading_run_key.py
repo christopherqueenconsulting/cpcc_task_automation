@@ -37,6 +37,7 @@ def generate_grading_run_key(
     model_name: str = "gpt-5-mini",
     temperature: float = 0.2,
     debug_mode: bool = False,
+    grading_mode: str = "rubric_and_errors",
 ) -> str:
     """Generate a deterministic hash key from grading inputs.
     
@@ -53,6 +54,7 @@ def generate_grading_run_key(
         model_name: OpenAI model name
         temperature: Sampling temperature
         debug_mode: Whether debug mode is enabled
+        grading_mode: Grading mode identifier
         
     Returns:
         SHA256 hash string (64 hex characters)
@@ -73,6 +75,7 @@ def generate_grading_run_key(
         "model_name": model_name,
         "temperature": temperature,
         "debug_mode": debug_mode,
+        "grading_mode": grading_mode,
     }
     
     # Serialize to JSON with sorted keys for determinism
