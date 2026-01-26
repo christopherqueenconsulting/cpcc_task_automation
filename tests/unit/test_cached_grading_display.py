@@ -9,19 +9,30 @@ Tests ensure that:
 4. No Pydantic ValidationError when displaying cached results
 """
 
+import importlib
+from types import SimpleNamespace
 import pytest
 from unittest.mock import MagicMock, patch
 from cqc_cpcc.rubric_models import RubricAssessmentResult, CriterionResult
 
 
+def _import_grade_assignment_module():
+    return importlib.import_module("src.cqc_streamlit_app.pages.4_Grade_Assignment")
+
+
+class SessionState(SimpleNamespace):
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+
 @pytest.fixture
 def mock_session_state():
     """Mock Streamlit session state."""
-    return {
-        'grading_results_by_key': {},
-        'expand_all_students': False,
-        'feedback_zip_bytes_by_key': {}
-    }
+    return SessionState(
+        grading_results_by_key={},
+        expand_all_students=False,
+        feedback_zip_bytes_by_key={},
+    )
 
 
 @pytest.fixture
@@ -91,18 +102,17 @@ class TestCachedGradingDisplay:
         This is the main regression test for the bug where placeholder_rubric
         was created with invalid parameters causing Pydantic ValidationError.
         """
+        grade_assignment = _import_grade_assignment_module()
         # Mock Streamlit
-        with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.st') as mock_st:
+        with patch.object(grade_assignment, 'st') as mock_st:
             mock_st.session_state = mock_session_state
             mock_st.session_state.grading_results_by_key['test_run_key'] = sample_cached_results
+            mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
             
             # Mock the Rubric import to track if it's instantiated
-            with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.Rubric') as mock_rubric:
-                # Import the function under test
-                from src.cqc_streamlit_app.pages.4_Grade_Assignment import display_cached_grading_results
-                
+            with patch.object(grade_assignment, 'Rubric') as mock_rubric:
                 # Call the function
-                display_cached_grading_results('test_run_key', 'TestCourse_Exam1')
+                grade_assignment.display_cached_grading_results('test_run_key', 'TestCourse_Exam1')
                 
                 # Assert Rubric was NEVER instantiated (key fix)
                 mock_rubric.assert_not_called()
@@ -134,18 +144,17 @@ class TestCachedGradingDisplay:
         
         cached_results = [("StudentIncomplete", incomplete_result)]
         
-        with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.st') as mock_st:
+        grade_assignment = _import_grade_assignment_module()
+        with patch.object(grade_assignment, 'st') as mock_st:
             mock_st.session_state = mock_session_state
             mock_st.session_state.grading_results_by_key['test_key'] = cached_results
-            mock_st.columns.return_value = [MagicMock(), MagicMock()]
+            mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
             mock_st.expander.return_value.__enter__ = MagicMock()
             mock_st.expander.return_value.__exit__ = MagicMock()
             
-            from src.cqc_streamlit_app.pages.4_Grade_Assignment import display_cached_grading_results
-            
             # Should not raise exception even with missing fields
             try:
-                display_cached_grading_results('test_key', 'TestCourse')
+                grade_assignment.display_cached_grading_results('test_key', 'TestCourse')
                 # If we get here, test passed (no exception)
                 assert True
             except Exception as e:
@@ -161,22 +170,29 @@ class TestCachedGradingDisplay:
             rubric_version="1.0",
             total_points_possible=0,  # Edge case
             total_points_earned=0,
-            criteria_results=[],
+            criteria_results=[
+                CriterionResult(
+                    criterion_id="zero",
+                    criterion_name="Zero",
+                    points_possible=0,
+                    points_earned=0,
+                    feedback="Zero"
+                )
+            ],
             overall_feedback="Test"
         )
         
         cached_results = [("StudentZero", result_with_zero_points)]
         
-        with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.st') as mock_st:
+        grade_assignment = _import_grade_assignment_module()
+        with patch.object(grade_assignment, 'st') as mock_st:
             mock_st.session_state = mock_session_state
             mock_st.session_state.grading_results_by_key['test_key'] = cached_results
-            mock_st.columns.return_value = [MagicMock(), MagicMock()]
-            
-            from src.cqc_streamlit_app.pages.4_Grade_Assignment import display_cached_grading_results
+            mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
             
             # Should handle 0 points without division by zero
             try:
-                display_cached_grading_results('test_key', 'TestCourse')
+                grade_assignment.display_cached_grading_results('test_key', 'TestCourse')
                 assert True
             except ZeroDivisionError:
                 pytest.fail("display_cached_grading_results raised ZeroDivisionError")
@@ -190,23 +206,24 @@ class TestCachedGradingDisplay:
         # This test verifies the fix by ensuring we never call RubricModel()
         # with invalid parameters in the cached display path
         
-        with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.st') as mock_st:
-            mock_st.session_state = {
-                'grading_results_by_key': {
+        grade_assignment = _import_grade_assignment_module()
+        with patch.object(grade_assignment, 'st') as mock_st:
+            mock_st.session_state = SessionState(
+                grading_results_by_key={
                     'key1': [("Student", MagicMock(
                         total_points_possible=100,
                         total_points_earned=85,
                         overall_band_label="Good"
                     ))]
-                }
-            }
-            mock_st.columns.return_value = [MagicMock(), MagicMock()]
-            
-            from src.cqc_streamlit_app.pages.4_Grade_Assignment import display_cached_grading_results
+                },
+                expand_all_students=False,
+                feedback_zip_bytes_by_key={},
+            )
+            mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
             
             # If this runs without ValidationError, the fix is working
             try:
-                display_cached_grading_results('key1', 'TestCourse')
+                grade_assignment.display_cached_grading_results('key1', 'TestCourse')
                 # Success - no validation error
                 assert True
             except ValueError as e:
@@ -223,18 +240,19 @@ class TestGenerateFeedbackDocsAndZip:
     
     def test_generate_docs_uses_total_points_not_rubric(self, sample_cached_results):
         """Test that _generate_feedback_docs_and_zip uses total_points_possible, not Rubric."""
-        with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.st') as mock_st:
-            mock_st.session_state = {'feedback_zip_bytes_by_key': {}}
+        grade_assignment = _import_grade_assignment_module()
+        with patch.object(grade_assignment, 'st') as mock_st:
+            mock_st.session_state = SessionState(
+                feedback_zip_bytes_by_key={},
+            )
             mock_st.spinner.return_value.__enter__ = MagicMock()
             mock_st.spinner.return_value.__exit__ = MagicMock()
             
-            with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.generate_student_feedback_doc'):
-                with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.create_zip_file'):
-                    from src.cqc_streamlit_app.pages.4_Grade_Assignment import _generate_feedback_docs_and_zip
-                    
+            with patch.object(grade_assignment, 'generate_student_feedback_doc'):
+                with patch.object(grade_assignment, 'create_zip_file'):
                     # Call with total_points_possible instead of effective_rubric
                     try:
-                        _generate_feedback_docs_and_zip(
+                        grade_assignment._generate_feedback_docs_and_zip(
                             all_results=sample_cached_results,
                             course_name="TestCourse",
                             total_points_possible=100,  # Direct value, no Rubric
@@ -268,18 +286,19 @@ class TestCachedErrorOnlyDisplay:
             }),
         ]
         
-        with patch('src.cqc_streamlit_app.pages.4_Grade_Assignment.st') as mock_st:
-            mock_st.session_state = {
-                'error_only_results_by_key': {'test_key': cached_results},
-                'error_only_feedback_zip_by_key': {'test_key': '/tmp/test.zip'},
-                'expand_all_students': False,
-            }
-            mock_st.columns.return_value = [MagicMock(), MagicMock()]
-            
-            from src.cqc_streamlit_app.pages.4_Grade_Assignment import display_cached_error_only_results
+        grade_assignment = _import_grade_assignment_module()
+        with patch.object(grade_assignment, 'st') as mock_st:
+            mock_st.session_state = SessionState(
+                error_only_results_by_key={'test_key': cached_results},
+                error_only_feedback_zip_by_key={'test_key': '/tmp/test.zip'},
+                expand_all_students=False,
+            )
+            mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
+            mock_st.empty.return_value = MagicMock()
             
             try:
-                display_cached_error_only_results('test_key', 'TestCourse_Exam1')
+                with patch.object(grade_assignment, 'on_download_click'):
+                    grade_assignment.display_cached_error_only_results('test_key', 'TestCourse_Exam1')
                 assert True
             except Exception as e:
                 pytest.fail(f"display_cached_error_only_results raised unexpected exception: {e}")
