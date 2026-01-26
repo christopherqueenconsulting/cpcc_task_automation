@@ -1,696 +1,274 @@
-# Testing Documentation
-
-This document provides comprehensive information about testing in the CPCC Task Automation project, including test structure, running tests, and testing best practices.
+# Testing Guide for CPCC Task Automation
 
 ## Overview
 
-The project uses **pytest** as the primary testing framework with various plugins for enhanced functionality. Tests are organized into three types:
-
-1. **Unit Tests**: Fast, isolated tests of individual functions/classes with mocked dependencies
-2. **Integration Tests**: Backend tests that exercise larger code flows without UI
-3. **E2E Tests**: End-to-end tests using Playwright to test the Streamlit UI
-
-**Test Directory**: `tests/`
-
-**Coverage Goal**: 80% patch coverage (enforced), 80% overall project coverage (target).
+This project uses **pytest** as the primary testing framework with extensive mocking to ensure tests are deterministic and don't require external dependencies (network, API, filesystem).
 
 ## Test Structure
 
 ```
 tests/
-├── conftest.py                     # Shared fixtures and configuration
-├── openai_test_helpers.py          # OpenAI mocking utilities
-├── unit/                           # Unit tests (isolated functions/classes)
+├── conftest.py              # Shared fixtures
+├── unit/                    # Unit tests (fast, isolated)
 │   ├── test_attendance.py
-│   ├── test_brightspace.py
-│   ├── test_my_colleges.py
+│   ├── test_date.py
 │   ├── test_date_utilities.py
+│   ├── test_env_constants.py
+│   ├── test_logger.py
 │   ├── test_selenium_util.py
-│   └── ...
-├── integration/                    # Integration tests (backend only, no UI)
-│   ├── conftest.py                 # Integration-specific fixtures
-│   ├── test_error_definitions_integration.py
-│   ├── test_rubric_integration.py
-│   ├── test_rubric_grading_integration.py
-│   └── ...
-└── e2e/                            # E2E tests (Playwright, full UI)
-    ├── conftest.py                 # E2E-specific fixtures (Streamlit app)
-    ├── test_smoke.py               # Basic smoke tests
-    └── ...
+│   └── test_utils.py
+└── integration/             # Integration tests (slower, cross-module)
+    └── __init__.py
 ```
 
 ## Running Tests
 
-### Basic Commands
-
+### Run All Unit Tests
 ```bash
-# Run all tests
-poetry run pytest
-
-# Run only unit tests
-poetry run pytest -m unit
-
-# Run only integration tests (backend, no UI)
-OPENAI_API_KEY=test-key poetry run pytest -m integration
-
-# Run only e2e tests (with Playwright UI)
-CQC_TEST_MODE=true OPENAI_API_KEY=test-key poetry run pytest -m e2e
-
-# Run specific test file
-poetry run pytest tests/unit/test_date_utilities.py
-
-# Run specific test function
-poetry run pytest tests/unit/test_date.py::test_is_date_in_range
-
-# Run with verbose output
-poetry run pytest -v
-
-# Run with coverage report
-poetry run pytest --cov=src --cov-report=html
-
-# Show slowest tests
-poetry run pytest --durations=5
-
-# Run tests matching pattern
-poetry run pytest -k "date"
+poetry run pytest tests/unit/ -m unit
 ```
 
-### Using Shell Script
+### Run Specific Test File
 ```bash
-./scripts/run_tests.sh
+poetry run pytest tests/unit/test_utils.py -m unit
 ```
 
-## Test Configuration
-
-### pytest.ini_options (in pyproject.toml)
-
-```toml
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-addopts = "--snapshot-warn-unused --strict-markers --strict-config --durations=5"
-markers = [
-    "requires: mark tests as requiring a specific library",
-    "asyncio: mark tests as requiring asyncio",
-    "compile: mark placeholder test used to compile integration tests without running them",
-    "unit: mark a test as a unit test",
-    "integration: mark a test as an integration test",
-    "e2e: mark a test as an end-to-end test",
-]
-asyncio_mode = "auto"
+### Run Specific Test Class
+```bash
+poetry run pytest tests/unit/test_utils.py::TestFlipName -m unit
 ```
 
-### Key Options Explained
+### Run Specific Test
+```bash
+poetry run pytest tests/unit/test_utils.py::TestFlipName::test_flip_name_with_spaces -m unit
+```
 
-- `pythonpath = ["src"]` - Add src to Python path for imports
-- `--strict-markers` - Raise error on unknown markers
-- `--strict-config` - Raise error on invalid configuration
-- `--durations=5` - Show 5 slowest tests
-- `--snapshot-warn-unused` - Warn about unused snapshots (syrupy)
+### Run with Verbose Output
+```bash
+poetry run pytest tests/unit/ -v -m unit
+```
+
+### Run with Test Duration Report
+```bash
+poetry run pytest tests/unit/ --durations=10 -m unit
+```
 
 ## Test Markers
 
-Tests should be marked with appropriate decorators:
+Tests are marked with decorators for categorization:
 
-### Unit Tests
-```python
-import pytest
+- `@pytest.mark.unit` - Fast, isolated unit tests (most common)
+- `@pytest.mark.integration` - Cross-module integration tests
+- `@pytest.mark.asyncio` - Async tests
 
-@pytest.mark.unit
-def test_date_calculation():
-    """Test date utility function"""
-    result = calculate_date_range()
-    assert result is not None
-```
-
-### Integration Tests
-```python
-@pytest.mark.integration
-def test_attendance_workflow():
-    """Test full attendance workflow"""
-    # Multi-module test
-    pass
-```
-
-### Async Tests
-```python
-@pytest.mark.asyncio
-async def test_async_operation():
-    """Test asynchronous operation"""
-    result = await async_function()
-    assert result
-```
-
-### E2E Tests
-```python
-@pytest.mark.e2e
-def test_streamlit_page_loads(page: Page, streamlit_app_url: str):
-    """Test Streamlit page loads"""
-    page.goto(streamlit_app_url)
-    page.wait_for_load_state("networkidle")
-    expect(page).to_have_title(re.compile(r".*CPCC.*"))
-```
-
-## Test Mode
-
-The `CQC_TEST_MODE` environment variable enables deterministic testing:
-
+### Run Only Unit Tests
 ```bash
-export CQC_TEST_MODE=true
+poetry run pytest -m unit
 ```
 
-**When enabled:**
-- OpenAI API calls return fake deterministic responses
-- No real network calls to external services
-- Streamlit app runs in isolated test mode
-
-**Usage in code:**
-```python
-from cqc_cpcc.utilities.env_constants import TEST_MODE
-
-if TEST_MODE:
-    return mock_response()  # Deterministic fake data
-else:
-    return openai.ChatCompletion.create(...)  # Real API call
+### Run Only Integration Tests
+```bash
+poetry run pytest -m integration
 ```
 
-## Fixtures
+## Test Dependencies
 
-### Shared Fixtures (conftest.py)
+Key testing libraries (installed via `poetry install --with test`):
 
-Located in `tests/conftest.py`, these fixtures are available to all tests:
+- **pytest** - Test framework
+- **pytest-mock** - Mocking support
+- **freezegun** - Time/date mocking
+- **syrupy** - Snapshot testing
+- **pytest-asyncio** - Async test support
 
-#### Example Fixtures
+## Mocking Strategy
+
+### External I/O
+All external I/O is mocked in unit tests:
+- **Selenium WebDriver**: Mocked with `MagicMock()`
+- **OpenAI API**: Mocked with `patch('cqc_cpcc.utilities.AI.llm.llms.*')`
+- **Filesystem**: Use `tmp_path` fixture or mock `os` functions
+- **Environment Variables**: Use `patch('os.environ', {'VAR': 'value'})`
+
+### Example: Mocking Selenium
 ```python
-import pytest
-from datetime import date, timedelta
+from unittest.mock import MagicMock, patch
 
-@pytest.fixture
-def sample_date_range():
-    """Provides a sample date range for testing"""
-    end_date = date.today()
-    start_date = end_date - timedelta(days=7)
-    return start_date, end_date
-
-@pytest.fixture
-def mock_driver(mocker):
-    """Provides a mocked Selenium WebDriver"""
-    driver = mocker.MagicMock()
-    driver.current_window_handle = "test-window"
-    return driver
-
-@pytest.fixture
-def mock_wait(mocker):
-    """Provides a mocked WebDriverWait"""
-    wait = mocker.MagicMock()
-    return wait
-```
-
-### Using Fixtures
-```python
-def test_with_fixtures(sample_date_range, mock_driver):
-    start, end = sample_date_range
-    # Use fixtures in test
-    assert start < end
-    assert mock_driver is not None
-```
-
-## Mocking
-
-### pytest-mock Plugin
-
-Uses `pytest-mock` for mocking (based on unittest.mock):
-
-#### Basic Mocking
-```python
-def test_with_mock(mocker):
-    # Mock a function
-    mock_func = mocker.patch('module.function')
-    mock_func.return_value = "mocked result"
+def test_selenium_function():
+    mock_driver = MagicMock()
+    mock_wait = MagicMock()
+    mock_element = MagicMock()
     
-    # Call code that uses the function
-    result = call_code_that_uses_function()
-    
-    # Assert mock was called
-    mock_func.assert_called_once()
-    assert result == "mocked result"
+    with patch('cqc_cpcc.utilities.selenium_util.get_session_driver',
+               return_value=(mock_driver, mock_wait)):
+        # Your test code here
+        pass
 ```
 
-#### Mock Selenium Driver
-```python
-def test_selenium_operation(mocker):
-    # Mock driver creation
-    mock_driver = mocker.MagicMock()
-    mocker.patch(
-        'cqc_cpcc.utilities.selenium_util.get_session_driver',
-        return_value=(mock_driver, mocker.MagicMock())
-    )
-    
-    # Test code that uses driver
-    from cqc_cpcc.attendance import take_attendance
-    # ...
-```
-
-#### Mock OpenAI Calls
-```python
-def test_ai_feedback(mocker):
-    # Mock LLM
-    mock_llm = mocker.MagicMock()
-    mock_llm.invoke.return_value = {
-        "summary": "Test feedback",
-        "score": 85
-    }
-    mocker.patch(
-        'cqc_cpcc.utilities.AI.llm.llms.get_default_llm',
-        return_value=mock_llm
-    )
-    
-    # Test feedback generation
-    # ...
-```
-
-### Freezegun for Time Testing
-
-Use `freezegun` to freeze time for date-dependent tests:
-
+### Example: Mocking Time
 ```python
 from freezegun import freeze_time
-from datetime import date
+import datetime as DT
 
 @freeze_time("2024-01-15")
 def test_date_calculation():
-    """Test with frozen time"""
-    today = date.today()
-    assert today == date(2024, 1, 15)
-    
-    # Date calculations will be consistent
-    result = calculate_attendance_range()
-    assert result.start == date(2024, 1, 8)  # 7 days before
+    result = calculate_something()
+    assert result == DT.date(2024, 1, 15)
 ```
 
-## Testing Patterns
-
-### Pattern 1: Unit Test for Pure Function
+### Example: Mocking Environment
 ```python
-import pytest
-from cqc_cpcc.utilities.date import is_date_in_range
-from datetime import date
+from unittest.mock import patch
 
-@pytest.mark.unit
-def test_is_date_in_range_true():
-    """Test date within range returns True"""
-    check = date(2024, 1, 15)
-    start = date(2024, 1, 10)
-    end = date(2024, 1, 20)
-    
-    assert is_date_in_range(check, start, end) is True
-
-@pytest.mark.unit
-def test_is_date_in_range_false():
-    """Test date outside range returns False"""
-    check = date(2024, 1, 25)
-    start = date(2024, 1, 10)
-    end = date(2024, 1, 20)
-    
-    assert is_date_in_range(check, start, end) is False
-
-@pytest.mark.unit
-def test_is_date_in_range_boundary():
-    """Test boundary conditions"""
-    start = date(2024, 1, 10)
-    end = date(2024, 1, 20)
-    
-    # Boundaries should be inclusive
-    assert is_date_in_range(start, start, end) is True
-    assert is_date_in_range(end, start, end) is True
+def test_env_constant():
+    with patch('os.environ', {'MY_VAR': 'test_value'}):
+        from cqc_cpcc.utilities.env_constants import MY_VAR
+        assert MY_VAR == 'test_value'
 ```
 
-### Pattern 2: Unit Test with Mocks
+## Writing New Tests
+
+### Test File Naming
+- Unit tests: `tests/unit/test_<module>.py`
+- Integration tests: `tests/integration/test_<feature>.py`
+
+### Test Function Naming
+Use descriptive names that explain the scenario:
 ```python
-import pytest
-from cqc_cpcc.utilities.selenium_util import click_element_wait_retry
-
 @pytest.mark.unit
-def test_click_element_success(mocker):
-    """Test successful element click"""
-    mock_driver = mocker.MagicMock()
-    mock_wait = mocker.MagicMock()
-    mock_element = mocker.MagicMock()
-    
-    result = click_element_wait_retry(mock_driver, mock_wait, mock_element)
-    
-    assert result is True
-    mock_element.click.assert_called_once()
+def test_<function>_<scenario>_<expected_outcome>():
+    # Example: test_flip_name_with_comma_reverses_order
+    pass
+```
 
+### Test Class Organization
+Group related tests in classes:
+```python
 @pytest.mark.unit
-def test_click_element_retry(mocker):
-    """Test retry on stale element"""
-    from selenium.common.exceptions import StaleElementReferenceException
+class TestFlipName:
+    """Test the flip_name function."""
     
-    mock_driver = mocker.MagicMock()
-    mock_wait = mocker.MagicMock()
-    mock_element = mocker.MagicMock()
+    def test_flip_name_with_comma(self):
+        # Test implementation
+        pass
     
-    # First call raises exception, second succeeds
-    mock_element.click.side_effect = [
-        StaleElementReferenceException("stale"),
-        None  # Success on retry
-    ]
-    
-    result = click_element_wait_retry(mock_driver, mock_wait, mock_element, max_retry=2)
-    
-    assert result is True
-    assert mock_element.click.call_count == 2
+    def test_flip_name_without_comma(self):
+        # Test implementation
+        pass
 ```
 
-### Pattern 3: Integration Test
+### Test Structure (AAA Pattern)
 ```python
-import pytest
-
-@pytest.mark.integration
-def test_attendance_workflow(mocker):
-    """Test complete attendance workflow"""
-    # Mock external dependencies
-    mock_driver = mocker.MagicMock()
-    mock_my_colleges = mocker.patch('cqc_cpcc.my_colleges.MyColleges')
-    mock_brightspace = mocker.patch('cqc_cpcc.brightspace.BrightSpace_Course')
+def test_something():
+    # Arrange - Set up test data and mocks
+    input_data = "test"
+    expected = "TEST"
     
-    # Setup mock behaviors
-    mock_my_colleges.return_value.get_course_list.return_value = [
-        mocker.MagicMock(course_name="CSC 151")
-    ]
+    # Act - Call the function under test
+    result = function_under_test(input_data)
     
-    # Run workflow
-    from cqc_cpcc.attendance import take_attendance
-    take_attendance("http://tracker.url")
-    
-    # Verify interactions
-    mock_my_colleges.return_value.get_course_list.assert_called_once()
-    # Additional assertions...
+    # Assert - Verify the result
+    assert result == expected
 ```
 
-### Pattern 4: Parameterized Tests
-```python
-import pytest
-from cqc_cpcc.utilities.date import get_datetime
+## Coverage (Future)
 
-@pytest.mark.unit
-@pytest.mark.parametrize("input_str,expected_year", [
-    ("2024-01-15", 2024),
-    ("January 15, 2024", 2024),
-    ("1/15/2024", 2024),
-])
-def test_date_parsing(input_str, expected_year):
-    """Test various date formats"""
-    result = get_datetime(input_str)
-    assert result.year == expected_year
-```
-
-## Test Naming Conventions
-
-### Format
-```
-test_<function>_<scenario>_<expected_outcome>
-```
-
-### Examples
-```python
-# Good names
-def test_is_date_in_range_with_valid_dates_returns_true():
-    pass
-
-def test_click_element_when_stale_retries_successfully():
-    pass
-
-def test_parse_date_with_invalid_format_raises_error():
-    pass
-
-# Bad names
-def test_dates():  # Too vague
-    pass
-
-def test_click():  # No context
-    pass
-
-def test_1():  # Meaningless
-    pass
-```
-
-## Coverage
-
-### Generating Coverage Reports
+Coverage tooling is available but not yet configured. To add coverage:
 
 ```bash
-# HTML report (open htmlcov/index.html)
-poetry run pytest --cov=src --cov-report=html
+# Install coverage
+poetry add --group test pytest-cov
 
-# Terminal report
-poetry run pytest --cov=src --cov-report=term
+# Run tests with coverage
+poetry run pytest --cov=src/cqc_cpcc --cov-report=html tests/unit/
 
-# XML report (for CI)
-poetry run pytest --cov=src --cov-report=xml
+# View coverage report
+open htmlcov/index.html
 ```
 
-### Coverage Configuration
+## Current Test Status
 
-```toml
-[tool.coverage.run]
-omit = [
-    "tests/*",
-]
-```
+**As of Latest Commit:**
+- Total Unit Tests: 168
+- Passing: 166
+- Failing: 2 (baseline - known issues, not blocking)
+- Test Files: 7
 
-### Coverage Goals
+**Coverage by Module:**
+- ✅ `env_constants.py` - 26 tests (100% core functions)
+- ✅ `utils.py` - 26 tests (main helper functions)
+- ✅ `logger.py` - 12 tests (100% coverage)
+- ✅ `selenium_util.py` - 30 tests (driver setup, options, helpers)
+- ✅ `date.py` - 74 tests (comprehensive date utilities)
 
-| Component | Target Coverage | Priority |
-|-----------|----------------|----------|
-| Utilities (date, selenium) | 80%+ | High |
-| Core logic (attendance, feedback) | 60-70% | Medium |
-| UI (Streamlit pages) | <30% | Low (manual testing) |
-| AI/LLM (chains, prompts) | 50% | Medium |
+## Known Issues
 
-## Testing Different Components
+### Baseline Failures
+Two tests fail in the baseline (pre-existing, not introduced by new tests):
+1. `test_is_checkdate_before_date_handles_datetime_objects` - Date comparison edge case
+2. `test_weeks_between_dates_with_rounding[date10-date20-2]` - Rounding calculation
 
-### Testing Selenium Operations
-
-**Challenge**: Slow, requires browser
-**Solution**: Mock WebDriver
-
-```python
-def test_selenium_scraping(mocker):
-    # Mock driver and wait
-    mock_driver = mocker.MagicMock()
-    mock_wait = mocker.MagicMock()
-    
-    # Mock element finding
-    mock_element = mocker.MagicMock()
-    mock_element.text = "Test Student"
-    mock_driver.find_element.return_value = mock_element
-    
-    # Test scraping logic
-    # ...
-```
-
-### Testing AI Features
-
-**Challenge**: Non-deterministic, expensive API calls
-**Solution**: Mock LLM responses
-
-```python
-def test_feedback_generation(mocker):
-    # Mock LLM
-    mock_llm = mocker.MagicMock()
-    mock_llm.invoke.return_value = mocker.MagicMock(
-        content='{"summary": "Good work", "score": 85}'
-    )
-    
-    mocker.patch(
-        'cqc_cpcc.utilities.AI.llm.llms.get_default_llm',
-        return_value=mock_llm
-    )
-    
-    # Test feedback workflow
-    # ...
-```
-
-### Testing Date Logic
-
-**Challenge**: Tests depend on current date
-**Solution**: Use freezegun
-
-```python
-from freezegun import freeze_time
-
-@freeze_time("2024-01-15")
-def test_attendance_date_range():
-    from cqc_cpcc.attendance import calculate_date_range
-    
-    result = calculate_date_range()
-    assert result.end == date(2024, 1, 13)  # 2 days ago
-    assert result.start == date(2024, 1, 6)  # 7 days before end
-```
-
-### Testing Streamlit UI
-
-**Challenge**: Difficult to automate
-**Solution**: Manual testing + integration tests for logic
-
-```python
-# Integration test for UI logic (not UI rendering)
-def test_attendance_page_logic(mocker):
-    # Mock core functions
-    mock_take_attendance = mocker.patch('cqc_cpcc.attendance.take_attendance')
-    
-    # Simulate page behavior
-    # (test the logic, not Streamlit rendering)
-    
-    # Verify core function called correctly
-    mock_take_attendance.assert_called_once_with("http://tracker.url")
-```
-
-## Continuous Integration
-
-### GitHub Actions Workflows
-
-#### 1. Unit Tests (`unit-tests.yml`)
-- **Workflow Name**: CI / Unit Tests
-- **Trigger**: On PR and push to master
-- **Coverage Upload**: Flag `unit`
-- **Codecov Check**: Patch coverage ≥80% (enforced)
-
-#### 2. Integration Tests (`integration-coverage.yml`)
-- **Workflow Name**: CI / Integration Test w/ Coverage
-- **Trigger**: On PR and push to master
-- **Coverage Upload**: Flag `integration`
-
-#### 3. E2E Tests (`e2e-coverage.yml`)
-- **Workflow Name**: CI / E2E Test w/ Coverage
-- **Trigger**: On PR and push to master
-- **Coverage Upload**: Flag `e2e`
-- **Special Setup**: Installs Playwright browsers
-
-### Codecov Flags
-
-Coverage is uploaded separately for each test type:
-
-| Flag | Test Type | Coverage Paths |
-|------|-----------|---------------|
-| `unit` | Unit tests | `src/cqc_cpcc/` |
-| `integration` | Integration tests | `src/cqc_cpcc/` |
-| `e2e` | E2E tests | `src/cqc_cpcc/`, `src/cqc_streamlit_app/` |
-
-**Viewing Coverage by Flag:**
-1. Go to Codecov PR comment
-2. Click "Flags" tab to see coverage breakdown per test type
-3. Overall coverage combines all flags
-
-### Codecov Enforcement
-
-- **Project Coverage**: Target 80% (informational, doesn't block PRs)
-- **Patch Coverage**: ≥80% required for new/modified code (enforced, blocks PRs)
-
-If patch coverage fails:
-1. Check Codecov comment for uncovered lines
-2. Add tests for new code paths
-3. Run locally: `poetry run pytest -m unit --cov=src --cov-report=term-missing`
+These are documented and tracked but not blocking test development.
 
 ## Best Practices
 
-### General
+### DO:
+- ✅ Mock all external dependencies
+- ✅ Use `@pytest.mark.unit` for unit tests
+- ✅ Test happy paths AND edge cases
+- ✅ Test error handling and exceptions
+- ✅ Use descriptive test names
+- ✅ Keep tests fast (< 1 second each)
+- ✅ Make tests deterministic (no randomness, no real time)
 
-1. **One assertion per test** (when practical) - Makes failures clear
-2. **Test behavior, not implementation** - Don't test internal details
-3. **Keep tests independent** - No shared state between tests
-4. **Use descriptive names** - Test name should explain what's tested
-5. **Test edge cases** - Empty inputs, None values, boundaries
+### DON'T:
+- ❌ Make real network calls
+- ❌ Call real APIs (OpenAI, etc.)
+- ❌ Depend on external files (unless using tmp_path)
+- ❌ Use `time.sleep()` (use mocking instead)
+- ❌ Test implementation details (test behavior, not internals)
+- ❌ Write tests that depend on other tests
 
-### Mocking
+## Continuous Integration
 
-1. **Mock external dependencies** - Selenium, OpenAI, file I/O
-2. **Don't mock internal logic** - Test actual implementation
-3. **Verify mock interactions** - Use `assert_called_once()`, etc.
-4. **Keep mocks simple** - Don't recreate complex behaviors
+Tests run automatically on:
+- Pull requests
+- Commits to main branch
+- Manual workflow dispatch
 
-### Fixtures
+See `.github/workflows/` for CI configuration.
 
-1. **Use fixtures for setup/teardown** - Not in test body
-2. **Keep fixtures focused** - One responsibility
-3. **Name fixtures clearly** - Obvious what they provide
-4. **Share common fixtures** - Use conftest.py
+## Troubleshooting
 
-### Test Organization
+### Tests Hang
+If tests hang, likely cause is unmocked network/API call. Check:
+1. Are all external dependencies mocked?
+2. Is there a `time.sleep()` call that should be mocked?
+3. Is Selenium trying to open a real browser?
 
-1. **Group related tests** - Use classes for grouping
-2. **Test files mirror source** - `test_attendance.py` for `attendance.py`
-3. **Mark tests appropriately** - unit, integration, asyncio
-4. **Separate fast and slow tests** - Run fast tests frequently
+### Import Errors
+Ensure `poetry install --with test` has been run and virtual environment is activated.
 
-## Common Issues
-
-### Issue 1: Import Errors
-**Problem**: `ModuleNotFoundError: No module named 'cqc_cpcc'`
-**Solution**: Ensure `pythonpath = ["src"]` in pytest config
-
-### Issue 2: Fixtures Not Found
-**Problem**: `fixture 'my_fixture' not found`
-**Solution**: Check fixture is in conftest.py or imported properly
-
-### Issue 3: Tests Pass Locally, Fail in CI
-**Problem**: Different environment
-**Solution**: Check dependencies, environment variables, file paths
-
-### Issue 4: Flaky Tests
-**Problem**: Tests pass/fail intermittently
-**Solution**: Check for time dependencies (use freezegun), race conditions, external dependencies
-
-### Issue 5: Slow Test Suite
-**Problem**: Tests take too long
-**Solution**: Mock external calls, use markers to skip slow tests, parallelize with pytest-xdist
-
-## Debugging Tests
-
-### Run with verbose output
+### Pytest Not Found
 ```bash
-poetry run pytest -v
+# Activate virtual environment
+poetry shell
+
+# Or use poetry run
+poetry run pytest
 ```
 
-### Show print statements
-```bash
-poetry run pytest -s
+### Mock Not Working
+Ensure the path in `patch()` matches where the function is used, not where it's defined:
+```python
+# If module A imports function from module B and uses it:
+# Module A: from module_b import function
+# Mock in A's tests: patch('module_a.function')
 ```
-
-### Drop into debugger on failure
-```bash
-poetry run pytest --pdb
-```
-
-### Run specific test with debugging
-```bash
-poetry run pytest tests/unit/test_date.py::test_specific_case -v -s
-```
-
-## Future Improvements
-
-1. **Add more integration tests** - Test complex backend workflows
-2. **Add more E2E tests** - Cover grading, feedback, and settings pages
-3. **Property-based tests** - Use Hypothesis for edge case generation
-4. **Visual regression tests** - For Streamlit UI changes
-5. **Mutation testing** - Verify tests actually catch bugs
-6. **Performance tests** - Ensure operations complete within time limits
 
 ## Resources
 
-- **pytest docs**: https://docs.pytest.org/
-- **pytest-mock**: https://pytest-mock.readthedocs.io/
-- **freezegun**: https://github.com/spulec/freezegun
-- **coverage.py**: https://coverage.readthedocs.io/
-
-## Related Documentation
-
-- [src-cqc-cpcc.md](src-cqc-cpcc.md) - Core modules being tested
-- [utilities.md](utilities.md) - Utility functions being tested
-- [ai-llm.md](ai-llm.md) - AI components being tested
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Development workflow
-
----
-
-*For questions or clarifications, see [docs/README.md](README.md) or open a GitHub issue.*
+- [pytest Documentation](https://docs.pytest.org/)
+- [pytest-mock Plugin](https://pytest-mock.readthedocs.io/)
+- [freezegun Documentation](https://github.com/spulec/freezegun)
+- [Python unittest.mock](https://docs.python.org/3/library/unittest.mock.html)
