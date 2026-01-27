@@ -69,6 +69,21 @@ def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.dat
         raise ValueError("invalid datetime as string")
 
     return parsed
+
+def _coerce_supported_date_type(value: DT.datetime | DT.date | str) -> DT.datetime | DT.date:
+    if isinstance(value, str):
+        return get_datetime(value)
+    return value
+
+
+def _coerce_to_date(value: DT.datetime | DT.date | str) -> DT.date:
+    value = _coerce_supported_date_type(value)
+    if isinstance(value, DT.datetime):
+        return _ensure_naive_datetime(value).date()
+    if isinstance(value, DT.date):
+        return value
+    raise TypeError("invalid date value")
+
 def get_datetime_old(text: str) -> DT.datetime:
     """Parse a date/time string into a datetime object.
     
@@ -119,10 +134,13 @@ def is_checkdate_before_date(check_date: DT.datetime | DT.date, before_date: DT.
         >>> is_checkdate_before_date(date(2024, 1, 15), datetime(2024, 1, 15, 12, 0))
         False  # Same calendar day, so not "before"
     """
+    check_date = _coerce_supported_date_type(check_date)
+    before_date = _coerce_supported_date_type(before_date)
+
     # Convert date to datetime (check datetime first since datetime is a subclass of date)
     check_is_date_only = isinstance(check_date, DT.date) and not isinstance(check_date, DT.datetime)
     before_is_date_only = isinstance(before_date, DT.date) and not isinstance(before_date, DT.datetime)
-    
+
     # If one is a date and the other is a datetime, check if they're on the same calendar day
     if check_is_date_only != before_is_date_only:
         # One is date, one is datetime
@@ -137,6 +155,9 @@ def is_checkdate_before_date(check_date: DT.datetime | DT.date, before_date: DT.
         before_date = DT.datetime.combine(before_date, DT.datetime.min.time())
     if check_is_date_only:
         check_date = DT.datetime.combine(check_date, DT.datetime.min.time())
+
+    # Align timezone awareness for accurate comparison
+    check_date, before_date = _align_datetime_awareness(check_date, before_date)
 
     return check_date < before_date
 
@@ -163,10 +184,13 @@ def is_checkdate_after_date(check_date: DT.datetime | DT.date, after_date: DT.da
         >>> is_checkdate_after_date(date(2024, 1, 15), datetime(2024, 1, 15, 12, 0))
         False  # Same calendar day, so not "after"
     """
+    check_date = _coerce_supported_date_type(check_date)
+    after_date = _coerce_supported_date_type(after_date)
+
     # Convert date to datetime (check datetime first since datetime is a subclass of date)
     check_is_date_only = isinstance(check_date, DT.date) and not isinstance(check_date, DT.datetime)
     after_is_date_only = isinstance(after_date, DT.date) and not isinstance(after_date, DT.datetime)
-    
+
     # If one is a date and the other is a datetime, check if they're on the same calendar day
     if check_is_date_only != after_is_date_only:
         # One is date, one is datetime
@@ -181,6 +205,9 @@ def is_checkdate_after_date(check_date: DT.datetime | DT.date, after_date: DT.da
         after_date = DT.datetime.combine(after_date, DT.datetime.min.time())
     if check_is_date_only:
         check_date = DT.datetime.combine(check_date, DT.datetime.min.time())
+
+    # Align timezone awareness for accurate comparison
+    check_date, after_date = _align_datetime_awareness(check_date, after_date)
 
     return after_date < check_date
 
@@ -200,7 +227,7 @@ def is_date_in_range(start_date: DT.datetime | DT.date, check_date: DT.datetime 
     
     Returns:
         True if check_date is within [start_date, end_date] inclusive, False otherwise
-        
+
     Example:
         >>> is_date_in_range(date(2024, 1, 1), date(2024, 1, 15), date(2024, 1, 31))
         True
@@ -210,20 +237,46 @@ def is_date_in_range(start_date: DT.datetime | DT.date, check_date: DT.datetime 
     Note:
         Used extensively for attendance tracking to filter activities by date range.
     """
-    if isinstance(start_date, DT.date):
-        start_date = DT.datetime.combine(start_date, DT.datetime.min.time())
-    if isinstance(check_date, DT.date):
-        check_date = DT.datetime.combine(check_date, DT.datetime.min.time())
-    if isinstance(end_date, DT.date):
-        end_date = DT.datetime.combine(end_date, DT.datetime.max.time())
+    start_date = _coerce_supported_date_type(start_date)
+    check_date = _coerce_supported_date_type(check_date)
+    end_date = _coerce_supported_date_type(end_date)
+
+    start_is_date_only = _is_date_only(start_date)
+    check_is_date_only = _is_date_only(check_date)
+    end_is_date_only = _is_date_only(end_date)
+
+    if start_is_date_only:
+        start_dt = DT.datetime.combine(start_date, DT.datetime.min.time())
+    else:
+        start_dt = start_date
+
+    if end_is_date_only:
+        end_dt = DT.datetime.combine(end_date, DT.datetime.max.time())
+    else:
+        end_dt = end_date
+
+    if check_is_date_only and not (start_is_date_only and end_is_date_only):
+        check_start = DT.datetime.combine(check_date, DT.datetime.min.time())
+        check_end = DT.datetime.combine(check_date, DT.datetime.max.time())
+        start_dt, end_dt, check_start, check_end = _normalize_datetimes_for_compare(
+            [start_dt, end_dt, check_start, check_end]
+        )
+        return start_dt <= check_end and check_start <= end_dt
+
+    if check_is_date_only:
+        check_dt = DT.datetime.combine(check_date, DT.datetime.min.time())
+    else:
+        check_dt = check_date
+
+    start_dt, check_dt, end_dt = _normalize_datetimes_for_compare([start_dt, check_dt, end_dt])
 
     time_format = "%m-%d-%Y %H:%M:%S %Z"
-    # print("Checking Date Range | Start: %s | Check: %s | End: %s" % (start_date.strftime(time_format),
-    #                                                                 check_date.strftime(time_format),
-    #                                                                 end_date.strftime(time_format)))
+    # print("Checking Date Range | Start: %s | Check: %s | End: %s" % (start_dt.strftime(time_format),
+    #                                                                 check_dt.strftime(time_format),
+    #                                                                 end_dt.strftime(time_format)))
     # pprint(due_dates)
 
-    return start_date <= check_date <= end_date
+    return start_dt <= check_dt <= end_dt
 
 
 def filter_dates_in_range(date_strings: list[str], start_date: DT.datetime | DT.date, 
@@ -293,7 +346,9 @@ def get_earliest_date(date_strings: list[str]) -> str:
     return ordered_dates[0] if ordered_dates else ""
 
 
-def weeks_between_dates(date1: DT.date, date2: DT.date, round_up: bool = False) -> int:
+def weeks_between_dates(
+    date1: DT.date | DT.datetime | str, date2: DT.date | DT.datetime | str, round_up: bool = False
+) -> int:
     """Calculate the number of weeks between two dates.
     
     Args:
@@ -320,7 +375,9 @@ def weeks_between_dates(date1: DT.date, date2: DT.date, round_up: bool = False) 
         When round_up=True, accounts for the course starting "in" week 1, so even
         7 days (1 complete week) represents having been in both week 1 and week 2.
     """
-    # Calculate the difference in days between the two dates
+    date1 = _coerce_to_date(date1)
+    date2 = _coerce_to_date(date2)
+
     delta_days = abs((date2 - date1).days)
 
     if round_up:
@@ -346,12 +403,52 @@ def weeks_between_dates(date1: DT.date, date2: DT.date, round_up: bool = False) 
 
 
 def convert_datetime_to_end_of_day(dt: DT.datetime) -> DT.datetime:
-    return DT.datetime.combine(dt, DT.datetime.max.time())
+    return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
 
 
 def convert_datetime_to_start_of_day(dt: DT.datetime) -> DT.datetime:
-    return DT.datetime.combine(dt, DT.datetime.min.time())
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def convert_date_to_datetime(date: DT.date) -> DT.datetime:
     return DT.datetime.combine(date, DT.datetime.min.time())
+
+
+def _is_timezone_aware(value: DT.datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _strip_timezone(value: DT.datetime) -> DT.datetime:
+    offset = value.utcoffset()
+    if offset is None:
+        return value.replace(tzinfo=None)
+    return (value - offset).replace(tzinfo=None)
+
+
+def _ensure_naive_datetime(value: DT.datetime) -> DT.datetime:
+    """Return a timezone-naive datetime for reliable comparisons."""
+    if isinstance(value, DT.datetime) and _is_timezone_aware(value):
+        return _strip_timezone(value)
+    return value
+
+
+def _normalize_datetimes_for_compare(values: list[DT.datetime]) -> list[DT.datetime]:
+    if any(_is_timezone_aware(value) for value in values):
+        return [_ensure_naive_datetime(value) for value in values]
+    return values
+
+
+def _align_datetime_awareness(
+    first: DT.datetime, second: DT.datetime
+) -> tuple[DT.datetime, DT.datetime]:
+    first_aware = _is_timezone_aware(first)
+    second_aware = _is_timezone_aware(second)
+
+    if first_aware or second_aware:
+        first = _ensure_naive_datetime(first)
+        second = _ensure_naive_datetime(second)
+
+    return first, second
+
+def _is_date_only(value: DT.date | DT.datetime) -> bool:
+    return isinstance(value, DT.date) and not isinstance(value, DT.datetime)
