@@ -132,7 +132,7 @@ def test_build_rubric_grading_prompt_includes_all_sections(
     )
     
     # Check that prompt contains expected sections
-    assert "# Grading Task" in prompt
+    assert "# Rubric-Based Grading Task" in prompt  # Updated after GPT-5.2 refactor
     assert "## Assignment Instructions" in prompt
     assert "## Reference Solution" in prompt
     assert f"## Grading Rubric: {rubric.title}" in prompt
