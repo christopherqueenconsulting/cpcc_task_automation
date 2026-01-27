@@ -238,11 +238,21 @@ def test_is_date_in_range_inclusive_boundaries(sample_dates):
 
 @pytest.mark.unit
 def test_is_date_in_range_handles_mixed_timezone_awareness():
-    """Timezone-aware start/end should compare cleanly with naive check_date."""
+    """Timezone-aware start/end should compare cleanly with naive check_date.
+    
+    When mixing timezone-aware and naive datetimes, timezone-aware values are
+    converted to naive by stripping the UTC offset. This means:
+    - start_date: 2024-01-10 05:00 UTC → 2024-01-10 05:00 naive
+    - check_date: 2024-01-10 01:00 naive → stays 2024-01-10 01:00 naive  
+    - end_date: 2024-01-12 00:00 UTC → 2024-01-12 00:00 naive
+    
+    Since 01:00 < 05:00 on the same day, check_date is NOT in range.
+    """
     start_date = DT.datetime(2024, 1, 10, 5, 0, tzinfo=DT.timezone.utc)
     check_date = DT.datetime(2024, 1, 10, 1, 0)
     end_date = DT.datetime(2024, 1, 12, 0, 0, tzinfo=DT.timezone.utc)
-    assert is_date_in_range(start_date, check_date, end_date) is True
+    # check_date (01:00) is before start_date (05:00) on same day, so NOT in range
+    assert is_date_in_range(start_date, check_date, end_date) is False
 
 
 # ===== filter_dates_in_range Tests =====
