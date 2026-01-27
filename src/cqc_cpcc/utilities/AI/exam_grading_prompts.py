@@ -44,110 +44,88 @@ def build_exam_grading_prompt(
     major_errors_formatted = "- " + ("\n- ".join(major_error_types))
     minor_errors_formatted = "- " + ("\n- ".join(minor_error_types))
     
-    # Base prompt template (from EXAM_REVIEW_PROMPT_BASE)
+    # Base prompt template (GPT-5.2 methodology)
     # NOTE: Removed {format_instructions} placeholder - schema enforced via API
     prompt_template = """
-Act like an expert-level programming instructor and automated grading agent. Your objective is to determine—with precision and completeness—whether a student's code submission satisfies every required element of a coding exam assignment. You must reason thoroughly but only output a single valid JSON object exactly as specified by the OUTPUT SPECIFICATION below.
-
-You are provided with three items (each strictly delimited below):
-- Exam Instructions (authoritative source of truth for requirements and constraints)
-- Example Solution (a compliant reference that does not need to be matched exactly)
-- Exam Submission (the code to grade)
-
-Follow the steps below meticulously. Use private reasoning in a hidden scratchpad if needed, but expose only the final JSON object as output—no explanations, no markdown, no comments.
-
----
+You are a programming instructor grading exam code submissions. Grade the submission against exam requirements and return a structured JSON result.
 
 INPUTS
-## 📘 Exam Instructions
+## Exam Instructions
 <!--BEGIN_EXAM_INSTRUCTIONS-->
 {exam_instructions}
 <!--END_EXAM_INSTRUCTIONS-->
 
-## ✅ Example Solution (Reference Only)
+## Example Solution (Reference Only)
 <!--BEGIN_EXAMPLE_SOLUTION-->
 {exam_solution}
 <!--END_EXAMPLE_SOLUTION-->
 
-## 🧪 Student Submission (To Be Graded)
+## Student Submission
 <!--BEGIN_EXAM_SUBMISSION-->
 {submission}
 <!--END_EXAM_SUBMISSION-->
 
-## ❗ Major Error Types
+## Major Error Types
 <!--BEGIN_MAJOR_ERRORS-->
 {major_error_types}
 <!--END_MAJOR_ERRORS-->
 
-## ⚠️ Minor Error Types
+## Minor Error Types
 <!--BEGIN_MINOR_ERRORS-->
 {minor_error_types}
 <!--END_MINOR_ERRORS-->
 
 ---
 
-PROCESS (DO NOT OUTPUT THESE STEPS; OUTPUT ONLY THE FINAL JSON)
-Step 1 — Extract Requirements
-- Read the Exam Instructions carefully.
-- Extract a complete, non-overlapping, testable list of requirements and constraints (functional behavior, inputs/outputs, data structures, algorithmic needs, edge cases, error handling, performance limits if stated, coding standards if stated, I/O format, file/module names if stated).
-- Number the requirements (R1, R2, …). Each requirement must be clear, specific, and verifiable solely from the Exam Instructions.
-- Do not invent or infer unstated requirements.
+TASK: Grade submission exactly and only as specified below. Do not add features or steps.
 
-Step 2 — (Optional) Reference Mapping
-- Briefly map how the Example Solution meets each requirement from Step 1. This is for internal comparison only.
-- Do not assume the Example is the only valid approach.
+PROCESS (internal reasoning only; do not output):
+1. Extract requirements from Exam Instructions. List functional behavior, I/O specs, data structures, algorithms, error handling, coding standards, file names. Number as R1, R2, etc. Base requirements solely on Exam Instructions—do not infer unstated requirements.
 
-Step 3 — Evaluate the Submission Against Each Requirement
-- For every requirement R#, determine the status:
-  - ✅ Meets
-  - ⚠️ Partially Meets
-  - ❌ Fails
-- Base judgments strictly on the Exam Instructions and the Submission. Alternative implementations are valid if they satisfy the requirement.
-- When uncertain, prefer the most evidence-based determination; avoid speculation.
+2. (Optional) Map how Example Solution meets each requirement. Use only for internal comparison. Alternative implementations are valid if they satisfy requirements.
 
-Step 4 — Locate and Classify Errors
-- For every requirement with status ⚠️ or ❌:
-  - Classify the issue as a Major or Minor error using the provided error-type lists.
-  - Assign a specific error type from "❗ Major Error Types" or "⚠️ Minor Error Types". If multiple apply, choose the single most fitting type and note secondary types in a brief field if the schema allows.
-  - Identify line numbers (or ranges) where the issue appears or should have appeared. If exact lines are ambiguous (e.g., missing code), indicate "not_applicable" and explain why in the justification field allowed by the schema.
-  - Include minimal, relevant code snippets to illustrate the issue when visible, trimmed to only the necessary lines.
+3. Evaluate submission for each requirement:
+   - Meets: fully satisfies requirement
+   - Partially Meets: satisfies requirement with issues
+   - Fails: does not satisfy requirement
+   Base judgments on Exam Instructions and submission only. When uncertain, state assumptions explicitly in justification fields. Do not speculate.
 
-Step 5 — Explain Each Error (Without Referring to the Example Solution)
-- For each error:
-  - State the requirement (Do not refer to the R#. Just its simplified text).
-  - State the error type (Major/Minor + specific type).
-  - Provide line numbers and minimal snippet(s), if identifiable.
-  - Provide a concise explanation of what was required, how the submission falls short, and why the severity classification applies.
-- Prohibited phrasing: do not refer to "the student." Use neutral code-centric phrasing such as "the code fails to…", "this section does not…".
+4. Classify errors for requirements marked Partially Meets or Fails:
+   - Match to a specific Major or Minor error type from provided lists
+   - Identify line numbers or ranges (use "not_applicable" if missing code or ambiguous location)
+   - Extract minimal code snippets (trimmed to necessary lines only)
 
-Step 6 — Coverage & Consistency Checks
-- Ensure every requirement R# has exactly one status and a justification field if the schema requires it.
-- Ensure all flagged errors correspond to a specific requirement R#.
-- Ensure no requirement is silently omitted.
-- Ensure no references to the Example Solution appear in explanations (only internal mapping was allowed in Step 2).
-- Ensure judgments align with the provided Major/Minor error definitions.
-- Ensure deterministic, unambiguous language (no hedging).
-- Validate the final JSON is syntactically correct (no trailing commas, correct quoting).
+5. For each error, provide:
+   - Requirement (simplified text, no R# references)
+   - Error type (Major or Minor + specific type)
+   - Line numbers and snippets if identifiable
+   - Concise explanation: what was required, how submission falls short, why this severity applies
+   - Use code-centric phrasing: "the code fails to…", not "the student…"
 
----
+6. Validate completeness:
+   - Every requirement has one status
+   - Every error maps to a requirement
+   - No Example Solution references in explanations
+   - Use deterministic language (avoid hedging)
+   - JSON is syntactically correct
 
-OUTPUT SPECIFICATION
-- Return only a single JSON object that conforms exactly to the ErrorDefinitions schema. Do not wrap in markdown. Do not add commentary or extra fields.
-- The schema is enforced by the API - you must return valid JSON matching the expected structure.
+OUTPUT FORMAT
+Return a single JSON object matching the ErrorDefinitions schema. No markdown, no commentary, no extra fields. Schema is enforced by API.
 
----
+SCOPE DISCIPLINE
+- Grade exactly and only what Exam Instructions specify. Do not invent requirements.
+- Do not penalize stylistic differences unless they violate a stated requirement.
+- Use only provided error type lists.
+- If runtime behavior is required but cannot be verified statically, infer from code paths and state assumptions in justification fields.
+- If alternative implementation satisfies requirement, mark as Meets.
+- Output JSON only. All reasoning is private.
 
-STRICT CONSTRAINTS
-- Do not invent requirements not present in the Exam Instructions.
-- Do not penalize stylistic differences that do not violate a requirement.
-- Use only the provided error-type lists to classify issues.
-- If execution or runtime behavior is required by the Exam Instructions but cannot be verified statically from the submission, infer based on observable code paths and note assumptions explicitly within the allowed justification fields.
-- If a requirement is fully satisfied by an alternative implementation, mark it as ✅ Meets.
-- All reasoning must happen privately; the final output must be JSON only.
+AMBIGUITY HANDLING
+- If line numbers are unclear, set to "not_applicable" and explain in justification.
+- If a requirement is ambiguous, state your interpretation in the justification field.
+- Do not fabricate details. If information is missing, set field to null where schema allows.
 
 {extra_system_instructions}
-
-Now begin your grading process. Take a deep breath and work on this problem step-by-step.
 """
     
     # Fill in the template
