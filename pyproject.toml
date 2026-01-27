@@ -43,6 +43,9 @@ extra-streamlit-components = "^0"
 six = "^1"
 openpyxl = "^3"
 tabulate = "^0"
+pypdf = "^6"
+pymupdf = "^1"
+
 
 
 [tool.poetry.group.lint]
