@@ -2,10 +2,9 @@
 
 """Unit tests for PDF text extraction utilities."""
 
-import pytest
-import os
-import tempfile
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture
@@ -173,7 +172,10 @@ class TestBinaryDataDetection:
         """Test that clean text is not flagged as binary."""
         from cqc_cpcc.utilities.pdf_utils import _contains_binary_data
         
-        clean_text = "This is clean text with normal characters.\nMultiple lines.\nSpecial: @#$%"
+        clean_text = (
+            "This is clean text with normal characters.\n"
+            "Multiple lines.\nSpecial: @#$%"
+        )
         
         assert not _contains_binary_data(clean_text)
     
@@ -284,6 +286,7 @@ class TestPdfExtractionErrorHandling:
     def test_extraction_logs_failures(self, sample_pdf, caplog):
         """Test that extraction failures are logged."""
         import logging
+
         from cqc_cpcc.utilities.pdf_utils import extract_text_from_pdf
         
         # This should succeed, but let's test the logging setup
@@ -291,4 +294,7 @@ class TestPdfExtractionErrorHandling:
             extract_text_from_pdf(str(sample_pdf))
         
         # Should have logged the extraction attempt
-        assert any("Extracting text from PDF" in record.message for record in caplog.records)
+        assert any(
+            "Extracting text from PDF" in record.message
+            for record in caplog.records
+        )

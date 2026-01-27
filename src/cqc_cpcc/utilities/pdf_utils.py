@@ -6,8 +6,8 @@ This module provides robust PDF text extraction using multiple libraries
 to ensure clean text is extracted and sent to OpenAI API.
 """
 
-from typing import Optional
 import os
+
 from cqc_cpcc.utilities.logger import logger
 
 
@@ -28,7 +28,10 @@ def extract_text_from_pdf(file_path: str, method: str = "auto") -> str:
         raise FileNotFoundError(f"PDF file not found: {file_path}")
     
     file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
-    logger.info(f"Extracting text from PDF: {os.path.basename(file_path)} ({file_size:.2f} MB)")
+    logger.info(
+        f"Extracting text from PDF: {os.path.basename(file_path)} "
+        f"({file_size:.2f} MB)"
+    )
     
     # Try extraction methods in order
     if method == "auto":
@@ -50,10 +53,16 @@ def extract_text_from_pdf(file_path: str, method: str = "auto") -> str:
             if text and len(text.strip()) > 0:
                 # Check for binary data
                 if _contains_binary_data(text):
-                    logger.warning(f"Binary data detected with {extraction_method}, trying next method")
+                    logger.warning(
+                        f"Binary data detected with {extraction_method}, "
+                        "trying next method"
+                    )
                     continue
                 
-                logger.info(f"Successfully extracted {len(text)} characters using {extraction_method}")
+                logger.info(
+                    f"Successfully extracted {len(text)} characters "
+                    f"using {extraction_method}"
+                )
                 return text
             else:
                 logger.warning(f"No text extracted using {extraction_method}")
