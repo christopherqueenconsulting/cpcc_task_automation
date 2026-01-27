@@ -571,10 +571,7 @@ def _build_preprocessing_prompt(
     Returns:
         Preprocessing prompt
     """
-    prompt = f"""You are a teaching assistant creating a grading digest for an instructor.
-
-TASK:
-Analyze the full student submission below and create a COMPREHENSIVE grading digest that preserves ALL information needed for accurate grading. This digest will replace the raw code in the grading request.
+    prompt = f"""Create a grading digest from student code submission. Preserve all information needed for accurate grading.
 
 ASSIGNMENT INSTRUCTIONS:
 {assignment_instructions}
@@ -584,22 +581,27 @@ ASSIGNMENT INSTRUCTIONS:
 STUDENT SUBMISSION (FULL CODE):
 {student_code}
 
-CREATE GRADING DIGEST:
-For each file in the submission, provide:
-1. File purpose and overall structure
-2. Key functions/classes/methods with signatures
-3. Notable logic patterns (loops, conditionals, algorithms)
-4. Input/output behavior
-5. Any detected issues or concerns (with file+line references where possible)
+---
 
-REQUIREMENTS:
-- Preserve enough detail for accurate grading without re-seeing raw code
-- Include specific file and line references for any issues
-- Capture algorithm logic, not just existence of functions
+CREATE GRADING DIGEST:
+For each file, extract:
+1. File purpose and structure
+2. Key functions/classes/methods with signatures
+3. Logic patterns (loops, conditionals, algorithms)
+4. Input/output behavior
+5. Issues or concerns with file+line references
+
+TASK: Create digest exactly and only as specified. Do not add interpretation.
+
+OUTPUT REQUIREMENTS:
+- Preserve detail sufficient for grading without raw code
+- Include specific file:line references for issues
+- Capture algorithm logic, not just function existence
 - Note missing required components
 - Keep digest compact but comprehensive
 
-Return ONLY valid JSON with this structure (no markdown):
+OUTPUT FORMAT:
+Return valid JSON only (no markdown):
 {{
   "files": [
     {{
@@ -630,6 +632,17 @@ Return ONLY valid JSON with this structure (no markdown):
     "missing_components": ["string"]
   }}
 }}
+
+SCOPE DISCIPLINE:
+- Extract exactly what is present in code
+- Do not invent components not in submission
+- Base assessment solely on assignment instructions and code
+- If component purpose unclear, state "unclear" in field rather than fabricate
+
+AMBIGUITY HANDLING:
+- If file purpose ambiguous, state observation without speculation
+- If behavior cannot be determined statically, describe code structure and note limitation
+- Set arrays to empty [] if no items detected
 """
     return prompt
 
