@@ -146,6 +146,22 @@ def test_is_checkdate_before_date_handles_datetime_objects():
     assert is_checkdate_before_date(dt1, dt2) is True
 
 
+@pytest.mark.unit
+def test_is_checkdate_before_date_handles_mixed_timezone_awareness():
+    """Ensure timezone-aware vs. naive datetimes compare without errors."""
+    aware_dt = DT.datetime(2024, 1, 10, 12, 0, tzinfo=DT.timezone.utc)
+    naive_dt = DT.datetime(2024, 1, 11, 0, 0)
+    assert is_checkdate_before_date(aware_dt, naive_dt) is True
+
+
+@pytest.mark.unit
+def test_is_checkdate_before_date_same_day_with_timezone_mismatch():
+    """Verify same-day comparisons remain non-strict even with tz mismatches."""
+    aware_dt = DT.datetime(2024, 1, 10, 12, 0, tzinfo=DT.timezone.utc)
+    date_only = DT.date(2024, 1, 10)
+    assert is_checkdate_before_date(aware_dt, date_only) is False
+
+
 # ===== is_checkdate_after_date Tests =====
 
 @pytest.mark.unit
@@ -164,6 +180,14 @@ def test_is_checkdate_after_date_returns_false_when_before(sample_dates):
 def test_is_checkdate_after_date_returns_false_when_equal(sample_dates):
     """Test is_checkdate_after_date returns False when dates are equal."""
     assert is_checkdate_after_date(sample_dates['middle'], sample_dates['middle']) is False
+
+
+@pytest.mark.unit
+def test_is_checkdate_after_date_handles_mixed_timezone_awareness():
+    """Ensure timezone-aware vs. naive datetimes compare without errors."""
+    naive_dt = DT.datetime(2024, 1, 10, 0, 0)
+    aware_dt = DT.datetime(2024, 1, 9, 23, 0, tzinfo=DT.timezone.utc)
+    assert is_checkdate_after_date(naive_dt, aware_dt) is True
 
 
 # ===== is_date_in_range Tests =====
@@ -210,6 +234,15 @@ def test_is_date_in_range_inclusive_boundaries(sample_dates):
     assert is_date_in_range(sample_dates['early'], sample_dates['early'], sample_dates['late']) is True
     # End boundary
     assert is_date_in_range(sample_dates['early'], sample_dates['late'], sample_dates['late']) is True
+
+
+@pytest.mark.unit
+def test_is_date_in_range_handles_mixed_timezone_awareness():
+    """Timezone-aware start/end should compare cleanly with naive check_date."""
+    start_date = DT.datetime(2024, 1, 10, 5, 0, tzinfo=DT.timezone.utc)
+    check_date = DT.datetime(2024, 1, 10, 1, 0)
+    end_date = DT.datetime(2024, 1, 12, 0, 0, tzinfo=DT.timezone.utc)
+    assert is_date_in_range(start_date, check_date, end_date) is True
 
 
 # ===== filter_dates_in_range Tests =====
