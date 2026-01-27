@@ -65,9 +65,9 @@ def build_rubric_grading_prompt(
     """
     prompt_parts = []
     
-    # Header
-    prompt_parts.append("# Grading Task")
-    prompt_parts.append("You are grading a student submission using a structured rubric.")
+    # Header - GPT-5.2: concise, direct role definition
+    prompt_parts.append("# Rubric-Based Grading Task")
+    prompt_parts.append("Grade a student submission using the provided rubric. Return structured JSON assessment.")
     prompt_parts.append("")
     
     # Assignment instructions
@@ -128,10 +128,8 @@ def build_rubric_grading_prompt(
                 enabled_errors.append(e)
         
         if enabled_errors:
-            prompt_parts.append("### Error Definitions to Check")
-            prompt_parts.append("Detect the following errors in the student submission and provide:")
-            prompt_parts.append("1. A list of detected_errors with error code, severity, and occurrence count")
-            prompt_parts.append("2. Aggregated counts by severity in error_counts_by_severity")
+            prompt_parts.append("### Error Definitions")
+            prompt_parts.append("Detect errors from the following list. For each detected error, report code, severity, and occurrence count.")
             prompt_parts.append("")
             
             # Group by severity - handle both severity_category and severity fields
@@ -177,41 +175,43 @@ def build_rubric_grading_prompt(
     prompt_parts.append("```")
     prompt_parts.append("")
     
-    # Grading instructions
+    # Grading instructions - GPT-5.2 methodology
     prompt_parts.append("## Grading Instructions")
-    prompt_parts.append("1. Evaluate the student submission against each criterion in the rubric")
-    prompt_parts.append("2. For criteria with scoring_mode='manual':")
-    prompt_parts.append("   - Assign points earned for each criterion (0 to max_points)")
-    prompt_parts.append("   - Select the most appropriate performance level label if levels are defined")
-    prompt_parts.append("3. For criteria with scoring_mode='level_band':")
-    prompt_parts.append("   - SELECT the most appropriate performance level label from the defined levels")
-    prompt_parts.append("   - DO NOT assign points (backend will compute from level range)")
-    prompt_parts.append("   - Set points_earned to 0 as a placeholder")
-    prompt_parts.append("   - Provide feedback explaining why this level was selected")
-    prompt_parts.append("4. For criteria with scoring_mode='error_count':")
-    prompt_parts.append("   - DO NOT assign points (backend will compute based on error counts)")
-    prompt_parts.append("   - Set points_earned to 0 as a placeholder")
-    prompt_parts.append("   - Still provide feedback describing detected errors")
-    prompt_parts.append("5. Provide specific, actionable feedback for each criterion")
-    prompt_parts.append("6. Include evidence from the submission to support your assessment")
-    prompt_parts.append("7. DO NOT calculate total points - backend will compute from individual criteria")
-    prompt_parts.append("8. Set total_points_earned to 0 as placeholder (backend will recalculate)")
-    prompt_parts.append("9. Provide overall summary feedback")
+    prompt_parts.append("Grade exactly and only as specified. Do not add features or interpretation beyond what is requested.")
+    prompt_parts.append("")
+    prompt_parts.append("### Evaluation Process")
+    prompt_parts.append("For each enabled criterion:")
+    prompt_parts.append("- scoring_mode='manual': Assign points (0 to max_points). Select performance level label if levels exist.")
+    prompt_parts.append("- scoring_mode='level_band': Select performance level label. Set points_earned=0 (backend computes). Explain level selection in feedback.")
+    prompt_parts.append("- scoring_mode='error_count': Set points_earned=0 (backend computes from error counts). Describe detected errors in feedback.")
+    prompt_parts.append("")
+    prompt_parts.append("For all criteria:")
+    prompt_parts.append("- Evaluate submission against criterion")
+    prompt_parts.append("- Provide specific, actionable feedback with evidence from submission")
+    prompt_parts.append("- Base assessment solely on assignment instructions and rubric criteria")
+    prompt_parts.append("")
     
     if error_definitions:
-        prompt_parts.append("10. Check for defined errors and include them in detected_errors field")
-        prompt_parts.append("   - For each detected error, set 'code' to the error_id (e.g., 'CSC_151_EXAM_1_SYNTAX_ERROR')")
-        prompt_parts.append("   - Set 'severity' to the severity_category (e.g., 'major', 'minor')")
-        prompt_parts.append("   - Set 'occurrences' to the count of times this error appears")
-        prompt_parts.append("11. Populate error_counts_by_severity with aggregated counts (e.g., {'major': 2, 'minor': 5})")
-        prompt_parts.append("12. Optionally populate error_counts_by_id with per-error counts")
+        prompt_parts.append("### Error Detection")
+        prompt_parts.append("Check submission for errors from provided definitions:")
+        prompt_parts.append("- For each detected error: set 'code' to error_id, 'severity' to severity_category, 'occurrences' to count")
+        prompt_parts.append("- Populate error_counts_by_severity with aggregated counts (e.g., {'major': 2, 'minor': 5})")
+        prompt_parts.append("- Optionally populate error_counts_by_id with per-error counts")
+        prompt_parts.append("")
     
+    prompt_parts.append("### Output Requirements")
+    prompt_parts.append("Return structured JSON matching RubricAssessmentResult schema.")
+    prompt_parts.append("- Set total_points_earned=0 (backend recalculates from criteria)")
+    prompt_parts.append("- Include overall_feedback summarizing assessment")
+    prompt_parts.append("- Be objective, fair, and constructive")
     prompt_parts.append("")
-    prompt_parts.append("Return your assessment as structured JSON matching the RubricAssessmentResult schema.")
-    prompt_parts.append("Be objective, fair, and constructive in your feedback.")
+    prompt_parts.append("### Scope Discipline")
+    prompt_parts.append("- Backend computes all point totals and percentages. Your role: identify performance levels, detect errors, provide feedback.")
+    prompt_parts.append("- Do not invent requirements not in assignment instructions")
+    prompt_parts.append("- If information is missing or unclear, state assumptions in feedback or set field to null where schema allows")
     prompt_parts.append("")
-    prompt_parts.append("IMPORTANT: The backend will compute all point totals and percentages deterministically.")
-    prompt_parts.append("Your role is to identify performance levels, detect errors, and provide feedback.")
+    prompt_parts.append("### Output Format")
+    prompt_parts.append("JSON only. No markdown, no commentary, no extra fields. Schema enforced by API.")
     
     return "\n".join(prompt_parts)
 
