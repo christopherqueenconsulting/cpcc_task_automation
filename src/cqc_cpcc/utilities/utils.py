@@ -342,6 +342,7 @@ def convert_xlsx_to_markdown(file_path: str) -> str:
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format.
     
+    For PDF files (.pdf): Extracts text using PyMuPDF/PyPDF to avoid binary data
     For audio files (.mp3, .wav, .m4a, .ogg): Transcribes using OpenAI Whisper
     For video files (.mp4, .avi, .mov, .webm): Returns metadata and grading instructions
     For HTML files: Extracts text content (removes scripts/styles)
@@ -350,7 +351,11 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     file_name, file_extension = os.path.splitext(file_path)
     file_extension = file_extension.lower()
 
-    if convert_to_markdown:
+    # If file is PDF, extract text using specialized PDF library
+    if file_extension == '.pdf':
+        from cqc_cpcc.utilities.pdf_utils import extract_text_from_pdf
+        contents = extract_text_from_pdf(file_path)
+    elif convert_to_markdown:
         with open(file_path, mode='rb') as f:
             # results = mammoth.convert_to_markdown(f)
             results = mammoth.convert_to_html(f)
