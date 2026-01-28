@@ -27,11 +27,18 @@ from cqc_cpcc.rubric_models import RubricAssessmentResult
 
 
 # Check if we should skip these tests
+# Skip if:
+# - No API key is set
+# - API key is a test/placeholder value
+# - SKIP_OPENAI_INTEGRATION_TESTS is explicitly set to "1"
+api_key = os.environ.get("OPENAI_API_KEY", "")
 SKIP_OPENAI_TESTS = (
-    not os.environ.get("OPENAI_API_KEY") 
+    not api_key
+    or api_key.startswith("test-")
+    or api_key == "sk-test"
     or os.environ.get("SKIP_OPENAI_INTEGRATION_TESTS") == "1"
 )
-SKIP_REASON = "OPENAI_API_KEY not set or SKIP_OPENAI_INTEGRATION_TESTS=1"
+SKIP_REASON = "OPENAI_API_KEY not set, is a test key, or SKIP_OPENAI_INTEGRATION_TESTS=1"
 
 
 # Test models for structured output validation
