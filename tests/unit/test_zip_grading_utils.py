@@ -71,12 +71,35 @@ class TestFileFiltering:
         assert should_ignore_file("image.jpg") is True
         assert should_ignore_file("video.mp4") is True
     
+    def test_should_ignore_index_html(self):
+        """Test that index.html files are ignored (BrightSpace exports)."""
+        assert should_ignore_file("index.html") is True
+        assert should_ignore_file("wrapper/index.html") is True
+        assert should_ignore_file("Programming Exam 1/index.html") is True
+    
+    def test_should_ignore_index_htm(self):
+        """Test that index.htm files are ignored (alternative format)."""
+        assert should_ignore_file("index.htm") is True
+        assert should_ignore_file("wrapper/index.htm") is True
+    
+    def test_should_ignore_index_html_case_insensitive(self):
+        """Test that index.html filtering is case-insensitive."""
+        assert should_ignore_file("INDEX.HTML") is True
+        assert should_ignore_file("Index.Html") is True
+        assert should_ignore_file("INDEX.HTM") is True
+    
     def test_should_not_ignore_source_files(self):
         """Test that source files are not ignored."""
         assert should_ignore_file("Main.java") is False
         assert should_ignore_file("script.py") is False
         assert should_ignore_file("program.cpp") is False
         assert should_ignore_file("README.txt") is False
+    
+    def test_should_not_ignore_student_html_files(self):
+        """Test that student HTML files (not index.html) are not ignored."""
+        assert should_ignore_file("student1/assignment.html") is False
+        assert should_ignore_file("report.html") is False
+        assert should_ignore_file("page.htm") is False
 
 
 @pytest.mark.unit

@@ -523,6 +523,8 @@ def dict_to_markdown_table(data, headers):
 
 def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict:
     unacceptable_file_prefixes = ['._']
+    # BrightSpace export files that should never be graded
+    unacceptable_file_names = {'index.html', 'index.htm'}
     students_data = {}
 
     if file_path.endswith('.zip'):
@@ -541,8 +543,10 @@ def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict
                     student_name = directory_name.split(folder_name_delimiter)[1]
 
                     # Check if the file has an accepted file type
-                    if file_name.endswith(tuple(accepted_file_types)) and not file_name.startswith(
-                            tuple(unacceptable_file_prefixes)):
+                    # Skip BrightSpace export files (case-insensitive)
+                    if (file_name.endswith(tuple(accepted_file_types)) 
+                        and not file_name.startswith(tuple(unacceptable_file_prefixes))
+                        and file_name.lower() not in unacceptable_file_names):
                         # Read the file contents
                         with zip_ref.open(file_info.filename) as file:
                             # TODO: Change to modules on read file method
