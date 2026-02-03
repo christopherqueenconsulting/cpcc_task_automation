@@ -2239,7 +2239,12 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
     st.markdown("#### Criterion Breakdown")
     
     for criterion_result in result.criteria_results:
-        with st.expander(f"**{criterion_result.criterion_name}** - {criterion_result.points_earned}/{criterion_result.points_possible} pts", expanded=False):
+        # Build expander title with level label if available
+        title = f"**{criterion_result.criterion_name}** - {criterion_result.points_earned}/{criterion_result.points_possible} pts"
+        if criterion_result.selected_level_label:
+            title += f" (Level: {criterion_result.selected_level_label})"
+        
+        with st.expander(title, expanded=False):
             if criterion_result.selected_level_label:
                 st.markdown(f"**Level:** {criterion_result.selected_level_label}")
             
