@@ -166,9 +166,18 @@ class TestBrightSpaceZIPFormat:
         
         with zipfile.ZipFile(zip_path, 'w') as zf:
             # BrightSpace format with wrapper and index.html
-            zf.writestr("Programming Exam/index.html", "<html>BrightSpace Index</html>")
-            zf.writestr("Programming Exam/12345 - Student One/assignment.html", "<html>Student work</html>")
-            zf.writestr("Programming Exam/12346 - Student Two/Main.java", "public class Main {}")
+            zf.writestr(
+                "Programming Exam/index.html",
+                "<html>BrightSpace Index</html>"
+            )
+            zf.writestr(
+                "Programming Exam/12345 - Student One/assignment.html",
+                "<html>Student work</html>"
+            )
+            zf.writestr(
+                "Programming Exam/12346 - Student Two/Main.java",
+                "public class Main {}"
+            )
         
         # Accept html files
         accepted_types = ["html", "java"]
