@@ -7,12 +7,12 @@ import zipfile
 import pytest
 
 from cqc_cpcc.utilities.zip_grading_utils import (
-    estimate_tokens,
-    should_ignore_file,
-    get_file_priority,
-    extract_student_submissions_from_zip,
-    build_submission_text_with_token_limit,
     CHARS_PER_TOKEN,
+    build_submission_text_with_token_limit,
+    estimate_tokens,
+    extract_student_submissions_from_zip,
+    get_file_priority,
+    should_ignore_file,
 )
 
 
