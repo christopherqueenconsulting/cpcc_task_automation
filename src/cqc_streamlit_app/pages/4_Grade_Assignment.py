@@ -2245,9 +2245,6 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
             title += f" (Level: {criterion_result.selected_level_label})"
         
         with st.expander(title, expanded=False):
-            if criterion_result.selected_level_label:
-                st.markdown(f"**Level:** {criterion_result.selected_level_label}")
-            
             st.markdown("**Feedback:**")
             st.markdown(criterion_result.feedback)
             
