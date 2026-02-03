@@ -61,6 +61,12 @@ IGNORE_FILE_PREFIXES = {
     'Thumbs.db',
 }
 
+# BrightSpace export files that should never be graded
+IGNORE_FILE_NAMES = {
+    'index.html',  # BrightSpace export index
+    'index.htm',   # Alternative BrightSpace export index
+}
+
 # File extensions by priority (higher priority = more relevant for grading)
 FILE_PRIORITY = {
     # Highest priority: source code
@@ -158,8 +164,15 @@ def should_ignore_file(filepath: str) -> bool:
         if part in IGNORE_DIRECTORIES:
             return True
     
-    # Check filename prefixes
+    # Check filename (case-insensitive for exact match)
     filename = path.name
+    filename_lower = filename.lower()
+    
+    # Check exact filenames (e.g., index.html from BrightSpace exports)
+    if filename_lower in IGNORE_FILE_NAMES:
+        return True
+    
+    # Check filename prefixes
     for prefix in IGNORE_FILE_PREFIXES:
         if filename.startswith(prefix):
             return True

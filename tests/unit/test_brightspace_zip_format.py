@@ -159,3 +159,77 @@ class TestBrightSpaceZIPFormat:
         
         assert len(students) == 1
         assert len(students["Student1"].files) == 3
+    
+    def test_index_html_filtered_even_when_html_accepted(self, tmp_path):
+        """Test that index.html is filtered even when html files are accepted."""
+        zip_path = tmp_path / "test_index_html.zip"
+        
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            # BrightSpace format with wrapper and index.html
+            zf.writestr("Programming Exam/index.html", "<html>BrightSpace Index</html>")
+            zf.writestr("Programming Exam/12345 - Student One/assignment.html", "<html>Student work</html>")
+            zf.writestr("Programming Exam/12346 - Student Two/Main.java", "public class Main {}")
+        
+        # Accept html files
+        accepted_types = ["html", "java"]
+        
+        students = extract_student_submissions_from_zip(
+            str(zip_path),
+            accepted_types
+        )
+        
+        # Should have 2 students
+        assert len(students) == 2
+        assert "Student One" in students
+        assert "Student Two" in students
+        
+        # Student One should have assignment.html (not index.html)
+        assert "assignment.html" in students["Student One"].files
+        assert "index.html" not in students["Student One"].files
+        
+        # Verify index.html wasn't treated as a separate student
+        assert "index" not in students
+        assert "html" not in students
+    
+    def test_index_htm_also_filtered(self, tmp_path):
+        """Test that index.htm (alternative format) is also filtered."""
+        zip_path = tmp_path / "test_index_htm.zip"
+        
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            zf.writestr("Exam/index.htm", "<html>Index</html>")
+            zf.writestr("Exam/12345 - Student/page.htm", "<html>Page</html>")
+        
+        accepted_types = ["htm", "html"]
+        
+        students = extract_student_submissions_from_zip(
+            str(zip_path),
+            accepted_types
+        )
+        
+        # Should have 1 student with page.htm only
+        assert len(students) == 1
+        assert "Student" in students
+        assert "page.htm" in students["Student"].files
+        assert "index.htm" not in students["Student"].files
+    
+    def test_index_html_case_insensitive(self, tmp_path):
+        """Test that index.html filtering is case-insensitive."""
+        zip_path = tmp_path / "test_case_insensitive.zip"
+        
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            zf.writestr("Exam/INDEX.HTML", "<html>Index</html>")
+            zf.writestr("Exam/Index.Html", "<html>Index</html>")
+            zf.writestr("Exam/12345 - Student/Page.HTML", "<html>Page</html>")
+        
+        accepted_types = ["html"]
+        
+        students = extract_student_submissions_from_zip(
+            str(zip_path),
+            accepted_types
+        )
+        
+        # Should have 1 student
+        assert len(students) == 1
+        assert "Student" in students
+        # Should only have the actual student file
+        assert "Page.HTML" in students["Student"].files
