@@ -69,12 +69,15 @@ Follow the interactive prompts to select an action.
 Configure these settings in `.streamlit/secrets.toml` (for local development) or environment variables (for deployment):
 
 ```toml
-OPENAI_API_KEY = "sk-..."              # OpenAI API key for AI features
+OPENAI_API_KEY = "sk-..."              # OpenAI API key for AI features (legacy)
+OPENROUTER_API_KEY = "sk-..."          # OpenRouter API key for AI routing (recommended)
 INSTRUCTOR_USERID = "your_username"     # MyColleges/BrightSpace username
 INSTRUCTOR_PASS = "your_password"       # MyColleges/BrightSpace password
 FEEDBACK_SIGNATURE = "Professor Name"   # Your signature for feedback documents
 ATTENDANCE_TRACKER_URL = "https://..."  # Google Sheets URL for attendance tracking
 ```
+
+**Note:** The application now uses OpenRouter.ai for AI routing by default, which provides automatic model selection and access to multiple AI providers. You can still use OpenAI directly if preferred.
 
 ### Optional Settings
 
