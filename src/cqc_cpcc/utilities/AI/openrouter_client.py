@@ -48,7 +48,7 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAITransportError,
 )
 from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
-from cqc_cpcc.utilities.env_constants import OPENROUTER_API_KEY
+from cqc_cpcc.utilities.env_constants import OPENROUTER_API_KEY, OPENROUTER_ALLOWED_MODELS
 from cqc_cpcc.utilities.logger import logger
 
 T = TypeVar("T", bound=BaseModel)
@@ -56,6 +56,66 @@ T = TypeVar("T", bound=BaseModel)
 # OpenRouter API endpoints
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+
+
+def get_openrouter_plugins() -> Optional[list[dict]]:
+    """Parse OPENROUTER_ALLOWED_MODELS environment variable and build plugins parameter.
+    
+    The plugins parameter allows configuring OpenRouter's auto-router with a list of
+    allowed models. This is useful for restricting the auto-router to specific model
+    providers or families.
+    
+    Environment Variable Format:
+        OPENROUTER_ALLOWED_MODELS - Comma-separated list of model patterns
+        Supports wildcards (*) for pattern matching
+        Example: "google/gemini-*,meta-llama/llama-3*-instruct,mistralai/mistral-large*"
+    
+    Returns:
+        None if OPENROUTER_ALLOWED_MODELS is not set or empty (uses account defaults)
+        List with auto-router plugin configuration if models are specified:
+        [
+            {
+                'id': 'auto-router',
+                'allowed_models': ['model1', 'model2', ...]
+            }
+        ]
+    
+    Example:
+        >>> import os
+        >>> os.environ['OPENROUTER_ALLOWED_MODELS'] = 'google/gemini-*,meta-llama/*'
+        >>> plugins = get_openrouter_plugins()
+        >>> print(plugins)
+        [{'id': 'auto-router', 'allowed_models': ['google/gemini-*', 'meta-llama/*']}]
+        
+        >>> os.environ['OPENROUTER_ALLOWED_MODELS'] = ''
+        >>> plugins = get_openrouter_plugins()
+        >>> print(plugins)
+        None
+    """
+    if not OPENROUTER_ALLOWED_MODELS:
+        return None
+    
+    # Parse comma-separated list and strip whitespace
+    allowed_models = [
+        model.strip() 
+        for model in OPENROUTER_ALLOWED_MODELS.split(',') 
+        if model.strip()
+    ]
+    
+    # Return None if no valid models after parsing
+    if not allowed_models:
+        return None
+    
+    # Build plugins parameter for OpenRouter API
+    plugins = [
+        {
+            'id': 'auto-router',
+            'allowed_models': allowed_models
+        }
+    ]
+    
+    logger.debug(f"OpenRouter plugins configured with {len(allowed_models)} allowed model patterns")
+    return plugins
 
 
 def _get_openrouter_client() -> AsyncOpenAI:
@@ -179,21 +239,36 @@ async def get_openrouter_completion(
     
     client = _get_openrouter_client()
     
+    # Get plugins configuration for auto-router
+    plugins = get_openrouter_plugins()
+    
     logger.info(
         f"Calling OpenRouter with model={effective_model}, "
         f"auto_route={use_auto_route}, schema={schema_model.__name__}"
     )
+    if plugins:
+        logger.info(f"Using auto-router plugins with {len(plugins[0]['allowed_models'])} allowed model patterns")
     
     try:
-        # Call OpenRouter API (OpenAI-compatible)
-        response = await client.chat.completions.create(
-            model=effective_model,
-            messages=[
+        # Build API call parameters
+        api_params = {
+            "model": effective_model,
+            "messages": [
                 {"role": "user", "content": prompt}
             ],
-            response_format=response_format,
-            max_tokens=max_tokens,
-        )
+            "response_format": response_format,
+        }
+        
+        # Add optional parameters
+        if max_tokens:
+            api_params["max_tokens"] = max_tokens
+        
+        # Add plugins for auto-router configuration (if specified)
+        if plugins:
+            api_params["extra_body"] = {"plugins": plugins}
+        
+        # Call OpenRouter API (OpenAI-compatible)
+        response = await client.chat.completions.create(**api_params)
         
         # Extract and validate response
         if not response.choices:
