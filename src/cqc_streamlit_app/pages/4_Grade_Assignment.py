@@ -65,7 +65,7 @@ from cqc_streamlit_app.utils import (
     get_file_extension_from_filepath,
     get_language_from_file_path,
     on_download_click,
-    prefix_content_file_name,
+    prefix_content_file_name, define_openrouter_model,
 )
 
 # Initialize session state variables
