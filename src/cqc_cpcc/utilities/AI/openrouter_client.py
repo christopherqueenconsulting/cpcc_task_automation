@@ -40,8 +40,8 @@ import json
 from typing import Optional, Type, TypeVar
 
 import httpx
-from openrouter import OpenRouter, components
-from pydantic import BaseModel
+from openai import AsyncOpenAI
+from pydantic import BaseModel, ValidationError
 
 from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
@@ -58,68 +58,20 @@ T = TypeVar("T", bound=BaseModel)
 
 # OpenRouter API endpoints
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_APP_NAME = "CPCC Task Automation"
+OPENROUTER_APP_URL = "https://github.com/gitchrisqueen/cpcc_task_automation"
 
 
-def get_openrouter_plugins() -> Optional[list[dict]]:
-    """Parse OPENROUTER_ALLOWED_MODELS environment variable and build plugins parameter.
-    
-    The plugins parameter allows configuring OpenRouter's auto-router with a list of
-    allowed models. This is useful for restricting the auto-router to specific model
-    providers or families.
-    
-    Environment Variable Format:
-        OPENROUTER_ALLOWED_MODELS - Comma-separated list of model patterns
-        Supports wildcards (*) for pattern matching
-        Example: "google/gemini-*,meta-llama/llama-3*-instruct,mistralai/mistral-large*"
-    
+
+def _get_openrouter_client() -> AsyncOpenAI:
+    """Get configured AsyncOpenAI client pointing to OpenRouter API.
+
+    OpenRouter provides an OpenAI-compatible API endpoint at https://openrouter.ai/api/v1
+    We use AsyncOpenAI with this endpoint to access OpenRouter's models.
+
     Returns:
-        None if OPENROUTER_ALLOWED_MODELS is not set or empty (uses account defaults)
-        List with ChatGenerationParamsPluginAutoRouter plugin configuration if models are specified
-    
-    Example:
-        >>> import os
-        >>> os.environ['OPENROUTER_ALLOWED_MODELS'] = 'google/gemini-*,meta-llama/*'
-        >>> plugins = get_openrouter_plugins()
-        >>> print(plugins)
-        [ChatGenerationParamsPluginAutoRouter(id='auto-router', allowed_models=['google/gemini-*', 'meta-llama/*'])]
-        
-        >>> os.environ['OPENROUTER_ALLOWED_MODELS'] = ''
-        >>> plugins = get_openrouter_plugins()
-        >>> print(plugins)
-        None
-    """
-    if not OPENROUTER_ALLOWED_MODELS:
-        return None
-    
-    # Parse comma-separated list and strip whitespace
-    allowed_models = [
-        model.strip() 
-        for model in OPENROUTER_ALLOWED_MODELS.split(',') 
-        if model.strip()
-    ]
-    
-    # Return None if no valid models after parsing
-    if not allowed_models:
-        return None
-    
-    # Build plugins parameter using official SDK components
-    plugins = [
-        components.ChatGenerationParamsPluginAutoRouter(
-            id='auto-router',
-            allowed_models=allowed_models
-        )
-    ]
-    
-    logger.debug(f"OpenRouter plugins configured with {len(allowed_models)} allowed model patterns")
-    return plugins
+        Configured AsyncOpenAI client with OpenRouter base URL
 
-
-def _get_openrouter_client() -> OpenRouter:
-    """Get configured OpenRouter SDK client.
-    
-    Returns:
-        Configured OpenRouter client from the official SDK
-        
     Raises:
         ValueError: If OPENROUTER_API_KEY is not set
     """
@@ -129,8 +81,15 @@ def _get_openrouter_client() -> OpenRouter:
             "Please set it in your .streamlit/secrets.toml or environment."
         )
     
-    return OpenRouter(
+    # Use AsyncOpenAI with OpenRouter's base URL
+    # OpenRouter provides OpenAI-compatible API at https://openrouter.ai/api/v1
+    return AsyncOpenAI(
         api_key=OPENROUTER_API_KEY,
+        base_url="https://openrouter.ai/api/v1",
+        default_headers={
+            "X-Title": OPENROUTER_APP_NAME,
+            "HTTP-Referer": OPENROUTER_APP_URL,
+        },
     )
 
 
@@ -175,6 +134,21 @@ async def fetch_openrouter_models() -> list[dict]:
         raise OpenAITransportError(f"Failed to fetch OpenRouter models: {e}")
 
 
+def _parse_allowed_models() -> list[str] | None:
+    """Parse OPENROUTER_ALLOWED_MODELS into a list of model patterns.
+
+    Returns None when no restriction is configured.
+    """
+    if not OPENROUTER_ALLOWED_MODELS:
+        return None
+    allowed_models = [
+        model.strip()
+        for model in OPENROUTER_ALLOWED_MODELS.split(",")
+        if model.strip()
+    ]
+    return allowed_models or None
+
+
 async def get_openrouter_completion(
     prompt: str,
     schema_model: Type[T],
@@ -182,8 +156,11 @@ async def get_openrouter_completion(
     model_name: Optional[str] = None,
     max_tokens: Optional[int] = None,
 ) -> T:
-    """Get structured completion from OpenRouter using official SDK.
-    
+    """Get structured completion from OpenRouter using OpenAI-compatible API.
+
+    OpenRouter provides an OpenAI-compatible API endpoint, so we use AsyncOpenAI
+    with base_url pointing to https://openrouter.ai/api/v1.
+
     Args:
         prompt: The prompt to send to the model
         schema_model: Pydantic model class for response validation
@@ -212,64 +189,61 @@ async def get_openrouter_completion(
     if not use_auto_route and not model_name:
         raise ValueError("model_name is required when use_auto_route=False")
     
-    # Use auto-routing model ID if enabled - FIXED: "auto/router" not "openrouter/auto"
-    effective_model = "auto/router" if use_auto_route else model_name
-    
+    # Use auto-routing model ID if enabled
+    effective_model = "openrouter/auto" if use_auto_route else model_name
+
     # Generate and normalize schema
     raw_schema = schema_model.model_json_schema()
     normalized_schema = normalize_json_schema_for_openai(raw_schema)
     
-    # Build response format for structured output using SDK components
-    json_schema_config = components.JSONSchemaConfig(
-        name=schema_model.__name__,
-        schema_=normalized_schema,  # Note the underscore - it's aliased to "schema"
-        strict=True,
-    )
-    
-    response_format = components.ResponseFormatJSONSchema(
-        json_schema=json_schema_config,
-        type="json_schema",
-    )
-    
+    # Build response format for OpenAI compatible API
+    json_schema = {
+        "name": schema_model.__name__,
+        "schema": normalized_schema,
+        "strict": True,
+    }
+
     client = _get_openrouter_client()
-    
-    # Get plugins configuration for auto-router
-    plugins = get_openrouter_plugins()
     
     logger.info(
         f"Calling OpenRouter with model={effective_model}, "
         f"auto_route={use_auto_route}, schema={schema_model.__name__}"
     )
-    if plugins:
-        logger.info(f"Using auto-router plugins with {len(plugins[0].allowed_models)} allowed model patterns")
-    
+
     try:
-        # Build message using SDK components
-        message = components.UserMessage(
-            content=prompt,
-            role="user"
-        )
-        
-        # Build API call parameters
-        api_params = {
-            "messages": [message],
+        # Build API call parameters for OpenAI-compatible endpoint
+        api_kwargs = {
             "model": effective_model,
-            "response_format": response_format,
-            "stream": False,  # Non-streaming for structured output
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": json_schema,
+            },
         }
         
         # Add optional parameters
         if max_tokens:
-            api_params["max_tokens"] = max_tokens
-        
-        # Add plugins for auto-router configuration (if specified)
-        if plugins:
-            api_params["plugins"] = plugins
-        
-        # Call OpenRouter API using official SDK (async context manager)
-        async with client:
-            response = await client.chat.send_async(**api_params)
-        
+            api_kwargs["max_completion_tokens"] = max_tokens
+
+        # Constrain auto-router if OPENROUTER_ALLOWED_MODELS is configured
+        if use_auto_route:
+            allowed_models = _parse_allowed_models()
+            if allowed_models:
+                logger.info(
+                    "Applying OPENROUTER_ALLOWED_MODELS constraints: "
+                    f"{', '.join(allowed_models)}"
+                )
+                api_kwargs["extra_body"] = {
+                    "plugins": [
+                        {
+                            "id": "auto-router",
+                            "allowed_models": allowed_models,
+                        }
+                    ]
+                }
+        # Call OpenRouter API using OpenAI-compatible client
+        response = await client.chat.completions.create(**api_kwargs)
+
         # Extract and validate response
         if not response.choices:
             raise OpenAITransportError("No choices in OpenRouter response")
@@ -299,15 +273,15 @@ async def get_openrouter_completion(
         # Validate against Pydantic schema
         try:
             result = schema_model(**parsed_data)
-        except Exception as e:
+        except ValidationError as e:
             raise OpenAISchemaValidationError(
                 f"Response doesn't match schema {schema_model.__name__}: {e}",
-                validation_errors=[str(e)]
+                validation_errors=[str(x) for x in e.errors()]
             )
         
         logger.info(
             f"OpenRouter completion successful with {effective_model}, "
-            f"used_model={getattr(response, 'model', 'unknown')}"
+            f"used_model={response.model}"
         )
         
         return result

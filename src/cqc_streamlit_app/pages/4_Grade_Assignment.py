@@ -241,7 +241,7 @@ def get_flowgorithm_content():
         total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
 
         model_cfg = define_chatGPTModel("flowgorithm_assignment", default_temp_value=.5)
-        selected_model = model_cfg.get("model", "gpt-5")
+        selected_model = model_cfg.get("model", "openrouter/auto")
         selected_temperature = float(model_cfg.get("temperature", .5))
         selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
@@ -952,7 +952,7 @@ async def get_grade_exam_content():
     model_cfg = define_openrouter_model("grade_exam_assigment", default_use_auto_route=True)
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
-    selected_model = model_cfg.get("model", "auto/router")
+    selected_model = model_cfg.get("model", "openrouter/auto")
 
     st.header("Student Submission File(s)")
     # Added support for HTML, audio, and video files
@@ -1740,8 +1740,8 @@ async def process_error_only_grading_batch(
         all_results.append((student_id, result_summary))
         doc_files.append(doc_file)
     
-    st.session_state.error_only_results_by_key[run_key] = all_results
-    
+    st.session_state.error_only_results_by_key = all_results
+
     success_count = len(all_results)
     failure_count = total_students - success_count
     
@@ -1988,8 +1988,8 @@ async def get_rubric_based_exam_grading():
     model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=True)
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
-    selected_model = model_cfg.get("model", "auto/router")
-    
+    selected_model = model_cfg.get("model", "openrouter/auto")
+
     # Step 8: Student Submissions
     st.header("Student Submission File(s)")
     student_submission_accepted_file_types = [
@@ -2376,7 +2376,6 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             display_rubric_assessment_result(result, student_id)
     
     # Generate Word docs and ZIP download (uses cached ZIP if available)
-    # No rubric needed - all data comes from cached RubricAssessmentResult objects
     st.markdown("---")
     
     _generate_feedback_docs_and_zip(
@@ -2496,7 +2495,6 @@ def _generate_feedback_docs_and_zip(
         except Exception as e:
             logger.error(f"Error generating feedback documents: {e}", exc_info=True)
             st.error(f"❌ Error generating documents: {str(e)}")
-
 
 
 

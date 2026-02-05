@@ -6,6 +6,7 @@ from random import randint
 from typing import TypeVar, cast, Union, Any, Tuple
 
 import streamlit as st
+from cqc_cpcc.utilities.logger import logger
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_openai import ChatOpenAI
@@ -1020,13 +1021,38 @@ def define_chatGPTModel(unique_key: str | int,
     }
 
 
+@st.cache_data(ttl=3600)
+def _fetch_openrouter_models_cached() -> list:
+    """
+    Fetch OpenRouter models with Streamlit caching.
+    Uses @st.cache_data to cache results for 1 hour.
+
+    This helper runs outside of Streamlit's event loop context,
+    allowing asyncio.run() to work properly.
+
+    Returns:
+        List of model dictionaries from OpenRouter API
+    """
+    try:
+        import asyncio
+        from cqc_cpcc.utilities.AI.openrouter_client import fetch_openrouter_models
+
+        # st.cache_data runs in a context where asyncio.run() is safe
+        models = asyncio.run(fetch_openrouter_models())
+        logger.info(f"Fetched {len(models)} models from OpenRouter")
+        return models
+    except Exception as e:
+        logger.error(f"Failed to fetch OpenRouter models: {e}", exc_info=True)
+        return []
+
+
 def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool = True) -> Dict[str, Any]:
     """
     Presents OpenRouter model configuration with auto-routing option.
     Returns JSON-serializable dict:
       {
         "use_auto_route": bool,
-        "model": str,  # "auto/router" or specific model ID
+        "model": str,  # "openrouter/auto" or specific model ID
         "use_openrouter": True,
       }
     
@@ -1047,72 +1073,59 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
         help="Let OpenRouter automatically select the best model for your request"
     )
     
-    selected_model = "auto/router"
-    
+    selected_model = "openrouter/auto"
+
     if not use_auto_route:
         # Fetch available models from OpenRouter
-        # Cache this in session state to avoid repeated API calls
-        cache_key = "openrouter_models_cache"
-        if cache_key not in st.session_state:
-            with st.spinner("Fetching available models from OpenRouter..."):
-                try:
-                    import asyncio
-                    from cqc_cpcc.utilities.AI.openrouter_client import fetch_openrouter_models
-                    
-                    # Run async function in sync context
-                    models = asyncio.run(fetch_openrouter_models())
-                    st.session_state[cache_key] = models
-                except Exception as e:
-                    st.error(f"Failed to fetch OpenRouter models: {e}")
-                    st.session_state[cache_key] = []
-        
-        models = st.session_state.get(cache_key, [])
-        
-        if models:
-            # Create model options from fetched models
-            # Format: "model_id - Model Name"
-            model_options = []
-            model_id_map = {}
-            
-            for model in models:
-                model_id = model.get("id", "")
-                model_name = model.get("name", model_id)
-                display_name = f"{model_id} - {model_name}"
-                model_options.append(display_name)
-                model_id_map[display_name] = model_id
-            
-            # Sort alphabetically
-            model_options.sort()
-            
-            selected_display = st.selectbox(
-                label="Select OpenRouter Model",
-                key=f"openrouter_model_{uk}",
-                options=model_options,
-                help="Choose a specific model from OpenRouter's available models"
-            )
-            
-            selected_model = model_id_map.get(selected_display, "auto/router")
-            
-            # Display model information if available
-            selected_model_info = next(
-                (m for m in models if m.get("id") == selected_model),
-                None
-            )
-            if selected_model_info:
-                context_length = selected_model_info.get("context_length", "N/A")
-                pricing = selected_model_info.get("pricing", {})
-                prompt_price = pricing.get("prompt", "N/A")
-                completion_price = pricing.get("completion", "N/A")
-                
-                st.info(
-                    f"**Model:** {selected_model}  \n"
-                    f"**Context Length:** {context_length:,} tokens  \n"
-                    f"**Pricing:** Prompt: ${prompt_price} / token, Completion: ${completion_price} / token"
+        # Using cached helper to avoid asyncio.run() in running event loop
+        with st.spinner("Fetching available models from OpenRouter..."):
+            models = _fetch_openrouter_models_cached()
+
+            if not models:
+                st.warning("No models available from OpenRouter. Check your API key and try again later.")
+                selected_model = "openrouter/auto"
+                use_auto_route = True
+            else:
+                # Create model options from fetched models
+                # Format: "model_id - Model Name"
+                model_options = []
+                model_id_map = {}
+
+                for model in models:
+                    model_id = model.get("id", "")
+                    model_name = model.get("name", model_id)
+                    display_name = f"{model_id} - {model_name}"
+                    model_options.append(display_name)
+                    model_id_map[display_name] = model_id
+
+                # Sort alphabetically
+                model_options.sort()
+
+                selected_display = st.selectbox(
+                    label="Select OpenRouter Model",
+                    key=f"openrouter_model_{uk}",
+                    options=model_options,
+                    help="Choose a specific model from OpenRouter's available models"
                 )
-        else:
-            st.warning("No models available. Using auto-routing as fallback.")
-            selected_model = "auto/router"
-            use_auto_route = True
+
+                selected_model = model_id_map.get(selected_display, "openrouter/auto")
+
+                # Display model information if available
+                selected_model_info = next(
+                    (m for m in models if m.get("id") == selected_model),
+                    None
+                )
+                if selected_model_info:
+                    context_length = selected_model_info.get("context_length", "N/A")
+                    pricing = selected_model_info.get("pricing", {})
+                    prompt_price = pricing.get("prompt", "N/A")
+                    completion_price = pricing.get("completion", "N/A")
+
+                    st.info(
+                        f"**Model:** {selected_model}  \n"
+                        f"**Context Length:** {context_length:,} tokens  \n"
+                        f"**Pricing:** Prompt: ${prompt_price} / token, Completion: ${completion_price} / token"
+                    )
     else:
         st.info("**Auto Router:** OpenRouter will automatically select the best model for your request.")
     

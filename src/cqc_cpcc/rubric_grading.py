@@ -283,17 +283,39 @@ async def grade_with_rubric(
     )
     
     try:
-        # Call OpenAI with structured output validation
-        # Uses 3 retries (4 total attempts) with smart fallback for robustness
-        result = await get_structured_completion(
-            prompt=prompt,
-            model_name=model_name,
-            schema_model=RubricAssessmentResult,
-            temperature=temperature,
-            max_tokens=DEFAULT_MAX_TOKENS,
-            max_retries=3,  # 3 retries = 4 total attempts (initial + 3 fallback)
-        )
-        
+        # Check if using OpenRouter model IDs (openrouter/auto or provider/model-name)
+        is_openrouter_model = model_name.startswith("openrouter/") or "/" in model_name
+
+        if is_openrouter_model:
+            # Route to OpenRouter client for structured output
+            from cqc_cpcc.utilities.AI.openrouter_client import get_openrouter_completion
+
+            logger.info(
+                f"Detected OpenRouter model ID '{model_name}', routing to OpenRouter client"
+            )
+
+            use_auto_route = model_name == "openrouter/auto"
+            explicit_model = None if use_auto_route else model_name
+
+            result = await get_openrouter_completion(
+                prompt=prompt,
+                schema_model=RubricAssessmentResult,
+                use_auto_route=use_auto_route,
+                model_name=explicit_model,
+                max_tokens=DEFAULT_MAX_TOKENS,
+            )
+        else:
+            # Call OpenAI with structured output validation
+            # Uses 3 retries (4 total attempts) with smart fallback for robustness
+            result = await get_structured_completion(
+                prompt=prompt,
+                model_name=model_name,
+                schema_model=RubricAssessmentResult,
+                temperature=temperature,
+                max_tokens=DEFAULT_MAX_TOKENS,
+                max_retries=3,  # 3 retries = 4 total attempts (initial + 3 fallback)
+            )
+
         # Log raw OpenAI response for debugging
         logger.info(
             f"OpenAI raw response: total_points_earned={result.total_points_earned}, "
