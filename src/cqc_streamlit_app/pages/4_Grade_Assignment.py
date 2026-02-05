@@ -947,10 +947,12 @@ async def get_grade_exam_content():
         # Convert DataFrame to list of Minor Error types
         minor_error_type_list = minor_error_types[DESCRIPTION].to_list()
 
-    model_cfg = define_chatGPTModel("grade_exam_assigment", default_temp_value=.3)
-    selected_model = model_cfg.get("model", "gpt-5")
-    selected_temperature = float(model_cfg.get("temperature", .3))
-    selected_service_tier = model_cfg.get("langchain_service_tier", "default")
+    # Model Configuration - Use OpenRouter
+    st.header("Model Configuration")
+    model_cfg = define_openrouter_model("grade_exam_assigment", default_use_auto_route=True)
+    use_openrouter = model_cfg.get("use_openrouter", True)
+    use_auto_route = model_cfg.get("use_auto_route", True)
+    selected_model = model_cfg.get("model", "openrouter/auto")
 
     st.header("Student Submission File(s)")
     # Added support for HTML, audio, and video files
@@ -975,7 +977,9 @@ async def get_grade_exam_content():
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
 
-        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model,service_tier=selected_service_tier)
+        # Note: custom_llm is still needed for legacy LangChain compatibility
+        # but the actual grading will use OpenRouter
+        custom_llm = None  # Not used with OpenRouter
 
         # Start status wheel and display with updates from the coder
 
@@ -989,7 +993,9 @@ async def get_grade_exam_content():
             minor_error_type_list=minor_error_type_list,
             grader_llm=custom_llm,
             model_name=selected_model,
-            temperature=selected_temperature,
+            temperature=0.0,  # Temperature not used with OpenRouter
+            use_openrouter=use_openrouter,
+            openrouter_auto_route=use_auto_route,
         )
 
         tasks = []
@@ -1978,9 +1984,11 @@ async def get_rubric_based_exam_grading():
         deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10, key="error_only_minor_deduction")
     
     # Step 7: Model Configuration
-    model_cfg = define_chatGPTModel("rubric_grade_exam", default_temp_value=0.2)
-    selected_model = model_cfg.get("model", "gpt-5-mini")
-    selected_temperature = float(model_cfg.get("temperature", 0.2))
+    st.header("Model Configuration")
+    model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=True)
+    use_openrouter = model_cfg.get("use_openrouter", True)
+    use_auto_route = model_cfg.get("use_auto_route", True)
+    selected_model = model_cfg.get("model", "openrouter/auto")
     
     # Step 8: Student Submissions
     st.header("Student Submission File(s)")
@@ -2021,7 +2029,7 @@ async def get_rubric_based_exam_grading():
         error_definition_ids=error_definition_ids,
         file_metadata=file_metadata,
         model_name=selected_model,
-        temperature=selected_temperature,
+        temperature=0.0,  # Temperature not used with OpenRouter
         debug_mode=False,
         grading_mode=grading_mode,
     )
@@ -2099,7 +2107,7 @@ async def get_rubric_based_exam_grading():
                     deduction_per_major_error=int(deduction_per_major_error or 0),
                     deduction_per_minor_error=int(deduction_per_minor_error or 0),
                     model_name=selected_model,
-                    temperature=selected_temperature,
+                    temperature=0.0,  # Temperature not used with OpenRouter
                     course_name=f"{selected_course_id}_{selected_assignment_name}",
                     accepted_file_types=student_submission_accepted_file_types,
                     run_key=current_run_key,
@@ -2112,7 +2120,7 @@ async def get_rubric_based_exam_grading():
                     reference_solution=assignment_solution_contents,
                     error_definitions=effective_error_definitions,
                     model_name=selected_model,
-                    temperature=selected_temperature,
+                    temperature=0.0,  # Temperature not used with OpenRouter
                     course_name=f"{selected_course_id}_{selected_assignment_name}",
                     accepted_file_types=student_submission_accepted_file_types,
                     run_key=current_run_key,
