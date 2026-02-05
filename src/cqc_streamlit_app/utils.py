@@ -1026,7 +1026,7 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
     Returns JSON-serializable dict:
       {
         "use_auto_route": bool,
-        "model": str,  # "openrouter/auto" or specific model ID
+        "model": str,  # "auto/router" or specific model ID
         "use_openrouter": True,
       }
     
@@ -1047,7 +1047,7 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
         help="Let OpenRouter automatically select the best model for your request"
     )
     
-    selected_model = "openrouter/auto"
+    selected_model = "auto/router"
     
     if not use_auto_route:
         # Fetch available models from OpenRouter
@@ -1091,7 +1091,7 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
                 help="Choose a specific model from OpenRouter's available models"
             )
             
-            selected_model = model_id_map.get(selected_display, "openrouter/auto")
+            selected_model = model_id_map.get(selected_display, "auto/router")
             
             # Display model information if available
             selected_model_info = next(
@@ -1111,7 +1111,7 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
                 )
         else:
             st.warning("No models available. Using auto-routing as fallback.")
-            selected_model = "openrouter/auto"
+            selected_model = "auto/router"
             use_auto_route = True
     else:
         st.info("**Auto Router:** OpenRouter will automatically select the best model for your request.")

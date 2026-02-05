@@ -21,11 +21,13 @@ Successfully implemented OpenRouter.ai integration to auto-route AI calls instea
 - Added `httpx` dependency to `pyproject.toml`
 
 #### 2. OpenRouter Client (`openrouter_client.py`)
-- Async client for OpenRouter API
+- Uses official OpenRouter Python SDK (v0.1.3+)
+- Async client wrapper for OpenRouter API
 - Compatible with OpenAI structured outputs
-- Auto-routing via `openrouter/auto` model
+- Auto-routing via `auto/router` model ID (SDK standard)
 - Dynamic model fetching from OpenRouter
 - Error handling with custom exceptions
+- Plugin support for allowed model restrictions
 
 #### 3. UI Configuration (`utils.py`)
 - New `define_openrouter_model()` function

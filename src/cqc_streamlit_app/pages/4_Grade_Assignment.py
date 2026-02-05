@@ -952,7 +952,7 @@ async def get_grade_exam_content():
     model_cfg = define_openrouter_model("grade_exam_assigment", default_use_auto_route=True)
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
-    selected_model = model_cfg.get("model", "openrouter/auto")
+    selected_model = model_cfg.get("model", "auto/router")
 
     st.header("Student Submission File(s)")
     # Added support for HTML, audio, and video files
@@ -1988,7 +1988,7 @@ async def get_rubric_based_exam_grading():
     model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=True)
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
-    selected_model = model_cfg.get("model", "openrouter/auto")
+    selected_model = model_cfg.get("model", "auto/router")
     
     # Step 8: Student Submissions
     st.header("Student Submission File(s)")
