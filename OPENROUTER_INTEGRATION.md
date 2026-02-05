@@ -13,16 +13,17 @@ This implementation adds support for OpenRouter.ai to automatically route AI cal
 
 ### 2. OpenRouter Client Module
 - **File**: `src/cqc_cpcc/utilities/AI/openrouter_client.py` (NEW)
-- **Purpose**: Wrapper around OpenRouter API compatible with OpenAI structured outputs
+- **Purpose**: Wrapper around official OpenRouter SDK compatible with OpenAI structured outputs
 - **Key Functions**:
   - `get_openrouter_completion()` - Async function to get structured completions from OpenRouter
   - `fetch_openrouter_models()` - Fetch available models from OpenRouter API
   - `get_openrouter_completion_sync()` - Synchronous wrapper for compatibility
 - **Features**:
-  - Auto-routing support via `openrouter/auto` model
+  - Auto-routing support via `auto/router` model ID (official SDK default)
   - Manual model selection from OpenRouter's catalog
   - Schema normalization for structured outputs
   - Error handling with custom exceptions
+  - Uses official OpenRouter Python SDK (v0.1.3+)
 
 ### 3. UI Configuration Function
 - **File**: `src/cqc_streamlit_app/utils.py`
@@ -69,7 +70,9 @@ This implementation adds support for OpenRouter.ai to automatically route AI cal
 
 ### 8. Dependencies
 - **File**: `pyproject.toml`
-- **Change**: Added `httpx = "^0.28"` for OpenRouter API calls
+- **Change**: 
+  - Added `openrouter = "^0.1.3"` for official OpenRouter SDK
+  - Added `httpx = "^0.28"` for OpenRouter API calls
 
 ### 9. Documentation
 - **File**: `README.md`
@@ -82,13 +85,14 @@ This implementation adds support for OpenRouter.ai to automatically route AI cal
 
 ### Auto-Routing Mode (Recommended)
 1. User enables "Use Auto Router" checkbox (default)
-2. System uses `openrouter/auto` as the model ID
+2. System uses `auto/router` as the model ID (official SDK model name)
 3. OpenRouter automatically selects the best available model for the request
 4. Request is routed to the optimal model based on:
    - Performance requirements
    - Cost optimization
    - Model availability
    - Request complexity
+5. Optional: Set `OPENROUTER_ALLOWED_MODELS` environment variable to restrict which models can be used
 
 ### Manual Model Selection
 1. User disables "Use Auto Router" checkbox
@@ -105,6 +109,8 @@ define_openrouter_model()
 CodeGrader / grade_exam_submission()
     ↓ (if use_openrouter=True)
 get_openrouter_completion()
+    ↓ (uses official OpenRouter SDK)
+OpenRouter.chat.send_async()
     ↓ (API call)
 OpenRouter API
     ↓ (routes to)

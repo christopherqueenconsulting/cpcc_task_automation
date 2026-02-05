@@ -29,6 +29,7 @@ except KeyError:
 DEBUG = isTrue(get_constanct_from_env('DEBUG', default_value='False'))
 OPENAI_API_KEY = get_constanct_from_env('OPENAI_API_KEY')
 OPENROUTER_API_KEY = get_constanct_from_env('OPENROUTER_API_KEY')
+OPENROUTER_ALLOWED_MODELS = get_constanct_from_env('OPENROUTER_ALLOWED_MODELS', default_value='')
 INSTRUCTOR_USERID = get_constanct_from_env('INSTRUCTOR_USERID')
 INSTRUCTOR_PASS = get_constanct_from_env('INSTRUCTOR_PASS')
 INSTRUCTOR_NAME = get_constanct_from_env('INSTRUCTOR_NAME')

@@ -3981,6 +3981,23 @@ files = [
 et-xmlfile = "*"
 
 [[package]]
+name = "openrouter"
+version = "0.1.3"
+description = "Official Python Client SDK for OpenRouter."
+optional = false
+python-versions = ">=3.9.2"
+groups = ["main"]
+files = [
+    {file = "openrouter-0.1.3-py3-none-any.whl", hash = "sha256:536dd9c4fc76c4f84217671f0c1c22e39ac6dedcfa745e0bd672c857bf754e9f"},
+    {file = "openrouter-0.1.3.tar.gz", hash = "sha256:e780740539dd294cf7b596d4b6a81dea7d8b55320c70526c47e77c11a3653222"},
+]
+
+[package.dependencies]
+httpcore = ">=1.0.9"
+httpx = ">=0.28.1"
+pydantic = ">=2.11.2"
+
+[[package]]
 name = "opentelemetry-api"
 version = "1.39.1"
 description = "OpenTelemetry Python API"
@@ -8272,4 +8289,8 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
+<<<<<<< HEAD
 content-hash = "7b12f3dd00524e92785ccfcdd22aa3f6a2aa83cc7a874594ffc9fc055b4e0690"
+=======
+content-hash = "1187eb90fd609764e4df8edb334765bf3949f96cdd289dc100b4563e9cd39437"
+>>>>>>> 63ca22c6b3341eb0185730b490ec9a80694fc06d
