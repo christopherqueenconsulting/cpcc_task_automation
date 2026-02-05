@@ -7,6 +7,9 @@ from cqc_cpcc.utilities.env_constants import *
 
 # Initialize session state variables
 def init_session_state():
+    if 'openrouter_api_key' not in st.session_state:
+        st.session_state.openrouter_api_key = OPENROUTER_API_KEY
+
     if 'openai_api_key' not in st.session_state:
         st.session_state.openai_api_key = OPENAI_API_KEY
 

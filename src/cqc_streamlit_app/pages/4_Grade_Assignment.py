@@ -2549,13 +2549,13 @@ def main():
         st.title("Online GDB")
 
     with tab3:
-        if st.session_state.openai_api_key:
+        if st.session_state.openai_api_key or st.session_state.openrouter_api_key:
             grade_exam_content_sync()
         else:
             st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
     
     with tab4:
-        if st.session_state.openai_api_key:
+        if st.session_state.openai_api_key or st.session_state.openrouter_api_key:
             rubric_based_exam_grading_sync()
         else:
             st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
