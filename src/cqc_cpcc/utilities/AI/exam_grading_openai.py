@@ -50,11 +50,13 @@ async def grade_exam_submission(
     temperature: float = DEFAULT_TEMPERATURE,
     callback: BaseCallbackHandler | None = None,
     use_preprocessing: bool | None = None,
+    use_openrouter: bool = False,
+    openrouter_auto_route: bool = True,
 ) -> "ErrorDefinitions":
-    """Grade an exam submission using OpenAI structured outputs.
+    """Grade an exam submission using OpenAI structured outputs or OpenRouter.
     
     This function replaces the LangChain-based grading flow. It builds a prompt,
-    calls OpenAI with strict schema validation, and returns validated ErrorDefinitions.
+    calls OpenAI (or OpenRouter) with strict schema validation, and returns validated ErrorDefinitions.
     
     For large submissions, this function automatically uses preprocessing to generate
     a grading digest instead of sending raw code, preventing context_length_exceeded
@@ -66,10 +68,12 @@ async def grade_exam_submission(
         student_submission: Student's code to be graded
         major_error_type_list: List of major error type enum values
         minor_error_type_list: List of minor error type enum values
-        model_name: OpenAI model to use (default: gpt-5-mini)
+        model_name: OpenAI model to use (default: gpt-5-mini) or OpenRouter model
         temperature: Sampling temperature (default: 0.2)
         callback: Optional LangChain callback for compatibility (currently unused)
         use_preprocessing: Force preprocessing on/off. If None, auto-detect based on size.
+        use_openrouter: If True, use OpenRouter instead of OpenAI
+        openrouter_auto_route: If True and use_openrouter=True, use OpenRouter auto-routing
         
     Returns:
         ErrorDefinitions object with validated major and minor errors
@@ -147,18 +151,31 @@ async def grade_exam_submission(
     logger.info(
         f"Grading exam submission with {model_name} "
         f"({len(major_error_type_list)} major, {len(minor_error_type_list)} minor error types, "
-        f"preprocessing={'YES' if use_preprocessing else 'NO'})"
+        f"preprocessing={'YES' if use_preprocessing else 'NO'}, "
+        f"openrouter={'YES' if use_openrouter else 'NO'})"
     )
     
     try:
-        # Call OpenAI with structured output validation (with own 2-attempt retry)
-        result = await get_structured_completion(
-            prompt=prompt,
-            model_name=model_name,
-            schema_model=ErrorDefinitions,
-            temperature=temperature,
-            max_tokens=DEFAULT_MAX_TOKENS,
-        )
+        # Call OpenRouter or OpenAI based on configuration
+        if use_openrouter:
+            from cqc_cpcc.utilities.AI.openrouter_client import get_openrouter_completion
+            
+            result = await get_openrouter_completion(
+                prompt=prompt,
+                schema_model=ErrorDefinitions,
+                use_auto_route=openrouter_auto_route,
+                model_name=model_name if not openrouter_auto_route else None,
+                max_tokens=DEFAULT_MAX_TOKENS,
+            )
+        else:
+            # Call OpenAI with structured output validation (with own 2-attempt retry)
+            result = await get_structured_completion(
+                prompt=prompt,
+                model_name=model_name,
+                schema_model=ErrorDefinitions,
+                temperature=temperature,
+                max_tokens=DEFAULT_MAX_TOKENS,
+            )
         
         logger.info(
             f"Grading complete: {len(result.all_major_errors or [])} major errors, "
@@ -175,12 +192,12 @@ async def grade_exam_submission(
         raise
         
     except OpenAITransportError as e:
-        logger.error(f"OpenAI API error during exam grading: {e}")
+        logger.error(f"API error during exam grading: {e}")
         raise
 
 
 class ExamGraderOpenAI:
-    """Exam grader using OpenAI structured outputs.
+    """Exam grader using OpenAI structured outputs or OpenRouter.
     
     This class provides a simpler interface for exam grading that stores
     configuration and can be reused across multiple submissions.
@@ -192,6 +209,8 @@ class ExamGraderOpenAI:
         minor_error_type_list: List of minor error type strings
         model_name: OpenAI model to use
         temperature: Sampling temperature
+        use_openrouter: If True, use OpenRouter instead of OpenAI
+        openrouter_auto_route: If True, use OpenRouter auto-routing
     """
     
     def __init__(
@@ -202,6 +221,8 @@ class ExamGraderOpenAI:
         minor_error_type_list: list[str],
         model_name: str = DEFAULT_GRADING_MODEL,
         temperature: float = DEFAULT_TEMPERATURE,
+        use_openrouter: bool = False,
+        openrouter_auto_route: bool = True,
     ):
         """Initialize exam grader with configuration.
         
@@ -212,6 +233,8 @@ class ExamGraderOpenAI:
             minor_error_type_list: List of minor error type enum values
             model_name: OpenAI model to use (default: gpt-5-mini)
             temperature: Sampling temperature (default: 0.2)
+            use_openrouter: If True, use OpenRouter instead of OpenAI
+            openrouter_auto_route: If True, use OpenRouter auto-routing
         """
         self.exam_instructions = exam_instructions
         self.exam_solution = exam_solution
@@ -219,6 +242,8 @@ class ExamGraderOpenAI:
         self.minor_error_type_list = minor_error_type_list
         self.model_name = model_name
         self.temperature = temperature
+        self.use_openrouter = use_openrouter
+        self.openrouter_auto_route = openrouter_auto_route
     
     async def grade(
         self,
@@ -247,4 +272,6 @@ class ExamGraderOpenAI:
             model_name=self.model_name,
             temperature=self.temperature,
             callback=callback,
+            use_openrouter=self.use_openrouter,
+            openrouter_auto_route=self.openrouter_auto_route,
         )

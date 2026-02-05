@@ -339,6 +339,8 @@ class CodeGrader:
     use_openai_wrapper: bool = True  # Default to new implementation
     model_name: str = DEFAULT_GRADING_MODEL
     temperature: float = DEFAULT_TEMPERATURE
+    use_openrouter: bool = False
+    openrouter_auto_route: bool = True
 
     def __init__(self, max_points: int, exam_instructions: str, exam_solution: str,
                  deduction_per_major_error: int = 20,
@@ -348,7 +350,9 @@ class CodeGrader:
                  grader_llm: BaseChatModel = None,
                  use_openai_wrapper: bool = True,
                  model_name: str = DEFAULT_GRADING_MODEL,
-                 temperature: float = DEFAULT_TEMPERATURE):
+                 temperature: float = DEFAULT_TEMPERATURE,
+                 use_openrouter: bool = False,
+                 openrouter_auto_route: bool = True):
         self.max_points = max_points
         self.deduction_per_major_error = deduction_per_major_error
         self.deduction_per_minor_error = deduction_per_minor_error
@@ -357,6 +361,8 @@ class CodeGrader:
         self.use_openai_wrapper = use_openai_wrapper
         self.model_name = model_name
         self.temperature = temperature
+        self.use_openrouter = use_openrouter
+        self.openrouter_auto_route = openrouter_auto_route
         
         if major_error_type_list is None:
             major_error_type_list = MajorErrorType.list()
@@ -433,7 +439,7 @@ class CodeGrader:
         # print("Identifying Errors")
         
         if self.use_openai_wrapper:
-            # New OpenAI wrapper path
+            # New OpenAI wrapper path (supports OpenRouter)
             error_definitions = await grade_exam_submission(
                 exam_instructions=self.exam_instructions,
                 exam_solution=self.exam_solution,
@@ -442,7 +448,9 @@ class CodeGrader:
                 minor_error_type_list=self.minor_error_type_list,
                 model_name=self.model_name,
                 temperature=self.temperature,
-                callback=callback
+                callback=callback,
+                use_openrouter=self.use_openrouter,
+                openrouter_auto_route=self.openrouter_auto_route,
             )
         else:
             # Legacy LangChain path
