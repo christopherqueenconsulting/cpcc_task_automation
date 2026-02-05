@@ -37,11 +37,10 @@ Example usage:
 
 import asyncio
 import json
-from typing import Type, TypeVar, Optional
-import httpx
+from typing import Optional, Type, TypeVar
 
-from openrouter import OpenRouter
-from openrouter import components
+import httpx
+from openrouter import OpenRouter, components
 from pydantic import BaseModel
 
 from cqc_cpcc.utilities.AI.openai_exceptions import (
@@ -49,7 +48,10 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAITransportError,
 )
 from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
-from cqc_cpcc.utilities.env_constants import OPENROUTER_API_KEY, OPENROUTER_ALLOWED_MODELS
+from cqc_cpcc.utilities.env_constants import (
+    OPENROUTER_ALLOWED_MODELS,
+    OPENROUTER_API_KEY,
+)
 from cqc_cpcc.utilities.logger import logger
 
 T = TypeVar("T", bound=BaseModel)

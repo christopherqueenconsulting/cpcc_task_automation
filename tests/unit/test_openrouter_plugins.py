@@ -5,12 +5,16 @@ OPENROUTER_ALLOWED_MODELS environment variable and builds the plugins
 parameter for OpenRouter API auto-router configuration using official SDK.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from openrouter import components
 from pydantic import BaseModel, Field
 
-from openrouter import components
-from cqc_cpcc.utilities.AI.openrouter_client import get_openrouter_plugins, get_openrouter_completion
+from cqc_cpcc.utilities.AI.openrouter_client import (
+    get_openrouter_completion,
+    get_openrouter_plugins,
+)
 
 
 class SimpleResponse(BaseModel):
@@ -167,6 +171,10 @@ class TestOpenRouterCompletionWithPlugins:
                     use_auto_route=True
                 )
                 
+                # Verify result is valid
+                assert result is not None
+                assert isinstance(result, SimpleResponse)
+                
                 # Verify the API was called
                 assert mock_client.chat.send_async.called
                 
@@ -179,7 +187,10 @@ class TestOpenRouterCompletionWithPlugins:
                 
                 # Verify structure using SDK components
                 assert len(plugins) == 1
-                assert isinstance(plugins[0], components.ChatGenerationParamsPluginAutoRouter)
+                assert isinstance(
+                    plugins[0], 
+                    components.ChatGenerationParamsPluginAutoRouter
+                )
                 assert plugins[0].ID == 'auto-router'
                 assert len(plugins[0].allowed_models) == 2
                 assert 'google/gemini-*' in plugins[0].allowed_models
@@ -209,6 +220,10 @@ class TestOpenRouterCompletionWithPlugins:
                     use_auto_route=True
                 )
                 
+                # Verify result is valid
+                assert result is not None
+                assert isinstance(result, SimpleResponse)
+                
                 # Verify the API was called
                 assert mock_client.chat.send_async.called
                 
@@ -216,4 +231,7 @@ class TestOpenRouterCompletionWithPlugins:
                 call_kwargs = mock_client.chat.send_async.call_args.kwargs
                 
                 # Verify plugins are NOT included
-                assert 'plugins' not in call_kwargs or call_kwargs.get('plugins') is None
+                assert (
+                    'plugins' not in call_kwargs 
+                    or call_kwargs.get('plugins') is None
+                )
