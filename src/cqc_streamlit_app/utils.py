@@ -5,20 +5,23 @@ import tempfile
 import threading
 import zipfile
 from random import randint
-from typing import TypeVar, cast, Union, Any, Tuple, Optional
-from urllib.parse import urlparse, parse_qs
+from typing import Any, Optional, Tuple, TypeVar, Union, cast
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import streamlit as st
-from cqc_cpcc.utilities.logger import logger
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_openai import ChatOpenAI
 from streamlit.delta_generator import DeltaGenerator
 from streamlit.elements.lib.mutable_status_container import StatusContainer
-from streamlit.errors import NoSessionContext
-from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx, SCRIPT_RUN_CONTEXT_ATTR_NAME
+from streamlit.runtime.scriptrunner_utils.script_run_context import (
+    SCRIPT_RUN_CONTEXT_ATTR_NAME,
+    get_script_run_ctx,
+)
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+
+from cqc_cpcc.utilities.logger import logger
 
 CODE_LANGUAGES = [
     "abap", "abnf", "actionscript", "ada", "agda", "al", "antlr4", "apacheconf",
@@ -826,9 +829,9 @@ def define_code_language_selection(unique_key: str | int, default_option: str = 
 
 
 # streamlit model/tier selector with updated GPT-5 Flex pricing (per 1M tokens)
-from typing import Any, Dict, Optional
-import os
 import json
+from typing import Dict
+
 import streamlit as st
 
 
@@ -1039,6 +1042,7 @@ def _fetch_openrouter_models_cached() -> list:
     """
     try:
         import asyncio
+
         from cqc_cpcc.utilities.AI.openrouter_client import fetch_openrouter_models
 
         # st.cache_data runs in a context where asyncio.run() is safe
@@ -1631,13 +1635,14 @@ def render_openai_debug_panel(
         correlation_id: Correlation ID for the request (if available)
         error: Exception that occurred (if any)
     """
-    from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
+    import json
+
     from cqc_cpcc.utilities.AI.openai_debug import get_debug_context
     from cqc_cpcc.utilities.AI.openai_exceptions import (
         OpenAISchemaValidationError,
         OpenAITransportError,
     )
-    import json
+    from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
     
     # Only show debug panel if debug mode is enabled
     if not CQC_OPENAI_DEBUG:
@@ -1658,7 +1663,7 @@ def render_openai_debug_panel(
             st.error("**Error Occurred:**")
             
             if isinstance(error, OpenAISchemaValidationError):
-                st.markdown(f"**Type:** Schema Validation Error")
+                st.markdown("**Type:** Schema Validation Error")
                 st.markdown(f"**Schema:** {error.schema_name}")
                 if error.decision_notes:
                     st.markdown(f"**Decision Notes:** {error.decision_notes}")
@@ -1671,7 +1676,7 @@ def render_openai_debug_panel(
                         st.code(error.raw_output[:1000], language="json")  # Truncate to 1000 chars
             
             elif isinstance(error, OpenAITransportError):
-                st.markdown(f"**Type:** Transport Error")
+                st.markdown("**Type:** Transport Error")
                 if error.status_code:
                     st.markdown(f"**Status Code:** {error.status_code}")
                 if error.retry_after:

@@ -57,15 +57,17 @@ from cqc_cpcc.utilities.zip_grading_utils import (
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import (
     ChatGPTStatusCallbackHandler,
+    add_flexible_upload_element,
     add_upload_file_element,
     create_zip_file,
     define_chatGPTModel,
+    define_openrouter_model,
     get_cpcc_css,
     get_custom_llm,
     get_file_extension_from_filepath,
     get_language_from_file_path,
     on_download_click,
-    prefix_content_file_name, define_openrouter_model,
+    prefix_content_file_name,
 )
 
 # Initialize session state variables
@@ -82,7 +84,6 @@ DESCRIPTION = "Description"
 # Import error definitions system
 from cqc_cpcc.error_definitions_config import (
     add_assignment_to_course,
-    get_assignments_for_course,
     get_distinct_course_ids_from_errors,
     load_error_config_registry,
     registry_to_json_string,
@@ -118,7 +119,6 @@ def run_async_in_streamlit(coro):
             except ImportError:
                 # nest_asyncio not available
                 # As a workaround, create a new thread to run the async code
-                import concurrent.futures
                 import threading
                 
                 logger.warning(
@@ -623,7 +623,7 @@ def display_assignment_and_error_definitions_selector(
         # Clear the flags
         st.session_state.assignment_just_created = False
         st.session_state.newly_created_assignment_id = None
-        st.success(f"✅ Assignment created successfully and selected below!")
+        st.success("✅ Assignment created successfully and selected below!")
     
     # Get assignments for this course from session state registry (not from file!)
     # This ensures newly created assignments are visible immediately
@@ -1246,7 +1246,10 @@ async def grade_single_rubric_student(
             status.update(label=f"{status_label} | Calling OpenAI...")
             
             # Create correlation ID for tracking (will be used by OpenAI debug if enabled)
-            from cqc_cpcc.utilities.AI.openai_debug import create_correlation_id, should_debug
+            from cqc_cpcc.utilities.AI.openai_debug import (
+                create_correlation_id,
+                should_debug,
+            )
             if should_debug():
                 grading_correlation_id = create_correlation_id()
                 logger.info(f"Starting grading for {student_id} with correlation_id={grading_correlation_id}")
@@ -1930,10 +1933,11 @@ async def get_rubric_based_exam_grading():
     
     # Step 4: Assignment Instructions
     st.header("Assignment Instructions")
-    _orig_file_name, instructions_file_path = add_upload_file_element(
+    _orig_file_name, instructions_file_path = add_flexible_upload_element(
         "Upload Exam Instructions",
         ["txt", "docx", "pdf"],
-        key_prefix="rubric_exam_"
+        key_prefix="rubric_exam_",
+        allow_url=True
     )
     convert_instructions_to_markdown = st.checkbox(
         "Convert To Markdown",
@@ -1950,11 +1954,12 @@ async def get_rubric_based_exam_grading():
     # Step 5: Solution File (Optional)
     st.header("Solution File (Optional)")
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
-    solution_file_paths = add_upload_file_element(
+    solution_file_paths = add_flexible_upload_element(
         "Upload Exam Solution (Optional)",
         solution_accepted_file_types,
         accept_multiple_files=True,
-        key_prefix="rubric_exam_"
+        key_prefix="rubric_exam_",
+        allow_url=True
     )
     
     assignment_solution_contents = None
@@ -1998,11 +2003,12 @@ async def get_rubric_based_exam_grading():
         "mp3", "wav", "m4a", "ogg",
         "mp4", "avi", "mov", "webm"
     ]
-    student_submission_file_paths = add_upload_file_element(
+    student_submission_file_paths = add_flexible_upload_element(
         "Upload Student Exam Submission",
         student_submission_accepted_file_types,
         accept_multiple_files=True,
-        key_prefix="rubric_exam_"
+        key_prefix="rubric_exam_",
+        allow_url=True
     )
     
     # Step 9: Generate Run Key and Check Cache
@@ -2010,7 +2016,10 @@ async def get_rubric_based_exam_grading():
         st.info("📝 Please upload assignment instructions and student submissions to begin grading.")
         return
     
-    from cqc_cpcc.grading_run_key import generate_grading_run_key, generate_file_metadata
+    from cqc_cpcc.grading_run_key import (
+        generate_file_metadata,
+        generate_grading_run_key,
+    )
     file_metadata = generate_file_metadata(student_submission_file_paths)
     error_definition_ids = [ed.error_id for ed in (effective_error_definitions or []) if ed.enabled]
     
