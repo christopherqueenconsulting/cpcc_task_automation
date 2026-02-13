@@ -1,10 +1,14 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+import os
+import re
 import tempfile
 import threading
 import zipfile
 from random import randint
-from typing import TypeVar, cast, Union, Any, Tuple
+from typing import TypeVar, cast, Union, Any, Tuple, Optional
+from urllib.parse import urlparse, parse_qs
 
+import httpx
 import streamlit as st
 from cqc_cpcc.utilities.logger import logger
 from langchain_core.callbacks import BaseCallbackHandler
@@ -1144,6 +1148,112 @@ def reset_session_key_value(key: str):
 UploadedFileResult = Union[list[tuple[Any, str]], tuple[Any, str], tuple[None, None]]
 
 
+def parse_google_drive_url(url: str) -> Optional[str]:
+    """
+    Parse a Google Drive URL and return the file ID.
+    
+    Supports various Google Drive URL formats:
+    - https://drive.google.com/file/d/{FILE_ID}/view
+    - https://drive.google.com/open?id={FILE_ID}
+    - https://drive.google.com/uc?id={FILE_ID}
+    
+    Args:
+        url: Google Drive URL
+        
+    Returns:
+        File ID if valid Google Drive URL, None otherwise
+    """
+    if not url or 'drive.google.com' not in url:
+        return None
+    
+    # Pattern 1: /file/d/{FILE_ID}/view or /file/d/{FILE_ID}/
+    match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
+    if match:
+        return match.group(1)
+    
+    # Pattern 2: ?id={FILE_ID} (from open?id= or uc?id=)
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    if 'id' in params and params['id']:
+        return params['id'][0]
+    
+    return None
+
+
+def download_file_from_url(url: str, filename_hint: Optional[str] = None) -> Optional[Tuple[str, str]]:
+    """
+    Download a file from a URL (Google Drive or direct URL) and save to temp file.
+    
+    Args:
+        url: URL to download from (Google Drive URL or direct download URL)
+        filename_hint: Optional filename hint for extension detection
+        
+    Returns:
+        Tuple of (original_filename, temp_file_path) on success, None on failure
+    """
+    try:
+        # Check if it's a Google Drive URL
+        file_id = parse_google_drive_url(url)
+        if file_id:
+            # Convert to direct download URL
+            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            logger.info(f"Detected Google Drive file ID: {file_id}")
+        else:
+            download_url = url
+        
+        # Download the file with httpx
+        with httpx.Client(follow_redirects=True, timeout=30.0) as client:
+            response = client.get(download_url)
+            response.raise_for_status()
+            
+            # Try to get filename from Content-Disposition header
+            content_disposition = response.headers.get('content-disposition', '')
+            filename = None
+            if content_disposition:
+                match = re.search(r'filename="?([^"]+)"?', content_disposition)
+                if match:
+                    filename = match.group(1)
+            
+            # Fall back to URL path or hint
+            if not filename:
+                parsed_url = urlparse(url)
+                filename = os.path.basename(parsed_url.path) or filename_hint or "downloaded_file"
+            
+            # Ensure filename has an extension
+            if '.' not in filename:
+                content_type = response.headers.get('content-type', '')
+                if 'pdf' in content_type:
+                    filename += '.pdf'
+                elif 'word' in content_type or 'document' in content_type:
+                    filename += '.docx'
+                elif 'text' in content_type:
+                    filename += '.txt'
+                elif 'zip' in content_type:
+                    filename += '.zip'
+            
+            # Create temp file with appropriate extension
+            file_extension = os.path.splitext(filename)[1] or '.tmp'
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
+            temp_file.write(response.content)
+            temp_file.close()
+            
+            logger.info(f"Successfully downloaded file from URL: {url} -> {temp_file.name}")
+            return filename, temp_file.name
+            
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error downloading file from URL {url}: {e}")
+        st.error(f"Failed to download file: HTTP {e.response.status_code}")
+        return None
+    except httpx.TimeoutException:
+        logger.error(f"Timeout downloading file from URL: {url}")
+        st.error("Download timeout. Please check the URL and try again.")
+        return None
+    except Exception as e:
+        logger.error(f"Error downloading file from URL {url}: {e}", exc_info=True)
+        st.error(f"Error downloading file: {str(e)}")
+        return None
+
+
 def add_upload_file_element(
     uploader_text: str, 
     accepted_file_types: list[str], 
@@ -1207,6 +1317,118 @@ def add_upload_file_element(
         if success_message:
             st.success("File uploaded successfully.")
         return original_file_name, temp_file_name
+    else:
+        return None, None
+
+
+def add_flexible_upload_element(
+    uploader_text: str,
+    accepted_file_types: list[str],
+    success_message: bool = True,
+    accept_multiple_files: bool = False,
+    key_prefix: str = "",
+    allow_url: bool = True
+) -> UploadedFileResult:
+    """
+    Add a flexible file input element supporting local uploads, Google Drive URLs, and direct URLs.
+    
+    This function extends add_upload_file_element with URL download capabilities.
+    
+    Args:
+        uploader_text: Label for the file input
+        accepted_file_types: List of accepted file extensions
+        success_message: Whether to show success message on upload
+        accept_multiple_files: Whether to accept multiple files
+        key_prefix: Prefix for widget keys to ensure uniqueness
+        allow_url: Whether to show URL input option
+        
+    Returns:
+        If accept_multiple_files=True: List of (original_name, temp_path) tuples
+        If accept_multiple_files=False: Single (original_name, temp_path) tuple
+        If no files provided: (None, None)
+    """
+    # Create tabs for different input methods
+    if allow_url:
+        tab1, tab2 = st.tabs(["📁 Upload File(s)", "🔗 From URL/Google Drive"])
+    else:
+        tab1 = st.container()
+        tab2 = None
+    
+    with tab1:
+        # Use existing upload function for file uploads
+        result = add_upload_file_element(
+            uploader_text=uploader_text,
+            accepted_file_types=accepted_file_types,
+            success_message=success_message,
+            accept_multiple_files=accept_multiple_files,
+            key_prefix=key_prefix + "local_"
+        )
+        
+        # If we got files from upload, return them
+        if accept_multiple_files:
+            if result and len(result) > 0:
+                return result
+        else:
+            if result[0] is not None:
+                return result
+    
+    if allow_url and tab2:
+        with tab2:
+            st.markdown("**Paste a URL to download:**")
+            st.markdown("- Google Drive share link (e.g., `https://drive.google.com/file/d/FILE_ID/view`)")
+            st.markdown("- Direct download URL (e.g., `https://example.com/file.pdf`)")
+            
+            # URL input
+            url_key = f"{key_prefix}url_input_{uploader_text.replace(' ', '_')}"
+            url = st.text_input(
+                "File URL",
+                key=url_key,
+                placeholder="https://drive.google.com/file/d/FILE_ID/view",
+                help="Enter a Google Drive share link or direct download URL"
+            )
+            
+            if url:
+                download_button_key = f"{key_prefix}download_btn_{uploader_text.replace(' ', '_')}"
+                if st.button("📥 Download from URL", key=download_button_key):
+                    with st.spinner("Downloading file..."):
+                        result = download_file_from_url(url)
+                        
+                        if result:
+                            original_name, temp_path = result
+                            if success_message:
+                                st.success(f"✅ Downloaded: {original_name}")
+                            
+                            # Store in session state for persistence
+                            state_key = f"{key_prefix}downloaded_file_{uploader_text.replace(' ', '_')}"
+                            st.session_state[state_key] = result
+                            
+                            if accept_multiple_files:
+                                return [result]
+                            else:
+                                return result
+            
+            # Check if we have a previously downloaded file in session state
+            state_key = f"{key_prefix}downloaded_file_{uploader_text.replace(' ', '_')}"
+            if state_key in st.session_state and st.session_state[state_key]:
+                original_name, temp_path = st.session_state[state_key]
+                
+                # Show current downloaded file
+                st.info(f"📄 Current file: {original_name}")
+                
+                # Add clear button
+                clear_key = f"{key_prefix}clear_btn_{uploader_text.replace(' ', '_')}"
+                if st.button("🗑️ Clear", key=clear_key):
+                    del st.session_state[state_key]
+                    st.rerun()
+                
+                if accept_multiple_files:
+                    return [st.session_state[state_key]]
+                else:
+                    return st.session_state[state_key]
+    
+    # No files from either source
+    if accept_multiple_files:
+        return []
     else:
         return None, None
 

@@ -1,5 +1,6 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
+import os
 import pytest
 import tempfile
 from enum import Enum
@@ -721,3 +722,198 @@ class TestErrorHolder:
         # Code error lines should be combined (but bug in production means they may not be in line_numbers_of_error_holder)
         assert "Error 1" in combined[0].error_details
         assert "Error 2" in combined[0].error_details
+
+
+@pytest.mark.unit
+class TestGoogleDriveUrlParsing:
+    """Test parsing Google Drive URLs."""
+    
+    def test_parse_google_drive_file_url(self):
+        """Test parsing standard Google Drive file URL."""
+        from cqc_streamlit_app.utils import parse_google_drive_url
+        
+        url = "https://drive.google.com/file/d/1a2b3c4d5e6f7g8h9i/view?usp=sharing"
+        file_id = parse_google_drive_url(url)
+        assert file_id == "1a2b3c4d5e6f7g8h9i"
+    
+    def test_parse_google_drive_open_url(self):
+        """Test parsing Google Drive open?id= URL."""
+        from cqc_streamlit_app.utils import parse_google_drive_url
+        
+        url = "https://drive.google.com/open?id=1a2b3c4d5e6f7g8h9i"
+        file_id = parse_google_drive_url(url)
+        assert file_id == "1a2b3c4d5e6f7g8h9i"
+    
+    def test_parse_google_drive_uc_url(self):
+        """Test parsing Google Drive uc?id= URL."""
+        from cqc_streamlit_app.utils import parse_google_drive_url
+        
+        url = "https://drive.google.com/uc?id=1a2b3c4d5e6f7g8h9i&export=download"
+        file_id = parse_google_drive_url(url)
+        assert file_id == "1a2b3c4d5e6f7g8h9i"
+    
+    def test_parse_non_google_drive_url_returns_none(self):
+        """Test that non-Google Drive URLs return None."""
+        from cqc_streamlit_app.utils import parse_google_drive_url
+        
+        url = "https://example.com/file.pdf"
+        file_id = parse_google_drive_url(url)
+        assert file_id is None
+    
+    def test_parse_empty_url_returns_none(self):
+        """Test that empty URL returns None."""
+        from cqc_streamlit_app.utils import parse_google_drive_url
+        
+        file_id = parse_google_drive_url("")
+        assert file_id is None
+    
+    def test_parse_none_url_returns_none(self):
+        """Test that None URL returns None."""
+        from cqc_streamlit_app.utils import parse_google_drive_url
+        
+        file_id = parse_google_drive_url(None)
+        assert file_id is None
+
+
+@pytest.mark.unit
+class TestDownloadFileFromUrl:
+    """Test downloading files from URLs."""
+    
+    def test_download_from_direct_url(self, mocker):
+        """Test downloading from a direct URL."""
+        from cqc_streamlit_app.utils import download_file_from_url
+        
+        # Mock httpx client
+        mock_response = mocker.Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {
+            'content-disposition': 'attachment; filename="test.pdf"',
+            'content-type': 'application/pdf'
+        }
+        mock_response.content = b"PDF content here"
+        
+        mock_client = mocker.Mock()
+        mock_client.__enter__ = mocker.Mock(return_value=mock_client)
+        mock_client.__exit__ = mocker.Mock(return_value=None)
+        mock_client.get = mocker.Mock(return_value=mock_response)
+        
+        mocker.patch('httpx.Client', return_value=mock_client)
+        
+        result = download_file_from_url("https://example.com/test.pdf")
+        
+        assert result is not None
+        filename, temp_path = result
+        assert filename == "test.pdf"
+        assert temp_path.endswith(".pdf")
+        assert os.path.exists(temp_path)
+        
+        # Cleanup
+        os.unlink(temp_path)
+    
+    def test_download_from_google_drive_url(self, mocker):
+        """Test downloading from Google Drive URL."""
+        from cqc_streamlit_app.utils import download_file_from_url
+        
+        # Mock httpx client
+        mock_response = mocker.Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {
+            'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        }
+        mock_response.content = b"DOCX content"
+        
+        mock_client = mocker.Mock()
+        mock_client.__enter__ = mocker.Mock(return_value=mock_client)
+        mock_client.__exit__ = mocker.Mock(return_value=None)
+        mock_client.get = mocker.Mock(return_value=mock_response)
+        
+        mocker.patch('httpx.Client', return_value=mock_client)
+        
+        url = "https://drive.google.com/file/d/1a2b3c4d5e6f7g8h9i/view"
+        result = download_file_from_url(url, filename_hint="document.docx")
+        
+        assert result is not None
+        filename, temp_path = result
+        assert filename == "document.docx" or filename.endswith(".docx")
+        assert os.path.exists(temp_path)
+        
+        # Verify it tried to download from the converted URL
+        call_args = mock_client.get.call_args[0]
+        assert "drive.google.com/uc?export=download" in call_args[0]
+        
+        # Cleanup
+        os.unlink(temp_path)
+    
+    def test_download_handles_http_error(self, mocker):
+        """Test handling HTTP errors gracefully."""
+        from cqc_streamlit_app.utils import download_file_from_url
+        import httpx
+        
+        # Mock httpx client to raise error
+        mock_response = mocker.Mock()
+        mock_response.status_code = 404
+        mock_response.raise_for_status = mocker.Mock(
+            side_effect=httpx.HTTPStatusError("Not found", request=mocker.Mock(), response=mock_response)
+        )
+        
+        mock_client = mocker.Mock()
+        mock_client.__enter__ = mocker.Mock(return_value=mock_client)
+        mock_client.__exit__ = mocker.Mock(return_value=None)
+        mock_client.get = mocker.Mock(return_value=mock_response)
+        
+        mocker.patch('httpx.Client', return_value=mock_client)
+        
+        # Mock streamlit error to avoid issues in test
+        mocker.patch('streamlit.error')
+        
+        result = download_file_from_url("https://example.com/nonexistent.pdf")
+        
+        assert result is None
+    
+    def test_download_handles_timeout(self, mocker):
+        """Test handling timeout errors."""
+        from cqc_streamlit_app.utils import download_file_from_url
+        import httpx
+        
+        # Mock httpx client to raise timeout
+        mock_client = mocker.Mock()
+        mock_client.__enter__ = mocker.Mock(return_value=mock_client)
+        mock_client.__exit__ = mocker.Mock(return_value=None)
+        mock_client.get = mocker.Mock(side_effect=httpx.TimeoutException("Timeout"))
+        
+        mocker.patch('httpx.Client', return_value=mock_client)
+        mocker.patch('streamlit.error')
+        
+        result = download_file_from_url("https://example.com/slow.pdf")
+        
+        assert result is None
+    
+    def test_download_infers_extension_from_content_type(self, mocker):
+        """Test inferring file extension from content-type header."""
+        from cqc_streamlit_app.utils import download_file_from_url
+        
+        # Mock httpx client with no filename in headers
+        mock_response = mocker.Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {
+            'content-type': 'application/pdf'
+        }
+        mock_response.content = b"PDF content"
+        
+        mock_client = mocker.Mock()
+        mock_client.__enter__ = mocker.Mock(return_value=mock_client)
+        mock_client.__exit__ = mocker.Mock(return_value=None)
+        mock_client.get = mocker.Mock(return_value=mock_response)
+        
+        mocker.patch('httpx.Client', return_value=mock_client)
+        
+        result = download_file_from_url("https://example.com/download", filename_hint="unknown")
+        
+        assert result is not None
+        filename, temp_path = result
+        # Should add .pdf extension based on content-type
+        assert filename.endswith(".pdf")
+        
+        # Cleanup
+        os.unlink(temp_path)
+
