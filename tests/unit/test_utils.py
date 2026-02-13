@@ -916,4 +916,65 @@ class TestDownloadFileFromUrl:
         
         # Cleanup
         os.unlink(temp_path)
+    
+    def test_download_handles_docx_content_type(self, mocker):
+        """Test proper MIME type detection for DOCX files."""
+        from cqc_streamlit_app.utils import download_file_from_url
+        
+        # Mock httpx client with DOCX content-type
+        mock_response = mocker.Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {
+            'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        }
+        mock_response.content = b"DOCX content"
+        
+        mock_client = mocker.Mock()
+        mock_client.__enter__ = mocker.Mock(return_value=mock_client)
+        mock_client.__exit__ = mocker.Mock(return_value=None)
+        mock_client.get = mocker.Mock(return_value=mock_response)
+        
+        mocker.patch('httpx.Client', return_value=mock_client)
+        mocker.patch('streamlit.warning')  # Mock warning for unknown types
+        
+        result = download_file_from_url("https://example.com/document")
+        
+        assert result is not None
+        filename, temp_path = result
+        # Should add .docx extension based on precise MIME type
+        assert filename.endswith(".docx")
+        
+        # Cleanup
+        os.unlink(temp_path)
+    
+    def test_download_warns_on_unknown_content_type(self, mocker):
+        """Test that unknown content-types trigger a warning."""
+        from cqc_streamlit_app.utils import download_file_from_url
+        
+        # Mock httpx client with unknown content-type
+        mock_response = mocker.Mock()
+        mock_response.status_code = 200
+        mock_response.headers = {
+            'content-type': 'application/x-custom-type'
+        }
+        mock_response.content = b"Custom content"
+        
+        mock_client = mocker.Mock()
+        mock_client.__enter__ = mocker.Mock(return_value=mock_client)
+        mock_client.__exit__ = mocker.Mock(return_value=None)
+        mock_client.get = mocker.Mock(return_value=mock_response)
+        
+        mocker.patch('httpx.Client', return_value=mock_client)
+        mock_warning = mocker.patch('streamlit.warning')
+        
+        result = download_file_from_url("https://example.com/custom")
+        
+        assert result is not None
+        # Should have called warning about unknown content-type
+        mock_warning.assert_called_once()
+        assert "Could not determine file type" in mock_warning.call_args[0][0]
+        
+        # Cleanup
+        _, temp_path = result
+        os.unlink(temp_path)
 

@@ -1223,20 +1223,31 @@ def download_file_from_url(url: str, filename_hint: Optional[str] = None) -> Opt
                 parsed_url = urlparse(url)
                 filename = os.path.basename(parsed_url.path) or filename_hint or "downloaded_file"
             
-            # Ensure filename has an extension
+            # Ensure filename has an extension - use precise MIME type mapping
             if '.' not in filename:
-                content_type = response.headers.get('content-type', '')
-                if 'pdf' in content_type:
-                    filename += '.pdf'
-                elif 'word' in content_type or 'document' in content_type:
-                    filename += '.docx'
-                elif 'text' in content_type:
-                    filename += '.txt'
-                elif 'zip' in content_type:
-                    filename += '.zip'
+                content_type = response.headers.get('content-type', '').lower().split(';')[0].strip()
+                mime_to_ext = {
+                    'application/pdf': '.pdf',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+                    'application/msword': '.doc',
+                    'text/plain': '.txt',
+                    'application/zip': '.zip',
+                    'application/x-zip-compressed': '.zip',
+                    'text/html': '.html',
+                    'application/json': '.json',
+                }
+                extension = mime_to_ext.get(content_type)
+                if extension:
+                    filename += extension
+                else:
+                    # If we can't determine extension, raise an error
+                    logger.warning(f"Could not determine file extension for content-type: {content_type}")
+                    st.warning(f"Could not determine file type (content-type: {content_type}). File may not be processed correctly.")
             
             # Create temp file with appropriate extension
             file_extension = os.path.splitext(filename)[1] or '.tmp'
+            # Note: temp files with delete=False are cleaned up by the OS temp directory cleanup
+            # or when the session ends. Streamlit manages temp file lifecycle.
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
             temp_file.write(response.content)
             temp_file.close()
