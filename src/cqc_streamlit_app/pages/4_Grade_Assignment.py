@@ -2012,7 +2012,21 @@ async def get_rubric_based_exam_grading():
     )
     
     # Step 9: Generate Run Key and Check Cache
+    # If files are not uploaded but we have a previous run_key in session state,
+    # try to display cached results for that run_key
     if not all([assignment_instructions_content, student_submission_file_paths]):
+        # Check if we have a stored run_key from a previous grading session
+        stored_run_key = st.session_state.get('last_grading_run_key')
+        if stored_run_key:
+            results_cache = st.session_state.error_only_results_by_key if grading_mode == "errors_only" else st.session_state.grading_results_by_key
+            if stored_run_key in results_cache:
+                st.info("📦 Displaying cached results from previous grading session")
+                if grading_mode == "errors_only":
+                    display_cached_error_only_results(stored_run_key, f"{selected_course_id}_{selected_assignment_name}")
+                else:
+                    display_cached_grading_results(stored_run_key, f"{selected_course_id}_{selected_assignment_name}")
+                return
+        
         st.info("📝 Please upload assignment instructions and student submissions to begin grading.")
         return
     
@@ -2104,6 +2118,8 @@ async def get_rubric_based_exam_grading():
     
     if should_grade:
         st.session_state.grading_status_by_key[current_run_key] = "running"
+        # Store the run_key so we can display cached results even after page rerun
+        st.session_state.last_grading_run_key = current_run_key
         
         try:
             if grading_mode == "errors_only":
@@ -2147,6 +2163,8 @@ async def get_rubric_based_exam_grading():
             st.session_state.do_grade = False
     
     elif has_cached_results:
+        # Store the run_key so we can display cached results even after page rerun
+        st.session_state.last_grading_run_key = current_run_key
         st.info("📦 Displaying cached results")
         if grading_mode == "errors_only":
             display_cached_error_only_results(current_run_key, f"{selected_course_id}_{selected_assignment_name}")
