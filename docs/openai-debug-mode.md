@@ -1,16 +1,17 @@
-# OpenAI Debug Mode
+# AI Debug Mode
 
-This document describes how to use the OpenAI debug mode to troubleshoot API calls.
+This document describes how to use the AI debug mode to troubleshoot AI API calls (OpenAI, OpenRouter, etc.).
 
 ## Overview
 
-The OpenAI debug mode provides comprehensive visibility into every OpenAI API call made by the application. When enabled, it captures:
+The AI debug mode provides comprehensive visibility into every AI API call made by the application. When enabled, it captures:
 
 - **Correlation IDs**: Unique identifiers for each request to track calls across logs and files
-- **Request payloads**: Model, prompts, schema information, and parameters sent to OpenAI
+- **Request payloads**: Model, prompts, schema information, and parameters sent to AI providers
 - **Response data**: Raw response metadata, parsed output, refusal information
 - **Decision notes**: Diagnostic information explaining why output_parsed might be empty
 - **PII redaction**: Automatic redaction of sensitive data (optional)
+- **Works with all providers**: OpenAI, OpenRouter, and future AI providers
 
 ## Quick Start
 
@@ -19,13 +20,13 @@ The OpenAI debug mode provides comprehensive visibility into every OpenAI API ca
 Set the following environment variable:
 
 ```bash
-export CQC_OPENAI_DEBUG=1
+export CQC_AI_DEBUG=1
 ```
 
 Or in `.streamlit/secrets.toml`:
 
 ```toml
-CQC_OPENAI_DEBUG = true
+CQC_AI_DEBUG = true
 ```
 
 ### Basic Usage
@@ -43,40 +44,50 @@ CQC_OPENAI_DEBUG = true
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CQC_OPENAI_DEBUG` | `false` | Enable/disable debug mode |
-| `CQC_OPENAI_DEBUG_REDACT` | `true` | Redact PII from logs and files |
-| `CQC_OPENAI_DEBUG_SAVE_DIR` | `None` | Directory to save JSON debug files |
+| `CQC_AI_DEBUG` | `false` | Enable/disable debug mode for all AI providers |
+| `CQC_AI_DEBUG_REDACT` | `true` | Redact PII from logs and files |
+| `CQC_AI_DEBUG_SAVE_DIR` | `None` | Directory to save JSON debug files |
+
+**Legacy Variables (Deprecated):** `CQC_OPENAI_DEBUG`, `CQC_OPENAI_DEBUG_REDACT`, `CQC_OPENAI_DEBUG_SAVE_DIR` are still supported for backward compatibility but will be removed in a future version. Use `CQC_AI_DEBUG*` instead.
 
 ### Examples
 
 **Enable debug with file logging:**
 
 ```bash
-export CQC_OPENAI_DEBUG=1
-export CQC_OPENAI_DEBUG_SAVE_DIR=/tmp/openai_debug
+export CQC_AI_DEBUG=1
+export CQC_AI_DEBUG_SAVE_DIR=/tmp/ai_debug
 ```
 
 **Disable PII redaction (for internal debugging only):**
 
 ```bash
-export CQC_OPENAI_DEBUG=1
-export CQC_OPENAI_DEBUG_REDACT=0
-export CQC_OPENAI_DEBUG_SAVE_DIR=/tmp/openai_debug
+export CQC_AI_DEBUG=1
+export CQC_AI_DEBUG_REDACT=0
+export CQC_AI_DEBUG_SAVE_DIR=/tmp/ai_debug
 ```
 
 ## What Gets Logged
 
 ### Console/Log File
 
-When debug mode is enabled, each OpenAI request/response logs:
+When debug mode is enabled, each AI request/response logs:
 
 ```
-INFO [a1b2c3d4] OpenAI Request: model=gpt-5-mini, schema=RubricAssessmentResult
+INFO [a1b2c3d4] AI Request: model=gpt-5-mini, schema=RubricAssessmentResult (provider=OpenAI)
 DEBUG [a1b2c3d4] Full request: {model, messages, response_format, ...}
-INFO [a1b2c3d4] OpenAI Response: schema=RubricAssessmentResult, parsed=True, notes=parsed successfully
+INFO [a1b2c3d4] AI Response: schema=RubricAssessmentResult, parsed=True, notes=parsed successfully
 ```
 
-### Debug Files (when CQC_OPENAI_DEBUG_SAVE_DIR is set)
+For OpenRouter:
+```
+INFO [a1b2c3d4] Calling OpenRouter with model=openrouter/auto, schema=RubricAssessmentResult, max_retries=2
+INFO [a1b2c3d4] Attempt 1: Applying OPENROUTER_ALLOWED_MODELS constraints
+WARNING [a1b2c3d4] Attempt 1/2 failed with JSON error: Invalid JSON. Retrying...
+INFO [a1b2c3d4] OpenRouter completion successful, attempt=2, used_model=openai/gpt-5
+```
+
+### Debug Files (when CQC_AI_DEBUG_SAVE_DIR is set)
 
 Three JSON files are saved per request:
 
@@ -114,12 +125,34 @@ The debug panel displays:
 
 ### Example Workflow
 
-1. Enable debug mode: `CQC_OPENAI_DEBUG=1`
-2. Set save directory: `CQC_OPENAI_DEBUG_SAVE_DIR=/tmp/openai_debug`
+1. Enable debug mode: `CQC_AI_DEBUG=1`
+2. Set save directory: `CQC_AI_DEBUG_SAVE_DIR=/tmp/ai_debug`
 3. Run exam grading in Streamlit
-4. If error occurs, expand "🔍 OpenAI Debug Information" panel
+4. If error occurs, expand "🔍 AI Debug Information" panel
 5. Note the correlation ID (e.g., `a1b2c3d4`)
-6. Download JSON files or check `/tmp/openai_debug/` for matching files
+6. Download JSON files or check `/tmp/ai_debug/` for matching files
+
+## Retry Logic
+
+Both OpenAI and OpenRouter clients include retry logic to handle transient errors and malformed responses:
+
+### OpenAI Client
+- **Default retries**: 2 attempts (1 initial + 1 retry)
+- **Retries on**: Transient errors (timeouts, rate limits, connection errors)
+- **Does NOT retry**: Schema validation errors
+- **Fallback strategy**: Plain JSON mode on empty response
+
+### OpenRouter Client  
+- **Default retries**: 2 attempts (1 initial + 1 retry)
+- **Retries on**: JSON parse errors, empty responses, transient errors
+- **Does NOT retry**: Pydantic validation errors (schema mismatch)
+- **Delay**: Exponential backoff (1s * attempt number)
+
+**Example retry flow:**
+```
+Attempt 1: Invalid JSON (missing comma) → Wait 1s
+Attempt 2: Success → Return result
+```
 
 ## Troubleshooting Common Issues
 

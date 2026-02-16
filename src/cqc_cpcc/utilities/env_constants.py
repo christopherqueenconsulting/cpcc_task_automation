@@ -50,7 +50,12 @@ BRIGHTSPACE_HOMEPAGE_TITLE = 'Homepage - Central Piedmont'
 # Test mode flag (for e2e testing with deterministic responses)
 TEST_MODE = get_constanct_from_env('CQC_TEST_MODE', default_value='false').lower() == 'true'
 
-# OpenAI Debug Mode Configuration
-CQC_OPENAI_DEBUG = isTrue(get_constanct_from_env('CQC_OPENAI_DEBUG', default_value='False'))
-CQC_OPENAI_DEBUG_REDACT = isTrue(get_constanct_from_env('CQC_OPENAI_DEBUG_REDACT', default_value='True'))
-CQC_OPENAI_DEBUG_SAVE_DIR = get_constanct_from_env('CQC_OPENAI_DEBUG_SAVE_DIR', default_value=None)
+# OpenAI Debug Mode Configuration (renamed to CQC_AI_DEBUG for all AI providers)
+CQC_AI_DEBUG = isTrue(get_constanct_from_env('CQC_AI_DEBUG', default_value='False'))
+CQC_AI_DEBUG_REDACT = isTrue(get_constanct_from_env('CQC_AI_DEBUG_REDACT', default_value='True'))
+CQC_AI_DEBUG_SAVE_DIR = get_constanct_from_env('CQC_AI_DEBUG_SAVE_DIR', default_value=None)
+
+# Legacy aliases for backward compatibility (deprecated - use CQC_AI_DEBUG instead)
+CQC_OPENAI_DEBUG = CQC_AI_DEBUG
+CQC_OPENAI_DEBUG_REDACT = CQC_AI_DEBUG_REDACT
+CQC_OPENAI_DEBUG_SAVE_DIR = CQC_AI_DEBUG_SAVE_DIR

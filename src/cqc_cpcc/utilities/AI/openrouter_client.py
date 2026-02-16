@@ -37,12 +37,19 @@ Example usage:
 
 import asyncio
 import json
+import time
 from typing import Optional, Type, TypeVar
 
 import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
+from cqc_cpcc.utilities.AI.openai_debug import (
+    create_correlation_id,
+    record_request,
+    record_response,
+    should_debug,
+)
 from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
     OpenAITransportError,
@@ -60,6 +67,10 @@ T = TypeVar("T", bound=BaseModel)
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 OPENROUTER_APP_NAME = "CPCC Task Automation"
 OPENROUTER_APP_URL = "https://github.com/gitchrisqueen/cpcc_task_automation"
+
+# Retry configuration for OpenRouter
+DEFAULT_MAX_RETRIES = 2  # Total attempts (1 initial + 1 retry)
+DEFAULT_RETRY_DELAY = 1.0  # Base delay in seconds
 
 
 
@@ -186,11 +197,14 @@ async def get_openrouter_completion(
     use_auto_route: bool = True,
     model_name: Optional[str] = None,
     max_tokens: Optional[int] = None,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> T:
     """Get structured completion from OpenRouter using OpenAI-compatible API.
 
     OpenRouter provides an OpenAI-compatible API endpoint, so we use AsyncOpenAI
     with base_url pointing to https://openrouter.ai/api/v1.
+    
+    Includes retry logic for malformed JSON responses and transient errors.
 
     Args:
         prompt: The prompt to send to the model
@@ -198,13 +212,14 @@ async def get_openrouter_completion(
         use_auto_route: If True, use OpenRouter's auto-routing (recommended)
         model_name: Specific model to use (required if use_auto_route=False)
         max_tokens: Maximum tokens in response (optional)
+        max_retries: Maximum number of retry attempts (default: 2)
         
     Returns:
         Validated Pydantic model instance
         
     Raises:
-        OpenAISchemaValidationError: If response doesn't match schema
-        OpenAITransportError: If API call fails
+        OpenAISchemaValidationError: If response doesn't match schema after retries
+        OpenAITransportError: If API call fails after retries
         ValueError: If use_auto_route=False but model_name not provided
         
     Example:
@@ -236,94 +251,176 @@ async def get_openrouter_completion(
 
     client = _get_openrouter_client()
     
+    # Debug logging setup
+    correlation_id = create_correlation_id() if should_debug() else None
+    
     logger.info(
         f"Calling OpenRouter with model={effective_model}, "
-        f"auto_route={use_auto_route}, schema={schema_model.__name__}"
+        f"auto_route={use_auto_route}, schema={schema_model.__name__}, "
+        f"max_retries={max_retries}, correlation_id={correlation_id}"
     )
+    
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            # Build API call parameters for OpenAI-compatible endpoint
+            api_kwargs = {
+                "model": effective_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": json_schema,
+                },
+            }
+            
+            # Add optional parameters
+            if max_tokens:
+                api_kwargs["max_completion_tokens"] = max_tokens
 
-    try:
-        # Build API call parameters for OpenAI-compatible endpoint
-        api_kwargs = {
-            "model": effective_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": json_schema,
-            },
-        }
-        
-        # Add optional parameters
-        if max_tokens:
-            api_kwargs["max_completion_tokens"] = max_tokens
-
-        # Constrain auto-router if OPENROUTER_ALLOWED_MODELS is configured
-        if use_auto_route:
-            allowed_models = _parse_allowed_models()
-            if allowed_models:
-                logger.info(
-                    "Applying OPENROUTER_ALLOWED_MODELS constraints: "
-                    f"{', '.join(allowed_models)}"
+            # Constrain auto-router if OPENROUTER_ALLOWED_MODELS is configured
+            if use_auto_route:
+                allowed_models = _parse_allowed_models()
+                if allowed_models:
+                    logger.info(
+                        f"Attempt {attempt + 1}: Applying OPENROUTER_ALLOWED_MODELS constraints: "
+                        f"{', '.join(allowed_models)}"
+                    )
+                    api_kwargs["extra_body"] = {
+                        "plugins": [
+                            {
+                                "id": "auto-router",
+                                "allowed_models": allowed_models,
+                            }
+                        ]
+                    }
+            
+            # Debug: Record request
+            if correlation_id:
+                record_request(
+                    correlation_id=correlation_id,
+                    model=effective_model,
+                    messages=api_kwargs["messages"],
+                    response_format=api_kwargs.get("response_format"),
+                    max_tokens=max_tokens,
+                    schema_name=schema_model.__name__,
                 )
-                api_kwargs["extra_body"] = {
-                    "plugins": [
-                        {
-                            "id": "auto-router",
-                            "allowed_models": allowed_models,
-                        }
-                    ]
-                }
-        # Call OpenRouter API using OpenAI-compatible client
-        response = await client.chat.completions.create(**api_kwargs)
+            
+            # Call OpenRouter API using OpenAI-compatible client
+            response = await client.chat.completions.create(**api_kwargs)
 
-        # Extract and validate response
-        if not response.choices:
-            raise OpenAITransportError("No choices in OpenRouter response")
-        
-        choice = response.choices[0]
-        
-        # Check for refusal
-        if hasattr(choice.message, 'refusal') and choice.message.refusal:
-            raise OpenAITransportError(f"Model refused: {choice.message.refusal}")
-        
-        # Parse JSON content
-        content = choice.message.content
-        if not content:
-            raise OpenAISchemaValidationError(
-                "Empty content in OpenRouter response",
-                validation_errors=["No content returned"]
+            # Extract and validate response
+            if not response.choices:
+                raise OpenAITransportError("No choices in OpenRouter response")
+            
+            choice = response.choices[0]
+            
+            # Check for refusal
+            if hasattr(choice.message, 'refusal') and choice.message.refusal:
+                raise OpenAITransportError(f"Model refused: {choice.message.refusal}")
+            
+            # Parse JSON content
+            content = choice.message.content
+            if not content:
+                error_msg = "Empty content in OpenRouter response"
+                if correlation_id:
+                    record_response(
+                        correlation_id=correlation_id,
+                        response=None,
+                        decision_notes=error_msg,
+                    )
+                raise OpenAISchemaValidationError(
+                    error_msg,
+                    validation_errors=["No content returned"]
+                )
+            
+            try:
+                parsed_data = json.loads(content)
+            except json.JSONDecodeError as e:
+                error_msg = f"Invalid JSON in OpenRouter response: {e}"
+                if correlation_id:
+                    record_response(
+                        correlation_id=correlation_id,
+                        response=content,
+                        decision_notes=error_msg,
+                    )
+                raise OpenAISchemaValidationError(
+                    error_msg,
+                    validation_errors=[str(e)]
+                )
+            
+            # Validate against Pydantic schema
+            try:
+                result = schema_model(**parsed_data)
+            except ValidationError as e:
+                error_msg = f"Response doesn't match schema {schema_model.__name__}: {e}"
+                if correlation_id:
+                    record_response(
+                        correlation_id=correlation_id,
+                        response=parsed_data,
+                        decision_notes=error_msg,
+                    )
+                raise OpenAISchemaValidationError(
+                    error_msg,
+                    validation_errors=[str(x) for x in e.errors()]
+                )
+            
+            # Success! Debug log and return
+            if correlation_id:
+                record_response(
+                    correlation_id=correlation_id,
+                    response=result.model_dump(),
+                    decision_notes="Success",
+                )
+            
+            logger.info(
+                f"OpenRouter completion successful with {effective_model}, "
+                f"used_model={response.model}, attempt={attempt + 1}"
             )
-        
-        try:
-            parsed_data = json.loads(content)
-        except json.JSONDecodeError as e:
-            raise OpenAISchemaValidationError(
-                f"Invalid JSON in OpenRouter response: {e}",
-                validation_errors=[str(e)]
+            
+            return result
+            
+        except OpenAISchemaValidationError as e:
+            # Retry JSON parse errors, but not schema validation errors
+            last_error = e
+            if "Invalid JSON" in str(e) or "Empty content" in str(e):
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries} failed with JSON error: {e}. "
+                    f"{'Retrying...' if attempt + 1 < max_retries else 'No more retries.'}"
+                )
+                if attempt + 1 < max_retries:
+                    await asyncio.sleep(DEFAULT_RETRY_DELAY * (attempt + 1))
+                    continue
+            # Schema validation errors - don't retry
+            logger.error(f"Schema validation error (not retrying): {e}")
+            raise
+            
+        except OpenAITransportError as e:
+            last_error = e
+            logger.warning(
+                f"Attempt {attempt + 1}/{max_retries} failed with transport error: {e}. "
+                f"{'Retrying...' if attempt + 1 < max_retries else 'No more retries.'}"
             )
-        
-        # Validate against Pydantic schema
-        try:
-            result = schema_model(**parsed_data)
-        except ValidationError as e:
-            raise OpenAISchemaValidationError(
-                f"Response doesn't match schema {schema_model.__name__}: {e}",
-                validation_errors=[str(x) for x in e.errors()]
-            )
-        
-        logger.info(
-            f"OpenRouter completion successful with {effective_model}, "
-            f"used_model={response.model}"
-        )
-        
-        return result
-        
-    except OpenAISchemaValidationError:
-        raise
-    except OpenAITransportError:
-        raise
-    except Exception as e:
-        logger.error(f"OpenRouter API error: {e}")
-        raise OpenAITransportError(f"OpenRouter API error: {e}")
+            if attempt + 1 < max_retries:
+                await asyncio.sleep(DEFAULT_RETRY_DELAY * (attempt + 1))
+                continue
+            raise
+            
+        except Exception as e:
+            last_error = e
+            logger.error(f"Attempt {attempt + 1}/{max_retries} failed with unexpected error: {e}")
+            if attempt + 1 < max_retries:
+                await asyncio.sleep(DEFAULT_RETRY_DELAY * (attempt + 1))
+                continue
+            raise OpenAITransportError(f"OpenRouter API error: {e}")
+    
+    # If we exhausted all retries, raise the last error
+    if last_error:
+        logger.error(f"All {max_retries} attempts failed. Last error: {last_error}")
+        raise last_error
+    
+    # Should never reach here
+    raise OpenAITransportError("Unknown error in OpenRouter completion")
 
 
 # Convenience function for sync contexts
@@ -333,6 +430,7 @@ def get_openrouter_completion_sync(
     use_auto_route: bool = True,
     model_name: Optional[str] = None,
     max_tokens: Optional[int] = None,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> T:
     """Sync wrapper for get_openrouter_completion.
     
@@ -349,5 +447,6 @@ def get_openrouter_completion_sync(
             use_auto_route=use_auto_route,
             model_name=model_name,
             max_tokens=max_tokens,
+            max_retries=max_retries,
         )
     )
