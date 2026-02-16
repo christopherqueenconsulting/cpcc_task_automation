@@ -209,8 +209,31 @@ poetry run ruff check --fix .        # Auto-fix issues
 ```
 
 ### GitHub Actions Workflows
+- **unit-tests.yml**: Unit tests with coverage (required for PR merge)
+- **integration-coverage.yml**: Integration tests with coverage (required for PR merge)
+- **e2e-coverage.yml**: E2E tests with Playwright (required for PR merge)
+- **codeql.yml** / **codeql-analysis.yml**: Security scanning
+- **gitguardian-scan.yml**: Secret scanning
+- **dependabot-auto-merge.yml**: Auto-approve and merge Dependabot PRs
 - **Selenium_Action.yml**: Manual web scraping workflow (workflow_dispatch)
 - **Cron_Action.yml**: Scheduled automation workflow with secrets/vars
+
+### CI Failure Handling
+**CRITICAL**: All PRs must pass CI tests before merging. Dependabot PRs auto-merge only when all checks pass.
+
+When CI tests fail:
+1. **Investigate**: Use GitHub MCP tools to get workflow run logs
+2. **Reproduce**: Run tests locally to understand the failure
+3. **Fix**: Make minimal changes to resolve the issue
+4. **Verify**: Test locally and push to trigger CI re-run
+
+**See detailed instructions**: `.github/instructions/ci-failure-handling.instructions.md`
+
+**Common CI failure types:**
+- Import errors (missing functions, incorrect paths)
+- Test collection errors (syntax errors, invalid markers)
+- Mock/assertion failures (API changes, incorrect test setup)
+- Dependency issues (version incompatibilities)
 
 ### Environment Variables
 Required for automation features (set in `.streamlit/secrets.toml` or environment):
@@ -348,6 +371,10 @@ When GitHub Copilot suggests code in this repository:
 ## Notes for Copilot
 
 - This is a **production system** used by real instructors - prioritize **reliability**
+- **⚠️ CI FAILURES**: NEVER ignore failing CI tests - they block PR merges and Dependabot auto-merge
+  - Always investigate failures using GitHub MCP tools
+  - Fix issues before marking PR complete
+  - See `.github/instructions/ci-failure-handling.instructions.md` for complete process
 - **⚠️ OpenAI CRITICAL**: ALL OpenAI usage MUST follow `docs/openai-structured-outputs-guide.md` - violations cause 400 errors
   - Use GPT-5 models ONLY (gpt-5, gpt-5-mini, gpt-5-nano)
   - Use `get_structured_completion()` wrapper from `openai_client.py`
