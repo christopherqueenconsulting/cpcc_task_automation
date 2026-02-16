@@ -1090,9 +1090,37 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
             models = _fetch_openrouter_models_cached()
 
             if not models:
-                st.warning("No models available from OpenRouter. Check your API key and try again later.")
-                selected_model = "openrouter/auto"
-                use_auto_route = True
+                # Fall back to allowed models from environment or default list
+                from cqc_cpcc.utilities.env_constants import OPENROUTER_ALLOWED_MODELS
+                
+                if OPENROUTER_ALLOWED_MODELS:
+                    # Parse comma-separated list from environment
+                    allowed_model_ids = [m.strip() for m in OPENROUTER_ALLOWED_MODELS.split(',') if m.strip()]
+                    st.info(f"Using allowed models from OPENROUTER_ALLOWED_MODELS environment variable ({len(allowed_model_ids)} models)")
+                else:
+                    # Use default list of known GPT-5 models
+                    allowed_model_ids = [
+                        "openai/gpt-5-mini",
+                        "openai/gpt-5",
+                        "openai/gpt-5-nano"
+                    ]
+                    st.info("Using default allowed models: GPT-5 family")
+                
+                # Create model options from allowed list
+                model_options = allowed_model_ids
+                model_id_map = {model_id: model_id for model_id in allowed_model_ids}
+                
+                # Sort alphabetically
+                model_options.sort()
+                
+                selected_display = st.selectbox(
+                    label="Select OpenRouter Model",
+                    key=f"openrouter_model_{uk}",
+                    options=model_options,
+                    help="Choose a specific model from the allowed models list"
+                )
+                
+                selected_model = model_id_map.get(selected_display, allowed_model_ids[0])
             else:
                 # Create model options from fetched models
                 # Format: "model_id - Model Name"

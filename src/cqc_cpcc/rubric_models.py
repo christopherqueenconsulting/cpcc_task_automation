@@ -308,15 +308,27 @@ class CriterionResult(BaseModel):
         criterion_id: ID of the criterion being assessed
         criterion_name: Name of the criterion
         points_possible: Maximum points for this criterion
-        points_earned: Points earned by the student
+        points_earned: Points earned by the student (Optional - backend may compute from level or errors)
         selected_level_label: Optional label of the selected performance level
         feedback: Detailed feedback for this criterion
         evidence: Optional list of code snippets or references supporting the assessment
+    
+    Note:
+        For scoring_mode='level_band' or 'error_count', the AI should NOT populate points_earned.
+        The backend will compute it from selected_level_label or detected errors.
+        For scoring_mode='manual', the AI must populate points_earned.
     """
     criterion_id: Annotated[str, Field(description="ID of the criterion")]
     criterion_name: Annotated[str, Field(description="Name of the criterion")]
     points_possible: Annotated[int, Field(ge=0, description="Maximum points for this criterion")]
-    points_earned: Annotated[int, Field(ge=0, description="Points earned")]
+    points_earned: Annotated[
+        Optional[int], 
+        Field(
+            default=None,
+            ge=0,
+            description="Points earned (AI assigns for scoring_mode='manual', backend computes for other modes)"
+        )
+    ]
     selected_level_label: Annotated[
         Optional[str], 
         Field(default=None, description="Label of selected performance level")
@@ -329,9 +341,9 @@ class CriterionResult(BaseModel):
     
     @field_validator('points_earned')
     @classmethod
-    def validate_points_earned(cls, points_earned: int, info) -> int:
-        """Validate that points_earned <= points_possible."""
-        if 'points_possible' in info.data:
+    def validate_points_earned(cls, points_earned: Optional[int], info) -> Optional[int]:
+        """Validate that points_earned <= points_possible when provided."""
+        if points_earned is not None and 'points_possible' in info.data:
             points_possible = info.data['points_possible']
             if points_earned > points_possible:
                 raise ValueError(
@@ -419,9 +431,23 @@ class RubricAssessmentResult(BaseModel):
     
     @model_validator(mode='after')
     def validate_totals_match_criteria(self) -> 'RubricAssessmentResult':
-        """Validate that totals match sum of criteria results."""
+        """Validate that totals match sum of criteria results.
+        
+        Note: This validation only runs after backend scoring has populated all
+        points_earned values. If any criterion has None points_earned, we skip
+        the validation (backend will fix it).
+        """
         if self.criteria_results:
             computed_possible = sum(r.points_possible for r in self.criteria_results)
+            
+            # Check if any criterion has None points_earned (pre-backend-scoring state)
+            has_none_points = any(r.points_earned is None for r in self.criteria_results)
+            
+            if has_none_points:
+                # Skip validation - backend scoring will populate points_earned
+                return self
+            
+            # All points_earned are populated - validate totals
             computed_earned = sum(r.points_earned for r in self.criteria_results)
             
             if computed_possible != self.total_points_possible:
