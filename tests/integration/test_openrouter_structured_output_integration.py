@@ -291,6 +291,7 @@ class TestOpenRouterCSC113Week4Reflection:
             Rubric,
             Criterion,
             PerformanceLevel,
+            OverallBand,
             RubricAssessmentResult,
         )
         
@@ -425,7 +426,32 @@ class TestOpenRouterCSC113Week4Reflection:
                     ],
                 ),
             ],
-            overall_performance_bands=[],
+            overall_performance_bands=[
+                OverallBand(
+                    label="Exemplary",
+                    score_min=90,
+                    score_max=100,
+                    description="Outstanding work demonstrating mastery",
+                ),
+                OverallBand(
+                    label="Proficient",
+                    score_min=75,
+                    score_max=89,
+                    description="Good work meeting expectations",
+                ),
+                OverallBand(
+                    label="Developing",
+                    score_min=60,
+                    score_max=74,
+                    description="Acceptable work with room for improvement",
+                ),
+                OverallBand(
+                    label="Beginning",
+                    score_min=0,
+                    score_max=59,
+                    description="Work needs significant improvement",
+                ),
+            ],
         )
         
         # Sample student submission
