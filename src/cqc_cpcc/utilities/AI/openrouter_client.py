@@ -69,7 +69,7 @@ OPENROUTER_APP_NAME = "CPCC Task Automation"
 OPENROUTER_APP_URL = "https://github.com/gitchrisqueen/cpcc_task_automation"
 
 # Retry configuration for OpenRouter
-DEFAULT_MAX_RETRIES = 2  # Total attempts (1 initial + 1 retry)
+DEFAULT_MAX_RETRIES = 3  # Total attempts (1 initial + 2 retries) - matches OpenAI for consistency
 DEFAULT_RETRY_DELAY = 1.0  # Base delay in seconds
 
 
@@ -388,8 +388,10 @@ async def get_openrouter_completion(
             # Retry JSON parse errors, but not schema validation errors
             last_error = e
             if "Invalid JSON" in str(e) or "Empty content" in str(e):
+                # Include model info in retry logs
+                model_used = response.model if 'response' in locals() and response else effective_model
                 logger.warning(
-                    f"Attempt {attempt + 1}/{max_retries} failed with JSON error: {e}. "
+                    f"Attempt {attempt + 1}/{max_retries} failed with JSON error from model {model_used}: {e}. "
                     f"{'Retrying...' if attempt + 1 < max_retries else 'No more retries.'}"
                 )
                 if attempt + 1 < max_retries:
