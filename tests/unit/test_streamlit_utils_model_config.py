@@ -29,7 +29,7 @@ class TestOpenRouterModelConfigurationFallback:
         
         # This test documents the behavior - actual testing requires
         # setting environment variables before import
-        assert OPENROUTER_ALLOWED_MODELS is not None or OPENROUTER_ALLOWED_MODELS == ''
+        assert isinstance(OPENROUTER_ALLOWED_MODELS, (str, type(None)))
     
     def test_default_model_list_format(self):
         """Test that the default model list has the expected format."""
