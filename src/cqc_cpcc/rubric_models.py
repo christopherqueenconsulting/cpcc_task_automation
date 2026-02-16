@@ -436,6 +436,9 @@ class RubricAssessmentResult(BaseModel):
         Note: This validation only runs after backend scoring has populated all
         points_earned values. If any criterion has None points_earned, we skip
         the validation (backend will fix it).
+        
+        Also skips validation if total_points_earned is 0, which indicates AI
+        followed the prompt to set it to 0 for backend recalculation.
         """
         if self.criteria_results:
             computed_possible = sum(r.points_possible for r in self.criteria_results)
@@ -445,6 +448,10 @@ class RubricAssessmentResult(BaseModel):
             
             if has_none_points:
                 # Skip validation - backend scoring will populate points_earned
+                return self
+            
+            # Skip validation if total_points_earned is 0 (AI set it for backend recalculation)
+            if self.total_points_earned == 0:
                 return self
             
             # All points_earned are populated - validate totals
