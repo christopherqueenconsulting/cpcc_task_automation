@@ -371,7 +371,8 @@ def aggregate_rubric_result(
     """
     # Compute totals from criteria results
     computed_total_possible = sum(r.points_possible for r in criteria_results)
-    computed_total_earned = sum(r.points_earned for r in criteria_results)
+    # Handle None values in points_earned (shouldn't happen after backend scoring, but safety check)
+    computed_total_earned = sum(r.points_earned if r.points_earned is not None else 0 for r in criteria_results)
     
     # Validate against rubric
     expected_total_possible = rubric.total_points_possible

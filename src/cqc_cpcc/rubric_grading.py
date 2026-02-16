@@ -90,16 +90,20 @@ def build_rubric_grading_prompt(
     
     # Criteria breakdown
     prompt_parts.append("### Criteria")
+    prompt_parts.append("**IMPORTANT**: Use the exact `criterion_id` values shown below in your response.")
+    prompt_parts.append("")
     for criterion in rubric.criteria:
         if not criterion.enabled:
             continue  # Skip disabled criteria
         
-        prompt_parts.append(f"\n**{criterion.name}** (Max: {criterion.max_points} points)")
+        prompt_parts.append(f"\n**Criterion ID: `{criterion.criterion_id}`**")
+        prompt_parts.append(f"**Name:** {criterion.name}")
+        prompt_parts.append(f"**Max Points:** {criterion.max_points}")
         if criterion.description:
-            prompt_parts.append(f"- {criterion.description}")
+            prompt_parts.append(f"**Description:** {criterion.description}")
         
         if criterion.levels:
-            prompt_parts.append("Performance Levels:")
+            prompt_parts.append("**Performance Levels:**")
             for level in sorted(criterion.levels, key=lambda l: l.score_max, reverse=True):
                 prompt_parts.append(
                     f"  - **{level.label}** ({level.score_min}-{level.score_max} points): {level.description}"
@@ -201,6 +205,7 @@ def build_rubric_grading_prompt(
     
     prompt_parts.append("### Output Requirements")
     prompt_parts.append("Return structured JSON matching RubricAssessmentResult schema.")
+    prompt_parts.append("- **CRITICAL**: Use EXACT criterion_id values from the rubric above (e.g., if rubric shows 'criterion_id: documentation', use 'documentation', NOT 'DOC' or 'doc_quality')")
     prompt_parts.append("- Set total_points_earned=0 (backend recalculates from all criteria)")
     prompt_parts.append("- For scoring_mode='level_band': DO NOT set points_earned in criteria_results (backend computes from selected_level_label)")
     prompt_parts.append("- For scoring_mode='error_count': DO NOT set points_earned in criteria_results (backend computes from error counts)")
@@ -519,8 +524,12 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         
         if not rubric_criterion:
             logger.warning(
-                f"Criterion '{criterion_result.criterion_id}' in result not found in rubric"
+                f"Criterion '{criterion_result.criterion_id}' in result not found in rubric. "
+                f"This criterion will be ignored (points_earned set to 0)."
             )
+            # Set points_earned to 0 for criteria not in rubric to avoid NoneType errors
+            if criterion_result.points_earned is None:
+                criterion_result.points_earned = 0
             updated_criteria_results.append(criterion_result)
             continue
         
