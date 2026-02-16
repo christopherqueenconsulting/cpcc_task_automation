@@ -47,6 +47,7 @@ openpyxl = "^3"
 tabulate = "^0"
 pypdf = "^6"
 pymupdf = "^1"
+onnxruntime = ">=1.20,<1.24"
 
 
 
@@ -82,6 +83,7 @@ pytest-asyncio = "^1"
 grandalf = "^0"
 pytest-profiling = "^1"
 pytest-timeout = "^2"
+pytest-dotenv = "^0"
 
 
 [tool.poetry.group.test_integration]
@@ -139,6 +141,8 @@ markers = [
     "e2e: mark a test as an end-to-end test",
 ]
 asyncio_mode = "auto"
+# Load environment variables for tests via pytest-dotenv
+env_files = [".env"]
 # Filter third-party deprecation warnings that are outside our control
 filterwarnings = [
     # Protobuf 3.x uses deprecated datetime.utcfromtimestamp() in well_known_types.py
