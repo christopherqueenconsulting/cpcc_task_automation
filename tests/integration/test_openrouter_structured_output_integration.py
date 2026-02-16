@@ -312,25 +312,25 @@ class TestOpenRouterCSC113Week4Reflection:
                     enabled=True,
                     performance_levels=[
                         PerformanceLevel(
-                            level_label="Exemplary",
+                            label="Exemplary",
                             score_min=18,
                             score_max=20,
                             description="All three prompts included, exact and unparaphrased",
                         ),
                         PerformanceLevel(
-                            level_label="Proficient",
+                            label="Proficient",
                             score_min=14,
                             score_max=17,
                             description="Three prompts with minor formatting issues",
                         ),
                         PerformanceLevel(
-                            level_label="Developing",
+                            label="Developing",
                             score_min=10,
                             score_max=13,
                             description="Missing one prompt or prompts paraphrased",
                         ),
                         PerformanceLevel(
-                            level_label="Beginning",
+                            label="Beginning",
                             score_min=0,
                             score_max=9,
                             description="Missing multiple prompts or heavily paraphrased",
@@ -346,13 +346,13 @@ class TestOpenRouterCSC113Week4Reflection:
                     enabled=True,
                     performance_levels=[
                         PerformanceLevel(
-                            level_label="Exemplary",
+                            label="Exemplary",
                             score_min=27,
                             score_max=30,
                             description="Specific, detailed cause-effect analysis",
                         ),
                         PerformanceLevel(
-                            level_label="Proficient",
+                            label="Proficient",
                             score_min=21,
                             score_max=26,
                             description="Identifies several specific elements with reasonable analysis",
@@ -368,13 +368,13 @@ class TestOpenRouterCSC113Week4Reflection:
                     enabled=True,
                     performance_levels=[
                         PerformanceLevel(
-                            level_label="Exemplary",
+                            label="Exemplary",
                             score_min=23,
                             score_max=25,
                             description="Describes specific limitation with thoughtful interpretation",
                         ),
                         PerformanceLevel(
-                            level_label="Proficient",
+                            label="Proficient",
                             score_min=18,
                             score_max=22,
                             description="Identifies genuine limitation with reasonable specificity",
@@ -390,13 +390,13 @@ class TestOpenRouterCSC113Week4Reflection:
                     enabled=True,
                     performance_levels=[
                         PerformanceLevel(
-                            level_label="Exemplary",
+                            label="Exemplary",
                             score_min=18,
                             score_max=20,
                             description="Clear connections to course content on training/ML",
                         ),
                         PerformanceLevel(
-                            level_label="Proficient",
+                            label="Proficient",
                             score_min=14,
                             score_max=17,
                             description="Reasonable connections to technical concepts",
@@ -412,13 +412,13 @@ class TestOpenRouterCSC113Week4Reflection:
                     enabled=True,
                     performance_levels=[
                         PerformanceLevel(
-                            level_label="Exemplary",
+                            label="Exemplary",
                             score_min=4,
                             score_max=5,
                             description="Meets all format requirements, well-organized",
                         ),
                         PerformanceLevel(
-                            level_label="Proficient",
+                            label="Proficient",
                             score_min=3,
                             score_max=4,
                             description="Meets basic requirements with minor issues",
