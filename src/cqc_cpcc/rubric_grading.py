@@ -181,9 +181,9 @@ def build_rubric_grading_prompt(
     prompt_parts.append("")
     prompt_parts.append("### Evaluation Process")
     prompt_parts.append("For each enabled criterion:")
-    prompt_parts.append("- scoring_mode='manual': Assign points (0 to max_points). Select performance level label if levels exist.")
-    prompt_parts.append("- scoring_mode='level_band': Select performance level label. Set points_earned=0 (backend computes). Explain level selection in feedback.")
-    prompt_parts.append("- scoring_mode='error_count': Set points_earned=0 (backend computes from error counts). Describe detected errors in feedback.")
+    prompt_parts.append("- scoring_mode='manual': Assign points_earned (0 to max_points). Select performance level label if levels exist.")
+    prompt_parts.append("- scoring_mode='level_band': Select ONLY selected_level_label. DO NOT populate points_earned (backend computes from level). Explain level selection in feedback.")
+    prompt_parts.append("- scoring_mode='error_count': DO NOT populate points_earned (backend computes from error counts). Describe detected errors in feedback.")
     prompt_parts.append("")
     prompt_parts.append("For all criteria:")
     prompt_parts.append("- Evaluate submission against criterion")
@@ -201,7 +201,10 @@ def build_rubric_grading_prompt(
     
     prompt_parts.append("### Output Requirements")
     prompt_parts.append("Return structured JSON matching RubricAssessmentResult schema.")
-    prompt_parts.append("- Set total_points_earned=0 (backend recalculates from criteria)")
+    prompt_parts.append("- Set total_points_earned=0 (backend recalculates from all criteria)")
+    prompt_parts.append("- For scoring_mode='level_band': DO NOT set points_earned in criteria_results (backend computes from selected_level_label)")
+    prompt_parts.append("- For scoring_mode='error_count': DO NOT set points_earned in criteria_results (backend computes from error counts)")
+    prompt_parts.append("- For scoring_mode='manual': SET points_earned in criteria_results (0 to max_points)")
     prompt_parts.append("- Include overall_feedback summarizing assessment")
     prompt_parts.append("- Be objective, fair, and constructive")
     prompt_parts.append("")
@@ -551,7 +554,9 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                     f"Criterion '{criterion_result.criterion_id}' has scoring_mode='level_band' "
                     f"but no selected_level_label in result. Cannot compute score."
                 )
-                # Keep whatever points the LLM assigned (may be 0)
+                # Default to 0 if no level selected
+                if criterion_result.points_earned is None:
+                    criterion_result.points_earned = 0
             else:
                 try:
                     scoring_result = score_level_band_criterion(
@@ -572,7 +577,9 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                     logger.error(
                         f"Failed to score level_band criterion '{criterion_result.criterion_id}': {e}"
                     )
-                    # Keep whatever points the LLM assigned (may be 0)
+                    # Default to 0 if scoring fails
+                    if criterion_result.points_earned is None:
+                        criterion_result.points_earned = 0
         
         elif rubric_criterion.scoring_mode == "error_count":
             # Error-count scoring: compute points from error counts
@@ -593,7 +600,15 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 f"(effective: {scoring_result['effective_major']} major, {scoring_result['effective_minor']} minor)"
             )
         
-        # scoring_mode='manual' - keep LLM-assigned points as-is
+        else:
+            # scoring_mode='manual' - keep LLM-assigned points as-is
+            # If AI didn't populate points_earned, default to 0
+            if criterion_result.points_earned is None:
+                logger.warning(
+                    f"Criterion '{criterion_result.criterion_id}' has scoring_mode='manual' "
+                    f"but AI did not populate points_earned. Defaulting to 0."
+                )
+                criterion_result.points_earned = 0
         
         updated_criteria_results.append(criterion_result)
     
