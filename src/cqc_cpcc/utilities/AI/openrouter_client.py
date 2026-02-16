@@ -149,6 +149,37 @@ def _parse_allowed_models() -> list[str] | None:
     return allowed_models or None
 
 
+def get_openrouter_plugins() -> Optional[list]:
+    """Get OpenRouter plugins configuration for auto-router.
+    
+    Parses OPENROUTER_ALLOWED_MODELS environment variable and builds the plugins
+    parameter for OpenRouter API auto-router configuration using official SDK components.
+    
+    Returns:
+        None if OPENROUTER_ALLOWED_MODELS is not set or empty (uses account defaults).
+        Otherwise, returns a list containing a PluginAutoRouter
+        component with the allowed models configuration.
+        
+    Example:
+        >>> import os
+        >>> os.environ['OPENROUTER_ALLOWED_MODELS'] = 'google/gemini-*,anthropic/claude-*'
+        >>> plugins = get_openrouter_plugins()
+        >>> # Returns [PluginAutoRouter(id='auto-router', allowed_models=[...])]
+    """
+    from openrouter import components
+    
+    allowed_models = _parse_allowed_models()
+    if not allowed_models:
+        return None
+    
+    return [
+        components.PluginAutoRouter(
+            id="auto-router",
+            allowed_models=allowed_models,
+        )
+    ]
+
+
 async def get_openrouter_completion(
     prompt: str,
     schema_model: Type[T],
