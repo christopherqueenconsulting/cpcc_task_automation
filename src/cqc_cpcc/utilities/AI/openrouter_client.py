@@ -327,6 +327,7 @@ async def get_openrouter_completion(
                     record_response(
                         correlation_id=correlation_id,
                         response=None,
+                        schema_name=schema_model.__name__,
                         decision_notes=error_msg,
                     )
                 raise OpenAISchemaValidationError(
@@ -342,6 +343,7 @@ async def get_openrouter_completion(
                     record_response(
                         correlation_id=correlation_id,
                         response=content,
+                        schema_name=schema_model.__name__,
                         decision_notes=error_msg,
                     )
                 raise OpenAISchemaValidationError(
@@ -358,6 +360,7 @@ async def get_openrouter_completion(
                     record_response(
                         correlation_id=correlation_id,
                         response=parsed_data,
+                        schema_name=schema_model.__name__,
                         decision_notes=error_msg,
                     )
                 raise OpenAISchemaValidationError(
@@ -370,6 +373,7 @@ async def get_openrouter_completion(
                 record_response(
                     correlation_id=correlation_id,
                     response=result.model_dump(),
+                    schema_name=schema_model.__name__,
                     decision_notes="Success",
                 )
             
