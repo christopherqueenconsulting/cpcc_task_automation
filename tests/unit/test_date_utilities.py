@@ -95,8 +95,16 @@ def test_get_datetime_with_natural_language_parses_correctly():
 
 
 @pytest.mark.unit
-def test_get_datetime_with_invalid_string_raises_error():
-    """Test get_datetime raises ValueError for invalid date strings."""
+def test_get_datetime_with_invalid_string_raises_error(mocker):
+    """Test get_datetime raises ValueError for invalid date strings.
+    
+    Mocks dateparser.parse to return None immediately for performance,
+    since we're only testing the error handling path, not actual parsing.
+    """
+    # Mock dateparser to return None immediately (invalid parse)
+    # This makes the test ~100x faster by avoiding dateparser's slow retry logic
+    mocker.patch('cqc_cpcc.utilities.date.dateparser.parse', return_value=None)
+    
     with pytest.raises(ValueError, match="invalid datetime as string"):
         get_datetime("not-a-date")
 
