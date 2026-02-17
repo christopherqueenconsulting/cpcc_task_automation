@@ -47,7 +47,7 @@ jobs:
           OPENAI_API_KEY: "test-key-not-used"
         run: |
           echo "Running integration tests with coverage..."
-          poetry run pytest -m integration --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml:coverage-integration.xml --cov-report=term-missing
+          poetry run pytest -m integration --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml:coverage-integration.xml --cov-report=term-missing --junitxml=junit-integration.xml -o junit_family=legacy
 
       - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -71,3 +71,12 @@ jobs:
           
           # Verbose output for debugging
           verbose: true
+      
+      - name: Upload test results to Codecov
+        # Upload test results even if tests fail (using !cancelled())
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: integration
+          file: ./junit-integration.xml

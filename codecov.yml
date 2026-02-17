@@ -77,7 +77,8 @@ coverage:
 # Comment configuration for PR feedback
 comment:
   # Post coverage summary as PR comment
-  layout: "condensed_header, condensed_files, condensed_footer"
+  # Include component information in PR comments
+  layout: "condensed_header, condensed_files, condensed_footer, components"
   
   # Show both patch and project status in comment
   behavior: default
@@ -120,3 +121,104 @@ flags:
       - "src/cqc_streamlit_app/"
     # Join with other flags
     carryforward: true
+
+# Component configuration for categorizing coverage by logical areas
+# Components provide virtual filters to isolate coverage data
+component_management:
+  default_rules:
+    # Default: all components have project status with 80% target
+    statuses:
+      - type: project
+        target: 80%
+        threshold: 1%
+        only_pulls: true
+  
+  individual_components:
+    # Core automation modules - web scraping and data collection
+    - component_id: core_automation
+      name: Core Automation
+      paths:
+        - "src/cqc_cpcc/brightspace.py"
+        - "src/cqc_cpcc/my_colleges.py"
+        - "src/cqc_cpcc/attendance.py"
+        - "src/cqc_cpcc/find_student.py"
+      statuses:
+        - type: project
+          target: 80%
+        - type: patch
+          target: 80%
+    
+    # AI/LLM functionality - OpenAI, OpenRouter, prompts
+    - component_id: ai_llm
+      name: AI/LLM
+      paths:
+        - "src/cqc_cpcc/utilities/AI/**"
+      statuses:
+        - type: project
+          target: 80%
+        - type: patch
+          target: 80%
+    
+    # Rubric grading system - models, config, scoring
+    - component_id: rubric_grading
+      name: Rubric Grading
+      paths:
+        - "src/cqc_cpcc/rubric_*.py"
+        - "src/cqc_cpcc/scoring/**"
+      statuses:
+        - type: project
+          target: 90%  # Higher standard for critical grading logic
+        - type: patch
+          target: 90%
+    
+    # Exam and project grading
+    - component_id: exam_grading
+      name: Exam & Project Grading
+      paths:
+        - "src/cqc_cpcc/exam_review.py"
+        - "src/cqc_cpcc/project_feedback.py"
+        - "src/cqc_cpcc/error_*.py"
+      statuses:
+        - type: project
+          target: 80%
+        - type: patch
+          target: 80%
+    
+    # Feedback and document generation
+    - component_id: feedback_generation
+      name: Feedback Generation
+      paths:
+        - "src/cqc_cpcc/feedback_doc_generator.py"
+        - "src/cqc_cpcc/student_feedback_builder.py"
+      statuses:
+        - type: project
+          target: 95%  # High coverage for student-facing output
+        - type: patch
+          target: 95%
+    
+    # Utilities - general helper functions
+    - component_id: utilities
+      name: Utilities
+      paths:
+        - "src/cqc_cpcc/utilities/utils.py"
+        - "src/cqc_cpcc/utilities/date.py"
+        - "src/cqc_cpcc/utilities/logger.py"
+        - "src/cqc_cpcc/utilities/selenium_util.py"
+        - "src/cqc_cpcc/utilities/pdf_utils.py"
+        - "src/cqc_cpcc/utilities/zip_grading_utils.py"
+      statuses:
+        - type: project
+          target: 80%
+        - type: patch
+          target: 80%
+    
+    # Streamlit UI - user interface components
+    - component_id: streamlit_ui
+      name: Streamlit UI
+      paths:
+        - "src/cqc_streamlit_app/**"
+      # UI has lower coverage requirement (tested via E2E)
+      statuses:
+        - type: project
+          target: 30%
+          informational: true
