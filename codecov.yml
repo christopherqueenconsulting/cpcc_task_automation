@@ -10,6 +10,12 @@ codecov:
   # This prevents rogue branches from changing coverage rules
   strict_yaml_branch: master
 
+  # Codecov will reject reports that are over 12 hours old according to the timestamp in the report. 
+  # This is to prevent reports that may have been accidentally checked into
+  # To disable this functionality please add the following
+  max_report_age: off
+  #max_report_age can be listed in hours '#h' (hours) or '#d' (days)
+
 # Coverage analysis configuration
 coverage:
   # Precision for coverage percentages (2 decimal places)
