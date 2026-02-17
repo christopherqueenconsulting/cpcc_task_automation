@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           echo "Running unit tests with pytest..."
-          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml --durations=25
+          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml --junitxml=junit-unit.xml -o junit_family=legacy --durations=25
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
@@ -69,3 +69,12 @@ jobs:
           
           # Verbose output for debugging
           verbose: true
+      
+      - name: Upload test results to Codecov
+        # Upload test results even if tests fail (using !cancelled())
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: unit
+          file: ./junit-unit.xml
