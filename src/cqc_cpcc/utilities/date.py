@@ -31,7 +31,7 @@ def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.dat
     derived from the current (possibly frozen) system time.
 
     Optimization: Tries common ISO formats first before falling back to dateparser
-    for faster parsing of standard dates. Also quickly rejects obviously invalid strings.
+    for faster parsing of standard dates.
 
     Raises:
         ValueError: if the string cannot be parsed.
@@ -41,12 +41,6 @@ def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.dat
 
     s = date_str.strip()
     if not s:
-        raise ValueError("invalid datetime as string")
-    
-    # OPTIMIZATION: Quick rejection of obviously invalid strings
-    # This avoids slow dateparser calls for garbage input
-    # Check if string contains any digits (all valid dates have digits)
-    if not any(c.isdigit() for c in s):
         raise ValueError("invalid datetime as string")
 
     # OPTIMIZATION: Try common ISO formats first (much faster than dateparser)
