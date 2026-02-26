@@ -293,6 +293,24 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                 c["evidence"] = json.loads(c["evidence"])
             except (json.JSONDecodeError, ValueError):
                 c["evidence"] = [c["evidence"]] if c["evidence"] else None
+        # If the dict looks like a JSON Schema definition (has "type"/"properties" but
+        # missing required criterion fields), try to extract values from "properties"
+        _required_criterion_fields = {"criterion_id", "criterion_name", "points_possible", "feedback"}
+        if not _required_criterion_fields.issubset(c.keys()):
+            props = c.get("properties") if isinstance(c.get("properties"), dict) else None
+            if props:
+                for field in _required_criterion_fields:
+                    if field not in c and field in props:
+                        val = props[field]
+                        # Props may be {"type": "string", "default": "..."} or just a scalar
+                        if isinstance(val, dict):
+                            c[field] = (
+                                val.get("default") if val.get("default") is not None
+                                else val.get("example") if val.get("example") is not None
+                                else val.get("const")
+                            )
+                        else:
+                            c[field] = val
         return c
 
     # Normalize criteria_results if present
