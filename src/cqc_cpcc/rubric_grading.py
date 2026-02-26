@@ -680,7 +680,10 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     updated_result = result.model_copy(update={
         "criteria_results": updated_criteria_results,
         "total_points_earned": aggregation["total_points_earned"],
-        "overall_band_label": aggregation["overall_band_label"],
+        "overall_band_label": aggregation["overall_band_label"] or next(
+            (cr.selected_level_label for cr in updated_criteria_results if cr.selected_level_label),
+            None
+        ),  # Fallback for single-criterion/error_count rubrics (e.g. CSC134) that have no overall_performance_bands
         "original_major_errors": original_major if (error_count_criteria or has_program_performance) else None,
         "original_minor_errors": original_minor if (error_count_criteria or has_program_performance) else None,
         "effective_major_errors": effective_major if (error_count_criteria or has_program_performance) else None,

@@ -284,30 +284,30 @@ class TestCSC134ErrorDefinitions:
         course_ids = get_distinct_course_ids_from_errors()
         assert "CSC134" in course_ids
 
-    def test_csc134_project1_errors_load(self):
-        """Test that CSC134 Project1 error definitions load correctly."""
-        errors = get_error_definitions("CSC134", "Project1")
+    def test_csc134_project_errors_load(self):
+        """Test that CSC134 Project error definitions load correctly."""
+        errors = get_error_definitions("CSC134", "Project")
 
         assert isinstance(errors, list)
         assert len(errors) > 0
 
-    def test_csc134_project1_has_major_errors(self):
-        """Test that CSC134 Project1 has major error definitions."""
-        errors = get_error_definitions("CSC134", "Project1")
+    def test_csc134_project_has_major_errors(self):
+        """Test that CSC134 Project has major error definitions."""
+        errors = get_error_definitions("CSC134", "Project")
         major_errors = [e for e in errors if e.severity_category == "major"]
 
         assert len(major_errors) == 9  # 9 major errors from HTML
 
-    def test_csc134_project1_has_minor_errors(self):
-        """Test that CSC134 Project1 has minor error definitions."""
-        errors = get_error_definitions("CSC134", "Project1")
+    def test_csc134_project_has_minor_errors(self):
+        """Test that CSC134 Project has minor error definitions."""
+        errors = get_error_definitions("CSC134", "Project")
         minor_errors = [e for e in errors if e.severity_category == "minor"]
 
         assert len(minor_errors) == 9  # 9 minor errors from HTML
 
-    def test_csc134_project1_has_insufficient_documentation_error(self):
-        """Test that CSC134 Project1 includes Insufficient Documentation as major error."""
-        errors = get_error_definitions("CSC134", "Project1")
+    def test_csc134_project_has_insufficient_documentation_error(self):
+        """Test that CSC134 Project includes Insufficient Documentation as major error."""
+        errors = get_error_definitions("CSC134", "Project")
         doc_error = next(
             (e for e in errors if e.error_id == "CSC_134_PROJECT_1_INSUFFICIENT_DOCUMENTATION"),
             None,
@@ -316,9 +316,9 @@ class TestCSC134ErrorDefinitions:
         assert doc_error is not None
         assert doc_error.severity_category == "major"
 
-    def test_csc134_project1_has_does_not_compile_error(self):
-        """Test that CSC134 Project1 includes Does Not Compile as major error."""
-        errors = get_error_definitions("CSC134", "Project1")
+    def test_csc134_project_has_does_not_compile_error(self):
+        """Test that CSC134 Project includes Does Not Compile as major error."""
+        errors = get_error_definitions("CSC134", "Project")
         compile_error = next(
             (e for e in errors if e.error_id == "CSC_134_PROJECT_1_DOES_NOT_COMPILE"),
             None,
@@ -327,9 +327,9 @@ class TestCSC134ErrorDefinitions:
         assert compile_error is not None
         assert compile_error.severity_category == "major"
 
-    def test_csc134_project1_has_curly_braces_error(self):
-        """Test that CSC134 Project1 includes Curly Braces Omitted as major error (from HTML)."""
-        errors = get_error_definitions("CSC134", "Project1")
+    def test_csc134_project_has_curly_braces_error(self):
+        """Test that CSC134 Project includes Curly Braces Omitted as major error (from HTML)."""
+        errors = get_error_definitions("CSC134", "Project")
         brace_error = next(
             (e for e in errors if e.error_id == "CSC_134_PROJECT_1_CURLY_BRACES_OMITTED"),
             None,
@@ -338,9 +338,9 @@ class TestCSC134ErrorDefinitions:
         assert brace_error is not None
         assert brace_error.severity_category == "major"
 
-    def test_csc134_project1_has_misspelling_error(self):
-        """Test that CSC134 Project1 includes Misspelling as minor error (from HTML)."""
-        errors = get_error_definitions("CSC134", "Project1")
+    def test_csc134_project_has_misspelling_error(self):
+        """Test that CSC134 Project includes Misspelling as minor error (from HTML)."""
+        errors = get_error_definitions("CSC134", "Project")
         spell_error = next(
             (e for e in errors if e.error_id == "CSC_134_PROJECT_1_MISSPELLING"),
             None,
@@ -349,46 +349,25 @@ class TestCSC134ErrorDefinitions:
         assert spell_error is not None
         assert spell_error.severity_category == "minor"
 
-    def test_csc134_project2_errors_load(self):
-        """Test that CSC134 Project2 error definitions load correctly."""
-        errors = get_error_definitions("CSC134", "Project2")
-
-        assert isinstance(errors, list)
-        assert len(errors) == 18  # 9 major + 9 minor
-
-    def test_csc134_project2_has_function_prototype_error(self):
-        """Test that CSC134 Project2 includes Function/Prototype Error as major error."""
-        errors = get_error_definitions("CSC134", "Project2")
-        func_error = next(
-            (e for e in errors if e.error_id == "CSC_134_PROJECT_2_FUNCTION_PROTOTYPE_ERROR"),
-            None,
-        )
-
-        assert func_error is not None
-        assert func_error.severity_category == "major"
-
-    def test_csc134_assignments_available_for_course(self):
-        """Test that CSC134 has Project1 and Project2 assignments."""
+    def test_csc134_assignment_available_for_course(self):
+        """Test that CSC134 has Project assignment."""
         assignments = get_assignments_for_course("CSC134")
 
-        assert len(assignments) >= 2
+        assert len(assignments) >= 1
         assignment_ids = [a.assignment_id for a in assignments]
-        assert "Project1" in assignment_ids
-        assert "Project2" in assignment_ids
+        assert "Project" in assignment_ids
 
     def test_csc134_error_ids_are_unique(self):
-        """Test that all CSC134 error IDs are unique across projects."""
-        project1_errors = get_error_definitions("CSC134", "Project1")
-        project2_errors = get_error_definitions("CSC134", "Project2")
+        """Test that all CSC134 error IDs are unique."""
+        project_errors = get_error_definitions("CSC134", "Project")
 
-        all_ids = [e.error_id for e in project1_errors + project2_errors]
+        all_ids = [e.error_id for e in project_errors]
         assert len(all_ids) == len(set(all_ids))
 
     def test_csc134_errors_have_descriptions(self):
         """Test that all CSC134 error definitions have non-empty descriptions."""
-        project1_errors = get_error_definitions("CSC134", "Project1")
-        project2_errors = get_error_definitions("CSC134", "Project2")
+        project_errors = get_error_definitions("CSC134", "Project")
 
-        for error in project1_errors + project2_errors:
+        for error in project_errors:
             assert error.description is not None
             assert len(error.description.strip()) > 0

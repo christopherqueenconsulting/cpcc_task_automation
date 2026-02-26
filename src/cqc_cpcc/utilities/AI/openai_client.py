@@ -280,25 +280,34 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
     """
     normalized = data.copy()
     
+    def _normalize_criterion_dict(c: dict) -> dict:
+        """Apply field renaming and evidence normalization to a single criterion dict."""
+        if "rubric_criterion_id" in c and "criterion_id" not in c:
+            c["criterion_id"] = c.pop("rubric_criterion_id")
+        if "criterion_title" in c and "criterion_name" not in c:
+            c["criterion_name"] = c.pop("criterion_title")
+        if "level_label" in c and "selected_level_label" not in c:
+            c["selected_level_label"] = c.pop("level_label")
+        if "evidence" in c and isinstance(c["evidence"], str):
+            try:
+                c["evidence"] = json.loads(c["evidence"])
+            except (json.JSONDecodeError, ValueError):
+                c["evidence"] = [c["evidence"]] if c["evidence"] else None
+        return c
+
     # Normalize criteria_results if present
     if "criteria_results" in normalized and isinstance(normalized["criteria_results"], list):
         for i, criterion in enumerate(normalized["criteria_results"]):
             if isinstance(criterion, dict):
-                # Map wrong field names to correct ones
-                if "rubric_criterion_id" in criterion and "criterion_id" not in criterion:
-                    criterion["criterion_id"] = criterion.pop("rubric_criterion_id")
-                if "criterion_title" in criterion and "criterion_name" not in criterion:
-                    criterion["criterion_name"] = criterion.pop("criterion_title")
-                if "level_label" in criterion and "selected_level_label" not in criterion:
-                    criterion["selected_level_label"] = criterion.pop("level_label")
-                
-                # Ensure evidence is a list if present
-                if "evidence" in criterion and isinstance(criterion["evidence"], str):
-                    try:
-                        criterion["evidence"] = json.loads(criterion["evidence"])
-                    except (json.JSONDecodeError, ValueError):
-                        # If it's not JSON, wrap it in a list
-                        criterion["evidence"] = [criterion["evidence"]] if criterion["evidence"] else None
+                normalized["criteria_results"][i] = _normalize_criterion_dict(criterion)
+            elif isinstance(criterion, str):
+                # String-encoded criterion - parse then normalize
+                try:
+                    parsed_criterion = json.loads(criterion)
+                    if isinstance(parsed_criterion, dict):
+                        normalized["criteria_results"][i] = _normalize_criterion_dict(parsed_criterion)
+                except (json.JSONDecodeError, ValueError):
+                    logger.warning(f"Failed to parse criteria_results[{i}] as JSON string, leaving as-is")
     
     # Normalize detected_errors if it's a stringified JSON array or list of strings
     if "detected_errors" in normalized:
