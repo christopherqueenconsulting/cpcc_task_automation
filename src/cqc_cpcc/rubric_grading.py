@@ -119,10 +119,10 @@ def build_rubric_grading_prompt(
         prompt_parts.append("")
     
     # Error definitions if provided
+    enabled_errors = []
     if error_definitions:
         # Filter to enabled errors if the objects have an 'enabled' attribute
         # Handle both ErrorDefinition (with enabled) and DetectedError (without) types
-        enabled_errors = []
         for e in error_definitions:
             if hasattr(e, 'enabled'):
                 if e.enabled:
@@ -184,7 +184,7 @@ def build_rubric_grading_prompt(
     prompt_parts.append("Grade exactly and only as specified. Do not add features or interpretation beyond what is requested.")
     prompt_parts.append("")
     
-    if error_definitions:
+    if enabled_errors:
         prompt_parts.append("### Step 1: Error Detection (Do This First)")
         prompt_parts.append("Before evaluating any rubric criteria, scan the entire submission for errors using the Error Definitions above:")
         prompt_parts.append("- For each detected error: set 'code' to error_id, 'severity' to severity_category, 'occurrences' to count")
@@ -520,12 +520,26 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
             f"Original error counts: {original_major} major, {original_minor} minor"
         )
         
-        # Apply error normalization (4 minor = 1 major for CSC151)
-        effective_major, effective_minor = normalize_errors(original_major, original_minor)
-        
-        logger.info(
-            f"Effective error counts after normalization: {effective_major} major, {effective_minor} minor"
+        # Apply error normalization only when any criterion has error_conversion defined.
+        # CSC134 and other rubrics without error_conversion use original counts as-is.
+        has_conversion = any(
+            c.error_rules and c.error_rules.error_conversion
+            for c in rubric.criteria
+            if c.enabled and c.scoring_mode == "error_count"
         )
+        if has_conversion:
+            effective_major, effective_minor = normalize_errors(original_major, original_minor)
+            logger.info(
+                f"Effective error counts after normalization: {effective_major} major, {effective_minor} minor"
+            )
+        else:
+            # No conversion defined — effective counts equal original counts
+            effective_major = original_major
+            effective_minor = original_minor
+            logger.info(
+                f"No error_conversion defined; effective counts equal original: "
+                f"{effective_major} major, {effective_minor} minor"
+            )
     
     # Update criterion results with computed scores
     updated_criteria_results = []

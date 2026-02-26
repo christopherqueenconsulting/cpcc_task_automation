@@ -302,8 +302,8 @@ def select_program_performance_level(
 
 
 def select_csc134_program_performance_level(
-    effective_major: int,
-    effective_minor: int,
+    major_error_count: int,
+    minor_error_count: int,
     assignment_submitted: bool = True
 ) -> Tuple[str, int]:
     """Select CSC134 C++ program performance level based on error counts.
@@ -316,8 +316,8 @@ def select_csc134_program_performance_level(
     whose condition is met by either major OR minor error count.
 
     Args:
-        effective_major: Number of major errors detected
-        effective_minor: Number of minor errors detected
+        major_error_count: Number of major errors detected (original, no conversion applied)
+        minor_error_count: Number of minor errors detected (original, no conversion applied)
         assignment_submitted: Whether the assignment was submitted (default: True)
 
     Returns:
@@ -350,28 +350,28 @@ def select_csc134_program_performance_level(
         return ("No Submission", 0)
 
     # Major errors take priority from worst to best
-    if effective_major >= 6:
+    if major_error_count >= 6:
         return ("Unsatisfactory", 15)  # 15% of 100
-    elif effective_major == 5:
+    elif major_error_count == 5:
         return ("Substandard", 28)  # 27.5% of 100, rounded
-    elif effective_major == 4:
+    elif major_error_count == 4:
         return ("Needs Improvement", 40)  # 40% of 100
 
     # Combined check: select worst-applicable level using either major or minor count
-    if effective_major == 3 or effective_minor > 5:
+    if major_error_count == 3 or minor_error_count > 5:
         return ("Below Average", 55)  # 55% of 100
-    elif effective_major == 2 or effective_minor == 5:
+    elif major_error_count == 2 or minor_error_count == 5:
         return ("Average", 70)  # 70% of 100
-    elif effective_major == 1 or (3 <= effective_minor <= 4):
+    elif major_error_count == 1 or (3 <= minor_error_count <= 4):
         return ("Above Average", 80)  # 80% of 100
-    elif effective_minor <= 2:
-        if effective_minor == 0:
+    elif minor_error_count <= 2:
+        if minor_error_count == 0:
             return ("Outstanding", 100)  # 100% of 100
         return ("Superior", 90)  # 90% of 100
 
     # Default (should not reach here)
     logger.warning(
         f"Unexpected error counts in CSC134 scoring: "
-        f"major={effective_major}, minor={effective_minor}. Defaulting to Below Average."
+        f"major={major_error_count}, minor={minor_error_count}. Defaulting to Below Average."
     )
     return ("Below Average", 55)
