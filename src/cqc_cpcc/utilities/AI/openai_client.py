@@ -311,7 +311,49 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                             )
                         else:
                             c[field] = val
+            # After extraction attempt, if still missing required fields, set fallback values
+            # This handles JSON-Schema-style dicts where properties has no actual data
+            if not c.get("criterion_id"):
+                c["criterion_id"] = c.get("id") or c.get("name") or "unknown_criterion"
+            if not c.get("criterion_name"):
+                c["criterion_name"] = c.get("title") or c.get("criterion_id") or "Unknown Criterion"
+            if c.get("points_possible") is None:
+                c["points_possible"] = 0
+            if not c.get("feedback"):
+                c["feedback"] = "Unable to assess this criterion (model returned schema definition instead of data)"
         return c
+
+    def _normalize_error_dict(e: dict) -> dict:
+        """Apply field normalization to a single detected_error dict.
+
+        Handles JSON-Schema-style dicts (missing code/name/severity/description)
+        by extracting from 'properties' if present, or setting fallback values.
+        """
+        _required_error_fields = {"code", "name", "severity", "description"}
+        if not _required_error_fields.issubset(e.keys()):
+            props = e.get("properties") if isinstance(e.get("properties"), dict) else None
+            if props:
+                for field in _required_error_fields:
+                    if field not in e and field in props:
+                        val = props[field]
+                        if isinstance(val, dict):
+                            e[field] = (
+                                val.get("default") if val.get("default") is not None
+                                else val.get("example") if val.get("example") is not None
+                                else val.get("const")
+                            )
+                        else:
+                            e[field] = val
+            # After extraction attempt, set fallback values for any still-missing required fields
+            if not e.get("code"):
+                e["code"] = e.get("id") or e.get("error_id") or "unknown_error"
+            if not e.get("name"):
+                e["name"] = e.get("error_name") or e.get("code") or "Unknown Error"
+            if not e.get("severity"):
+                e["severity"] = "minor"
+            if not e.get("description"):
+                e["description"] = e.get("details") or e.get("message") or "Error detected (schema definition returned instead of data)"
+        return e
 
     # Normalize criteria_results if present
     if "criteria_results" in normalized and isinstance(normalized["criteria_results"], list):
@@ -336,42 +378,50 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                 logger.warning(f"Failed to parse detected_errors as JSON, setting to None")
                 normalized["detected_errors"] = None
         
-        # If detected_errors is a list of strings instead of DetectedError objects, convert them
+        # If detected_errors is a list of strings or JSON-Schema-style dicts, normalize them
         if isinstance(normalized["detected_errors"], list):
             converted_errors = []
             for i, error in enumerate(normalized["detected_errors"]):
                 if isinstance(error, str):
-                    # Convert string to DetectedError object
-                    # Parse error_id from error_counts_by_id keys if available
-                    error_id = f"error_{i+1}"
-                    if "error_counts_by_id" in normalized and isinstance(normalized["error_counts_by_id"], dict):
-                        # Try to match error description with error_id keys
-                        for eid in normalized["error_counts_by_id"].keys():
-                            if eid.lower() in error.lower() or error.lower() in eid.lower():
-                                error_id = eid
-                                break
-                    
-                    # Determine severity from error_counts_by_severity or default to "minor"
-                    severity = "minor"  # default
-                    if "error_counts_by_severity" in normalized and isinstance(normalized["error_counts_by_severity"], dict):
-                        # If we have more major errors, assume this is major; otherwise minor
-                        major_count = normalized["error_counts_by_severity"].get("major", 0)
-                        minor_count = normalized["error_counts_by_severity"].get("minor", 0)
-                        if i < major_count:
-                            severity = "major"
-                    
-                    converted_errors.append({
-                        "code": error_id,
-                        "name": error.split('.')[0].strip() if '.' in error else error[:50],  # Use first sentence or first 50 chars as name
-                        "severity": severity,
-                        "description": error,
-                        "occurrences": 1,
-                        "notes": None
-                    })
+                    # First try to parse as JSON (handles string-encoded JSON-Schema-style objects)
+                    parsed_from_str = None
+                    try:
+                        parsed_from_str = json.loads(error)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                    if isinstance(parsed_from_str, dict):
+                        # String was a JSON-encoded dict - normalize it
+                        converted_errors.append(_normalize_error_dict(parsed_from_str))
+                    else:
+                        # Plain string error description - convert to DetectedError object
+                        error_id = f"error_{i+1}"
+                        if "error_counts_by_id" in normalized and isinstance(normalized["error_counts_by_id"], dict):
+                            # Try to match error description with error_id keys
+                            for eid in normalized["error_counts_by_id"].keys():
+                                if eid.lower() in error.lower() or error.lower() in eid.lower():
+                                    error_id = eid
+                                    break
+
+                        # Determine severity from error_counts_by_severity or default to "minor"
+                        severity = "minor"  # default
+                        if "error_counts_by_severity" in normalized and isinstance(normalized["error_counts_by_severity"], dict):
+                            major_count = normalized["error_counts_by_severity"].get("major", 0)
+                            if i < major_count:
+                                severity = "major"
+
+                        converted_errors.append({
+                            "code": error_id,
+                            "name": error.split('.')[0].strip() if '.' in error else error[:50],
+                            "severity": severity,
+                            "description": error,
+                            "occurrences": 1,
+                            "notes": None
+                        })
                 elif isinstance(error, dict):
-                    # Already a dict, keep it
-                    converted_errors.append(error)
-            
+                    # Apply normalization in case it's a JSON-Schema-style dict
+                    converted_errors.append(_normalize_error_dict(error))
+
             if converted_errors:
                 normalized["detected_errors"] = converted_errors
                 logger.info(f"Converted {len(converted_errors)} string errors to DetectedError objects")
