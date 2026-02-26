@@ -281,46 +281,58 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
     normalized = data.copy()
     
     def _normalize_criterion_dict(c: dict) -> dict:
-        """Apply field renaming and evidence normalization to a single criterion dict."""
-        if "rubric_criterion_id" in c and "criterion_id" not in c:
-            c["criterion_id"] = c.pop("rubric_criterion_id")
-        if "criterion_title" in c and "criterion_name" not in c:
-            c["criterion_name"] = c.pop("criterion_title")
-        if "level_label" in c and "selected_level_label" not in c:
-            c["selected_level_label"] = c.pop("level_label")
-        if "evidence" in c and isinstance(c["evidence"], str):
-            try:
-                c["evidence"] = json.loads(c["evidence"])
-            except (json.JSONDecodeError, ValueError):
-                c["evidence"] = [c["evidence"]] if c["evidence"] else None
-        # If the dict looks like a JSON Schema definition (has "type"/"properties" but
-        # missing required criterion fields), try to extract values from "properties"
-        _required_criterion_fields = {"criterion_id", "criterion_name", "points_possible", "feedback"}
-        if not _required_criterion_fields.issubset(c.keys()):
-            props = c.get("properties") if isinstance(c.get("properties"), dict) else None
-            if props:
-                for field in _required_criterion_fields:
-                    if field not in c and field in props:
-                        val = props[field]
-                        # Props may be {"type": "string", "default": "..."} or just a scalar
-                        if isinstance(val, dict):
-                            c[field] = (
-                                val.get("default") if val.get("default") is not None
-                                else val.get("example") if val.get("example") is not None
-                                else val.get("const")
-                            )
-                        else:
-                            c[field] = val
-            # After extraction attempt, if still missing required fields, set fallback values
-            # This handles JSON-Schema-style dicts where properties has no actual data
-            if not c.get("criterion_id"):
-                c["criterion_id"] = c.get("id") or c.get("name") or "unknown_criterion"
-            if not c.get("criterion_name"):
-                c["criterion_name"] = c.get("title") or c.get("criterion_id") or "Unknown Criterion"
-            if c.get("points_possible") is None:
-                c["points_possible"] = 0
-            if not c.get("feedback"):
-                c["feedback"] = "Unable to assess this criterion (model returned schema definition instead of data)"
+        """Apply field renaming and evidence normalization to a single criterion dict.
+
+        Always returns a dict with all required CriterionResult fields populated,
+        using fallback values if the dict looks like a JSON-Schema-style object.
+        """
+        try:
+            if "rubric_criterion_id" in c and "criterion_id" not in c:
+                c["criterion_id"] = c.pop("rubric_criterion_id")
+            if "criterion_title" in c and "criterion_name" not in c:
+                c["criterion_name"] = c.pop("criterion_title")
+            if "level_label" in c and "selected_level_label" not in c:
+                c["selected_level_label"] = c.pop("level_label")
+            if "evidence" in c and isinstance(c["evidence"], str):
+                try:
+                    c["evidence"] = json.loads(c["evidence"])
+                except (json.JSONDecodeError, ValueError):
+                    c["evidence"] = [c["evidence"]] if c["evidence"] else None
+            # If the dict looks like a JSON Schema definition (has "type"/"properties" but
+            # missing required criterion fields), try to extract values from "properties"
+            _required_criterion_fields = {"criterion_id", "criterion_name", "points_possible", "feedback"}
+            if not _required_criterion_fields.issubset(c.keys()):
+                props = c.get("properties") if isinstance(c.get("properties"), dict) else None
+                if props:
+                    for field in _required_criterion_fields:
+                        if field not in c and field in props:
+                            val = props[field]
+                            # Props may be {"type": "string", "default": "..."} or just a scalar
+                            if isinstance(val, dict):
+                                c[field] = (
+                                    val.get("default") if val.get("default") is not None
+                                    else val.get("example") if val.get("example") is not None
+                                    else val.get("const")
+                                )
+                            else:
+                                c[field] = val
+        except Exception as inner_err:
+            logger.error(
+                f"_normalize_criterion_dict failed unexpectedly: {inner_err}. "
+                f"Applying fallback values.",
+                exc_info=True,
+            )
+        # Always apply fallbacks after try/except to ensure all required fields are present.
+        # Covers both: (a) JSON-Schema-style dicts where props extraction yields None,
+        # and (b) any unexpected exception in the try block above.
+        if not c.get("criterion_id"):
+            c["criterion_id"] = c.get("id") or c.get("name") or "unknown_criterion"
+        if not c.get("criterion_name"):
+            c["criterion_name"] = c.get("title") or c.get("criterion_id") or "Unknown Criterion"
+        if c.get("points_possible") is None:
+            c["points_possible"] = 0
+        if not c.get("feedback"):
+            c["feedback"] = "Unable to assess this criterion (model returned schema definition instead of data)"
         return c
 
     def _normalize_error_dict(e: dict) -> dict:
@@ -328,31 +340,39 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
 
         Handles JSON-Schema-style dicts (missing code/name/severity/description)
         by extracting from 'properties' if present, or setting fallback values.
+        Always returns a dict with all required DetectedError fields populated.
         """
-        _required_error_fields = {"code", "name", "severity", "description"}
-        if not _required_error_fields.issubset(e.keys()):
-            props = e.get("properties") if isinstance(e.get("properties"), dict) else None
-            if props:
-                for field in _required_error_fields:
-                    if field not in e and field in props:
-                        val = props[field]
-                        if isinstance(val, dict):
-                            e[field] = (
-                                val.get("default") if val.get("default") is not None
-                                else val.get("example") if val.get("example") is not None
-                                else val.get("const")
-                            )
-                        else:
-                            e[field] = val
-            # After extraction attempt, set fallback values for any still-missing required fields
-            if not e.get("code"):
-                e["code"] = e.get("id") or e.get("error_id") or "unknown_error"
-            if not e.get("name"):
-                e["name"] = e.get("error_name") or e.get("code") or "Unknown Error"
-            if not e.get("severity"):
-                e["severity"] = "minor"
-            if not e.get("description"):
-                e["description"] = e.get("details") or e.get("message") or "Error detected (schema definition returned instead of data)"
+        try:
+            _required_error_fields = {"code", "name", "severity", "description"}
+            if not _required_error_fields.issubset(e.keys()):
+                props = e.get("properties") if isinstance(e.get("properties"), dict) else None
+                if props:
+                    for field in _required_error_fields:
+                        if field not in e and field in props:
+                            val = props[field]
+                            if isinstance(val, dict):
+                                e[field] = (
+                                    val.get("default") if val.get("default") is not None
+                                    else val.get("example") if val.get("example") is not None
+                                    else val.get("const")
+                                )
+                            else:
+                                e[field] = val
+        except Exception as inner_err:
+            logger.error(
+                f"_normalize_error_dict failed unexpectedly: {inner_err}. "
+                f"Applying fallback values.",
+                exc_info=True,
+            )
+        # Always apply fallbacks after try/except to ensure all required fields are present.
+        if not e.get("code"):
+            e["code"] = e.get("id") or e.get("error_id") or "unknown_error"
+        if not e.get("name"):
+            e["name"] = e.get("error_name") or e.get("code") or "Unknown Error"
+        if not e.get("severity"):
+            e["severity"] = "minor"
+        if not e.get("description"):
+            e["description"] = e.get("details") or e.get("message") or "Error detected (schema definition returned instead of data)"
         return e
 
     # Normalize criteria_results if present

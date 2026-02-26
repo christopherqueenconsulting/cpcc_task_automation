@@ -356,11 +356,14 @@ async def get_openrouter_completion(
             try:
                 parsed_data = _normalize_fallback_json(parsed_data, schema_model)
             except Exception as norm_err:
-                logger.warning(f"Normalization warning (non-fatal): {norm_err}")
+                logger.warning(
+                    f"Normalization warning (non-fatal): {norm_err}",
+                    exc_info=True,
+                )
             
             # Validate against Pydantic schema
             try:
-                result = schema_model(**parsed_data)
+                result = schema_model.model_validate(parsed_data)
             except ValidationError as e:
                 error_msg = f"Response doesn't match schema {schema_model.__name__}: {e}"
                 if correlation_id:

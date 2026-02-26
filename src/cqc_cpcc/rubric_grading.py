@@ -236,6 +236,16 @@ def build_rubric_grading_prompt(
     prompt_parts.append("- Ensure all braces, brackets, and quotes are properly closed")
     prompt_parts.append("- Test your output is valid JSON before submitting")
     prompt_parts.append("- If feedback is too long, summarize to fit within token limits")
+    prompt_parts.append("")
+    prompt_parts.append("**CRITICAL: Return DATA VALUES, not JSON Schema definitions.**")
+    prompt_parts.append("Each `criteria_results` item must have actual field values like this example:")
+    prompt_parts.append('  {"criterion_id": "program_performance", "criterion_name": "Program Performance",')
+    prompt_parts.append('   "points_possible": 100, "points_earned": null, "feedback": "Your feedback here.",')
+    prompt_parts.append('   "selected_level_label": "Above Average", "evidence": null}')
+    prompt_parts.append("Do NOT return schema objects like {\"type\": \"Object\", \"properties\": {...}} or {\"completionState\": \"...\"}.")
+    prompt_parts.append("Each `detected_errors` item must have actual values:")
+    prompt_parts.append('  {"code": "MISSING_DOCS", "name": "Insufficient Documentation", "severity": "major",')
+    prompt_parts.append('   "description": "What was found in the code.", "occurrences": 1, "notes": null}')
     
     return "\n".join(prompt_parts)
 
