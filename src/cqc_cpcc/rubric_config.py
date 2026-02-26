@@ -2535,9 +2535,9 @@ RUBRICS_JSON = """{
   },
   "csc134_cpp_exam_rubric": {
     "rubric_id": "csc134_cpp_exam_rubric",
-    "rubric_version": "1.0",
-    "title": "CSC 134 C++ Exam Rubric (Brightspace-aligned)",
-    "description": "Aligned to the official Brightspace Exam Grading Rubric for CSC134. Program Performance is scored strictly by error counts. Rule: Every 4 Minor Errors convert into 1 Major Error before scoring.",
+    "rubric_version": "2.0",
+    "title": "CSC 134 C++ Program Performance Rubric (Brightspace-aligned)",
+    "description": "Aligned to the official Brightspace Program Performance Rubric for CSC134 (C++). Program Performance is scored using detected error counts. Identify all major and minor errors first, then select the performance level based on error counts. No minor-to-major conversion is applied.",
     "course_ids": [
       "CSC134"
     ],
@@ -2545,71 +2545,68 @@ RUBRICS_JSON = """{
       {
         "criterion_id": "program_performance",
         "name": "Program Performance",
-        "description": "Apply Minor→Major conversion first. Every 4 Minor Errors become 1 Major Error (remainder stays Minor). Then select the score band.",
+        "description": "Identify all major and minor errors first. Then select the performance level: Outstanding (no errors), Superior (≤2 minor, 0 major), Above Average (3-4 minor or 1 major), Average (5 minor or 2 major), Below Average (>5 minor or 3 major), Needs Improvement (4 major), Substandard (5 major), Unsatisfactory (6+ major), No Submission (not submitted).",
         "max_points": 100,
         "enabled": true,
         "scoring_mode": "error_count",
         "error_rules": {
           "major_weight": 0,
-          "minor_weight": 0,
-          "error_conversion": {
-            "minor_to_major_ratio": 4
-          }
+          "minor_weight": 0
         },
         "levels": [
           {
-            "label": "A+ (0 errors)",
+            "label": "Outstanding",
             "score_min": 96,
             "score_max": 100,
-            "description": "Perfect - no errors detected"
+            "description": "Program performs the specified operations at an outstanding level (No Errors)."
           },
           {
-            "label": "A (1 minor error)",
-            "score_min": 91,
-            "score_max": 95,
-            "description": "Excellent - only 1 minor error"
-          },
-          {
-            "label": "A- (2 minor errors)",
+            "label": "Superior",
             "score_min": 86,
-            "score_max": 90,
-            "description": "Very good - 2 minor errors"
+            "score_max": 95,
+            "description": "Program performs the specified operations on a superior level (two or fewer minor errors)."
           },
           {
-            "label": "B (3 minor errors)",
-            "score_min": 81,
+            "label": "Above Average",
+            "score_min": 76,
             "score_max": 85,
-            "description": "Good - 3 minor errors"
+            "description": "Program performs the specified operations on an above average level (three or four minor errors and/or 1 major error)."
           },
           {
-            "label": "B- (1 major error)",
-            "score_min": 71,
-            "score_max": 80,
-            "description": "Satisfactory - 1 major error"
+            "label": "Average",
+            "score_min": 66,
+            "score_max": 75,
+            "description": "Program performs the specified operations on an average level (five minor errors and/or 2 major errors)."
           },
           {
-            "label": "C (2 major errors)",
-            "score_min": 61,
-            "score_max": 70,
-            "description": "Acceptable - 2 major errors"
+            "label": "Below Average",
+            "score_min": 51,
+            "score_max": 65,
+            "description": "Program performs the specified operations on a below average level (more than 5 minor errors and/or 3 major errors)."
           },
           {
-            "label": "D (3 major errors)",
-            "score_min": 16,
-            "score_max": 60,
-            "description": "Poor - 3 major errors"
+            "label": "Needs Improvement",
+            "score_min": 36,
+            "score_max": 50,
+            "description": "Program performs the specified operations on a below average level or is incomplete (more than 5 minor errors and/or 4 major errors)."
           },
           {
-            "label": "F (4+ major errors)",
+            "label": "Substandard",
+            "score_min": 21,
+            "score_max": 35,
+            "description": "Program performs the specified operations on a below average level or is incomplete (more than 5 minor errors and/or 5 major errors)."
+          },
+          {
+            "label": "Unsatisfactory",
             "score_min": 1,
-            "score_max": 15,
-            "description": "Failing - 4 or more major errors"
+            "score_max": 20,
+            "description": "A reasonable attempt was made to write the program, but the program does not perform the specified operations (six or more major errors)."
           },
           {
-            "label": "0 (Not submitted or incomplete)",
+            "label": "No Submission",
             "score_min": 0,
             "score_max": 0,
-            "description": "Not submitted or incomplete"
+            "description": "Program was not submitted."
           }
         ]
       }
