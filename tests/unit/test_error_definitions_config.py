@@ -273,3 +273,111 @@ class TestRegistryToJsonString:
         # Verify structure is preserved
         assert len(new_registry.courses) == len(registry.courses)
         assert new_registry.courses[0].course_id == registry.courses[0].course_id
+
+
+@pytest.mark.unit
+class TestCSC134ErrorDefinitions:
+    """Test CSC134 C++ error definitions configuration."""
+
+    def test_csc134_course_exists_in_registry(self):
+        """Test that CSC134 course is present in the error registry."""
+        course_ids = get_distinct_course_ids_from_errors()
+        assert "CSC134" in course_ids
+
+    def test_csc134_exam1_errors_load(self):
+        """Test that CSC134 Exam1 error definitions load correctly."""
+        errors = get_error_definitions("CSC134", "Exam1")
+
+        assert isinstance(errors, list)
+        assert len(errors) > 0
+
+    def test_csc134_exam1_has_major_errors(self):
+        """Test that CSC134 Exam1 has major error definitions."""
+        errors = get_error_definitions("CSC134", "Exam1")
+        major_errors = [e for e in errors if e.severity_category == "major"]
+
+        assert len(major_errors) > 0
+
+    def test_csc134_exam1_has_minor_errors(self):
+        """Test that CSC134 Exam1 has minor error definitions."""
+        errors = get_error_definitions("CSC134", "Exam1")
+        minor_errors = [e for e in errors if e.severity_category == "minor"]
+
+        assert len(minor_errors) > 0
+
+    def test_csc134_exam1_has_insufficient_documentation_error(self):
+        """Test that CSC134 Exam1 includes Insufficient Documentation as major error."""
+        errors = get_error_definitions("CSC134", "Exam1")
+        doc_error = next(
+            (e for e in errors if e.error_id == "CSC_134_EXAM_1_INSUFFICIENT_DOCUMENTATION"),
+            None,
+        )
+
+        assert doc_error is not None
+        assert doc_error.severity_category == "major"
+
+    def test_csc134_exam1_has_does_not_compile_error(self):
+        """Test that CSC134 Exam1 includes Does Not Compile as major error."""
+        errors = get_error_definitions("CSC134", "Exam1")
+        compile_error = next(
+            (e for e in errors if e.error_id == "CSC_134_EXAM_1_DOES_NOT_COMPILE"),
+            None,
+        )
+
+        assert compile_error is not None
+        assert compile_error.severity_category == "major"
+
+    def test_csc134_exam1_has_header_file_error(self):
+        """Test that CSC134 Exam1 includes Header File Error as minor error."""
+        errors = get_error_definitions("CSC134", "Exam1")
+        header_error = next(
+            (e for e in errors if e.error_id == "CSC_134_EXAM_1_HEADER_FILE_ERROR"),
+            None,
+        )
+
+        assert header_error is not None
+        assert header_error.severity_category == "minor"
+
+    def test_csc134_exam2_errors_load(self):
+        """Test that CSC134 Exam2 error definitions load correctly."""
+        errors = get_error_definitions("CSC134", "Exam2")
+
+        assert isinstance(errors, list)
+        assert len(errors) > 0
+
+    def test_csc134_exam2_has_function_errors(self):
+        """Test that CSC134 Exam2 includes Function Errors as major error."""
+        errors = get_error_definitions("CSC134", "Exam2")
+        func_error = next(
+            (e for e in errors if e.error_id == "CSC_134_EXAM_2_FUNCTION_ERRORS"),
+            None,
+        )
+
+        assert func_error is not None
+        assert func_error.severity_category == "major"
+
+    def test_csc134_assignments_available_for_course(self):
+        """Test that CSC134 has assignments available."""
+        assignments = get_assignments_for_course("CSC134")
+
+        assert len(assignments) >= 2
+        assignment_ids = [a.assignment_id for a in assignments]
+        assert "Exam1" in assignment_ids
+        assert "Exam2" in assignment_ids
+
+    def test_csc134_error_ids_are_unique(self):
+        """Test that all CSC134 error IDs are unique across exams."""
+        exam1_errors = get_error_definitions("CSC134", "Exam1")
+        exam2_errors = get_error_definitions("CSC134", "Exam2")
+
+        all_ids = [e.error_id for e in exam1_errors + exam2_errors]
+        assert len(all_ids) == len(set(all_ids))
+
+    def test_csc134_errors_have_descriptions(self):
+        """Test that all CSC134 error definitions have non-empty descriptions."""
+        exam1_errors = get_error_definitions("CSC134", "Exam1")
+        exam2_errors = get_error_definitions("CSC134", "Exam2")
+
+        for error in exam1_errors + exam2_errors:
+            assert error.description is not None
+            assert len(error.description.strip()) > 0
