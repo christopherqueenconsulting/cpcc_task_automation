@@ -523,3 +523,31 @@ class TestGradingFlowOrder:
 
         assert "Use the detected errors" in prompt
         assert "determine the appropriate performance level" in prompt
+
+    def test_prompt_with_all_disabled_errors_uses_evaluation_process(self, base_rubric):
+        """If all error definitions are disabled, prompt falls back to Evaluation Process (not Step1/Step2)."""
+        from cqc_cpcc.error_definitions_models import ErrorDefinition
+
+        disabled_errors = [
+            ErrorDefinition(
+                error_id="ERR_DISABLED",
+                name="Disabled Error",
+                description="This error is disabled.",
+                severity_category="major",
+                enabled=False,
+            )
+        ]
+
+        prompt = build_rubric_grading_prompt(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            error_definitions=disabled_errors,
+        )
+
+        # No enabled errors → should use standard Evaluation Process, not Step 1/Step 2
+        assert "Evaluation Process" in prompt
+        assert "Step 1: Error Detection" not in prompt
+        assert "Step 2: Rubric Evaluation" not in prompt
+        # And the Error Definitions section should not appear
+        assert "Error Definitions" not in prompt
