@@ -11,15 +11,14 @@ Tests cover:
 
 import json
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, mock_open, MagicMock
+from pathlib import Path
 
 from cqc_cpcc.rubric_config import (
     load_rubrics_from_config,
     load_error_definitions_from_config,
     get_rubric_by_id,
     list_available_rubrics,
-    RUBRICS_JSON,
-    ERROR_DEFINITIONS_JSON,
 )
 from cqc_cpcc.rubric_models import Rubric, DetectedError
 
@@ -81,7 +80,7 @@ class TestLoadRubrics:
     
     def test_invalid_json_raises_error(self):
         """Test that invalid JSON raises ValueError."""
-        with patch('cqc_cpcc.rubric_config.RUBRICS_JSON', 'invalid json {'):
+        with patch('cqc_cpcc.rubric_config._load_json_file', side_effect=ValueError("Invalid JSON in rubrics.json: bad")):
             with pytest.raises(ValueError) as exc_info:
                 load_rubrics_from_config()
             
@@ -89,7 +88,7 @@ class TestLoadRubrics:
     
     def test_non_dict_json_raises_error(self):
         """Test that non-dict JSON raises ValueError."""
-        with patch('cqc_cpcc.rubric_config.RUBRICS_JSON', '["not", "a", "dict"]'):
+        with patch('cqc_cpcc.rubric_config._load_json_file', return_value=["not", "a", "dict"]):
             with pytest.raises(ValueError) as exc_info:
                 load_rubrics_from_config()
             
@@ -104,7 +103,7 @@ class TestLoadRubrics:
             }
         }
         
-        with patch('cqc_cpcc.rubric_config.RUBRICS_JSON', json.dumps(invalid_rubric)):
+        with patch('cqc_cpcc.rubric_config._load_json_file', return_value=invalid_rubric):
             with pytest.raises(ValueError) as exc_info:
                 load_rubrics_from_config()
             
@@ -156,8 +155,8 @@ class TestLoadErrorDefinitions:
         assert "CSC_251_EXAM_1_METHOD_ERRORS" in codes
     
     def test_invalid_json_raises_error(self):
-        """Test that invalid JSON raises ValueError."""
-        with patch('cqc_cpcc.rubric_config.ERROR_DEFINITIONS_JSON', 'invalid json ['):
+        """Test that invalid JSON file raises ValueError."""
+        with patch('cqc_cpcc.rubric_config._load_json_file', side_effect=ValueError("Invalid JSON in rubric_error_definitions.json: bad")):
             with pytest.raises(ValueError) as exc_info:
                 load_error_definitions_from_config()
             
@@ -165,7 +164,7 @@ class TestLoadErrorDefinitions:
     
     def test_non_list_json_raises_error(self):
         """Test that non-list JSON raises ValueError."""
-        with patch('cqc_cpcc.rubric_config.ERROR_DEFINITIONS_JSON', '{"not": "a list"}'):
+        with patch('cqc_cpcc.rubric_config._load_json_file', return_value={"not": "a list"}):
             with pytest.raises(ValueError) as exc_info:
                 load_error_definitions_from_config()
             
@@ -180,7 +179,7 @@ class TestLoadErrorDefinitions:
             }
         ]
         
-        with patch('cqc_cpcc.rubric_config.ERROR_DEFINITIONS_JSON', json.dumps(invalid_errors)):
+        with patch('cqc_cpcc.rubric_config._load_json_file', return_value=invalid_errors):
             with pytest.raises(ValueError) as exc_info:
                 load_error_definitions_from_config()
             
