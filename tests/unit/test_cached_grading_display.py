@@ -30,6 +30,7 @@ def mock_session_state():
     """Mock Streamlit session state."""
     return SessionState(
         grading_results_by_key={},
+        grading_failures_by_key={},
         expand_all_students=False,
         feedback_zip_bytes_by_key={},
     )
@@ -216,6 +217,7 @@ class TestCachedGradingDisplay:
                         overall_band_label="Good"
                     ))]
                 },
+                grading_failures_by_key={},
                 expand_all_students=False,
                 feedback_zip_bytes_by_key={},
             )
