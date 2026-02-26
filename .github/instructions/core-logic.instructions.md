@@ -96,3 +96,11 @@
 - **Use early returns** to reduce nesting
 - **Validate inputs** before processing (dates, URLs)
 - **Clean up resources** (quit driver, close tabs)
+
+### JSON Configuration Files
+- **All rubric and error definition data MUST be stored in `.json` files** under `src/cqc_cpcc/config/`
+- **Never embed large JSON strings directly in `.py` files** — use a separate `.json` file
+- Python modules load config via `Path(__file__).parent / "config" / "<name>.json"` with a `_load_json_file()` helper
+- Config files follow the naming convention: `rubrics.json`, `rubrics_v1_legacy.json`, `rubric_error_definitions.json`, `error_definitions_registry.json`
+- **When adding a new rubric or course error definitions**, edit the corresponding `.json` file directly (not inline strings in `.py`)
+- Tests that validate load error paths should mock `_load_json_file` (for `rubric_config.py`) or `builtins.open` (for `error_definitions_config.py`) rather than patching deleted module-level string constants

@@ -2,11 +2,11 @@
 
 """Configuration module for error definitions.
 
-This module stores and loads error definitions from a JSON string embedded in
-configuration. Error definitions are organized hierarchically by course and assignment.
+This module loads error definitions from a JSON file stored in the config/ directory.
+Error definitions are organized hierarchically by course and assignment.
 
-Configuration Structure:
-- ERROR_DEFINITIONS_REGISTRY_JSON: JSON string containing hierarchical error definitions
+Configuration Files:
+- config/error_definitions_registry.json: Hierarchical error definitions
   - courses[] -> assignments[] -> error_definitions[]
 
 Usage:
@@ -16,6 +16,7 @@ Usage:
 """
 
 import json
+from pathlib import Path
 from typing import Optional
 from cqc_cpcc.error_definitions_models import (
     ErrorConfigRegistry,
@@ -27,475 +28,8 @@ from cqc_cpcc.error_definitions_models import (
 from cqc_cpcc.utilities.logger import logger
 
 
-# ============================================================================
-# ERROR DEFINITIONS REGISTRY CONFIGURATION (JSON STRING)
-# ============================================================================
-
-ERROR_DEFINITIONS_REGISTRY_JSON = """{
-    "courses": [
-        {
-            "course_id": "CSC151",
-            "assignments": [
-                {
-                    "assignment_id": "Exam1",
-                    "assignment_name": "CSC 151 Exam 1",
-                    "error_definitions": [
-                        {
-                            "error_id": "CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION",
-                            "name": "Insufficient Documentation",
-                            "description": "No documentation or insufficient amount of comments in the code",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_SEQUENCE_AND_SELECTION_ERROR",
-                            "name": "Sequence and Selection Error",
-                            "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR",
-                            "name": "Output Impact Error",
-                            "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_SYNTAX_ERROR",
-                            "name": "Syntax Error",
-                            "description": "There are syntax errors in the code",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_NAMING_CONVENTION",
-                            "name": "Naming Convention Violation",
-                            "description": "Naming conventions are not followed",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_CONSTANTS_ERROR",
-                            "name": "Constants Error",
-                            "description": "Constants are not properly declared or used",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_INEFFICIENT_CODE",
-                            "name": "Inefficient Code",
-                            "description": "The code is inefficient and can be optimized",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_OUTPUT_FORMATTING",
-                            "name": "Output Formatting Issues",
-                            "description": "There are issues with the expected code output formatting (spacing, decimal places, etc.)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_PROGRAMMING_STYLE",
-                            "name": "Programming Style Issues",
-                            "description": "There are programming style issues that do not adhere to language standards (indentation, white space, etc.)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_1_SCANNER_CLASS",
-                            "name": "Scanner Class Error",
-                            "description": "There are errors related to the use of the Scanner class",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        }
-                    ]
-                },
-                {
-                    "assignment_id": "Exam2",
-                    "assignment_name": "CSC 151 Exam 2",
-                    "error_definitions": [
-                        {
-                            "error_id": "CSC_151_EXAM_2_METHOD_ERRORS",
-                            "name": "Method Errors",
-                            "description": "Method errors in the code (passing the incorrect number of arguments, incorrect data types for arguments and parameter variables, or failing to include the data type of parameter variables in the method header)",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_2_INSUFFICIENT_DOCUMENTATION",
-                            "name": "Insufficient Documentation",
-                            "description": "No documentation or insufficient amount of comments in the code",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_151_EXAM_2_SEQUENCE_AND_SELECTION_ERROR",
-                            "name": "Sequence and Selection Error",
-                            "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        }
-                    ]
-                }
-            ]
-        },
-        {
-            "course_id": "CSC251",
-            "assignments": [
-                {
-                    "assignment_id": "Exam1",
-                    "assignment_name": "CSC 251 Exam 1",
-                    "error_definitions": [
-                        {
-                            "error_id": "CSC_251_EXAM_1_INSUFFICIENT_DOCUMENTATION",
-                            "name": "Insufficient Documentation",
-                            "description": "No documentation or insufficient amount of comments in the code",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_SEQUENCE_AND_SELECTION_ERROR",
-                            "name": "Sequence and Selection Error",
-                            "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_OUTPUT_IMPACT_ERROR",
-                            "name": "Output Impact Error",
-                            "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_CONSTANTS_ERROR",
-                            "name": "Constants Error",
-                            "description": "Constants are not properly declared or used",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_DECIMAL_SCALE",
-                            "name": "Decimal Scale Error",
-                            "description": "There are issues with the expected code output where the decimal scale is not correct and/or missing commas separators",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_CURLY_BRACES_OMITTED",
-                            "name": "Curly Braces Omitted",
-                            "description": "The code has omission of curly braces",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_METHOD_ERRORS",
-                            "name": "Method Errors",
-                            "description": "There are method errors (issues with parameters, return types, incorrect values, etc.)",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_CLASS_DESIGN_ERRORS",
-                            "name": "Class Design Errors",
-                            "description": "There are class design errors",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_ARRAYLIST_ERRORS",
-                            "name": "ArrayList Errors",
-                            "description": "There are errors involving ArrayList",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_SYNTAX_ERROR",
-                            "name": "Syntax Error",
-                            "description": "There are syntax errors in the code",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_NAMING_CONVENTION",
-                            "name": "Naming Convention Violation",
-                            "description": "Naming conventions are not followed",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_INEFFICIENT_CODE",
-                            "name": "Inefficient Code",
-                            "description": "The code is inefficient and can be optimized",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_PROGRAMMING_STYLE",
-                            "name": "Programming Style Issues",
-                            "description": "There are programming style issues that do not adhere to language standards (indentation, white space, etc.)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_FILE_CLASS_NAME_MISMATCH",
-                            "name": "File/Class Name Mismatch",
-                            "description": "The filename and class container are not the same",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_MINOR_FORMATTING",
-                            "name": "Minor Formatting Issues",
-                            "description": "There are formatting issues not matching Sample Input and Output (i.e spacing, missing dollar sign, not using print/println appropriately, etc.)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_STALE_DATA",
-                            "name": "Stale Data",
-                            "description": "There is stale data in classes",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_UNUSED_VARIABLES",
-                            "name": "Unused Variables",
-                            "description": "There are variables/fields declared that are not used in the program",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_INCORRECT_DATA_TYPE",
-                            "name": "Incorrect Data Type",
-                            "description": "The program has the incorrect data type(s) used",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_1_DOES_NOT_COMPILE",
-                            "name": "Does Not Compile",
-                            "description": "The program does not compile",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        }
-                    ]
-                },
-                {
-                    "assignment_id": "Exam2",
-                    "assignment_name": "CSC 251 Exam 2",
-                    "error_definitions": [
-                        {
-                            "error_id": "CSC_251_EXAM_2_SECURITY_HOLES",
-                            "name": "Security Holes",
-                            "description": "There are security holes in the code",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_251_EXAM_2_AGGREGATION_ERRORS",
-                            "name": "Aggregation Errors",
-                            "description": "There are aggregation errors",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        }
-                    ]
-                }
-            ]
-        },
-        {
-            "course_id": "CSC134",
-            "assignments": [
-                {
-                    "assignment_id": "Project",
-                    "assignment_name": "CSC 134 Project",
-                    "error_definitions": [
-                        {
-                            "error_id": "CSC_134_PROJECT_1_INSUFFICIENT_DOCUMENTATION",
-                            "name": "Insufficient Documentation",
-                            "description": "No documentation or insufficient documentation (comments) in the code",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_DOES_NOT_COMPILE",
-                            "name": "Does Not Compile",
-                            "description": "Program does not compile",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_MAJOR_FORMATTING",
-                            "name": "Major Formatting Issues",
-                            "description": "Major formatting issues – instructions are not followed for output (output and formatting must match sample output exactly)",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_SEQUENCE_SELECTION_ERROR",
-                            "name": "Sequence and Selection Error",
-                            "description": "All errors when coding sequence, selection and/or looping control structures",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_CURLY_BRACES_OMITTED",
-                            "name": "Curly Braces Omitted",
-                            "description": "Omit curly braces where required",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_INPUT_VALIDATION",
-                            "name": "Input Validation Error",
-                            "description": "Failure to validate input or input validation is incorrect",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_FUNCTION_PROTOTYPE_ERROR",
-                            "name": "Function / Prototype Error",
-                            "description": "Functions / Prototypes not declared and called correctly per the assignment instructions",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_CALCULATION_ERROR",
-                            "name": "Calculation Error",
-                            "description": "Calculation errors that produce incorrect results",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_OUTPUT_IMPACT_ERROR",
-                            "name": "Output Impact Error",
-                            "description": "Any errors that adversely impact the output",
-                            "severity_category": "major",
-                            "enabled": true,
-                            "default_penalty_points": 40
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_FILENAME_CLASS_MISMATCH",
-                            "name": "Filename / Class Name Mismatch",
-                            "description": "Filename and class container name are not the same",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_INCORRECT_FILENAME",
-                            "name": "Incorrect Filename",
-                            "description": "Incorrect filename (does not match assignment requirements)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_INCORRECT_DATA_TYPE",
-                            "name": "Incorrect Data Type",
-                            "description": "Data type declaration is incorrect",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_MISSPELLING",
-                            "name": "Misspelling",
-                            "description": "Misspelling(s) in identifiers, output strings, or comments",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_NAMING_CONVENTION",
-                            "name": "Naming Convention Violation",
-                            "description": "Failing to follow naming conventions",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_CONSTANTS_ERROR",
-                            "name": "Constants Error",
-                            "description": "Failing to declare and use named constants (if needed)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_INEFFICIENT_CODE",
-                            "name": "Inefficient Code",
-                            "description": "Inefficient code (code duplication; spaghetti code, etc.)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_MINOR_FORMATTING",
-                            "name": "Minor Formatting Issues",
-                            "description": "Minor formatting issues – decimal scale (incorrect decimal places or missing separators)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        },
-                        {
-                            "error_id": "CSC_134_PROJECT_1_PROGRAMMING_STYLE",
-                            "name": "Programming Style Issues",
-                            "description": "Programming style issues (inconsistent or no indentation, inadequate white space, etc. – review sample programs in the book)",
-                            "severity_category": "minor",
-                            "enabled": true,
-                            "default_penalty_points": 10
-                        }
-                    ]
-                }
-            ]
-        }
-    ]
-}"""
+# Directory containing JSON config files (sibling config/ dir)
+_CONFIG_DIR = Path(__file__).parent / "config"
 
 
 # ============================================================================
@@ -503,16 +37,16 @@ ERROR_DEFINITIONS_REGISTRY_JSON = """{
 # ============================================================================
 
 def load_error_config_registry() -> ErrorConfigRegistry:
-    """Load error definitions registry from ERROR_DEFINITIONS_REGISTRY_JSON.
+    """Load error definitions registry from config/error_definitions_registry.json.
     
-    Parses the JSON string, validates the structure, and returns an ErrorConfigRegistry
+    Parses the JSON file, validates the structure, and returns an ErrorConfigRegistry
     with all courses, assignments, and error definitions.
     
     Returns:
         ErrorConfigRegistry with validated error definitions
         
     Raises:
-        ValueError: If JSON is invalid or validation fails
+        ValueError: If JSON file is missing, invalid, or validation fails
         
     Example:
         >>> registry = load_error_config_registry()
@@ -520,14 +54,19 @@ def load_error_config_registry() -> ErrorConfigRegistry:
         >>> print(course_ids)
         ['CSC151', 'CSC251']
     """
+    registry_path = _CONFIG_DIR / "error_definitions_registry.json"
     try:
-        registry_data = json.loads(ERROR_DEFINITIONS_REGISTRY_JSON)
+        with open(registry_path, "r", encoding="utf-8") as f:
+            registry_data = json.load(f)
+    except FileNotFoundError as e:
+        logger.error(f"Config file not found: {registry_path}")
+        raise ValueError(f"Missing config file: {registry_path}") from e
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse ERROR_DEFINITIONS_REGISTRY_JSON: {e}")
-        raise ValueError(f"Invalid JSON in ERROR_DEFINITIONS_REGISTRY_JSON: {e}")
+        logger.error(f"Invalid JSON in {registry_path}: {e}")
+        raise ValueError(f"Invalid JSON in {registry_path}: {e}") from e
     
     if not isinstance(registry_data, dict):
-        raise ValueError("ERROR_DEFINITIONS_REGISTRY_JSON must be a JSON object (dict)")
+        raise ValueError("error_definitions_registry.json must be a JSON object (dict)")
     
     try:
         registry = ErrorConfigRegistry.model_validate(registry_data)

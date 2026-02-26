@@ -40,17 +40,23 @@ class TestLoadErrorConfigRegistry:
             assert "courses" in log_message
             assert "error definitions" in log_message
     
-    @patch('cqc_cpcc.error_definitions_config.ERROR_DEFINITIONS_REGISTRY_JSON', '{"invalid json')
     def test_load_raises_on_invalid_json(self):
-        """load_error_config_registry should raise ValueError on invalid JSON."""
-        with pytest.raises(ValueError, match="Invalid JSON"):
-            load_error_config_registry()
+        """load_error_config_registry should raise ValueError on invalid JSON file."""
+        from unittest.mock import mock_open
+        import json as _json
+        m = mock_open(read_data="{ invalid json")
+        with patch("builtins.open", m):
+            with pytest.raises(ValueError, match="Invalid JSON"):
+                load_error_config_registry()
     
-    @patch('cqc_cpcc.error_definitions_config.ERROR_DEFINITIONS_REGISTRY_JSON', '["not", "a", "dict"]')
     def test_load_raises_on_non_dict_json(self):
         """load_error_config_registry should raise ValueError if JSON is not a dict."""
-        with pytest.raises(ValueError, match="must be a JSON object"):
-            load_error_config_registry()
+        from unittest.mock import mock_open
+        import json as _json
+        m = mock_open(read_data='["not", "a", "dict"]')
+        with patch("builtins.open", m):
+            with pytest.raises(ValueError, match="must be a JSON object"):
+                load_error_config_registry()
 
 
 @pytest.mark.unit
