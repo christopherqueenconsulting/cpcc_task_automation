@@ -1535,6 +1535,7 @@ async def process_rubric_grading_batch(
             avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
             total_possible = effective_rubric.total_points_possible
             if total_possible > 0:
+                avg_pct = (avg_score / total_possible * 100)
                 st.metric("Average Score", f"{avg_score:.1f}/{total_possible} ({avg_pct:.1f}%)")
             else:
                 logger.warning("Effective rubric has zero total_points_possible; skipping average percentage calculation.")
