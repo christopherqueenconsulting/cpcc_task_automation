@@ -284,11 +284,183 @@ def test_fallback_prompt_emphasizes_exact_field_names():
     print("✅ Fallback prompt emphasizes exact field names")
 
 
+@pytest.mark.unit
+def test_normalize_criterion_dict_with_json_schema_style_no_properties():
+    """Test normalization handles JSON-Schema-style criterion dict missing all required fields.
+
+    Reproduces the scenario where GPT-5-mini returns a dict like:
+    {'completionState': 'completed', 'type': 'Object'}
+    that has no 'properties' key and is missing criterion_id/name/points_possible/feedback.
+    """
+    fallback_data = {
+        "rubric_id": "csc134_cpp_exam_rubric",
+        "rubric_version": "1.0",
+        "total_points_possible": 100,
+        "total_points_earned": 0,
+        "criteria_results": [
+            {
+                # JSON-Schema-style dict from GPT-5-mini with no actual data
+                "completionState": "completed",
+                "type": "Object",
+                # No criterion_id, criterion_name, points_possible, or feedback
+            }
+        ],
+        "overall_feedback": "Unable to grade",
+    }
+
+    normalized = _normalize_fallback_json(fallback_data, RubricAssessmentResult)
+
+    criterion = normalized["criteria_results"][0]
+    # Must have all required fields after normalization (with fallback values)
+    assert "criterion_id" in criterion, "criterion_id key missing"
+    assert criterion["criterion_id"] is not None, "criterion_id is None"
+    assert "criterion_name" in criterion, "criterion_name key missing"
+    assert criterion["criterion_name"] is not None, "criterion_name is None"
+    assert "points_possible" in criterion, "points_possible key missing"
+    assert criterion["points_possible"] is not None, "points_possible is None"
+    assert "feedback" in criterion, "feedback key missing"
+    assert criterion["feedback"] is not None, "feedback is None"
+
+    print("✅ JSON-Schema-style criterion dict (no properties) gets fallback values")
+
+
+@pytest.mark.unit
+def test_normalize_detected_errors_json_schema_style_dicts():
+    """Test normalization handles detected_errors that are JSON-Schema-style dicts.
+
+    Reproduces the scenario where GPT-5-mini returns detected_errors items as
+    dicts like {'completionState': 'completed', 'type': 'Object'} that are missing
+    required fields code/name/severity/description.
+    """
+    fallback_data = {
+        "rubric_id": "test",
+        "rubric_version": "1.0",
+        "total_points_possible": 100,
+        "total_points_earned": 50,
+        "criteria_results": [
+            {
+                "criterion_id": "test_criterion",
+                "criterion_name": "Test",
+                "points_possible": 100,
+                "points_earned": 50,
+                "feedback": "Test",
+            }
+        ],
+        "overall_feedback": "Test",
+        "detected_errors": [
+            # JSON-Schema-style dicts missing code/name/severity/description
+            {"completionState": "completed", "type": "Object"},
+            {"completionState": "completed", "type": "Object"},
+        ],
+    }
+
+    normalized = _normalize_fallback_json(fallback_data, RubricAssessmentResult)
+
+    assert isinstance(normalized["detected_errors"], list)
+    assert len(normalized["detected_errors"]) == 2
+    for i, error in enumerate(normalized["detected_errors"]):
+        assert isinstance(error, dict), f"detected_errors[{i}] is not a dict"
+        assert "code" in error, f"detected_errors[{i}] missing 'code'"
+        assert error["code"] is not None, f"detected_errors[{i}]['code'] is None"
+        assert "name" in error, f"detected_errors[{i}] missing 'name'"
+        assert error["name"] is not None, f"detected_errors[{i}]['name'] is None"
+        assert "severity" in error, f"detected_errors[{i}] missing 'severity'"
+        assert error["severity"] is not None, f"detected_errors[{i}]['severity'] is None"
+        assert "description" in error, f"detected_errors[{i}] missing 'description'"
+        assert error["description"] is not None, f"detected_errors[{i}]['description'] is None"
+
+    print("✅ JSON-Schema-style detected_errors dicts get fallback values")
+
+
+@pytest.mark.unit
+def test_normalize_detected_errors_string_encoded_json_schema():
+    """Test normalization handles detected_errors items that are JSON-Schema strings.
+
+    Reproduces: detected_errors.0 input_value='{"completionState":"comp...","type":"Object"}'
+    input_type=str  (item is a string encoding a JSON-Schema-style dict)
+    """
+    schema_style_str = json.dumps({"completionState": "completed", "type": "Object"})
+
+    fallback_data = {
+        "rubric_id": "test",
+        "rubric_version": "1.0",
+        "total_points_possible": 100,
+        "total_points_earned": 50,
+        "criteria_results": [
+            {
+                "criterion_id": "test_criterion",
+                "criterion_name": "Test",
+                "points_possible": 100,
+                "points_earned": 50,
+                "feedback": "Test",
+            }
+        ],
+        "overall_feedback": "Test",
+        # Items are JSON-encoded strings, not dicts
+        "detected_errors": [schema_style_str, schema_style_str],
+    }
+
+    normalized = _normalize_fallback_json(fallback_data, RubricAssessmentResult)
+
+    assert isinstance(normalized["detected_errors"], list)
+    assert len(normalized["detected_errors"]) == 2
+    for i, error in enumerate(normalized["detected_errors"]):
+        assert isinstance(error, dict), f"detected_errors[{i}] should be dict, got {type(error)}"
+        assert "code" in error, f"detected_errors[{i}] missing 'code'"
+        assert error["code"] is not None, f"detected_errors[{i}]['code'] is None"
+
+    print("✅ String-encoded JSON-Schema detected_errors get fallback values")
+
+
+@pytest.mark.unit
+def test_normalize_detected_errors_with_properties_extraction():
+    """Test normalization extracts detected_error fields from JSON Schema 'properties'."""
+    fallback_data = {
+        "rubric_id": "test",
+        "rubric_version": "1.0",
+        "total_points_possible": 100,
+        "total_points_earned": 50,
+        "criteria_results": [
+            {
+                "criterion_id": "test_criterion",
+                "criterion_name": "Test",
+                "points_possible": 100,
+                "points_earned": 50,
+                "feedback": "Test",
+            }
+        ],
+        "overall_feedback": "Test",
+        "detected_errors": [
+            {
+                # JSON-Schema-style dict WITH properties containing actual values
+                "type": "Object",
+                "properties": {
+                    "code": {"type": "string", "default": "MISSING_DOCS"},
+                    "name": {"type": "string", "default": "Missing Documentation"},
+                    "severity": {"type": "string", "default": "major"},
+                    "description": {"type": "string", "default": "File lacks required documentation"},
+                },
+            }
+        ],
+    }
+
+    normalized = _normalize_fallback_json(fallback_data, RubricAssessmentResult)
+
+    assert isinstance(normalized["detected_errors"], list)
+    error = normalized["detected_errors"][0]
+    assert error["code"] == "MISSING_DOCS"
+    assert error["name"] == "Missing Documentation"
+    assert error["severity"] == "major"
+    assert error["description"] == "File lacks required documentation"
+
+    print("✅ JSON-Schema detected_errors with properties get correct values extracted")
+
+
 if __name__ == "__main__":
     # Run tests manually
     print("Running OpenAI fallback normalization tests...")
     print()
-    
+
     test_normalize_fallback_json_with_wrong_field_names()
     test_normalize_fallback_json_with_stringified_arrays()
     test_normalize_fallback_json_with_stringified_dicts()
@@ -297,6 +469,10 @@ if __name__ == "__main__":
     test_fallback_prompt_uses_correct_field_names()
     test_fallback_prompt_does_not_instruct_string_types()
     test_fallback_prompt_emphasizes_exact_field_names()
+    test_normalize_criterion_dict_with_json_schema_style_no_properties()
+    test_normalize_detected_errors_json_schema_style_dicts()
+    test_normalize_detected_errors_string_encoded_json_schema()
+    test_normalize_detected_errors_with_properties_extraction()
     
     print()
     print("All fallback normalization tests passed! ✅")
