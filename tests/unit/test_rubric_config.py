@@ -404,3 +404,110 @@ class TestCSC151V2Rubric:
         # Criterion description should mention conversion
         assert "Minor→Major conversion" in criterion.description or "4 Minor Errors" in criterion.description
 
+
+
+@pytest.mark.unit
+class TestCSC134Rubric:
+    """Test CSC134 C++ exam rubric configuration."""
+
+    def test_csc134_rubric_exists(self):
+        """Test that CSC134 rubric loads correctly."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert rubric.rubric_id == "csc134_cpp_exam_rubric"
+        assert rubric.rubric_version == "1.0"
+        assert rubric.title == "CSC 134 C++ Exam Rubric (Brightspace-aligned)"
+        assert "CSC134" in rubric.course_ids
+
+    def test_csc134_has_program_performance_criterion(self):
+        """Test that CSC134 rubric has program_performance criterion."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert len(rubric.criteria) == 1
+
+        criterion = rubric.criteria[0]
+        assert criterion.criterion_id == "program_performance"
+        assert criterion.name == "Program Performance"
+        assert criterion.max_points == 100
+        assert criterion.enabled is True
+
+    def test_csc134_has_correct_levels(self):
+        """Test that CSC134 rubric has all 9 performance levels."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        criterion = rubric.criteria[0]
+
+        assert len(criterion.levels) == 9
+
+        expected_labels = [
+            "A+ (0 errors)",
+            "A (1 minor error)",
+            "A- (2 minor errors)",
+            "B (3 minor errors)",
+            "B- (1 major error)",
+            "C (2 major errors)",
+            "D (3 major errors)",
+            "F (4+ major errors)",
+            "0 (Not submitted or incomplete)",
+        ]
+
+        actual_labels = [level.label for level in criterion.levels]
+        assert actual_labels == expected_labels
+
+    def test_csc134_level_score_ranges(self):
+        """Test that CSC134 rubric levels have correct score ranges."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        criterion = rubric.criteria[0]
+
+        levels_by_label = {level.label: level for level in criterion.levels}
+
+        assert levels_by_label["A+ (0 errors)"].score_min == 96
+        assert levels_by_label["A+ (0 errors)"].score_max == 100
+
+        assert levels_by_label["A (1 minor error)"].score_min == 91
+        assert levels_by_label["A (1 minor error)"].score_max == 95
+
+        assert levels_by_label["B- (1 major error)"].score_min == 71
+        assert levels_by_label["B- (1 major error)"].score_max == 80
+
+        assert levels_by_label["F (4+ major errors)"].score_min == 1
+        assert levels_by_label["F (4+ major errors)"].score_max == 15
+
+        assert levels_by_label["0 (Not submitted or incomplete)"].score_min == 0
+        assert levels_by_label["0 (Not submitted or incomplete)"].score_max == 0
+
+    def test_csc134_total_points(self):
+        """Test that CSC134 rubric has correct total points."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert rubric.total_points_possible == 100
+
+    def test_csc134_description_mentions_conversion(self):
+        """Test that CSC134 rubric description mentions error conversion rule."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert "4 Minor Errors" in rubric.description
+        assert "1 Major Error" in rubric.description
+
+    def test_csc134_criterion_description_mentions_conversion(self):
+        """Test that CSC134 program_performance criterion mentions conversion."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        criterion = rubric.criteria[0]
+
+        assert "Minor→Major conversion" in criterion.description or "4 Minor Errors" in criterion.description
+
+    def test_csc134_error_count_scoring_mode(self):
+        """Test that CSC134 criterion uses error_count scoring mode."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        criterion = rubric.criteria[0]
+
+        assert criterion.scoring_mode == "error_count"
+        assert criterion.error_rules is not None
+        assert criterion.error_rules.error_conversion is not None
+        assert criterion.error_rules.error_conversion.minor_to_major_ratio == 4
+
+    def test_csc134_appears_in_course_ids(self):
+        """Test that CSC134 appears in the list of distinct course IDs."""
+        from cqc_cpcc.rubric_config import get_distinct_course_ids
+
+        course_ids = get_distinct_course_ids()
+        assert "CSC134" in course_ids

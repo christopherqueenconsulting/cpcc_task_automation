@@ -338,6 +338,199 @@ ERROR_DEFINITIONS_REGISTRY_JSON = """{
                     ]
                 }
             ]
+        },
+        {
+            "course_id": "CSC134",
+            "assignments": [
+                {
+                    "assignment_id": "Exam1",
+                    "assignment_name": "CSC 134 Exam 1",
+                    "error_definitions": [
+                        {
+                            "error_id": "CSC_134_EXAM_1_INSUFFICIENT_DOCUMENTATION",
+                            "name": "Insufficient Documentation",
+                            "description": "No documentation or insufficient amount of comments in the code",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_SEQUENCE_AND_SELECTION_ERROR",
+                            "name": "Sequence and Selection Error",
+                            "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_OUTPUT_IMPACT_ERROR",
+                            "name": "Output Impact Error",
+                            "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_DOES_NOT_COMPILE",
+                            "name": "Does Not Compile",
+                            "description": "The program does not compile due to fatal syntax or structural errors",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_SYNTAX_ERROR",
+                            "name": "Syntax Error",
+                            "description": "There are syntax errors in the code",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_NAMING_CONVENTION",
+                            "name": "Naming Convention Violation",
+                            "description": "Naming conventions are not followed (e.g., variable names, function names, or constants not adhering to C++ standards)",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_CONSTANTS_ERROR",
+                            "name": "Constants Error",
+                            "description": "Constants are not properly declared or used (e.g., using magic numbers instead of named constants with const)",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_INEFFICIENT_CODE",
+                            "name": "Inefficient Code",
+                            "description": "The code is inefficient and can be optimized",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_OUTPUT_FORMATTING",
+                            "name": "Output Formatting Issues",
+                            "description": "There are issues with the expected code output formatting (spacing, decimal places, alignment, etc.)",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_PROGRAMMING_STYLE",
+                            "name": "Programming Style Issues",
+                            "description": "There are programming style issues that do not adhere to C++ standards (indentation, white space, brace placement, etc.)",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_1_HEADER_FILE_ERROR",
+                            "name": "Header File Error",
+                            "description": "Missing or incorrect header file includes (e.g., missing #include directives or including unnecessary headers)",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        }
+                    ]
+                },
+                {
+                    "assignment_id": "Exam2",
+                    "assignment_name": "CSC 134 Exam 2",
+                    "error_definitions": [
+                        {
+                            "error_id": "CSC_134_EXAM_2_INSUFFICIENT_DOCUMENTATION",
+                            "name": "Insufficient Documentation",
+                            "description": "No documentation or insufficient amount of comments in the code",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_SEQUENCE_AND_SELECTION_ERROR",
+                            "name": "Sequence and Selection Error",
+                            "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_OUTPUT_IMPACT_ERROR",
+                            "name": "Output Impact Error",
+                            "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_FUNCTION_ERRORS",
+                            "name": "Function Errors",
+                            "description": "Function errors in the code (incorrect number of arguments, wrong data types for parameters, incorrect return types, or missing function prototypes)",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_DOES_NOT_COMPILE",
+                            "name": "Does Not Compile",
+                            "description": "The program does not compile due to fatal syntax or structural errors",
+                            "severity_category": "major",
+                            "enabled": true,
+                            "default_penalty_points": 40
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_SYNTAX_ERROR",
+                            "name": "Syntax Error",
+                            "description": "There are syntax errors in the code",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_NAMING_CONVENTION",
+                            "name": "Naming Convention Violation",
+                            "description": "Naming conventions are not followed",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_CONSTANTS_ERROR",
+                            "name": "Constants Error",
+                            "description": "Constants are not properly declared or used",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_INEFFICIENT_CODE",
+                            "name": "Inefficient Code",
+                            "description": "The code is inefficient and can be optimized",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_OUTPUT_FORMATTING",
+                            "name": "Output Formatting Issues",
+                            "description": "There are issues with the expected code output formatting (spacing, decimal places, alignment, etc.)",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        },
+                        {
+                            "error_id": "CSC_134_EXAM_2_PROGRAMMING_STYLE",
+                            "name": "Programming Style Issues",
+                            "description": "There are programming style issues that do not adhere to C++ standards (indentation, white space, brace placement, etc.)",
+                            "severity_category": "minor",
+                            "enabled": true,
+                            "default_penalty_points": 10
+                        }
+                    ]
+                }
+            ]
         }
     ]
 }"""

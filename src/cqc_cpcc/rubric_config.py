@@ -2532,6 +2532,88 @@ RUBRICS_JSON = """{
         "score_max": 59
       }
     ]
+  },
+  "csc134_cpp_exam_rubric": {
+    "rubric_id": "csc134_cpp_exam_rubric",
+    "rubric_version": "1.0",
+    "title": "CSC 134 C++ Exam Rubric (Brightspace-aligned)",
+    "description": "Aligned to the official Brightspace Exam Grading Rubric for CSC134. Program Performance is scored strictly by error counts. Rule: Every 4 Minor Errors convert into 1 Major Error before scoring.",
+    "course_ids": [
+      "CSC134"
+    ],
+    "criteria": [
+      {
+        "criterion_id": "program_performance",
+        "name": "Program Performance",
+        "description": "Apply Minor→Major conversion first. Every 4 Minor Errors become 1 Major Error (remainder stays Minor). Then select the score band.",
+        "max_points": 100,
+        "enabled": true,
+        "scoring_mode": "error_count",
+        "error_rules": {
+          "major_weight": 0,
+          "minor_weight": 0,
+          "error_conversion": {
+            "minor_to_major_ratio": 4
+          }
+        },
+        "levels": [
+          {
+            "label": "A+ (0 errors)",
+            "score_min": 96,
+            "score_max": 100,
+            "description": "Perfect - no errors detected"
+          },
+          {
+            "label": "A (1 minor error)",
+            "score_min": 91,
+            "score_max": 95,
+            "description": "Excellent - only 1 minor error"
+          },
+          {
+            "label": "A- (2 minor errors)",
+            "score_min": 86,
+            "score_max": 90,
+            "description": "Very good - 2 minor errors"
+          },
+          {
+            "label": "B (3 minor errors)",
+            "score_min": 81,
+            "score_max": 85,
+            "description": "Good - 3 minor errors"
+          },
+          {
+            "label": "B- (1 major error)",
+            "score_min": 71,
+            "score_max": 80,
+            "description": "Satisfactory - 1 major error"
+          },
+          {
+            "label": "C (2 major errors)",
+            "score_min": 61,
+            "score_max": 70,
+            "description": "Acceptable - 2 major errors"
+          },
+          {
+            "label": "D (3 major errors)",
+            "score_min": 16,
+            "score_max": 60,
+            "description": "Poor - 3 major errors"
+          },
+          {
+            "label": "F (4+ major errors)",
+            "score_min": 1,
+            "score_max": 15,
+            "description": "Failing - 4 or more major errors"
+          },
+          {
+            "label": "0 (Not submitted or incomplete)",
+            "score_min": 0,
+            "score_max": 0,
+            "description": "Not submitted or incomplete"
+          }
+        ]
+      }
+    ]
   }
 }"""
 
