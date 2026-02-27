@@ -468,3 +468,86 @@ class TestRubricGradingOptionalParameters:
         assert "Assignment Instructions" in prompt
         assert "Student Submission" in prompt
         assert base_rubric.title in prompt
+
+
+@pytest.mark.unit
+class TestGradingFlowOrder:
+    """Test that the grading prompt enforces Error Detection FIRST, then Rubric Evaluation."""
+
+    def test_prompt_without_errors_uses_evaluation_process(self, base_rubric):
+        """Without error definitions, prompt uses standard Evaluation Process header."""
+        prompt = build_rubric_grading_prompt(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+        )
+
+        assert "Evaluation Process" in prompt
+        assert "Step 1: Error Detection" not in prompt
+        assert "Step 2: Rubric Evaluation" not in prompt
+
+    def test_prompt_with_errors_has_step1_before_step2(self, base_rubric, error_definitions):
+        """With error definitions, Error Detection (Step 1) comes before Rubric Evaluation (Step 2)."""
+        prompt = build_rubric_grading_prompt(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            error_definitions=error_definitions[:5],
+        )
+
+        assert "Step 1: Error Detection" in prompt
+        assert "Step 2: Rubric Evaluation" in prompt
+        # Step 1 must appear before Step 2 in the prompt
+        assert prompt.index("Step 1: Error Detection") < prompt.index("Step 2: Rubric Evaluation")
+
+    def test_prompt_with_errors_emphasizes_errors_first(self, base_rubric, error_definitions):
+        """With error definitions, the prompt explicitly says to detect errors before rubric."""
+        prompt = build_rubric_grading_prompt(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            error_definitions=error_definitions[:5],
+        )
+
+        assert "Do This First" in prompt
+        assert "Complete ALL error detection before proceeding" in prompt
+
+    def test_prompt_error_count_criterion_links_errors_to_rubric(self, base_rubric, error_definitions):
+        """error_count criteria tell the model to use detected errors to determine level."""
+        prompt = build_rubric_grading_prompt(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            error_definitions=error_definitions[:5],
+        )
+
+        assert "Use the detected errors" in prompt
+        assert "determine the appropriate performance level" in prompt
+
+    def test_prompt_with_all_disabled_errors_uses_evaluation_process(self, base_rubric):
+        """If all error definitions are disabled, prompt falls back to Evaluation Process (not Step1/Step2)."""
+        from cqc_cpcc.error_definitions_models import ErrorDefinition
+
+        disabled_errors = [
+            ErrorDefinition(
+                error_id="ERR_DISABLED",
+                name="Disabled Error",
+                description="This error is disabled.",
+                severity_category="major",
+                enabled=False,
+            )
+        ]
+
+        prompt = build_rubric_grading_prompt(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            error_definitions=disabled_errors,
+        )
+
+        # No enabled errors → should use standard Evaluation Process, not Step 1/Step 2
+        assert "Evaluation Process" in prompt
+        assert "Step 1: Error Detection" not in prompt
+        assert "Step 2: Rubric Evaluation" not in prompt
+        # And the Error Definitions section should not appear
+        assert "Error Definitions" not in prompt

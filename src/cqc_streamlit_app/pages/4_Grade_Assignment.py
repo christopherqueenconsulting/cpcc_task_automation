@@ -1192,7 +1192,7 @@ async def grade_single_rubric_student(
     model_name: str,
     temperature: float,
     course_name: str,
-) -> tuple[str, RubricAssessmentResult]:
+) -> tuple[str, RubricAssessmentResult | None]:
     """Grade a single student submission with rubric using async OpenAI call.
     
     This function is executed as an async task for concurrent grading.
@@ -1276,7 +1276,10 @@ async def grade_single_rubric_student(
             # Display results with debug information
             display_rubric_assessment_result(result, student_id, correlation_id=grading_correlation_id)
             
-            status.update(label=f"✅ {student_id} graded", state="complete")
+            band_or_level = _get_band_or_level_label(result)
+            score_str = f"{result.total_points_earned}/{result.total_points_possible}"
+            level_str = f" [{band_or_level}]" if band_or_level else ""
+            status.update(label=f"✅ {student_id} — {score_str}{level_str}", state="complete")
             
             return (student_id, result)
             
@@ -1364,8 +1367,7 @@ async def grade_single_rubric_student(
             
             status.update(label=f"❌ Error: {student_id}", state="error")
             
-            # Re-raise to let gather() capture it as an exception
-            raise
+            return (student_id, None)  # None signals failure
 
 
 async def process_rubric_grading_batch(
@@ -1471,27 +1473,30 @@ async def process_rubric_grading_batch(
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     # Separate successful results from failures
+    failed_student_ids = []
     for result in results:
         if isinstance(result, Exception):
-            # Task failed - exception is already logged in grade_single_rubric_student
-            logger.debug(f"Skipping failed task: {type(result).__name__}")
+            # Unexpected exception not caught inside grade_single_rubric_student
+            logger.debug(f"Skipping unexpected exception: {type(result).__name__}")
             continue
         
-        # Successful result
-        all_results.append(result)
+        student_id, assessment = result
+        if assessment is None:
+            # Grading failed - cache the failure
+            failed_student_ids.append(student_id)
+        else:
+            all_results.append((student_id, assessment))
     
-    # Store results in session state for this run_key
+    # Store results AND failures in session state for this run_key
     st.session_state.grading_results_by_key[run_key] = all_results
+    st.session_state.grading_failures_by_key[run_key] = failed_student_ids
     
     # Display summary
     success_count = len(all_results)
-    failure_count = total_students - success_count
+    failure_count = len(failed_student_ids)
     
     if success_count > 0:
         st.success(f"✅ Successfully graded {success_count}/{total_students} submission(s)")
-        
-        # TODO: Generate aggregate report (CSV/JSON)
-        # For now, results are displayed in individual status blocks
         
         # Display summary table
         summary_data = []
@@ -1510,13 +1515,24 @@ async def process_rubric_grading_batch(
                 "Band": result.overall_band_label or "N/A",
             })
         
+        # Add failure rows
+        for failed_id in failed_student_ids:
+            summary_data.append({
+                "Student": failed_id,
+                "Points Earned": "—",
+                "Points Possible": effective_rubric.total_points_possible,
+                "Percentage": "Failed",
+                "Band": "❌ Failed",
+            })
+        
         if summary_data:
             st.subheader("📊 Grading Summary")
             summary_df = pd.DataFrame(summary_data)
             st.dataframe(summary_df, hide_index=True)
             
-            # Calculate statistics
-            avg_score = summary_df["Points Earned"].mean()
+            # Calculate statistics - exclude failure rows from average
+            numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
+            avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
             total_possible = effective_rubric.total_points_possible
             if total_possible > 0:
                 avg_pct = (avg_score / total_possible * 100)
@@ -1908,6 +1924,20 @@ async def get_rubric_based_exam_grading():
         selected_assignment_name = assignment_label.strip() or "Rubric Only"
         selected_assignment_id = sanitize_filename(assignment_label) if assignment_label else "RubricOnly"
     
+    # Class section input (shown for all grading modes)
+    course_section = st.text_input(
+        "Class Section (e.g., N805, N804)",
+        placeholder="Enter class section identifier",
+        key="rubric_grading_course_section"
+    )
+    
+    # Build course_name including optional section
+    course_name_parts = [selected_course_id]
+    if course_section and course_section.strip():
+        course_name_parts.append(course_section.strip())
+    course_name_parts.append(selected_assignment_name)
+    course_name = "_".join(course_name_parts)
+    
     # Step 3: Rubric Overrides Editor (if rubric mode)
     if use_rubric:
         rubric_overrides = display_rubric_overrides_editor(selected_rubric)
@@ -2022,9 +2052,9 @@ async def get_rubric_based_exam_grading():
             if stored_run_key in results_cache:
                 st.info("📦 Displaying cached results from previous grading session")
                 if grading_mode == "errors_only":
-                    display_cached_error_only_results(stored_run_key, f"{selected_course_id}_{selected_assignment_name}")
+                    display_cached_error_only_results(stored_run_key, course_name)
                 else:
-                    display_cached_grading_results(stored_run_key, f"{selected_course_id}_{selected_assignment_name}")
+                    display_cached_grading_results(stored_run_key, course_name)
                 return
         
         st.info("📝 Please upload assignment instructions and student submissions to begin grading.")
@@ -2133,7 +2163,7 @@ async def get_rubric_based_exam_grading():
                     deduction_per_minor_error=int(deduction_per_minor_error or 0),
                     model_name=selected_model,
                     temperature=0.0,  # Temperature not used with OpenRouter
-                    course_name=f"{selected_course_id}_{selected_assignment_name}",
+                    course_name=course_name,
                     accepted_file_types=student_submission_accepted_file_types,
                     run_key=current_run_key,
                 )
@@ -2146,7 +2176,7 @@ async def get_rubric_based_exam_grading():
                     error_definitions=effective_error_definitions,
                     model_name=selected_model,
                     temperature=0.0,  # Temperature not used with OpenRouter
-                    course_name=f"{selected_course_id}_{selected_assignment_name}",
+                    course_name=course_name,
                     accepted_file_types=student_submission_accepted_file_types,
                     run_key=current_run_key,
                 )
@@ -2167,9 +2197,18 @@ async def get_rubric_based_exam_grading():
         st.session_state.last_grading_run_key = current_run_key
         st.info("📦 Displaying cached results")
         if grading_mode == "errors_only":
-            display_cached_error_only_results(current_run_key, f"{selected_course_id}_{selected_assignment_name}")
+            display_cached_error_only_results(current_run_key, course_name)
         else:
-            display_cached_grading_results(current_run_key, f"{selected_course_id}_{selected_assignment_name}")
+            display_cached_grading_results(current_run_key, course_name)
+
+
+def _get_band_or_level_label(result) -> Optional[str]:
+    """Return the overall band label, falling back to the first criterion's selected level."""
+    band = getattr(result, 'overall_band_label', None)
+    if band:
+        return band
+    criteria = getattr(result, 'criteria_results', None) or []
+    return next((cr.selected_level_label for cr in criteria if cr.selected_level_label), None)
 
 
 def display_rubric_assessment_result(result, student_name: str, correlation_id: Optional[str] = None):
@@ -2335,13 +2374,14 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         return
     
     all_results = st.session_state.grading_results_by_key[run_key]
+    failed_student_ids = st.session_state.grading_failures_by_key.get(run_key, [])
     
-    if not all_results:
+    if not all_results and not failed_student_ids:
         st.warning("⚠️ No successful grading results to display")
         return
     
-    total_students = len(all_results)
-    st.success(f"✅ Displaying cached results for {total_students} student(s)")
+    total_students = len(all_results) + len(failed_student_ids)
+    st.success(f"✅ Displaying cached results for {len(all_results)} student(s)")
     
     # Add "Expand All" button (passive - doesn't trigger re-grading)
     col1, col2 = st.columns([3, 1])
@@ -2371,13 +2411,27 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             "Band": getattr(result, 'overall_band_label', None) or "N/A",
         })
     
+    # Add failure rows
+    total_possible_for_failures = next(
+        (r[1].total_points_possible for r in all_results if r[1] is not None), 0
+    )
+    for failed_id in failed_student_ids:
+        summary_data.append({
+            "Student": failed_id,
+            "Points Earned": "—",
+            "Points Possible": total_possible_for_failures,
+            "Percentage": "Failed",
+            "Band": "❌ Failed",
+        })
+    
     if summary_data:
         st.subheader("📊 Grading Summary")
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, hide_index=True)
         
-        # Calculate statistics - use cached result data directly
-        avg_score = summary_df["Points Earned"].mean()
+        # Calculate statistics - exclude failure rows from average
+        numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
+        avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
         # Get total_possible from first result, default to 100 if missing
         try:
             total_possible = all_results[0][1].total_points_possible
@@ -2399,7 +2453,10 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         # Use expand_all_students flag from session state
         expanded_state = st.session_state.get('expand_all_students', False)
         
-        with st.expander(f"📝 {student_id}", expanded=expanded_state):
+        band_or_level = _get_band_or_level_label(result)
+        score_str = f"{getattr(result, 'total_points_earned', 0)}/{getattr(result, 'total_points_possible', 0)}"
+        level_str = f" [{band_or_level}]" if band_or_level else ""
+        with st.expander(f"📝 {student_id} — {score_str}{level_str}", expanded=expanded_state):
             display_rubric_assessment_result(result, student_id)
     
     # Generate Word docs and ZIP download (uses cached ZIP if available)
