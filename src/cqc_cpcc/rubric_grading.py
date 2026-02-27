@@ -41,7 +41,7 @@ from cqc_cpcc.utilities.logger import logger
 # Default model configuration
 DEFAULT_GRADING_MODEL = "gpt-5-mini"
 DEFAULT_TEMPERATURE = 0.2
-DEFAULT_MAX_TOKENS = 4096
+DEFAULT_MAX_TOKENS = 16384
 
 
 def build_rubric_grading_prompt(
