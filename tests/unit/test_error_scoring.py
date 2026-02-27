@@ -9,7 +9,8 @@ from cqc_cpcc.error_scoring import (
     aggregate_error_counts,
     get_error_count_for_severity,
     normalize_errors,
-    select_program_performance_level
+    select_program_performance_level,
+    select_csc134_program_performance_level,
 )
 from cqc_cpcc.rubric_models import Criterion, ErrorCountScoringRules, DetectedError
 
@@ -463,3 +464,110 @@ class TestGetErrorCountForSeverity:
         assert get_error_count_for_severity(counts, "MAJOR") == 5
         assert get_error_count_for_severity(counts, "Minor") == 3
         assert get_error_count_for_severity(counts, "MaJoR") == 5
+
+
+@pytest.mark.unit
+class TestSelectCSC134ProgramPerformanceLevel:
+    """Test select_csc134_program_performance_level function for CSC134 rubric."""
+
+    def test_no_errors_is_outstanding(self):
+        """0 errors → Outstanding (100 pts)."""
+        label, score = select_csc134_program_performance_level(0, 0)
+        assert label == "Outstanding"
+        assert score == 100
+
+    def test_one_minor_is_superior(self):
+        """1 minor error → Superior (90 pts)."""
+        label, score = select_csc134_program_performance_level(0, 1)
+        assert label == "Superior"
+        assert score == 90
+
+    def test_two_minor_is_superior(self):
+        """2 minor errors → Superior (90 pts)."""
+        label, score = select_csc134_program_performance_level(0, 2)
+        assert label == "Superior"
+        assert score == 90
+
+    def test_three_minor_is_above_average(self):
+        """3 minor errors → Above Average (80 pts)."""
+        label, score = select_csc134_program_performance_level(0, 3)
+        assert label == "Above Average"
+        assert score == 80
+
+    def test_four_minor_is_above_average(self):
+        """4 minor errors → Above Average (80 pts)."""
+        label, score = select_csc134_program_performance_level(0, 4)
+        assert label == "Above Average"
+        assert score == 80
+
+    def test_five_minor_is_average(self):
+        """5 minor errors → Average (70 pts)."""
+        label, score = select_csc134_program_performance_level(0, 5)
+        assert label == "Average"
+        assert score == 70
+
+    def test_six_minor_is_below_average(self):
+        """6 minor errors (>5) → Below Average (55 pts)."""
+        label, score = select_csc134_program_performance_level(0, 6)
+        assert label == "Below Average"
+        assert score == 55
+
+    def test_one_major_is_above_average(self):
+        """1 major error → Above Average (80 pts)."""
+        label, score = select_csc134_program_performance_level(1, 0)
+        assert label == "Above Average"
+        assert score == 80
+
+    def test_two_major_is_average(self):
+        """2 major errors → Average (70 pts)."""
+        label, score = select_csc134_program_performance_level(2, 0)
+        assert label == "Average"
+        assert score == 70
+
+    def test_three_major_is_below_average(self):
+        """3 major errors → Below Average (55 pts)."""
+        label, score = select_csc134_program_performance_level(3, 0)
+        assert label == "Below Average"
+        assert score == 55
+
+    def test_four_major_is_needs_improvement(self):
+        """4 major errors → Needs Improvement (40 pts)."""
+        label, score = select_csc134_program_performance_level(4, 0)
+        assert label == "Needs Improvement"
+        assert score == 40
+
+    def test_five_major_is_substandard(self):
+        """5 major errors → Substandard (28 pts)."""
+        label, score = select_csc134_program_performance_level(5, 0)
+        assert label == "Substandard"
+        assert score == 28
+
+    def test_six_major_is_unsatisfactory(self):
+        """6+ major errors → Unsatisfactory (15 pts)."""
+        label, score = select_csc134_program_performance_level(6, 0)
+        assert label == "Unsatisfactory"
+        assert score == 15
+
+    def test_many_major_is_unsatisfactory(self):
+        """8 major errors → Unsatisfactory (15 pts)."""
+        label, score = select_csc134_program_performance_level(8, 0)
+        assert label == "Unsatisfactory"
+        assert score == 15
+
+    def test_not_submitted_is_no_submission(self):
+        """Not submitted → No Submission (0 pts)."""
+        label, score = select_csc134_program_performance_level(0, 0, assignment_submitted=False)
+        assert label == "No Submission"
+        assert score == 0
+
+    def test_minor_errors_dominate_to_below_average(self):
+        """1 major + 6 minor: minor count (>5) pushes to Below Average."""
+        label, score = select_csc134_program_performance_level(1, 6)
+        assert label == "Below Average"
+        assert score == 55
+
+    def test_minor_errors_with_major_average(self):
+        """1 major + 5 minor: minor count (5) gives Average (70 pts)."""
+        label, score = select_csc134_program_performance_level(1, 5)
+        assert label == "Average"
+        assert score == 70

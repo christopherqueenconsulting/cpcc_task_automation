@@ -11,15 +11,14 @@ Tests cover:
 
 import json
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, mock_open, MagicMock
+from pathlib import Path
 
 from cqc_cpcc.rubric_config import (
     load_rubrics_from_config,
     load_error_definitions_from_config,
     get_rubric_by_id,
     list_available_rubrics,
-    RUBRICS_JSON,
-    ERROR_DEFINITIONS_JSON,
 )
 from cqc_cpcc.rubric_models import Rubric, DetectedError
 
@@ -81,7 +80,7 @@ class TestLoadRubrics:
     
     def test_invalid_json_raises_error(self):
         """Test that invalid JSON raises ValueError."""
-        with patch('cqc_cpcc.rubric_config.RUBRICS_JSON', 'invalid json {'):
+        with patch('cqc_cpcc.rubric_config._load_json_file', side_effect=ValueError("Invalid JSON in rubrics.json: bad")):
             with pytest.raises(ValueError) as exc_info:
                 load_rubrics_from_config()
             
@@ -89,7 +88,7 @@ class TestLoadRubrics:
     
     def test_non_dict_json_raises_error(self):
         """Test that non-dict JSON raises ValueError."""
-        with patch('cqc_cpcc.rubric_config.RUBRICS_JSON', '["not", "a", "dict"]'):
+        with patch('cqc_cpcc.rubric_config._load_json_file', return_value=["not", "a", "dict"]):
             with pytest.raises(ValueError) as exc_info:
                 load_rubrics_from_config()
             
@@ -104,7 +103,7 @@ class TestLoadRubrics:
             }
         }
         
-        with patch('cqc_cpcc.rubric_config.RUBRICS_JSON', json.dumps(invalid_rubric)):
+        with patch('cqc_cpcc.rubric_config._load_json_file', return_value=invalid_rubric):
             with pytest.raises(ValueError) as exc_info:
                 load_rubrics_from_config()
             
@@ -156,8 +155,8 @@ class TestLoadErrorDefinitions:
         assert "CSC_251_EXAM_1_METHOD_ERRORS" in codes
     
     def test_invalid_json_raises_error(self):
-        """Test that invalid JSON raises ValueError."""
-        with patch('cqc_cpcc.rubric_config.ERROR_DEFINITIONS_JSON', 'invalid json ['):
+        """Test that invalid JSON file raises ValueError."""
+        with patch('cqc_cpcc.rubric_config._load_json_file', side_effect=ValueError("Invalid JSON in rubric_error_definitions.json: bad")):
             with pytest.raises(ValueError) as exc_info:
                 load_error_definitions_from_config()
             
@@ -165,7 +164,7 @@ class TestLoadErrorDefinitions:
     
     def test_non_list_json_raises_error(self):
         """Test that non-list JSON raises ValueError."""
-        with patch('cqc_cpcc.rubric_config.ERROR_DEFINITIONS_JSON', '{"not": "a list"}'):
+        with patch('cqc_cpcc.rubric_config._load_json_file', return_value={"not": "a list"}):
             with pytest.raises(ValueError) as exc_info:
                 load_error_definitions_from_config()
             
@@ -180,7 +179,7 @@ class TestLoadErrorDefinitions:
             }
         ]
         
-        with patch('cqc_cpcc.rubric_config.ERROR_DEFINITIONS_JSON', json.dumps(invalid_errors)):
+        with patch('cqc_cpcc.rubric_config._load_json_file', return_value=invalid_errors):
             with pytest.raises(ValueError) as exc_info:
                 load_error_definitions_from_config()
             
@@ -404,3 +403,114 @@ class TestCSC151V2Rubric:
         # Criterion description should mention conversion
         assert "Minor→Major conversion" in criterion.description or "4 Minor Errors" in criterion.description
 
+
+
+@pytest.mark.unit
+class TestCSC134Rubric:
+    """Test CSC134 C++ program performance rubric configuration."""
+
+    def test_csc134_rubric_exists(self):
+        """Test that CSC134 rubric loads correctly."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert rubric.rubric_id == "csc134_cpp_exam_rubric"
+        assert rubric.rubric_version == "2.0"
+        assert rubric.title == "CSC 134 C++ Program Performance Rubric (Brightspace-aligned)"
+        assert "CSC134" in rubric.course_ids
+
+    def test_csc134_has_program_performance_criterion(self):
+        """Test that CSC134 rubric has program_performance criterion."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert len(rubric.criteria) == 1
+
+        criterion = rubric.criteria[0]
+        assert criterion.criterion_id == "program_performance"
+        assert criterion.name == "Program Performance"
+        assert criterion.max_points == 100
+        assert criterion.enabled is True
+
+    def test_csc134_has_correct_levels(self):
+        """Test that CSC134 rubric has all 9 HTML-defined performance levels."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        criterion = rubric.criteria[0]
+
+        assert len(criterion.levels) == 9
+
+        expected_labels = [
+            "Outstanding",
+            "Superior",
+            "Above Average",
+            "Average",
+            "Below Average",
+            "Needs Improvement",
+            "Substandard",
+            "Unsatisfactory",
+            "No Submission",
+        ]
+
+        actual_labels = [level.label for level in criterion.levels]
+        assert actual_labels == expected_labels
+
+    def test_csc134_level_score_ranges(self):
+        """Test that CSC134 rubric levels have correct score ranges."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        criterion = rubric.criteria[0]
+
+        levels_by_label = {level.label: level for level in criterion.levels}
+
+        assert levels_by_label["Outstanding"].score_min == 96
+        assert levels_by_label["Outstanding"].score_max == 100
+
+        assert levels_by_label["Superior"].score_min == 86
+        assert levels_by_label["Superior"].score_max == 95
+
+        assert levels_by_label["Above Average"].score_min == 76
+        assert levels_by_label["Above Average"].score_max == 85
+
+        assert levels_by_label["Below Average"].score_min == 51
+        assert levels_by_label["Below Average"].score_max == 65
+
+        assert levels_by_label["Unsatisfactory"].score_min == 1
+        assert levels_by_label["Unsatisfactory"].score_max == 20
+
+        assert levels_by_label["No Submission"].score_min == 0
+        assert levels_by_label["No Submission"].score_max == 0
+
+    def test_csc134_total_points(self):
+        """Test that CSC134 rubric has correct total points."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert rubric.total_points_possible == 100
+
+    def test_csc134_description_mentions_errors_first(self):
+        """Test that CSC134 rubric description mentions identifying errors first."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert "error" in rubric.description.lower()
+
+    def test_csc134_criterion_description_mentions_error_levels(self):
+        """Test that CSC134 program_performance criterion mentions key performance levels."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        criterion = rubric.criteria[0]
+
+        assert "Outstanding" in criterion.description
+        assert "Superior" in criterion.description
+        assert "Below Average" in criterion.description
+
+    def test_csc134_error_count_scoring_mode_no_conversion(self):
+        """Test that CSC134 criterion uses error_count scoring mode without conversion."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        criterion = rubric.criteria[0]
+
+        assert criterion.scoring_mode == "error_count"
+        assert criterion.error_rules is not None
+        # CSC134 does NOT use minor-to-major conversion
+        assert criterion.error_rules.error_conversion is None
+
+    def test_csc134_appears_in_course_ids(self):
+        """Test that CSC134 appears in the list of distinct course IDs."""
+        from cqc_cpcc.rubric_config import get_distinct_course_ids
+
+        course_ids = get_distinct_course_ids()
+        assert "CSC134" in course_ids

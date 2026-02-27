@@ -38,6 +38,9 @@ def init_session_state():
     if 'grading_errors_by_key' not in st.session_state:
         st.session_state.grading_errors_by_key = {}
     
+    if 'grading_failures_by_key' not in st.session_state:
+        st.session_state.grading_failures_by_key = {}
+    
     if 'feedback_zip_bytes_by_key' not in st.session_state:
         st.session_state.feedback_zip_bytes_by_key = {}
 

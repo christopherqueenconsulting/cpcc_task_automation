@@ -10,6 +10,8 @@ Functions:
     - normalize_errors: Convert minor errors to major errors (CSC151 rule: 4 minor = 1 major)
     - compute_error_based_score: Calculate points based on error counts
     - aggregate_error_counts: Group errors by severity and error_id
+    - select_program_performance_level: Select CSC151 performance level from error counts
+    - select_csc134_program_performance_level: Select CSC134 (C++) performance level from error counts
 """
 
 from typing import Optional, Tuple
@@ -297,3 +299,79 @@ def select_program_performance_level(
     )
     return ("F (4+ major errors)", 8)
 
+
+
+def select_csc134_program_performance_level(
+    major_error_count: int,
+    minor_error_count: int,
+    assignment_submitted: bool = True
+) -> Tuple[str, int]:
+    """Select CSC134 C++ program performance level based on error counts.
+
+    Implements the CSC134 rubric logic using the official Program Performance
+    Rubric (percentage-based levels). No minor→major conversion is applied;
+    major and minor errors are evaluated independently.
+
+    Selection uses the worst-applicable level: the lowest (most penalized) level
+    whose condition is met by either major OR minor error count.
+
+    Args:
+        major_error_count: Number of major errors detected (original, no conversion applied)
+        minor_error_count: Number of minor errors detected (original, no conversion applied)
+        assignment_submitted: Whether the assignment was submitted (default: True)
+
+    Returns:
+        Tuple of (level_label, score) matching the rubric level
+
+    Level thresholds (from official rubric):
+        - Outstanding  (100%): No errors
+        - Superior     (90%):  ≤2 minor errors, 0 major
+        - Above Average(80%):  3–4 minor errors, or 1 major error
+        - Average      (70%):  5 minor errors, or 2 major errors
+        - Below Average(55%):  >5 minor errors, or 3 major errors
+        - Needs Improvement(40%): 4 major errors
+        - Substandard  (27.5%→28 pts): 5 major errors
+        - Unsatisfactory(15%): 6+ major errors
+        - No Submission(0%):   Not submitted
+
+    Example:
+        >>> select_csc134_program_performance_level(0, 0)
+        ('Outstanding', 100)
+        >>> select_csc134_program_performance_level(0, 2)
+        ('Superior', 90)
+        >>> select_csc134_program_performance_level(1, 0)
+        ('Above Average', 80)
+        >>> select_csc134_program_performance_level(3, 0)
+        ('Below Average', 55)
+        >>> select_csc134_program_performance_level(0, 0, assignment_submitted=False)
+        ('No Submission', 0)
+    """
+    if not assignment_submitted:
+        return ("No Submission", 0)
+
+    # Major errors take priority from worst to best
+    if major_error_count >= 6:
+        return ("Unsatisfactory", 15)  # 15% of 100
+    elif major_error_count == 5:
+        return ("Substandard", 28)  # 27.5% of 100, rounded
+    elif major_error_count == 4:
+        return ("Needs Improvement", 40)  # 40% of 100
+
+    # Combined check: select worst-applicable level using either major or minor count
+    if major_error_count == 3 or minor_error_count > 5:
+        return ("Below Average", 55)  # 55% of 100
+    elif major_error_count == 2 or minor_error_count == 5:
+        return ("Average", 70)  # 70% of 100
+    elif major_error_count == 1 or (3 <= minor_error_count <= 4):
+        return ("Above Average", 80)  # 80% of 100
+    elif minor_error_count <= 2:
+        if minor_error_count == 0:
+            return ("Outstanding", 100)  # 100% of 100
+        return ("Superior", 90)  # 90% of 100
+
+    # Default (should not reach here)
+    logger.warning(
+        f"Unexpected error counts in CSC134 scoring: "
+        f"major={major_error_count}, minor={minor_error_count}. Defaulting to Below Average."
+    )
+    return ("Below Average", 55)

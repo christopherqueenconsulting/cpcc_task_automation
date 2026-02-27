@@ -311,3 +311,163 @@ def test_scoring_consistency_across_display():
     # Verify actual values
     assert updated.total_points_earned == 83
     assert abs(percentage_card - 83.0) < 0.01
+
+
+@pytest.mark.unit
+def test_csc134_program_performance_no_conversion_0_errors():
+    """Test CSC134 apply_backend_scoring: 0 errors → Outstanding (100 pts), no minor→major conversion."""
+    rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+    result = RubricAssessmentResult(
+        rubric_id=rubric.rubric_id,
+        rubric_version=rubric.rubric_version,
+        total_points_earned=0,
+        total_points_possible=100,
+        criteria_results=[
+            CriterionResult(
+                criterion_id="program_performance",
+                criterion_name="Program Performance",
+                points_earned=0,
+                points_possible=100,
+                feedback="No errors detected.",
+                selected_level_label=None,
+            )
+        ],
+        overall_feedback="Outstanding submission.",
+        overall_band_label=None,
+        detected_errors=[],
+        error_counts_by_severity={"major": 0, "minor": 0},
+    )
+
+    updated = apply_backend_scoring(rubric, result)
+
+    assert updated.total_points_earned == 100
+    assert updated.criteria_results[0].points_earned == 100
+    assert updated.criteria_results[0].selected_level_label == "Outstanding"
+    # For CSC134 (no conversion), effective == original
+    assert updated.original_major_errors == 0
+    assert updated.original_minor_errors == 0
+    assert updated.effective_major_errors == 0
+    assert updated.effective_minor_errors == 0
+
+
+@pytest.mark.unit
+def test_csc134_program_performance_no_conversion_3_minor():
+    """Test CSC134 apply_backend_scoring: 3 minor → Above Average (80 pts) without conversion."""
+    rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+    result = RubricAssessmentResult(
+        rubric_id=rubric.rubric_id,
+        rubric_version=rubric.rubric_version,
+        total_points_earned=0,
+        total_points_possible=100,
+        criteria_results=[
+            CriterionResult(
+                criterion_id="program_performance",
+                criterion_name="Program Performance",
+                points_earned=0,
+                points_possible=100,
+                feedback="Three minor errors found.",
+                selected_level_label=None,
+            )
+        ],
+        overall_feedback="Above average work.",
+        overall_band_label=None,
+        detected_errors=[],
+        error_counts_by_severity={"major": 0, "minor": 3},
+    )
+
+    updated = apply_backend_scoring(rubric, result)
+
+    # CSC134: 3 minor errors → Above Average (80 pts), NO 4:1 conversion applied
+    assert updated.total_points_earned == 80
+    assert updated.criteria_results[0].points_earned == 80
+    assert updated.criteria_results[0].selected_level_label == "Above Average"
+    assert updated.original_major_errors == 0
+    assert updated.original_minor_errors == 3
+    # No conversion → effective == original
+    assert updated.effective_major_errors == 0
+    assert updated.effective_minor_errors == 3
+
+
+@pytest.mark.unit
+def test_csc134_program_performance_no_conversion_3_major():
+    """Test CSC134 apply_backend_scoring: 3 major → Below Average (55 pts)."""
+    rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+    result = RubricAssessmentResult(
+        rubric_id=rubric.rubric_id,
+        rubric_version=rubric.rubric_version,
+        total_points_earned=0,
+        total_points_possible=100,
+        criteria_results=[
+            CriterionResult(
+                criterion_id="program_performance",
+                criterion_name="Program Performance",
+                points_earned=0,
+                points_possible=100,
+                feedback="Three major errors detected.",
+                selected_level_label=None,
+            )
+        ],
+        overall_feedback="Below average submission.",
+        overall_band_label=None,
+        detected_errors=[],
+        error_counts_by_severity={"major": 3, "minor": 0},
+    )
+
+    updated = apply_backend_scoring(rubric, result)
+
+    assert updated.total_points_earned == 55
+    assert updated.criteria_results[0].points_earned == 55
+    assert updated.criteria_results[0].selected_level_label == "Below Average"
+    assert updated.original_major_errors == 3
+    assert updated.original_minor_errors == 0
+    assert updated.effective_major_errors == 3
+    assert updated.effective_minor_errors == 0
+
+
+@pytest.mark.unit
+def test_csc134_versus_csc151_different_conversion():
+    """Verify CSC134 does NOT apply 4:1 conversion, while CSC151 does."""
+    csc134_rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+    csc151_rubric = get_rubric_by_id("csc151_java_exam_rubric")
+
+    # 4 minor errors: under CSC151 → converts to 1 major → B- (75 pts)
+    #                 under CSC134 → stays 4 minor → Above Average (80 pts)
+    def make_result(rubric, minor_errors):
+        return RubricAssessmentResult(
+            rubric_id=rubric.rubric_id,
+            rubric_version=rubric.rubric_version,
+            total_points_earned=0,
+            total_points_possible=100,
+            criteria_results=[
+                CriterionResult(
+                    criterion_id="program_performance",
+                    criterion_name="Program Performance",
+                    points_earned=0,
+                    points_possible=100,
+                    feedback="Test feedback.",
+                    selected_level_label=None,
+                )
+            ],
+            overall_feedback="Test.",
+            overall_band_label=None,
+            detected_errors=[],
+            error_counts_by_severity={"major": 0, "minor": minor_errors},
+        )
+
+    csc134_result = apply_backend_scoring(csc134_rubric, make_result(csc134_rubric, 4))
+    csc151_result = apply_backend_scoring(csc151_rubric, make_result(csc151_rubric, 4))
+
+    # CSC134: 4 minor stays as 4 minor → Above Average (80 pts)
+    assert csc134_result.total_points_earned == 80
+    assert csc134_result.criteria_results[0].selected_level_label == "Above Average"
+    assert csc134_result.effective_major_errors == 0
+    assert csc134_result.effective_minor_errors == 4
+
+    # CSC151: 4 minor converts to 1 major → B- (75 pts)
+    assert csc151_result.total_points_earned == 75
+    assert csc151_result.criteria_results[0].selected_level_label == "B- (1 major error)"
+    assert csc151_result.effective_major_errors == 1
+    assert csc151_result.effective_minor_errors == 0
