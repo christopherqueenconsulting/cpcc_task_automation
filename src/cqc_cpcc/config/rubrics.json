@@ -169,8 +169,8 @@
   "csc151_java_exam_rubric": {
     "rubric_id": "csc151_java_exam_rubric",
     "rubric_version": "2.0",
-    "title": "CSC 151 Java Exam Rubric (Brightspace-aligned)",
-    "description": "Aligned to the official Brightspace Exam Grading Rubric for CSC151. Program Performance is scored strictly by error counts. Rule: Every 4 Minor Errors convert into 1 Major Error before scoring.",
+    "title": "CSC 151 Java Exam Rubric (BrightSpace-aligned)",
+    "description": "Aligned to the official BrightSpace Exam Grading Rubric for CSC151. Program Performance is scored strictly by error counts. Rule: Every 4 Minor Errors convert into 1 Major Error before scoring.",
     "course_ids": [
       "CSC151"
     ],
@@ -178,7 +178,7 @@
       {
         "criterion_id": "program_performance",
         "name": "Program Performance",
-        "description": "Apply Minor\u2192Major conversion first. Every 4 Minor Errors become 1 Major Error (remainder stays Minor). Then select the score band.",
+        "description": "Apply Minor->Major conversion first. Every 4 Minor Errors become 1 Major Error (remainder stays Minor). Then select the score band.",
         "max_points": 100,
         "enabled": true,
         "scoring_mode": "error_count",
@@ -365,7 +365,7 @@
       {
         "criterion_id": "presentation_requirements",
         "name": "Presentation & Requirements",
-        "description": "Meets format requirements (250\u2013400 words OR 2\u20133 minutes) and communicates clearly.",
+        "description": "Meets format requirements (250-400 words OR 2-3 minutes) and communicates clearly.",
         "max_points": 20,
         "enabled": true,
         "scoring_mode": "level_band",
@@ -711,7 +711,7 @@
       {
         "criterion_id": "reflecting_on_learning",
         "name": "Reflecting on Learning",
-        "description": "Explains how thinking changed since Week 1\u20133 with specific references to learning experiences.",
+        "description": "Explains how thinking changed since Week 1-3 with specific references to learning experiences.",
         "max_points": 15,
         "enabled": true,
         "scoring_mode": "level_band",
@@ -746,7 +746,7 @@
       {
         "criterion_id": "presentation_requirements",
         "name": "Presentation & Requirements",
-        "description": "Meets format requirements (250\u2013400 words OR 2\u20133 minutes) and communicates clearly.",
+        "description": "Meets format requirements (250-400 words OR 2-3 minutes) and communicates clearly.",
         "max_points": 10,
         "enabled": true,
         "scoring_mode": "level_band",
@@ -1483,7 +1483,7 @@
             "label": "Exemplary",
             "score_min": 18,
             "score_max": 20,
-            "description": "Describes a specific, real instance where AI produced flawed output with concrete details about the task, what the AI produced, and precisely what was wrong (incorrect, misleading, incomplete, or subtly off). Provides enough context for reader to understand both the output and the flaw. Shows intellectual honesty\u2014draws from actual experience rather than inventing convenient examples."
+            "description": "Describes a specific, real instance where AI produced flawed output with concrete details about the task, what the AI produced, and precisely what was wrong (incorrect, misleading, incomplete, or subtly off). Provides enough context for reader to understand both the output and the flaw. Shows intellectual honesty-draws from actual experience rather than inventing convenient examples."
           },
           {
             "label": "Proficient",
@@ -1542,7 +1542,7 @@
       },
       {
         "criterion_id": "verification_strategy_development",
-        "name": "Verificatioin Strategy Development",
+        "name": "Verification Strategy Development",
         "description": "",
         "max_points": 30,
         "enabled": true,
@@ -1613,7 +1613,7 @@
       {
         "criterion_id": "presentation_requirements",
         "name": "Presentation & Requirements",
-        "description": "Meets format requirements (250\u2013400 words OR 2\u20133 minutes) and addresses required elements clearly.",
+        "description": "Meets format requirements (250-400 words OR 2-3 minutes) and addresses required elements clearly.",
         "max_points": 5,
         "enabled": true,
         "scoring_mode": "level_band",
@@ -1821,7 +1821,7 @@
       {
         "criterion_id": "presentation_requirements",
         "name": "Presentation & Requirements",
-        "description": "Meets format requirements (250\u2013400 words OR 2\u20133 minutes) and addresses all four required elements clearly.",
+        "description": "Meets format requirements (250-400 words OR 2-3 minutes) and addresses all four required elements clearly.",
         "max_points": 5,
         "enabled": true,
         "scoring_mode": "level_band",
@@ -2088,8 +2088,8 @@
   "csc134_cpp_exam_rubric": {
     "rubric_id": "csc134_cpp_exam_rubric",
     "rubric_version": "2.0",
-    "title": "CSC 134 C++ Program Performance Rubric (Brightspace-aligned)",
-    "description": "Aligned to the official Brightspace Program Performance Rubric for CSC134 (C++). Program Performance is scored using detected error counts. Identify all major and minor errors first, then select the performance level based on error counts. No minor-to-major conversion is applied.",
+    "title": "CSC 134 C++ Program Performance Rubric (BrightSpace-aligned)",
+    "description": "Aligned to the official BrightSpace Program Performance Rubric for CSC134 (C++). Program Performance is scored using detected error counts. Identify all major and minor errors first, then select the performance level based on error counts. No minor-to-major conversion is applied.",
     "course_ids": [
       "CSC134"
     ],
@@ -2097,7 +2097,7 @@
       {
         "criterion_id": "program_performance",
         "name": "Program Performance",
-        "description": "Identify all major and minor errors first. Then select the performance level: Outstanding (no errors), Superior (\u22642 minor, 0 major), Above Average (3-4 minor or 1 major), Average (5 minor or 2 major), Below Average (>5 minor or 3 major), Needs Improvement (4 major), Substandard (5 major), Unsatisfactory (6+ major), No Submission (not submitted).",
+        "description": "Identify all major and minor errors first. Then select the performance level: Outstanding (no errors), Superior (≤2 minor, 0 major), Above Average (3-4 minor or 1 major), Average (5 minor or 2 major), Below Average (>5 minor or 3 major), Needs Improvement (4 major), Substandard (5 major), Unsatisfactory (6+ major), No Submission (not submitted).",
         "max_points": 100,
         "enabled": true,
         "scoring_mode": "error_count",
