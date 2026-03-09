@@ -189,9 +189,6 @@ class MyColleges:
 
                 # TODO: NOTE:  VVV This is to be used to start attendance from the course start date if something went wrong over time
                 # last_attendance_record_date = course_start_date
-
-                last_attendance_record_date = convert_date_to_datetime(DT.date(2026, 2, 1))
-
                 # TODO: NOTE:  ^^^ This is to be used to start attendance from the course start date if something went wrong over time
 
                 bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
