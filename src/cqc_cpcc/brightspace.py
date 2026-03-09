@@ -59,6 +59,7 @@ class BrightSpace_Course:
         self.select_xpath = "//select[.//option[contains(., 'per page')]]"
         # TODO: Create delta date function in the date utility file for below
         self.date_range_end = DT.date.today() - DT.timedelta(days=2)  # TODO: This should be 2
+
         if date_range_start is None:
             self.date_range_start = self.date_range_end - DT.timedelta(days=7)  # TODO: This should be 7
         else:

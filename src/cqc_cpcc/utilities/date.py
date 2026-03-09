@@ -50,7 +50,7 @@ def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.dat
         "%Y-%m-%d %H:%M:%S",  # 2024-01-15 14:30:00
         "%Y-%m-%dT%H:%M:%S",  # 2024-01-15T14:30:00 (ISO)
         "%m/%d/%Y",           # 01/15/2024
-        "%d-%m-%Y",           # 15-01-2024
+        "%m-%d-%Y",           # 01-15-2024
     ]
     
     for fmt in common_formats:

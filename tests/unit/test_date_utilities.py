@@ -126,6 +126,26 @@ def test_get_datetime_with_various_formats():
         assert result.day == 15
 
 
+@pytest.mark.unit
+def test_get_datetime_formatting_with_mm_dd_yyyy_format():
+    """Test get_datetime correctly parses MM-DD-YYYY format and formats with strftime.
+
+    This test verifies the specific use case from my_colleges.py line 215:
+    formatted_date = get_datetime(record_date).strftime("%-m/%-d/%Y (%A)")
+    """
+    record_date = "02-12-2026"
+    dt = get_datetime(record_date)
+
+    # Verify parsed components
+    assert dt.year == 2026
+    assert dt.month == 2
+    assert dt.day == 12
+
+    # Verify formatted output matches expected format
+    formatted_date = dt.strftime("%-m/%-d/%Y (%A)")
+    assert formatted_date == "2/12/2026 (Thursday)"
+
+
 # ===== is_checkdate_before_date Tests =====
 
 @pytest.mark.unit

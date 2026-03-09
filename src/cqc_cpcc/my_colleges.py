@@ -14,7 +14,7 @@ from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 
 from cqc_cpcc.brightspace import BrightSpace_Course
-from cqc_cpcc.utilities.date import get_datetime, is_date_in_range, get_latest_date
+from cqc_cpcc.utilities.date import get_datetime, is_date_in_range, get_latest_date, convert_date_to_datetime
 from cqc_cpcc.utilities.env_constants import MYCOLLEGE_URL
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import getText, click_element_wait_retry, click_given_element_wait_retry, \
@@ -189,6 +189,9 @@ class MyColleges:
 
                 # TODO: NOTE:  VVV This is to be used to start attendance from the course start date if something went wrong over time
                 # last_attendance_record_date = course_start_date
+
+                last_attendance_record_date = convert_date_to_datetime(DT.date(2026, 2, 1))
+
                 # TODO: NOTE:  ^^^ This is to be used to start attendance from the course start date if something went wrong over time
 
                 bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
@@ -202,6 +205,9 @@ class MyColleges:
                 self.driver.switch_to.window(self.current_tab)
 
                 next_day_students = []
+
+                # Flag for if datepicker available for this course
+                datepicker_avail = True
 
                 # For each date update the attendance on MyColleges Faculty page
                 for record_date, students in bsc.attendance_records.items():
@@ -220,27 +226,30 @@ class MyColleges:
                         # Try to find datepicker first
                         datepicker_xpath = "//date-picker//input"
                         date_input_found = False
+
+                        if datepicker_avail:
                         
-                        try:
-                            # Check if datepicker exists
-                            date_input_element = get_element_wait_retry(self.driver, self.wait, datepicker_xpath,
-                                                                        'Checking for Date Picker Input', max_try=1)
-                            if date_input_element:
-                                logger.info("Datepicker found, using input method")
-                                # Format date as M/d/yyyy (e.g., "1/15/2024" instead of "01/15/2024 (Monday)")
-                                # Using cross-platform compatible formatting
-                                date_obj = get_datetime(record_date)
-                                date_for_picker = f"{date_obj.month}/{date_obj.day}/{date_obj.year}"
-                                
-                                # Clear existing value and input new date
-                                date_input_element.clear()
-                                date_input_element.send_keys(date_for_picker)
-                                date_input_element.send_keys(Keys.ENTER)
-                                
-                                wait_for_ajax(self.driver)
-                                date_input_found = True
-                        except (NoSuchElementException, TimeoutException):
-                            logger.info("Datepicker not found, trying dropdown")
+                            try:
+                                # Check if datepicker exists
+                                date_input_element = get_element_wait_retry(self.driver, self.wait, datepicker_xpath,
+                                                                            'Checking for Date Picker Input', max_try=1)
+                                if date_input_element:
+                                    logger.info("Datepicker found, using input method")
+                                    # Format date as M/d/yyyy (e.g., "1/15/2024" instead of "01/15/2024 (Monday)")
+                                    # Using cross-platform compatible formatting
+                                    date_obj = get_datetime(record_date)
+                                    date_for_picker = f"{date_obj.month}/{date_obj.day}/{date_obj.year}"
+
+                                    # Clear existing value and input new date
+                                    date_input_element.clear()
+                                    date_input_element.send_keys(date_for_picker)
+                                    date_input_element.send_keys(Keys.ENTER)
+
+                                    wait_for_ajax(self.driver)
+                                    date_input_found = True
+                            except (NoSuchElementException, TimeoutException):
+                                datepicker_avail = False
+                                logger.info("Datepicker not found, trying dropdown")
                         
                         # If datepicker not found, fall back to dropdown
                         if not date_input_found:
