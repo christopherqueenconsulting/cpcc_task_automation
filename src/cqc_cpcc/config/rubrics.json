@@ -1507,7 +1507,7 @@
       },
       {
         "criterion_id": "detection_process",
-        "name": "Detectioin Process",
+        "name": "Detection Process",
         "description": "",
         "max_points": 30,
         "enabled": true,
