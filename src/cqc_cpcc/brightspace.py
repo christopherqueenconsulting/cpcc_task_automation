@@ -20,7 +20,7 @@ from cqc_cpcc.utilities.date import convert_datetime_to_end_of_day, convert_date
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry, get_elements_text_as_list_wait_stale, \
-    get_elements_href_as_list_wait_stale, wait_for_ajax
+    get_elements_href_as_list_wait_stale, wait_for_ajax, get_driver_wait
 from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, login_if_needed, \
     LINE_DASH_COUNT
 
@@ -32,6 +32,7 @@ class BrightSpace_Course:
     term_year: str
     driver: WebDriver
     wait: WebDriverWait
+    short_wait: WebDriverWait
     attendance_records: dict
     withdrawal_records: dict
     first_drop_day: DT.date
@@ -55,6 +56,7 @@ class BrightSpace_Course:
         self.course_end_date = convert_datetime_to_end_of_day(course_end_date)
         self.driver = driver
         self.wait = wait
+        self.short_wait = get_driver_wait(driver, 3)
         self.select_xpath = "//select[.//option[contains(., 'per page')]]"
         # TODO: Create delta date function in the date utility file for below
         self.date_range_end = DT.date.today() - DT.timedelta(days=2)  # TODO: This should be 2
@@ -182,7 +184,7 @@ class BrightSpace_Course:
         # Get the course url
         try:
             logger.info("Searching for Url | Course Name: %s" % self.name)
-            course_link = self.wait.until(
+            course_link = self.short_wait.until(
                 lambda d: d.find_element(By.XPATH, xpath_expression),
                 "Waiting for Course Links")
             self.url = course_link.get_attribute("href")

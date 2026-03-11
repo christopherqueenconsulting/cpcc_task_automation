@@ -4,7 +4,11 @@ import datetime as DT
 import time
 from typing import List
 
-from selenium.common import NoSuchElementException, TimeoutException, StaleElementReferenceException
+from selenium.common import (
+    NoSuchElementException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 from selenium.webdriver import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -14,17 +18,32 @@ from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 
 from cqc_cpcc.brightspace import BrightSpace_Course
-from cqc_cpcc.utilities.date import get_datetime, is_date_in_range, get_latest_date, convert_date_to_datetime
+from cqc_cpcc.utilities.date import (
+    convert_date_to_datetime,
+    get_datetime,
+    get_latest_date,
+    is_date_in_range,
+)
 from cqc_cpcc.utilities.env_constants import MYCOLLEGE_URL
 from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.selenium_util import getText, click_element_wait_retry, click_given_element_wait_retry, \
-    get_element_wait_retry, get_elements_text_as_list_wait_stale, wait_for_ajax, close_tab, wait_for_element_to_hide
+from cqc_cpcc.utilities.selenium_util import (
+    click_element_wait_retry,
+    click_given_element_wait_retry,
+    close_tab,
+    get_driver_wait,
+    get_element_wait_retry,
+    get_elements_text_as_list_wait_stale,
+    getText,
+    wait_for_ajax,
+    wait_for_element_to_hide,
+)
 from cqc_cpcc.utilities.utils import login_if_needed
 
 
 class MyColleges:
     driver: WebDriver
     wait: WebDriverWait
+    short_wait: WebDriverWait
     course_information: dict
     current_tab: str
     student_info: dict
@@ -32,6 +51,7 @@ class MyColleges:
     def __init__(self, driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait):
         self.driver = driver
         self.wait = wait
+        self.short_wait = get_driver_wait(driver, 3)
         self.course_information = {}
         self.student_info = {}
 
@@ -183,6 +203,27 @@ class MyColleges:
         )
         return True
 
+    def _get_optional_deadline_date(
+        self,
+        xpath: str,
+        wait_text: str,
+    ) -> DT.datetime | None:
+        """Return an optional deadline date when present, otherwise None."""
+        try:
+            deadline_element = get_element_wait_retry(
+                self.driver,
+                self.short_wait,
+                xpath,
+                wait_text,
+                max_try=1,
+            )
+            if not deadline_element:
+                return None
+            return get_datetime(getText(deadline_element))
+        except (NoSuchElementException, TimeoutException):
+            logger.info("%s not found. Using fallback date when needed.", wait_text)
+            return None
+
     def _select_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
         formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
         datepicker_xpath = "//date-picker//input"
@@ -192,7 +233,7 @@ class MyColleges:
             try:
                 date_input_element = get_element_wait_retry(
                     self.driver,
-                    self.wait,
+                    self.short_wait,
                     datepicker_xpath,
                     'Checking for Date Picker Input',
                     max_try=1,
@@ -258,14 +299,11 @@ class MyColleges:
 
         # Prompt user once for attendance start date - applies to all courses
         # Find a representative course to get a start date from
-        representative_last_date = None
         representative_course_date = None
         for course_info in self.course_information.values():
             representative_course_date = course_info['start_date']
             break
 
-        if representative_course_date:
-            representative_last_date = representative_course_date
 
         last_attendance_start_date = self.prompt_attendance_start_date(
             "All Courses",
@@ -303,25 +341,33 @@ class MyColleges:
                                          "Waiting for Attendance Tab", By.ID)
 
                 # TODO: Set default dates if these elements below dont exist
-                self.course_information[course_name]['last_day_to_add'] = get_datetime(
+                last_day_to_add = self._get_optional_deadline_date(
+                    "//span[@data-bind='text: AddEndDateDisplay()']",
+                    "Waiting for Deadline End Date",
+                ) or course_end_date
+                self.course_information[course_name]["last_day_to_add"] = last_day_to_add
 
-                    getText(get_element_wait_retry(self.driver, self.wait,
-                                                   "//span[@data-bind='text: AddEndDateDisplay()']",
-                                                   "Waiting for Deadline End Date")))
+                first_day_to_drop = self._get_optional_deadline_date(
+                    "//span[@data-bind='text: DropStartDateDisplay()']",
+                    "Waiting for Deadline Start Date",
+                ) or course_start_date
+                self.course_information[course_name]["first_day_to_drop"] = first_day_to_drop
+
+                last_day_to_drop_without_grade = self._get_optional_deadline_date(
+                    "//span[@data-bind='text: DropGradesRequiredDateDisplay()']",
+                    "Waiting for Deadline Drop Without Grade Date",
+                ) or course_end_date
                 self.course_information[course_name][
-                    'first_day_to_drop'] = first_day_to_drop = get_datetime(
-                    getText(get_element_wait_retry(self.driver, self.wait,
-                                                   "//span[@data-bind='text: DropStartDateDisplay()']",
-                                                   "Waiting for Deadline Start Date")))
-                self.course_information[course_name]['last_day_to_drop_without_grade'] = get_datetime(
-                    getText(get_element_wait_retry(self.driver, self.wait,
-                                                   "//span[@data-bind='text: DropGradesRequiredDateDisplay()']",
-                                                   "Waiting for Deadline Drop Without Grade Date")))
+                    "last_day_to_drop_without_grade"
+                ] = last_day_to_drop_without_grade
+
+                final_day_to_drop = self._get_optional_deadline_date(
+                    "//span[@data-bind='text: DropEndDateDisplay()']",
+                    "Waiting for Deadline Drop With Grade Date",
+                ) or course_end_date
                 self.course_information[course_name][
-                    'last_day_to_drop_with_grade'] = final_day_to_drop = get_datetime(
-                    getText(get_element_wait_retry(self.driver, self.wait,
-                                                   "//span[@data-bind='text: DropEndDateDisplay()']",
-                                                   "Waiting for Deadline Drop With Grade Date")))
+                    "last_day_to_drop_with_grade"
+                ] = final_day_to_drop
 
                 # TODO: Set default dates if these elements above dont exist
 
