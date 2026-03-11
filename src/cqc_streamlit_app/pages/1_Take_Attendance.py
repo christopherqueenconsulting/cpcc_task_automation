@@ -11,7 +11,7 @@ from streamlit_elements import elements, mui, html, sync
 
 import cqc_cpcc.attendance as AT
 import cqc_cpcc.attendance_screenshot
-from cqc_cpcc.utilities.logger import LOGGING_FILENAME
+from cqc_cpcc.utilities.logger import LOGGING_FILENAME, logger
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.pexels_helper import get_photo
 from cqc_streamlit_app.streamlit_logger import streamlit_handler
@@ -34,7 +34,7 @@ def slideshow_swipeable(images):
     # Truncate the key to a few characters lie md5 length
     # key = key[:256]
 
-    print("Key: %s" % key)
+    logger.debug("Slideshow key: %s" % key)
 
     # Initialize the default slideshow index.
     if key not in st.session_state:
@@ -268,7 +268,7 @@ def start_attendance(attendance_tracker_url: str):
         #    time.sleep(1)
         #    time.sleep(5)
 
-    print("Runtime Finished")
+    logger.info("Runtime Finished")
 
     # TODO: Slideshow examples below (may not need these anymore)
     # https://discuss.streamlit.io/t/automatic-slideshow/38342/5 - How to do slideshow

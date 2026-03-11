@@ -33,19 +33,19 @@ def which_browser():
     """Prompts the user to select a value from the given enum."""
     enum = BrowserType
 
-    print("Please select a browser:")
+    logger.info("Please select a browser:")
     for i, member in enumerate(enum):
-        print(f"{member.value}: {member.name}")
+        logger.info("%s: %s", member.value, member.name)
 
     default = BrowserType.LOCAL_CHROME.value
     user_input = int(input('Enter your selection [' + str(default) + ']: ').strip() or default)
 
     try:
         bt = BrowserType(user_input)
-        print(f"You selected {bt.name}")
+        logger.info("You selected %s", bt.name)
         return bt
     except ValueError:
-        print("Invalid selection.")
+        logger.warning("Invalid selection.")
         return which_browser()
 
 

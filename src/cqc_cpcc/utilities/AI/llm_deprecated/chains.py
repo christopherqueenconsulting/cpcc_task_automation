@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_retry_model
 from cqc_cpcc.utilities.AI.llm_deprecated.prompts import *
 from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS, DEBUG
+from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.my_pydantic_parser import CustomPydanticOutputParser
 
 T = TypeVar("T", bound=BaseModel)
@@ -33,7 +34,7 @@ def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplat
         final_output = retry_parser.parse_with_prompt(output.content, prompt_value)
         # final_output = retry_parser.parse_with_prompt(output.get('text'), prompt_value)
     except OutputParserException as e:
-        print("Exception During Retry Output: %s" % e)
+        logger.error("Exception during retry output: %s", e)
         # if max_tries > 0:
         #    finalOutput = retryOutput(finalOutput, prompt, max_tries - 1, **prompt_args)
     return final_output
@@ -96,8 +97,7 @@ def generate_error_definitions(llm: BaseChatModel, pydantic_object: Type[T], maj
         final_output = parser.parse(output.content)
         # final_output = parser.parse(output.get('text'))
     except Exception as e:
-        print("\n\nException during parse:")
-        print(e)
+        logger.warning("Exception during parse while generating error definitions: %s", e)
         # retry_model = get_llm_model_from_runnable_serializable(completion_chain)
         retry_model = get_default_retry_model()
         final_output = retry_output(output, parser, prompt,
@@ -202,7 +202,7 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
         config=config)
 
     if DEBUG:
-        print("\n\nOutput:")
+        logger.debug("Output received from completion chain for exam error definitions")
         pprint(output.content)
 
     # Defensive parse of the returned content
@@ -214,11 +214,10 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
         try:
             final_output = parser.parse(content)
             if DEBUG:
-                print("\n\nFinal Output (was already json string):")
+                logger.debug("Final output parsed from JSON string content")
                 pprint(final_output)
         except Exception as e:
-            print("\n\nException during parse (string):")
-            print(e)
+            logger.warning("Exception during parse (string content): %s", e)
             retry_model = get_default_retry_model()
             final_output = retry_output(output, parser, prompt,
                                         submission=student_submission,
@@ -230,11 +229,10 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
         try:
             final_output = parser.parse(json.dumps(content))
             if DEBUG:
-                print("\n\nFinal Output (already a dict):")
+                logger.debug("Final output parsed from dict content")
                 pprint(final_output)
         except Exception as e:
-            print("\n\nException during parse (dict):")
-            print(e)
+            logger.warning("Exception during parse (dict content): %s", e)
             retry_model = get_default_retry_model()
             final_output = retry_output(output, parser, prompt,
                                         submission=student_submission,
@@ -268,11 +266,10 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
             try:
                 final_output = parser.parse(json.dumps(parsed_obj))
                 if DEBUG:
-                    print("\n\nFinal Output (parsed from list):")
+                    logger.debug("Final output parsed from list content")
                     pprint(final_output)
             except Exception as e:
-                print("\n\nException during parse (from list):")
-                print(e)
+                logger.warning("Exception during parse (parsed list content): %s", e)
                 retry_model = get_default_retry_model()
                 final_output = retry_output(output, parser, prompt,
                                             submission=student_submission,
@@ -283,8 +280,7 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
             try:
                 final_output = parser.parse(json.dumps(content))
             except Exception as e:
-                print("\n\nException during parse (fallback list):")
-                print(e)
+                logger.warning("Exception during parse (fallback list content): %s", e)
                 retry_model = get_default_retry_model()
                 final_output = retry_output(output, parser, prompt,
                                             submission=student_submission,
@@ -294,7 +290,7 @@ async def get_exam_error_definition_from_completion_chain(student_submission: st
     else:
         final_output = content
         if DEBUG:
-            print("\n\nFinal Output (not a string, dict, nor list):")
+            logger.debug("Final output returned without parsing (unsupported content type)")
             pprint(final_output)
 
     return final_output
@@ -368,7 +364,7 @@ async def get_feedback_from_completion_chain(
         final_output = parser.parse(output.content)
         # final_output = parser.parse(output.get('text'))
     except Exception as e:
-        print(e)
+        logger.warning("Exception during feedback parse from completion chain: %s", e)
         # retry_model = get_llm_model_from_runnable_serializable(completion_chain)
         retry_model = get_default_retry_model()
         final_output = retry_output(output, parser, prompt,
@@ -441,7 +437,7 @@ async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedba
         final_output = parser.parse(output.content)
         # final_output = parser.parse(output.get('text'))
     except Exception as e:
-        print(e)
+        logger.warning("Exception during generate_feedback parse: %s", e)
         # retry_model = get_llm_model_from_runnable_serializable(completion_chain)
         retry_model = get_default_retry_model()
         final_output = retry_output(output, parser, prompt,
@@ -452,7 +448,7 @@ async def generate_feedback(llm: BaseChatModel, pydantic_object: Type[T], feedba
                                     retry_model=retry_model
                                     )
 
-    print("\n\nFinal Output:")
+    logger.debug("Final output from generate_feedback")
     pprint(output)
 
     return final_output

@@ -81,6 +81,150 @@ class MyColleges:
             self.course_information[course_name] = {'href': course_href, 'start_date': course_start_date,
                                                     'end_date': course_end_date}
 
+    def prompt_attendance_start_date(
+        self,
+        course_name: str,
+        course_start_date: DT.date | DT.datetime,
+    ) -> DT.datetime | None:
+        """Prompt for the date from which attendance should start processing."""
+        last_attendance_date = None
+        course_start_datetime = convert_date_to_datetime(course_start_date)
+
+        logger.info("Select attendance start date for Course: %s", course_name)
+        logger.info("1: Last Attendance Date")
+        logger.info("2: Course Start Date (%s)", course_start_datetime.strftime("%m-%d-%Y"))
+        logger.info("3: Custom Date")
+
+        user_input = input("Enter your selection [1]: ").strip() or "1"
+
+        try:
+            selection = int(user_input)
+        except ValueError:
+            logger.warning("Invalid selection.")
+            return self.prompt_attendance_start_date(course_name, course_start_datetime)
+
+        if selection == 1:
+            logger.info("Using Last Attendance Date")
+            return last_attendance_date
+
+        if selection == 2:
+            logger.info("Using Course Start Date: %s", course_start_datetime.strftime("%m-%d-%Y"))
+            return course_start_datetime
+
+        if selection == 3:
+            custom_date = input("Enter custom attendance start date [MM-DD-YYYY]: ").strip()
+            try:
+                custom_datetime = get_datetime(custom_date)
+                logger.info("Using Custom Attendance Start Date: %s", custom_datetime.strftime("%m-%d-%Y"))
+                return custom_datetime
+            except ValueError:
+                logger.warning("Invalid custom date.")
+                return self.prompt_attendance_start_date(course_name, course_start_datetime)
+
+        logger.warning("Invalid selection.")
+        return self.prompt_attendance_start_date(course_name, course_start_datetime)
+
+    @staticmethod
+    def _normalize_attendance_record_date(record_date: str | DT.date | DT.datetime) -> DT.date:
+        if isinstance(record_date, DT.datetime):
+            return record_date.date()
+        if isinstance(record_date, DT.date):
+            return record_date
+        return get_datetime(record_date).date()
+
+    def _build_pending_attendance_records(self, attendance_records: dict) -> dict[DT.date, list[str]]:
+        pending_attendance_records: dict[DT.date, list[str]] = {}
+
+        for record_date, students in attendance_records.items():
+            normalized_date = self._normalize_attendance_record_date(record_date)
+            self._merge_students_for_date(pending_attendance_records, normalized_date, students)
+
+        return dict(sorted(pending_attendance_records.items()))
+
+    @staticmethod
+    def _merge_students_for_date(
+        pending_attendance_records: dict[DT.date, list[str]],
+        record_date: DT.date,
+        students: list[str],
+    ) -> None:
+        pending_students = pending_attendance_records.get(record_date, [])
+        pending_attendance_records[record_date] = sorted(set(pending_students + students))
+
+    def _carry_students_to_next_consecutive_date(
+        self,
+        pending_attendance_records: dict[DT.date, list[str]],
+        current_date: DT.date,
+        students: list[str],
+        final_course_date: DT.date,
+    ) -> bool:
+        next_consecutive_date = current_date + DT.timedelta(days=1)
+        if next_consecutive_date > final_course_date:
+            logger.info(
+                "Cannot update attendance for Date: %s | No next consecutive course date is available.",
+                current_date.strftime("%-m/%-d/%Y (%A)"),
+            )
+            logger.info(
+                "Present (not recorded for %s): %s",
+                current_date.strftime("%-m/%-d/%Y (%A)"),
+                " | ".join(sorted(students)),
+            )
+            return False
+
+        self._merge_students_for_date(pending_attendance_records, next_consecutive_date, students)
+        logger.info(
+            "Cannot update attendance for Date: %s | Carrying students forward to next consecutive date: %s",
+            current_date.strftime("%-m/%-d/%Y (%A)"),
+            next_consecutive_date.strftime("%-m/%-d/%Y (%A)"),
+        )
+        logger.info(
+            "Present (not recorded for %s): %s",
+            current_date.strftime("%-m/%-d/%Y (%A)"),
+            " | ".join(sorted(students)),
+        )
+        return True
+
+    def _select_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
+        formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
+        datepicker_xpath = "//date-picker//input"
+        date_input_found = False
+
+        if datepicker_avail:
+            try:
+                date_input_element = get_element_wait_retry(
+                    self.driver,
+                    self.wait,
+                    datepicker_xpath,
+                    'Checking for Date Picker Input',
+                    max_try=1,
+                )
+                if date_input_element:
+                    logger.info("Datepicker found, using input method")
+                    date_for_picker = f"{record_date.month}/{record_date.day}/{record_date.year}"
+                    date_input_element.clear()
+                    date_input_element.send_keys(date_for_picker)
+                    date_input_element.send_keys(Keys.ENTER)
+                    wait_for_ajax(self.driver)
+                    date_input_found = True
+            except (NoSuchElementException, TimeoutException):
+                datepicker_avail = False
+                logger.info("Datepicker not found, trying dropdown")
+
+        if not date_input_found:
+            date_select_id = "event-dates-dropdown"
+            click_element_wait_retry(
+                self.driver,
+                self.wait,
+                date_select_id,
+                'Waiting for Select Date Dropdown',
+                By.ID,
+            )
+
+            date_select = Select(self.driver.find_element(By.ID, date_select_id))
+            date_select.select_by_visible_text(formatted_date)
+            wait_for_ajax(self.driver)
+
+        return datepicker_avail
+
     def process_attendance(self) -> List[BrightSpace_Course]:
         self.get_course_info()
 
@@ -93,6 +237,41 @@ class MyColleges:
         # Keep an array of all the BrightSpace courses
         bs_courses = []
 
+        # Prompt user if they want to process all courses or specific courses
+        process = input("Do you want to process all courses (Y/N)? If no, you will be prompted for each course. ")
+        process_all = process.strip().lower() == 'y'
+
+        if not process_all:
+            # Filter courses to only those the user wants to process
+            filtered_course_information = {}
+
+            for course_name, course_info in self.course_information.items():
+                course_start_date = course_info['start_date']
+                course_end_date = course_info['end_date']
+
+                # Skip courses that have not started or have ended within the last week
+                if is_date_in_range(course_start_date, check_date, course_end_date):
+                    process_course = input(f"Do you want to process course: {course_name} (Y/N)? ")
+                    if process_course.strip().lower() == 'y':
+                        filtered_course_information[course_name] = self.course_information[course_name]
+            self.course_information = filtered_course_information
+
+        # Prompt user once for attendance start date - applies to all courses
+        # Find a representative course to get a start date from
+        representative_last_date = None
+        representative_course_date = None
+        for course_info in self.course_information.values():
+            representative_course_date = course_info['start_date']
+            break
+
+        if representative_course_date:
+            representative_last_date = representative_course_date
+
+        last_attendance_start_date = self.prompt_attendance_start_date(
+            "All Courses",
+            representative_course_date or DT.datetime.now(),
+        ) if representative_course_date else None
+
         for course_name, course_info in self.course_information.items():
             course_url = course_info['href']
             course_start_date = course_info['start_date']
@@ -104,7 +283,7 @@ class MyColleges:
                 # Switch back to original_tab
                 self.driver.switch_to.window(original_tab)
 
-                handles = self.driver.window_handles
+                handles = set(self.driver.window_handles)
 
                 # Opens a new tab and switches to new tab
                 self.driver.switch_to.new_window('tab')
@@ -171,26 +350,27 @@ class MyColleges:
 
                 logger.info("Term Semester: %s | Year: %s" % (term_semester, term_year))
 
-                try:
-                    # logger.debug("Latest Attendance Recorded Dates: %s" % last_attendance_record_dates)
-                    latest_date_str = get_latest_date(last_attendance_record_dates)
-                    # logger.debug("Latest Attendance Recorded Date (string): %s" % latest_date_str)
+                # Use the global attendance start date if set, otherwise use the course's date
+                if last_attendance_start_date:
+                    last_attendance_record_date = last_attendance_start_date
 
-                    # Get the Latest Date and Convert To date time
-                    last_attendance_record_date = get_datetime(latest_date_str)
-                    logger.info(
-                        "Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
-                except ValueError:
-                    # No date found then use start of course date
-                    # last_attendance_record_date = get_datetime(check_date.strftime("%m-%d-%Y"))
-                    last_attendance_record_date = course_start_date
-                    logger.info("No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
-                        "%m-%d-%Y"))
+                else:
 
-                # TODO: NOTE:  VVV This is to be used to start attendance from the course start date if something went wrong over time
-                # last_attendance_record_date = course_start_date
+                    try:
+                        # logger.debug("Latest Attendance Recorded Dates: %s" % last_attendance_record_dates)
+                        latest_date_str = get_latest_date(last_attendance_record_dates)
+                        # logger.debug("Latest Attendance Recorded Date (string): %s" % latest_date_str)
 
-                # TODO: NOTE:  ^^^ This is to be used to start attendance from the course start date if something went wrong over time
+                        # Get the Latest Date and Convert To date time
+                        last_attendance_record_date = get_datetime(latest_date_str)
+                        logger.info(
+                            "Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
+                    except ValueError:
+                        # No date found then use start of course date
+                        # last_attendance_record_date = get_datetime(check_date.strftime("%m-%d-%Y"))
+                        last_attendance_record_date = course_start_date
+                        logger.info("No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
+                            "%m-%d-%Y"))
 
                 bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
                                          course_start_date, course_end_date,
@@ -202,73 +382,26 @@ class MyColleges:
                 # Switch back to tab
                 self.driver.switch_to.window(self.current_tab)
 
-                next_day_students = []
+                pending_attendance_records = self._build_pending_attendance_records(bsc.attendance_records)
+                final_course_date = convert_date_to_datetime(course_end_date).date()
 
                 # Flag for if datepicker available for this course
                 datepicker_avail = True
 
                 # For each date update the attendance on MyColleges Faculty page
-                for record_date, students in bsc.attendance_records.items():
-                    # add any students from next day list
-                    students.extend(next_day_students)
-                    # Clear the next day student list
-                    next_day_students = []
-                    # Sort students in alphabetical order
-                    students.sort()
-                    # Format the date to match drop down selection
-                    formatted_date = get_datetime(record_date).strftime("%-m/%-d/%Y (%A)")
+                while pending_attendance_records:
+                    record_date = min(pending_attendance_records)
+                    students = pending_attendance_records.pop(record_date)
+                    formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
 
                     logger.info("Attendance Date: %s | Name(s): %s " % (formatted_date, " | ".join(students)))
 
                     try:
-                        # Try to find datepicker first
-                        datepicker_xpath = "//date-picker//input"
-                        date_input_found = False
-
-                        if datepicker_avail:
-                        
-                            try:
-                                # Check if datepicker exists
-                                date_input_element = get_element_wait_retry(self.driver, self.wait, datepicker_xpath,
-                                                                            'Checking for Date Picker Input', max_try=1)
-                                if date_input_element:
-                                    logger.info("Datepicker found, using input method")
-                                    # Format date as M/d/yyyy (e.g., "1/15/2024" instead of "01/15/2024 (Monday)")
-                                    # Using cross-platform compatible formatting
-                                    date_obj = get_datetime(record_date)
-                                    date_for_picker = f"{date_obj.month}/{date_obj.day}/{date_obj.year}"
-
-                                    # Clear existing value and input new date
-                                    date_input_element.clear()
-                                    date_input_element.send_keys(date_for_picker)
-                                    date_input_element.send_keys(Keys.ENTER)
-
-                                    wait_for_ajax(self.driver)
-                                    date_input_found = True
-                            except (NoSuchElementException, TimeoutException):
-                                datepicker_avail = False
-                                logger.info("Datepicker not found, trying dropdown")
-                        
-                        # If datepicker not found, fall back to dropdown
-                        if not date_input_found:
-                            # Click on date drop down select
-                            date_select_id = "event-dates-dropdown"
-                            click_element_wait_retry(self.driver, self.wait, date_select_id,
-                                                     'Waiting for Select Date Dropdown',
-                                                     By.ID)
-
-                            date_select = Select(self.driver.find_element(By.ID, date_select_id))
-                            date_select.select_by_visible_text(formatted_date)
-
-                            wait_for_ajax(self.driver)
+                        datepicker_avail = self._select_attendance_date(record_date, datepicker_avail)
 
                         # Update the attendance for each student
                         logger.info("Updating Attendance for Date: %s" % formatted_date)
                         for student_name in students:
-                            # student_name_parts = student_name.split(",")
-                            # student_first_name = student_name_parts[0].strip()
-                            # student_last_name = student_name_parts[1].strip()
-                            # student_name_formatted = flip_name(student_name)
                             logger.info("Present: %s" % student_name)
 
                             # Set the present for OCLS and OLAB
@@ -279,10 +412,12 @@ class MyColleges:
                                 logger.info("Could Not Mark Present: %s" % student_name)
 
                     except (NoSuchElementException, TimeoutException):
-                        logger.info(
-                            "Cannot update attendance for Date: %s | Dropdown option was not found. | Adding students to the next available date." % formatted_date)
-                        next_day_students.extend(students)
-                        logger.info("Present (not recorded for %s): %s" % (formatted_date, " | ".join(students)))
+                        self._carry_students_to_next_consecutive_date(
+                            pending_attendance_records,
+                            record_date,
+                            students,
+                            final_course_date,
+                        )
 
                 # Ask user to review before moving on - give them a chance to review
                 # satisfied = are_you_satisfied()
@@ -300,17 +435,14 @@ class MyColleges:
         # Switch back to original_tab
         self.driver.switch_to.window(original_tab)
 
-        # TODO: Review this commented out section below
-        # Close window when done
-        # close_tab(self.driver) # Leave open so driver can do other thins
-
         # Return the list of BrightSpaceCourses
         return bs_courses
 
     def mark_student_present(self, full_name: str, retry=0):
         success = False
         present_value = 'P'
-        
+        attendance_updated = False
+
         # Use consolidated XPath to find all attendance-entry selects for the student
         xpath_select = ("//table[contains(@id,'student-attendance-table')]//tr[descendant::div[" + " and ".join(
             ['contains(text(), "{}")'.format(element) for element in
@@ -329,6 +461,14 @@ class MyColleges:
             # Iterate over each select element
             for idx, select_element in enumerate(select_elements):
                 try:
+                    if select_element.get_attribute("value") == present_value:
+                        logger.info(
+                            "Attendance already marked Present for %s on select element %d",
+                            full_name,
+                            idx + 1,
+                        )
+                        break # If already marked present, skip to element which also applies to the same student
+
                     # Click the element
                     click_given_element_wait_retry(self.driver, self.wait, select_element,
                                                   "Waiting for attendance select element %d" % (idx + 1))
@@ -337,24 +477,28 @@ class MyColleges:
                     select_elements_refreshed = self.driver.find_elements(By.XPATH, xpath_select)
                     if idx < len(select_elements_refreshed):
                         select_element = select_elements_refreshed[idx]
-                    
-                    # Create Select object and select the present value
-                    select_obj = Select(select_element)
-                    select_obj.select_by_value(present_value)
-                    wait_for_ajax(self.driver)
-                    
+
+                    if select_element.get_attribute("value") != present_value:
+                        # Create Select object and select the present value
+                        select_obj = Select(select_element)
+                        select_obj.select_by_value(present_value)
+                        wait_for_ajax(self.driver)
+                    attendance_updated = True
+
                 except StaleElementReferenceException:
                     # If element becomes stale, re-find all elements and continue
                     logger.info("Stale element at index %d, re-finding elements" % idx)
                     select_elements = self.driver.find_elements(By.XPATH, xpath_select)
                     if idx < len(select_elements):
                         select_element = select_elements[idx]
-                        select_obj = Select(select_element)
-                        select_obj.select_by_value(present_value)
-                        wait_for_ajax(self.driver)
-                
+                        if select_element.get_attribute("value") != present_value:
+                            select_obj = Select(select_element)
+                            select_obj.select_by_value(present_value)
+                            wait_for_ajax(self.driver)
+                            attendance_updated = True
+
             # Tab away from the last select element
-            if select_elements:
+            if attendance_updated and select_elements:
                 # Re-get the last element to avoid stale reference
                 select_elements_final = self.driver.find_elements(By.XPATH, xpath_select)
                 if select_elements_final:
@@ -397,7 +541,7 @@ class MyColleges:
                 # Switch back to original_tab
                 self.driver.switch_to.window(original_tab)
 
-                handles = self.driver.window_handles
+                handles = set(self.driver.window_handles)
 
                 # Opens a new tab and switches to new tab
                 self.driver.switch_to.new_window('tab')

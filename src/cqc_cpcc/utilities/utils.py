@@ -24,6 +24,7 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 
 from cqc_cpcc.utilities.date import get_datetime
+from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import get_driver_wait, click_element_wait_retry
 
 # from simplify_docx import simplify
@@ -42,9 +43,9 @@ def are_you_satisfied():
 
     enum = Satisfactory
 
-    print("Are you satisfied?")
+    logger.info("Are you satisfied?")
     for i, member in enumerate(enum):
-        print(f"{member.value}: {member.name}")
+        logger.info("%s: %s", member.value, member.name)
 
     default = Satisfactory.YES
     default_value = default.value
@@ -52,10 +53,10 @@ def are_you_satisfied():
 
     try:
         sf = Satisfactory(user_input)
-        print(f"You selected {sf.name}")
+        logger.info("You selected %s", sf.name)
         return sf.value == default_value
     except ValueError:
-        print("Invalid selection.")
+        logger.warning("Invalid selection.")
         return are_you_satisfied() == default_value
 
 

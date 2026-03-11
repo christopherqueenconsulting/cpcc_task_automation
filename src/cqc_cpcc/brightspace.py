@@ -4,7 +4,6 @@ import datetime as DT
 import re
 import time
 from collections import defaultdict
-from pprint import pprint
 
 from selenium.common import TimeoutException, NoSuchElementException, ElementNotInteractableException, \
     StaleElementReferenceException
@@ -136,7 +135,7 @@ class BrightSpace_Course:
         close_tab(self.driver)
 
     def open_course_tab(self) -> bool:
-        handles = self.driver.window_handles
+        handles = set(self.driver.window_handles)
 
         self.driver.switch_to.new_window('tab')
 
@@ -385,12 +384,12 @@ class BrightSpace_Course:
             due_dates = list(set(due_dates))
 
             if due_dates:
-                print("Found Due Dates (Filtered To between %s - %s):" % (self.date_range_start, self.date_range_end))
-                pprint(due_dates)
+                logger.info("Found Due Dates (Filtered To between %s - %s): %s",
+                            self.date_range_start, self.date_range_end, due_dates)
             else:
                 logger.info("No Due Dates Found Between %s - %s" % (self.date_range_start, self.date_range_end))
 
-            print("-" * LINE_DASH_COUNT)
+            logger.debug("%s", "-" * LINE_DASH_COUNT)
             # logger.info(due_dates)
 
         except TimeoutException:
@@ -447,7 +446,7 @@ class BrightSpace_Course:
             # Switch back to tab
             self.driver.switch_to.window(current_tab)
 
-            handles = self.driver.window_handles
+            handles = set(self.driver.window_handles)
             self.driver.switch_to.new_window('tab')
 
             # Wait for the new window or tab
@@ -653,7 +652,7 @@ class BrightSpace_Course:
             # Switch back to tab
             self.driver.switch_to.window(current_tab)
 
-            handles = self.driver.window_handles
+            handles = set(self.driver.window_handles)
             self.driver.switch_to.new_window('tab')
 
             # Wait for the new window or tab
@@ -779,7 +778,7 @@ class BrightSpace_Course:
             # Switch back to tab
             self.driver.switch_to.window(current_tab)
 
-            handles = self.driver.window_handles
+            handles = set(self.driver.window_handles)
             self.driver.switch_to.new_window('tab')
 
             # Wait for the new window or tab

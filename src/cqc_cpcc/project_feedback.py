@@ -430,4 +430,4 @@ class FeedbackGiver:
 
         # Save the feedback to file
         document.save(file_path)
-        print("Feedback Saved to : %s" % file_path)
+        logger.info("Feedback saved to: %s", file_path)

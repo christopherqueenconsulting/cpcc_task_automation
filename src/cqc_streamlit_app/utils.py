@@ -1503,13 +1503,13 @@ def process_file(file_path, allowed_file_extensions):
 
             for folder_path, files in folder_contents.items():
                 concatenated_contents = b''.join(files)
-                print(f"Contents of folder '{folder_path}': {concatenated_contents.decode()}")
+                logger.debug("Contents of folder '%s': %s", folder_path, concatenated_contents.decode())
 
     # If it's a single file
     else:
         if any(file_path.lower().endswith(ext) for ext in allowed_file_extensions):
             with open(file_path, 'r') as file:
-                print("Contents of single file:", file.read())
+                logger.debug("Contents of single file: %s", file.read())
 
 
 def choose_preferred_mime(mime_list):
@@ -1540,7 +1540,7 @@ def get_file_mime_type(file_extension: str):
         try:
             key, value = line.split()
         except ValueError:
-            print("Error splitting line: %s" % line)
+            logger.warning("Error splitting MIME mapping line: %s", line)
             key = None
             value = None
 

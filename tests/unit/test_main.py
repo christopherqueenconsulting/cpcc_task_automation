@@ -3,7 +3,7 @@
 """Unit tests for main.py CLI entry point."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from cqc_cpcc.main import Instructor_Actions, prompt_action, prompt_attendance_tracker_url, take_action
 
 
@@ -110,10 +110,9 @@ class TestTakeAction:
         take_action()
         mock_give_feedback.assert_called_once()
     
-    @patch('builtins.print')
+    @patch('cqc_cpcc.main.logger.warning')
     @patch('cqc_cpcc.main.prompt_action', return_value=Instructor_Actions.GRADE_EXAM)
-    def test_take_action_prints_message_for_grade_exam(self, mock_prompt, mock_print):
-        """GRADE_EXAM action prints not implemented message."""
+    def test_take_action_logs_message_for_grade_exam(self, mock_prompt, mock_logger_warning):
+        """GRADE_EXAM action logs not implemented message."""
         take_action()
-        # Verify print was called with "Needs implementation"
-        mock_print.assert_called_with("Needs implementation")
+        mock_logger_warning.assert_called_once_with("GRADE_EXAM action selected but not implemented yet.")

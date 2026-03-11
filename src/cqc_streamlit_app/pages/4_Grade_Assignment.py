@@ -1048,7 +1048,7 @@ async def get_grade_exam_content():
                         tasks.append(task)
         except* Exception as e:
             for exc in e.exceptions:
-                print(f"Unhandled error: {exc}")
+                logger.error("Unhandled error during grading task group: %s", exc)
 
         for complete_task in tasks:
             graded_feedback_file_name, graded_feedback_temp_file_name = complete_task.result()
