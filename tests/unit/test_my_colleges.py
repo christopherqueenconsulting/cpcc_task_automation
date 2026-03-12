@@ -84,6 +84,21 @@ class TestAttendanceDateRouting:
             "Dora Student",
         ]
 
+    def test_carry_students_to_next_consecutive_date_stops_when_no_next_selectable_date(self):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        pending = {}
+
+        carry_result = my_colleges._carry_students_to_next_consecutive_date(
+            pending,
+            DT.date(2026, 1, 12),
+            ["Amy Student"],
+            DT.date(2026, 2, 1),
+            [DT.date(2026, 1, 12)],
+        )
+
+        assert carry_result is False
+        assert pending == {}
+
 
 @pytest.mark.unit
 class TestMarkStudentPresent:
@@ -111,7 +126,10 @@ class TestMarkStudentPresent:
         mock_click.assert_not_called()
         mock_select_class.assert_not_called()
         mock_wait_for_ajax.assert_not_called()
-        select_element.send_keys.assert_not_called()
+        select_element.send_keys.assert_called_once_with(Keys.TAB)
+        driver.execute_script.assert_called_once_with(
+            "if (document.activeElement) { document.activeElement.blur(); }"
+        )
 
     @patch("cqc_cpcc.my_colleges.wait_for_ajax")
     @patch("cqc_cpcc.my_colleges.Select")
@@ -310,12 +328,20 @@ class TestOptionalDeadlineDate:
         "_get_optional_deadline_date",
         side_effect=[None, None, None, None],
     )
+    @patch.object(
+        MyColleges,
+        "_get_selectable_attendance_dates_from_dropdown",
+        return_value=[],
+    )
+    @patch.object(MyColleges, "_get_last_selectable_attendance_date", return_value=None)
     @patch.object(MyColleges, "prompt_attendance_start_date", return_value=None)
     @patch.object(MyColleges, "get_course_info")
     def test_process_attendance_uses_course_date_fallbacks_when_deadlines_missing(
         self,
         mock_get_course_info,
         mock_prompt_attendance_start_date,
+        _mock_get_last_selectable_attendance_date,
+        _mock_get_selectable_attendance_dates_from_dropdown,
         mock_get_optional_deadline_date,
         mock_get_elements_text,
         mock_click_element_wait_retry,
@@ -368,3 +394,57 @@ class TestOptionalDeadlineDate:
             == course_end_date
         )
 
+
+@pytest.mark.unit
+class TestSelectableAttendanceDate:
+    """Test helper that determines UI-bound attendance date limits."""
+
+    @patch("cqc_cpcc.my_colleges.Select")
+    def test_get_last_selectable_attendance_date_prefers_dropdown_options(
+        self,
+        mock_select_class,
+    ):
+        driver = MagicMock()
+        wait = MagicMock()
+        dropdown_element = MagicMock()
+        driver.find_element.return_value = dropdown_element
+        option_1 = MagicMock(text="1/10/2026 (Saturday)")
+        option_2 = MagicMock(text="1/12/2026 (Monday)")
+        option_placeholder = MagicMock(text="Select")
+        select_instance = MagicMock()
+        select_instance.options = [option_placeholder, option_1, option_2]
+        mock_select_class.return_value = select_instance
+        my_colleges = MyColleges(driver, wait)
+
+        result = my_colleges._get_last_selectable_attendance_date()
+
+        assert result == DT.date(2026, 1, 12)
+        driver.find_element.assert_called_once_with(By.ID, "event-dates-dropdown")
+
+    @patch("cqc_cpcc.my_colleges.get_element_wait_retry")
+    def test_get_last_selectable_attendance_date_uses_datepicker_when_dropdown_missing(
+        self,
+        mock_get_element_wait_retry,
+    ):
+        driver = MagicMock()
+        wait = MagicMock()
+        driver.find_element.side_effect = NoSuchElementException()
+        date_input_element = MagicMock()
+        date_input_element.get_attribute.side_effect = lambda attr: {
+            "max": "1/20/2026",
+            "data-max": None,
+            "value": "1/12/2026",
+        }.get(attr)
+        mock_get_element_wait_retry.return_value = date_input_element
+        my_colleges = MyColleges(driver, wait)
+
+        result = my_colleges._get_last_selectable_attendance_date()
+
+        assert result == DT.date(2026, 1, 20)
+        mock_get_element_wait_retry.assert_called_once_with(
+            driver,
+            my_colleges.short_wait,
+            "//date-picker//input",
+            "Checking for Date Picker Input",
+            max_try=1,
+        )

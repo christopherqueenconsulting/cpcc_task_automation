@@ -9,6 +9,7 @@ from selenium.common import (
     StaleElementReferenceException,
     TimeoutException,
 )
+from selenium.common.exceptions import UnexpectedTagNameException
 from selenium.webdriver import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -169,39 +170,6 @@ class MyColleges:
     ) -> None:
         pending_students = pending_attendance_records.get(record_date, [])
         pending_attendance_records[record_date] = sorted(set(pending_students + students))
-
-    def _carry_students_to_next_consecutive_date(
-        self,
-        pending_attendance_records: dict[DT.date, list[str]],
-        current_date: DT.date,
-        students: list[str],
-        final_course_date: DT.date,
-    ) -> bool:
-        next_consecutive_date = current_date + DT.timedelta(days=1)
-        if next_consecutive_date > final_course_date:
-            logger.info(
-                "Cannot update attendance for Date: %s | No next consecutive course date is available.",
-                current_date.strftime("%-m/%-d/%Y (%A)"),
-            )
-            logger.info(
-                "Present (not recorded for %s): %s",
-                current_date.strftime("%-m/%-d/%Y (%A)"),
-                " | ".join(sorted(students)),
-            )
-            return False
-
-        self._merge_students_for_date(pending_attendance_records, next_consecutive_date, students)
-        logger.info(
-            "Cannot update attendance for Date: %s | Carrying students forward to next consecutive date: %s",
-            current_date.strftime("%-m/%-d/%Y (%A)"),
-            next_consecutive_date.strftime("%-m/%-d/%Y (%A)"),
-        )
-        logger.info(
-            "Present (not recorded for %s): %s",
-            current_date.strftime("%-m/%-d/%Y (%A)"),
-            " | ".join(sorted(students)),
-        )
-        return True
 
     def _get_optional_deadline_date(
         self,
@@ -387,6 +355,18 @@ class MyColleges:
 
                                                                                     "Waiting for Latest Attendance Records")
 
+                # Cap attendance processing/carry-forward to what the UI currently allows.
+                final_course_date = convert_date_to_datetime(course_end_date).date()
+                selectable_attendance_dates = self._get_selectable_attendance_dates_from_dropdown()
+                last_selectable_attendance_date = (
+                    max(selectable_attendance_dates)
+                    if selectable_attendance_dates
+                    else (self._get_last_selectable_attendance_date() or final_course_date)
+                )
+                self.course_information[course_name][
+                    "last_selectable_attendance_date"
+                ] = last_selectable_attendance_date
+
                 logger.info("Processing Course: : %s" % course_name)
 
                 # Find the corresponding BrightSpace course
@@ -429,7 +409,6 @@ class MyColleges:
                 self.driver.switch_to.window(self.current_tab)
 
                 pending_attendance_records = self._build_pending_attendance_records(bsc.attendance_records)
-                final_course_date = convert_date_to_datetime(course_end_date).date()
 
                 # Flag for if datepicker available for this course
                 datepicker_avail = True
@@ -462,7 +441,8 @@ class MyColleges:
                             pending_attendance_records,
                             record_date,
                             students,
-                            final_course_date,
+                            last_selectable_attendance_date,
+                            selectable_attendance_dates,
                         )
 
                 # Ask user to review before moving on - give them a chance to review
@@ -484,10 +464,133 @@ class MyColleges:
         # Return the list of BrightSpaceCourses
         return bs_courses
 
+    @staticmethod
+    def _parse_attendance_control_date(date_text: str | None) -> DT.date | None:
+        """Parse a date from attendance control text/attributes.
+
+        Accepts values such as "1/12/2026 (Monday)" or "01/12/2026".
+        """
+        if not date_text:
+            return None
+
+        normalized_date = date_text.split("(")[0].strip()
+        if not normalized_date:
+            return None
+
+        try:
+            return get_datetime(normalized_date).date()
+        except ValueError:
+            return None
+
+    def _get_selectable_attendance_dates_from_dropdown(self) -> list[DT.date]:
+        """Return all selectable attendance dates from the dropdown when available."""
+        try:
+            date_dropdown = self.driver.find_element(By.ID, "event-dates-dropdown")
+            dropdown_options = Select(date_dropdown).options
+            selectable_dates = sorted(
+                {
+                    parsed_date
+                    for parsed_date in (
+                        self._parse_attendance_control_date(option.text.strip())
+                        for option in dropdown_options
+                    )
+                    if parsed_date is not None
+                }
+            )
+            return selectable_dates
+        except (
+            NoSuchElementException,
+            StaleElementReferenceException,
+            UnexpectedTagNameException,
+        ):
+            logger.debug("Attendance date dropdown not available while determining selectable dates.")
+            return []
+
+    def _get_last_selectable_attendance_date(self) -> DT.date | None:
+        """Return the latest attendance date selectable in the current MyColleges UI."""
+        selectable_dates = self._get_selectable_attendance_dates_from_dropdown()
+        if selectable_dates:
+            return max(selectable_dates)
+
+        try:
+            date_input_element = get_element_wait_retry(
+                self.driver,
+                self.short_wait,
+                "//date-picker//input",
+                "Checking for Date Picker Input",
+                max_try=1,
+            )
+            if not date_input_element:
+                return None
+
+            for attr_name in ("max", "data-max", "value"):
+                parsed_date = self._parse_attendance_control_date(
+                    date_input_element.get_attribute(attr_name),
+                )
+                if parsed_date is not None:
+                    return parsed_date
+        except (NoSuchElementException, TimeoutException):
+            logger.debug("Datepicker input not available while determining selectable attendance date.")
+
+        return None
+
+    def _carry_students_to_next_consecutive_date(
+        self,
+        pending_attendance_records: dict[DT.date, list[str]],
+        current_date: DT.date,
+        students: list[str],
+        final_course_date: DT.date,
+        selectable_attendance_dates: list[DT.date] | None = None,
+    ) -> bool:
+        next_selectable_date = None
+
+        if selectable_attendance_dates:
+            next_selectable_date = next(
+                (selectable_date for selectable_date in selectable_attendance_dates if selectable_date > current_date),
+                None,
+            )
+            if next_selectable_date is None:
+                logger.info(
+                    "Cannot update attendance for Date: %s | No next selectable attendance date is available.",
+                    current_date.strftime("%-m/%-d/%Y (%A)"),
+                )
+                logger.info(
+                    "Present (not recorded for %s): %s",
+                    current_date.strftime("%-m/%-d/%Y (%A)"),
+                    " | ".join(sorted(students)),
+                )
+                return False
+
+        if next_selectable_date is None:
+            next_selectable_date = current_date + DT.timedelta(days=1)
+            if next_selectable_date > final_course_date:
+                logger.info(
+                    "Cannot update attendance for Date: %s | No next selectable attendance date is available.",
+                    current_date.strftime("%-m/%-d/%Y (%A)"),
+                )
+                logger.info(
+                    "Present (not recorded for %s): %s",
+                    current_date.strftime("%-m/%-d/%Y (%A)"),
+                    " | ".join(sorted(students)),
+                )
+                return False
+
+        self._merge_students_for_date(pending_attendance_records, next_selectable_date, students)
+        logger.info(
+            "Cannot update attendance for Date: %s | Carrying students forward to next selectable date: %s",
+            current_date.strftime("%-m/%-d/%Y (%A)"),
+            next_selectable_date.strftime("%-m/%-d/%Y (%A)"),
+        )
+        logger.info(
+            "Present (not recorded for %s): %s",
+            current_date.strftime("%-m/%-d/%Y (%A)"),
+            " | ".join(sorted(students)),
+        )
+        return True
+
     def mark_student_present(self, full_name: str, retry=0):
         success = False
         present_value = 'P'
-        attendance_updated = False
 
         # Use consolidated XPath to find all attendance-entry selects for the student
         xpath_select = ("//table[contains(@id,'student-attendance-table')]//tr[descendant::div[" + " and ".join(
@@ -497,13 +600,13 @@ class MyColleges:
         try:
             # Find all select elements for this student
             select_elements = self.driver.find_elements(By.XPATH, xpath_select)
-            
+
             if not select_elements:
                 logger.error("No attendance select elements found for: %s" % full_name)
                 return False
-            
+
             logger.info("Found %d attendance select element(s) for: %s" % (len(select_elements), full_name))
-            
+
             # Iterate over each select element
             for idx, select_element in enumerate(select_elements):
                 try:
@@ -513,12 +616,12 @@ class MyColleges:
                             full_name,
                             idx + 1,
                         )
-                        break # If already marked present, skip to element which also applies to the same student
+                        continue
 
                     # Click the element
                     click_given_element_wait_retry(self.driver, self.wait, select_element,
                                                   "Waiting for attendance select element %d" % (idx + 1))
-                    
+
                     # Re-find the element to avoid stale reference after click
                     select_elements_refreshed = self.driver.find_elements(By.XPATH, xpath_select)
                     if idx < len(select_elements_refreshed):
@@ -529,8 +632,6 @@ class MyColleges:
                         select_obj = Select(select_element)
                         select_obj.select_by_value(present_value)
                         wait_for_ajax(self.driver)
-                    attendance_updated = True
-
                 except StaleElementReferenceException:
                     # If element becomes stale, re-find all elements and continue
                     logger.info("Stale element at index %d, re-finding elements" % idx)
@@ -541,14 +642,19 @@ class MyColleges:
                             select_obj = Select(select_element)
                             select_obj.select_by_value(present_value)
                             wait_for_ajax(self.driver)
-                            attendance_updated = True
 
-            # Tab away from the last select element
-            if attendance_updated and select_elements:
-                # Re-get the last element to avoid stale reference
+            # Always release focus from attendance controls so course tabs can be closed.
+            try:
                 select_elements_final = self.driver.find_elements(By.XPATH, xpath_select)
                 if select_elements_final:
                     select_elements_final[-1].send_keys(Keys.TAB)
+            except Exception:
+                logger.debug("Unable to tab away from attendance select for %s", full_name)
+
+            try:
+                self.driver.execute_script("if (document.activeElement) { document.activeElement.blur(); }")
+            except Exception:
+                logger.debug("Unable to blur active element after attendance update for %s", full_name)
 
             success = True
 
