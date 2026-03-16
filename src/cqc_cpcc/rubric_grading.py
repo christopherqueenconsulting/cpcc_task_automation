@@ -590,21 +590,22 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 log_prefix = "CSC134"
             else:
                 # CSC151/default: apply 4-minor→1-major conversion, use effective counts
-                logger.info(f"Using CSC151 program_performance scoring with effective_major={effective_major}, effective_minor={effective_minor}")
+                logger.info(f"Using program_performance scoring with effective_major={effective_major}, effective_minor={effective_minor}")
                 level_label, score = select_program_performance_level(
                     effective_major,
                     effective_minor,
+                    criterion=rubric_criterion,
                     assignment_submitted=True  # Assume submitted if we have a result
                 )
-                logger.info(f"CSC151 program_performance computed: level_label='{level_label}', score={score}")
-                log_prefix = "CSC151"
+                logger.info(f"program_performance computed: level_label='{level_label}', score={score}")
+                log_prefix = "program_performance"
             
             # Update the criterion result
             criterion_result.points_earned = score
             criterion_result.selected_level_label = level_label
             
             logger.info(
-                f"{log_prefix} program_performance: {level_label} = {score}/100 points"
+                f"{log_prefix}: {level_label} = {score}/{criterion_result.points_possible} points"
             )
         
         elif rubric_criterion.scoring_mode == "level_band":
