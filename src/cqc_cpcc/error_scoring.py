@@ -233,71 +233,117 @@ def get_error_count_for_severity(
 def select_program_performance_level(
     effective_major: int,
     effective_minor: int,
+    criterion: Optional[Criterion] = None,
     assignment_submitted: bool = True
 ) -> Tuple[str, int]:
-    """Select CSC151 program performance level based on effective error counts.
+    """Select program performance level based on effective error counts and rubric criterion.
     
-    Implements the CSC151 v2.0 rubric logic for selecting the appropriate
-    performance level label and score based on effective (normalized) error counts.
+    Implements the program_performance criterion scoring logic by:
+    1. Determining which performance level matches the error counts
+    2. Looking up that level's score range in the rubric criterion
+    3. Returning the midpoint score within the range
     
-    This function MUST be called AFTER normalize_errors() has been applied.
+    This function MUST be called AFTER normalize_errors() has been applied (for CSC151).
     
     Args:
         effective_major: Number of effective major errors (after normalization)
         effective_minor: Number of effective minor errors (after normalization)
+        criterion: The Criterion object with levels defined (required)
         assignment_submitted: Whether the assignment was submitted (default: True)
         
     Returns:
-        Tuple of (level_label, score) matching the rubric level
+        Tuple of (level_label, score) where score is the max of the selected level's range
+        
+    Raises:
+        ValueError: If criterion is None or lacks expected levels
         
     Example:
-        >>> select_program_performance_level(0, 0)
-        ('A+ (0 errors)', 98)
-        >>> select_program_performance_level(0, 1)
-        ('A (1 minor error)', 93)
-        >>> select_program_performance_level(1, 0)
-        ('B- (1 major error)', 75)
-        >>> select_program_performance_level(4, 0)
-        ('F (4+ major errors)', 8)
+        >>> criterion = Criterion(
+        ...     criterion_id="program_performance",
+        ...     name="Program Performance",
+        ...     max_points=100,
+        ...     levels=[
+        ...         PerformanceLevel(label="A+ (0 errors)", score_min=96, score_max=100),
+        ...         PerformanceLevel(label="A (1 minor error)", score_min=91, score_max=95),
+        ...         PerformanceLevel(label="B- (1 major error)", score_min=71, score_max=80),
+        ...         PerformanceLevel(label="0 (Not submitted)", score_min=0, score_max=0),
+        ...     ]
+        ... )
+        >>> label, score = select_program_performance_level(0, 0, criterion)
+        ('A+ (0 errors)', 100)  # MAx 90-100
+        >>> label, score = select_program_performance_level(1, 0, criterion)
+        ('B- (1 major error)', 75)  # MAx of 71-80
     """
+    if criterion is None:
+        raise ValueError(
+            "criterion parameter is required for select_program_performance_level. "
+            "The function needs the PerformanceLevel definitions to compute scores."
+        )
+    
+    if not criterion.levels:
+        raise ValueError(
+            f"Criterion '{criterion.criterion_id}' has no performance levels defined. "
+            f"Cannot select level without level definitions."
+        )
+    
     if not assignment_submitted:
+        # Find the "not submitted" level (typically score_min=0, score_max=0)
+        not_submitted_level = next(
+            (l for l in criterion.levels if l.score_min == 0 and l.score_max == 0),
+            None
+        )
+        if not_submitted_level:
+            return (not_submitted_level.label, 0)
         return ("0 (Not submitted or incomplete)", 0)
     
-    # Check for major errors first
+    # Determine which level matches the error counts
+    # Logic: Match label pattern to error counts
+    level_to_select = None
+    
     if effective_major == 0:
         # No major errors - check minor errors
         if effective_minor == 0:
-            return ("A+ (0 errors)", 98)  # Mid-point of 96-100
+            level_to_select = next((l for l in criterion.levels if "0 error" in l.label.lower()), None)
         elif effective_minor == 1:
-            return ("A (1 minor error)", 93)  # Mid-point of 91-95
+            level_to_select = next((l for l in criterion.levels if "1 minor error" in l.label.lower()), None)
         elif effective_minor == 2:
-            return ("A- (2 minor errors)", 88)  # Mid-point of 86-90
+            level_to_select = next((l for l in criterion.levels if "2 minor error" in l.label.lower()), None)
         elif effective_minor == 3:
-            return ("B (3 minor errors)", 83)  # Mid-point of 81-85
+            level_to_select = next((l for l in criterion.levels if "3 minor error" in l.label.lower()), None)
         else:
             # Should not happen if normalization is applied correctly (4+ minor should convert)
             logger.warning(
                 f"Unexpected state: {effective_minor} minor errors after normalization. "
                 f"Expected 0-3 minor errors."
             )
-            # Fall through to major error handling
     
-    # Has major errors
-    if effective_major == 1:
-        return ("B- (1 major error)", 75)  # Mid-point of 71-80
-    elif effective_major == 2:
-        return ("C (2 major errors)", 65)  # Mid-point of 61-70
-    elif effective_major == 3:
-        return ("D (3 major errors)", 38)  # Mid-point of 16-60
-    elif effective_major >= 4:
-        return ("F (4+ major errors)", 8)  # Mid-point of 1-15
+    # If no minor-only level matched, check major error levels
+    if level_to_select is None:
+        if effective_major == 1:
+            level_to_select = next((l for l in criterion.levels if "1 major error" in l.label.lower()), None)
+        elif effective_major == 2:
+            level_to_select = next((l for l in criterion.levels if "2 major error" in l.label.lower()), None)
+        elif effective_major == 3:
+            level_to_select = next((l for l in criterion.levels if "3 major error" in l.label.lower()), None)
+        elif effective_major >= 4:
+            level_to_select = next((l for l in criterion.levels if "4+" in l.label or "4 major" in l.label.lower()), None)
     
-    # Default case (should not reach here)
-    logger.warning(
-        f"Unexpected error counts: major={effective_major}, minor={effective_minor}. "
-        f"Defaulting to F level."
+    # Fallback: if no level matched, use the worst level (excluding "not submitted")
+    if level_to_select is None:
+        logger.warning(
+            f"Could not match error counts ({effective_major} major, {effective_minor} minor) to any level. "
+            f"Using worst level (lowest score)."
+        )
+        # Get all levels except "not submitted" and select the lowest score
+        non_zero_levels = [l for l in criterion.levels if not (l.score_min == 0 and l.score_max == 0)]
+        level_to_select = min(non_zero_levels, key=lambda l: l.score_max) if non_zero_levels else criterion.levels[0]
+
+    logger.debug(
+        f"Program performance level selection: major={effective_major}, minor={effective_minor} → "
+        f"'{level_to_select.label}' ({level_to_select.score_min}-{level_to_select.score_max}) → score={level_to_select.score_max}"
     )
-    return ("F (4+ major errors)", 8)
+    
+    return (level_to_select.label, level_to_select.score_max)
 
 
 

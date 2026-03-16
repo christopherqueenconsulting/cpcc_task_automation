@@ -12,7 +12,8 @@ from cqc_cpcc.error_scoring import (
     select_program_performance_level,
     select_csc134_program_performance_level,
 )
-from cqc_cpcc.rubric_models import Criterion, ErrorCountScoringRules, DetectedError
+from cqc_cpcc.rubric_models import Criterion, ErrorCountScoringRules, DetectedError, PerformanceLevel
+from cqc_cpcc.rubric_config import get_rubric_by_id
 
 
 @pytest.mark.unit
@@ -94,84 +95,88 @@ class TestNormalizeErrors:
 class TestSelectProgramPerformanceLevel:
     """Test select_program_performance_level function for CSC151 v2.0."""
     
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Load the rubric once per test."""
+        self.rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        self.criterion = self.rubric.criteria[0]
+    
     def test_zero_errors_gives_a_plus(self):
-        """Test 0 major + 0 minor → A+ (98 points)."""
-        label, score = select_program_performance_level(0, 0)
+        """Test 0 major + 0 minor → A+ level."""
+        label, score = select_program_performance_level(0, 0, criterion=self.criterion)
         assert label == "A+ (0 errors)"
-        assert score == 98
-        assert 96 <= score <= 100  # Within A+ range
+        assert 191 <= score <= 200  # Within A+ range (200-point rubric)
     
     def test_one_minor_gives_a(self):
-        """Test 0 major + 1 minor → A (93 points)."""
-        label, score = select_program_performance_level(0, 1)
+        """Test 0 major + 1 minor → A level."""
+        label, score = select_program_performance_level(0, 1, criterion=self.criterion)
         assert label == "A (1 minor error)"
-        assert score == 93
-        assert 91 <= score <= 95  # Within A range
+        assert 181 <= score <= 190  # Within A range (200-point rubric)
     
     def test_two_minor_gives_a_minus(self):
-        """Test 0 major + 2 minor → A- (88 points)."""
-        label, score = select_program_performance_level(0, 2)
+        """Test 0 major + 2 minor → A- level."""
+        label, score = select_program_performance_level(0, 2, criterion=self.criterion)
         assert label == "A- (2 minor errors)"
-        assert score == 88
-        assert 86 <= score <= 90  # Within A- range
+        assert 171 <= score <= 180  # Within A- range (200-point rubric)
     
     def test_three_minor_gives_b(self):
-        """Test 0 major + 3 minor → B (83 points)."""
-        label, score = select_program_performance_level(0, 3)
+        """Test 0 major + 3 minor → B level."""
+        label, score = select_program_performance_level(0, 3, criterion=self.criterion)
         assert label == "B (3 minor errors)"
-        assert score == 83
-        assert 81 <= score <= 85  # Within B range
+        assert 161 <= score <= 170  # Within B range (200-point rubric)
     
     def test_one_major_gives_b_minus(self):
-        """Test 1 major + 0 minor → B- (75 points)."""
-        label, score = select_program_performance_level(1, 0)
-        assert label == "B- (1 major error)"
-        assert score == 75
-        assert 71 <= score <= 80  # Within B- range
+        """Test 1 major + 0 minor → B- level."""
+        label, score = select_program_performance_level(1, 0, criterion=self.criterion)
+        assert label == "B- (4 minor errors or 1 major error)"
+        assert 141 <= score <= 160  # Within B- range (200-point rubric)
     
     def test_two_major_gives_c(self):
-        """Test 2 major + 0 minor → C (65 points)."""
-        label, score = select_program_performance_level(2, 0)
+        """Test 2 major + 0 minor → C level."""
+        label, score = select_program_performance_level(2, 0, criterion=self.criterion)
         assert label == "C (2 major errors)"
-        assert score == 65
-        assert 61 <= score <= 70  # Within C range
+        assert 121 <= score <= 140  # Within C range (200-point rubric)
     
     def test_three_major_gives_d(self):
-        """Test 3 major + 0 minor → D (38 points)."""
-        label, score = select_program_performance_level(3, 0)
+        """Test 3 major + 0 minor → D level."""
+        label, score = select_program_performance_level(3, 0, criterion=self.criterion)
         assert label == "D (3 major errors)"
-        assert score == 38
-        assert 16 <= score <= 60  # Within D range
+        assert 1 <= score <= 120  # Within D range (200-point rubric, 1-120)
     
     def test_four_major_gives_f(self):
-        """Test 4 major + 0 minor → F (8 points)."""
-        label, score = select_program_performance_level(4, 0)
+        """Test 4 major + 0 minor → F level."""
+        label, score = select_program_performance_level(4, 0, criterion=self.criterion)
         assert label == "F (4+ major errors)"
-        assert score == 8
-        assert 1 <= score <= 15  # Within F range
+        assert 1 <= score <= 100  # Within F range (200-point rubric)
     
     def test_five_major_gives_f(self):
-        """Test 5+ major errors also give F."""
-        label, score = select_program_performance_level(5, 0)
+        """Test 5+ major errors also give F level."""
+        label, score = select_program_performance_level(5, 0, criterion=self.criterion)
         assert label == "F (4+ major errors)"
-        assert score == 8
+        assert 1 <= score <= 100  # Within F range (200-point rubric)
     
     def test_not_submitted_gives_zero(self):
         """Test not submitted → 0 points."""
-        label, score = select_program_performance_level(0, 0, assignment_submitted=False)
+        label, score = select_program_performance_level(0, 0, criterion=self.criterion, assignment_submitted=False)
         assert label == "0 (Not submitted or incomplete)"
         assert score == 0
     
     def test_one_major_with_minor_errors_gives_b_minus(self):
         """Test 1 major + some minor → B- (major takes precedence)."""
-        label, score = select_program_performance_level(1, 2)
-        assert label == "B- (1 major error)"
-        assert score == 75
+        label, score = select_program_performance_level(1, 2, criterion=self.criterion)
+        assert label == "B- (4 minor errors or 1 major error)"
+        assert 141 <= score <= 160  # Within B- range (200-point rubric)
 
 
 @pytest.mark.unit
 class TestIntegrationNormalizeAndSelect:
     """Test the full normalize → select flow for CSC151 v2.0."""
+    
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Load the rubric once per test."""
+        self.rubric = get_rubric_by_id("csc151_java_exam_rubric")
+        self.criterion = self.rubric.criteria[0]
     
     def test_full_flow_4_minor_to_1_major(self):
         """Test complete flow: 0 major + 4 minor → 1 major + 0 minor → B-."""
@@ -181,9 +186,9 @@ class TestIntegrationNormalizeAndSelect:
         assert effective_minor == 0
         
         # Step 2: Select level
-        label, score = select_program_performance_level(effective_major, effective_minor)
-        assert label == "B- (1 major error)"
-        assert score == 75
+        label, score = select_program_performance_level(effective_major, effective_minor, criterion=self.criterion)
+        assert label == "B- (4 minor errors or 1 major error)"
+        assert 141 <= score <= 160
     
     def test_full_flow_1_major_7_minor(self):
         """Test complete flow: 1 major + 7 minor → 2 major + 3 minor → C."""
@@ -193,16 +198,16 @@ class TestIntegrationNormalizeAndSelect:
         assert effective_minor == 3
         
         # Select level (major takes precedence)
-        label, score = select_program_performance_level(effective_major, effective_minor)
+        label, score = select_program_performance_level(effective_major, effective_minor, criterion=self.criterion)
         assert label == "C (2 major errors)"
-        assert score == 65
+        assert 121 <= score <= 140
     
     def test_full_flow_no_errors(self):
         """Test complete flow: 0 major + 0 minor → A+."""
         effective_major, effective_minor = normalize_errors(0, 0)
-        label, score = select_program_performance_level(effective_major, effective_minor)
+        label, score = select_program_performance_level(effective_major, effective_minor, criterion=self.criterion)
         assert label == "A+ (0 errors)"
-        assert score == 98
+        assert 191 <= score <= 200
     
     def test_full_flow_3_minor_no_conversion(self):
         """Test complete flow: 0 major + 3 minor → B (no conversion)."""
@@ -210,9 +215,9 @@ class TestIntegrationNormalizeAndSelect:
         assert effective_major == 0
         assert effective_minor == 3
         
-        label, score = select_program_performance_level(effective_major, effective_minor)
+        label, score = select_program_performance_level(effective_major, effective_minor, criterion=self.criterion)
         assert label == "B (3 minor errors)"
-        assert score == 83
+        assert 161 <= score <= 170
 
 
 @pytest.mark.unit

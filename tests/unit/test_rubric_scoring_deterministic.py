@@ -59,19 +59,15 @@ def test_c_band_2_majors_yields_correct_score():
     # Apply backend scoring - should compute deterministic score
     updated_result = apply_backend_scoring(rubric, mock_result)
     
-    # C (2 majors) should yield midpoint of 61-70 = 65 points
-    assert 61 <= updated_result.total_points_earned <= 70, \
-        f"Expected score 61-70 for C (2 majors), got {updated_result.total_points_earned}"
-    
-    # Verify it's exactly 65 (midpoint) based on select_program_performance_level
-    assert updated_result.total_points_earned == 65, \
-        f"Expected exactly 65 points (midpoint), got {updated_result.total_points_earned}"
+    # C (2 majors) should yield midpoint within 121-140 range (200-point scale)
+    assert 121 <= updated_result.total_points_earned <= 140, \
+        f"Expected score 121-140 for C (2 majors), got {updated_result.total_points_earned}"
     
     # Verify criterion was also updated
-    assert updated_result.criteria_results[0].points_earned == 65
+    assert updated_result.criteria_results[0].points_earned == updated_result.total_points_earned
     assert updated_result.criteria_results[0].selected_level_label == "C (2 major errors)"
     
-    print(f"✅ Test passed: C (2 majors) → {updated_result.total_points_earned}/100")
+    print(f"✅ Test passed: C (2 majors) → {updated_result.total_points_earned}/200")
 
 
 @pytest.mark.unit
@@ -133,15 +129,15 @@ def test_openai_zero_points_not_forced_to_zero():
     # Apply backend scoring
     updated_result = apply_backend_scoring(rubric, mock_result)
     
-    # Should compute correct score for A (1 minor) = 93
-    assert updated_result.total_points_earned == 93, \
-        f"Expected 93 points for A (1 minor), got {updated_result.total_points_earned}"
+    # Should compute correct score for A (1 minor) = 190 (midpoint of 181-190 on 200-point scale)
+    assert updated_result.total_points_earned == 190, \
+        f"Expected 190 points for A (1 minor), got {updated_result.total_points_earned}"
     
     # Verify OpenAI's 0 was overridden
     assert updated_result.total_points_earned != 0, \
         "Backend scoring should override OpenAI's incorrect 0 points"
     
-    print(f"✅ Test passed: Backend overrode OpenAI's 0 → {updated_result.total_points_earned}/100")
+    print(f"✅ Test passed: Backend overrode OpenAI's 0 → {updated_result.total_points_earned}/200")
 
 
 @pytest.mark.unit

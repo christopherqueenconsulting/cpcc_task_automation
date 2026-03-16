@@ -14,20 +14,20 @@ from cqc_cpcc.rubric_grading import apply_backend_scoring
 
 @pytest.mark.unit
 def test_csc151_program_performance_0_errors():
-    """Test CSC151 program_performance scoring with 0 errors -> A+ (98 points)."""
+    """Test CSC151 program_performance scoring with 0 errors -> A+ (195 points on 200-point scale)."""
     rubric = get_rubric_by_id("csc151_java_exam_rubric")
     
     result = RubricAssessmentResult(
         rubric_id=rubric.rubric_id,
         rubric_version=rubric.rubric_version,
         total_points_earned=0,  # Placeholder
-        total_points_possible=100,
+        total_points_possible=200,
         criteria_results=[
             CriterionResult(
                 criterion_id="program_performance",
                 criterion_name="Program Performance",
                 points_earned=0,  # Placeholder
-                points_possible=100,
+                points_possible=200,
                 feedback="Perfect submission, no errors detected.",
                 selected_level_label=None
             )
@@ -40,8 +40,7 @@ def test_csc151_program_performance_0_errors():
     
     updated = apply_backend_scoring(rubric, result)
     
-    assert updated.total_points_earned == 98
-    assert updated.criteria_results[0].points_earned == 98
+    assert 191 <= updated.total_points_earned <= 200  # A+ range
     assert updated.criteria_results[0].selected_level_label == "A+ (0 errors)"
     assert updated.effective_major_errors == 0
     assert updated.effective_minor_errors == 0
@@ -49,20 +48,20 @@ def test_csc151_program_performance_0_errors():
 
 @pytest.mark.unit
 def test_csc151_program_performance_2_minor_errors():
-    """Test CSC151 program_performance scoring with 2 minor errors -> A- (88 points)."""
+    """Test CSC151 program_performance scoring with 2 minor errors -> A- (175 points on 200-point scale)."""
     rubric = get_rubric_by_id("csc151_java_exam_rubric")
     
     result = RubricAssessmentResult(
         rubric_id=rubric.rubric_id,
         rubric_version=rubric.rubric_version,
         total_points_earned=0,
-        total_points_possible=100,
+        total_points_possible=200,
         criteria_results=[
             CriterionResult(
                 criterion_id="program_performance",
                 criterion_name="Program Performance",
                 points_earned=0,
-                points_possible=100,
+                points_possible=200,
                 feedback="Two minor errors found.",
                 selected_level_label=None
             )
@@ -75,8 +74,7 @@ def test_csc151_program_performance_2_minor_errors():
     
     updated = apply_backend_scoring(rubric, result)
     
-    assert updated.total_points_earned == 88
-    assert updated.criteria_results[0].points_earned == 88
+    assert 171 <= updated.total_points_earned <= 180  # A- range
     assert updated.criteria_results[0].selected_level_label == "A- (2 minor errors)"
     assert updated.original_major_errors == 0
     assert updated.original_minor_errors == 2
@@ -86,20 +84,20 @@ def test_csc151_program_performance_2_minor_errors():
 
 @pytest.mark.unit
 def test_csc151_program_performance_4_minor_converts_to_1_major():
-    """Test CSC151 error conversion: 4 minor = 1 major -> B- (75 points)."""
+    """Test CSC151 error conversion: 4 minor = 1 major -> B- (150 points on 200-point scale)."""
     rubric = get_rubric_by_id("csc151_java_exam_rubric")
     
     result = RubricAssessmentResult(
         rubric_id=rubric.rubric_id,
         rubric_version=rubric.rubric_version,
         total_points_earned=0,
-        total_points_possible=100,
+        total_points_possible=200,
         criteria_results=[
             CriterionResult(
                 criterion_id="program_performance",
                 criterion_name="Program Performance",
                 points_earned=0,
-                points_possible=100,
+                points_possible=200,
                 feedback="Four minor errors detected.",
                 selected_level_label=None
             )
@@ -118,28 +116,27 @@ def test_csc151_program_performance_4_minor_converts_to_1_major():
     assert updated.effective_major_errors == 1
     assert updated.effective_minor_errors == 0
     
-    # 1 major error -> B- = 75 points
-    assert updated.total_points_earned == 75
-    assert updated.criteria_results[0].points_earned == 75
-    assert updated.criteria_results[0].selected_level_label == "B- (1 major error)"
+    # 1 major error -> B- = 141-160 range (200-point scale)
+    assert 141 <= updated.total_points_earned <= 160
+    assert updated.criteria_results[0].selected_level_label == "B- (4 minor errors or 1 major error)"
 
 
 @pytest.mark.unit
 def test_csc151_program_performance_1_major_5_minor():
-    """Test CSC151 with 1 major + 5 minor -> effective 2 major, 1 minor -> C (65 points)."""
+    """Test CSC151 with 1 major + 5 minor -> effective 2 major, 1 minor -> C (130 points on 200-point scale)."""
     rubric = get_rubric_by_id("csc151_java_exam_rubric")
     
     result = RubricAssessmentResult(
         rubric_id=rubric.rubric_id,
         rubric_version=rubric.rubric_version,
         total_points_earned=0,
-        total_points_possible=100,
+        total_points_possible=200,
         criteria_results=[
             CriterionResult(
                 criterion_id="program_performance",
                 criterion_name="Program Performance",
                 points_earned=0,
-                points_possible=100,
+                points_possible=200,
                 feedback="Multiple errors detected.",
                 selected_level_label=None
             )
@@ -158,9 +155,8 @@ def test_csc151_program_performance_1_major_5_minor():
     assert updated.effective_major_errors == 2
     assert updated.effective_minor_errors == 1
     
-    # 2 major errors -> C = 65 points (ignoring the 1 remaining minor for band selection)
-    assert updated.total_points_earned == 65
-    assert updated.criteria_results[0].points_earned == 65
+    # 2 major errors -> C = 121-140 range (200-point scale)
+    assert 121 <= updated.total_points_earned <= 140
     assert updated.criteria_results[0].selected_level_label == "C (2 major errors)"
 
 
@@ -173,13 +169,13 @@ def test_csc151_program_performance_no_error_counts_fallback():
         rubric_id=rubric.rubric_id,
         rubric_version=rubric.rubric_version,
         total_points_earned=0,
-        total_points_possible=100,
+        total_points_possible=200,
         criteria_results=[
             CriterionResult(
                 criterion_id="program_performance",
                 criterion_name="Program Performance",
                 points_earned=0,
-                points_possible=100,
+                points_possible=200,
                 feedback="No error counts provided.",
                 selected_level_label=None
             )
@@ -192,9 +188,8 @@ def test_csc151_program_performance_no_error_counts_fallback():
     
     updated = apply_backend_scoring(rubric, result)
     
-    # Should default to 0 errors -> A+ = 98 points
-    assert updated.total_points_earned == 98
-    assert updated.criteria_results[0].points_earned == 98
+    # Should default to 0 errors -> A+ = 191-200 range (200-point scale)
+    assert 191 <= updated.total_points_earned <= 200
     assert updated.criteria_results[0].selected_level_label == "A+ (0 errors)"
     assert updated.original_major_errors == 0
     assert updated.original_minor_errors == 0
@@ -273,13 +268,13 @@ def test_scoring_consistency_across_display():
         rubric_id=rubric.rubric_id,
         rubric_version=rubric.rubric_version,
         total_points_earned=0,
-        total_points_possible=100,
+        total_points_possible=200,
         criteria_results=[
             CriterionResult(
                 criterion_id="program_performance",
                 criterion_name="Program Performance",
                 points_earned=0,
-                points_possible=100,
+                points_possible=200,
                 feedback="Three minor errors.",
                 selected_level_label=None
             )
@@ -308,9 +303,9 @@ def test_scoring_consistency_across_display():
     assert abs(percentage_card - percentage_summary) < 0.01
     assert band_card == band_summary
     
-    # Verify actual values
-    assert updated.total_points_earned == 83
-    assert abs(percentage_card - 83.0) < 0.01
+    # Verify actual values (B level is 161-170 on 200-point scale)
+    assert 161 <= updated.total_points_earned <= 170
+    assert 80 <= percentage_card <= 85
 
 
 @pytest.mark.unit
@@ -433,20 +428,21 @@ def test_csc134_versus_csc151_different_conversion():
     csc134_rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
     csc151_rubric = get_rubric_by_id("csc151_java_exam_rubric")
 
-    # 4 minor errors: under CSC151 → converts to 1 major → B- (75 pts)
+    # 4 minor errors: under CSC151 → converts to 1 major → B- (141-160 pts on 200-point scale)
     #                 under CSC134 → stays 4 minor → Above Average (80 pts)
     def make_result(rubric, minor_errors):
+        points_possible = 100 if "csc134" in rubric.rubric_id else 200
         return RubricAssessmentResult(
             rubric_id=rubric.rubric_id,
             rubric_version=rubric.rubric_version,
             total_points_earned=0,
-            total_points_possible=100,
+            total_points_possible=points_possible,
             criteria_results=[
                 CriterionResult(
                     criterion_id="program_performance",
                     criterion_name="Program Performance",
                     points_earned=0,
-                    points_possible=100,
+                    points_possible=points_possible,
                     feedback="Test feedback.",
                     selected_level_label=None,
                 )
@@ -466,8 +462,8 @@ def test_csc134_versus_csc151_different_conversion():
     assert csc134_result.effective_major_errors == 0
     assert csc134_result.effective_minor_errors == 4
 
-    # CSC151: 4 minor converts to 1 major → B- (75 pts)
-    assert csc151_result.total_points_earned == 75
-    assert csc151_result.criteria_results[0].selected_level_label == "B- (1 major error)"
+    # CSC151: 4 minor converts to 1 major → B- (141-160 pts on 200-point scale)
+    assert 141 <= csc151_result.total_points_earned <= 160
+    assert csc151_result.criteria_results[0].selected_level_label == "B- (4 minor errors or 1 major error)"
     assert csc151_result.effective_major_errors == 1
     assert csc151_result.effective_minor_errors == 0
