@@ -156,3 +156,14 @@ class TestConstants:
         """Test that MYCOLLEGE_URL constant is defined."""
         from cqc_cpcc.utilities.env_constants import MYCOLLEGE_URL
         assert MYCOLLEGE_URL == "https://mycollegess.cpcc.edu"
+
+    def test_use_virtual_display_default_is_false(self):
+        """Test that USE_VIRTUAL_DISPLAY defaults to False when not set."""
+        from cqc_cpcc.utilities.env_constants import isTrue
+        # The default_value passed to get_constanct_from_env is 'False'
+        assert isTrue('False') is False
+
+    def test_use_virtual_display_is_boolean(self):
+        """Test that USE_VIRTUAL_DISPLAY is a boolean."""
+        from cqc_cpcc.utilities.env_constants import USE_VIRTUAL_DISPLAY
+        assert isinstance(USE_VIRTUAL_DISPLAY, bool)

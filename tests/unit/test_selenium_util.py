@@ -258,16 +258,90 @@ class TestGetBrowserDriver:
     
     @patch('cqc_cpcc.utilities.selenium_util.get_local_chrome_driver')
     @patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', False)
-    @patch('cqc_cpcc.utilities.selenium_util.HEADLESS_BROWSER', True)
-    def test_get_browser_driver_uses_browserless_when_headless(self, mock_get_local):
+    @patch('cqc_cpcc.utilities.selenium_util.HEADLESS_BROWSER', False)
+    @patch('cqc_cpcc.utilities.selenium_util.USE_VIRTUAL_DISPLAY', True)
+    @patch('cqc_cpcc.utilities.selenium_util._virtual_display', MagicMock())
+    def test_get_browser_driver_uses_local_chrome_when_virtual_display_active(self, mock_get_local):
         from cqc_cpcc.utilities.selenium_util import get_browser_driver
         mock_driver = MagicMock()
         mock_get_local.return_value = mock_driver
-        
+
         result = get_browser_driver()
-        # Should call with headless=True
-        mock_get_local.assert_called_once_with(True)
         assert result == mock_driver
+        # Should call get_local_chrome_driver (not headless – uses HEADLESS_BROWSER which is False)
+        mock_get_local.assert_called_once_with(False)
+
+    @patch('cqc_cpcc.utilities.selenium_util.get_local_chrome_driver')
+    @patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', False)
+    @patch('cqc_cpcc.utilities.selenium_util.HEADLESS_BROWSER', False)
+    @patch('cqc_cpcc.utilities.selenium_util.USE_VIRTUAL_DISPLAY', True)
+    @patch('cqc_cpcc.utilities.selenium_util._virtual_display', None)
+    def test_get_browser_driver_falls_back_to_headless_when_virtual_display_unavailable(self, mock_get_local):
+        from cqc_cpcc.utilities.selenium_util import get_browser_driver
+        mock_driver = MagicMock()
+        mock_get_local.return_value = mock_driver
+
+        result = get_browser_driver()
+        assert result == mock_driver
+        # Falls back to BROWSERLESS (headless=True) because virtual display is None
+        mock_get_local.assert_called_once_with(True)
+
+
+@pytest.mark.unit
+class TestStartVirtualDisplay:
+    """Test the start_virtual_display function."""
+
+    def test_start_virtual_display_returns_none_on_non_linux(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        original = sel_util._virtual_display
+        sel_util._virtual_display = None
+        try:
+            with patch('platform.system', return_value='Darwin'):
+                result = sel_util.start_virtual_display()
+            assert result is None
+        finally:
+            sel_util._virtual_display = original
+
+    def test_start_virtual_display_starts_display_on_linux(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        original = sel_util._virtual_display
+        sel_util._virtual_display = None
+        try:
+            mock_display_instance = MagicMock()
+            mock_display_instance.display = 99
+            with patch('platform.system', return_value='Linux'), \
+                 patch('cqc_cpcc.utilities.selenium_util.Display', return_value=mock_display_instance):
+                result = sel_util.start_virtual_display()
+            assert result is mock_display_instance
+            mock_display_instance.start.assert_called_once()
+            assert sel_util._virtual_display is mock_display_instance
+        finally:
+            sel_util._virtual_display = original
+
+    def test_start_virtual_display_returns_existing_display(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_existing = MagicMock()
+        mock_existing.display = 1
+        original = sel_util._virtual_display
+        sel_util._virtual_display = mock_existing
+        try:
+            result = sel_util.start_virtual_display()
+            assert result is mock_existing
+        finally:
+            sel_util._virtual_display = original
+
+    def test_start_virtual_display_returns_none_on_exception(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        original = sel_util._virtual_display
+        sel_util._virtual_display = None
+        try:
+            with patch('platform.system', return_value='Linux'), \
+                 patch('cqc_cpcc.utilities.selenium_util.Display', side_effect=Exception("Xvfb not found")):
+                result = sel_util.start_virtual_display()
+            assert result is None
+            assert sel_util._virtual_display is None
+        finally:
+            sel_util._virtual_display = original
 
 
 @pytest.mark.unit

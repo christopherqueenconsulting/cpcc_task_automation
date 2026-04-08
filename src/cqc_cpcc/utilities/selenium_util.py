@@ -1,3 +1,4 @@
+import platform
 import time
 from enum import Enum
 from typing import Callable
@@ -20,13 +21,56 @@ from webdriver_manager.chrome import ChromeDriverManager
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
 
-# Check ENV for Github action to determine to run this code
+# Module-level reference to the running virtual display (Linux only).
+_virtual_display = None
+
+
+def start_virtual_display(width: int = 1920, height: int = 1080):
+    """Start a virtual X11 display so Chrome can run without taking control of the local screen.
+
+    This is useful when running browser automation on a machine where the user is
+    actively working and does not want a Chrome window to appear and steal focus.
+    On Linux the display is backed by Xvfb (via pyvirtualdisplay).  On other
+    operating systems the function logs a warning and returns ``None``; callers
+    should fall back to ``--headless`` Chrome in that case.
+
+    Args:
+        width:  Width of the virtual display in pixels (default 1920).
+        height: Height of the virtual display in pixels (default 1080).
+
+    Returns:
+        The ``Display`` instance if started successfully, otherwise ``None``.
+    """
+    global _virtual_display
+
+    if _virtual_display is not None:
+        logger.debug("Virtual display already running on :%s", _virtual_display.display)
+        return _virtual_display
+
+    if platform.system() != "Linux":
+        logger.warning(
+            "Virtual display (pyvirtualdisplay/Xvfb) is only supported on Linux. "
+            "Set HEADLESS_BROWSER=True to run Chrome headlessly on this platform."
+        )
+        return None
+
+    try:
+        display = Display(visible=False, size=(width, height))
+        display.start()
+        _virtual_display = display
+        logger.info("Virtual display started on :%s", display.display)
+        return display
+    except Exception as e:
+        logger.error("Failed to start virtual display: %s", e)
+        return None
+
+
+# Start virtual display at module load when required.
 if IS_GITHUB_ACTION:
-    display = Display(visible=False, size=(800, 800))
-    display.start()
-    chromedriver_autoinstaller.install()  # Check if the current version of chromedriver exists
-    # and if it doesn't exist, download it automatically,
-    # then add chromedriver to path
+    start_virtual_display()
+    chromedriver_autoinstaller.install()
+elif USE_VIRTUAL_DISPLAY:
+    start_virtual_display()
 
 
 def which_browser():
@@ -81,6 +125,18 @@ def get_browser_driver():
         browser_type = BrowserType.LOCAL_CHROME
     elif HEADLESS_BROWSER:
         browser_type = BrowserType.BROWSERLESS
+    elif USE_VIRTUAL_DISPLAY:
+        # Run Chrome in the virtual display so it is invisible to the local user.
+        if _virtual_display is not None:
+            browser_type = BrowserType.LOCAL_CHROME
+        else:
+            # Virtual display could not be started (e.g. non-Linux OS); fall back
+            # to headless mode so the browser still doesn't steal focus.
+            logger.warning(
+                "USE_VIRTUAL_DISPLAY=True but virtual display is not running. "
+                "Falling back to headless mode."
+            )
+            browser_type = BrowserType.BROWSERLESS
     else:
         browser_type = which_browser()
     driver = None
