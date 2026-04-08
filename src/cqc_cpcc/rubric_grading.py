@@ -106,7 +106,7 @@ def build_rubric_grading_prompt(
             prompt_parts.append("**Performance Levels:**")
             for level in sorted(criterion.levels, key=lambda l: l.score_max, reverse=True):
                 prompt_parts.append(
-                    f"  - **{level.label}** ({level.score_min}-{level.score_max} points): {level.description}"
+                    f"  - **{level.label}** ({int(level.score_min)}-{int(level.score_max)} points): {level.description}"
                 )
     
     prompt_parts.append("")
@@ -115,7 +115,7 @@ def build_rubric_grading_prompt(
     if rubric.overall_bands:
         prompt_parts.append("### Overall Performance Bands")
         for band in sorted(rubric.overall_bands, key=lambda b: b.score_max, reverse=True):
-            prompt_parts.append(f"- **{band.label}**: {band.score_min}-{band.score_max} points")
+            prompt_parts.append(f"- **{band.label}**: {int(band.score_min)}-{int(band.score_max)} points")
         prompt_parts.append("")
     
     # Error definitions if provided
