@@ -47,7 +47,7 @@ class TestOpenRouterPlugins:
             assert result is not None
             assert len(result) == 1
             # Check that it's an SDK component
-            assert isinstance(result[0], components.PluginAutoRouter)
+            assert isinstance(result[0], components.ChatGenerationParamsPluginAutoRouter)
             assert result[0].id == 'auto-router'
             assert result[0].allowed_models == ['anthropic/claude-3-opus']
     
@@ -59,7 +59,7 @@ class TestOpenRouterPlugins:
             
             assert result is not None
             assert len(result) == 1
-            assert isinstance(result[0], components.PluginAutoRouter)
+            assert isinstance(result[0], components.ChatGenerationParamsPluginAutoRouter)
             assert result[0].id == 'auto-router'
             assert result[0].allowed_models == ['google/gemini-*']
     
@@ -72,7 +72,7 @@ class TestOpenRouterPlugins:
             
             assert result is not None
             assert len(result) == 1
-            assert isinstance(result[0], components.PluginAutoRouter)
+            assert isinstance(result[0], components.ChatGenerationParamsPluginAutoRouter)
             assert result[0].id == 'auto-router'
             assert len(result[0].allowed_models) == 3
             assert 'google/gemini-*' in result[0].allowed_models
@@ -122,7 +122,7 @@ class TestOpenRouterPlugins:
             # Verify structure matches OpenRouter SDK requirements
             assert isinstance(result, list)
             assert len(result) == 1
-            assert isinstance(result[0], components.PluginAutoRouter)
+            assert isinstance(result[0], components.ChatGenerationParamsPluginAutoRouter)
             assert result[0].id == 'auto-router'
             assert isinstance(result[0].allowed_models, list)
     

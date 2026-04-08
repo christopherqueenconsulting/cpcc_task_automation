@@ -169,14 +169,14 @@ def get_openrouter_plugins() -> Optional[list]:
     
     Returns:
         None if OPENROUTER_ALLOWED_MODELS is not set or empty (uses account defaults).
-        Otherwise, returns a list containing a PluginAutoRouter
+        Otherwise, returns a list containing a ChatGenerationParamsPluginAutoRouter
         component with the allowed models configuration.
         
     Example:
         >>> import os
         >>> os.environ['OPENROUTER_ALLOWED_MODELS'] = 'google/gemini-*,anthropic/claude-*'
         >>> plugins = get_openrouter_plugins()
-        >>> # Returns [PluginAutoRouter(id='auto-router', allowed_models=[...])]
+        >>> # Returns [ChatGenerationParamsPluginAutoRouter(id='auto-router', allowed_models=[...])]
     """
     from openrouter import components
     
@@ -185,7 +185,7 @@ def get_openrouter_plugins() -> Optional[list]:
         return None
     
     return [
-        components.PluginAutoRouter(
+        components.ChatGenerationParamsPluginAutoRouter(
             id="auto-router",
             allowed_models=allowed_models,
         )

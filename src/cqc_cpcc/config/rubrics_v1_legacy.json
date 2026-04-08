@@ -254,7 +254,8 @@
     "title": "AI Assignment Reflection Rubric",
     "description": "Rubric for grading AI tool reflection assignments. Uses level-band scoring where LLM selects performance levels and backend computes exact points.",
     "course_ids": [
-      "CSC113"
+      "CSC151",
+      "CSC251"
     ],
     "criteria": [
       {
