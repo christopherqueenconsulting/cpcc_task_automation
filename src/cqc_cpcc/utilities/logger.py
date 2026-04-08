@@ -94,6 +94,7 @@ logger.setLevel(base_logger_level)
 today = DT.date.today()
 # Log to file
 LOGGING_FILENAME = 'logs/' + base_name + '_' + today.strftime("%Y_%m_%d") + '.log'
+os.makedirs(os.path.dirname(LOGGING_FILENAME), exist_ok=True)
 
 
 class MyFormatter(logging.Formatter):
@@ -152,6 +153,7 @@ openai_debug_logger.setLevel(_resolve_openai_debug_log_level())
 
 # Add file handler for OpenAI debug logs (separate file)
 OPENAI_DEBUG_FILENAME = f'logs/openai/openai_debug_{today.strftime("%Y_%m_%d")}.log'
+os.makedirs(os.path.dirname(OPENAI_DEBUG_FILENAME), exist_ok=True)
 openai_debug_handler = RotatingFileHandler(
     OPENAI_DEBUG_FILENAME,
     maxBytes=250000000,
