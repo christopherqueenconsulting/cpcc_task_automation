@@ -222,6 +222,14 @@ def get_browser_driver():
     if IS_GITHUB_ACTION:
         browser_type = BrowserType.LOCAL_CHROME
     elif HEADLESS_BROWSER:
+        # HEADLESS_BROWSER takes precedence over USE_VIRTUAL_DISPLAY.
+        # If you want to use the virtual display instead, set HEADLESS_BROWSER=False.
+        if USE_VIRTUAL_DISPLAY:
+            logger.warning(
+                "Both HEADLESS_BROWSER and USE_VIRTUAL_DISPLAY are True. "
+                "HEADLESS_BROWSER takes precedence. "
+                "Set HEADLESS_BROWSER=False to use the virtual display instead."
+            )
         browser_type = BrowserType.BROWSERLESS
     elif USE_VIRTUAL_DISPLAY:
         # Run Chrome in the virtual display so it is invisible to the local user.
