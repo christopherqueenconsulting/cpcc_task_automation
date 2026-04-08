@@ -169,6 +169,15 @@ def wait_for_user_action(
     return input(
         f"\n{prompt_message}\nPress Enter when done (or type a value and press Enter): "
     ).strip()
+
+
+class BrowserType(Enum):
+    DOCKER_CHROME = 1
+    LOCAL_CHROME = 2
+    BROWSERLESS = 3
+
+
+def which_browser():
     """Prompts the user to select a value from the given enum."""
     enum = BrowserType
 
@@ -186,12 +195,6 @@ def wait_for_user_action(
     except ValueError:
         logger.warning("Invalid selection.")
         return which_browser()
-
-
-class BrowserType(Enum):
-    DOCKER_CHROME = 1
-    LOCAL_CHROME = 2
-    BROWSERLESS = 3
 
 
 def close_tab(driver: WebDriver, handles: list[str] = None, max_retry=3):
