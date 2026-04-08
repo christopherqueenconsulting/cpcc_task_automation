@@ -24,6 +24,7 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 
 from cqc_cpcc.utilities.date import get_datetime
+from cqc_cpcc.utilities.env_constants import IS_GITHUB_ACTION
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import (
     get_driver_wait,
@@ -719,7 +720,6 @@ def duo_login(driver: WebDriver):
         # appeared.  Take a screenshot so the user can see what happened and,
         # unless we are in a CI environment, pause for manual intervention.
         take_and_show_screenshot(driver, "duo_timeout")
-        from cqc_cpcc.utilities.env_constants import IS_GITHUB_ACTION
         if not IS_GITHUB_ACTION:
             wait_for_user_action(
                 driver,
