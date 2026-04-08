@@ -55,7 +55,7 @@ def start_virtual_display(width: int = 1920, height: int = 1080):
     if platform.system() != "Linux":
         logger.warning(
             "Virtual display (pyvirtualdisplay/Xvfb) is only supported on Linux. "
-            "Set HEADLESS_BROWSER=True to run Chrome headlessly on this platform."
+            "Browser automation will fall back to headless mode on this platform."
         )
         return None
 
@@ -125,7 +125,7 @@ def take_and_show_screenshot(driver: WebDriver, description: str = "browser_stat
             elif sys_name == "Darwin":
                 subprocess.Popen(["open", path])
             elif sys_name == "Windows":
-                subprocess.Popen(["start", path], shell=True)
+                os.startfile(path)
         except Exception as e:
             logger.debug("Could not auto-open screenshot: %s", e)
 

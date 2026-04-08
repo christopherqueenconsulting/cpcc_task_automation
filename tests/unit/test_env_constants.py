@@ -158,10 +158,28 @@ class TestConstants:
         assert MYCOLLEGE_URL == "https://mycollegess.cpcc.edu"
 
     def test_use_virtual_display_default_is_false(self):
-        """Test that USE_VIRTUAL_DISPLAY defaults to False when not set."""
-        from cqc_cpcc.utilities.env_constants import isTrue
-        # The default_value passed to get_constanct_from_env is 'False'
-        assert isTrue('False') is False
+        """Test that USE_VIRTUAL_DISPLAY defaults to False when the env var is not set."""
+        import importlib
+        import sys
+        import os
+
+        # Remove the env var so the module sees no value and uses its default.
+        env_backup = os.environ.pop("USE_VIRTUAL_DISPLAY", None)
+        mod_name = "cqc_cpcc.utilities.env_constants"
+        original_module = sys.modules.get(mod_name)
+        try:
+            if mod_name in sys.modules:
+                del sys.modules[mod_name]
+            mod = importlib.import_module(mod_name)
+            assert mod.USE_VIRTUAL_DISPLAY is False
+        finally:
+            # Restore environment and cached module.
+            if env_backup is not None:
+                os.environ["USE_VIRTUAL_DISPLAY"] = env_backup
+            if original_module is not None:
+                sys.modules[mod_name] = original_module
+            elif mod_name in sys.modules:
+                del sys.modules[mod_name]
 
     def test_use_virtual_display_is_boolean(self):
         """Test that USE_VIRTUAL_DISPLAY is a boolean."""
