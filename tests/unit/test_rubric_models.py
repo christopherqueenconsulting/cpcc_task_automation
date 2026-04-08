@@ -38,6 +38,17 @@ class TestPerformanceLevel:
         assert level.label == "Exemplary"
         assert level.score_min == 23
         assert level.score_max == 25
+
+    def test_decimal_score_range_is_allowed(self):
+        """Test that decimal score ranges are accepted for rubric levels."""
+        level = PerformanceLevel(
+            label="Superior",
+            score_min=24.01,
+            score_max=27.0,
+            description="Decimal lower bound",
+        )
+        assert level.score_min == 24.01
+        assert level.score_max == 27.0
     
     def test_score_max_less_than_min_fails(self):
         """Test that score_max < score_min raises validation error."""
@@ -142,6 +153,16 @@ class TestOverallBand:
         assert band.label == "Exemplary"
         assert band.score_min == 90
         assert band.score_max == 100
+
+    def test_decimal_overall_band_range_is_allowed(self):
+        """Test that decimal score ranges are accepted for overall bands."""
+        band = OverallBand(
+            label="Superior",
+            score_min=27,
+            score_max=29.99,
+        )
+        assert band.score_min == 27
+        assert band.score_max == 29.99
     
     def test_score_max_less_than_min_fails(self):
         """Test that score_max < score_min raises validation error."""

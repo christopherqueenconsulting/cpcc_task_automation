@@ -473,106 +473,307 @@ class TestGetErrorCountForSeverity:
 
 @pytest.mark.unit
 class TestSelectCSC134ProgramPerformanceLevel:
-    """Test select_csc134_program_performance_level function for CSC134 rubric."""
+    """Test select_csc134_program_performance_level function for CSC134 v3 rubric (30-point scale)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Load the CSC134 rubric and its program_performance criterion once per test."""
+        self.rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        self.criterion = self.rubric.criteria[0]
 
     def test_no_errors_is_outstanding(self):
-        """0 errors → Outstanding (100 pts)."""
-        label, score = select_csc134_program_performance_level(0, 0)
+        """0 errors → Outstanding (score_max=30)."""
+        label, score = select_csc134_program_performance_level(0, 0, criterion=self.criterion)
         assert label == "Outstanding"
-        assert score == 100
+        assert score == 30.0
 
     def test_one_minor_is_superior(self):
-        """1 minor error → Superior (90 pts)."""
-        label, score = select_csc134_program_performance_level(0, 1)
+        """1 minor error → Superior (score_max=27)."""
+        label, score = select_csc134_program_performance_level(0, 1, criterion=self.criterion)
         assert label == "Superior"
-        assert score == 90
+        assert score == 27.0
 
     def test_two_minor_is_superior(self):
-        """2 minor errors → Superior (90 pts)."""
-        label, score = select_csc134_program_performance_level(0, 2)
+        """2 minor errors → Superior (score_max=27)."""
+        label, score = select_csc134_program_performance_level(0, 2, criterion=self.criterion)
         assert label == "Superior"
-        assert score == 90
+        assert score == 27.0
 
     def test_three_minor_is_above_average(self):
-        """3 minor errors → Above Average (80 pts)."""
-        label, score = select_csc134_program_performance_level(0, 3)
+        """3 minor errors → Above Average (score_max=24)."""
+        label, score = select_csc134_program_performance_level(0, 3, criterion=self.criterion)
         assert label == "Above Average"
-        assert score == 80
+        assert score == 24.0
 
     def test_four_minor_is_above_average(self):
-        """4 minor errors → Above Average (80 pts)."""
-        label, score = select_csc134_program_performance_level(0, 4)
+        """4 minor errors → Above Average (score_max=24)."""
+        label, score = select_csc134_program_performance_level(0, 4, criterion=self.criterion)
         assert label == "Above Average"
-        assert score == 80
+        assert score == 24.0
 
     def test_five_minor_is_average(self):
-        """5 minor errors → Average (70 pts)."""
-        label, score = select_csc134_program_performance_level(0, 5)
+        """5 minor errors → Average (score_max=21)."""
+        label, score = select_csc134_program_performance_level(0, 5, criterion=self.criterion)
         assert label == "Average"
-        assert score == 70
+        assert score == 21.0
 
-    def test_six_minor_is_below_average(self):
-        """6 minor errors (>5) → Below Average (55 pts)."""
-        label, score = select_csc134_program_performance_level(0, 6)
-        assert label == "Below Average"
-        assert score == 55
+    def test_six_minor_is_needs_improvement(self):
+        """6 minor errors (>5) → Needs Improvement (score_max=12).
+
+        In rubric v3 the old 'Below Average' level was removed; the >5-minor threshold
+        now maps to 'Needs Improvement'.
+        """
+        label, score = select_csc134_program_performance_level(0, 6, criterion=self.criterion)
+        assert label == "Needs Improvement"
+        assert score == 12.0
 
     def test_one_major_is_above_average(self):
-        """1 major error → Above Average (80 pts)."""
-        label, score = select_csc134_program_performance_level(1, 0)
+        """1 major error → Above Average (score_max=24)."""
+        label, score = select_csc134_program_performance_level(1, 0, criterion=self.criterion)
         assert label == "Above Average"
-        assert score == 80
+        assert score == 24.0
 
     def test_two_major_is_average(self):
-        """2 major errors → Average (70 pts)."""
-        label, score = select_csc134_program_performance_level(2, 0)
+        """2 major errors → Average (score_max=21)."""
+        label, score = select_csc134_program_performance_level(2, 0, criterion=self.criterion)
         assert label == "Average"
-        assert score == 70
+        assert score == 21.0
 
-    def test_three_major_is_below_average(self):
-        """3 major errors → Below Average (55 pts)."""
-        label, score = select_csc134_program_performance_level(3, 0)
-        assert label == "Below Average"
-        assert score == 55
+    def test_three_major_is_needs_improvement(self):
+        """3 major errors → Needs Improvement (score_max=12).
+
+        In rubric v3 the old 'Below Average' level was removed; 3-major threshold
+        now maps to 'Needs Improvement'.
+        """
+        label, score = select_csc134_program_performance_level(3, 0, criterion=self.criterion)
+        assert label == "Needs Improvement"
+        assert score == 12.0
 
     def test_four_major_is_needs_improvement(self):
-        """4 major errors → Needs Improvement (40 pts)."""
-        label, score = select_csc134_program_performance_level(4, 0)
+        """4 major errors → Needs Improvement (score_max=12)."""
+        label, score = select_csc134_program_performance_level(4, 0, criterion=self.criterion)
         assert label == "Needs Improvement"
-        assert score == 40
+        assert score == 12.0
 
     def test_five_major_is_substandard(self):
-        """5 major errors → Substandard (28 pts)."""
-        label, score = select_csc134_program_performance_level(5, 0)
+        """5 major errors → Substandard (score_max=8.25, decimal boundary)."""
+        label, score = select_csc134_program_performance_level(5, 0, criterion=self.criterion)
         assert label == "Substandard"
-        assert score == 28
+        assert score == 8.25
 
     def test_six_major_is_unsatisfactory(self):
-        """6+ major errors → Unsatisfactory (15 pts)."""
-        label, score = select_csc134_program_performance_level(6, 0)
+        """6+ major errors → Unsatisfactory (score_max=4.50, decimal boundary)."""
+        label, score = select_csc134_program_performance_level(6, 0, criterion=self.criterion)
         assert label == "Unsatisfactory"
-        assert score == 15
+        assert score == 4.50
 
     def test_many_major_is_unsatisfactory(self):
-        """8 major errors → Unsatisfactory (15 pts)."""
-        label, score = select_csc134_program_performance_level(8, 0)
+        """8 major errors → Unsatisfactory (score_max=4.50)."""
+        label, score = select_csc134_program_performance_level(8, 0, criterion=self.criterion)
         assert label == "Unsatisfactory"
-        assert score == 15
+        assert score == 4.50
 
     def test_not_submitted_is_no_submission(self):
-        """Not submitted → No Submission (0 pts)."""
-        label, score = select_csc134_program_performance_level(0, 0, assignment_submitted=False)
+        """Not submitted → No Submission (score_max=0)."""
+        label, score = select_csc134_program_performance_level(
+            0, 0, criterion=self.criterion, assignment_submitted=False
+        )
         assert label == "No Submission"
-        assert score == 0
+        assert score == 0.0
 
-    def test_minor_errors_dominate_to_below_average(self):
-        """1 major + 6 minor: minor count (>5) pushes to Below Average."""
-        label, score = select_csc134_program_performance_level(1, 6)
-        assert label == "Below Average"
-        assert score == 55
+    def test_minor_errors_dominate_to_needs_improvement(self):
+        """1 major + 6 minor: minor count (>5) pushes to Needs Improvement (v3 label)."""
+        label, score = select_csc134_program_performance_level(1, 6, criterion=self.criterion)
+        assert label == "Needs Improvement"
+        assert score == 12.0
 
     def test_minor_errors_with_major_average(self):
-        """1 major + 5 minor: minor count (5) gives Average (70 pts)."""
-        label, score = select_csc134_program_performance_level(1, 5)
+        """1 major + 5 minor: minor count (5) matches Average (score_max=21)."""
+        label, score = select_csc134_program_performance_level(1, 5, criterion=self.criterion)
         assert label == "Average"
-        assert score == 70
+        assert score == 21.0
+
+    def test_criterion_required_raises_value_error(self):
+        """Omitting criterion raises ValueError (rubric-based scoring is required)."""
+        with pytest.raises(ValueError, match="criterion parameter is required"):
+            select_csc134_program_performance_level(0, 0, criterion=None)
+
+    def test_score_is_float_type(self):
+        """Score return value is a float, not int, to support decimal boundaries."""
+        _, score = select_csc134_program_performance_level(5, 0, criterion=self.criterion)
+        assert isinstance(score, float)
+
+
+@pytest.mark.unit
+class TestCSC134FullGradingAggregation:
+    """End-to-end tests: error counts → level selection → aggregate_rubric_result → overall band.
+
+    Validates that decimal score boundaries from the CSC134 v3 rubric are preserved
+    through the entire grading path without truncation.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Load rubric and criterion once per test."""
+        from cqc_cpcc.scoring import aggregate_rubric_result
+        from cqc_cpcc.rubric_models import CriterionResult
+
+        self.rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        self.criterion = self.rubric.criteria[0]
+        self.aggregate = aggregate_rubric_result
+        self.CriterionResult = CriterionResult
+
+    def _make_result(self, label: str, score: float) -> object:
+        """Build a minimal CriterionResult for the program_performance criterion."""
+        return self.CriterionResult(
+            criterion_id="program_performance",
+            criterion_name="Program Performance",
+            points_possible=30,
+            points_earned=score,
+            selected_level_label=label,
+            feedback="Auto-graded by test.",
+        )
+
+    def _grade(self, major: int, minor: int):
+        """Run full path: select level → build result → aggregate → return dict."""
+        label, score = select_csc134_program_performance_level(
+            major, minor, criterion=self.criterion
+        )
+        cr = self._make_result(label, score)
+        agg = self.aggregate(self.rubric, [cr])
+        return label, score, agg
+
+    # --- Outstanding boundary ---
+
+    def test_no_errors_full_path_outstanding(self):
+        """0 errors → Outstanding (30/30) → overall band 'Outstanding'."""
+        label, score, agg = self._grade(0, 0)
+        assert label == "Outstanding"
+        assert score == 30.0
+        assert agg["total_points_earned"] == 30.0
+        assert agg["percentage"] == 100.0
+        assert agg["overall_band_label"] == "Outstanding"
+
+    # --- Superior boundary (decimal overall band: 27–29.99) ---
+
+    def test_one_minor_full_path_superior(self):
+        """1 minor error → Superior (27/30) → overall band 'Superior'."""
+        label, score, agg = self._grade(0, 1)
+        assert label == "Superior"
+        assert score == 27.0
+        assert agg["total_points_earned"] == 27.0
+        assert agg["overall_band_label"] == "Superior"
+
+    # --- Above Average boundary ---
+
+    def test_one_major_full_path_above_average(self):
+        """1 major error → Above Average (24/30) → overall band 'Above Average'."""
+        label, score, agg = self._grade(1, 0)
+        assert label == "Above Average"
+        assert score == 24.0
+        assert agg["total_points_earned"] == 24.0
+        assert agg["overall_band_label"] == "Above Average"
+
+    def test_effective_one_major_one_minor_full_path_above_average(self):
+        """Effective counts of 1 major + 1 minor still aggregate to Above Average (24/30)."""
+        label, score, agg = self._grade(1, 1)
+        assert label == "Above Average"
+        assert score == 24.0
+        assert agg["total_points_earned"] == 24.0
+        assert agg["overall_band_label"] == "Above Average"
+
+    # --- Average boundary ---
+
+    def test_two_major_full_path_average(self):
+        """2 major errors → Average (21/30) → overall band 'Average'."""
+        label, score, agg = self._grade(2, 0)
+        assert label == "Average"
+        assert score == 21.0
+        assert agg["total_points_earned"] == 21.0
+        assert agg["overall_band_label"] == "Average"
+
+    # --- Needs Improvement boundary ---
+
+    def test_three_major_full_path_needs_improvement(self):
+        """3 major errors → Needs Improvement (12/30) → overall band 'Needs Improvement'."""
+        label, score, agg = self._grade(3, 0)
+        assert label == "Needs Improvement"
+        assert score == 12.0
+        assert agg["total_points_earned"] == 12.0
+        assert agg["overall_band_label"] == "Needs Improvement"
+
+    def test_six_minor_full_path_needs_improvement(self):
+        """6 minor errors (>5) → Needs Improvement (12/30) → overall band 'Needs Improvement'."""
+        label, score, agg = self._grade(0, 6)
+        assert label == "Needs Improvement"
+        assert score == 12.0
+        assert agg["overall_band_label"] == "Needs Improvement"
+
+    # --- Substandard decimal boundary (score_max=8.25) ---
+
+    def test_five_major_full_path_substandard_decimal(self):
+        """5 major errors → Substandard (8.25/30) → overall band 'Substandard'.
+
+        Key decimal boundary: 8.25 must map to 'Substandard' (8.25–11.99),
+        NOT to 'Unsatisfactory' (0–8.24).  This validates that float points_earned
+        is preserved without int truncation (int(8.25) == 8, which would fall in
+        the wrong band).
+        """
+        label, score, agg = self._grade(5, 0)
+        assert label == "Substandard"
+        assert score == 8.25
+        assert agg["total_points_earned"] == 8.25
+        assert agg["percentage"] == round(8.25 / 30 * 100, 2)
+        assert agg["overall_band_label"] == "Substandard"
+
+    # --- Unsatisfactory decimal boundary (score_max=4.50) ---
+
+    def test_six_major_full_path_unsatisfactory_decimal(self):
+        """6 major errors → Unsatisfactory (4.50/30) → overall band 'Unsatisfactory'.
+
+        Validates 4.50 falls in the 'Unsatisfactory' band (0–8.24) and is not
+        mistaken for 'Substandard' (min boundary 8.25).
+        """
+        label, score, agg = self._grade(6, 0)
+        assert label == "Unsatisfactory"
+        assert score == 4.50
+        assert agg["total_points_earned"] == 4.50
+        assert agg["overall_band_label"] == "Unsatisfactory"
+
+    def test_many_major_full_path_unsatisfactory(self):
+        """8 major errors also lands in Unsatisfactory."""
+        label, score, agg = self._grade(8, 0)
+        assert label == "Unsatisfactory"
+        assert agg["overall_band_label"] == "Unsatisfactory"
+
+    # --- Not submitted ---
+
+    def test_not_submitted_zero_score(self):
+        """Not submitted → No Submission (0/30) → no band match (score=0)."""
+        label, score = select_csc134_program_performance_level(
+            0, 0, criterion=self.criterion, assignment_submitted=False
+        )
+        assert label == "No Submission"
+        assert score == 0.0
+        cr = self._make_result(label, score)
+        agg = self.aggregate(self.rubric, [cr])
+        assert agg["total_points_earned"] == 0.0
+        assert agg["percentage"] == 0.0
+
+    # --- Score type preservation ---
+
+    def test_decimal_score_preserved_as_float_in_criterion_result(self):
+        """CriterionResult.points_earned stores 8.25 as float without truncation."""
+        label, score = select_csc134_program_performance_level(
+            5, 0, criterion=self.criterion
+        )
+        cr = self._make_result(label, score)
+        assert cr.points_earned == 8.25
+        assert isinstance(cr.points_earned, float)
+
+    def test_decimal_score_preserved_through_aggregation(self):
+        """aggregate_rubric_result total_points_earned preserves decimal precision."""
+        _, score_sub, agg_sub = self._grade(5, 0)   # Substandard → 8.25
+        _, score_uns, agg_uns = self._grade(6, 0)   # Unsatisfactory → 4.50
+        assert agg_sub["total_points_earned"] == 8.25
+        assert agg_uns["total_points_earned"] == 4.50
