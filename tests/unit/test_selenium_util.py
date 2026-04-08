@@ -258,16 +258,90 @@ class TestGetBrowserDriver:
     
     @patch('cqc_cpcc.utilities.selenium_util.get_local_chrome_driver')
     @patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', False)
-    @patch('cqc_cpcc.utilities.selenium_util.HEADLESS_BROWSER', True)
-    def test_get_browser_driver_uses_browserless_when_headless(self, mock_get_local):
+    @patch('cqc_cpcc.utilities.selenium_util.HEADLESS_BROWSER', False)
+    @patch('cqc_cpcc.utilities.selenium_util.USE_VIRTUAL_DISPLAY', True)
+    @patch('cqc_cpcc.utilities.selenium_util._virtual_display', MagicMock())
+    def test_get_browser_driver_uses_local_chrome_when_virtual_display_active(self, mock_get_local):
         from cqc_cpcc.utilities.selenium_util import get_browser_driver
         mock_driver = MagicMock()
         mock_get_local.return_value = mock_driver
-        
+
         result = get_browser_driver()
-        # Should call with headless=True
-        mock_get_local.assert_called_once_with(True)
         assert result == mock_driver
+        # Should call get_local_chrome_driver (not headless – uses HEADLESS_BROWSER which is False)
+        mock_get_local.assert_called_once_with(False)
+
+    @patch('cqc_cpcc.utilities.selenium_util.get_local_chrome_driver')
+    @patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', False)
+    @patch('cqc_cpcc.utilities.selenium_util.HEADLESS_BROWSER', False)
+    @patch('cqc_cpcc.utilities.selenium_util.USE_VIRTUAL_DISPLAY', True)
+    @patch('cqc_cpcc.utilities.selenium_util._virtual_display', None)
+    def test_get_browser_driver_falls_back_to_headless_when_virtual_display_unavailable(self, mock_get_local):
+        from cqc_cpcc.utilities.selenium_util import get_browser_driver
+        mock_driver = MagicMock()
+        mock_get_local.return_value = mock_driver
+
+        result = get_browser_driver()
+        assert result == mock_driver
+        # Falls back to BROWSERLESS (headless=True) because virtual display is None
+        mock_get_local.assert_called_once_with(True)
+
+
+@pytest.mark.unit
+class TestStartVirtualDisplay:
+    """Test the start_virtual_display function."""
+
+    def test_start_virtual_display_returns_none_on_non_linux(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        original = sel_util._virtual_display
+        sel_util._virtual_display = None
+        try:
+            with patch('platform.system', return_value='Darwin'):
+                result = sel_util.start_virtual_display()
+            assert result is None
+        finally:
+            sel_util._virtual_display = original
+
+    def test_start_virtual_display_starts_display_on_linux(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        original = sel_util._virtual_display
+        sel_util._virtual_display = None
+        try:
+            mock_display_instance = MagicMock()
+            mock_display_instance.display = 99
+            with patch('platform.system', return_value='Linux'), \
+                 patch('cqc_cpcc.utilities.selenium_util.Display', return_value=mock_display_instance):
+                result = sel_util.start_virtual_display()
+            assert result is mock_display_instance
+            mock_display_instance.start.assert_called_once()
+            assert sel_util._virtual_display is mock_display_instance
+        finally:
+            sel_util._virtual_display = original
+
+    def test_start_virtual_display_returns_existing_display(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_existing = MagicMock()
+        mock_existing.display = 1
+        original = sel_util._virtual_display
+        sel_util._virtual_display = mock_existing
+        try:
+            result = sel_util.start_virtual_display()
+            assert result is mock_existing
+        finally:
+            sel_util._virtual_display = original
+
+    def test_start_virtual_display_returns_none_on_exception(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        original = sel_util._virtual_display
+        sel_util._virtual_display = None
+        try:
+            with patch('platform.system', return_value='Linux'), \
+                 patch('cqc_cpcc.utilities.selenium_util.Display', side_effect=Exception("Xvfb not found")):
+                result = sel_util.start_virtual_display()
+            assert result is None
+            assert sel_util._virtual_display is None
+        finally:
+            sel_util._virtual_display = original
 
 
 @pytest.mark.unit
@@ -358,3 +432,130 @@ class TestClickElementWaitRetry:
         
         # Should try initial + 1 retry = 2 times
         assert mock_wait.until.call_count == 2
+
+
+@pytest.mark.unit
+class TestTakeAndShowScreenshot:
+    """Test the take_and_show_screenshot helper."""
+
+    def test_saves_screenshot_and_returns_path(self, tmp_path):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+
+        with patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', True), \
+             patch('tempfile.NamedTemporaryFile') as mock_ntf:
+            mock_tmp = MagicMock()
+            mock_tmp.name = str(tmp_path / "screenshot.png")
+            mock_ntf.return_value.__enter__.return_value = mock_tmp
+
+            result = sel_util.take_and_show_screenshot(mock_driver, "test")
+
+        mock_driver.save_screenshot.assert_called_once()
+        assert result == mock_tmp.name
+
+    def test_does_not_open_viewer_in_github_actions(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+
+        with patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', True), \
+             patch('subprocess.Popen') as mock_popen, \
+             patch('tempfile.NamedTemporaryFile'):
+            sel_util.take_and_show_screenshot(mock_driver)
+            mock_popen.assert_not_called()
+
+    def test_opens_viewer_on_linux_when_not_ci(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+
+        with patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', False), \
+             patch('platform.system', return_value='Linux'), \
+             patch('subprocess.Popen') as mock_popen, \
+             patch('tempfile.NamedTemporaryFile') as mock_ntf:
+            mock_tmp = MagicMock()
+            mock_tmp.name = "/tmp/test.png"
+            mock_ntf.return_value.__enter__.return_value = mock_tmp
+
+            sel_util.take_and_show_screenshot(mock_driver)
+
+            mock_popen.assert_called_once()
+            args = mock_popen.call_args[0][0]
+            assert args[0] == "xdg-open"
+            assert args[1] == "/tmp/test.png"
+
+    def test_uses_original_display_env_on_linux_with_virtual_display(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+        original_od = sel_util._original_display
+        sel_util._original_display = ":0"
+
+        try:
+            with patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', False), \
+                 patch('platform.system', return_value='Linux'), \
+                 patch('subprocess.Popen') as mock_popen, \
+                 patch('tempfile.NamedTemporaryFile') as mock_ntf:
+                mock_tmp = MagicMock()
+                mock_tmp.name = "/tmp/test.png"
+                mock_ntf.return_value.__enter__.return_value = mock_tmp
+
+                sel_util.take_and_show_screenshot(mock_driver)
+
+                kwargs = mock_popen.call_args[1]
+                assert kwargs.get('env', {}).get('DISPLAY') == ":0"
+        finally:
+            sel_util._original_display = original_od
+
+    def test_handles_screenshot_failure_gracefully(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+        mock_driver.save_screenshot.side_effect = Exception("driver dead")
+
+        with patch('cqc_cpcc.utilities.selenium_util.IS_GITHUB_ACTION', True), \
+             patch('tempfile.NamedTemporaryFile') as mock_ntf:
+            mock_tmp = MagicMock()
+            mock_tmp.name = "/tmp/test.png"
+            mock_ntf.return_value.__enter__.return_value = mock_tmp
+
+            # Should not raise
+            result = sel_util.take_and_show_screenshot(mock_driver)
+            assert result == "/tmp/test.png"
+
+
+@pytest.mark.unit
+class TestWaitForUserAction:
+    """Test the wait_for_user_action helper."""
+
+    def test_calls_take_and_show_screenshot_when_requested(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+
+        with patch.object(sel_util, 'take_and_show_screenshot') as mock_ss, \
+             patch('builtins.input', return_value=''):
+            sel_util.wait_for_user_action(mock_driver, "Do something", take_screenshot=True)
+            mock_ss.assert_called_once_with(mock_driver, "user_action_required")
+
+    def test_skips_screenshot_when_flag_is_false(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+
+        with patch.object(sel_util, 'take_and_show_screenshot') as mock_ss, \
+             patch('builtins.input', return_value=''):
+            sel_util.wait_for_user_action(mock_driver, "Do something", take_screenshot=False)
+            mock_ss.assert_not_called()
+
+    def test_returns_user_input(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+
+        with patch.object(sel_util, 'take_and_show_screenshot'), \
+             patch('builtins.input', return_value='123456'):
+            result = sel_util.wait_for_user_action(mock_driver, "Enter code")
+            assert result == "123456"
+
+    def test_returns_empty_string_when_user_presses_enter(self):
+        import cqc_cpcc.utilities.selenium_util as sel_util
+        mock_driver = MagicMock()
+
+        with patch.object(sel_util, 'take_and_show_screenshot'), \
+             patch('builtins.input', return_value=''):
+            result = sel_util.wait_for_user_action(mock_driver, "Press Enter")
+            assert result == ""

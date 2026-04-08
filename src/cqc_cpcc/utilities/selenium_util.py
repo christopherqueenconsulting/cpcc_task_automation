@@ -1,3 +1,7 @@
+import os
+import platform
+import subprocess
+import tempfile
 import time
 from enum import Enum
 from typing import Callable
@@ -20,13 +24,157 @@ from webdriver_manager.chrome import ChromeDriverManager
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
 
-# Check ENV for Github action to determine to run this code
+# Module-level reference to the running virtual display (Linux only).
+_virtual_display = None
+# DISPLAY value on the user's real X server before a virtual display is started.
+_original_display: str | None = None
+
+
+def start_virtual_display(width: int = 1920, height: int = 1080):
+    """Start a virtual X11 display so Chrome can run without taking control of the local screen.
+
+    This is useful when running browser automation on a machine where the user is
+    actively working and does not want a Chrome window to appear and steal focus.
+    On Linux the display is backed by Xvfb (via pyvirtualdisplay).  On other
+    operating systems the function logs a warning and returns ``None``; callers
+    should fall back to ``--headless`` Chrome in that case.
+
+    Args:
+        width:  Width of the virtual display in pixels (default 1920).
+        height: Height of the virtual display in pixels (default 1080).
+
+    Returns:
+        The ``Display`` instance if started successfully, otherwise ``None``.
+    """
+    global _virtual_display, _original_display
+
+    if _virtual_display is not None:
+        logger.debug("Virtual display already running on :%s", _virtual_display.display)
+        return _virtual_display
+
+    if platform.system() != "Linux":
+        logger.warning(
+            "Virtual display (pyvirtualdisplay/Xvfb) is only supported on Linux. "
+            "Browser automation will fall back to headless mode on this platform."
+        )
+        return None
+
+    try:
+        _original_display = os.environ.get("DISPLAY")
+        display = Display(visible=False, size=(width, height))
+        display.start()
+        _virtual_display = display
+        logger.info("Virtual display started on :%s", display.display)
+        return display
+    except Exception as e:
+        logger.error("Failed to start virtual display: %s", e)
+        return None
+
+
+# Start virtual display at module load when required.
 if IS_GITHUB_ACTION:
-    display = Display(visible=False, size=(800, 800))
-    display.start()
-    chromedriver_autoinstaller.install()  # Check if the current version of chromedriver exists
-    # and if it doesn't exist, download it automatically,
-    # then add chromedriver to path
+    start_virtual_display()
+    chromedriver_autoinstaller.install()
+elif USE_VIRTUAL_DISPLAY:
+    start_virtual_display()
+
+
+def take_and_show_screenshot(driver: WebDriver, description: str = "browser_state") -> str:
+    """Take a screenshot and open it so the user can inspect the current browser state.
+
+    When running in headless or virtual-display mode the browser window is not
+    visible to the local user.  This helper saves a PNG screenshot to a
+    temporary file and then opens that file with the OS default image viewer on
+    the user's **real** display (not an Xvfb virtual display), so they can see
+    exactly what the browser is doing — e.g. while waiting for a Duo MFA push.
+
+    In GitHub Actions the auto-open step is skipped because there is no
+    interactive display.
+
+    Args:
+        driver:      Active Selenium WebDriver instance.
+        description: Short label included in the temp-file name for easy
+                     identification (e.g. ``"duo_push_sent"``).
+
+    Returns:
+        Absolute path to the saved screenshot PNG file.
+    """
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=".png", prefix=f"browser_{description}_"
+    ) as tmp:
+        path = tmp.name
+
+    try:
+        driver.save_screenshot(path)
+        logger.info("📸 Screenshot saved: %s", path)
+    except Exception as e:
+        logger.warning("Could not save screenshot: %s", e)
+        return path
+
+    # Auto-open on the real display (skip in CI where there is no GUI).
+    if not IS_GITHUB_ACTION:
+        try:
+            sys_name = platform.system()
+            if sys_name == "Linux":
+                # If a virtual display is active, restore the original DISPLAY
+                # so xdg-open targets the user's real X server, not Xvfb.
+                env = None
+                if _original_display:
+                    env = {**os.environ, "DISPLAY": _original_display}
+                subprocess.Popen(["xdg-open", path], env=env)
+            elif sys_name == "Darwin":
+                subprocess.Popen(["open", path])
+            elif sys_name == "Windows":
+                os.startfile(path)
+        except Exception as e:
+            logger.debug("Could not auto-open screenshot: %s", e)
+
+    return path
+
+
+def wait_for_user_action(
+    driver: WebDriver,
+    prompt_message: str,
+    take_screenshot: bool = True,
+) -> str:
+    """Pause automation and wait for the user to complete a manual action.
+
+    Use this at points where the browser requires human interaction that cannot
+    be automated — for example, approving a Duo MFA push, solving a CAPTCHA,
+    or handling an unexpected login challenge.
+
+    A screenshot is taken (and displayed on the user's real display) before
+    the terminal prompt appears, giving the user full context even when the
+    browser is running headlessly or inside a virtual display.
+
+    This function should **not** be called in unattended/CI environments
+    because it will block forever.  Guard calls with ``not IS_GITHUB_ACTION``
+    where appropriate.
+
+    Args:
+        driver:          Active Selenium WebDriver instance.
+        prompt_message:  Instruction printed to the terminal explaining what
+                         the user needs to do before pressing Enter.
+        take_screenshot: When ``True`` (default) a screenshot is captured and
+                         opened before the prompt is shown.
+
+    Returns:
+        The text the user typed before pressing Enter (may be an empty string
+        if they pressed Enter without typing anything).
+    """
+    if take_screenshot:
+        take_and_show_screenshot(driver, "user_action_required")
+
+    logger.info("⏸  USER ACTION REQUIRED: %s", prompt_message)
+    return input(
+        f"\n{prompt_message}\nPress Enter when done (or type a value and press Enter): "
+    ).strip()
+
+
+class BrowserType(Enum):
+    DOCKER_CHROME = 1
+    LOCAL_CHROME = 2
+    BROWSERLESS = 3
 
 
 def which_browser():
@@ -47,12 +195,6 @@ def which_browser():
     except ValueError:
         logger.warning("Invalid selection.")
         return which_browser()
-
-
-class BrowserType(Enum):
-    DOCKER_CHROME = 1
-    LOCAL_CHROME = 2
-    BROWSERLESS = 3
 
 
 def close_tab(driver: WebDriver, handles: list[str] = None, max_retry=3):
@@ -80,7 +222,27 @@ def get_browser_driver():
     if IS_GITHUB_ACTION:
         browser_type = BrowserType.LOCAL_CHROME
     elif HEADLESS_BROWSER:
+        # HEADLESS_BROWSER takes precedence over USE_VIRTUAL_DISPLAY.
+        # If you want to use the virtual display instead, set HEADLESS_BROWSER=False.
+        if USE_VIRTUAL_DISPLAY:
+            logger.warning(
+                "Both HEADLESS_BROWSER and USE_VIRTUAL_DISPLAY are True. "
+                "HEADLESS_BROWSER takes precedence. "
+                "Set HEADLESS_BROWSER=False to use the virtual display instead."
+            )
         browser_type = BrowserType.BROWSERLESS
+    elif USE_VIRTUAL_DISPLAY:
+        # Run Chrome in the virtual display so it is invisible to the local user.
+        if _virtual_display is not None:
+            browser_type = BrowserType.LOCAL_CHROME
+        else:
+            # Virtual display could not be started (e.g. non-Linux OS); fall back
+            # to headless mode so the browser still doesn't steal focus.
+            logger.warning(
+                "USE_VIRTUAL_DISPLAY=True but virtual display is not running. "
+                "Falling back to headless mode."
+            )
+            browser_type = BrowserType.BROWSERLESS
     else:
         browser_type = which_browser()
     driver = None

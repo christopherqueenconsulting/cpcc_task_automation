@@ -24,8 +24,14 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 
 from cqc_cpcc.utilities.date import get_datetime
+from cqc_cpcc.utilities.env_constants import IS_GITHUB_ACTION
 from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.selenium_util import get_driver_wait, click_element_wait_retry
+from cqc_cpcc.utilities.selenium_util import (
+    get_driver_wait,
+    click_element_wait_retry,
+    take_and_show_screenshot,
+    wait_for_user_action,
+)
 
 # from simplify_docx import simplify
 
@@ -636,6 +642,10 @@ def microsoft_login(driver: WebDriver):
     click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Sign in')]",
                              "Waiting for Sign in Button", By.XPATH)
 
+    # Screenshot so the user can see the post-sign-in state when running headlessly.
+    take_and_show_screenshot(driver, "microsoft_login_submitted")
+    logger.info("🔔 Microsoft login submitted — waiting for sign-in to complete.")
+
     # Click the no button for Stay signed in
     no_stay_signed_in_button = click_element_wait_retry(driver, wait,
                                                         "//input[contains(@class, 'button-secondary') and contains(@value,'No')]",
@@ -678,6 +688,14 @@ def duo_login(driver: WebDriver):
     # login_field.click()
     click_element_wait_retry(driver, wait, "_eventId_proceed", "Waiting for login field", By.NAME)
 
+    # Duo sends an automatic push to the instructor's device at this point.
+    # Take a screenshot so the user can confirm the browser reached the Duo
+    # waiting screen even when running headlessly or in a virtual display.
+    take_and_show_screenshot(driver, "duo_push_sent")
+    logger.info(
+        "🔔 Duo push notification sent — please approve it on your device to continue."
+    )
+
     # Switch to Duo Iframe
     # duo_frame = wait.until(lambda d: d.find_element(By.ID, "duo_iframe"), "Waiting for Duo Iframe")
     # wait.until(EC.frame_to_be_available_and_switch_to_it(duo_frame))
@@ -697,8 +715,19 @@ def duo_login(driver: WebDriver):
             EC.invisibility_of_element(login_message),
             'Waiting for login to be successful')
     except TimeoutException:
-        # logger.info("Element not found within timeout")
-        pass
+        # The "No, other people use this device" button did not appear in time.
+        # This may mean Duo approval is still pending or an unexpected prompt
+        # appeared.  Take a screenshot so the user can see what happened and,
+        # unless we are in a CI environment, pause for manual intervention.
+        take_and_show_screenshot(driver, "duo_timeout")
+        if not IS_GITHUB_ACTION:
+            wait_for_user_action(
+                driver,
+                "Duo authentication did not complete automatically.\n"
+                "Please approve the Duo push on your device (or resolve any "
+                "prompt shown in the screenshot above), then press Enter to continue.",
+                take_screenshot=False,  # already taken above
+            )
 
     # Switch back to original window
     driver.switch_to.window(original_window)
