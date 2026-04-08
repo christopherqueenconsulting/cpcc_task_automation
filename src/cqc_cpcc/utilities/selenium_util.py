@@ -1,4 +1,7 @@
+import os
 import platform
+import subprocess
+import tempfile
 import time
 from enum import Enum
 from typing import Callable
@@ -23,6 +26,8 @@ from cqc_cpcc.utilities.logger import logger
 
 # Module-level reference to the running virtual display (Linux only).
 _virtual_display = None
+# DISPLAY value on the user's real X server before a virtual display is started.
+_original_display: str | None = None
 
 
 def start_virtual_display(width: int = 1920, height: int = 1080):
@@ -41,7 +46,7 @@ def start_virtual_display(width: int = 1920, height: int = 1080):
     Returns:
         The ``Display`` instance if started successfully, otherwise ``None``.
     """
-    global _virtual_display
+    global _virtual_display, _original_display
 
     if _virtual_display is not None:
         logger.debug("Virtual display already running on :%s", _virtual_display.display)
@@ -55,6 +60,7 @@ def start_virtual_display(width: int = 1920, height: int = 1080):
         return None
 
     try:
+        _original_display = os.environ.get("DISPLAY")
         display = Display(visible=False, size=(width, height))
         display.start()
         _virtual_display = display
@@ -73,7 +79,96 @@ elif USE_VIRTUAL_DISPLAY:
     start_virtual_display()
 
 
-def which_browser():
+def take_and_show_screenshot(driver: WebDriver, description: str = "browser_state") -> str:
+    """Take a screenshot and open it so the user can inspect the current browser state.
+
+    When running in headless or virtual-display mode the browser window is not
+    visible to the local user.  This helper saves a PNG screenshot to a
+    temporary file and then opens that file with the OS default image viewer on
+    the user's **real** display (not an Xvfb virtual display), so they can see
+    exactly what the browser is doing — e.g. while waiting for a Duo MFA push.
+
+    In GitHub Actions the auto-open step is skipped because there is no
+    interactive display.
+
+    Args:
+        driver:      Active Selenium WebDriver instance.
+        description: Short label included in the temp-file name for easy
+                     identification (e.g. ``"duo_push_sent"``).
+
+    Returns:
+        Absolute path to the saved screenshot PNG file.
+    """
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=".png", prefix=f"browser_{description}_"
+    ) as tmp:
+        path = tmp.name
+
+    try:
+        driver.save_screenshot(path)
+        logger.info("📸 Screenshot saved: %s", path)
+    except Exception as e:
+        logger.warning("Could not save screenshot: %s", e)
+        return path
+
+    # Auto-open on the real display (skip in CI where there is no GUI).
+    if not IS_GITHUB_ACTION:
+        try:
+            sys_name = platform.system()
+            if sys_name == "Linux":
+                # If a virtual display is active, restore the original DISPLAY
+                # so xdg-open targets the user's real X server, not Xvfb.
+                env = None
+                if _original_display:
+                    env = {**os.environ, "DISPLAY": _original_display}
+                subprocess.Popen(["xdg-open", path], env=env)
+            elif sys_name == "Darwin":
+                subprocess.Popen(["open", path])
+            elif sys_name == "Windows":
+                subprocess.Popen(["start", path], shell=True)
+        except Exception as e:
+            logger.debug("Could not auto-open screenshot: %s", e)
+
+    return path
+
+
+def wait_for_user_action(
+    driver: WebDriver,
+    prompt_message: str,
+    take_screenshot: bool = True,
+) -> str:
+    """Pause automation and wait for the user to complete a manual action.
+
+    Use this at points where the browser requires human interaction that cannot
+    be automated — for example, approving a Duo MFA push, solving a CAPTCHA,
+    or handling an unexpected login challenge.
+
+    A screenshot is taken (and displayed on the user's real display) before
+    the terminal prompt appears, giving the user full context even when the
+    browser is running headlessly or inside a virtual display.
+
+    This function should **not** be called in unattended/CI environments
+    because it will block forever.  Guard calls with ``not IS_GITHUB_ACTION``
+    where appropriate.
+
+    Args:
+        driver:          Active Selenium WebDriver instance.
+        prompt_message:  Instruction printed to the terminal explaining what
+                         the user needs to do before pressing Enter.
+        take_screenshot: When ``True`` (default) a screenshot is captured and
+                         opened before the prompt is shown.
+
+    Returns:
+        The text the user typed before pressing Enter (may be an empty string
+        if they pressed Enter without typing anything).
+    """
+    if take_screenshot:
+        take_and_show_screenshot(driver, "user_action_required")
+
+    logger.info("⏸  USER ACTION REQUIRED: %s", prompt_message)
+    return input(
+        f"\n{prompt_message}\nPress Enter when done (or type a value and press Enter): "
+    ).strip()
     """Prompts the user to select a value from the given enum."""
     enum = BrowserType
 
