@@ -21,6 +21,7 @@ from cqc_cpcc.rubric_config import (
     list_available_rubrics,
 )
 from cqc_cpcc.rubric_models import Rubric, DetectedError
+from cqc_cpcc.scoring import select_overall_band
 
 
 @pytest.mark.unit
@@ -415,8 +416,8 @@ class TestCSC134Rubric:
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
 
         assert rubric.rubric_id == "csc134_cpp_exam_rubric"
-        assert rubric.rubric_version == "2.0"
-        assert rubric.title == "CSC 134 C++ Program Performance Rubric (Brightspace-aligned)"
+        assert rubric.rubric_version == "3.0"
+        assert rubric.title == "CSC 134 C++ Program Performance Rubric"
         assert "CSC134" in rubric.course_ids
 
     def test_csc134_has_program_performance_criterion(self):
@@ -428,22 +429,21 @@ class TestCSC134Rubric:
         criterion = rubric.criteria[0]
         assert criterion.criterion_id == "program_performance"
         assert criterion.name == "Program Performance"
-        assert criterion.max_points == 100
+        assert criterion.max_points == 30
         assert criterion.enabled is True
 
     def test_csc134_has_correct_levels(self):
-        """Test that CSC134 rubric has all 9 HTML-defined performance levels."""
+        """Test that CSC134 rubric has current performance level labels."""
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
         criterion = rubric.criteria[0]
 
-        assert len(criterion.levels) == 9
+        assert len(criterion.levels) == 8
 
         expected_labels = [
             "Outstanding",
             "Superior",
             "Above Average",
             "Average",
-            "Below Average",
             "Needs Improvement",
             "Substandard",
             "Unsatisfactory",
@@ -454,26 +454,26 @@ class TestCSC134Rubric:
         assert actual_labels == expected_labels
 
     def test_csc134_level_score_ranges(self):
-        """Test that CSC134 rubric levels have correct score ranges."""
+        """Test that CSC134 rubric levels support decimal score ranges."""
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
         criterion = rubric.criteria[0]
 
         levels_by_label = {level.label: level for level in criterion.levels}
 
-        assert levels_by_label["Outstanding"].score_min == 96
-        assert levels_by_label["Outstanding"].score_max == 100
+        assert levels_by_label["Outstanding"].score_min == 27.01
+        assert levels_by_label["Outstanding"].score_max == 30
 
-        assert levels_by_label["Superior"].score_min == 86
-        assert levels_by_label["Superior"].score_max == 95
+        assert levels_by_label["Superior"].score_min == 24.01
+        assert levels_by_label["Superior"].score_max == 27
 
-        assert levels_by_label["Above Average"].score_min == 76
-        assert levels_by_label["Above Average"].score_max == 85
+        assert levels_by_label["Above Average"].score_min == 21.01
+        assert levels_by_label["Above Average"].score_max == 24
 
-        assert levels_by_label["Below Average"].score_min == 51
-        assert levels_by_label["Below Average"].score_max == 65
+        assert levels_by_label["Substandard"].score_min == 4.51
+        assert levels_by_label["Substandard"].score_max == 8.25
 
-        assert levels_by_label["Unsatisfactory"].score_min == 1
-        assert levels_by_label["Unsatisfactory"].score_max == 20
+        assert levels_by_label["Unsatisfactory"].score_min == 0.01
+        assert levels_by_label["Unsatisfactory"].score_max == 4.50
 
         assert levels_by_label["No Submission"].score_min == 0
         assert levels_by_label["No Submission"].score_max == 0
@@ -482,7 +482,7 @@ class TestCSC134Rubric:
         """Test that CSC134 rubric has correct total points."""
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
 
-        assert rubric.total_points_possible == 100
+        assert rubric.total_points_possible == 30
 
     def test_csc134_description_mentions_errors_first(self):
         """Test that CSC134 rubric description mentions identifying errors first."""
@@ -499,15 +499,22 @@ class TestCSC134Rubric:
         assert "Superior" in criterion.description
         assert "Below Average" in criterion.description
 
-    def test_csc134_error_count_scoring_mode_no_conversion(self):
-        """Test that CSC134 criterion uses error_count scoring mode without conversion."""
+    def test_csc134_error_count_scoring_mode(self):
+        """Test that CSC134 criterion uses error_count scoring mode."""
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
         criterion = rubric.criteria[0]
 
         assert criterion.scoring_mode == "error_count"
         assert criterion.error_rules is not None
-        # CSC134 does NOT use minor-to-major conversion
-        assert criterion.error_rules.error_conversion is None
+        assert criterion.error_rules.error_conversion is not None
+
+    def test_csc134_decimal_overall_band_boundaries_are_selectable(self):
+        """Test decimal score_min/score_max boundaries are honored by overall band selection."""
+        rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+
+        assert select_overall_band(29.99, rubric.overall_bands) == "Superior"
+        assert select_overall_band(8.25, rubric.overall_bands) == "Substandard"
+        assert select_overall_band(8.24, rubric.overall_bands) == "Unsatisfactory"
 
     def test_csc134_appears_in_course_ids(self):
         """Test that CSC134 appears in the list of distinct course IDs."""

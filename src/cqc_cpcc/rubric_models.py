@@ -51,13 +51,13 @@ class PerformanceLevel(BaseModel):
         description: Anchor text describing performance at this level
     """
     label: Annotated[str, Field(description="Performance level label (e.g., Exemplary, Proficient)")]
-    score_min: Annotated[int, Field(ge=0, description="Minimum score for this level")]
-    score_max: Annotated[int, Field(ge=0, description="Maximum score for this level")]
+    score_min: Annotated[float, Field(ge=0, description="Minimum score for this level")]
+    score_max: Annotated[float, Field(ge=0, description="Maximum score for this level")]
     description: Annotated[str, Field(description="Descriptive anchor text for this performance level")]
     
     @field_validator('score_max')
     @classmethod
-    def validate_score_range(cls, score_max: int, info) -> int:
+    def validate_score_range(cls, score_max: float, info) -> float:
         """Validate that score_max >= score_min."""
         if 'score_min' in info.data:
             score_min = info.data['score_min']
@@ -214,12 +214,12 @@ class OverallBand(BaseModel):
         score_max: Maximum total score for this band
     """
     label: Annotated[str, Field(description="Performance band label")]
-    score_min: Annotated[int, Field(ge=0, description="Minimum total score for this band")]
-    score_max: Annotated[int, Field(ge=0, description="Maximum total score for this band")]
+    score_min: Annotated[float, Field(ge=0, description="Minimum total score for this band")]
+    score_max: Annotated[float, Field(ge=0, description="Maximum total score for this band")]
     
     @field_validator('score_max')
     @classmethod
-    def validate_score_range(cls, score_max: int, info) -> int:
+    def validate_score_range(cls, score_max: float, info) -> float:
         """Validate that score_max >= score_min."""
         if 'score_min' in info.data:
             score_min = info.data['score_min']
@@ -322,11 +322,11 @@ class CriterionResult(BaseModel):
     criterion_name: Annotated[str, Field(description="Name of the criterion")]
     points_possible: Annotated[int, Field(ge=0, description="Maximum points for this criterion")]
     points_earned: Annotated[
-        Optional[int], 
+        Optional[float],
         Field(
             default=None,
             ge=0,
-            description="Points earned (AI assigns for scoring_mode='manual', backend computes for other modes)"
+            description="Points earned (AI assigns for scoring_mode='manual', backend computes for other modes). Float to support decimal rubric boundaries (e.g. CSC134 v3)."
         )
     ]
     selected_level_label: Annotated[
@@ -341,7 +341,7 @@ class CriterionResult(BaseModel):
     
     @field_validator('points_earned')
     @classmethod
-    def validate_points_earned(cls, points_earned: Optional[int], info) -> Optional[int]:
+    def validate_points_earned(cls, points_earned: Optional[float], info) -> Optional[float]:
         """Validate that points_earned <= points_possible when provided."""
         if points_earned is not None and 'points_possible' in info.data:
             points_possible = info.data['points_possible']
@@ -377,7 +377,7 @@ class RubricAssessmentResult(BaseModel):
     rubric_id: Annotated[str, Field(description="ID of the rubric used")]
     rubric_version: Annotated[str, Field(description="Version of the rubric used")]
     total_points_possible: Annotated[int, Field(ge=0, description="Total possible points")]
-    total_points_earned: Annotated[int, Field(ge=0, description="Total points earned")]
+    total_points_earned: Annotated[float, Field(ge=0, description="Total points earned (float to support decimal rubric boundaries)")]
     criteria_results: Annotated[
         list[CriterionResult], 
         Field(min_length=1, description="Per-criterion assessment results")
@@ -418,7 +418,7 @@ class RubricAssessmentResult(BaseModel):
     
     @field_validator('total_points_earned')
     @classmethod
-    def validate_total_earned(cls, total_earned: int, info) -> int:
+    def validate_total_earned(cls, total_earned: float, info) -> float:
         """Validate that total_points_earned <= total_points_possible."""
         if 'total_points_possible' in info.data:
             total_possible = info.data['total_points_possible']

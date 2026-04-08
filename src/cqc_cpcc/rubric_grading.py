@@ -579,11 +579,16 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         if rubric_criterion.criterion_id == "program_performance":
             # Dispatch to rubric-specific level selector
             if "CSC134" in rubric.course_ids:
-                # CSC134 C++ rubric: no error conversion, percentage-based levels
-                logger.info(f"Using CSC134 program_performance scoring with original_major={original_major}, original_minor={original_minor}")
+                # CSC134 C++ rubric: apply the rubric's configured normalization,
+                # then evaluate its rubric-specific performance thresholds.
+                logger.info(
+                    f"Using CSC134 program_performance scoring with effective_major={effective_major}, "
+                    f"effective_minor={effective_minor}"
+                )
                 level_label, score = select_csc134_program_performance_level(
-                    original_major,
-                    original_minor,
+                    effective_major,
+                    effective_minor,
+                    criterion=rubric_criterion,
                     assignment_submitted=True  # Assume submitted if we have a result
                 )
                 logger.info(f"CSC134 program_performance computed: level_label='{level_label}', score={score}")

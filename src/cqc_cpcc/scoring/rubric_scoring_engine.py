@@ -257,7 +257,7 @@ def score_error_count_criterion(
     }
 
 
-def compute_percentage(points_earned: int, points_possible: int) -> float:
+def compute_percentage(points_earned: float, points_possible: int) -> float:
     """Compute percentage score.
     
     Args:
@@ -286,7 +286,7 @@ def compute_percentage(points_earned: int, points_possible: int) -> float:
 
 
 def select_overall_band(
-    total_points_earned: int,
+    total_points_earned: float,
     overall_bands: Optional[list[OverallBand]]
 ) -> Optional[str]:
     """Select overall performance band based on total score.

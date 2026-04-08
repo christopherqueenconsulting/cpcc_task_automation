@@ -2130,8 +2130,8 @@
   },
   "csc134_cpp_exam_rubric": {
     "rubric_id": "csc134_cpp_exam_rubric",
-    "rubric_version": "2.0",
-    "title": "CSC 134 C++ Program Performance Rubric (Brightspace-aligned)",
+    "rubric_version": "3.0",
+    "title": "CSC 134 C++ Program Performance Rubric",
     "description": "Aligned to the official BrightSpace Program Performance Rubric for CSC134 (C++). Program Performance is scored using detected error counts. Identify all major and minor errors first, then select the performance level based on error counts. No minor-to-major conversion is applied.",
     "course_ids": [
       "CSC134"
@@ -2141,60 +2141,57 @@
         "criterion_id": "program_performance",
         "name": "Program Performance",
         "description": "Identify all major and minor errors first. Then select the performance level: Outstanding (no errors), Superior (≤2 minor, 0 major), Above Average (3-4 minor or 1 major), Average (5 minor or 2 major), Below Average (>5 minor or 3 major), Needs Improvement (4 major), Substandard (5 major), Unsatisfactory (6+ major), No Submission (not submitted).",
-        "max_points": 100,
+        "max_points": 30,
         "enabled": true,
         "scoring_mode": "error_count",
         "error_rules": {
-          "major_weight": 0,
-          "minor_weight": 0
+          "major_weight": 6,
+          "minor_weight": 1.5,
+          "error_conversion": {
+            "minor_to_major_ratio": 4
+          }
         },
         "levels": [
           {
             "label": "Outstanding",
-            "score_min": 96,
-            "score_max": 100,
+            "score_min": 27.01,
+            "score_max": 30,
             "description": "Program performs the specified operations at an outstanding level (No Errors)."
           },
           {
             "label": "Superior",
-            "score_min": 86,
-            "score_max": 95,
+            "score_min": 24.01,
+            "score_max": 27,
             "description": "Program performs the specified operations on a superior level (two or fewer minor errors)."
           },
           {
             "label": "Above Average",
-            "score_min": 76,
-            "score_max": 85,
+            "score_min": 21.01,
+            "score_max": 24,
             "description": "Program performs the specified operations on an above average level (three or four minor errors and/or 1 major error)."
           },
           {
             "label": "Average",
-            "score_min": 66,
-            "score_max": 75,
-            "description": "Program performs the specified operations on an average level (five minor errors and/or 2 major errors)."
-          },
-          {
-            "label": "Below Average",
-            "score_min": 51,
-            "score_max": 65,
-            "description": "Program performs the specified operations on a below average level (more than 5 minor errors and/or 3 major errors)."
+            "score_min": 12.01,
+            "score_max": 21,
+            "description": "Program performs the specified operations on an average level (five minor errors and/or 3 major errors)."
           },
           {
             "label": "Needs Improvement",
-            "score_min": 36,
-            "score_max": 50,
+            "score_min": 8.26,
+            "score_max": 12,
             "description": "Program performs the specified operations on a below average level or is incomplete (more than 5 minor errors and/or 4 major errors)."
           },
           {
             "label": "Substandard",
-            "score_min": 21,
-            "score_max": 35,
+            "score_min": 4.51,
+            "score_max": 8.25,
             "description": "Program performs the specified operations on a below average level or is incomplete (more than 5 minor errors and/or 5 major errors)."
           },
           {
             "label": "Unsatisfactory",
-            "score_min": 1,
-            "score_max": 20,
+            "score_min": 0.01,
+            "score_max": 4.50,
             "description": "A reasonable attempt was made to write the program, but the program does not perform the specified operations (six or more major errors)."
           },
           {
@@ -2204,6 +2201,48 @@
             "description": "Program was not submitted."
           }
         ]
+      }
+    ],
+    "overall_bands": [
+      {
+        "label": "Outstanding",
+        "score_min": 30,
+        "score_max": 30
+      },
+      {
+        "label": "Superior",
+        "score_min": 27,
+        "score_max": 29.99
+      },
+      {
+        "label": "Above Average",
+        "score_min": 24,
+        "score_max": 26.99
+      },
+      {
+        "label": "Average",
+        "score_min": 21,
+        "score_max": 23.99
+      },
+      {
+        "label": "Needs Improvement",
+        "score_min": 12,
+        "score_max": 20.99
+      },
+      {
+        "label": "Substandard",
+        "score_min": 8.25,
+        "score_max": 11.99
+      },
+      {
+        "label": "Unsatisfactory",
+        "score_min": 0,
+        "score_max": 8.24
+      },
+      {
+        "label": "No submission",
+        "score_min": 0,
+        "score_max": 0
       }
     ]
   }

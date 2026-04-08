@@ -350,74 +350,123 @@ def select_program_performance_level(
 def select_csc134_program_performance_level(
     major_error_count: int,
     minor_error_count: int,
+    criterion: Optional[Criterion] = None,
     assignment_submitted: bool = True
-) -> Tuple[str, int]:
+) -> Tuple[str, float]:
     """Select CSC134 C++ program performance level based on error counts.
 
-    Implements the CSC134 rubric logic using the official Program Performance
-    Rubric (percentage-based levels). No minor→major conversion is applied;
-    major and minor errors are evaluated independently.
+    Uses the rubric criterion's PerformanceLevel definitions to determine the
+    matching level label and its score_max.  Supports decimal score_max values
+    (e.g. 8.25, 4.50) as defined in the CSC134 v3 rubric (30-point scale).
 
-    Selection uses the worst-applicable level: the lowest (most penalized) level
-    whose condition is met by either major OR minor error count.
+    This selector does not perform minor→major conversion itself; it evaluates
+    whatever counts the caller provides. When a rubric defines error conversion,
+    backend scoring should normalize first and pass the effective counts here.
+    The worst-applicable level is selected when both major and minor counts
+    qualify for different tiers.
 
     Args:
-        major_error_count: Number of major errors detected (original, no conversion applied)
-        minor_error_count: Number of minor errors detected (original, no conversion applied)
-        assignment_submitted: Whether the assignment was submitted (default: True)
+        major_error_count: Number of major errors detected
+        minor_error_count: Number of minor errors detected
+        criterion: The ``program_performance`` Criterion from
+            ``csc134_cpp_exam_rubric`` (required).
+        assignment_submitted: Whether the assignment was submitted (default True)
 
     Returns:
-        Tuple of (level_label, score) matching the rubric level
+        Tuple of (level_label, score) where score is the ``score_max`` of the
+        matching PerformanceLevel.
 
-    Level thresholds (from official rubric):
-        - Outstanding  (100%): No errors
-        - Superior     (90%):  ≤2 minor errors, 0 major
-        - Above Average(80%):  3–4 minor errors, or 1 major error
-        - Average      (70%):  5 minor errors, or 2 major errors
-        - Below Average(55%):  >5 minor errors, or 3 major errors
-        - Needs Improvement(40%): 4 major errors
-        - Substandard  (27.5%→28 pts): 5 major errors
-        - Unsatisfactory(15%): 6+ major errors
-        - No Submission(0%):   Not submitted
+    Raises:
+        ValueError: If criterion is None or has no performance levels defined.
+
+    Level thresholds (CSC134 v3 rubric — 30-point scale):
+        - Outstanding  (score_max=30)   : No errors
+        - Superior     (score_max=27)   : ≤2 minor errors, 0 major
+        - Above Average(score_max=24)   : 3–4 minor errors or 1 major error
+        - Average      (score_max=21)   : 5 minor errors or 2 major errors
+        - Needs Improvement(score_max=12): >5 minor or 3–4 major errors
+        - Substandard  (score_max=8.25) : 5 major errors
+        - Unsatisfactory(score_max=4.50): 6+ major errors
+        - No Submission(score_max=0)    : Not submitted
+
+    Note:
+        In rubric v3 the old "Below Average" level was removed; the threshold
+        conditions that previously mapped to it (3 major or >5 minor) now map
+        to "Needs Improvement".
 
     Example:
-        >>> select_csc134_program_performance_level(0, 0)
-        ('Outstanding', 100)
-        >>> select_csc134_program_performance_level(0, 2)
-        ('Superior', 90)
-        >>> select_csc134_program_performance_level(1, 0)
-        ('Above Average', 80)
-        >>> select_csc134_program_performance_level(3, 0)
-        ('Below Average', 55)
-        >>> select_csc134_program_performance_level(0, 0, assignment_submitted=False)
-        ('No Submission', 0)
+        >>> from cqc_cpcc.rubric_config import get_rubric_by_id
+        >>> rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+        >>> criterion = rubric.criteria[0]
+        >>> select_csc134_program_performance_level(0, 0, criterion)
+        ('Outstanding', 30.0)
+        >>> select_csc134_program_performance_level(0, 2, criterion)
+        ('Superior', 27.0)
+        >>> select_csc134_program_performance_level(1, 0, criterion)
+        ('Above Average', 24.0)
+        >>> select_csc134_program_performance_level(5, 0, criterion)
+        ('Substandard', 8.25)
+        >>> select_csc134_program_performance_level(0, 0, criterion, assignment_submitted=False)
+        ('No Submission', 0.0)
     """
+    if criterion is None:
+        raise ValueError(
+            "criterion parameter is required for select_csc134_program_performance_level. "
+            "Pass the program_performance Criterion from csc134_cpp_exam_rubric."
+        )
+
+    if not criterion.levels:
+        raise ValueError(
+            f"Criterion '{criterion.criterion_id}' has no performance levels defined."
+        )
+
+    # Build label → level lookup for O(1) access
+    levels_by_label = {level.label: level for level in criterion.levels}
+
+    def _score_for(label: str) -> float:
+        """Return score_max for the named level, with a safe fallback."""
+        level = levels_by_label.get(label)
+        if level is None:
+            logger.warning(
+                f"Level label '{label}' not found in criterion '{criterion.criterion_id}'. "
+                f"Falling back to lowest non-zero level."
+            )
+            non_zero = [l for l in criterion.levels if not (l.score_min == 0 and l.score_max == 0)]
+            return float(min(non_zero, key=lambda l: l.score_max).score_max) if non_zero else 0.0
+        return float(level.score_max)
+
     if not assignment_submitted:
-        return ("No Submission", 0)
+        label = "No Submission"
+        return (label, _score_for(label))
 
-    # Major errors take priority from worst to best
+    # Determine level — evaluate worst condition first (major errors take priority)
     if major_error_count >= 6:
-        return ("Unsatisfactory", 15)  # 15% of 100
+        label = "Unsatisfactory"
     elif major_error_count == 5:
-        return ("Substandard", 28)  # 27.5% of 100, rounded
-    elif major_error_count == 4:
-        return ("Needs Improvement", 40)  # 40% of 100
-
-    # Combined check: select worst-applicable level using either major or minor count
-    if major_error_count == 3 or minor_error_count > 5:
-        return ("Below Average", 55)  # 55% of 100
+        label = "Substandard"
+    elif major_error_count >= 3 or minor_error_count > 5:
+        # 3–4 major, or >5 minor — maps to "Needs Improvement" in rubric v3
+        # (rubric v2 called this threshold "Below Average"; the level no longer exists)
+        label = "Needs Improvement"
     elif major_error_count == 2 or minor_error_count == 5:
-        return ("Average", 70)  # 70% of 100
+        label = "Average"
     elif major_error_count == 1 or (3 <= minor_error_count <= 4):
-        return ("Above Average", 80)  # 80% of 100
+        label = "Above Average"
     elif minor_error_count <= 2:
-        if minor_error_count == 0:
-            return ("Outstanding", 100)  # 100% of 100
-        return ("Superior", 90)  # 90% of 100
+        label = "Outstanding" if minor_error_count == 0 else "Superior"
+    else:
+        logger.warning(
+            f"Unexpected CSC134 error counts: major={major_error_count}, minor={minor_error_count}. "
+            f"Defaulting to lowest non-zero level."
+        )
+        non_zero = [l for l in criterion.levels if not (l.score_min == 0 and l.score_max == 0)]
+        worst = min(non_zero, key=lambda l: l.score_max) if non_zero else criterion.levels[0]
+        return (worst.label, float(worst.score_max))
 
-    # Default (should not reach here)
-    logger.warning(
-        f"Unexpected error counts in CSC134 scoring: "
-        f"major={major_error_count}, minor={minor_error_count}. Defaulting to Below Average."
+    score = _score_for(label)
+    logger.debug(
+        f"CSC134 level selection: major={major_error_count}, minor={minor_error_count} → "
+        f"'{label}' score_max={score}"
     )
-    return ("Below Average", 55)
+    return (label, score)
+
