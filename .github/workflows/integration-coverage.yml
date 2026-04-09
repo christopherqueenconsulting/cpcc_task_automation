@@ -50,7 +50,7 @@ jobs:
           poetry run pytest -m integration --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml:coverage-integration.xml --cov-report=term-missing --junitxml=junit-integration.xml -o junit_family=legacy
 
       - name: Upload integration coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         # Skip for Dependabot PRs
         if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
         with:

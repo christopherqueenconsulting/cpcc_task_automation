@@ -57,7 +57,7 @@ jobs:
           poetry run pytest -m e2e --cov=src --cov-branch --cov-report=xml:coverage-e2e.xml --cov-report=term-missing --junitxml=junit-e2e.xml -o junit_family=legacy
 
       - name: Upload E2E coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         # Skip for Dependabot PRs
         if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
         with:
