@@ -4,6 +4,8 @@ import os
 import pytest
 import tempfile
 from enum import Enum
+from unittest.mock import call, Mock
+from selenium.common import TimeoutException
 from cqc_cpcc.utilities.utils import (
     first_two_uppercase,
     flip_name,
@@ -11,7 +13,10 @@ from cqc_cpcc.utilities.utils import (
     get_unique_names_flip_first_last,
     ExtendedEnum,
     CodeError,
-    ErrorHolder
+    ErrorHolder,
+    _get_microsoft_account_tile_xpath,
+    _resolve_microsoft_account_path,
+    microsoft_login,
 )
 
 
@@ -978,3 +983,162 @@ class TestDownloadFileFromUrl:
         _, temp_path = result
         os.unlink(temp_path)
 
+
+@pytest.mark.unit
+class TestMicrosoftLoginHelpers:
+    """Test helper logic used by microsoft_login account path resolution."""
+
+    def test_get_microsoft_account_tile_xpath_contains_both_identifiers(self):
+        xpath = _get_microsoft_account_tile_xpath("CQueen", "email@cpcc.edu")
+        assert "cqueen" in xpath
+        assert "email@cpcc.edu" in xpath
+        assert "tilesHolder" in xpath
+
+    def test_resolve_account_path_returns_true_when_expected_prefilled(self, mocker):
+        driver = Mock()
+        wait = Mock()
+        wait_short = Mock()
+        wait_probe = Mock()
+
+        def find_elements(_by, value):
+            if "tilesHolder" in value:
+                return [Mock()]
+            return []
+
+        driver.find_elements.side_effect = find_elements
+        click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry")
+
+        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "email@cpcc.edu")
+
+        assert result is True
+        assert click_retry.call_count == 1
+        wait_probe.until.assert_not_called()
+        assert "tilesHolder" in click_retry.call_args[0][2]
+
+    def test_resolve_account_path_clears_wrong_prefilled_user(self, mocker):
+        driver = Mock()
+        wait = Mock()
+        wait_short = Mock()
+        wait_probe = Mock()
+        wait_probe.until.side_effect = [
+            TimeoutException("no account tile"),
+            Mock(),
+        ]
+        wait_short.until.return_value = Mock()
+
+        def find_elements(_by, value):
+            if value == "//div[@id='displayName']":
+                return [Mock()]
+            return []
+
+        driver.find_elements.side_effect = find_elements
+        click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry")
+        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "email@cpcc.edu")
+
+        assert result is False
+        assert click_retry.call_count == 2
+        assert click_retry.call_args_list[0] == call(
+            driver,
+            wait,
+            "//button[@class='backButton']",
+            "Waiting for back button",
+        )
+        assert click_retry.call_args_list[1] == call(
+            driver,
+            wait,
+            "//div[contains(text(),'Use another')]/parent::div",
+            "Waiting for use another account button",
+        )
+
+    def test_resolve_account_path_no_preloaded_account_returns_false(self, mocker):
+        driver = Mock()
+        wait = Mock()
+        wait_short = Mock()
+        wait_probe = Mock()
+        wait_probe.until.side_effect = [
+            TimeoutException("no account tile"),
+            TimeoutException("no display name"),
+            TimeoutException("no use another"),
+        ]
+        driver.find_elements.return_value = []
+        click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry")
+
+        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "email@cpcc.edu")
+
+        assert result is False
+        click_retry.assert_not_called()
+
+
+@pytest.mark.unit
+class TestMicrosoftLoginBranchBehavior:
+    """Test microsoft_login branch behavior after helper-based refactor."""
+
+    def test_microsoft_login_enters_username_when_not_prefilled(self, mocker):
+        driver = Mock()
+        driver.current_window_handle = "window-main"
+        username_field = Mock()
+        password_field = Mock()
+        driver.find_element.side_effect = [username_field, password_field]
+
+        wait_main = Mock()
+        wait_short = Mock()
+        wait_long = Mock()
+        wait_main.until.return_value = True
+        wait_short.until.return_value = True
+        wait_long.until.return_value = True
+
+        wait_probe = Mock()
+        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long])
+        mocker.patch("cqc_cpcc.utilities.utils._resolve_microsoft_account_path", return_value=False)
+        click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry", side_effect=[Mock(), Mock(), Mock()])
+        screenshot = mocker.patch("cqc_cpcc.utilities.utils.take_and_show_screenshot")
+        mocker.patch.dict(
+            os.environ,
+            {
+                "INSTRUCTOR_USERID": "cqueen",
+                "INSTRUCTOR_EMAIL": "email@cpcc.edu",
+                "INSTRUCTOR_PASS": "secret-pass",
+            },
+            clear=False,
+        )
+
+        microsoft_login(driver)
+
+        username_field.send_keys.assert_called_once_with("cqueen@cpcc.edu")
+        password_field.send_keys.assert_called_once_with("secret-pass")
+        assert any("Next" in c.args[2] for c in click_retry.call_args_list)
+        screenshot.assert_called_once_with(driver, "microsoft_login_submitted")
+        driver.switch_to.window.assert_called_once_with("window-main")
+
+    def test_microsoft_login_skips_username_when_prefilled(self, mocker):
+        driver = Mock()
+        driver.current_window_handle = "window-main"
+        password_field = Mock()
+        driver.find_element.return_value = password_field
+
+        wait_main = Mock()
+        wait_short = Mock()
+        wait_long = Mock()
+        wait_main.until.return_value = True
+        wait_short.until.return_value = True
+        wait_long.until.return_value = True
+
+        wait_probe = Mock()
+        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long])
+        mocker.patch("cqc_cpcc.utilities.utils._resolve_microsoft_account_path", return_value=True)
+        click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry", side_effect=[Mock(), Mock()])
+        mocker.patch("cqc_cpcc.utilities.utils.take_and_show_screenshot")
+        mocker.patch.dict(
+            os.environ,
+            {
+                "INSTRUCTOR_USERID": "cqueen",
+                "INSTRUCTOR_EMAIL": "email@cpcc.edu",
+                "INSTRUCTOR_PASS": "secret-pass",
+            },
+            clear=False,
+        )
+
+        microsoft_login(driver)
+
+        password_field.send_keys.assert_called_once_with("secret-pass")
+        assert not any("Next" in c.args[2] for c in click_retry.call_args_list)

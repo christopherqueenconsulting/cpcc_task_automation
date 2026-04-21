@@ -22,6 +22,7 @@ from selenium.common import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import IS_GITHUB_ACTION
@@ -586,48 +587,152 @@ def login_if_needed(driver: WebDriver):
         microsoft_login(driver)
 
 
+def _get_microsoft_account_tile_xpath(instructor_user_id: str, instructor_email: str) -> str:
+    """Build an XPath that matches the instructor account tile on Microsoft account picker."""
+    return (
+        '//*[@id="tilesHolder"]//*[contains(text(), "'
+        + instructor_user_id.lower()
+        + '") or contains(text(), "'
+        + instructor_email.lower()
+        + '")]'
+    )
+
+
+def _get_microsoft_expected_display_name_xpath(instructor_user_id: str, instructor_email: str) -> str:
+    """Build an XPath that matches an already-selected expected Microsoft account."""
+    return (
+        "//div[@id='displayName' and (contains(@title,'"
+        + instructor_user_id.lower()
+        + "') or contains(@title,'"
+        + instructor_email.lower()
+        + "'))]"
+    )
+
+
+def _is_xpath_present(driver: WebDriver, xpath: str) -> bool:
+    """Fast presence probe that avoids waiting when a branch is clearly unavailable."""
+    return bool(driver.find_elements(By.XPATH, xpath))
+
+
+def _is_xpath_present_with_short_wait(wait_probe: WebDriverWait, xpath: str, message: str) -> bool:
+    """Short wait probe used when an element may appear after a quick transition."""
+    try:
+        wait_probe.until(
+            EC.presence_of_element_located((By.XPATH, xpath)),
+            message,
+        )
+        return True
+    except TimeoutException:
+        return False
+
+
+def _wait_for_microsoft_identifier_step(wait_short: WebDriverWait) -> None:
+    """Wait until either account display or username input is present."""
+    wait_short.until(
+        lambda d: d.find_elements(By.NAME, "loginfmt") or d.find_elements(By.ID, "displayName"),
+        "Waiting for Microsoft identifier step",
+    )
+
+
+def _click_use_another_account_if_present(
+    driver: WebDriver,
+    wait: WebDriverWait,
+    wait_short: WebDriverWait,
+    wait_probe: WebDriverWait,
+) -> bool:
+    """Click "Use another account" when available and wait for the identifier step."""
+    use_another_xpath = "//div[contains(text(),'Use another')]/parent::div"
+    if not _is_xpath_present(driver, use_another_xpath) and not _is_xpath_present_with_short_wait(
+        wait_probe,
+        use_another_xpath,
+        "Waiting briefly for use another account button",
+    ):
+        return False
+
+    click_element_wait_retry(
+        driver,
+        wait,
+        use_another_xpath,
+        "Waiting for use another account button",
+    )
+    _wait_for_microsoft_identifier_step(wait_short)
+    return True
+
+
+def _resolve_microsoft_account_path(
+    driver: WebDriver,
+    wait: WebDriverWait,
+    wait_short: WebDriverWait,
+    wait_probe: WebDriverWait,
+    instructor_user_id: str,
+    instructor_email: str,
+) -> bool:
+    """Resolve Microsoft account selection path and return True when username entry can be skipped."""
+    pick_account_xpath = _get_microsoft_account_tile_xpath(instructor_user_id, instructor_email)
+    expected_display_name_xpath = _get_microsoft_expected_display_name_xpath(instructor_user_id, instructor_email)
+    any_display_name_xpath = "//div[@id='displayName']"
+
+    if _is_xpath_present(driver, expected_display_name_xpath):
+        return True
+
+    if _is_xpath_present(driver, pick_account_xpath) or _is_xpath_present_with_short_wait(
+        wait_probe,
+        pick_account_xpath,
+        "Waiting briefly to see if pick account is visible",
+    ):
+        click_element_wait_retry(driver, wait, pick_account_xpath, "Waiting for pick account selection")
+        return True
+
+    if _is_xpath_present(driver, any_display_name_xpath) or _is_xpath_present_with_short_wait(
+        wait_probe,
+        any_display_name_xpath,
+        "Waiting briefly to see if another username is present",
+    ):
+        click_element_wait_retry(driver, wait, "//button[@class='backButton']", "Waiting for back button")
+        _click_use_another_account_if_present(driver, wait, wait_short, wait_probe)
+        return False
+
+    _click_use_another_account_if_present(driver, wait, wait_short, wait_probe)
+
+    return False
+
+
 def microsoft_login(driver: WebDriver):
     # Enter in user info and password
     instructor_user_id = os.environ["INSTRUCTOR_USERID"]
+    instructor_email = os.getenv("INSTRUCTOR_EMAIL", f"{instructor_user_id}@cpcc.edu")
     instructor_password = os.environ["INSTRUCTOR_PASS"]
 
-    wait = get_driver_wait(driver, 15)  # Using shorter wait time for login
-    wait_long = get_driver_wait(driver, 30)  # Using  longer time
+    wait = get_driver_wait(driver, 15)
+    wait_short = get_driver_wait(driver, 5)
+    wait_probe = get_driver_wait(driver, 1)
+    wait_long = get_driver_wait(driver, 30)
 
     original_window = driver.current_window_handle
 
-    # Wait for title to change
+    # Wait for the title to change
     wait.until(EC.title_is("Sign in to your account"))
 
-    # Wait for login elements
-    wait.until(
-        lambda d: d.find_element(By.XPATH, "//div[@id='loginHeader']"),
-        "Waiting for login screen presence")
+    wait_short.until(
+        EC.presence_of_element_located((By.XPATH, "//div[@id='loginHeader']")),
+        "Waiting for login screen presence",
+    )
 
-    # Username may already be prefilled If it is correct continue if not go back anc clear it
-    user_name_already_entered = False
-    try:
-        wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//div[@id='displayName' and contains(@title,'" + instructor_user_id.lower() + "')]")),
-            "Waiting for username to be prefilled")
-        user_name_already_entered = True
-    except TimeoutException:
-        # logger.info("Element not found within timeout")
-        # Make sure that another username is not entered and we need to go back
-        try:
-            wait.until(EC.presence_of_element_located(
-                (By.XPATH, "//div[@id='displayName']")), "Waiting to see if another username is present")
-            # Click back button
-            click_element_wait_retry(driver, wait, "//button[@class='backButton']", "Waiting for back button")
-            # Click the use another account button
-            click_element_wait_retry(driver, wait, "//div[contains(text(),'Use another')]/parent::div",
-                                     "Waiting for use another account button")
-            time.sleep(2)
-        except TimeoutException:
-            # logger.info("Element not found within timeout")
-            pass
+    # Username may already be prefilled; if a different user is shown, clear it.
+    user_name_already_entered = _resolve_microsoft_account_path(
+        driver,
+        wait,
+        wait_short,
+        wait_probe,
+        instructor_user_id,
+        instructor_email,
+    )
 
     if not user_name_already_entered:
+        wait_short.until(
+            EC.presence_of_element_located((By.NAME, "loginfmt")),
+            "Waiting for username input",
+        )
         # Enter username / email
         username_field = driver.find_element(By.NAME, "loginfmt")
         username_field.send_keys(instructor_user_id + "@cpcc.edu")
@@ -635,6 +740,10 @@ def microsoft_login(driver: WebDriver):
         click_element_wait_retry(driver, wait,
                                  "//input[contains(@class, 'button_primary') and contains(@value,'Next')]",
                                  "Waiting for Next Button", By.XPATH)
+    wait_short.until(
+        EC.presence_of_element_located((By.NAME, "passwd")),
+        "Waiting for password input",
+    )
     # Enter password
     password_field = driver.find_element(By.NAME, "passwd")
     password_field.send_keys(instructor_password)
@@ -643,8 +752,9 @@ def microsoft_login(driver: WebDriver):
                              "Waiting for Sign in Button", By.XPATH)
 
     # Screenshot so the user can see the post-sign-in state when running headlessly.
-    take_and_show_screenshot(driver, "microsoft_login_submitted")
-    logger.info("🔔 Microsoft login submitted — waiting for sign-in to complete.")
+    # TODO: Make this happen only when running headlessly
+    # take_and_show_screenshot(driver, "microsoft_login_submitted")
+    # logger.info("🔔 Microsoft login submitted — waiting for sign-in to complete.")
 
     # Click the no button for Stay signed in
     no_stay_signed_in_button = click_element_wait_retry(driver, wait,
