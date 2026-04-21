@@ -59,7 +59,7 @@ class PerformanceLevel(BaseModel):
     @classmethod
     def validate_score_range(cls, score_max: float, info) -> float:
         """Validate that score_max >= score_min."""
-        if 'score_min' in info.data:
+        if info.data and 'score_min' in info.data:
             score_min = info.data['score_min']
             if score_max < score_min:
                 raise ValueError(f"score_max ({score_max}) must be >= score_min ({score_min})")
@@ -221,7 +221,7 @@ class OverallBand(BaseModel):
     @classmethod
     def validate_score_range(cls, score_max: float, info) -> float:
         """Validate that score_max >= score_min."""
-        if 'score_min' in info.data:
+        if info.data and 'score_min' in info.data:
             score_min = info.data['score_min']
             if score_max < score_min:
                 raise ValueError(f"score_max ({score_max}) must be >= score_min ({score_min})")
@@ -343,7 +343,7 @@ class CriterionResult(BaseModel):
     @classmethod
     def validate_points_earned(cls, points_earned: Optional[float], info) -> Optional[float]:
         """Validate that points_earned <= points_possible when provided."""
-        if points_earned is not None and 'points_possible' in info.data:
+        if points_earned is not None and info.data and 'points_possible' in info.data:
             points_possible = info.data['points_possible']
             if points_earned > points_possible:
                 raise ValueError(
@@ -420,7 +420,7 @@ class RubricAssessmentResult(BaseModel):
     @classmethod
     def validate_total_earned(cls, total_earned: float, info) -> float:
         """Validate that total_points_earned <= total_points_possible."""
-        if 'total_points_possible' in info.data:
+        if info.data and 'total_points_possible' in info.data:
             total_possible = info.data['total_points_possible']
             if total_earned > total_possible:
                 raise ValueError(
