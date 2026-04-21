@@ -221,6 +221,8 @@ poetry run ruff check --fix .        # Auto-fix issues
 ### CI Failure Handling
 **CRITICAL**: All PRs must pass CI tests before merging. Dependabot PRs auto-merge only when all checks pass.
 
+Dependabot `chore(deps)` PR CI failures are also auto-routed by `.github/workflows/dependabot-ci-autofix.yml`, which tags `@copilot` once per PR head SHA. Treat those comments as high-priority fix requests so auto-merge can complete.
+
 When CI tests fail:
 1. **Investigate**: Use GitHub MCP tools to get workflow run logs
 2. **Reproduce**: Run tests locally to understand the failure

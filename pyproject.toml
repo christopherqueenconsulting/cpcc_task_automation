@@ -27,7 +27,7 @@ openrouter = ">=0.8.1,<0.10.0"
 httpx = "^0.28"
 ordered-set = "^4"
 chromadb = "^1"
-protobuf = "^6"
+protobuf = ">=6,<8"
 python-docx = "^1"
 #simplify_docx= { git = "https://github.com/gitchrisqueen/Simplify-Docx.git"}
 chromedriver-autoinstaller = "^0"

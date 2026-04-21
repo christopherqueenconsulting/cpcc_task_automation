@@ -422,7 +422,7 @@ class RubricAssessmentResult(BaseModel):
         """Validate that total_points_earned <= total_points_possible."""
         if info.data and 'total_points_possible' in info.data:
             total_possible = info.data['total_points_possible']
-            if total_earned > total_possible:
+            if total_possible is not None and total_earned > total_possible:
                 raise ValueError(
                     f"total_points_earned ({total_earned}) cannot exceed "
                     f"total_points_possible ({total_possible})"
