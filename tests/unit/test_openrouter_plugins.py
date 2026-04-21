@@ -16,7 +16,6 @@ from cqc_cpcc.utilities.AI.openrouter_client import (
     get_openrouter_plugins,
 )
 
-
 _AUTO_ROUTER_PLUGIN_CLASS = getattr(components, "ChatGenerationParamsPluginAutoRouter", None)
 if _AUTO_ROUTER_PLUGIN_CLASS is None:
     _AUTO_ROUTER_PLUGIN_CLASS = getattr(components, "ChatRequestPluginAutoRouter", None)

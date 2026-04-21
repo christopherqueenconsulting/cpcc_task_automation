@@ -35,6 +35,11 @@ The following CI workflows run on every PR:
    - Scans for secrets in code
    - Should not require code changes
 
+6. **Dependabot CI Auto-Fix Trigger** (`.github/workflows/dependabot-ci-autofix.yml`)
+   - Listens for failed CI runs on Dependabot `chore(deps)` PRs
+   - Automatically comments `@copilot` on the PR (deduplicated per PR head SHA)
+   - Keeps auto-merge moving without waiting on manual intervention
+
 ---
 
 ## When to Investigate CI Failures
@@ -273,6 +278,10 @@ When a Dependabot PR fails CI:
 3. **Make minimal fixes** to restore compatibility
 4. **Test thoroughly** - dependency updates can have wide impact
 5. **Push fixes** to allow auto-merge to proceed
+
+For open Dependabot `chore(deps)` PRs that are already failing:
+1. List those PRs and their failing workflow runs.
+2. Re-run failed jobs so the auto-fix + auto-merge flow can continue.
 
 ---
 

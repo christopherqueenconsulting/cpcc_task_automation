@@ -161,6 +161,28 @@ def _parse_allowed_models() -> list[str] | None:
     return allowed_models or None
 
 
+def _get_auto_router_plugin_class():
+    """Get OpenRouter auto-router plugin class across SDK versions."""
+    from openrouter import components
+
+    plugin_class = getattr(
+        components, "ChatGenerationParamsPluginAutoRouter", None
+    )
+    if plugin_class is None:
+        plugin_class = getattr(
+            components, "ChatRequestPluginAutoRouter", None
+        )
+    if plugin_class is None:
+        plugin_class = getattr(components, "AutoRouterPlugin", None)
+    if plugin_class is None:
+        raise AttributeError(
+            "OpenRouter SDK missing auto-router plugin class "
+            "(expected ChatGenerationParamsPluginAutoRouter, "
+            "ChatRequestPluginAutoRouter, or AutoRouterPlugin)"
+        )
+    return plugin_class
+
+
 def get_openrouter_plugins() -> Optional[list]:
     """Get OpenRouter plugins configuration for auto-router.
     
@@ -178,26 +200,11 @@ def get_openrouter_plugins() -> Optional[list]:
         >>> plugins = get_openrouter_plugins()
         >>> # Returns [ChatGenerationParamsPluginAutoRouter(id='auto-router', allowed_models=[...])]
     """
-    from openrouter import components
-    
     allowed_models = _parse_allowed_models()
     if not allowed_models:
         return None
-    
-    # OpenRouter SDK renamed the auto-router plugin class across versions:
-    # ChatGenerationParamsPluginAutoRouter -> ChatRequestPluginAutoRouter -> AutoRouterPlugin.
-    plugin_class = getattr(components, "ChatGenerationParamsPluginAutoRouter", None)
-    if plugin_class is None:
-        plugin_class = getattr(components, "ChatRequestPluginAutoRouter", None)
-    if plugin_class is None:
-        plugin_class = getattr(components, "AutoRouterPlugin", None)
-    if plugin_class is None:
-        raise AttributeError(
-            "OpenRouter SDK missing auto-router plugin class "
-            "(expected ChatGenerationParamsPluginAutoRouter, "
-            "ChatRequestPluginAutoRouter, or AutoRouterPlugin)"
-        )
 
+    plugin_class = _get_auto_router_plugin_class()
     return [plugin_class(id="auto-router", allowed_models=allowed_models)]
 
 
