@@ -174,9 +174,9 @@ def build_rubric_grading_prompt(
     
     # Student submission
     prompt_parts.append("## Student Submission to Grade")
-    prompt_parts.append("```")
+    # Note Need to wrap code in backticks. It is expected that the student submission is preprocessed to be safely included in a markdown code block with File Name included ahead of it.
+    # If the submission is very long, it should be truncated with an indication that it was truncated.
     prompt_parts.append(student_submission)
-    prompt_parts.append("```")
     prompt_parts.append("")
     
     # Grading instructions - GPT-5.2 methodology

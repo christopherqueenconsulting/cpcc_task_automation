@@ -23,8 +23,8 @@ from typing import Optional
 from random import randint
 
 from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.utils import read_file
-
+from cqc_cpcc.utilities.utils import read_file, wrap_code_in_markdown_backticks
+from cqc_streamlit_app.utils import get_language_from_file_path
 
 # Token estimation constants
 # GPT-5 family models have 128K context window
@@ -497,11 +497,13 @@ def build_submission_text_with_token_limit(
                     f"Preprocessing will be used automatically."
                 )
             
-            # Add file with header (no budget check)
-            file_section = f"\n\n{'='*60}\n"
-            file_section += f"FILE: {filename}\n"
-            file_section += f"{'='*60}\n\n"
-            file_section += content
+            # Add file name details for AI (no budget check)
+            file_section = f"### Submission File Name: {filename}\n"
+            solution_language = get_language_from_file_path(filepath)
+            if solution_language:
+                # Add the content inside a codeblock
+                content = wrap_code_in_markdown_backticks(content, solution_language)
+            file_section += f"### Submission Content: {content}"
             
             parts.append(file_section)
             total_tokens += file_tokens

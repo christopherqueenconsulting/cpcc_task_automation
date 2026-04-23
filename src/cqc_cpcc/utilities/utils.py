@@ -266,9 +266,6 @@ def wrap_code_in_markdown_backticks(code: str, code_type: str = "java") -> str:
     while code_fence in code:
         code_fence += backticks
 
-    # Add double-backslash to code
-    # code = code.replace('\\','\\\\')
-
     prefix = code_fence + code_type + "\n"
     suffix = "\n" + code_fence
     return prefix + code.strip() + suffix

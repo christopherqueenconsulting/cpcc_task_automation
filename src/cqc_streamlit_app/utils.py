@@ -23,42 +23,162 @@ from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 from cqc_cpcc.utilities.logger import logger
 
-CODE_LANGUAGES = [
-    "abap", "abnf", "actionscript", "ada", "agda", "al", "antlr4", "apacheconf",
-    "apex", "apl", "applescript", "aql", "arduino", "arff", "asciidoc", "asm6502",
-    "asmatmel", "aspnet", "autohotkey", "autoit", "avisynth", "avroIdl", "bash",
-    "basic", "batch", "bbcode", "bicep", "birb", "bison", "bnf", "brainfuck",
-    "brightscript", "bro", "bsl", "c", "cfscript", "chaiscript", "cil", "clike",
-    "clojure", "cmake", "cobol", "coffeescript", "concurnas", "coq", "cpp", "crystal",
-    "csharp", "cshtml", "csp", "cssExtras", "css", "csv", "cypher", "d", "dart",
-    "dataweave", "dax", "dhall", "diff", "django", "dnsZoneFile", "docker", "dot",
-    "ebnf", "editorconfig", "eiffel", "ejs", "elixir", "elm", "erb", "erlang",
-    "etlua", "excelFormula", "factor", "falselang", "firestoreSecurityRules", "flow",
-    "fortran", "fsharp", "ftl", "gap", "gcode", "gdscript", "gedcom", "gherkin",
-    "git", "glsl", "gml", "gn", "goModule", "go", "graphql", "groovy", "haml",
-    "handlebars", "haskell", "haxe", "hcl", "hlsl", "hoon", "hpkp", "hsts", "http",
-    "ichigojam", "icon", "icuMessageFormat", "idris", "iecst", "ignore", "inform7",
-    "ini", "io", "j", "java", "javadoc", "javadoclike", "javascript", "javastacktrace",
-    "jexl", "jolie", "jq", "jsExtras", "jsTemplates", "jsdoc", "json", "json5", "jsonp",
-    "jsstacktrace", "jsx", "julia", "keepalived", "keyman", "kotlin", "kumir", "kusto",
-    "latex", "latte", "less", "lilypond", "liquid", "lisp", "livescript", "llvm", "log",
-    "lolcode", "lua", "magma", "makefile", "markdown", "markupTemplating", "markup",
-    "matlab", "maxscript", "mel", "mermaid", "mizar", "mongodb", "monkey", "moonscript",
-    "n1ql", "n4js", "nand2tetrisHdl", "naniscript", "nasm", "neon", "nevod", "nginx",
-    "nim", "nix", "nsis", "objectivec", "ocaml", "opencl", "openqasm", "oz", "parigp",
-    "parser", "pascal", "pascaligo", "pcaxis", "peoplecode", "perl", "phpExtras", "php",
-    "phpdoc", "plsql", "powerquery", "powershell", "processing", "prolog", "promql",
-    "properties", "protobuf", "psl", "pug", "puppet", "pure", "purebasic", "purescript",
-    "python", "q", "qml", "qore", "qsharp", "r", "racket", "reason", "regex", "rego",
-    "renpy", "rest", "rip", "roboconf", "robotframework", "ruby", "rust", "sas", "sass",
-    "scala", "scheme", "scss", "shellSession", "smali", "smalltalk", "smarty", "sml",
-    "solidity", "solutionFile", "soy", "sparql", "splunkSpl", "sqf", "sql", "squirrel",
-    "stan", "stylus", "swift", "systemd", "t4Cs", "t4Templating", "t4Vb", "tap", "tcl",
-    "textile", "toml", "tremor", "tsx", "tt2", "turtle", "twig", "typescript", "typoscript",
-    "unrealscript", "uorazor", "uri", "v", "vala", "vbnet", "velocity", "verilog", "vhdl",
-    "vim", "visualBasic", "warpscript", "wasm", "webIdl", "wiki", "wolfram", "wren", "xeora",
-    "xmlDoc", "xojo", "xquery", "yaml", "yang", "zig"
-]
+EXTENSION_TO_LANGUAGES = {
+    # Python
+    "py": ["python"],
+    "pyw": ["python"],
+
+    # C / C++
+    "c": ["c"],
+    "h": ["c", "cpp"],
+    "cpp": ["cpp"],
+    "cc": ["cpp"],
+    "cxx": ["cpp"],
+    "hpp": ["cpp"],
+    "hh": ["cpp"],
+
+    # Java
+    "java": ["java"],
+    "class": ["java"],
+
+    # JavaScript / TypeScript
+    "js": ["javascript"],
+    "mjs": ["javascript"],
+    "cjs": ["javascript"],
+    "jsx": ["javascript", "react"],
+    "ts": ["typescript"],
+    "tsx": ["typescript", "react"],
+
+    # Web / Markup
+    "html": ["html"],
+    "htm": ["html"],
+    "xml": ["xml"],
+    "svg": ["xml"],
+    "css": ["css"],
+    "scss": ["scss"],
+    "sass": ["sass"],
+    "less": ["less"],
+
+    # Shell
+    "sh": ["bash"],
+    "bash": ["bash"],
+    "zsh": ["bash"],
+    "fish": ["bash"],
+
+    # Data / Config
+    "json": ["json"],
+    "json5": ["json"],
+    "yaml": ["yaml"],
+    "yml": ["yaml"],
+    "toml": ["toml"],
+    "ini": ["ini"],
+    "env": ["dotenv"],
+    "conf": ["apacheconf", "nginx"],
+
+    # Markdown / Text
+    "md": ["markdown"],
+    "markdown": ["markdown"],
+    "txt": ["text"],
+
+    # SQL
+    "sql": ["sql"],
+    "psql": ["sql"],
+
+    # Go
+    "go": ["go"],
+    "mod": ["go"],
+
+    # Rust
+    "rs": ["rust"],
+
+    # Ruby
+    "rb": ["ruby"],
+
+    # PHP
+    "php": ["php"],
+
+    # Swift
+    "swift": ["swift"],
+
+    # Kotlin
+    "kt": ["kotlin"],
+    "kts": ["kotlin"],
+
+    # C#
+    "cs": ["csharp"],
+
+    # Objective-C / MATLAB conflict
+    "m": ["objective-c", "matlab"],
+    "mm": ["objective-c"],
+
+    # Dart
+    "dart": ["dart"],
+
+    # R
+    "r": ["r"],
+    "R": ["r"],
+
+    # Scala
+    "scala": ["scala"],
+
+    # Groovy
+    "groovy": ["groovy"],
+
+    # Haskell
+    "hs": ["haskell"],
+
+    # Lua
+    "lua": ["lua"],
+
+    # Perl
+    "pl": ["perl", "prolog"],
+    "pm": ["perl"],
+
+    # PowerShell
+    "ps1": ["powershell"],
+
+    # Windows scripts
+    "bat": ["batch"],
+    "cmd": ["batch"],
+
+    # Assembly
+    "asm": ["assembly"],
+    "s": ["assembly"],
+
+    # Docker
+    "dockerfile": ["docker"],
+    "docker": ["docker"],
+
+    # Make
+    "makefile": ["makefile"],
+    "mk": ["makefile"],
+
+    # GraphQL
+    "graphql": ["graphql"],
+    "gql": ["graphql"],
+
+    # Protobuf
+    "proto": ["protobuf"],
+
+    # LaTeX
+    "tex": ["latex"],
+
+    # Terraform / HCL
+    "tf": ["hcl"],
+    "tfvars": ["hcl"],
+
+    # Vim
+    "vim": ["vim"],
+
+    # Zig
+    "zig": ["zig"],
+
+    # WebAssembly
+    "wasm": ["wasm"],
+
+    # Misc
+    "log": ["log"],
+}
 
 mime_types_str = """
 .3dm	x-world/x-3dmf
@@ -809,22 +929,38 @@ def get_language_from_file_path(file_path):
     # Extract file extension from the file path
     file_extension = get_file_extension_from_filepath(file_path, True)
 
-    # Check if the file extension exists in the mapping
-    if file_extension in CODE_LANGUAGES:
-        # st.info(file_extension + " | Found in CODE_LANGUAGES")
-        return file_extension
-    else:
-        # st.info(file_extension + " | NOT Found in CODE_LANGUAGES")
-        return None  # Return None if the file extension is not found
+    # Get the languages associated with the file extension
+    langs = EXTENSION_TO_LANGUAGES.get(file_extension.lower(), [])
+    # Return the first option or text otherwise
+    return langs[0] if langs else "text"
+
+def get_unique_extensions() -> list[str]:
+    """
+    Returns a sorted list of unique file extensions.
+    """
+    return sorted({ext.lower() for ext in EXTENSION_TO_LANGUAGES.keys()})
+
+
+def get_unique_languages() -> list[str]:
+    """
+    Returns a sorted list of unique language names across all extensions.
+    """
+    return sorted({
+        lang.lower()
+        for langs in EXTENSION_TO_LANGUAGES.values()
+        for lang in langs
+    })
 
 
 def define_code_language_selection(unique_key: str | int, default_option: str = 'java'):
-    # List of available languages
+    # Get unique code languages
+    code_languages = get_unique_languages()
 
+    # List of available languages
     selected_language = st.selectbox(label="Select Code Language",
                                      key="language_select_" + unique_key,
-                                     options=CODE_LANGUAGES,
-                                     index=CODE_LANGUAGES.index(default_option))
+                                     options=code_languages,
+                                     index=code_languages.index(default_option))
     return selected_language
 
 
