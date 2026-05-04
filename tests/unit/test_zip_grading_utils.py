@@ -314,7 +314,7 @@ class TestSubmissionTextBuilding:
         
         text = build_submission_text_with_token_limit(files)
         
-        assert "FILE: test.java" in text
+        assert "Submission File Name: test.java" in text
         assert "public class Test {}" in text
     
     def test_build_submission_text_multiple_files(self, tmp_path):
@@ -333,8 +333,8 @@ class TestSubmissionTextBuilding:
         
         text = build_submission_text_with_token_limit(files)
         
-        assert "FILE: Main.java" in text
-        assert "FILE: Helper.java" in text
+        assert "Submission File Name: Main.java" in text
+        assert "Submission File Name: Helper.java" in text
         assert "public class Main" in text
         assert "public class Helper" in text
     
@@ -376,5 +376,5 @@ class TestSubmissionTextBuilding:
         text = build_submission_text_with_token_limit(files, max_tokens=300)
         
         # Should include both files (no truncation)
-        assert "FILE: file1.txt" in text
-        assert "FILE: file2.txt" in text
+        assert "Submission File Name: file1.txt" in text
+        assert "Submission File Name: file2.txt" in text

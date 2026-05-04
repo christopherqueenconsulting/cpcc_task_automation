@@ -373,5 +373,5 @@ class TestTokenBudgetingIntegration:
             assert fname in text
         
         # Verify included file is present
-        assert "FILE: included.java" in text
+        assert "Submission File Name: included.java" in text
         assert "public class Included" in text

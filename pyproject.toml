@@ -48,7 +48,7 @@ tabulate = "^0"
 pypdf = "^6"
 pymupdf = "^1"
 onnxruntime = ">=1.20,<=1.25.1"
-pandas-stubs = "^2"
+pandas-stubs = ">=2,<4"
 
 
 

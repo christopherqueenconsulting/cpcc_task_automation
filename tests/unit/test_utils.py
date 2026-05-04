@@ -1107,7 +1107,7 @@ class TestMicrosoftLoginBranchBehavior:
         username_field.send_keys.assert_called_once_with("cqueen@cpcc.edu")
         password_field.send_keys.assert_called_once_with("secret-pass")
         assert any("Next" in c.args[2] for c in click_retry.call_args_list)
-        screenshot.assert_called_once_with(driver, "microsoft_login_submitted")
+        screenshot.assert_not_called()
         driver.switch_to.window.assert_called_once_with("window-main")
 
     def test_microsoft_login_skips_username_when_prefilled(self, mocker):
