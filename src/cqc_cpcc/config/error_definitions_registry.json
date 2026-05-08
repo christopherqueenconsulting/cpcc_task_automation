@@ -116,6 +116,70 @@
               "severity_category": "major",
               "enabled": true,
               "default_penalty_points": 40
+            },
+            {
+              "error_id": "CSC_151_EXAM_2_OUTPUT_IMPACT_ERROR",
+              "name": "Output Impact Error",
+              "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
+              "severity_category": "major",
+              "enabled": true,
+              "default_penalty_points": 40
+            },
+            {
+              "error_id": "CSC_151_EXAM_2_SYNTAX_ERROR",
+              "name": "Syntax Error",
+              "description": "There are syntax errors in the code",
+              "severity_category": "minor",
+              "enabled": true,
+              "default_penalty_points": 10
+            },
+            {
+              "error_id": "CSC_151_EXAM_2_NAMING_CONVENTION",
+              "name": "Naming Convention Violation",
+              "description": "Naming conventions are not followed",
+              "severity_category": "minor",
+              "enabled": true,
+              "default_penalty_points": 10
+            },
+            {
+              "error_id": "CSC_151_EXAM_2_CONSTANTS_ERROR",
+              "name": "Constants Error",
+              "description": "Constants are not properly declared or used",
+              "severity_category": "minor",
+              "enabled": true,
+              "default_penalty_points": 10
+            },
+            {
+              "error_id": "CSC_151_EXAM_2_INEFFICIENT_CODE",
+              "name": "Inefficient Code",
+              "description": "The code is inefficient and can be optimized",
+              "severity_category": "minor",
+              "enabled": true,
+              "default_penalty_points": 10
+            },
+            {
+              "error_id": "CSC_151_EXAM_2_OUTPUT_FORMATTING",
+              "name": "Output Formatting Issues",
+              "description": "There are issues with the expected code output formatting (spacing, decimal places, etc.)",
+              "severity_category": "minor",
+              "enabled": true,
+              "default_penalty_points": 10
+            },
+            {
+              "error_id": "CSC_151_EXAM_2_PROGRAMMING_STYLE",
+              "name": "Programming Style Issues",
+              "description": "There are programming style issues that do not adhere to language standards (indentation, white space, etc.)",
+              "severity_category": "minor",
+              "enabled": true,
+              "default_penalty_points": 10
+            },
+            {
+              "error_id": "CSC_151_EXAM_2_SCANNER_CLASS",
+              "name": "Scanner Class Error",
+              "description": "There are errors related to the use of the Scanner class",
+              "severity_category": "minor",
+              "enabled": true,
+              "default_penalty_points": 10
             }
           ]
         }

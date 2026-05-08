@@ -24,6 +24,9 @@ def main():
     st.write('The information entered on this page is not stored online. It is only available in the browser for the other pages to use and run properly')
 
     # Get API keys
+    openrouter_api_key = st.text_input("Openrouter API Key", value=st.session_state.openrouter_api_key, type="password")
+    st.caption("*Required for all apps")
+
     openai_api_key = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key, type="password")
     st.caption("*Required for all apps; get it [here](https://platform.openai.com/account/api-keys).*")
 
@@ -39,19 +42,24 @@ def main():
     attendance_tracker_url = st.text_input("Attendance Tracker URL", value=st.session_state.attendance_tracker_url)
     st.caption("URL to the Attendance Tracker")
 
-    required_vars = [openai_api_key, instructor_user_id, instructor_password, instructor_signature, attendance_tracker_url]
+    required_vars = [openai_api_key, openrouter_api_key, instructor_user_id, instructor_password]
 
     # If the 'Save' button is clicked
     if st.button("Save"):
-        if any(not var.strip() for var in required_vars):
+        if any(not str(v or "").strip() for v in required_vars):
             st.error("Please provide the missing required settings.")
         else:
-            # Set both the st session state and the environment variable
-            st.session_state.openai_api_key = os.environ["OPENAI_API_KEY"] = openai_api_key
-            st.session_state.instructor_user_id = os.environ["INSTRUCTOR_USERID"] = instructor_user_id
-            st.session_state.instructor_password = os.environ["INSTRUCTOR_PASS"] = instructor_password
-            st.session_state.instructor_signature = os.environ["FEEDBACK_SIGNATURE"] = instructor_signature
-            st.session_state.attendance_tracker_url = os.environ["ATTENDANCE_TRACKER_URL"] = attendance_tracker_url
+            # Set both the st session state and the environment variable for required vars
+            st.session_state.openrouter_api_key = os.environ["OPENROUTER_API_KEY"] = openrouter_api_key.strip()
+            st.session_state.openai_api_key = os.environ["OPENAI_API_KEY"] = openai_api_key.strip()
+            st.session_state.instructor_user_id = os.environ["INSTRUCTOR_USERID"] = instructor_user_id.strip()
+            st.session_state.instructor_password = os.environ["INSTRUCTOR_PASS"] = instructor_password.strip()
+
+            # Set the the st session state and the environment variable for non-required vars
+            if (instructor_signature and instructor_signature.strip()):
+                st.session_state.instructor_signature = os.environ["FEEDBACK_SIGNATURE"] = instructor_signature.strip()
+            if (attendance_tracker_url and attendance_tracker_url.strip()):
+                st.session_state.attendance_tracker_url = os.environ["ATTENDANCE_TRACKER_URL"] = attendance_tracker_url.strip()
 
             st.success("Settings Saved")
 

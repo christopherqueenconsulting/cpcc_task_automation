@@ -4,26 +4,39 @@ import streamlit as st
 
 from cqc_cpcc.utilities.env_constants import *
 
+@st.cache_resource
+def get_env_config():
+    # This runs once and caches the result for all users/reruns
+    return {
+        "OPENROUTER_API_KEY": OPENROUTER_API_KEY,
+        "OPENAI_API_KEY": OPENAI_API_KEY,
+        "INSTRUCTOR_USERID": INSTRUCTOR_USERID,
+        "INSTRUCTOR_PASS": INSTRUCTOR_PASS,
+        "FEEDBACK_SIGNATURE": FEEDBACK_SIGNATURE,
+        "ATTENDANCE_TRACKER_URL": ATTENDANCE_TRACKER_URL
+    }
 
 # Initialize session state variables
 def init_session_state():
+    config = get_env_config()
+
     if 'openrouter_api_key' not in st.session_state:
-        st.session_state.openrouter_api_key = OPENROUTER_API_KEY
+        st.session_state.openrouter_api_key = config['OPENROUTER_API_KEY']
 
     if 'openai_api_key' not in st.session_state:
-        st.session_state.openai_api_key = OPENAI_API_KEY
+        st.session_state.openai_api_key = config['OPENAI_API_KEY']
 
     if 'instructor_user_id' not in st.session_state:
-        st.session_state.instructor_user_id = INSTRUCTOR_USERID
+        st.session_state.instructor_user_id = config['INSTRUCTOR_USERID']
 
     if 'instructor_password' not in st.session_state:
-        st.session_state.instructor_password = INSTRUCTOR_PASS
+        st.session_state.instructor_password = config['INSTRUCTOR_PASS']
 
     if 'instructor_signature' not in st.session_state:
-        st.session_state.instructor_signature = FEEDBACK_SIGNATURE
+        st.session_state.instructor_signature = config['FEEDBACK_SIGNATURE']
 
     if 'attendance_tracker_url' not in st.session_state:
-        st.session_state.attendance_tracker_url = ATTENDANCE_TRACKER_URL
+        st.session_state.attendance_tracker_url = config['ATTENDANCE_TRACKER_URL']
     
     # Initialize grading results caching state
     if 'grading_run_key' not in st.session_state:

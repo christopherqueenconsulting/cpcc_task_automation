@@ -70,50 +70,50 @@ class TestGetConstantFromEnv:
     """Test the get_constanct_from_env function."""
     
     def test_get_required_constant_that_exists(self):
-        from cqc_cpcc.utilities.env_constants import get_constanct_from_env
+        from cqc_cpcc.utilities.env_constants import get_constant_from_env
         with patch('os.environ', {'TEST_VAR': 'test_value'}):
-            result = get_constanct_from_env('TEST_VAR', required=True)
+            result = get_constant_from_env('TEST_VAR', required=True)
             assert result == 'test_value'
     
     def test_get_required_constant_that_does_not_exist_raises_error(self):
-        from cqc_cpcc.utilities.env_constants import get_constanct_from_env
+        from cqc_cpcc.utilities.env_constants import get_constant_from_env
         with patch('os.environ', {}):
             with pytest.raises(KeyError):
-                get_constanct_from_env('MISSING_VAR', required=True)
+                get_constant_from_env('MISSING_VAR', required=True)
     
     def test_get_optional_constant_that_exists(self):
-        from cqc_cpcc.utilities.env_constants import get_constanct_from_env
+        from cqc_cpcc.utilities.env_constants import get_constant_from_env
         with patch('os.environ', {'TEST_VAR': 'test_value'}):
-            result = get_constanct_from_env('TEST_VAR', required=False)
+            result = get_constant_from_env('TEST_VAR', required=False)
             assert result == 'test_value'
     
     def test_get_optional_constant_that_does_not_exist_returns_default(self):
-        from cqc_cpcc.utilities.env_constants import get_constanct_from_env, MISSING_CONSTANTS
+        from cqc_cpcc.utilities.env_constants import get_constant_from_env, MISSING_CONSTANTS
         # Clear MISSING_CONSTANTS before test
         MISSING_CONSTANTS.clear()
         
         with patch('os.environ', {}):
-            result = get_constanct_from_env('MISSING_VAR', required=False, default_value='default')
+            result = get_constant_from_env('MISSING_VAR', required=False, default_value='default')
             assert result == 'default'
             assert 'MISSING_VAR' in MISSING_CONSTANTS
     
     def test_get_optional_constant_without_default_returns_none(self):
-        from cqc_cpcc.utilities.env_constants import get_constanct_from_env, MISSING_CONSTANTS
+        from cqc_cpcc.utilities.env_constants import get_constant_from_env, MISSING_CONSTANTS
         # Clear MISSING_CONSTANTS before test
         MISSING_CONSTANTS.clear()
         
         with patch('os.environ', {}):
-            result = get_constanct_from_env('MISSING_VAR', required=False, default_value=None)
+            result = get_constant_from_env('MISSING_VAR', required=False, default_value=None)
             assert result is None
             assert 'MISSING_VAR' in MISSING_CONSTANTS
     
     def test_get_constant_with_empty_string_value(self):
-        from cqc_cpcc.utilities.env_constants import get_constanct_from_env, MISSING_CONSTANTS
+        from cqc_cpcc.utilities.env_constants import get_constant_from_env, MISSING_CONSTANTS
         # Clear MISSING_CONSTANTS before test
         MISSING_CONSTANTS.clear()
         
         with patch('os.environ', {'EMPTY_VAR': ''}):
-            result = get_constanct_from_env('EMPTY_VAR', required=False, default_value='default')
+            result = get_constant_from_env('EMPTY_VAR', required=False, default_value='default')
             # Empty string is falsy, so should return default
             assert result == 'default'
             assert 'EMPTY_VAR' in MISSING_CONSTANTS
