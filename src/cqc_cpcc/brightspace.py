@@ -5,15 +5,6 @@ import re
 import time
 from collections import defaultdict
 
-from selenium.common import TimeoutException, NoSuchElementException, ElementNotInteractableException, \
-    StaleElementReferenceException
-from selenium.webdriver import Keys
-from selenium.webdriver.common.by import By
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.select import Select
-from selenium.webdriver.support.wait import WebDriverWait
-
 from cqc_cpcc.utilities.date import convert_datetime_to_end_of_day, convert_date_to_datetime, \
     convert_datetime_to_start_of_day, is_date_in_range, weeks_between_dates, format_year, get_datetime, \
     is_checkdate_before_date, is_checkdate_after_date, filter_dates_in_range
@@ -23,6 +14,14 @@ from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry
     get_elements_href_as_list_wait_stale, wait_for_ajax, get_driver_wait
 from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, login_if_needed, \
     LINE_DASH_COUNT
+from selenium.common import TimeoutException, NoSuchElementException, ElementNotInteractableException, \
+    StaleElementReferenceException
+from selenium.webdriver import Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.select import Select
+from selenium.webdriver.support.wait import WebDriverWait
 
 
 class BrightSpace_Course:
@@ -237,9 +236,9 @@ class BrightSpace_Course:
                                                                refresh_on_stale=True)
 
             student_emails = get_elements_text_as_list_wait_stale(self.driver, self.wait,
-                                                               table_prefix_xpath + "//td[5]//label[1]",
-                                                               "Waiting for Student Ids",
-                                                               refresh_on_stale=True)
+                                                                  table_prefix_xpath + "//td[5]//label[1]",
+                                                                  "Waiting for Student Ids",
+                                                                  refresh_on_stale=True)
 
             withdrawal_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                     table_prefix_xpath + "//td[7]//label[1]",
@@ -430,7 +429,8 @@ class BrightSpace_Course:
                  due_dates]) + "]]/ancestor::th[1]//a[contains(@class,'d2l-link')]"
 
             assignment_links = get_elements_href_as_list_wait_stale(self.driver, self.wait, xpath_expression,
-                                                                    "Waiting for Assignment Links", refresh_on_stale=True)
+                                                                    "Waiting for Assignment Links",
+                                                                    refresh_on_stale=True)
             logger.info("Assignment Link(s) Due Between %s - %s:" % (self.date_range_start, self.date_range_end))
             logger.info("\n".join(assignment_links))
 
@@ -461,7 +461,8 @@ class BrightSpace_Course:
             wait_for_ajax(self.driver)
 
             # Get the Completion Summary Link
-            click_element_wait_retry(self.driver, self.wait, "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]",
+            click_element_wait_retry(self.driver, self.wait,
+                                     "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]",
                                      "Waiting for Submissions Link")
 
             # Click the Results per page select element
@@ -581,7 +582,8 @@ class BrightSpace_Course:
             # logger.info("Quizzes Links XPath: %s" % xpath_expression)
 
             quizzes_links = get_elements_href_as_list_wait_stale(self.driver, self.wait, xpath_expression,
-                                                                 "Waiting for Quizzes Links within due date range", refresh_on_stale=True)
+                                                                 "Waiting for Quizzes Links within due date range",
+                                                                 refresh_on_stale=True)
 
             # Need to modify the links using the quiz id
             quizzes_links = [self.modify_quiz_edit_url_to_attempt_log_url(link) for link in quizzes_links]
@@ -594,7 +596,7 @@ class BrightSpace_Course:
 
             # logger.info("Attendance Records (after quizzes):\n%s" % self.attendance_records)
 
-    def click_max_results_select(self, select_xpath: str, retry = 1) -> bool:
+    def click_max_results_select(self, select_xpath: str, retry=1) -> bool:
         select_successful = False
 
         while not select_successful and retry > 0:
@@ -630,7 +632,7 @@ class BrightSpace_Course:
                 select_element.send_keys(Keys.TAB)  # Use to blur the select element
                 # Explicit wait 1 second
                 time.sleep(3)
-                #self.driver.implicitly_wait(3)
+                # self.driver.implicitly_wait(3)
                 select_successful = True
             except (NoSuchElementException, ElementNotInteractableException):
                 # Break the while loop
@@ -638,7 +640,7 @@ class BrightSpace_Course:
             except (StaleElementReferenceException, TimeoutException) as ste:
                 logger.info("Exception while looking for: %s | Error: %s" % (select_xpath, ste))
                 retry -= 1
-                #self.driver.implicitly_wait(3)  # wait 3 seconds
+                # self.driver.implicitly_wait(3)  # wait 3 seconds
                 time.sleep(3)
 
             # are_you_satisfied()
@@ -692,11 +694,12 @@ class BrightSpace_Course:
                                                                                "Waiting for Completion Dates",
                                                                                refresh_on_stale=True)
 
-
                         if len(student_names) == len(completed_dates):
                             break  # Success, exit loop
                         attempts += 1
-                        logger.warn("Attempt %d: Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s | .....retrying." % (attempts, qu, len(student_names), len(completed_dates)))
+                        logger.warn(
+                            "Attempt %d: Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s | .....retrying." % (
+                                attempts, qu, len(student_names), len(completed_dates)))
 
                     if len(student_names) == 0:
                         logger.info("No Student Names Found")
@@ -704,7 +707,9 @@ class BrightSpace_Course:
                         logger.info("No Completion Dates Found")
                     # If the student names and post-dates lengths do not match, log an error and skip this quiz
                     if len(student_names) != len(completed_dates):
-                        logger.error("Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s" % (qu, len(student_names), len(completed_dates)))
+                        logger.error(
+                            "Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s" % (
+                                qu, len(student_names), len(completed_dates)))
                         continue
 
                     student_completions_dict = dict(zip(student_names, completed_dates))
@@ -761,7 +766,8 @@ class BrightSpace_Course:
                  latest_post_dates]) + "]]//a[contains(@class,'d2l-linkheading-link')]"
 
             discussion_links = get_elements_href_as_list_wait_stale(self.driver, self.wait, xpath_expression,
-                                                                    "Waiting for Discussions Links", refresh_on_stale=True)
+                                                                    "Waiting for Discussions Links",
+                                                                    refresh_on_stale=True)
             logger.info("Discussion Latest Post Link(s) Between %s - %s:" % (
                 self.date_range_start, DT.date.today()))  # Use today as the end date incase someone posted recently
             logger.info("\n".join(discussion_links))
@@ -815,7 +821,7 @@ class BrightSpace_Course:
             if self.click_max_results_select(self.select_xpath):
 
                 # Find the student names and the dates the for completed assignments
-                #TODo: Fix this xpath for table
+                # TODo: Fix this xpath for table
                 table_prefix_xpath = "//table[contains(@class,'d2l-grid') and contains(@summary,'submissions')]"
                 try:
 
@@ -856,7 +862,6 @@ class BrightSpace_Course:
                             "Mismatched lengths for student names and post-dates for Discussion: %s | Student Names: %s | Post Dates: %s" % (
                                 du, len(student_names), len(post_dates)))
                         continue
-
 
                     # Create a default dict to store dates associated with each student
                     student_post_date_dict = defaultdict(list)

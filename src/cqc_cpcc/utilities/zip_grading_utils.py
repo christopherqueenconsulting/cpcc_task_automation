@@ -19,8 +19,8 @@ import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 from random import randint
+from typing import Optional
 
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.utils import read_file, wrap_code_in_markdown_backticks
@@ -64,7 +64,7 @@ IGNORE_FILE_PREFIXES = {
 # BrightSpace export files that should never be graded
 IGNORE_FILE_NAMES = {
     'index.html',  # BrightSpace export index
-    'index.htm',   # Alternative BrightSpace export index
+    'index.htm',  # Alternative BrightSpace export index
 }
 
 # File extensions by priority (higher priority = more relevant for grading)
@@ -158,30 +158,30 @@ def should_ignore_file(filepath: str) -> bool:
         True if file should be ignored
     """
     path = Path(filepath)
-    
+
     # Check directory names
     for part in path.parts:
         if part in IGNORE_DIRECTORIES:
             return True
-    
+
     # Check filename (case-insensitive for exact match)
     filename = path.name
     filename_lower = filename.lower()
-    
+
     # Check exact filenames (e.g., index.html from BrightSpace exports)
     if filename_lower in IGNORE_FILE_NAMES:
         return True
-    
+
     # Check filename prefixes
     for prefix in IGNORE_FILE_PREFIXES:
         if filename.startswith(prefix):
             return True
-    
+
     # Check binary extensions
     ext = path.suffix.lower()
     if ext in BINARY_EXTENSIONS:
         return True
-    
+
     return False
 
 
@@ -201,9 +201,9 @@ def get_file_priority(filepath: str) -> int:
 
 
 def extract_student_submissions_from_zip(
-    zip_path: str,
-    accepted_file_types: list[str],
-    max_tokens_per_student: int = DEFAULT_MAX_INPUT_TOKENS,
+        zip_path: str,
+        accepted_file_types: list[str],
+        max_tokens_per_student: int = DEFAULT_MAX_INPUT_TOKENS,
 ) -> dict[str, StudentSubmission]:
     """Extract student submissions from a ZIP file with token estimation.
     
@@ -242,13 +242,13 @@ def extract_student_submissions_from_zip(
     """
     if not zip_path.endswith('.zip'):
         raise ValueError(f"Not a ZIP file: {zip_path}")
-    
+
     students_data: dict[str, StudentSubmission] = {}
-    
+
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         # First pass: analyze ZIP structure and detect wrapper folders
         all_paths = [f.filename for f in zip_ref.infolist() if not f.is_dir()]
-        
+
         # Check if there's a common wrapper folder
         # e.g., "Programming Exam 1/Student1/file.java" -> wrapper is "Programming Exam 1"
         wrapper_folder = None
@@ -256,13 +256,13 @@ def extract_student_submissions_from_zip(
             # Find common prefix path
             common_parts = []
             first_path_parts = all_paths[0].split('/')
-            
+
             for i, part in enumerate(first_path_parts[:-1]):  # Exclude filename
                 if all(p.split('/')[i] == part if len(p.split('/')) > i else False for p in all_paths):
                     common_parts.append(part)
                 else:
                     break
-            
+
             # If all files share a common top-level folder, treat it as wrapper
             if common_parts and len(common_parts) >= 1:
                 # Check if this is likely a wrapper folder (not a student folder)
@@ -273,39 +273,39 @@ def extract_student_submissions_from_zip(
                     # Skip paths that should be ignored (noise files)
                     if should_ignore_file(path):
                         continue
-                    
+
                     parts = path.split('/')
                     if len(parts) > len(common_parts) + 1:
                         folder_name = parts[len(common_parts)]
                         # Don't count noise directories
                         if folder_name not in IGNORE_DIRECTORIES:
                             second_level_folders.add(folder_name)
-                
+
                 if len(second_level_folders) > 1:
                     wrapper_folder = '/'.join(common_parts)
                     logger.info(f"Detected wrapper folder in ZIP: '{wrapper_folder}'")
-        
+
         # Second pass: group files by student folder
         student_files: dict[str, list[tuple[str, str]]] = {}  # student_id -> [(filename, zip_path)]
-        
+
         for file_info in zip_ref.infolist():
             # Skip directories
             if file_info.is_dir():
                 continue
-            
+
             file_name = os.path.basename(file_info.filename)
             directory_name = os.path.dirname(file_info.filename)
-            
+
             # Skip files in root (no student folder)
             if not directory_name:
                 logger.debug(f"Skipping file in root: {file_name}")
                 continue
-            
+
             # Check if should ignore
             if should_ignore_file(file_info.filename):
                 logger.debug(f"Ignoring file: {file_info.filename}")
                 continue
-            
+
             # Remove wrapper folder from directory path if present
             if wrapper_folder and directory_name.startswith(wrapper_folder):
                 directory_name = directory_name[len(wrapper_folder):].lstrip('/')
@@ -313,7 +313,7 @@ def extract_student_submissions_from_zip(
                 if not directory_name:
                     logger.debug(f"Skipping file directly in wrapper folder: {file_name}")
                     continue
-            
+
             # Parse student identifier from directory
             # Handle "Assignment - Student Name" format (BrightSpace)
             # BrightSpace format is typically: "ID - Student Name - Timestamp"
@@ -332,45 +332,46 @@ def extract_student_submissions_from_zip(
                 # Use top-level folder name as student ID
                 # Handle nested paths: "Student1/subfolder/file.java" -> "Student1"
                 student_id = directory_name.split('/')[0].split('\\')[0]
-            
+
             # Check file extension
             # accepted_file_types can contain extensions with or without dots
             # e.g., ['java', 'txt'] or ['.java', '.txt']
             # Normalize by removing dots for comparison
             file_ext = Path(file_name).suffix.lower().lstrip('.')  # e.g., 'java' from 'Main.java'
-            
+
             # Normalize accepted types (remove dots if present)
             normalized_accepted = [ext.lstrip('.') for ext in accepted_file_types]
-            
+
             if file_ext not in normalized_accepted:
-                logger.debug(f"Skipping file with unaccepted type: {file_name} (extension: .{file_ext}, accepted: {normalized_accepted})")
+                logger.debug(
+                    f"Skipping file with unaccepted type: {file_name} (extension: .{file_ext}, accepted: {normalized_accepted})")
                 continue
-            
+
             # Skip files with ignored prefixes
             if any(file_name.startswith(prefix) for prefix in IGNORE_FILE_PREFIXES):
                 logger.debug(f"Skipping ignored file: {file_name}")
                 continue
-            
+
             # Add to student's file list
             if student_id not in student_files:
                 student_files[student_id] = []
             student_files[student_id].append((file_name, file_info.filename))
-        
+
         logger.info(f"Found {len(student_files)} potential student folders after parsing")
-        
+
         # Second pass: extract and budget tokens per student
         for student_id, files_list in student_files.items():
             # Sort files by priority (highest first)
             files_list.sort(key=lambda f: get_file_priority(f[0]), reverse=True)
-            
+
             submission = StudentSubmission(
                 student_id=student_id,
                 student_name=student_id,  # Use as display name
                 files={},
             )
-            
+
             total_tokens = 0
-            
+
             for file_name, zip_file_path in files_list:
                 # Extract to temp file
                 with zip_ref.open(zip_file_path) as file:
@@ -384,12 +385,12 @@ def extract_student_submissions_from_zip(
                     temp_file.write(file.read())
                     temp_file.flush()
                     temp_file_path = temp_file.name
-                
+
                 # Read file content and estimate tokens
                 try:
                     file_content = read_file(temp_file_path, convert_to_markdown=False)
                     file_tokens = estimate_tokens(file_content)
-                    
+
                     # NO TRUNCATION: Just warn if submission is large
                     if total_tokens + file_tokens > max_tokens_per_student:
                         logger.warning(
@@ -397,20 +398,20 @@ def extract_student_submissions_from_zip(
                             f"(~{total_tokens + file_tokens} tokens). "
                             f"Preprocessing will be used automatically during grading."
                         )
-                    
+
                     # Add file to submission (no budget enforcement)
                     submission.files[file_name] = temp_file_path
                     submission.total_chars += len(file_content)
                     total_tokens += file_tokens
-                    
+
                 except Exception as e:
                     logger.error(f"Error reading {file_name} for student {student_id}: {e}")
                     # Clean up temp file
                     os.unlink(temp_file_path)
                     continue
-            
+
             submission.estimated_tokens = total_tokens
-            
+
             if submission.files:
                 students_data[student_id] = submission
                 logger.info(
@@ -419,13 +420,13 @@ def extract_student_submissions_from_zip(
                 )
             else:
                 logger.warning(f"No valid files found for student: {student_id}")
-    
+
     if not students_data:
         # Provide helpful error message
         error_msg = f"No student submissions found in ZIP: {zip_path}\n"
         if wrapper_folder:
             error_msg += f"Detected wrapper folder: '{wrapper_folder}'\n"
-        
+
         # List what was found (use all_paths already collected in with block)
         if all_paths:
             error_msg += f"Found {len(all_paths)} file(s) in ZIP but none matched expected structure.\n"
@@ -438,18 +439,18 @@ def extract_student_submissions_from_zip(
                 error_msg += f"  ... and {len(all_paths) - 5} more\n"
         else:
             error_msg += "ZIP appears to be empty or contains only directories.\n"
-        
+
         raise ValueError(error_msg.strip())
-    
+
     logger.info(f"Extracted {len(students_data)} student submissions from ZIP")
     return students_data
 
 
 def build_submission_text_with_token_limit(
-    files: dict[str, str],
-    max_tokens: int = DEFAULT_MAX_INPUT_TOKENS,
-    is_truncated: bool = False,
-    omitted_files: Optional[list[str]] = None,
+        files: dict[str, str],
+        max_tokens: int = DEFAULT_MAX_INPUT_TOKENS,
+        is_truncated: bool = False,
+        omitted_files: Optional[list[str]] = None,
 ) -> str:
     """Build combined submission text from multiple files.
     
@@ -471,7 +472,7 @@ def build_submission_text_with_token_limit(
         for backward compatibility but only used for warnings.
     """
     parts = []
-    
+
     if is_truncated:
         omitted_list = omitted_files or []
         omitted_text = "\n".join(f"- {name}" for name in omitted_list)
@@ -481,22 +482,22 @@ def build_submission_text_with_token_limit(
         )
         parts.append(notice)
     total_tokens = 0
-    
+
     # Sort files by priority for consistent ordering
     sorted_files = sorted(files.items(), key=lambda f: get_file_priority(f[0]), reverse=True)
-    
+
     for filename, filepath in sorted_files:
         try:
             content = read_file(filepath, convert_to_markdown=False)
             file_tokens = estimate_tokens(content)
-            
+
             # Warn if large, but don't truncate
             if total_tokens + file_tokens > max_tokens:
                 logger.warning(
                     f"Large submission detected (~{total_tokens + file_tokens} tokens). "
                     f"Preprocessing will be used automatically."
                 )
-            
+
             # Add file name details for AI (no budget check)
             file_section = f"### Submission File Name: {filename}\n"
             solution_language = get_language_from_file_path(filepath)
@@ -504,12 +505,12 @@ def build_submission_text_with_token_limit(
                 # Add the content inside a codeblock
                 content = wrap_code_in_markdown_backticks(content, solution_language)
             file_section += f"### Submission Content: {content}"
-            
+
             parts.append(file_section)
             total_tokens += file_tokens
-            
+
         except Exception as e:
             logger.error(f"Error reading {filename}: {e}")
             continue
-    
+
     return "\n".join(parts)

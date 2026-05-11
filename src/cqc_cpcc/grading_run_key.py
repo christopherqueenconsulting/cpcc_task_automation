@@ -28,16 +28,16 @@ from typing import Optional
 
 
 def generate_grading_run_key(
-    course_id: str,
-    assignment_id: str,
-    rubric_id: str,
-    rubric_version: int,
-    error_definition_ids: Optional[list[str]] = None,
-    file_metadata: Optional[list[tuple[str, int]]] = None,
-    model_name: str = "gpt-5-mini",
-    temperature: float = 0.2,
-    debug_mode: bool = False,
-    grading_mode: str = "rubric_and_errors",
+        course_id: str,
+        assignment_id: str,
+        rubric_id: str,
+        rubric_version: int,
+        error_definition_ids: Optional[list[str]] = None,
+        file_metadata: Optional[list[tuple[str, int]]] = None,
+        model_name: str = "gpt-5-mini",
+        temperature: float = 0.2,
+        debug_mode: bool = False,
+        grading_mode: str = "rubric_and_errors",
 ) -> str:
     """Generate a deterministic hash key from grading inputs.
     
@@ -77,10 +77,10 @@ def generate_grading_run_key(
         "debug_mode": debug_mode,
         "grading_mode": grading_mode,
     }
-    
+
     # Serialize to JSON with sorted keys for determinism
     json_str = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
-    
+
     # Hash with SHA256
     hash_obj = hashlib.sha256(json_str.encode("utf-8"))
     return hash_obj.hexdigest()
@@ -101,7 +101,7 @@ def generate_file_metadata(file_paths: list[tuple[str, str]]) -> list[tuple[str,
         >>> print(metadata)  # [("student1.java", 1234)]
     """
     import os
-    
+
     metadata = []
     for original_path, temp_path in file_paths:
         filename = os.path.basename(original_path)
@@ -110,7 +110,7 @@ def generate_file_metadata(file_paths: list[tuple[str, str]]) -> list[tuple[str,
         except (OSError, IOError):
             # If temp file is not accessible, use 0
             file_size = 0
-        
+
         metadata.append((filename, file_size))
-    
+
     return metadata

@@ -2,12 +2,12 @@
 import os
 
 import streamlit as st
-
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css
 
 # Initialize session state variables
 init_session_state()
+
 
 def main():
     st.set_page_config(layout="wide", page_title="Settings", page_icon="⚙️")  # TODO: Change the page icon
@@ -21,10 +21,12 @@ def main():
     # Streamlit app
     st.subheader('Settings')
 
-    st.write('The information entered on this page is not stored online. It is only available in the browser for the other pages to use and run properly')
+    st.write(
+        'The information entered on this page is not stored online. It is only available in the browser for the other pages to use and run properly')
 
     # Get API keys
-    openrouter_api_key = st.text_input("Openrouter API Key", value=st.session_state.openrouter_api_key or "", type="password")
+    openrouter_api_key = st.text_input("Openrouter API Key", value=st.session_state.openrouter_api_key or "",
+                                       type="password")
     st.caption("*Required for all apps")
 
     openai_api_key = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key or "", type="password")
@@ -33,7 +35,8 @@ def main():
     # Get CPCC variables
     instructor_user_id = st.text_input("Instructor User ID", value=st.session_state.instructor_user_id or "")
     st.caption("*Required for all apps")
-    instructor_password = st.text_input("Instructor Password", value=st.session_state.instructor_password or "", type="password")
+    instructor_password = st.text_input("Instructor Password", value=st.session_state.instructor_password or "",
+                                        type="password")
     st.caption("*Required for all apps")
 
     instructor_signature = st.text_input("Instructor Signature", value=st.session_state.instructor_signature or "")
@@ -59,7 +62,8 @@ def main():
             if (instructor_signature and instructor_signature.strip()):
                 st.session_state.instructor_signature = os.environ["FEEDBACK_SIGNATURE"] = instructor_signature.strip()
             if (attendance_tracker_url and attendance_tracker_url.strip()):
-                st.session_state.attendance_tracker_url = os.environ["ATTENDANCE_TRACKER_URL"] = attendance_tracker_url.strip()
+                st.session_state.attendance_tracker_url = os.environ[
+                    "ATTENDANCE_TRACKER_URL"] = attendance_tracker_url.strip()
 
             st.success("Settings Saved")
 

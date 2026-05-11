@@ -18,14 +18,12 @@ import re
 from datetime import datetime
 from typing import Optional
 
+from cqc_cpcc.rubric_models import RubricAssessmentResult
+from cqc_cpcc.student_feedback_builder import build_student_feedback
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor, Inches
-
-from cqc_cpcc.rubric_models import RubricAssessmentResult
-from cqc_cpcc.student_feedback_builder import build_student_feedback
-
 
 # CPCC Brand Colors
 CPCC_BLUE = RGBColor(0, 90, 163)  # #005AA3
@@ -72,38 +70,38 @@ def normalize_color_to_hex(color) -> str:
     if isinstance(color, (RGBColor, tuple, list)):
         if len(color) != 3:
             raise ValueError(f"Color tuple/list must have exactly 3 values (r, g, b), got {len(color)}")
-        
+
         r, g, b = color
-        
+
         # Validate range
         for component, name in [(r, 'r'), (g, 'g'), (b, 'b')]:
             if not isinstance(component, int) or not (0 <= component <= 255):
                 raise ValueError(
                     f"Color component '{name}' must be an integer between 0 and 255, got {component}"
                 )
-        
+
         return f"{r:02X}{g:02X}{b:02X}"
-    
+
     # Handle hex string
     elif isinstance(color, str):
         # Remove '#' prefix if present
         hex_str = color.lstrip('#')
-        
+
         # Validate hex string length
         if len(hex_str) != 6:
             raise ValueError(
                 f"Hex color string must be 6 characters (without '#'), got '{hex_str}' ({len(hex_str)} chars)"
             )
-        
+
         # Validate hex characters
         try:
             int(hex_str, 16)
         except ValueError:
             raise ValueError(f"Invalid hex color string: '{hex_str}' contains non-hex characters")
-        
+
         # Return uppercase
         return hex_str.upper()
-    
+
     else:
         raise TypeError(
             f"Unsupported color type: {type(color).__name__}. "
@@ -148,26 +146,26 @@ def add_horizontal_line(paragraph, color: RGBColor = CPCC_LIGHT_BLUE, height: in
     p = paragraph._p
     pPr = p.get_or_add_pPr()
     pBdr = OxmlElement('w:pBdr')
-    
+
     bottom = OxmlElement('w:bottom')
     bottom.set(qn('w:val'), 'single')
     bottom.set(qn('w:sz'), str(height // 1000))  # Convert to eighths of a point
     bottom.set(qn('w:space'), '1')
-    
+
     # Normalize color to hex string using our utility function
     color_hex = normalize_color_to_hex(color)
     bottom.set(qn('w:color'), color_hex)
-    
+
     pBdr.append(bottom)
     pPr.append(pBdr)
 
 
 def generate_student_feedback_doc(
-    student_name: str,
-    course_id: str,
-    assignment_name: str,
-    feedback_result: RubricAssessmentResult,
-    metadata: Optional[dict] = None
+        student_name: str,
+        course_id: str,
+        assignment_name: str,
+        feedback_result: RubricAssessmentResult,
+        metadata: Optional[dict] = None
 ) -> bytes:
     """Generate a CPCC-branded Word document containing student feedback.
     
@@ -199,7 +197,7 @@ def generate_student_feedback_doc(
     """
     # Create document
     doc = Document()
-    
+
     # Set default font and margins
     sections = doc.sections
     for section in sections:
@@ -207,7 +205,7 @@ def generate_student_feedback_doc(
         section.bottom_margin = Inches(1.0)
         section.left_margin = Inches(1.0)
         section.right_margin = Inches(1.0)
-    
+
     # Title: "Feedback Summary" (20pt Bold, CPCC Blue)
     title = doc.add_heading('Feedback Summary', level=1)
     title_run = title.runs[0]
@@ -217,7 +215,7 @@ def generate_student_feedback_doc(
     title_run.font.color.rgb = CPCC_BLUE
     title.paragraph_format.space_after = Pt(8)
     title.paragraph_format.line_spacing = 1.0
-    
+
     # Student line (12pt Regular, Neutral Dark)
     student_para = doc.add_paragraph()
     student_run = student_para.add_run(f'Student: {student_name}')
@@ -225,7 +223,7 @@ def generate_student_feedback_doc(
     student_run.font.size = Pt(12)
     student_run.font.color.rgb = NEUTRAL_DARK
     student_para.paragraph_format.space_after = Pt(6)
-    
+
     # Course/Assignment/Date line (12pt Regular, Neutral Dark)
     date_str = metadata.get('date') if metadata else datetime.now().strftime('%Y-%m-%d')
     course_para = doc.add_paragraph()
@@ -236,28 +234,28 @@ def generate_student_feedback_doc(
     course_run.font.size = Pt(12)
     course_run.font.color.rgb = NEUTRAL_DARK
     course_para.paragraph_format.space_after = Pt(12)
-    
+
     # Horizontal divider (CPCC Light Blue)
     divider_para = doc.add_paragraph()
     add_horizontal_line(divider_para, CPCC_LIGHT_BLUE)
     divider_para.paragraph_format.space_after = Pt(12)
-    
+
     # Build student feedback text (no scores)
     feedback_text = build_student_feedback(
         feedback_result,
         student_name=student_name,
         include_greeting=False  # Skip greeting in doc
     )
-    
+
     # Parse feedback text into sections
     sections_dict = _parse_feedback_sections(feedback_text)
-    
+
     # Add Summary section
     if 'summary' in sections_dict and sections_dict['summary']:
         _add_section_heading(doc, 'Summary')
         summary_para = doc.add_paragraph(sections_dict['summary'])
         _format_body_paragraph(summary_para)
-    
+
     # Add Strengths section
     if 'strengths' in sections_dict and sections_dict['strengths']:
         _add_section_heading(doc, 'Strengths')
@@ -265,7 +263,7 @@ def generate_student_feedback_doc(
             para = doc.add_paragraph(strength, style='List Bullet')
             _format_body_paragraph(para)
         doc.paragraphs[-1].paragraph_format.space_after = Pt(8)
-    
+
     # Add Improvements section
     if 'improvements' in sections_dict and sections_dict['improvements']:
         _add_section_heading(doc, 'Areas for Improvement')
@@ -273,40 +271,40 @@ def generate_student_feedback_doc(
             para = doc.add_paragraph(improvement, style='List Bullet')
             _format_body_paragraph(para)
         doc.paragraphs[-1].paragraph_format.space_after = Pt(8)
-    
+
     # Add Errors Observed section (only if errors exist)
     if 'errors' in sections_dict and sections_dict['errors']:
         _add_section_heading(doc, 'Errors Observed')
-        
+
         # Group errors by severity
         major_errors = [e for e in sections_dict['errors'] if e.get('severity') == 'major']
         minor_errors = [e for e in sections_dict['errors'] if e.get('severity') == 'minor']
-        
+
         if major_errors:
             major_label = doc.add_paragraph('Major Issues:')
             major_label_run = major_label.runs[0]
             major_label_run.font.italic = True
             _format_body_paragraph(major_label)
             major_label.paragraph_format.space_after = Pt(4)
-            
+
             for error in major_errors:
                 _add_error_to_doc(doc, error)
-        
+
         if minor_errors:
             minor_label = doc.add_paragraph('Minor Issues:')
             minor_label_run = minor_label.runs[0]
             minor_label_run.font.italic = True
             _format_body_paragraph(minor_label)
             minor_label.paragraph_format.space_after = Pt(4)
-            
+
             for error in minor_errors:
                 _add_error_to_doc(doc, error)
-    
+
     # Convert document to bytes
     doc_bytes = io.BytesIO()
     doc.save(doc_bytes)
     doc_bytes.seek(0)
-    
+
     return doc_bytes.getvalue()
 
 
@@ -337,7 +335,7 @@ def _format_body_paragraph(paragraph):
         run.font.name = 'Calibri'
         run.font.size = Pt(11)
         run.font.color.rgb = NEUTRAL_DARK
-    
+
     paragraph.paragraph_format.line_spacing = 1.15
     paragraph.paragraph_format.space_after = Pt(6)
 
@@ -363,18 +361,18 @@ def _parse_feedback_sections(feedback_text: str) -> dict:
         'improvements': [],
         'errors': []
     }
-    
+
     lines = feedback_text.split('\n')
     current_section = 'summary'
     current_error = None
-    
+
     for line in lines:
         line_stripped = line.strip()
-        
+
         # Skip empty lines
         if not line_stripped:
             continue
-        
+
         # Detect section headers
         if line_stripped.startswith('**Strengths:**'):
             current_section = 'strengths'
@@ -392,7 +390,7 @@ def _parse_feedback_sections(feedback_text: str) -> dict:
             else:
                 current_section = 'errors_minor'
             continue
-        
+
         # Process content based on current section
         if current_section == 'summary':
             sections['summary'] += line_stripped + ' '
@@ -420,10 +418,10 @@ def _parse_feedback_sections(feedback_text: str) -> dict:
             elif current_error and line_stripped and not line_stripped.startswith('Keep up'):
                 # Additional notes for current error
                 current_error['notes'] += line_stripped + ' '
-    
+
     # Clean up summary
     sections['summary'] = sections['summary'].strip()
-    
+
     return sections
 
 
@@ -444,13 +442,13 @@ def _add_error_to_doc(doc: Document, error: dict):
     _format_body_paragraph(error_para)
     error_para.runs[0].font.bold = True
     error_para.paragraph_format.space_after = Pt(2)
-    
+
     # Description sub-bullet
     desc_para = doc.add_paragraph(error['description'], style='List Bullet 2')
     _format_body_paragraph(desc_para)
     desc_para.paragraph_format.left_indent = Inches(0.5)
     desc_para.paragraph_format.space_after = Pt(2)
-    
+
     # Notes sub-bullet (if available)
     if error.get('notes') and error['notes'].strip():
         notes_para = doc.add_paragraph(error['notes'].strip(), style='List Bullet 2')

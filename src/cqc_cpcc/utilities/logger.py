@@ -64,8 +64,8 @@ def _resolve_openai_debug_log_level() -> int:
 
 
 def _replace_rotating_file_handlers(
-    target_logger: logging.Logger,
-    handler: RotatingFileHandler,
+        target_logger: logging.Logger,
+        handler: RotatingFileHandler,
 ) -> None:
     """Replace rotating file handlers to keep logger configuration idempotent."""
     for existing_handler in list(target_logger.handlers):
@@ -88,8 +88,8 @@ INFO_FORMAT = "%(message)s"
 base_logger_level = _resolve_base_log_level()
 logging.basicConfig(format=INFO_FORMAT, level=base_logger_level)
 logger.setLevel(base_logger_level)
-#logging.basicConfig(format=DEBUG_FORMAT, level=logging.DEBUG)
-#logging.basicConfig(format=ERROR_FORMAT, level=logging.ERROR)
+# logging.basicConfig(format=DEBUG_FORMAT, level=logging.DEBUG)
+# logging.basicConfig(format=ERROR_FORMAT, level=logging.ERROR)
 
 today = DT.date.today()
 # Log to file
@@ -133,10 +133,10 @@ class MyFormatter(logging.Formatter):
 
 
 fmt = MyFormatter()
-#stream_handler = logging.StreamHandler(sys.stdout)
-#stream_handler.setFormatter(fmt)
-#logger.root.addHandler(stream_handler)
-#logging.root.setLevel(logging.INFO)
+# stream_handler = logging.StreamHandler(sys.stdout)
+# stream_handler.setFormatter(fmt)
+# logger.root.addHandler(stream_handler)
+# logging.root.setLevel(logging.INFO)
 
 file_handler = RotatingFileHandler(
     LOGGING_FILENAME,
@@ -145,7 +145,6 @@ file_handler = RotatingFileHandler(
 )  # 10 files of 250MB each
 file_handler.setFormatter(fmt)
 _replace_rotating_file_handlers(logger, file_handler)
-
 
 # Setup OpenAI debug logger (separate channel)
 openai_debug_logger = logging.getLogger("openai.debug")
@@ -169,4 +168,3 @@ _replace_rotating_file_handlers(openai_debug_logger, openai_debug_handler)
 
 # Prevent propagation to root logger (keep debug logs separate)
 openai_debug_logger.propagate = False
-

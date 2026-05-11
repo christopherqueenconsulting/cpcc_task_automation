@@ -78,7 +78,7 @@ def _redact_sensitive_data(data: Any) -> Any:
     """
     if not CQC_OPENAI_DEBUG_REDACT:
         return data
-    
+
     if isinstance(data, dict):
         redacted = {}
         for key, value in data.items():
@@ -89,10 +89,10 @@ def _redact_sensitive_data(data: Any) -> Any:
             else:
                 redacted[key] = _redact_sensitive_data(value)
         return redacted
-    
+
     elif isinstance(data, list):
         return [_redact_sensitive_data(item) for item in data]
-    
+
     elif isinstance(data, str):
         # Redact email addresses
         text = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '***EMAIL***', data)
@@ -101,7 +101,7 @@ def _redact_sensitive_data(data: Any) -> Any:
         # Redact phone numbers (various formats)
         text = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '***PHONE***', text)
         return text
-    
+
     else:
         return data
 
@@ -116,38 +116,38 @@ def _save_to_file(correlation_id: str, data_type: str, data: dict) -> None:
     """
     if not CQC_OPENAI_DEBUG_SAVE_DIR:
         return
-    
+
     try:
         # Create save directory if it doesn't exist
         save_dir = Path(CQC_OPENAI_DEBUG_SAVE_DIR)
         save_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Generate filename with timestamp and correlation ID
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{correlation_id}_{data_type}.json"
         filepath = save_dir / filename
-        
+
         # Write JSON file
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, default=str)
-        
+
         debug_logger.debug(f"Saved {data_type} data to {filepath}")
-        
+
     except Exception as e:
         # Don't let file writing errors break the main flow
         debug_logger.warning(f"Failed to save {data_type} data to file: {e}")
 
 
 def record_request(
-    correlation_id: str,
-    model: str,
-    messages: list[dict],
-    response_format: dict,
-    schema_name: str,
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    request_type: str = "grading_structured",
-    **other_params
+        correlation_id: str,
+        model: str,
+        messages: list[dict],
+        response_format: dict,
+        schema_name: str,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        request_type: str = "grading_structured",
+        **other_params
 ) -> None:
     """Record an OpenAI API request for debugging.
     
@@ -164,12 +164,12 @@ def record_request(
     """
     if not should_debug():
         return
-    
+
     try:
         # Estimate input tokens from messages
         total_chars = sum(len(str(msg.get("content", ""))) for msg in messages)
         estimated_tokens = total_chars // 4  # Rough estimate: 4 chars per token
-        
+
         # Build request data
         request_data = {
             "correlation_id": correlation_id,
@@ -193,7 +193,7 @@ def record_request(
                 "message_chars": total_chars,
             },
         }
-        
+
         # Add optional parameters
         if temperature is not None:
             request_data["request"]["temperature"] = temperature
@@ -201,32 +201,32 @@ def record_request(
             request_data["request"]["max_tokens"] = max_tokens
         for key, value in other_params.items():
             request_data["request"][key] = value
-        
+
         # Redact sensitive data
         redacted_data = _redact_sensitive_data(request_data)
-        
+
         # Log to console/file
         debug_logger.info(
             f"[{correlation_id}] OpenAI Request: type={request_type}, model={model}, "
             f"schema={schema_name}, est_tokens={estimated_tokens}"
         )
         debug_logger.debug(f"[{correlation_id}] Full request: {json.dumps(redacted_data, indent=2, default=str)}")
-        
+
         # Save to file if configured
         _save_to_file(correlation_id, "request", redacted_data)
-        
+
     except Exception as e:
         debug_logger.warning(f"Failed to record request: {e}")
 
 
 def record_response(
-    correlation_id: str,
-    response: Any,
-    schema_name: str,
-    decision_notes: str,
-    output_text: Optional[str] = None,
-    output_parsed: Optional[Any] = None,
-    error: Optional[Exception] = None,
+        correlation_id: str,
+        response: Any,
+        schema_name: str,
+        decision_notes: str,
+        output_text: Optional[str] = None,
+        output_parsed: Optional[Any] = None,
+        error: Optional[Exception] = None,
 ) -> None:
     """Record an OpenAI API response for debugging.
     
@@ -241,7 +241,7 @@ def record_response(
     """
     if not should_debug():
         return
-    
+
     try:
         # Build response data
         response_data = {
@@ -250,7 +250,7 @@ def record_response(
             "schema_name": schema_name,
             "decision_notes": decision_notes,
         }
-        
+
         # Add response metadata if available
         if response:
             response_data["response_metadata"] = {
@@ -259,7 +259,7 @@ def record_response(
                 "created": getattr(response, 'created', None),
                 "object": getattr(response, 'object', None),
             }
-            
+
             # Add usage info if available
             if hasattr(response, 'usage') and response.usage:
                 response_data["usage"] = {
@@ -267,18 +267,18 @@ def record_response(
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
                 }
-            
+
             # Add finish_reason and other choice metadata
             if hasattr(response, 'choices') and response.choices:
                 choice = response.choices[0]
                 response_data["finish_reason"] = getattr(choice, 'finish_reason', None)
-                
+
                 if hasattr(choice, 'message'):
                     message = choice.message
                     # Check for refusal
                     if hasattr(message, 'refusal') and message.refusal:
                         response_data["refusal"] = message.refusal
-        
+
         # Add output data with length metrics
         if output_text:
             output_chars = len(output_text)
@@ -286,7 +286,7 @@ def record_response(
         else:
             output_chars = 0
             output_tokens_est = 0
-            
+
         response_data["output"] = {
             "text": output_text[:500] if output_text else None,  # Truncate to 500 chars for console/log display
             "text_length_chars": output_chars,
@@ -294,32 +294,32 @@ def record_response(
             "parsed_present": output_parsed is not None,
             "parsed_type": type(output_parsed).__name__ if output_parsed else None,
         }
-        
+
         # Add error info if present
         if error:
             response_data["error"] = {
                 "type": type(error).__name__,
                 "message": str(error),
             }
-        
+
         # Redact sensitive data for console/log display
         redacted_data = _redact_sensitive_data(response_data)
-        
+
         # Log to console/file with enhanced diagnostics
         finish_reason = response_data.get("finish_reason", "unknown")
         usage_summary = "no usage" if not response or not hasattr(response, 'usage') or not response.usage else \
-                       f"{response.usage.total_tokens} tokens"
-        
+            f"{response.usage.total_tokens} tokens"
+
         debug_logger.info(
             f"[{correlation_id}] OpenAI Response: schema={schema_name}, "
             f"parsed={output_parsed is not None}, finish_reason={finish_reason}, "
             f"usage={usage_summary}, notes={decision_notes}"
         )
         debug_logger.debug(f"[{correlation_id}] Full response: {json.dumps(redacted_data, indent=2, default=str)}")
-        
+
         # Save redacted response summary for backward compatibility
         _save_to_file(correlation_id, "response", redacted_data)
-        
+
         # Save raw response with FULL output text (not truncated) to response_raw.json
         response_raw_data = response_data.copy()
         response_raw_data["output"] = {
@@ -331,7 +331,7 @@ def record_response(
         }
         redacted_raw_data = _redact_sensitive_data(response_raw_data)
         _save_to_file(correlation_id, "response_raw", redacted_raw_data)
-        
+
         # Save parsed output to response_parsed.json
         if output_parsed is not None:
             try:
@@ -342,19 +342,19 @@ def record_response(
                     parsed_dict = output_parsed.dict()
                 else:
                     parsed_dict = {"raw": str(output_parsed)}
-                
+
                 parsed_data = {
                     "correlation_id": correlation_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "schema_name": schema_name,
                     "parsed_model": parsed_dict,
                 }
-                
+
                 redacted_parsed_data = _redact_sensitive_data(parsed_data)
                 _save_to_file(correlation_id, "response_parsed", redacted_parsed_data)
             except Exception as e:
                 debug_logger.warning(f"Failed to save parsed output: {e}")
-        
+
         # Save decision notes separately for easy access
         notes_data = {
             "correlation_id": correlation_id,
@@ -365,7 +365,7 @@ def record_response(
             "finish_reason": finish_reason,
         }
         _save_to_file(correlation_id, "notes", notes_data)
-        
+
     except Exception as e:
         debug_logger.warning(f"Failed to record response: {e}")
 
@@ -381,38 +381,38 @@ def get_debug_context(correlation_id: str) -> dict:
     """
     if not should_debug() or not CQC_OPENAI_DEBUG_SAVE_DIR:
         return {}
-    
+
     try:
         save_dir = Path(CQC_OPENAI_DEBUG_SAVE_DIR)
         if not save_dir.exists():
             return {}
-        
+
         # Find files matching this correlation ID
         request_files = list(save_dir.glob(f"*_{correlation_id}_request.json"))
         response_files = list(save_dir.glob(f"*_{correlation_id}_response.json"))
         notes_files = list(save_dir.glob(f"*_{correlation_id}_notes.json"))
-        
+
         context = {
             "correlation_id": correlation_id,
         }
-        
+
         # Load request data
         if request_files:
             with open(request_files[0], 'r', encoding='utf-8') as f:
                 context["request"] = json.load(f)
-        
+
         # Load response data
         if response_files:
             with open(response_files[0], 'r', encoding='utf-8') as f:
                 context["response"] = json.load(f)
-        
+
         # Load notes data
         if notes_files:
             with open(notes_files[0], 'r', encoding='utf-8') as f:
                 context["notes"] = json.load(f)
-        
+
         return context
-        
+
     except Exception as e:
         debug_logger.warning(f"Failed to load debug context: {e}")
         return {}

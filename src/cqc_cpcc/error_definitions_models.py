@@ -28,8 +28,9 @@ Usage:
 """
 
 from typing import Optional, Annotated
-from pydantic import BaseModel, Field, field_validator
+
 from cqc_cpcc.course_identifier import course_ids_match, normalize_course_id
+from pydantic import BaseModel, Field, field_validator
 
 
 class ErrorDefinition(BaseModel):
@@ -61,7 +62,7 @@ class ErrorDefinition(BaseModel):
         Optional[list[str]],
         Field(default=None, description="Optional list of example code snippets or descriptions")
     ]
-    
+
     @field_validator('error_id')
     @classmethod
     def validate_error_id(cls, v: str) -> str:
@@ -70,7 +71,7 @@ class ErrorDefinition(BaseModel):
         if not v:
             raise ValueError("error_id cannot be empty")
         return v
-    
+
     @field_validator('name')
     @classmethod
     def validate_name(cls, v: str) -> str:
@@ -79,7 +80,7 @@ class ErrorDefinition(BaseModel):
         if not v:
             raise ValueError("name cannot be empty")
         return v
-    
+
     @field_validator('description')
     @classmethod
     def validate_description(cls, v: str) -> str:
@@ -88,7 +89,7 @@ class ErrorDefinition(BaseModel):
         if not v:
             raise ValueError("description cannot be empty")
         return v
-    
+
     @field_validator('severity_category')
     @classmethod
     def validate_severity_category(cls, v: str) -> str:
@@ -116,7 +117,7 @@ class AssignmentErrorConfig(BaseModel):
         list[ErrorDefinition],
         Field(default_factory=list, description="Error definitions for this assignment")
     ]
-    
+
     @field_validator('assignment_id')
     @classmethod
     def validate_assignment_id(cls, v: str) -> str:
@@ -125,7 +126,7 @@ class AssignmentErrorConfig(BaseModel):
         if not v:
             raise ValueError("assignment_id cannot be empty")
         return v
-    
+
     @field_validator('assignment_name')
     @classmethod
     def validate_assignment_name(cls, v: str) -> str:
@@ -134,7 +135,7 @@ class AssignmentErrorConfig(BaseModel):
         if not v:
             raise ValueError("assignment_name cannot be empty")
         return v
-    
+
     def get_enabled_errors(self) -> list[ErrorDefinition]:
         """Get only enabled error definitions.
         
@@ -142,7 +143,7 @@ class AssignmentErrorConfig(BaseModel):
             List of error definitions where enabled=True
         """
         return [e for e in self.error_definitions if e.enabled]
-    
+
     def get_errors_by_severity(self, severity: str) -> list[ErrorDefinition]:
         """Get error definitions by severity category.
         
@@ -170,7 +171,7 @@ class CourseErrorConfig(BaseModel):
         list[AssignmentErrorConfig],
         Field(default_factory=list, description="Assignment error configurations")
     ]
-    
+
     @field_validator('course_id')
     @classmethod
     def validate_course_id(cls, v: str) -> str:
@@ -179,7 +180,7 @@ class CourseErrorConfig(BaseModel):
         if not v:
             raise ValueError("course_id cannot be empty")
         return v
-    
+
     def get_assignment(self, assignment_id: str) -> Optional[AssignmentErrorConfig]:
         """Get a specific assignment by ID.
         
@@ -207,7 +208,7 @@ class ErrorConfigRegistry(BaseModel):
         list[CourseErrorConfig],
         Field(default_factory=list, description="Course error configurations")
     ]
-    
+
     def get_course(self, course_id: str) -> Optional[CourseErrorConfig]:
         """Get a specific course by ID.
         
@@ -221,7 +222,7 @@ class ErrorConfigRegistry(BaseModel):
             if course_ids_match(course.course_id, course_id):
                 return course
         return None
-    
+
     def get_error_definitions(self, course_id: str, assignment_id: str) -> list[ErrorDefinition]:
         """Get error definitions for a specific course and assignment.
         
@@ -235,13 +236,13 @@ class ErrorConfigRegistry(BaseModel):
         course = self.get_course(course_id)
         if not course:
             return []
-        
+
         assignment = course.get_assignment(assignment_id)
         if not assignment:
             return []
-        
+
         return assignment.error_definitions
-    
+
     def get_all_course_ids(self) -> list[str]:
         """Get all unique course IDs in the registry.
         
@@ -296,19 +297,19 @@ def create_registry_from_flat_list(flat_errors: list[dict]) -> ErrorConfigRegist
             enabled=True,  # Default to enabled for backward compatibility
         )
         error_definitions.append(error_def)
-    
+
     # Create assignment with all errors
     assignment = AssignmentErrorConfig(
         assignment_id="UNASSIGNED",
         assignment_name="Default Assignment",
         error_definitions=error_definitions
     )
-    
+
     # Create course with the assignment
     course = CourseErrorConfig(
         course_id="UNASSIGNED",
         assignments=[assignment]
     )
-    
+
     # Create registry with the course
     return ErrorConfigRegistry(courses=[course])

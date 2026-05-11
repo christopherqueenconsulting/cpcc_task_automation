@@ -14,16 +14,6 @@ import pandas as pd
 import streamlit
 import textract
 from bs4 import BeautifulSoup
-from docx import Document
-from markdownify import markdownify as md
-from ordered_set import OrderedSet
-from pydantic import BaseModel, Field, StrictStr, PositiveInt
-from selenium.common import TimeoutException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import IS_GITHUB_ACTION
 from cqc_cpcc.utilities.logger import logger
@@ -33,6 +23,15 @@ from cqc_cpcc.utilities.selenium_util import (
     take_and_show_screenshot,
     wait_for_user_action,
 )
+from docx import Document
+from markdownify import markdownify as md
+from ordered_set import OrderedSet
+from pydantic import BaseModel, Field, StrictStr, PositiveInt
+from selenium.common import TimeoutException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 # from simplify_docx import simplify
 
@@ -387,13 +386,13 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
             # Import asyncio to run the async transcription
             import asyncio
             from cqc_cpcc.utilities.AI.openai_client import transcribe_audio, format_transcription_for_grading
-            
+
             # Run the async transcription - handle event loop properly
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
                 loop = None
-            
+
             if loop is not None and loop.is_running():
                 # We're in an async context - create new loop in thread
                 import concurrent.futures
@@ -404,14 +403,14 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
                         return new_loop.run_until_complete(transcribe_audio(file_path))
                     finally:
                         new_loop.close()
-                
+
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     future = pool.submit(run_in_thread)
                     transcription = future.result()
             else:
                 # No running loop - create and use one
                 transcription = asyncio.run(transcribe_audio(file_path))
-            
+
             contents = format_transcription_for_grading(transcription)
         except Exception as e:
             # If transcription fails, return error message with file info
@@ -427,13 +426,13 @@ Please manually review this audio file for grading."""
         try:
             import asyncio
             from cqc_cpcc.utilities.AI.openai_client import process_video_file
-            
+
             # Run the async video processing - handle event loop properly
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
                 loop = None
-            
+
             if loop is not None and loop.is_running():
                 # We're in an async context - create new loop in thread
                 import concurrent.futures
@@ -444,7 +443,7 @@ Please manually review this audio file for grading."""
                         return new_loop.run_until_complete(process_video_file(file_path))
                     finally:
                         new_loop.close()
-                
+
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     future = pool.submit(run_in_thread)
                     contents = future.result()
@@ -549,9 +548,9 @@ def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict
 
                     # Check if the file has an accepted file type
                     # Skip BrightSpace export files (case-insensitive)
-                    if (file_name.endswith(tuple(accepted_file_types)) 
-                        and not file_name.startswith(tuple(unacceptable_file_prefixes))
-                        and file_name.lower() not in unacceptable_file_names):
+                    if (file_name.endswith(tuple(accepted_file_types))
+                            and not file_name.startswith(tuple(unacceptable_file_prefixes))
+                            and file_name.lower() not in unacceptable_file_names):
                         # Read the file contents
                         with zip_ref.open(file_info.filename) as file:
                             # TODO: Change to modules on read file method
@@ -587,22 +586,22 @@ def login_if_needed(driver: WebDriver):
 def _get_microsoft_account_tile_xpath(instructor_user_id: str, instructor_email: str) -> str:
     """Build an XPath that matches the instructor account tile on Microsoft account picker."""
     return (
-        '//*[@id="tilesHolder"]//*[contains(text(), "'
-        + instructor_user_id.lower()
-        + '") or contains(text(), "'
-        + instructor_email.lower()
-        + '")]'
+            '//*[@id="tilesHolder"]//*[contains(text(), "'
+            + instructor_user_id.lower()
+            + '") or contains(text(), "'
+            + instructor_email.lower()
+            + '")]'
     )
 
 
 def _get_microsoft_expected_display_name_xpath(instructor_user_id: str, instructor_email: str) -> str:
     """Build an XPath that matches an already-selected expected Microsoft account."""
     return (
-        "//div[@id='displayName' and (contains(@title,'"
-        + instructor_user_id.lower()
-        + "') or contains(@title,'"
-        + instructor_email.lower()
-        + "'))]"
+            "//div[@id='displayName' and (contains(@title,'"
+            + instructor_user_id.lower()
+            + "') or contains(@title,'"
+            + instructor_email.lower()
+            + "'))]"
     )
 
 
@@ -632,17 +631,17 @@ def _wait_for_microsoft_identifier_step(wait_short: WebDriverWait) -> None:
 
 
 def _click_use_another_account_if_present(
-    driver: WebDriver,
-    wait: WebDriverWait,
-    wait_short: WebDriverWait,
-    wait_probe: WebDriverWait,
+        driver: WebDriver,
+        wait: WebDriverWait,
+        wait_short: WebDriverWait,
+        wait_probe: WebDriverWait,
 ) -> bool:
     """Click "Use another account" when available and wait for the identifier step."""
     use_another_xpath = "//div[contains(text(),'Use another')]/parent::div"
     if not _is_xpath_present(driver, use_another_xpath) and not _is_xpath_present_with_short_wait(
-        wait_probe,
-        use_another_xpath,
-        "Waiting briefly for use another account button",
+            wait_probe,
+            use_another_xpath,
+            "Waiting briefly for use another account button",
     ):
         return False
 
@@ -657,12 +656,12 @@ def _click_use_another_account_if_present(
 
 
 def _resolve_microsoft_account_path(
-    driver: WebDriver,
-    wait: WebDriverWait,
-    wait_short: WebDriverWait,
-    wait_probe: WebDriverWait,
-    instructor_user_id: str,
-    instructor_email: str,
+        driver: WebDriver,
+        wait: WebDriverWait,
+        wait_short: WebDriverWait,
+        wait_probe: WebDriverWait,
+        instructor_user_id: str,
+        instructor_email: str,
 ) -> bool:
     """Resolve Microsoft account selection path and return True when username entry can be skipped."""
     pick_account_xpath = _get_microsoft_account_tile_xpath(instructor_user_id, instructor_email)
@@ -673,17 +672,17 @@ def _resolve_microsoft_account_path(
         return True
 
     if _is_xpath_present(driver, pick_account_xpath) or _is_xpath_present_with_short_wait(
-        wait_probe,
-        pick_account_xpath,
-        "Waiting briefly to see if pick account is visible",
+            wait_probe,
+            pick_account_xpath,
+            "Waiting briefly to see if pick account is visible",
     ):
         click_element_wait_retry(driver, wait, pick_account_xpath, "Waiting for pick account selection")
         return True
 
     if _is_xpath_present(driver, any_display_name_xpath) or _is_xpath_present_with_short_wait(
-        wait_probe,
-        any_display_name_xpath,
-        "Waiting briefly to see if another username is present",
+            wait_probe,
+            any_display_name_xpath,
+            "Waiting briefly to see if another username is present",
     ):
         click_element_wait_retry(driver, wait, "//button[@class='backButton']", "Waiting for back button")
         _click_use_another_account_if_present(driver, wait, wait_short, wait_probe)

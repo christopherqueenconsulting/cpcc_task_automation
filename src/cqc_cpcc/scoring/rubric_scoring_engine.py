@@ -33,15 +33,16 @@ Usage Example:
 """
 
 from typing import Optional, Dict, Any
-from cqc_cpcc.rubric_models import Criterion, Rubric, PerformanceLevel, OverallBand, CriterionResult
+
 from cqc_cpcc.error_scoring import normalize_errors
+from cqc_cpcc.rubric_models import Criterion, Rubric, PerformanceLevel, OverallBand, CriterionResult
 from cqc_cpcc.utilities.logger import logger
 
 
 def score_level_band_criterion(
-    selected_level_label: str,
-    criterion: Criterion,
-    points_strategy: str = "min",
+        selected_level_label: str,
+        criterion: Criterion,
+        points_strategy: str = "min",
 ) -> Dict[str, Any]:
     """Compute points for a level_band criterion from selected performance level.
     
@@ -91,31 +92,31 @@ def score_level_band_criterion(
             f"Criterion '{criterion.criterion_id}' scoring_mode is '{criterion.scoring_mode}', "
             f"expected 'level_band'"
         )
-    
+
     if not criterion.levels or len(criterion.levels) == 0:
         raise ValueError(
             f"Criterion '{criterion.criterion_id}' has no levels defined"
         )
-    
+
     if points_strategy not in ["min", "mid", "max"]:
         raise ValueError(
             f"Invalid points_strategy '{points_strategy}'. Must be 'min', 'mid', or 'max'"
         )
-    
+
     # Find matching level
     matching_level: Optional[PerformanceLevel] = None
     for level in criterion.levels:
         if level.label == selected_level_label:
             matching_level = level
             break
-    
+
     if matching_level is None:
         available_labels = [l.label for l in criterion.levels]
         raise ValueError(
             f"Level label '{selected_level_label}' not found in criterion '{criterion.criterion_id}'. "
             f"Available labels: {available_labels}"
         )
-    
+
     # Compute points based on strategy
     if points_strategy == "min":
         points_awarded = matching_level.score_min
@@ -124,13 +125,13 @@ def score_level_band_criterion(
     elif points_strategy == "mid":
         # Midpoint, rounded down for integer result
         points_awarded = (matching_level.score_min + matching_level.score_max) // 2
-    
+
     logger.debug(
         f"Level-band scoring for '{criterion.criterion_id}': "
         f"level='{selected_level_label}', range=[{matching_level.score_min},{matching_level.score_max}], "
         f"strategy='{points_strategy}', awarded={points_awarded}/{criterion.max_points}"
     )
-    
+
     return {
         "points_awarded": points_awarded,
         "level_label": selected_level_label,
@@ -141,9 +142,9 @@ def score_level_band_criterion(
 
 
 def score_error_count_criterion(
-    major_count: int,
-    minor_count: int,
-    criterion: Criterion,
+        major_count: int,
+        minor_count: int,
+        criterion: Criterion,
 ) -> Dict[str, Any]:
     """Compute points for an error_count criterion from detected error counts.
     
@@ -198,19 +199,19 @@ def score_error_count_criterion(
             f"Criterion '{criterion.criterion_id}' scoring_mode is '{criterion.scoring_mode}', "
             f"expected 'error_count'"
         )
-    
+
     if not criterion.error_rules:
         raise ValueError(
             f"Criterion '{criterion.criterion_id}' has no error_rules defined"
         )
-    
+
     if major_count < 0 or minor_count < 0:
         raise ValueError(
             f"Error counts cannot be negative: major={major_count}, minor={minor_count}"
         )
-    
+
     rules = criterion.error_rules
-    
+
     # Apply error conversion if defined
     if rules.error_conversion:
         ratio = rules.error_conversion.minor_to_major_ratio
@@ -219,34 +220,34 @@ def score_error_count_criterion(
         # No conversion, use original counts
         effective_major = major_count
         effective_minor = minor_count
-    
+
     # Calculate total deduction
     deduction = (effective_major * rules.major_weight) + (effective_minor * rules.minor_weight)
-    
+
     # Apply max_deduction cap if specified
     if rules.max_deduction is not None:
         deduction = min(deduction, rules.max_deduction)
-    
+
     # Calculate raw score
     points_awarded = criterion.max_points - deduction
-    
+
     # Apply floor_score if specified
     if rules.floor_score is not None:
         points_awarded = max(rules.floor_score, points_awarded)
-    
+
     # Ensure within valid range [0, max_points]
     points_awarded = max(0, min(criterion.max_points, points_awarded))
-    
+
     # Convert to integer
     points_awarded_int = int(round(points_awarded))
-    
+
     logger.debug(
         f"Error-count scoring for '{criterion.criterion_id}': "
         f"original=({major_count} major, {minor_count} minor), "
         f"effective=({effective_major} major, {effective_minor} minor), "
         f"deduction={deduction:.1f}, awarded={points_awarded_int}/{criterion.max_points}"
     )
-    
+
     return {
         "points_awarded": points_awarded_int,
         "original_major": major_count,
@@ -277,17 +278,17 @@ def compute_percentage(points_earned: float, points_possible: int) -> float:
     """
     if points_possible <= 0:
         raise ValueError(f"points_possible must be positive, got {points_possible}")
-    
+
     if points_earned < 0:
         raise ValueError(f"points_earned cannot be negative, got {points_earned}")
-    
+
     percentage = (points_earned / points_possible) * 100.0
     return round(percentage, 2)
 
 
 def select_overall_band(
-    total_points_earned: float,
-    overall_bands: Optional[list[OverallBand]]
+        total_points_earned: float,
+        overall_bands: Optional[list[OverallBand]]
 ) -> Optional[str]:
     """Select overall performance band based on total score.
     
@@ -316,7 +317,7 @@ def select_overall_band(
     """
     if not overall_bands:
         return None
-    
+
     for band in overall_bands:
         if band.score_min <= total_points_earned <= band.score_max:
             logger.debug(
@@ -324,7 +325,7 @@ def select_overall_band(
                 f"(range: {band.score_min}-{band.score_max})"
             )
             return band.label
-    
+
     logger.warning(
         f"No overall band found for score {total_points_earned}. "
         f"Available bands: {[(b.label, b.score_min, b.score_max) for b in overall_bands]}"
@@ -333,9 +334,9 @@ def select_overall_band(
 
 
 def aggregate_rubric_result(
-    rubric: Rubric,
-    criteria_results: list[CriterionResult],
-    recalculate_overall_band: bool = True,
+        rubric: Rubric,
+        criteria_results: list[CriterionResult],
+        recalculate_overall_band: bool = True,
 ) -> Dict[str, Any]:
     """Aggregate per-criterion results into totals, percentage, and overall band.
     
@@ -373,7 +374,7 @@ def aggregate_rubric_result(
     computed_total_possible = sum(r.points_possible for r in criteria_results)
     # Handle None values in points_earned (shouldn't happen after backend scoring, but safety check)
     computed_total_earned = sum(r.points_earned if r.points_earned is not None else 0 for r in criteria_results)
-    
+
     # Validate against rubric
     expected_total_possible = rubric.total_points_possible
     if computed_total_possible != expected_total_possible:
@@ -382,20 +383,20 @@ def aggregate_rubric_result(
             f"rubric total_points_possible ({expected_total_possible}). "
             f"This may indicate disabled criteria or override mismatches."
         )
-    
+
     # Compute percentage
     percentage = compute_percentage(computed_total_earned, computed_total_possible)
-    
+
     # Select overall band if requested
     overall_band_label = None
     if recalculate_overall_band:
         overall_band_label = select_overall_band(computed_total_earned, rubric.overall_bands)
-    
+
     logger.info(
         f"Aggregated rubric result: {computed_total_earned}/{computed_total_possible} "
         f"({percentage:.1f}%), band='{overall_band_label}'"
     )
-    
+
     return {
         "total_points_possible": computed_total_possible,
         "total_points_earned": computed_total_earned,

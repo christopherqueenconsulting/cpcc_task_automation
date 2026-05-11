@@ -4,7 +4,6 @@ import json
 import extra_streamlit_components as stx
 import pandas as pd
 import streamlit as st
-
 from cqc_cpcc.find_student import FindStudents
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css
@@ -110,15 +109,12 @@ def main():
                     student_info_items]
             df = pd.DataFrame(data)
 
-
             # Create a filter input for the column
             filter_value = st.text_input("Filter by Course Name")
 
             # Apply the filter to the DataFrame dynamically
             if filter_value:
                 df = df[df["Course Name"].str.contains(filter_value, case=False, na=False)]
-
-
 
             # Add a editable table of all the students found
             edited_df = fs_placeholder.data_editor(data=df,

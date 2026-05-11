@@ -4,18 +4,16 @@ import os
 import time
 from threading import Thread
 
-import streamlit as st
-from streamlit.runtime import get_instance
-from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
-from streamlit_elements import elements, mui, html, sync
-
-import cqc_cpcc.attendance as AT
 import cqc_cpcc.attendance_screenshot
+import streamlit as st
 from cqc_cpcc.utilities.logger import LOGGING_FILENAME, logger
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.pexels_helper import get_photo
 from cqc_streamlit_app.streamlit_logger import streamlit_handler
 from cqc_streamlit_app.utils import get_cpcc_css, on_download_click
+from streamlit.runtime import get_instance
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+from streamlit_elements import elements, mui, html, sync
 
 # Initialize session state variables
 init_session_state()
@@ -171,7 +169,7 @@ def main():
 
             # Display the download button for the log file
             base_file_name, _extension = os.path.splitext(LOGGING_FILENAME)
-            on_download_click(log_download_button_placeholder,LOGGING_FILENAME, "Download Log", base_file_name)
+            on_download_click(log_download_button_placeholder, LOGGING_FILENAME, "Download Log", base_file_name)
 
             # attendance_section()
             # logging_section()

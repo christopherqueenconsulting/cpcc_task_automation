@@ -47,15 +47,6 @@ import os
 import random
 from typing import Type, TypeVar
 
-from openai import (
-    APIConnectionError,
-    APIError,
-    APITimeoutError,
-    AsyncOpenAI,
-    RateLimitError,
-)
-from pydantic import BaseModel, ValidationError, Field
-
 from cqc_cpcc.utilities.AI.openai_debug import (
     create_correlation_id,
     record_request,
@@ -69,6 +60,14 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
 from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
 from cqc_cpcc.utilities.env_constants import OPENAI_API_KEY as DEFAULT_OPENAI_API_KEY
 from cqc_cpcc.utilities.logger import logger
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    RateLimitError,
+)
+from pydantic import BaseModel, ValidationError, Field
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -143,6 +142,7 @@ def _calculate_jittered_delay(base_delay: float) -> float:
     jitter = random.uniform(JITTER_MIN, JITTER_MAX)
     return base_delay + jitter
 
+
 # Model token limits (based on OpenAI documentation)
 # max_output=None means no explicit limit should be set (let model decide)
 MODEL_TOKEN_LIMITS = {
@@ -184,7 +184,7 @@ def get_token_param_for_model(model: str) -> str:
     # GPT-5 family uses max_completion_tokens
     if model.startswith("gpt-5"):
         return "max_completion_tokens"
-    
+
     # Legacy models use max_tokens (for backward compatibility only)
     return "max_tokens"
 
@@ -204,7 +204,7 @@ def get_max_tokens_for_model(model: str) -> int | None:
     model_info = MODEL_TOKEN_LIMITS.get(model)
     if model_info:
         return model_info["max_output"]
-    
+
     # Unknown model - don't impose a limit
     return None
 
@@ -244,7 +244,7 @@ def sanitize_openai_params(model: str, params: dict) -> dict:
         {"temperature": 0.2, "max_tokens": 1000}  # unchanged for backward compat
     """
     sanitized = params.copy()
-    
+
     # GPT-5 family models have strict parameter constraints
     if model.startswith("gpt-5"):
         # Temperature constraint: only default (1) is supported
@@ -259,7 +259,7 @@ def sanitize_openai_params(model: str, params: dict) -> dict:
                     f"(GPT-5 only supports default temperature=1)"
                 )
                 del sanitized["temperature"]
-    
+
     return sanitized
 
 
@@ -280,7 +280,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
         Normalized dict ready for schema validation
     """
     normalized = data.copy()
-    
+
     def _normalize_criterion_dict(c: dict) -> dict:
         """Apply field renaming and evidence normalization to a single criterion dict.
 
@@ -373,7 +373,8 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
         if not e.get("severity"):
             e["severity"] = "minor"
         if not e.get("description"):
-            e["description"] = e.get("details") or e.get("message") or "Error detected (schema definition returned instead of data)"
+            e["description"] = e.get("details") or e.get(
+                "message") or "Error detected (schema definition returned instead of data)"
         return e
 
     # Normalize criteria_results if present
@@ -389,7 +390,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                         normalized["criteria_results"][i] = _normalize_criterion_dict(parsed_criterion)
                 except (json.JSONDecodeError, ValueError):
                     logger.warning(f"Failed to parse criteria_results[{i}] as JSON string, leaving as-is")
-    
+
     # Normalize detected_errors if it's a stringified JSON array or list of strings
     if "detected_errors" in normalized:
         if isinstance(normalized["detected_errors"], str):
@@ -398,7 +399,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
             except (json.JSONDecodeError, ValueError):
                 logger.warning(f"Failed to parse detected_errors as JSON, setting to None")
                 normalized["detected_errors"] = None
-        
+
         # If detected_errors is a list of strings or JSON-Schema-style dicts, normalize them
         if isinstance(normalized["detected_errors"], list):
             converted_errors = []
@@ -416,7 +417,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                         converted_errors.append(_normalize_error_dict(parsed_from_str))
                     else:
                         # Plain string error description - convert to DetectedError object
-                        error_id = f"error_{i+1}"
+                        error_id = f"error_{i + 1}"
                         if "error_counts_by_id" in normalized and isinstance(normalized["error_counts_by_id"], dict):
                             # Try to match error description with error_id keys
                             for eid in normalized["error_counts_by_id"].keys():
@@ -426,7 +427,8 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
 
                         # Determine severity from error_counts_by_severity or default to "minor"
                         severity = "minor"  # default
-                        if "error_counts_by_severity" in normalized and isinstance(normalized["error_counts_by_severity"], dict):
+                        if "error_counts_by_severity" in normalized and isinstance(
+                                normalized["error_counts_by_severity"], dict):
                             major_count = normalized["error_counts_by_severity"].get("major", 0)
                             if i < major_count:
                                 severity = "major"
@@ -446,7 +448,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
             if converted_errors:
                 normalized["detected_errors"] = converted_errors
                 logger.info(f"Converted {len(converted_errors)} string errors to DetectedError objects")
-    
+
     # Normalize error_counts_by_severity if it's a stringified JSON object
     if "error_counts_by_severity" in normalized:
         if isinstance(normalized["error_counts_by_severity"], str):
@@ -454,13 +456,13 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                 parsed = json.loads(normalized["error_counts_by_severity"])
                 # Ensure values are integers, not strings
                 normalized["error_counts_by_severity"] = {
-                    k: int(v) if isinstance(v, str) else v 
+                    k: int(v) if isinstance(v, str) else v
                     for k, v in parsed.items()
                 }
             except (json.JSONDecodeError, ValueError, TypeError):
                 logger.warning(f"Failed to parse error_counts_by_severity as JSON, setting to None")
                 normalized["error_counts_by_severity"] = None
-    
+
     # Normalize error_counts_by_id if it's a stringified JSON object
     if "error_counts_by_id" in normalized:
         if isinstance(normalized["error_counts_by_id"], str):
@@ -468,13 +470,13 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                 parsed = json.loads(normalized["error_counts_by_id"])
                 # Ensure values are integers, not strings
                 normalized["error_counts_by_id"] = {
-                    k: int(v) if isinstance(v, str) else v 
+                    k: int(v) if isinstance(v, str) else v
                     for k, v in parsed.items()
                 }
             except (json.JSONDecodeError, ValueError, TypeError):
                 logger.warning(f"Failed to parse error_counts_by_id as JSON, setting to None")
                 normalized["error_counts_by_id"] = None
-    
+
     # Normalize integer fields that might be strings
     int_fields = [
         "original_major_errors", "original_minor_errors",
@@ -487,7 +489,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                 normalized[field] = int(normalized[field])
             except (ValueError, TypeError):
                 logger.warning(f"Failed to convert {field} to int, leaving as is")
-    
+
     # CRITICAL: For RubricAssessmentResult, ensure total_points_earned matches sum of criteria
     # This fixes validation errors like "total_points_earned (0) does not match sum of criteria (100)"
     if schema_model.__name__ == "RubricAssessmentResult":
@@ -504,7 +506,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                             computed_total += int(points)
                     except (ValueError, TypeError):
                         logger.warning(f"Failed to parse points_earned: {criterion.get('points_earned')}")
-            
+
             # Override total_points_earned with computed value
             if "total_points_earned" in normalized:
                 original_total = normalized["total_points_earned"]
@@ -518,7 +520,7 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
                 # Total wasn't provided at all - set it
                 logger.info(f"Setting total_points_earned to {computed_total} (computed from criteria_results)")
                 normalized["total_points_earned"] = computed_total
-    
+
     return normalized
 
 
@@ -539,12 +541,12 @@ def _build_fallback_prompt(original_prompt: str, schema_model: Type[BaseModel]) 
     # Get schema info from Pydantic model
     schema = schema_model.model_json_schema()
     schema_name = schema_model.__name__
-    
+
     # Build detailed schema description with nested types
     def describe_type(field_info: dict, indent: str = "") -> str:
         """Recursively describe field types."""
         field_type = field_info.get("type", "any")
-        
+
         if field_type == "array":
             items = field_info.get("items", {})
             if "$ref" in items:
@@ -565,22 +567,22 @@ def _build_fallback_prompt(original_prompt: str, schema_model: Type[BaseModel]) 
             return "object"
         else:
             return field_type
-    
+
     # Build field requirements from top-level properties
     properties = schema.get("properties", {})
     required = schema.get("required", [])
     defs = schema.get("$defs", {})
-    
+
     field_descriptions = []
     field_descriptions.append(f"Schema: {schema_name}")
     field_descriptions.append("")
     field_descriptions.append("CRITICAL - Use these EXACT field names and types:")
-    
+
     for field_name, field_info in properties.items():
         field_type_desc = describe_type(field_info)
         description = field_info.get("description", "")
         required_marker = " [REQUIRED]" if field_name in required else " [optional]"
-        
+
         # Add special notes for nested structures
         if field_name == "criteria_results":
             field_descriptions.append(
@@ -606,9 +608,9 @@ def _build_fallback_prompt(original_prompt: str, schema_model: Type[BaseModel]) 
             field_descriptions.append(
                 f"  • {field_name}: {field_type_desc}{required_marker} - {description}"
             )
-    
+
     fields_text = "\n".join(field_descriptions)
-    
+
     fallback_prompt = f"""{original_prompt}
 
 IMPORTANT - Response Format Requirements:
@@ -639,21 +641,21 @@ def should_use_preprocessing(student_code: str, context_window: int = 128_000) -
     """
     estimated_tokens = len(student_code) // CHARS_PER_TOKEN_ESTIMATE
     threshold_tokens = int(context_window * PREPROCESSING_TOKEN_THRESHOLD)
-    
+
     if estimated_tokens > threshold_tokens:
         logger.info(
             f"Preprocessing triggered: {estimated_tokens} est. tokens > "
-            f"{threshold_tokens} threshold ({PREPROCESSING_TOKEN_THRESHOLD*100}% of {context_window})"
+            f"{threshold_tokens} threshold ({PREPROCESSING_TOKEN_THRESHOLD * 100}% of {context_window})"
         )
         return True
-    
+
     return False
 
 
 def _build_preprocessing_prompt(
-    student_code: str,
-    assignment_instructions: str,
-    rubric_config: str = "",
+        student_code: str,
+        assignment_instructions: str,
+        rubric_config: str = "",
 ) -> str:
     """Build prompt for preprocessing stage that creates grading digest.
     
@@ -746,10 +748,10 @@ AMBIGUITY HANDLING:
 
 
 async def generate_preprocessing_digest(
-    student_code: str,
-    assignment_instructions: str,
-    rubric_config: str = "",
-    model_name: str = DEFAULT_MODEL,
+        student_code: str,
+        assignment_instructions: str,
+        rubric_config: str = "",
+        model_name: str = DEFAULT_MODEL,
 ) -> PreprocessingDigest:
     """Generate a preprocessing digest for large student submissions.
     
@@ -775,12 +777,12 @@ async def generate_preprocessing_digest(
         assignment_instructions=assignment_instructions,
         rubric_config=rubric_config,
     )
-    
+
     logger.info(
         f"Generating preprocessing digest for {len(student_code)} chars "
-        f"(~{len(student_code)//CHARS_PER_TOKEN_ESTIMATE} est. tokens)"
+        f"(~{len(student_code) // CHARS_PER_TOKEN_ESTIMATE} est. tokens)"
     )
-    
+
     # Call with own 2-attempt retry logic
     digest = await get_structured_completion(
         prompt=prompt,
@@ -788,7 +790,7 @@ async def generate_preprocessing_digest(
         schema_model=PreprocessingDigest,
         max_retries=DEFAULT_MAX_RETRIES,  # 2 attempts total
     )
-    
+
     # Save digest to debug artifacts if debug enabled
     if should_debug():
         try:
@@ -797,7 +799,7 @@ async def generate_preprocessing_digest(
             # The record_request/record_response in get_structured_completion already saves this
         except Exception as e:
             logger.warning(f"Failed to save preprocessing digest: {e}")
-    
+
     return digest
 
 
@@ -818,7 +820,7 @@ async def get_client() -> AsyncOpenAI:
     """
     global _client, _client_api_key
     current_api_key = os.getenv("OPENAI_API_KEY") or DEFAULT_OPENAI_API_KEY
-    
+
     if not current_api_key:
         raise ValueError(
             "OPENAI_API_KEY environment variable is not set. "
@@ -838,20 +840,20 @@ async def get_client() -> AsyncOpenAI:
                 _client = AsyncOpenAI(api_key=current_api_key, max_retries=0)
                 _client_api_key = current_api_key
                 logger.info("Initialized AsyncOpenAI client with max_retries=0 (single-layer retry)")
-    
+
     return _client
 
 
 async def get_structured_completion(
-    prompt: str,
-    model_name: str = DEFAULT_MODEL,
-    schema_model: Type[T] = None,
-    temperature: float = 0.2,
-    max_tokens: int | None = None,
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    retry_delay: float = DEFAULT_RETRY_DELAY,
-    allow_repair: bool = False,
-    retry_empty_response: bool = True,
+        prompt: str,
+        model_name: str = DEFAULT_MODEL,
+        schema_model: Type[T] = None,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
+        allow_repair: bool = False,
+        retry_empty_response: bool = True,
 ) -> T:
     """Get a structured completion from OpenAI with strict schema validation.
     
@@ -925,45 +927,45 @@ async def get_structured_completion(
     # Validate inputs
     if not prompt or not prompt.strip():
         raise ValueError("Prompt cannot be empty")
-    
+
     if not model_name or not model_name.strip():
         raise ValueError("Model name cannot be empty")
-    
+
     if temperature < 0 or temperature > 2:
         raise ValueError(f"Temperature must be between 0 and 2, got {temperature}")
-    
+
     if max_tokens is not None and max_tokens < 1:
         raise ValueError(f"max_tokens must be positive, got {max_tokens}")
-    
+
     if max_retries < 0:
         raise ValueError(f"max_retries must be non-negative, got {max_retries}")
-    
+
     # Test mode: return deterministic mock response
     from cqc_cpcc.utilities.env_constants import TEST_MODE
     if TEST_MODE:
         return _get_test_mode_response(schema_model)
-    
+
     # Create correlation ID for debug tracking
     correlation_id = create_correlation_id() if should_debug() else None
-    
+
     # Get client instance
     client = await get_client()
-    
+
     # Build JSON schema from Pydantic model
     # IMPORTANT: Normalize schema to add additionalProperties: false to all objects
     # This is required by OpenAI Structured Outputs strict mode
     raw_schema = schema_model.model_json_schema()
     normalized_schema = normalize_json_schema_for_openai(raw_schema)
-    
+
     json_schema = {
         "name": schema_model.__name__,
         "schema": normalized_schema,
         "strict": True,
     }
-    
+
     # Determine correct token parameter and value
     token_param = get_token_param_for_model(model_name)
-    
+
     # If max_tokens not specified, don't impose a limit (let model decide)
     # This avoids artificially truncating output for models with large capacity
     token_kwargs = {}
@@ -972,26 +974,26 @@ async def get_structured_completion(
         logger.debug(f"Using {token_param}={max_tokens} for model {model_name}")
     else:
         logger.debug(f"No token limit set for model {model_name} (using model default)")
-    
+
     # Retry loop for transient errors
     last_error: Exception | None = None
     is_smart_retry = False  # Track if we're using fallback strategy
-    
+
     for attempt in range(max_retries + 1):
         try:
             # Determine request type for logging
             request_type = "grading_structured" if attempt == 0 else "grading_fallback_plain_json"
-            
+
             logger.info(
                 f"OpenAI API call attempt {attempt + 1} of {max_retries + 1} "
                 f"(model={model_name}, schema={schema_model.__name__}, type={request_type})"
             )
-            
+
             # SMART RETRY: On attempt 2+, use fallback plain JSON instead of strict schema
             if attempt > 0 and is_smart_retry:
                 # Build fallback prompt that requests plain JSON
                 fallback_prompt = _build_fallback_prompt(prompt, schema_model)
-                
+
                 # Use plain JSON mode without strict schema enforcement
                 api_kwargs = {
                     "model": model_name,
@@ -1011,14 +1013,14 @@ async def get_structured_completion(
                     },
                     "temperature": temperature,
                 }
-            
+
             # Add token limit parameter if specified
             api_kwargs.update(token_kwargs)
-            
+
             # Sanitize parameters for model-specific constraints
             # (e.g., GPT-5 models don't support temperature != 1)
             api_kwargs = sanitize_openai_params(model_name, api_kwargs)
-            
+
             # DEBUG: Log the exact schema being sent to OpenAI for troubleshooting
             if attempt == 0:  # Only log on first attempt to avoid spam
                 import json
@@ -1038,7 +1040,7 @@ async def get_structured_completion(
                                     f"extra_in_required={req_set - props_set}, "
                                     f"missing_from_required={props_set - req_set}"
                                 )
-            
+
             # Record request for debugging
             if correlation_id:
                 record_request(
@@ -1051,9 +1053,9 @@ async def get_structured_completion(
                     max_tokens=api_kwargs.get(token_param),
                     request_type=request_type,
                 )
-            
+
             response = await client.chat.completions.create(**api_kwargs)
-            
+
             # Check for refusal first
             if hasattr(response, 'choices') and response.choices:
                 message = response.choices[0].message
@@ -1076,13 +1078,13 @@ async def get_structured_completion(
                         decision_notes=decision_notes,
                         attempt_count=attempt + 1,
                     )
-            
+
             # Extract JSON content from response
             json_output = response.choices[0].message.content
-            
+
             # Check finish_reason for truncation
             finish_reason = getattr(response.choices[0], 'finish_reason', None) if response.choices else None
-            
+
             if not json_output:
                 # Handle empty response or truncation
                 if finish_reason == "length":
@@ -1093,7 +1095,7 @@ async def get_structured_completion(
                     )
                 else:
                     decision_notes = "no content in response.choices[0].message.content"
-                
+
                 if correlation_id:
                     record_response(
                         correlation_id=correlation_id,
@@ -1103,7 +1105,7 @@ async def get_structured_completion(
                         output_text=None,
                         output_parsed=None,
                     )
-                
+
                 # Empty response or truncation is retryable with smart retry
                 if retry_empty_response and attempt < max_retries:
                     logger.warning(
@@ -1116,7 +1118,7 @@ async def get_structured_completion(
                     logger.debug(f"Retrying in {delay:.2f} seconds...")
                     await asyncio.sleep(delay)
                     continue
-                
+
                 # Final attempt or retry disabled, raise error
                 raise OpenAISchemaValidationError(
                     "Empty response from OpenAI API" if finish_reason != "length" else "Response truncated due to length limit",
@@ -1125,7 +1127,7 @@ async def get_structured_completion(
                     decision_notes=decision_notes,
                     attempt_count=attempt + 1,
                 )
-            
+
             # Validate against Pydantic model
             try:
                 # If using fallback plain JSON mode, apply normalization first
@@ -1142,7 +1144,7 @@ async def get_structured_completion(
                 else:
                     # Normal strict schema path - validate directly from JSON string
                     validated_model = schema_model.model_validate_json(json_output)
-                
+
                 # Record successful response
                 if correlation_id:
                     record_response(
@@ -1153,7 +1155,7 @@ async def get_structured_completion(
                         output_text=json_output,
                         output_parsed=validated_model,
                     )
-                
+
                 logger.info(
                     f"Successfully generated structured completion "
                     f"(model={model_name}, schema={schema_model.__name__}, "
@@ -1162,32 +1164,32 @@ async def get_structured_completion(
                     f"{f', correlation_id={correlation_id}' if correlation_id else ''})"
                 )
                 return validated_model
-                
+
             except ValidationError as e:
                 # Schema validation failed
                 error_details = e.errors()
                 decision_notes = f"pydantic validation failed: {len(error_details)} errors"
-                
+
                 # Log validation errors with helpful details
                 logger.error(
                     f"Schema validation failed for {schema_model.__name__}: "
                     f"{len(error_details)} errors"
                     f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
                 )
-                
+
                 # Log first few errors for debugging
                 for i, err in enumerate(error_details[:5]):
                     loc = ".".join(str(x) for x in err.get("loc", []))
                     msg = err.get("msg", "")
-                    logger.error(f"  Error {i+1}: {loc} - {msg}")
-                
+                    logger.error(f"  Error {i + 1}: {loc} - {msg}")
+
                 if len(error_details) > 5:
                     logger.error(f"  ... and {len(error_details) - 5} more errors")
-                
+
                 # Include first 500 chars of output in error for context
                 output_preview = json_output[:500] if json_output else "None"
                 logger.debug(f"Output preview (first 500 chars): {output_preview}")
-                
+
                 # Record failed validation
                 if correlation_id:
                     record_response(
@@ -1199,7 +1201,7 @@ async def get_structured_completion(
                         output_parsed=None,
                         error=e,
                     )
-                
+
                 # Smart retry for parse failures (if not already using fallback)
                 if not is_smart_retry and attempt < max_retries:
                     logger.warning(
@@ -1209,7 +1211,7 @@ async def get_structured_completion(
                     is_smart_retry = True  # Enable fallback for next attempt
                     await asyncio.sleep(retry_delay)
                     continue
-                
+
                 # If repair is allowed and this is our first attempt, retry once
                 # (legacy path, deprecated in favor of smart retry)
                 if allow_repair and attempt == 0 and not is_smart_retry:
@@ -1218,7 +1220,7 @@ async def get_structured_completion(
                     )
                     await asyncio.sleep(retry_delay)
                     continue
-                
+
                 raise OpenAISchemaValidationError(
                     "LLM output failed Pydantic validation",
                     schema_name=schema_model.__name__,
@@ -1228,7 +1230,7 @@ async def get_structured_completion(
                     decision_notes=decision_notes,
                     attempt_count=attempt + 1,
                 )
-        
+
         except (APITimeoutError, APIConnectionError) as e:
             # Network/timeout errors - retryable
             last_error = e
@@ -1236,25 +1238,25 @@ async def get_structured_completion(
                 f"Transient error on attempt {attempt + 1} of {max_retries + 1}: "
                 f"{type(e).__name__}"
             )
-            
+
             if attempt < max_retries:
                 delay = retry_delay * (DEFAULT_BACKOFF_MULTIPLIER ** attempt)
                 logger.info(f"Retrying in {delay:.1f} seconds...")
                 await asyncio.sleep(delay)
                 continue
-            
+
             raise OpenAITransportError(
                 f"Failed after {max_retries + 1} attempts: {str(e)}",
                 status_code=getattr(e, "status_code", None),
                 correlation_id=correlation_id,
                 attempt_count=max_retries + 1,
             ) from e
-        
+
         except RateLimitError as e:
             # Rate limit - retryable with Retry-After header
             last_error = e
             logger.warning(f"Rate limit hit on attempt {attempt + 1} of {max_retries + 1}")
-            
+
             if attempt < max_retries:
                 # Check for Retry-After header
                 retry_after = getattr(e, "retry_after", None)
@@ -1262,11 +1264,11 @@ async def get_structured_completion(
                     delay = float(retry_after)
                 else:
                     delay = retry_delay * (DEFAULT_BACKOFF_MULTIPLIER ** attempt)
-                
+
                 logger.info(f"Rate limited. Retrying in {delay:.1f} seconds...")
                 await asyncio.sleep(delay)
                 continue
-            
+
             raise OpenAITransportError(
                 f"Rate limit exceeded after {max_retries + 1} attempts",
                 status_code=429,
@@ -1274,32 +1276,32 @@ async def get_structured_completion(
                 correlation_id=correlation_id,
                 attempt_count=max_retries + 1,
             ) from e
-        
+
         except APIError as e:
             # General API error - check if retryable (5xx)
             last_error = e
             status_code = getattr(e, "status_code", None)
-            
+
             # Retry on 5xx errors (server-side issues)
             if status_code and 500 <= status_code < 600:
                 logger.warning(
                     f"Server error {status_code} on attempt "
                     f"{attempt + 1} of {max_retries + 1}"
                 )
-                
+
                 if attempt < max_retries:
                     delay = retry_delay * (DEFAULT_BACKOFF_MULTIPLIER ** attempt)
                     logger.info(f"Retrying in {delay:.1f} seconds...")
                     await asyncio.sleep(delay)
                     continue
-                
+
                 raise OpenAITransportError(
                     f"Server error after {max_retries + 1} attempts: {str(e)}",
                     status_code=status_code,
                     correlation_id=correlation_id,
                     attempt_count=max_retries + 1,
                 ) from e
-            
+
             # Don't retry 4xx errors (client errors like invalid_request_error, context_length_exceeded)
             logger.error(
                 f"Non-retryable API error (attempt {attempt + 1} of {max_retries + 1}): "
@@ -1311,7 +1313,7 @@ async def get_structured_completion(
                 correlation_id=correlation_id,
                 attempt_count=attempt + 1,
             ) from e
-    
+
     # Should never reach here, but handle just in case
     if last_error:
         raise OpenAITransportError(
@@ -1319,7 +1321,7 @@ async def get_structured_completion(
             correlation_id=correlation_id,
             attempt_count=max_retries + 1,
         ) from last_error
-    
+
     raise OpenAITransportError(
         "Unknown error occurred",
         correlation_id=correlation_id,
@@ -1344,9 +1346,9 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
     )
     from cqc_cpcc.project_feedback import Feedback, FeedbackGuide, FeedbackType
     from cqc_cpcc.rubric_models import CriterionResult, RubricAssessmentResult
-    
+
     model_name = schema_model.__name__
-    
+
     # RubricAssessmentResult for exam grading
     if model_name == "RubricAssessmentResult":
         return RubricAssessmentResult(
@@ -1366,14 +1368,14 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
             detected_errors=[],
             error_counts_by_severity={}
         )
-    
+
     # ErrorDefinitions for exam review
     elif model_name == "ErrorDefinitions":
         return ErrorDefinitions(
             major_errors=[],
             minor_errors=[]
         )
-    
+
     # FeedbackGuide for project feedback
     elif model_name == "FeedbackGuide":
         return FeedbackGuide(
@@ -1384,7 +1386,7 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
                 )
             ]
         )
-    
+
     # Default: return empty instance
     else:
         logger.warning(f"No test mode response defined for {model_name}, returning empty instance")
@@ -1398,7 +1400,7 @@ async def close_client() -> None:
     the next call to get_structured_completion will create a new client.
     """
     global _client, _client_api_key
-    
+
     async with _client_lock:
         if _client is not None:
             await _client.close()
@@ -1428,14 +1430,14 @@ async def transcribe_audio(file_path: str) -> dict:
     """
     import os
     from pathlib import Path
-    
+
     client = await get_client()
     file_name = os.path.basename(file_path)
     file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
     file_ext = Path(file_path).suffix.lower()
-    
+
     logger.info(f"Transcribing audio file: {file_name} ({file_size:.2f} MB)")
-    
+
     try:
         # Check file size (OpenAI limit is 25 MB)
         if file_size > 25:
@@ -1443,7 +1445,7 @@ async def transcribe_audio(file_path: str) -> dict:
                 f"Audio file {file_name} exceeds OpenAI's 25 MB limit ({file_size:.2f} MB). "
                 f"Please compress or split the file before transcription."
             )
-        
+
         # Open and transcribe the audio file
         with open(file_path, "rb") as audio_file:
             transcription = await client.audio.transcriptions.create(
@@ -1451,7 +1453,7 @@ async def transcribe_audio(file_path: str) -> dict:
                 file=audio_file,
                 response_format="verbose_json"  # Includes duration, language
             )
-        
+
         result = {
             "text": transcription.text,
             "duration": getattr(transcription, 'duration', None),
@@ -1462,12 +1464,12 @@ async def transcribe_audio(file_path: str) -> dict:
                 "type": file_ext[1:].upper() if file_ext else "unknown"
             }
         }
-        
+
         logger.info(f"Successfully transcribed {file_name}: {len(result['text'])} characters, "
-                   f"duration: {result['duration']}s, language: {result['language']}")
-        
+                    f"duration: {result['duration']}s, language: {result['language']}")
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Failed to transcribe audio file {file_name}: {e}")
         raise OpenAITransportError(f"Audio transcription failed: {str(e)}")
@@ -1486,9 +1488,9 @@ def format_transcription_for_grading(transcription: dict) -> str:
     duration = transcription.get("duration")
     language = transcription.get("language", "unknown")
     text = transcription["text"]
-    
+
     duration_str = f"{duration:.1f} seconds" if duration else "unknown"
-    
+
     formatted = f"""[AUDIO FILE: {file_info['name']}]
 File type: {file_info['type']}
 File size: {file_info['size_mb']} MB
@@ -1514,14 +1516,14 @@ async def extract_audio_from_video(video_path: str) -> str | None:
     import subprocess
     import tempfile
     from pathlib import Path
-    
+
     video_name = Path(video_path).stem
-    
+
     # Create temp file for audio
     temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3', prefix=f"{video_name}_audio_")
     temp_audio_path = temp_audio.name
     temp_audio.close()
-    
+
     try:
         # Try to extract audio using ffmpeg
         result = subprocess.run(
@@ -1530,16 +1532,16 @@ async def extract_audio_from_video(video_path: str) -> str | None:
             text=True,
             timeout=300  # 5 minute timeout
         )
-        
+
         if result.returncode == 0 and os.path.exists(temp_audio_path):
             file_size = os.path.getsize(temp_audio_path)
             if file_size > 0:
                 logger.info(f"Successfully extracted audio from {video_name} ({file_size} bytes)")
                 return temp_audio_path
-        
+
         logger.warning(f"ffmpeg extraction failed for {video_name}: {result.stderr}")
         return None
-        
+
     except FileNotFoundError:
         logger.info("ffmpeg not found - video audio extraction not available")
         return None
@@ -1565,30 +1567,30 @@ async def process_video_file(file_path: str) -> str:
     """
     import os
     from pathlib import Path
-    
+
     file_name = os.path.basename(file_path)
     file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
     file_ext = Path(file_path).suffix.lower()
-    
+
     logger.info(f"Processing video file: {file_name} ({file_size:.2f} MB)")
-    
+
     # Try to extract and transcribe audio track
     audio_path = await extract_audio_from_video(file_path)
-    
+
     if audio_path:
         try:
             # Transcribe the extracted audio
             transcription = await transcribe_audio(audio_path)
-            
+
             # Clean up temp audio file
             try:
                 os.unlink(audio_path)
             except:
                 pass
-            
+
             # Format for grading with video context
             duration_str = f"{transcription['duration']:.1f} seconds" if transcription.get('duration') else "unknown"
-            
+
             formatted = f"""[VIDEO FILE: {file_name}]
 File type: {file_ext[1:].upper() if file_ext else 'unknown'}
 File size: {file_size:.2f} MB
@@ -1600,10 +1602,10 @@ Audio Transcription:
 
 Note: This is a video submission. The transcription above is from the audio track.
 Please evaluate the content based on the transcribed narration/explanation."""
-            
+
             logger.info(f"Successfully transcribed video audio for {file_name}")
             return formatted
-            
+
         except Exception as e:
             logger.error(f"Failed to transcribe video audio for {file_name}: {e}")
             # Clean up temp file on error
@@ -1612,7 +1614,7 @@ Please evaluate the content based on the transcribed narration/explanation."""
                     os.unlink(audio_path)
             except:
                 pass
-    
+
     # Fallback: Return metadata with manual review instruction
     formatted = f"""[VIDEO FILE: {file_name}]
 File type: {file_ext[1:].upper() if file_ext else 'unknown'}
@@ -1626,5 +1628,5 @@ The video content should be evaluated based on:
 - Overall quality and professionalism
 
 Please review the video file to assess the student's work."""
-    
+
     return formatted

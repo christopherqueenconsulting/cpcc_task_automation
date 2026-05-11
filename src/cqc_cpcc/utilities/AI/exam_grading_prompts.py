@@ -11,11 +11,11 @@ from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
 
 
 def build_exam_grading_prompt(
-    exam_instructions: str,
-    exam_solution: str,
-    student_submission: str,
-    major_error_types: list[str],
-    minor_error_types: list[str],
+        exam_instructions: str,
+        exam_solution: str,
+        student_submission: str,
+        major_error_types: list[str],
+        minor_error_types: list[str],
 ) -> str:
     """Build the exam grading prompt without format instructions.
     
@@ -39,11 +39,11 @@ def build_exam_grading_prompt(
         extra_system_instructions = """Provide the first 25 characters of the relevant line(s) of code from the Exam Submission for each error when appropriate, as code_error_lines. 
     Each element in code_error_lines should represent only one line of code. 
     """
-    
+
     # Format error types as bulleted lists
     major_errors_formatted = "- " + ("\n- ".join(major_error_types))
     minor_errors_formatted = "- " + ("\n- ".join(minor_error_types))
-    
+
     # Base prompt template (GPT-5.2 methodology)
     # NOTE: Removed {format_instructions} placeholder - schema enforced via API
     prompt_template = """
@@ -127,7 +127,7 @@ AMBIGUITY HANDLING
 
 {extra_system_instructions}
 """
-    
+
     # Fill in the template
     return prompt_template.format(
         exam_instructions=exam_instructions,

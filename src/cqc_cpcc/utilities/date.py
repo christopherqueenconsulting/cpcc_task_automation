@@ -1,8 +1,8 @@
 import datetime as DT
-from dateparser.conf import Settings as _DateParserSettings  # local import for compatibility
 from typing import Optional
 
 import dateparser
+from dateparser.conf import Settings as _DateParserSettings  # local import for compatibility
 
 
 def format_year(year: str) -> str:
@@ -23,6 +23,7 @@ def format_year(year: str) -> str:
         y = year % 100
 
     return str(y)
+
 
 def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.datetime:
     """
@@ -46,13 +47,13 @@ def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.dat
     # OPTIMIZATION: Try common ISO formats first (much faster than dateparser)
     # This speeds up tests and common use cases significantly
     common_formats = [
-        "%Y-%m-%d",           # 2024-01-15
+        "%Y-%m-%d",  # 2024-01-15
         "%Y-%m-%d %H:%M:%S",  # 2024-01-15 14:30:00
         "%Y-%m-%dT%H:%M:%S",  # 2024-01-15T14:30:00 (ISO)
-        "%m/%d/%Y",           # 01/15/2024
-        "%m-%d-%Y",           # 01-15-2024
+        "%m/%d/%Y",  # 01/15/2024
+        "%m-%d-%Y",  # 01-15-2024
     ]
-    
+
     for fmt in common_formats:
         try:
             parsed = DT.datetime.strptime(s, fmt)
@@ -63,7 +64,7 @@ def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.dat
             return parsed
         except ValueError:
             continue
-    
+
     # Fall back to dateparser for natural language and other formats
     # Use the current datetime (will be frozen by freezegun in tests).
     now = DT.datetime.now()
@@ -95,6 +96,7 @@ def get_datetime(date_str: str, return_as_timezone_aware: bool = True) -> DT.dat
 
     return parsed
 
+
 def _coerce_supported_date_type(value: DT.datetime | DT.date | str) -> DT.datetime | DT.date:
     if isinstance(value, str):
         return get_datetime(value)
@@ -108,6 +110,7 @@ def _coerce_to_date(value: DT.datetime | DT.date | str) -> DT.date:
     if isinstance(value, DT.date):
         return value
     raise TypeError("invalid date value")
+
 
 def get_datetime_old(text: str) -> DT.datetime:
     """Parse a date/time string into a datetime object.
@@ -174,7 +177,7 @@ def is_checkdate_before_date(check_date: DT.datetime | DT.date, before_date: DT.
         if check_cal_date == before_cal_date:
             # Same calendar day, so not "before"
             return False
-    
+
     # Convert dates to datetime for comparison
     if before_is_date_only:
         before_date = DT.datetime.combine(before_date, DT.datetime.min.time())
@@ -224,7 +227,7 @@ def is_checkdate_after_date(check_date: DT.datetime | DT.date, after_date: DT.da
         if check_cal_date == after_cal_date:
             # Same calendar day, so not "after"
             return False
-    
+
     # Convert dates to datetime for comparison
     if after_is_date_only:
         after_date = DT.datetime.combine(after_date, DT.datetime.min.time())
@@ -304,8 +307,8 @@ def is_date_in_range(start_date: DT.datetime | DT.date, check_date: DT.datetime 
     return start_dt <= check_dt <= end_dt
 
 
-def filter_dates_in_range(date_strings: list[str], start_date: DT.datetime | DT.date, 
-                         end_date: DT.datetime | DT.date) -> list[str]:
+def filter_dates_in_range(date_strings: list[str], start_date: DT.datetime | DT.date,
+                          end_date: DT.datetime | DT.date) -> list[str]:
     """Filter a list of date strings to only those within the specified range.
     
     Automatically removes empty strings and invalid date formats before filtering.
@@ -372,7 +375,7 @@ def get_earliest_date(date_strings: list[str]) -> str:
 
 
 def weeks_between_dates(
-    date1: DT.date | DT.datetime | str, date2: DT.date | DT.datetime | str, round_up: bool = False
+        date1: DT.date | DT.datetime | str, date2: DT.date | DT.datetime | str, round_up: bool = False
 ) -> int:
     """Calculate the number of weeks between two dates.
     
@@ -408,7 +411,7 @@ def weeks_between_dates(
     if round_up:
         complete_weeks = delta_days // 7
         remainder = delta_days % 7
-        
+
         if remainder > 0:
             # Partial week, round up
             weeks = complete_weeks + 1
@@ -417,7 +420,7 @@ def weeks_between_dates(
             # Special case: 7 days (1 complete week) returns 2 (weeks 1 and 2)
             # But 14+ days return their exact week count
             weeks = max(complete_weeks, 2) if delta_days > 0 and complete_weeks < 2 else complete_weeks
-        
+
         # Ensure at least 1 week for round_up mode
         weeks = max(weeks, 1)
     else:
@@ -464,7 +467,7 @@ def _normalize_datetimes_for_compare(values: list[DT.datetime]) -> list[DT.datet
 
 
 def _align_datetime_awareness(
-    first: DT.datetime, second: DT.datetime
+        first: DT.datetime, second: DT.datetime
 ) -> tuple[DT.datetime, DT.datetime]:
     first_aware = _is_timezone_aware(first)
     second_aware = _is_timezone_aware(second)
@@ -474,6 +477,7 @@ def _align_datetime_awareness(
         second = _ensure_naive_datetime(second)
 
     return first, second
+
 
 def _is_date_only(value: DT.date | DT.datetime) -> bool:
     return isinstance(value, DT.date) and not isinstance(value, DT.datetime)

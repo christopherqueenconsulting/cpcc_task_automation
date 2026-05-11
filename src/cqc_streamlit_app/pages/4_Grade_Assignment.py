@@ -8,12 +8,7 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
-from streamlit.runtime.scriptrunner import add_script_run_ctx
-from streamlit.runtime.scriptrunner_utils.script_run_context import (
-    ScriptRunContext,
-    get_script_run_ctx,
-)
-
+from cqc_cpcc.course_identifier import format_course_id_for_display
 from cqc_cpcc.error_definitions_models import ErrorDefinition
 from cqc_cpcc.exam_review import (
     CodeGrader,
@@ -21,12 +16,10 @@ from cqc_cpcc.exam_review import (
     MinorErrorType,
     parse_error_type_enum_name,
 )
-from cqc_cpcc.course_identifier import format_course_id_for_display
 from cqc_cpcc.feedback_doc_generator import (
     generate_student_feedback_doc,
     sanitize_filename,
 )
-
 # Import rubric system
 from cqc_cpcc.rubric_config import (
     get_distinct_course_ids,
@@ -56,9 +49,9 @@ from cqc_cpcc.utilities.zip_grading_utils import (
     estimate_tokens,
     extract_student_submissions_from_zip,
 )
+from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import (
-    ChatGPTStatusCallbackHandler,
     add_flexible_upload_element,
     add_upload_file_element,
     add_grading_summary_to_zip,
@@ -74,6 +67,11 @@ from cqc_streamlit_app.utils import (
     prefix_content_file_name,
     sanitize_zip_filename,
 )
+from streamlit.runtime.scriptrunner import add_script_run_ctx
+from streamlit.runtime.scriptrunner_utils.script_run_context import (
+    ScriptRunContext,
+    get_script_run_ctx,
+)
 
 # Initialize session state variables
 init_session_state()
@@ -84,7 +82,6 @@ COURSE = "COURSE"
 EXAM = "EXAM"
 NAME = "Name"
 DESCRIPTION = "Description"
-
 
 # Import error definitions system
 from cqc_cpcc.error_definitions_config import (
@@ -125,15 +122,15 @@ def run_async_in_streamlit(coro):
                 # nest_asyncio not available
                 # As a workaround, create a new thread to run the async code
                 import threading
-                
+
                 logger.warning(
                     "Event loop already running and nest_asyncio not available. "
                     "Using thread-based workaround which may have limitations."
                 )
-                
+
                 result_container = []
                 exception_container = []
-                
+
                 def run_in_thread():
                     try:
                         # Create a new event loop for this thread
@@ -146,11 +143,11 @@ def run_async_in_streamlit(coro):
                             new_loop.close()
                     except Exception as e:
                         exception_container.append(e)
-                
+
                 thread = threading.Thread(target=run_in_thread)
                 thread.start()
                 thread.join()
-                
+
                 if exception_container:
                     raise exception_container[0]
                 if result_container:
@@ -251,7 +248,8 @@ def get_flowgorithm_content():
         selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
         if st.session_state.openai_api_key:
-            custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model, service_tier=selected_service_tier)
+            custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model,
+                                        service_tier=selected_service_tier)
 
             student_submission_file_path, student_submission_temp_file_path = add_upload_file_element(
                 "Upload Student Flowgorithm Submission",
@@ -276,6 +274,7 @@ def get_flowgorithm_content():
         else:
             st.error("Please provide your Open API Key on the settings page.")
 
+
 def get_course_list_from_error_definitions() -> list[str]:
     course_set = set()
 
@@ -293,9 +292,8 @@ def get_course_list_from_error_definitions() -> list[str]:
     return course_list
 
 
-def define_error_definitions(course_filter:str = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def define_error_definitions(course_filter: str = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     # Preload the table with default rows and values
-
 
     # Filter by course_filter when provided (keep previous check for private names)
     major_error_types_data = [
@@ -351,13 +349,13 @@ def define_error_definitions(course_filter:str = None) -> tuple[pd.DataFrame, pd
 def select_grading_mode() -> str:
     if "grading_mode" not in st.session_state:
         st.session_state.grading_mode = "rubric_and_errors"
-    
+
     mode_labels = {
         "rubric_and_errors": "Rubric + Error Definitions",
         "rubric_only": "Rubric Only",
         "errors_only": "Error Definitions Only",
     }
-    
+
     return st.radio(
         "Grading Mode",
         options=list(mode_labels.keys()),
@@ -369,44 +367,44 @@ def select_grading_mode() -> str:
 def select_course_from_error_definitions() -> str | None:
     st.header("Course Selection")
     course_ids = get_distinct_course_ids_from_errors()
-    
+
     if not course_ids:
         st.warning("No courses found in error definitions registry. Add courses in error_definitions_config.py")
         return None
-    
+
     if "selected_error_course_id" not in st.session_state:
         st.session_state.selected_error_course_id = None
-    
+
     course_display_map = {
         "-- Select Course --": None,
         **{format_course_id_for_display(course_id): course_id for course_id in course_ids},
     }
     course_display_options = list(course_display_map.keys())
-    
+
     current_index = 0
     if st.session_state.selected_error_course_id:
         display_label = format_course_id_for_display(st.session_state.selected_error_course_id)
         if display_label in course_display_options:
             current_index = course_display_options.index(display_label)
-    
+
     selected_course_display = st.selectbox(
         "Select Course",
         course_display_options,
         index=current_index,
         key="error_course_selector"
     )
-    
+
     if selected_course_display == "-- Select Course --":
         selected_course_id = None
     else:
         selected_course_id = course_display_map[selected_course_display]
-    
+
     if selected_course_id != st.session_state.selected_error_course_id:
         st.session_state.selected_error_course_id = selected_course_id
         if "assignment_selector" in st.session_state:
             st.session_state.assignment_selector = "-- Select Assignment --"
         st.session_state.show_create_assignment_form = False
-    
+
     return selected_course_id
 
 
@@ -417,96 +415,96 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
         Tuple of (selected_course_id, selected_rubric) or (None, None) if not selected
     """
     st.header("Rubric Selection")
-    
+
     # Get distinct courses from rubrics
     course_ids = get_distinct_course_ids()
-    
+
     if not course_ids:
         st.warning("No courses found in rubric configuration. Add course_ids to rubrics in rubric_config.py")
         return None, None
-    
+
     # Course dropdown
     # Initialize session state for course selection persistence
     if "selected_course_id" not in st.session_state:
         st.session_state.selected_course_id = None
-    
+
     # Create display labels for courses (e.g., "CSC151" -> "CSC 151")
     course_display_map = {
         "-- Select Course --": None,
         **{format_course_id_for_display(course_id): course_id for course_id in course_ids},
     }
     course_display_options = list(course_display_map.keys())
-    
+
     # Find current index
     current_index = 0
     if st.session_state.selected_course_id:
         display_label = format_course_id_for_display(st.session_state.selected_course_id)
         if display_label in course_display_options:
             current_index = course_display_options.index(display_label)
-    
+
     selected_course_display = st.selectbox(
         "Select Course",
         course_display_options,
         index=current_index,
         key="course_selector"
     )
-    
+
     # Convert display back to course_id
     if selected_course_display == "-- Select Course --":
         selected_course_id = None
     else:
         selected_course_id = course_display_map[selected_course_display]
-    
+
     # Check if course changed
     if selected_course_id != st.session_state.selected_course_id:
         st.session_state.selected_course_id = selected_course_id
         # Reset rubric selection when course changes
         if "selected_rubric_id" in st.session_state:
             st.session_state.selected_rubric_id = None
-    
+
     if not selected_course_id:
         return None, None
-    
+
     # Get rubrics for selected course
     course_rubrics = get_rubrics_for_course(selected_course_id)
-    
+
     if not course_rubrics:
         st.warning(f"No rubrics found for course {selected_course_id}")
         return selected_course_id, None
-    
+
     # Rubric dropdown
     if "selected_rubric_id" not in st.session_state:
         st.session_state.selected_rubric_id = None
-    
+
     rubric_options = ["-- Select Rubric --"] + [
         f"{rubric.title} (v{rubric.rubric_version}, {rubric.total_points_possible} pts)"
         for rubric_id, rubric in course_rubrics.items()
     ]
     rubric_ids = list(course_rubrics.keys())
-    
+
     # Find current rubric index
     rubric_index = 0
     if st.session_state.selected_rubric_id and st.session_state.selected_rubric_id in rubric_ids:
         rubric_index = rubric_ids.index(st.session_state.selected_rubric_id) + 1
-    
+
     selected_rubric_display = st.selectbox(
         "Select Rubric",
         rubric_options,
         index=rubric_index,
         key="rubric_selector"
     )
-    
+
     if selected_rubric_display == "-- Select Rubric --":
         return selected_course_id, None
-    
+
     # Get rubric ID from selection
     selected_rubric_idx = rubric_options.index(selected_rubric_display) - 1
     selected_rubric_id = rubric_ids[selected_rubric_idx]
     st.session_state.selected_rubric_id = selected_rubric_id
-    
+
     # Load the rubric
     selected_rubric = course_rubrics[selected_rubric_id]
-    
+
     return selected_course_id, selected_rubric
 
 
@@ -522,7 +520,7 @@ def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
     st.header("Rubric Criteria Editor")
     st.markdown(f"**Rubric:** {rubric.title} (v{rubric.rubric_version})")
     st.markdown(f"**Total Points:** {rubric.total_points_possible}")
-    
+
     # Build criteria dataframe for editing
     criteria_data = []
     for criterion in rubric.criteria:
@@ -533,9 +531,9 @@ def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
             "max_points": criterion.max_points,
             "has_levels": len(criterion.levels) if criterion.levels else 0
         })
-    
+
     criteria_df = pd.DataFrame(criteria_data)
-    
+
     # Display editable criteria table
     edited_criteria_df = st.data_editor(
         criteria_df,
@@ -545,42 +543,44 @@ def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
             "enabled": st.column_config.CheckboxColumn("Enabled", help="Enable/disable this criterion"),
             "criterion_id": st.column_config.TextColumn("ID", help="Criterion identifier (read-only)"),
             "name": st.column_config.TextColumn("Name", help="Criterion display name"),
-            "max_points": st.column_config.NumberColumn("Max Points", min_value=1, help="Maximum points for this criterion"),
+            "max_points": st.column_config.NumberColumn("Max Points", min_value=1,
+                                                        help="Maximum points for this criterion"),
             "has_levels": st.column_config.NumberColumn("# Levels", help="Number of performance levels (read-only)")
         },
         key="criteria_editor"
     )
-    
+
     # Build overrides from edited dataframe
     criterion_overrides = {}
     for _, row in edited_criteria_df.iterrows():
         criterion_id = row["criterion_id"]
         base_criterion = next(c for c in rubric.criteria if c.criterion_id == criterion_id)
-        
+
         # Check if any field changed
         changed = False
         override = CriterionOverride()
-        
+
         if row["enabled"] != base_criterion.enabled:
             override.enabled = row["enabled"]
             changed = True
-        
+
         if row["name"] != base_criterion.name:
             override.name = row["name"]
             changed = True
-        
+
         if row["max_points"] != base_criterion.max_points:
             override.max_points = int(row["max_points"])
             changed = True
-        
+
         if changed:
             criterion_overrides[criterion_id] = override
-    
+
     # Optional: Add level editor in expander
     with st.expander("Advanced: Edit Performance Levels", expanded=False):
-        st.info("Performance level editing is optional. Leave unchanged to use default levels from rubric configuration.")
+        st.info(
+            "Performance level editing is optional. Leave unchanged to use default levels from rubric configuration.")
         st.markdown("*Level editing UI can be added here in future if needed.*")
-    
+
     return RubricOverrides(criterion_overrides=criterion_overrides)
 
 
@@ -593,16 +593,17 @@ def _build_error_definitions_from_df(error_df: pd.DataFrame) -> list[ErrorDefini
             description=str(row["description"]).strip(),
             severity_category=str(row["severity_category"]).strip(),
             enabled=bool(row["enabled"]),
-            default_penalty_points=int(row["default_penalty_points"]) if pd.notna(row["default_penalty_points"]) else None
+            default_penalty_points=int(row["default_penalty_points"]) if pd.notna(
+                row["default_penalty_points"]) else None
         )
         updated_errors.append(error)
     return updated_errors
 
 
 def display_assignment_and_error_definitions_selector(
-    course_id: str,
-    *,
-    allow_skip: bool = True,
+        course_id: str,
+        *,
+        allow_skip: bool = True,
 ) -> tuple[str | None, str | None, list[ErrorDefinition] | None]:
     """Display assignment selector and error definitions editor.
     
@@ -612,15 +613,15 @@ def display_assignment_and_error_definitions_selector(
     # Initialize session state for error definitions
     if "error_definitions_registry" not in st.session_state:
         st.session_state.error_definitions_registry = load_error_config_registry()
-    
+
     if "error_definitions_overrides" not in st.session_state:
         st.session_state.error_definitions_overrides = {}  # {(course_id, assignment_id): list[ErrorDefinition]}
-    
+
     if "error_definitions_skipped" not in st.session_state:
         st.session_state.error_definitions_skipped = {}
-    
+
     registry = st.session_state.error_definitions_registry
-    
+
     # Check if we just created an assignment (success flag in session state)
     newly_created_assignment_id = None
     if st.session_state.get('assignment_just_created', False):
@@ -630,23 +631,23 @@ def display_assignment_and_error_definitions_selector(
         st.session_state.assignment_just_created = False
         st.session_state.newly_created_assignment_id = None
         st.success("✅ Assignment created successfully and selected below!")
-    
+
     # Get assignments for this course from session state registry (not from file!)
     # This ensures newly created assignments are visible immediately
     assignments = registry.get_assignments_for_course(course_id)
-    
+
     if not assignments:
         st.warning(f"No assignments configured for course {course_id}. Create a new assignment below.")
-    
+
     # Assignment selector
     col1, col2 = st.columns([3, 1])
-    
+
     with col1:
         assignment_options = ["-- Select Assignment --"] + [
             f"{a.assignment_name} ({a.assignment_id})"
             for a in assignments
         ]
-        
+
         # Auto-select newly created assignment if available
         # We need to set the session state value directly because the index parameter
         # is ignored when the key already exists in session state
@@ -657,37 +658,37 @@ def display_assignment_and_error_definitions_selector(
                     auto_select_value = f"{a.assignment_name} ({a.assignment_id})"
                     st.session_state.assignment_selector = auto_select_value
                     break
-        
+
         selected_assignment_display = st.selectbox(
             "Select Assignment",
             assignment_options,
             key="assignment_selector"
         )
-    
+
     with col2:
         # Use a button instead of checkbox to avoid state modification issues
         if st.button("+ Create New", key="show_create_assignment_button"):
             st.session_state.show_create_assignment_form = True
-    
+
     # Handle new assignment creation
     if st.session_state.get('show_create_assignment_form', False):
         st.subheader("Create New Assignment")
         col1, col2 = st.columns(2)
-        
+
         with col1:
             new_assignment_id = st.text_input(
                 "Assignment ID (stable key)",
                 placeholder="e.g., Exam1, Midterm, Final",
                 key="new_assignment_id_input"
             )
-        
+
         with col2:
             new_assignment_name = st.text_input(
                 "Assignment Name (display label)",
                 placeholder="e.g., CSC 151 Exam 1",
                 key="new_assignment_name_input"
             )
-        
+
         col1, col2 = st.columns(2)
         with col1:
             if st.button("✓ Create Assignment", key="create_assignment_button", type="primary"):
@@ -711,26 +712,26 @@ def display_assignment_and_error_definitions_selector(
                         # Don't return - allow user to correct the error and retry
                 else:
                     st.warning("Please provide both Assignment ID and Name")
-        
+
         with col2:
             if st.button("✕ Cancel", key="cancel_create_assignment_button"):
                 st.session_state.show_create_assignment_form = False
                 st.rerun()
-        
+
         # Return None while in create mode
         return None, None, None
-    
+
     # Extract selected assignment
     if selected_assignment_display == "-- Select Assignment --":
         return None, None, None
-    
+
     # Parse assignment_id from display string
     selected_assignment_idx = assignment_options.index(selected_assignment_display) - 1
     selected_assignment = assignments[selected_assignment_idx]
     selected_assignment_id = selected_assignment.assignment_id
     selected_assignment_name = selected_assignment.assignment_name
     skip_key = (course_id, selected_assignment_id)
-    
+
     use_error_definitions = True
     if allow_skip:
         default_use = not st.session_state.error_definitions_skipped.get(skip_key, False)
@@ -740,17 +741,17 @@ def display_assignment_and_error_definitions_selector(
             key=f"error_definitions_toggle_{course_id}_{selected_assignment_id}"
         )
         st.session_state.error_definitions_skipped[skip_key] = not use_error_definitions
-    
+
     if not use_error_definitions:
         st.info("ℹ️ Error definitions are disabled for this run. Grading will use rubric-only scoring.")
         return selected_assignment_id, selected_assignment_name, []
-    
+
     # Display error definitions editor
     st.subheader(f"Error Definitions for {selected_assignment_name}")
-    
+
     # Get base error definitions from config
     base_error_definitions = registry.get_error_definitions(course_id, selected_assignment_id)
-    
+
     # Check for overrides in session state
     override_key = (course_id, selected_assignment_id)
     if override_key in st.session_state.error_definitions_overrides:
@@ -758,11 +759,12 @@ def display_assignment_and_error_definitions_selector(
         st.info("📝 Using session overrides. Changes are temporary until you export.")
     else:
         effective_error_definitions = base_error_definitions
-    
+
     if not effective_error_definitions:
-        st.info("ℹ️ No error definitions found for this assignment. Add error definitions below to enable error-based grading.")
+        st.info(
+            "ℹ️ No error definitions found for this assignment. Add error definitions below to enable error-based grading.")
         effective_error_definitions = []
-    
+
     # Convert to DataFrame for editing
     error_data = []
     for error in effective_error_definitions:
@@ -774,11 +776,11 @@ def display_assignment_and_error_definitions_selector(
             "description": error.description,
             "default_penalty_points": error.default_penalty_points or 0,
         })
-    
+
     error_df = pd.DataFrame(error_data) if error_data else pd.DataFrame(columns=[
         "enabled", "error_id", "name", "severity_category", "description", "default_penalty_points"
     ])
-    
+
     # Editable data editor
     edited_error_df = st.data_editor(
         error_df,
@@ -786,7 +788,9 @@ def display_assignment_and_error_definitions_selector(
         num_rows="dynamic",
         column_config={
             "enabled": st.column_config.CheckboxColumn("Enabled", help="Enable/disable this error definition"),
-            "error_id": st.column_config.TextColumn("Error ID", help="Stable identifier (use uppercase and underscores)", required=True),
+            "error_id": st.column_config.TextColumn("Error ID",
+                                                    help="Stable identifier (use uppercase and underscores)",
+                                                    required=True),
             "name": st.column_config.TextColumn("Name", help="Short human-readable name", required=True),
             "severity_category": st.column_config.SelectboxColumn(
                 "Severity",
@@ -803,16 +807,16 @@ def display_assignment_and_error_definitions_selector(
         },
         key=f"error_definitions_editor_{course_id}_{selected_assignment_id}"
     )
-    
+
     # Save and Export buttons
     col1, col2, col3 = st.columns([2, 2, 3])
-    
+
     with col1:
         if st.button("💾 Save to Session", key="save_error_definitions_button"):
             # Validate and save to session state
             try:
                 updated_errors = _build_error_definitions_from_df(edited_error_df)
-                
+
                 # Check for duplicate error_ids
                 error_ids = [e.error_id for e in updated_errors]
                 if len(error_ids) != len(set(error_ids)):
@@ -823,14 +827,14 @@ def display_assignment_and_error_definitions_selector(
                     st.rerun()
             except Exception as e:
                 st.error(f"Validation failed: {e}")
-    
+
     with col2:
         if st.button("🔄 Reset to Config", key="reset_error_definitions_button"):
             if override_key in st.session_state.error_definitions_overrides:
                 del st.session_state.error_definitions_overrides[override_key]
                 st.success("Reset to configuration defaults")
                 st.rerun()
-    
+
     with col3:
         if st.button("📋 Export JSON", key="export_error_definitions_button"):
             # Update registry with current overrides
@@ -840,11 +844,11 @@ def display_assignment_and_error_definitions_selector(
                 assignment = course.get_assignment(selected_assignment_id)
                 if assignment:
                     assignment.error_definitions = _build_error_definitions_from_df(edited_error_df)
-            
+
             json_str = registry_to_json_string(temp_registry)
             st.code(json_str, language="json")
             st.info("Copy the JSON above and paste it into error_definitions_config.py to persist changes.")
-    
+
     return selected_assignment_id, selected_assignment_name, effective_error_definitions
 
 
@@ -867,10 +871,9 @@ async def get_grade_exam_content():
     # Create course filter from selected course converting spaces to underscore
     course_filter = selected_course.replace(" ", "_") if selected_course != "-- Select Course --" else None
 
-
     # Text input for entering a course name
     course_section = st.text_input("Enter Course Section and Assignment Name")
-    course_name = selected_course+"_"+course_section if course_section else None
+    course_name = selected_course + "_" + course_section if course_section else None
     max_points = st.number_input("Max points for assignment", value=200)
     deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40)
     deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10)
@@ -898,7 +901,7 @@ async def get_grade_exam_content():
                                                   accept_multiple_files=True,
                                                   key_prefix="legacy_exam_")
 
-    #convert_solution_to_markdown = st.checkbox("Convert To Markdown", True,
+    # convert_solution_to_markdown = st.checkbox("Convert To Markdown", True,
     #                                               key="convert_exam_solution_to_markdown")
     convert_solution_to_markdown = False
 
@@ -932,7 +935,8 @@ async def get_grade_exam_content():
                     if get_file_extension_from_filepath(orig_solution_file_path) in [".xlsx", ".xls", ".xlsm"]:
                         st.markdown(read_content)
                     else:
-                        st.text_area(label="Solution Content", value=read_content, key=f"legacy_exam_solution_{solution_file_name}")
+                        st.text_area(label="Solution Content", value=read_content,
+                                     key=f"legacy_exam_solution_{solution_file_name}")
 
             # Append the content to the list
             assignment_solution_contents.append(read_content)
@@ -1125,7 +1129,8 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
             else:
                 if show_contents:
                     # Display the code in a text area
-                    st.text_area(label="Student Submission Content", value=student_submission_file_path_contents, key=f"{base_student_filename}_{filename}_text_area")
+                    st.text_area(label="Student Submission Content", value=student_submission_file_path_contents,
+                                 key=f"{base_student_filename}_{filename}_text_area")
                 student_submission_file_path_contents_final = student_submission_file_path_contents
             student_submission_file_path_contents_all.append(student_submission_file_path_contents_final)
 
@@ -1188,16 +1193,16 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
 
 
 async def grade_single_rubric_student(
-    ctx: ScriptRunContext,
-    student_id: str,
-    student_submission: StudentSubmission,
-    effective_rubric: Rubric,
-    assignment_instructions: str,
-    reference_solution: Optional[str],
-    error_definitions: Optional[list[ErrorDefinition]],
-    model_name: str,
-    temperature: float,
-    course_name: str,
+        ctx: ScriptRunContext,
+        student_id: str,
+        student_submission: StudentSubmission,
+        effective_rubric: Rubric,
+        assignment_instructions: str,
+        reference_solution: Optional[str],
+        error_definitions: Optional[list[ErrorDefinition]],
+        model_name: str,
+        temperature: float,
+        course_name: str,
 ) -> tuple[str, RubricAssessmentResult | None]:
     """Grade a single student submission with rubric using async OpenAI call.
     
@@ -1220,37 +1225,37 @@ async def grade_single_rubric_student(
         Tuple of (student_id, RubricAssessmentResult)
     """
     add_script_run_ctx(ctx=ctx)
-    
+
     status_label = f"Grading: {student_id}"
-    
+
     # Check if "Expand All" was clicked
     expanded_state = st.session_state.get('expand_all_students', False)
-    
+
     # Track correlation ID for debug info
     grading_correlation_id = None
-    
+
     with st.status(status_label, expanded=expanded_state) as status:
         try:
             # Build submission text from files
             status.update(label=f"{status_label} | Building submission text...")
-            
+
             submission_text = build_submission_text_with_token_limit(
                 files=student_submission.files,
             )
-            
+
             # Show file list
             st.markdown(f"**Files included:** {len(student_submission.files)}")
             for filename in student_submission.files.keys():
                 st.markdown(f"  - {filename}")
-            
+
             # Show token estimate (preprocessing used if large)
             st.info(f"📊 Estimated tokens: ~{student_submission.estimated_tokens}")
             if student_submission.estimated_tokens > 70000:  # 70% of 128K context
                 st.info("🔄 Large submission detected - preprocessing will be used automatically")
-            
+
             # Grade with rubric
             status.update(label=f"{status_label} | Calling OpenAI...")
-            
+
             # Create correlation ID for tracking (will be used by OpenAI debug if enabled)
             from cqc_cpcc.utilities.AI.openai_debug import (
                 create_correlation_id,
@@ -1259,7 +1264,7 @@ async def grade_single_rubric_student(
             if should_debug():
                 grading_correlation_id = create_correlation_id()
                 logger.info(f"Starting grading for {student_id} with correlation_id={grading_correlation_id}")
-            
+
             result = await grade_with_rubric(
                 rubric=effective_rubric,
                 assignment_instructions=assignment_instructions,
@@ -1269,43 +1274,43 @@ async def grade_single_rubric_student(
                 model_name=model_name,
                 temperature=temperature,
             )
-            
+
             status.update(label=f"{status_label} | Processing results...")
-            
+
             # Log grading summary for debugging
             logger.info(
                 f"Grading completed for {student_id}: "
                 f"{result.total_points_earned}/{result.total_points_possible} points "
                 f"({result.overall_band_label or 'No band'})"
             )
-            
+
             # Display results with debug information
             display_rubric_assessment_result(result, student_id, correlation_id=grading_correlation_id)
-            
+
             band_or_level = _get_band_or_level_label(result)
             score_str = f"{result.total_points_earned}/{result.total_points_possible}"
             level_str = f" [{band_or_level}]" if band_or_level else ""
             status.update(label=f"✅ {student_id} — {score_str}{level_str}", state="complete")
-            
+
             return (student_id, result)
-            
+
         except Exception as e:
             logger.error(f"Error grading student {student_id}: {e}", exc_info=True)
-            
+
             # Try to extract correlation_id from exception if available
             if not grading_correlation_id:
                 grading_correlation_id = getattr(e, 'correlation_id', None)
-            
+
             # Build detailed error message based on exception type
             error_msg = str(e)
             attempt_count = getattr(e, 'attempt_count', None)
-            
+
             # Check if this is a validation error (schema mismatch)
             from cqc_cpcc.utilities.AI.openai_exceptions import (
                 OpenAISchemaValidationError,
                 OpenAITransportError,
             )
-            
+
             if isinstance(e, OpenAISchemaValidationError):
                 # Validation error - provide specific guidance
                 error_type = "🔍 **Validation Error**"
@@ -1313,7 +1318,7 @@ async def grade_single_rubric_student(
                     error_msg = f"LLM output failed schema validation after {attempt_count} attempt(s)"
                 else:
                     error_msg = "LLM output does not match expected schema"
-                
+
                 st.error(f"❌ {error_type}: {student_id}")
                 st.markdown(f"""
                 **Issue:** {error_msg}
@@ -1326,7 +1331,7 @@ async def grade_single_rubric_student(
                 - Consider simplifying the rubric or submission
                 - Try re-running the grading
                 """)
-                
+
                 # Show validation errors if available
                 validation_errors = getattr(e, 'validation_errors', None)
                 if validation_errors and len(validation_errors) > 0:
@@ -1334,10 +1339,10 @@ async def grade_single_rubric_student(
                     for i, err in enumerate(validation_errors[:5]):  # Show first 5
                         loc = ".".join(str(x) for x in err.get("loc", []))
                         msg = err.get("msg", "")
-                        st.markdown(f"  {i+1}. `{loc}`: {msg}")
+                        st.markdown(f"  {i + 1}. `{loc}`: {msg}")
                     if len(validation_errors) > 5:
                         st.markdown(f"  ... and {len(validation_errors) - 5} more")
-            
+
             elif isinstance(e, OpenAITransportError):
                 # Transport/network error
                 error_type = "🌐 **API Error**"
@@ -1345,7 +1350,7 @@ async def grade_single_rubric_student(
                     error_msg = f"OpenAI API error after {attempt_count} attempt(s)"
                 else:
                     error_msg = "OpenAI API connection failed"
-                
+
                 st.error(f"❌ {error_type}: {student_id}")
                 st.markdown(f"""
                 **Issue:** {error_msg}
@@ -1358,35 +1363,35 @@ async def grade_single_rubric_student(
                 - Check OpenAI status: https://status.openai.com
                 - Wait a moment and try again
                 """)
-            
+
             else:
                 # Generic error
                 if attempt_count:
                     error_msg = f"{error_msg} (after {attempt_count} attempt(s))"
-                
+
                 st.error(f"❌ Error grading {student_id}: {error_msg}")
-            
+
             # Show debug panel if available
             from cqc_streamlit_app.utils import render_openai_debug_panel
             if grading_correlation_id:
                 render_openai_debug_panel(correlation_id=grading_correlation_id, error=e)
-            
+
             status.update(label=f"❌ Error: {student_id}", state="error")
-            
+
             return (student_id, None)  # None signals failure
 
 
 async def process_rubric_grading_batch(
-    submission_file_paths: list[tuple[str, str]],
-    effective_rubric: Rubric,
-    assignment_instructions: str,
-    reference_solution: Optional[str],
-    error_definitions: Optional[list[ErrorDefinition]],
-    model_name: str,
-    temperature: float,
-    course_name: str,
-    accepted_file_types: list[str],
-    run_key: str,
+        submission_file_paths: list[tuple[str, str]],
+        effective_rubric: Rubric,
+        assignment_instructions: str,
+        reference_solution: Optional[str],
+        error_definitions: Optional[list[ErrorDefinition]],
+        model_name: str,
+        temperature: float,
+        course_name: str,
+        accepted_file_types: list[str],
+        run_key: str,
 ) -> None:
     """Process a batch of student submissions with async grading.
     
@@ -1408,26 +1413,26 @@ async def process_rubric_grading_batch(
     """
     ctx = get_script_run_ctx()
     all_results: list[tuple[str, RubricAssessmentResult]] = []
-    
+
     # Collect all student submissions (from single files or ZIPs)
     student_submissions: dict[str, StudentSubmission] = {}
-    
+
     for original_path, temp_path in submission_file_paths:
         base_filename = os.path.basename(original_path)
-        
+
         if original_path.endswith('.zip'):
             # Extract students from ZIP
             st.info(f"📦 Extracting students from ZIP: {base_filename}")
-            
+
             try:
                 zip_students = extract_student_submissions_from_zip(
                     temp_path,
                     accepted_file_types,
                 )
-                
+
                 st.success(f"✅ Extracted {len(zip_students)} student(s) from {base_filename}")
                 student_submissions.update(zip_students)
-                
+
             except Exception as e:
                 st.error(f"❌ Error extracting ZIP {base_filename}: {e}")
                 logger.error(f"ZIP extraction failed for {base_filename}: {e}", exc_info=True)
@@ -1435,31 +1440,31 @@ async def process_rubric_grading_batch(
         else:
             # Single file = one student
             student_id = os.path.splitext(base_filename)[0]
-            
+
             student_submissions[student_id] = StudentSubmission(
                 student_id=student_id,
                 student_name=student_id,
                 files={base_filename: temp_path},
             )
-    
+
     if not student_submissions:
         st.error("❌ No valid student submissions found")
         return
-    
+
     total_students = len(student_submissions)
     st.info(f"📊 Grading {total_students} student submission(s)...")
-    
+
     # Add "Expand All" button for student status blocks
     col1, col2 = st.columns([3, 1])
     with col2:
         if st.button("🔽 Expand All Student Results", key="expand_all_students_button"):
             st.session_state.expand_all_students = True
             st.rerun()
-    
+
     # Create async tasks for concurrent grading
     # Use gather with return_exceptions=True to ensure one failure doesn't stop others
     tasks = []
-    
+
     for student_id, submission in student_submissions.items():
         task = grade_single_rubric_student(
             ctx=ctx,
@@ -1474,10 +1479,10 @@ async def process_rubric_grading_batch(
             course_name=course_name,
         )
         tasks.append(task)
-    
+
     # Execute all tasks concurrently, collecting both successes and exceptions
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     # Separate successful results from failures
     failed_student_ids = []
     for result in results:
@@ -1485,25 +1490,25 @@ async def process_rubric_grading_batch(
             # Unexpected exception not caught inside grade_single_rubric_student
             logger.debug(f"Skipping unexpected exception: {type(result).__name__}")
             continue
-        
+
         student_id, assessment = result
         if assessment is None:
             # Grading failed - cache the failure
             failed_student_ids.append(student_id)
         else:
             all_results.append((student_id, assessment))
-    
+
     # Store results AND failures in session state for this run_key
     st.session_state.grading_results_by_key[run_key] = all_results
     st.session_state.grading_failures_by_key[run_key] = failed_student_ids
-    
+
     # Display summary
     success_count = len(all_results)
     failure_count = len(failed_student_ids)
-    
+
     if success_count > 0:
         st.success(f"✅ Successfully graded {success_count}/{total_students} submission(s)")
-        
+
         # Display summary table
         summary_data = []
         for student_id, result in all_results:
@@ -1512,7 +1517,7 @@ async def process_rubric_grading_batch(
                 percentage = f"{(result.total_points_earned / result.total_points_possible * 100):.1f}%"
             else:
                 percentage = "N/A"
-            
+
             summary_data.append({
                 "Student": student_id,
                 "Points Earned": result.total_points_earned,
@@ -1520,7 +1525,7 @@ async def process_rubric_grading_batch(
                 "Percentage": percentage,
                 "Band": result.overall_band_label or "N/A",
             })
-        
+
         # Add failure rows
         for failed_id in failed_student_ids:
             summary_data.append({
@@ -1530,12 +1535,12 @@ async def process_rubric_grading_batch(
                 "Percentage": "Failed",
                 "Band": "❌ Failed",
             })
-        
+
         if summary_data:
             st.subheader("📊 Grading Summary")
             summary_df = pd.DataFrame(summary_data)
             st.dataframe(summary_df, hide_index=True)
-            
+
             # Calculate statistics - exclude failure rows from average
             numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
             avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
@@ -1544,9 +1549,10 @@ async def process_rubric_grading_batch(
                 avg_pct = (avg_score / total_possible * 100)
                 st.metric("Average Score", f"{avg_score:.1f}/{total_possible} ({avg_pct:.1f}%)")
             else:
-                logger.warning("Effective rubric has zero total_points_possible; skipping average percentage calculation.")
+                logger.warning(
+                    "Effective rubric has zero total_points_possible; skipping average percentage calculation.")
                 st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
-        
+
         # Generate Word docs and ZIP download
         st.markdown("---")
         _generate_feedback_docs_and_zip(
@@ -1557,17 +1563,17 @@ async def process_rubric_grading_batch(
             temperature=temperature,
             run_key=run_key
         )
-    
+
     if failure_count > 0:
         st.error(f"❌ {failure_count} submission(s) failed to grade")
 
 
 def _split_error_definitions_by_severity(
-    error_definitions: Optional[list[ErrorDefinition]],
+        error_definitions: Optional[list[ErrorDefinition]],
 ) -> tuple[list[str], list[str]]:
     major_error_type_list = []
     minor_error_type_list = []
-    
+
     for error in (error_definitions or []):
         if not error.enabled:
             continue
@@ -1575,46 +1581,46 @@ def _split_error_definitions_by_severity(
             major_error_type_list.append(error.description)
         elif error.severity_category == "minor":
             minor_error_type_list.append(error.description)
-    
+
     return major_error_type_list, minor_error_type_list
 
 
 async def grade_single_error_only_student(
-    ctx: ScriptRunContext,
-    student_id: str,
-    student_submission: StudentSubmission,
-    assignment_instructions: str,
-    reference_solution: Optional[str],
-    error_definitions: list[ErrorDefinition],
-    max_points: int,
-    deduction_per_major_error: int,
-    deduction_per_minor_error: int,
-    model_name: str,
-    temperature: float,
-    use_openrouter: bool,
-    openrouter_auto_route: bool,
+        ctx: ScriptRunContext,
+        student_id: str,
+        student_submission: StudentSubmission,
+        assignment_instructions: str,
+        reference_solution: Optional[str],
+        error_definitions: list[ErrorDefinition],
+        max_points: int,
+        deduction_per_major_error: int,
+        deduction_per_minor_error: int,
+        model_name: str,
+        temperature: float,
+        use_openrouter: bool,
+        openrouter_auto_route: bool,
 ) -> tuple[str, dict, tuple[str, str]]:
     add_script_run_ctx(ctx=ctx)
-    
+
     status_label = f"Grading: {student_id}"
     expanded_state = st.session_state.get('expand_all_students', False)
-    
+
     with st.status(status_label, expanded=expanded_state) as status:
         try:
             status.update(label=f"{status_label} | Building submission text...")
             submission_text = build_submission_text_with_token_limit(
                 files=student_submission.files,
             )
-            
+
             st.markdown(f"**Files included:** {len(student_submission.files)}")
             for filename in student_submission.files.keys():
                 st.markdown(f"  - {filename}")
-            
+
             estimated_tokens = student_submission.estimated_tokens or estimate_tokens(submission_text)
             st.info(f"📊 Estimated tokens: ~{estimated_tokens}")
-            
+
             major_error_type_list, minor_error_type_list = _split_error_definitions_by_severity(error_definitions)
-            
+
             code_grader = CodeGrader(
                 max_points=max_points,
                 exam_instructions=assignment_instructions,
@@ -1628,13 +1634,13 @@ async def grade_single_error_only_student(
                 use_openrouter=use_openrouter,
                 openrouter_auto_route=openrouter_auto_route,
             )
-            
+
             status.update(label=f"{status_label} | Calling grading model...")
             await code_grader.grade_submission(
                 submission_text,
                 callback=ChatGPTStatusCallbackHandler(status, status_label),
             )
-            
+
             feedback_text = code_grader.get_text_feedback()
             st.text_area(
                 label=f"Feedback for {student_id}",
@@ -1642,11 +1648,11 @@ async def grade_single_error_only_student(
                 height=260,
                 key=f"error_only_feedback_{student_id}",
             )
-            
+
             temp_doc = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
             code_grader.save_feedback_to_docx(temp_doc.name)
             temp_doc.close()
-            
+
             download_filename = f"{sanitize_filename(student_id)}_Feedback.docx"
             download_placeholder = st.empty()
             on_download_click(
@@ -1655,9 +1661,9 @@ async def grade_single_error_only_student(
                 f"Download Feedback for {student_id}",
                 download_filename
             )
-            
+
             status.update(label=f"✅ {student_id} graded", state="complete")
-            
+
             result_summary = {
                 "points_earned": code_grader.points,
                 "max_points": code_grader.max_points,
@@ -1665,50 +1671,50 @@ async def grade_single_error_only_student(
                 "minor_count": len(code_grader.minor_errors or []),
                 "feedback_text": feedback_text,
             }
-            
+
             return student_id, result_summary, (download_filename, temp_doc.name)
         except Exception as e:
             from cqc_cpcc.utilities.AI.openai_exceptions import (
                 OpenAISchemaValidationError,
                 OpenAITransportError,
             )
-            
+
             if isinstance(e, OpenAISchemaValidationError):
                 st.error(f"❌ Validation error for {student_id}: {e}")
             elif isinstance(e, OpenAITransportError):
                 st.error(f"❌ API error for {student_id}: {e}")
             else:
                 st.error(f"❌ Error grading {student_id}: {e}")
-            
+
             status.update(label=f"❌ Error: {student_id}", state="error")
             raise
 
 
 async def process_error_only_grading_batch(
-    submission_file_paths: list[tuple[str, str]],
-    assignment_instructions: str,
-    reference_solution: Optional[str],
-    error_definitions: list[ErrorDefinition],
-    max_points: int,
-    deduction_per_major_error: int,
-    deduction_per_minor_error: int,
-    model_name: str,
-    temperature: float,
-    use_openrouter: bool,
-    openrouter_auto_route: bool,
-    course_name: str,
-    accepted_file_types: list[str],
-    run_key: str,
+        submission_file_paths: list[tuple[str, str]],
+        assignment_instructions: str,
+        reference_solution: Optional[str],
+        error_definitions: list[ErrorDefinition],
+        max_points: int,
+        deduction_per_major_error: int,
+        deduction_per_minor_error: int,
+        model_name: str,
+        temperature: float,
+        use_openrouter: bool,
+        openrouter_auto_route: bool,
+        course_name: str,
+        accepted_file_types: list[str],
+        run_key: str,
 ) -> None:
     ctx = get_script_run_ctx()
     all_results: list[tuple[str, dict]] = []
     doc_files: list[tuple[str, str]] = []
-    
+
     student_submissions: dict[str, StudentSubmission] = {}
-    
+
     for original_path, temp_path in submission_file_paths:
         base_filename = os.path.basename(original_path)
-        
+
         if original_path.endswith('.zip'):
             st.info(f"📦 Extracting students from ZIP: {base_filename}")
             try:
@@ -1729,20 +1735,20 @@ async def process_error_only_grading_batch(
                 student_name=student_id,
                 files={base_filename: temp_path},
             )
-    
+
     if not student_submissions:
         st.error("❌ No valid student submissions found")
         return
-    
+
     total_students = len(student_submissions)
     st.info(f"📊 Grading {total_students} student submission(s)...")
-    
+
     col1, col2 = st.columns([3, 1])
     with col2:
         if st.button("🔽 Expand All Student Results", key="expand_all_students_error_only_button"):
             st.session_state.expand_all_students = True
             st.rerun()
-    
+
     tasks = []
     for student_id, submission in student_submissions.items():
         tasks.append(
@@ -1762,9 +1768,9 @@ async def process_error_only_grading_batch(
                 openrouter_auto_route=openrouter_auto_route,
             )
         )
-    
+
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     for result in results:
         if isinstance(result, Exception):
             logger.debug(f"Skipping failed task: {type(result).__name__}")
@@ -1772,15 +1778,15 @@ async def process_error_only_grading_batch(
         student_id, result_summary, doc_file = result
         all_results.append((student_id, result_summary))
         doc_files.append(doc_file)
-    
+
     st.session_state.error_only_results_by_key = all_results
 
     success_count = len(all_results)
     failure_count = total_students - success_count
-    
+
     if success_count > 0:
         st.success(f"✅ Successfully graded {success_count}/{total_students} submission(s)")
-        
+
         summary_data = []
         for student_id, result_summary in all_results:
             max_points_value = result_summary.get("max_points", 0)
@@ -1794,12 +1800,12 @@ async def process_error_only_grading_batch(
                 "Major Errors": result_summary.get("major_count", 0),
                 "Minor Errors": result_summary.get("minor_count", 0),
             })
-        
+
         if summary_data:
             st.subheader("📊 Grading Summary")
             summary_df = pd.DataFrame(summary_data)
             st.dataframe(summary_df, hide_index=True)
-            
+
             # Export options for grading summary
             col1, col2 = st.columns(2)
             with col1:
@@ -1816,7 +1822,7 @@ async def process_error_only_grading_batch(
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="download_summary_xlsx"
                     )
-            
+
             with col2:
                 # CSV export (alternative)
                 if csv_file_path:
@@ -1828,25 +1834,25 @@ async def process_error_only_grading_batch(
                             mime="text/csv",
                             key="download_summary_csv"
                         )
-            
+
             avg_score = summary_df["Points Earned"].mean()
             if max_points > 0:
                 avg_pct = (avg_score / max_points * 100)
                 st.metric("Average Score", f"{avg_score:.1f}/{max_points} ({avg_pct:.1f}%)")
             else:
                 st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
-        
+
         if doc_files:
             st.markdown("---")
             st.subheader("📥 Download Feedback Documents")
             st.markdown("*Word documents containing error-definition feedback*")
-            
+
             if run_key in st.session_state.error_only_feedback_zip_by_key:
                 zip_file_path = st.session_state.error_only_feedback_zip_by_key[run_key]
             else:
                 zip_file_path = create_zip_file(doc_files)
                 st.session_state.error_only_feedback_zip_by_key[run_key] = zip_file_path
-            
+
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
             zip_filename = sanitize_zip_filename(course_name, timestamp)
             download_placeholder = st.empty()
@@ -1856,7 +1862,7 @@ async def process_error_only_grading_batch(
                 "📥 Download All Feedback (.zip)",
                 zip_filename
             )
-    
+
     if failure_count > 0:
         st.error(f"❌ {failure_count} submission(s) failed to grade")
 
@@ -1865,22 +1871,22 @@ def display_cached_error_only_results(run_key: str, course_name: str) -> None:
     if run_key not in st.session_state.error_only_results_by_key:
         st.error("❌ No cached results found for this configuration")
         return
-    
+
     all_results = st.session_state.error_only_results_by_key[run_key]
-    
+
     if not all_results:
         st.warning("⚠️ No successful grading results to display")
         return
-    
+
     total_students = len(all_results)
     st.success(f"✅ Displaying cached results for {total_students} student(s)")
-    
+
     col1, col2 = st.columns([3, 1])
     with col2:
         if st.button("🔽 Expand All Student Results", key="expand_all_cached_error_only_button"):
             st.session_state.expand_all_students = True
             st.rerun()
-    
+
     summary_data = []
     for student_id, result_summary in all_results:
         max_points_value = result_summary.get("max_points", 0)
@@ -1894,12 +1900,12 @@ def display_cached_error_only_results(run_key: str, course_name: str) -> None:
             "Major Errors": result_summary.get("major_count", 0),
             "Minor Errors": result_summary.get("minor_count", 0),
         })
-    
+
     if summary_data:
         st.subheader("📊 Grading Summary")
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, hide_index=True)
-    
+
     if run_key in st.session_state.error_only_feedback_zip_by_key:
         st.markdown("---")
         st.subheader("📥 Download Feedback Documents")
@@ -1925,11 +1931,11 @@ async def get_rubric_based_exam_grading():
     - Rubric Only
     - Error Definitions Only
     """)
-    
+
     grading_mode = select_grading_mode()
     use_rubric = grading_mode in ["rubric_and_errors", "rubric_only"]
     use_error_definitions = grading_mode in ["rubric_and_errors", "errors_only"]
-    
+
     # Step 1: Course (and Rubric) Selection
     if use_rubric:
         selected_course_id, selected_rubric = select_rubric_with_course_filter()
@@ -1942,12 +1948,12 @@ async def get_rubric_based_exam_grading():
             st.info("👆 Please select a course to begin grading.")
             return
         selected_rubric = None
-    
+
     # Step 2: Assignment Selection and Error Definitions (if enabled)
     selected_assignment_id = None
     selected_assignment_name = None
     effective_error_definitions: list[ErrorDefinition] = []
-    
+
     if use_error_definitions:
         st.header("Assignment & Error Definitions")
         selected_assignment_id, selected_assignment_name, effective_error_definitions = display_assignment_and_error_definitions_selector(
@@ -1966,25 +1972,25 @@ async def get_rubric_based_exam_grading():
         )
         selected_assignment_name = assignment_label.strip() or "Rubric Only"
         selected_assignment_id = sanitize_filename(assignment_label) if assignment_label else "RubricOnly"
-    
+
     # Class section input (shown for all grading modes)
     course_section = st.text_input(
         "Class Section (e.g., N805, N804)",
         placeholder="Enter class section identifier",
         key="rubric_grading_course_section"
     )
-    
+
     # Build course_name including optional section
     course_name_parts = [selected_course_id]
     if course_section and course_section.strip():
         course_name_parts.append(course_section.strip())
     course_name_parts.append(selected_assignment_name)
     course_name = "_".join(course_name_parts)
-    
+
     # Step 3: Rubric Overrides Editor (if rubric mode)
     if use_rubric:
         rubric_overrides = display_rubric_overrides_editor(selected_rubric)
-        
+
         try:
             is_valid, errors = validate_overrides_compatible(selected_rubric, rubric_overrides)
             if not is_valid:
@@ -1992,18 +1998,18 @@ async def get_rubric_based_exam_grading():
                 for error in errors:
                     st.error(f"  - {error}")
                 return
-            
+
             effective_rubric = merge_rubric_overrides(selected_rubric, rubric_overrides)
-            
+
             st.success(f"Effective rubric: {effective_rubric.total_points_possible} total points, "
-                      f"{len([c for c in effective_rubric.criteria if c.enabled])} enabled criteria")
-            
+                       f"{len([c for c in effective_rubric.criteria if c.enabled])} enabled criteria")
+
         except ValueError as e:
             st.error(f"Failed to merge rubric overrides: {e}")
             return
     else:
         effective_rubric = None
-    
+
     # Step 4: Assignment Instructions
     st.header("Assignment Instructions")
     _orig_file_name, instructions_file_path = add_flexible_upload_element(
@@ -2017,13 +2023,13 @@ async def get_rubric_based_exam_grading():
         True,
         key="convert_rubric_exam_instruction_to_markdown"
     )
-    
+
     assignment_instructions_content = None
     if instructions_file_path:
         assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
         if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
             st.markdown(assignment_instructions_content, unsafe_allow_html=True)
-    
+
     # Step 5: Solution File (Optional)
     st.header("Solution File (Optional)")
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
@@ -2034,7 +2040,7 @@ async def get_rubric_based_exam_grading():
         key_prefix="rubric_exam_",
         allow_url=True
     )
-    
+
     assignment_solution_contents = None
     if solution_file_paths:
         assignment_solution_contents = []
@@ -2042,15 +2048,15 @@ async def get_rubric_based_exam_grading():
             solution_file_name = os.path.basename(orig_solution_file_path)
             read_content = read_file(solution_file_path, False)
             read_content = prefix_content_file_name(solution_file_name, read_content)
-            
+
             solution_language = get_language_from_file_path(orig_solution_file_path)
             if solution_language:
                 read_content = wrap_code_in_markdown_backticks(read_content, solution_language)
-            
+
             assignment_solution_contents.append(read_content)
-        
+
         assignment_solution_contents = "\n\n".join(assignment_solution_contents)
-    
+
     # Step 6: Error-Only Scoring Config
     max_points = None
     deduction_per_major_error = None
@@ -2058,9 +2064,11 @@ async def get_rubric_based_exam_grading():
     if grading_mode == "errors_only":
         st.header("Error-Only Scoring")
         max_points = st.number_input("Max points for assignment", value=200, key="error_only_max_points")
-        deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40, key="error_only_major_deduction")
-        deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10, key="error_only_minor_deduction")
-    
+        deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40,
+                                                    key="error_only_major_deduction")
+        deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10,
+                                                    key="error_only_minor_deduction")
+
     # Step 7: Model Configuration
     st.header("Model Configuration")
     model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=True)
@@ -2083,7 +2091,7 @@ async def get_rubric_based_exam_grading():
         key_prefix="rubric_exam_",
         allow_url=True
     )
-    
+
     # Step 9: Generate Run Key and Check Cache
     # If files are not uploaded but we have a previous run_key in session state,
     # try to display cached results for that run_key
@@ -2099,24 +2107,24 @@ async def get_rubric_based_exam_grading():
                 else:
                     display_cached_grading_results(stored_run_key, course_name)
                 return
-        
+
         st.info("📝 Please upload assignment instructions and student submissions to begin grading.")
         return
-    
+
     from cqc_cpcc.grading_run_key import (
         generate_file_metadata,
         generate_grading_run_key,
     )
     file_metadata = generate_file_metadata(student_submission_file_paths)
     error_definition_ids = [ed.error_id for ed in (effective_error_definitions or []) if ed.enabled]
-    
+
     if use_rubric:
         rubric_id = selected_rubric.rubric_id
         rubric_version = selected_rubric.rubric_version
     else:
         rubric_id = "errors_only"
         rubric_version = 0
-    
+
     current_run_key = generate_grading_run_key(
         course_id=selected_course_id,
         assignment_id=selected_assignment_id,
@@ -2129,21 +2137,21 @@ async def get_rubric_based_exam_grading():
         debug_mode=False,
         grading_mode=grading_mode,
     )
-    
+
     results_cache = st.session_state.error_only_results_by_key if grading_mode == "errors_only" else st.session_state.grading_results_by_key
     has_cached_results = current_run_key in results_cache
     is_grading_in_progress = st.session_state.grading_status_by_key.get(current_run_key) == "running"
-    
+
     st.success("All required inputs provided. Ready to grade!")
-    
+
     with st.expander("🔑 Run Key (for debugging)", expanded=False):
         st.code(current_run_key, language="text")
         if has_cached_results:
             st.info("✅ Cached results available for this configuration")
-    
+
     # Step 10: Grade Button and Action Guard
     col1, col2, col3 = st.columns([2, 2, 3])
-    
+
     with col1:
         grade_button_clicked = st.button(
             "🎯 Grade Submissions",
@@ -2152,7 +2160,7 @@ async def get_rubric_based_exam_grading():
             type="primary",
             help="Click to start grading (or re-grade if inputs changed)"
         )
-    
+
     with col2:
         if has_cached_results:
             if st.button("🔄 Clear Results", key="clear_results_button"):
@@ -2172,28 +2180,28 @@ async def get_rubric_based_exam_grading():
                     del st.session_state.grading_errors_by_key[current_run_key]
                 st.success("Results cleared! Click Grade to re-run.")
                 st.rerun()
-    
+
     with col3:
         if has_cached_results:
             st.info("📦 Using cached results (click Clear to re-grade)")
         elif is_grading_in_progress:
             st.warning("⏳ Grading in progress...")
-    
+
     if grade_button_clicked:
         st.session_state.do_grade = True
         st.session_state.grading_run_key = current_run_key
-    
+
     should_grade = (
-        st.session_state.do_grade
-        and st.session_state.grading_run_key == current_run_key
-        and not has_cached_results
+            st.session_state.do_grade
+            and st.session_state.grading_run_key == current_run_key
+            and not has_cached_results
     )
-    
+
     if should_grade:
         st.session_state.grading_status_by_key[current_run_key] = "running"
         # Store the run_key so we can display cached results even after page rerun
         st.session_state.last_grading_run_key = current_run_key
-        
+
         try:
             if grading_mode == "errors_only":
                 await process_error_only_grading_batch(
@@ -2225,18 +2233,18 @@ async def get_rubric_based_exam_grading():
                     accepted_file_types=student_submission_accepted_file_types,
                     run_key=current_run_key,
                 )
-            
+
             st.session_state.grading_status_by_key[current_run_key] = "done"
-            
+
         except Exception as e:
             st.session_state.grading_status_by_key[current_run_key] = "failed"
             st.session_state.grading_errors_by_key[current_run_key] = str(e)
             st.error(f"❌ Grading failed: {e}")
             logger.error(f"Grading failed for run_key {current_run_key}: {e}", exc_info=True)
-        
+
         finally:
             st.session_state.do_grade = False
-    
+
     elif has_cached_results:
         # Store the run_key so we can display cached results even after page rerun
         st.session_state.last_grading_run_key = current_run_key
@@ -2266,9 +2274,9 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
     """
     from cqc_cpcc.student_feedback_builder import build_student_feedback
     from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
-    
+
     st.subheader(f"📊 Results for {student_name}")
-    
+
     # Show debug panel placeholder if debug mode is on (even without correlation_id)
     # The debug panel will check debug files for recent requests
     if CQC_OPENAI_DEBUG:
@@ -2294,14 +2302,14 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                     st.markdown("**Error Counts:**")
                     for severity, count in result.error_counts_by_severity.items():
                         st.markdown(f"  - {severity.capitalize()}: {count}")
-    
+
     # Add Student Feedback section at the top (copy/paste-able)
     st.markdown("### 📝 Student Feedback (Copy/Paste)")
     st.markdown("*This feedback is formatted for students and does not include numeric scores.*")
-    
+
     # Build student-facing feedback
     student_feedback = build_student_feedback(result, student_name=student_name)
-    
+
     # Display in a text area for easy copying
     st.text_area(
         label="Copy this feedback to paste to the student:",
@@ -2310,16 +2318,17 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
         key=f"student_feedback_{student_name}",
         help="Select all text (Ctrl+A or Cmd+A) and copy (Ctrl+C or Cmd+C) to paste into your LMS"
     )
-    
+
     st.markdown("---")  # Visual separator
-    
+
     # Instructor View - Detailed Scoring Breakdown
     st.markdown("### 📊 Instructor View - Detailed Breakdown")
     st.markdown("*The sections below show detailed scoring information for instructor reference only.*")
-    
+
     # Overall score (instructor view)
-    score_percentage = (result.total_points_earned / result.total_points_possible * 100) if result.total_points_possible > 0 else 0
-    
+    score_percentage = (
+                result.total_points_earned / result.total_points_possible * 100) if result.total_points_possible > 0 else 0
+
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Points", f"{result.total_points_earned}/{result.total_points_possible}")
@@ -2328,11 +2337,11 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
     with col3:
         if result.overall_band_label:
             st.metric("Performance Band", result.overall_band_label)
-    
+
     # Display error counts if available
     if result.error_counts_by_severity:
         st.markdown("#### 📋 Error Counts")
-        
+
         # Create columns for error counts
         severity_cols = st.columns(len(result.error_counts_by_severity))
         for col, (severity, count) in zip(severity_cols, sorted(result.error_counts_by_severity.items())):
@@ -2344,7 +2353,7 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                     st.metric(f"🟡 {severity.capitalize()} Errors", count)
                 else:
                     st.metric(f"{severity.capitalize()} Errors", count)
-        
+
         # Optionally show per-error breakdown
         if result.error_counts_by_id:
             with st.expander("📊 Error Breakdown by ID", expanded=False):
@@ -2353,36 +2362,36 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                     for error_id, count in sorted(result.error_counts_by_id.items())
                 ])
                 st.dataframe(error_breakdown_df, hide_index=True)
-    
+
     # Per-criterion results
     st.markdown("#### Criterion Breakdown")
-    
+
     for criterion_result in result.criteria_results:
         # Build expander title with level label if available
         title = f"**{criterion_result.criterion_name}** - {criterion_result.points_earned}/{criterion_result.points_possible} pts"
         if criterion_result.selected_level_label:
             title += f" (Level: {criterion_result.selected_level_label})"
-        
+
         with st.expander(title, expanded=False):
             st.markdown("**Feedback:**")
             st.markdown(criterion_result.feedback)
-            
+
             if criterion_result.evidence:
                 st.markdown("**Evidence:**")
                 for evidence in criterion_result.evidence:
                     st.code(evidence, language="text")
-    
+
     # Overall feedback
     st.markdown("#### Overall Feedback (Instructor Notes)")
     st.markdown(result.overall_feedback)
-    
+
     # Detected errors
     if result.detected_errors:
         st.markdown("#### Detected Errors (Detailed)")
-        
+
         major_errors = [e for e in result.detected_errors if e.severity == "major"]
         minor_errors = [e for e in result.detected_errors if e.severity == "minor"]
-        
+
         if major_errors:
             st.markdown("**Major Errors:**")
             for error in major_errors:
@@ -2392,7 +2401,7 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                         st.markdown(f"*Occurrences:* {error.occurrences}")
                     if error.notes:
                         st.markdown(f"*Notes:* {error.notes}")
-        
+
         if minor_errors:
             st.markdown("**Minor Errors:**")
             for error in minor_errors:
@@ -2417,24 +2426,24 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
     if run_key not in st.session_state.grading_results_by_key:
         st.error("❌ No cached results found for this configuration")
         return
-    
+
     all_results = st.session_state.grading_results_by_key[run_key]
     failed_student_ids = st.session_state.grading_failures_by_key.get(run_key, [])
-    
+
     if not all_results and not failed_student_ids:
         st.warning("⚠️ No successful grading results to display")
         return
-    
+
     total_students = len(all_results) + len(failed_student_ids)
     st.success(f"✅ Displaying cached results for {len(all_results)} student(s)")
-    
+
     # Add "Expand All" button (passive - doesn't trigger re-grading)
     col1, col2 = st.columns([3, 1])
     with col2:
         if st.button("🔽 Expand All Student Results", key="expand_all_cached_button"):
             st.session_state.expand_all_students = True
             st.rerun()
-    
+
     # Display summary table
     summary_data = []
     for student_id, result in all_results:
@@ -2447,7 +2456,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         except (AttributeError, TypeError, ZeroDivisionError) as e:
             logger.warning(f"Error calculating percentage for {student_id}: {e}")
             percentage = "N/A"
-        
+
         summary_data.append({
             "Student": student_id,
             "Points Earned": getattr(result, 'total_points_earned', 0),
@@ -2455,7 +2464,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             "Percentage": percentage,
             "Band": getattr(result, 'overall_band_label', None) or "N/A",
         })
-    
+
     # Add failure rows
     total_possible_for_failures = next(
         (r[1].total_points_possible for r in all_results if r[1] is not None), 0
@@ -2468,12 +2477,12 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             "Percentage": "Failed",
             "Band": "❌ Failed",
         })
-    
+
     if summary_data:
         st.subheader("📊 Grading Summary")
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, hide_index=True)
-        
+
         # Export options for grading summary
         col1, col2 = st.columns(2)
         with col1:
@@ -2490,7 +2499,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="download_summary_xlsx_rubric"
                 )
-        
+
         with col2:
             # CSV export (alternative)
             if csv_file_path:
@@ -2502,7 +2511,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
                         mime="text/csv",
                         key="download_summary_csv_rubric"
                     )
-        
+
         # Calculate statistics - exclude failure rows from average
         numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
         avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
@@ -2512,33 +2521,33 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         except (IndexError, AttributeError):
             logger.warning("Could not extract total_points_possible from results, defaulting to 100")
             total_possible = 100
-        
+
         if total_possible > 0:
             avg_pct = (avg_score / total_possible * 100)
             st.metric("Average Score", f"{avg_score:.1f}/{total_possible} ({avg_pct:.1f}%)")
         else:
             st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
-        
+
         # Store summary_df in session state for use in _generate_feedback_docs_and_zip
         st.session_state[f"grading_summary_df_{run_key}"] = summary_df
-    
+
     # Display individual student results
     st.markdown("---")
     st.subheader("Individual Student Results")
-    
+
     for student_id, result in all_results:
         # Use expand_all_students flag from session state
         expanded_state = st.session_state.get('expand_all_students', False)
-        
+
         band_or_level = _get_band_or_level_label(result)
         score_str = f"{getattr(result, 'total_points_earned', 0)}/{getattr(result, 'total_points_possible', 0)}"
         level_str = f" [{band_or_level}]" if band_or_level else ""
         with st.expander(f"📝 {student_id} — {score_str}{level_str}", expanded=expanded_state):
             display_rubric_assessment_result(result, student_id)
-    
+
     # Generate Word docs and ZIP download (uses cached ZIP if available)
     st.markdown("---")
-    
+
     _generate_feedback_docs_and_zip(
         all_results=all_results,
         course_name=course_name,
@@ -2550,12 +2559,12 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
 
 
 def _generate_feedback_docs_and_zip(
-    all_results: list[tuple[str, RubricAssessmentResult]],
-    course_name: str,
-    total_points_possible: int,
-    model_name: str,
-    temperature: float,
-    run_key: str
+        all_results: list[tuple[str, RubricAssessmentResult]],
+        course_name: str,
+        total_points_possible: int,
+        model_name: str,
+        temperature: float,
+        run_key: str
 ) -> None:
     """Generate Word documents for all students and create a ZIP download.
     
@@ -2578,31 +2587,31 @@ def _generate_feedback_docs_and_zip(
     """
     st.subheader("📥 Download Feedback Documents")
     st.markdown("*CPCC-branded Word documents containing student feedback (no scores)*")
-    
-     # Check if we have cached ZIP bytes for this run_key
-     if run_key in st.session_state.feedback_zip_bytes_by_key:
-         st.info("📦 Using cached ZIP file")
-         zip_file_path = st.session_state.feedback_zip_bytes_by_key[run_key]
-         
-         # Generate ZIP filename with timestamp
-         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-         zip_filename = sanitize_zip_filename(course_name, timestamp)
-         
-         # Add download button
-         download_placeholder = st.empty()
-         on_download_click(
-             download_placeholder,
-             zip_file_path,
-             "📥 Download All Feedback (.zip)",
-             zip_filename
-         )
-         return
-    
+
+    # Check if we have cached ZIP bytes for this run_key
+    if run_key in st.session_state.feedback_zip_bytes_by_key:
+        st.info("📦 Using cached ZIP file")
+        zip_file_path = st.session_state.feedback_zip_bytes_by_key[run_key]
+
+        # Generate ZIP filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        zip_filename = sanitize_zip_filename(course_name, timestamp)
+
+        # Add download button
+        download_placeholder = st.empty()
+        on_download_click(
+            download_placeholder,
+            zip_file_path,
+            "📥 Download All Feedback (.zip)",
+            zip_filename
+        )
+        return
+
     with st.spinner("Generating Word documents..."):
         try:
             # Generate Word docs for each student
             doc_files: list[tuple[str, str]] = []  # (filename, temp_file_path)
-            
+
             # Extract course ID, optional section, and assignment from course_name.
             #
             # Handles canonical CSC_### format (splitting on "_" yields ["CSC","251",...])
@@ -2619,9 +2628,9 @@ def _generate_feedback_docs_and_zip(
             else:
                 # Detect canonical split: short alpha prefix + 3-digit number (e.g. "CSC" + "251")
                 if (
-                    len(course_parts) > 1
-                    and re.fullmatch(r"[A-Za-z]{2,}", course_parts[0])
-                    and re.fullmatch(r"\d{3}", course_parts[1])
+                        len(course_parts) > 1
+                        and re.fullmatch(r"[A-Za-z]{2,}", course_parts[0])
+                        and re.fullmatch(r"\d{3}", course_parts[1])
                 ):
                     base_course_id = f"{course_parts[0]}_{course_parts[1]}"
                     idx = 2
@@ -2671,13 +2680,13 @@ def _generate_feedback_docs_and_zip(
 
             if not assignment_name:
                 assignment_name = "Assignment"
-            
+
             for student_id, result in all_results:
                 # Generate sanitized filename
                 # Try to parse student_id as "LastName_FirstName" or use as-is
                 sanitized_name = sanitize_filename(student_id)
                 doc_filename = f"{sanitized_name}_Feedback.docx"
-                
+
                 # Generate Word document bytes
                 doc_bytes = generate_student_feedback_doc(
                     student_name=student_id,
@@ -2686,51 +2695,50 @@ def _generate_feedback_docs_and_zip(
                     feedback_result=result,
                     metadata={'date': datetime.now().strftime('%Y-%m-%d')}
                 )
-                
+
                 # Save to temp file
                 temp_doc = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
                 temp_doc.write(doc_bytes)
                 temp_doc.close()
-                
+
                 doc_files.append((doc_filename, temp_doc.name))
-            
-             # Create ZIP file
-             st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
-             zip_file_path = create_zip_file(doc_files)
-             
-             # Add grading summary to zip if available
-             if f"grading_summary_df_{run_key}" in st.session_state:
-                 summary_df = st.session_state[f"grading_summary_df_{run_key}"]
-                 st.info("📊 Adding grading summary to ZIP archive...")
-                 zip_file_path = add_grading_summary_to_zip(
-                     zip_file_path,
-                     summary_df,
-                     include_csv=True
-                 )
-             
-             # Cache the ZIP file path in session state
-             st.session_state.feedback_zip_bytes_by_key[run_key] = zip_file_path
-             
-             # Generate ZIP filename with timestamp
-             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-             zip_filename = sanitize_zip_filename(course_name, timestamp)
-             
-             # Add download button
-             download_placeholder = st.empty()
-             on_download_click(
-                 download_placeholder,
-                 zip_file_path,
-                 "📥 Download All Feedback (.zip)",
-                 zip_filename
-             )
-            
+
+            # Create ZIP file
+            st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
+            zip_file_path = create_zip_file(doc_files)
+
+            # Add grading summary to zip if available
+            if f"grading_summary_df_{run_key}" in st.session_state:
+                summary_df = st.session_state[f"grading_summary_df_{run_key}"]
+                st.info("📊 Adding grading summary to ZIP archive...")
+                zip_file_path = add_grading_summary_to_zip(
+                    zip_file_path,
+                    summary_df,
+                    include_csv=True
+                )
+
+            # Cache the ZIP file path in session state
+            st.session_state.feedback_zip_bytes_by_key[run_key] = zip_file_path
+
+            # Generate ZIP filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            zip_filename = sanitize_zip_filename(course_name, timestamp)
+
+            # Add download button
+            download_placeholder = st.empty()
+            on_download_click(
+                download_placeholder,
+                zip_file_path,
+                "📥 Download All Feedback (.zip)",
+                zip_filename
+            )
+
             st.success(f"✅ Generated {len(doc_files)} Word document(s)")
             st.info(f"📄 Files included: {', '.join([fn for fn, _ in doc_files])}")
-            
+
         except Exception as e:
             logger.error(f"Error generating feedback documents: {e}", exc_info=True)
             st.error(f"❌ Error generating documents: {str(e)}")
-
 
 
 def grade_exam_content_sync():
@@ -2774,7 +2782,8 @@ def main():
     st.markdown("""Here we will give feedback and grade a students assignment submission""")
 
     # Create tabs - Added new "Exams (Rubric)" tab
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Flowgorithm Assignments", "Online GDB", "Exams (Legacy)", "Exams (Rubric)", "Other"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["Flowgorithm Assignments", "Online GDB", "Exams (Legacy)", "Exams (Rubric)", "Other"])
 
     with tab1:
         get_flowgorithm_content()
@@ -2786,13 +2795,13 @@ def main():
             grade_exam_content_sync()
         else:
             st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
-    
+
     with tab4:
         if st.session_state.openai_api_key or st.session_state.openrouter_api_key:
             rubric_based_exam_grading_sync()
         else:
             st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
-    
+
     with tab5:
         st.title("Other")
 

@@ -4,13 +4,12 @@ from threading import Thread
 from typing import Callable
 
 import urllib3
-from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
-
 from cqc_cpcc.attendance import update_attendance_tracker
-from cqc_cpcc.screenshot_listener import ScreenshotListener
 from cqc_cpcc.my_colleges import MyColleges
+from cqc_cpcc.screenshot_listener import ScreenshotListener
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import get_session_driver
+from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
 
 
 class AttendanceScreenShot:

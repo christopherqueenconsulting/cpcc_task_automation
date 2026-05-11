@@ -19,10 +19,10 @@ Usage:
 import json
 from pathlib import Path
 from typing import Dict
+
 from cqc_cpcc.course_identifier import course_ids_match, normalize_course_id
 from cqc_cpcc.rubric_models import Rubric, DetectedError
 from cqc_cpcc.utilities.logger import logger
-
 
 # Directory containing JSON config files (sibling config/ dir)
 _CONFIG_DIR = Path(__file__).parent / "config"
@@ -64,7 +64,7 @@ def load_rubrics_from_config() -> Dict[str, Rubric]:
         100
     """
     rubrics_data = _load_json_file(_CONFIG_DIR / "rubrics.json")
-    
+
     if not isinstance(rubrics_data, dict):
         raise ValueError("rubrics.json must be a JSON object (dict)")
 
@@ -76,7 +76,7 @@ def load_rubrics_from_config() -> Dict[str, Rubric]:
             rubrics_data = {**legacy_rubrics_data, **rubrics_data}
     except ValueError as e:
         logger.warning(f"Could not load legacy rubrics from {legacy_path}: {e}")
-    
+
     rubrics = {}
     for rubric_id, rubric_dict in rubrics_data.items():
         try:
@@ -96,10 +96,10 @@ def load_rubrics_from_config() -> Dict[str, Rubric]:
         except Exception as e:
             logger.error(f"Failed to validate rubric '{rubric_id}': {e}")
             raise ValueError(f"Invalid rubric '{rubric_id}': {e}")
-    
+
     if not rubrics:
         logger.warning("No rubrics found in config/rubrics.json")
-    
+
     return rubrics
 
 
@@ -120,10 +120,10 @@ def load_error_definitions_from_config() -> list:
         >>> print(len(major_errors))
     """
     errors_data = _load_json_file(_CONFIG_DIR / "rubric_error_definitions.json")
-    
+
     if not isinstance(errors_data, list):
         raise ValueError("rubric_error_definitions.json must be a JSON array (list)")
-    
+
     errors = []
     for i, error_dict in enumerate(errors_data):
         try:
@@ -132,12 +132,12 @@ def load_error_definitions_from_config() -> list:
         except Exception as e:
             logger.error(f"Failed to validate error definition at index {i}: {e}")
             raise ValueError(f"Invalid error definition at index {i}: {e}")
-    
+
     logger.info(f"Loaded {len(errors)} error definitions from config")
     major_count = sum(1 for e in errors if e.severity == "major")
     minor_count = sum(1 for e in errors if e.severity == "minor")
     logger.info(f"Error definitions: {major_count} major, {minor_count} minor")
-    
+
     return errors
 
 
@@ -195,14 +195,14 @@ def get_distinct_course_ids() -> list[str]:
     """
     rubrics = load_rubrics_from_config()
     course_ids_set = set()
-    
+
     for rubric in rubrics.values():
         course_ids_set.update(normalize_course_id(course_id) for course_id in rubric.course_ids)
 
     # Remove UNASSIGNED if there are other courses
     if len(course_ids_set) > 1 and "UNASSIGNED" in course_ids_set:
         course_ids_set.discard("UNASSIGNED")
-    
+
     return sorted(list(course_ids_set))
 
 
@@ -227,6 +227,6 @@ def get_rubrics_for_course(course_id: str) -> Dict[str, Rubric]:
         for rubric_id, rubric in all_rubrics.items()
         if any(course_ids_match(normalized_course_id, rubric_course_id) for rubric_course_id in rubric.course_ids)
     }
-    
+
     logger.info(f"Found {len(filtered_rubrics)} rubrics for course '{normalized_course_id}'")
     return filtered_rubrics

@@ -1,6 +1,16 @@
 import datetime as DT
 from typing import Optional, Annotated, List, TypeVar
 
+from cqc_cpcc.exam_review import JavaCode
+from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm_model
+from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
+from cqc_cpcc.utilities.date import get_datetime
+from cqc_cpcc.utilities.env_constants import *
+from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.selenium_util import get_session_driver, click_element_wait_retry, \
+    get_elements_text_as_list_wait_stale, \
+    get_elements_href_as_list_wait_stale
+from cqc_cpcc.utilities.utils import are_you_satisfied, ExtendedEnum, CodeError, ErrorHolder, duo_login
 from docx import Document
 from docx.shared import Pt
 from pydantic import BaseModel, Field
@@ -9,17 +19,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
-
-from cqc_cpcc.exam_review import JavaCode
-from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
-from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm_model
-from cqc_cpcc.utilities.date import get_datetime
-from cqc_cpcc.utilities.env_constants import *
-from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.selenium_util import get_session_driver, click_element_wait_retry, \
-    get_elements_text_as_list_wait_stale, \
-    get_elements_href_as_list_wait_stale
-from cqc_cpcc.utilities.utils import are_you_satisfied, ExtendedEnum, CodeError, ErrorHolder, duo_login
 
 COMMENTS_MISSING_STRING = "The code does not include sufficient commenting throughout"
 T = TypeVar("T", bound=BaseModel)
@@ -120,7 +119,6 @@ class FeedbackGuide(ErrorHolder):
         if self.all_feedback is not None:
             feedback_errors = self.get_combined_errors_by_type(self.all_feedback)
         return feedback_errors
-
 
 
 def init_page(driver: WebDriver, wait: WebDriverWait) -> str:
@@ -275,12 +273,10 @@ def process_submission_from_link(driver: WebDriver, wait: WebDriverWait, url: st
     driver.close()
 
 
-
-
 class FeedbackGiver:
     feedback_list: List[Feedback] = None
     feedback_guide: FeedbackGuide = None
-    
+
     # Configuration for OpenAI structured completion
     model_name: str = None
     temperature: float = 0.2
@@ -317,10 +313,10 @@ class FeedbackGiver:
             None (sets self.feedback_list)
         """
         from cqc_cpcc.utilities.AI.llm_deprecated.prompts import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
-        
+
         # Build the prompt with all parameters
         feedback_types_str = "\n\t".join(self.feedback_type_list) if self.feedback_type_list else "N/A"
-        
+
         prompt = CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
             course_name=self.course_name,
             assignment=self.assignment_instructions,
@@ -328,7 +324,7 @@ class FeedbackGiver:
             submission=student_submission,
             feedback_types=feedback_types_str
         )
-        
+
         # Call OpenAI structured completion
         feedback_guide = await get_structured_completion(
             prompt=prompt,
@@ -342,7 +338,6 @@ class FeedbackGiver:
         # Set feedback to empty list if set to None
         if unique_feedback is None:
             unique_feedback = []
-
 
         if COMMENTS_MISSING_STRING in DefaultFeedbackType.list():
 

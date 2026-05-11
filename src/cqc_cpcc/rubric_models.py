@@ -35,6 +35,7 @@ Usage:
 """
 
 from typing import Optional, Annotated, Literal
+
 from pydantic import (
     BaseModel,
     Field,
@@ -61,7 +62,7 @@ class PerformanceLevel(BaseModel):
     score_min: Annotated[float, Field(ge=0, description="Minimum score for this level")]
     score_max: Annotated[float, Field(ge=0, description="Maximum score for this level")]
     description: Annotated[str, Field(description="Descriptive anchor text for this performance level")]
-    
+
     @field_validator('score_max')
     @classmethod
     def validate_score_range(cls, score_max: float, info) -> float:
@@ -144,13 +145,14 @@ class Criterion(BaseModel):
     description: Annotated[Optional[str], Field(default=None, description="Optional description of the criterion")]
     max_points: Annotated[int, Field(gt=0, description="Maximum points for this criterion")]
     levels: Annotated[
-        Optional[list['PerformanceLevel']], 
+        Optional[list['PerformanceLevel']],
         Field(default=None, description="Optional performance levels for this criterion")
     ]
     enabled: Annotated[bool, Field(default=True, description="Whether this criterion is enabled")]
     scoring_mode: Annotated[
         Literal["manual", "level_band", "error_count"],
-        Field(default="manual", description="Scoring mode: manual, level_band (LLM selects level), or error_count (computed from errors)")
+        Field(default="manual",
+              description="Scoring mode: manual, level_band (LLM selects level), or error_count (computed from errors)")
     ]
     error_rules: Annotated[
         Optional[ErrorCountScoringRules],
@@ -160,7 +162,7 @@ class Criterion(BaseModel):
         Literal["min", "mid", "max"],
         Field(default="min", description="Strategy for selecting points within level range (for level_band mode)")
     ]
-    
+
     @model_validator(mode='after')
     def validate_levels_fit_max_points(self) -> 'Criterion':
         """Validate that performance levels fit within max_points."""
@@ -172,7 +174,7 @@ class Criterion(BaseModel):
                         f"criterion max_points ({self.max_points})"
                     )
         return self
-    
+
     @model_validator(mode='after')
     def validate_levels_non_overlapping(self) -> 'Criterion':
         """Warn if performance levels overlap (not enforced, just validated)."""
@@ -187,7 +189,7 @@ class Criterion(BaseModel):
                     # In production, you might want to log this
                     pass
         return self
-    
+
     @model_validator(mode='after')
     def validate_error_rules_when_needed(self) -> 'Criterion':
         """Validate that error_rules are provided when scoring_mode is error_count."""
@@ -197,7 +199,7 @@ class Criterion(BaseModel):
                 f"but error_rules is not provided"
             )
         return self
-    
+
     @model_validator(mode='after')
     def validate_levels_when_level_band(self) -> 'Criterion':
         """Validate that levels are provided when scoring_mode is level_band."""
@@ -223,7 +225,7 @@ class OverallBand(BaseModel):
     label: Annotated[str, Field(description="Performance band label")]
     score_min: Annotated[float, Field(ge=0, description="Minimum total score for this band")]
     score_max: Annotated[float, Field(ge=0, description="Maximum total score for this band")]
-    
+
     @field_validator('score_max')
     @classmethod
     def validate_score_range(cls, score_max: float, info) -> float:
@@ -256,20 +258,20 @@ class Rubric(BaseModel):
     description: Annotated[Optional[str], Field(default=None, description="Optional rubric description")]
     criteria: Annotated[list[Criterion], Field(min_length=1, description="List of grading criteria")]
     overall_bands: Annotated[
-        Optional[list[OverallBand]], 
+        Optional[list[OverallBand]],
         Field(default=None, description="Optional overall performance bands")
     ]
     course_ids: Annotated[
         list[str],
         Field(default_factory=lambda: ["UNASSIGNED"], description="List of course IDs this rubric applies to")
     ]
-    
+
     @computed_field
     @property
     def total_points_possible(self) -> int:
         """Compute total points possible from enabled criteria."""
         return sum(c.max_points for c in self.criteria if c.enabled)
-    
+
     @model_validator(mode='after')
     def validate_overall_bands_fit_total(self) -> 'Rubric':
         """Validate that overall bands fit within total_points_possible."""
@@ -337,15 +339,15 @@ class CriterionResult(BaseModel):
         )
     ]
     selected_level_label: Annotated[
-        Optional[str], 
+        Optional[str],
         Field(default=None, description="Label of selected performance level")
     ]
     feedback: Annotated[str, Field(description="Detailed feedback for this criterion")]
     evidence: Annotated[
-        Optional[list[str]], 
+        Optional[list[str]],
         Field(default=None, description="Code snippets or references supporting assessment")
     ]
-    
+
     @field_validator('points_earned')
     @classmethod
     def validate_points_earned(cls, points_earned: Optional[float], info) -> Optional[float]:
@@ -384,18 +386,19 @@ class RubricAssessmentResult(BaseModel):
     rubric_id: Annotated[str, Field(description="ID of the rubric used")]
     rubric_version: Annotated[str, Field(description="Version of the rubric used")]
     total_points_possible: Annotated[int, Field(ge=0, description="Total possible points")]
-    total_points_earned: Annotated[float, Field(ge=0, description="Total points earned (float to support decimal rubric boundaries)")]
+    total_points_earned: Annotated[
+        float, Field(ge=0, description="Total points earned (float to support decimal rubric boundaries)")]
     criteria_results: Annotated[
-        list[CriterionResult], 
+        list[CriterionResult],
         Field(min_length=1, description="Per-criterion assessment results")
     ]
     overall_band_label: Annotated[
-        Optional[str], 
+        Optional[str],
         Field(default=None, description="Overall performance band label")
     ]
     overall_feedback: Annotated[str, Field(description="Overall summary feedback")]
     detected_errors: Annotated[
-        Optional[list[DetectedError]], 
+        Optional[list[DetectedError]],
         Field(default=None, description="Detected errors from error definitions")
     ]
     error_counts_by_severity: Annotated[
@@ -422,26 +425,26 @@ class RubricAssessmentResult(BaseModel):
         Optional[int],
         Field(default=None, description="Effective minor error count after Minor→Major conversion")
     ]
-    
+
     @field_validator('total_points_earned')
     @classmethod
     def validate_total_earned(
-        cls, total_earned: float | None, info: ValidationInfo
+            cls, total_earned: float | None, info: ValidationInfo
     ) -> float | None:
         """Validate that total_points_earned <= total_points_possible."""
         if info.data and 'total_points_possible' in info.data:
             total_possible = info.data['total_points_possible']
             if (
-                total_possible is not None
-                and total_earned is not None
-                and total_earned > total_possible
+                    total_possible is not None
+                    and total_earned is not None
+                    and total_earned > total_possible
             ):
                 raise ValueError(
                     f"total_points_earned ({total_earned}) cannot exceed "
                     f"total_points_possible ({total_possible})"
                 )
         return total_earned
-    
+
     @model_validator(mode='after')
     def validate_totals_match_criteria(self) -> 'RubricAssessmentResult':
         """Validate that totals match sum of criteria results.
@@ -455,31 +458,31 @@ class RubricAssessmentResult(BaseModel):
         """
         if self.criteria_results:
             computed_possible = sum(r.points_possible for r in self.criteria_results)
-            
+
             # Check if any criterion has None points_earned (pre-backend-scoring state)
             has_none_points = any(r.points_earned is None for r in self.criteria_results)
-            
+
             if has_none_points:
                 # Skip validation - backend scoring will populate points_earned
                 return self
-            
+
             # Skip validation if total_points_earned is 0 (AI set it for backend recalculation)
             if self.total_points_earned == 0:
                 return self
-            
+
             # All points_earned are populated - validate totals
             computed_earned = sum(r.points_earned for r in self.criteria_results)
-            
+
             if computed_possible != self.total_points_possible:
                 raise ValueError(
                     f"total_points_possible ({self.total_points_possible}) does not match "
                     f"sum of criteria points_possible ({computed_possible})"
                 )
-            
+
             if computed_earned != self.total_points_earned:
                 raise ValueError(
                     f"total_points_earned ({self.total_points_earned}) does not match "
                     f"sum of criteria points_earned ({computed_earned})"
                 )
-        
+
         return self

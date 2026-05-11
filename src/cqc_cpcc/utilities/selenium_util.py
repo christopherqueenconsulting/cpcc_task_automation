@@ -1,4 +1,4 @@
-import os
+import platform
 import platform
 import subprocess
 import tempfile
@@ -7,6 +7,8 @@ from enum import Enum
 from typing import Callable
 
 import chromedriver_autoinstaller
+from cqc_cpcc.utilities.env_constants import *
+from cqc_cpcc.utilities.logger import logger
 from pyvirtualdisplay import Display
 from selenium import webdriver
 from selenium.common import NoSuchElementException, StaleElementReferenceException, ElementNotInteractableException, \
@@ -15,14 +17,11 @@ from selenium.webdriver import ActionChains
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support.wait import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
-
-from cqc_cpcc.utilities.env_constants import *
-from cqc_cpcc.utilities.logger import logger
 
 # Module-level reference to the running virtual display (Linux only).
 _virtual_display = None
@@ -100,7 +99,7 @@ def take_and_show_screenshot(driver: WebDriver, description: str = "browser_stat
         Absolute path to the saved screenshot PNG file.
     """
     with tempfile.NamedTemporaryFile(
-        delete=False, suffix=".png", prefix=f"browser_{description}_"
+            delete=False, suffix=".png", prefix=f"browser_{description}_"
     ) as tmp:
         path = tmp.name
 
@@ -133,9 +132,9 @@ def take_and_show_screenshot(driver: WebDriver, description: str = "browser_stat
 
 
 def wait_for_user_action(
-    driver: WebDriver,
-    prompt_message: str,
-    take_screenshot: bool = True,
+        driver: WebDriver,
+        prompt_message: str,
+        take_screenshot: bool = True,
 ) -> str:
     """Pause automation and wait for the user to complete a manual action.
 
@@ -273,10 +272,10 @@ def get_docker_driver(headless=True):
 
     return driver
 
+
 def create_folder_if_not_exists(folder_path):
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
-
 
 
 def get_local_chrome_driver(headless=True):
@@ -299,7 +298,8 @@ def get_local_chrome_driver(headless=True):
         # Set up the Chrome driver options
         # Note: This will create a new profile for each run (not shared between runs)
         # options.add_argument("--user-data-dir=" + profile_folder_path)  # This is to keep the browser logged in between runs
-        options.add_argument("user-data-dir=" + str(profile_folder_path))  # This is to keep the browser logged in between runs
+        options.add_argument(
+            "user-data-dir=" + str(profile_folder_path))  # This is to keep the browser logged in between runs
         options.add_argument("--profile-directory=" + INSTRUCTOR_USERID)
 
     options.add_experimental_option("detach", detached)  # Change if you want to close when program ends
@@ -322,16 +322,15 @@ def get_local_chrome_driver(headless=True):
         # driver.maximize_window()
         driver.set_window_size(1920, 1080)
 
-    #try:
-        # Remove navigator.webdriver Flag using JavaScript
-        #driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    #except JavascriptException as je:
-        #logger.debug(f"Error while removing navigator.webdriver flag: {je}")
-        #pass
+    # try:
+    # Remove navigator.webdriver Flag using JavaScript
+    # driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    # except JavascriptException as je:
+    # logger.debug(f"Error while removing navigator.webdriver flag: {je}")
+    # pass
 
     # Give some time for multiple calls
     time.sleep(2)
-
 
     return driver
 
@@ -362,12 +361,12 @@ def add_headless_options(options: Options) -> Options:
     return options
 
 
-def getBaseOptions(base_download_directory:str = None):
+def getBaseOptions(base_download_directory: str = None):
     options = Options()
     # options.add_argument("--incognito") # TODO: May cause issues with tabs
     if base_download_directory is None:
         base_download_directory = os.getcwd()
-    prefs = {"download.default_directory": base_download_directory+ '/downloads',
+    prefs = {"download.default_directory": base_download_directory + '/downloads',
              "download.prompt_for_download": False,
              "download.directory_upgrade": True,
              "plugins.always_open_pdf_externally": True}
@@ -378,16 +377,15 @@ def getBaseOptions(base_download_directory:str = None):
     options.add_argument('--disable-dev-shm-usage')
 
     # Options to prevent detection
-    #options.add_argument("--disable-blink-features=AutomationControlled")
-    #options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    #options.add_experimental_option("useAutomationExtension", False)
+    # options.add_argument("--disable-blink-features=AutomationControlled")
+    # options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    # options.add_experimental_option("useAutomationExtension", False)
     # TODO: Make sure options above are working as expected
 
     # Options to make us undetectable (Review https://amiunique.org/fingerprint from the browser to verify)
     options.add_argument("window-size=1920x1080")
     options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.91 Safari/537.36")
-
 
     # options.page_load_strategy = 'eager'  # interactive
     # options.page_load_strategy = "normal"  # complete
@@ -442,7 +440,7 @@ def get_session_driver() -> tuple[WebDriver, WebDriverWait]:
     return driver, wait
 
 
-def get_driver_wait(driver, wait_default_timeout = None):
+def get_driver_wait(driver, wait_default_timeout=None):
     if wait_default_timeout is None:
         wait_default_timeout = WAIT_DEFAULT_TIMEOUT
 
@@ -522,7 +520,7 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
     except (StaleElementReferenceException, ElementNotInteractableException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale or Not Interactable | .....retrying")
         time.sleep(5)  # wait 5 seconds
-        #driver.implicitly_wait(5)  # wait on driver 5 seconds
+        # driver.implicitly_wait(5)  # wait on driver 5 seconds
         if max_try > 0:
             # Still have retries left, decrement and retry
             element = click_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
@@ -590,7 +588,7 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
     except (StaleElementReferenceException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale | .....retrying")
         time.sleep(5)  # wait 5 seconds
-        #driver.implicitly_wait(5)  # wait on driver 5 seconds
+        # driver.implicitly_wait(5)  # wait on driver 5 seconds
         if max_try > 1:
             element = get_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
         else:
@@ -602,7 +600,8 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
 
 def get_elements_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
                                     find_by: str = By.XPATH, max_retry=3, refresh_on_stale: bool = False,
-                                    additional_lambda_function: Callable[[WebElement], str|None] | None  = None) -> list[WebElement|str]:
+                                    additional_lambda_function: Callable[[WebElement], str | None] | None = None) -> \
+list[WebElement | str]:
     """Return a list of WebElement found by the locator.
 
     Behavior:
@@ -612,16 +611,18 @@ def get_elements_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find
     - This method performs the retry loop itself (iteratively) so child callers
       should not wrap or add additional retries to avoid compounding attempts.
     """
-    elements: list[WebElement|str] = []
+    elements: list[WebElement | str] = []
 
     refreshed = False
 
     for attempt in range(1, max_retry + 1):
         try:
-            #elements = wait.until(lambda d: d.find_elements(find_by, find_by_value), wait_text)
+            # elements = wait.until(lambda d: d.find_elements(find_by, find_by_value), wait_text)
 
             # Find all the elements by the locator. If additional_lambda_function is provided, apply the lambda function to each element as well.
-            elements = wait.until(lambda d: [additional_lambda_function(e) if additional_lambda_function is not None else e for e in d.find_elements(find_by, find_by_value)], wait_text)
+            elements = wait.until(
+                lambda d: [additional_lambda_function(e) if additional_lambda_function is not None else e for e in
+                           d.find_elements(find_by, find_by_value)], wait_text)
 
             return elements
         except StaleElementReferenceException as se:
@@ -654,7 +655,8 @@ def get_elements_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find
 
 
 def get_elements_text_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
-                                         find_by: str = By.XPATH, max_retry=3, refresh_on_stale: bool = False) -> list[str]:
+                                         find_by: str = By.XPATH, max_retry=3, refresh_on_stale: bool = False) -> list[
+    str]:
     """Return the text of elements found by the locator. Delegates to
     `get_elements_as_list_wait_stale` which now contains the retry + refresh logic.
 
@@ -664,9 +666,10 @@ def get_elements_text_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait,
     elements: list[str] = []
 
     try:
-        elements = get_elements_as_list_wait_stale(driver, wait, find_by_value, wait_text, find_by, max_retry, refresh_on_stale,
+        elements = get_elements_as_list_wait_stale(driver, wait, find_by_value, wait_text, find_by, max_retry,
+                                                   refresh_on_stale,
                                                    lambda x: getText(x))
-        #logger.info(f"Found {len(elements)} elements")
+        # logger.info(f"Found {len(elements)} elements")
         return elements
     except StaleElementReferenceException:
         logger.info(wait_text + " | List Count: %s | Stale | .....failed", len(elements))
@@ -675,7 +678,7 @@ def get_elements_text_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait,
         # Preserve previous behavior: propagate or return empty list depending on callers expectations
         logger.info(wait_text + " | Timeout | .....failed")
         return []
-        #raise
+        # raise
 
 
 def get_elements_href_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
@@ -689,9 +692,10 @@ def get_elements_href_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait,
     elements: list[str] = []
 
     try:
-        elements = get_elements_as_list_wait_stale(driver, wait, find_by_value, wait_text, find_by, max_retry, refresh_on_stale,
+        elements = get_elements_as_list_wait_stale(driver, wait, find_by_value, wait_text, find_by, max_retry,
+                                                   refresh_on_stale,
                                                    lambda x: x.get_attribute('href'))
-        #logger.info(f"Found {len(elements)} elements")
+        # logger.info(f"Found {len(elements)} elements")
         return elements
     except StaleElementReferenceException:
         logger.info(wait_text + " | List Count: %s | Stale | .....failed", len(elements))
@@ -699,6 +703,7 @@ def get_elements_href_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait,
     except TimeoutException:
         logger.info(wait_text + " | Timeout | .....failed")
         return []
+
 
 def wait_for_ajax(driver):
     wait = get_driver_wait(driver)

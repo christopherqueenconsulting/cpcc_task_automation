@@ -102,22 +102,22 @@ def normalize_json_schema_for_openai(schema: dict[str, Any], *, strip_title: boo
     """
     # Make a deep copy to avoid mutating the original schema
     normalized = deepcopy(schema)
-    
+
     # Optionally strip root-level "title" field if requested
     # This can help with certain OpenAI model compatibility issues
     if strip_title and "title" in normalized:
         del normalized["title"]
-    
+
     # Recursively normalize the schema
     _normalize_schema_recursive(normalized)
-    
+
     # CRITICAL: Validate the normalized schema before returning
     # This catches bugs early before OpenAI returns 400 errors
     errors = validate_schema_for_openai(normalized)
     if errors:
         error_msg = "Schema normalization produced invalid schema for OpenAI:\n" + "\n".join(f"  - {e}" for e in errors)
         raise ValueError(error_msg)
-    
+
     return normalized
 
 
@@ -139,7 +139,7 @@ def _normalize_schema_recursive(schema: dict[str, Any]) -> None:
     """
     if not isinstance(schema, dict):
         return
-    
+
     # Rule 1: If this node has "properties", it's a structured object
     # that needs both additionalProperties: false AND a complete required array.
     # 
@@ -147,15 +147,15 @@ def _normalize_schema_recursive(schema: dict[str, Any]) -> None:
     # we should NOT add a required array, as OpenAI strict mode doesn't expect it.
     # Dict fields only need the additionalProperties schema to be normalized.
     has_properties = "properties" in schema and isinstance(schema["properties"], dict) and len(schema["properties"]) > 0
-    
+
     if has_properties:
         # This is a structured object with defined properties
-        
+
         # Sub-rule 1a: Add additionalProperties: false if not present
         # (structured objects should not accept arbitrary extra properties)
         if "additionalProperties" not in schema:
             schema["additionalProperties"] = False
-        
+
         # Sub-rule 1b: Fix required array to include ALL properties
         # OpenAI strict mode requires this even for optional fields
         # CRITICAL: Build required from properties.keys() ONLY, never from field names
@@ -168,13 +168,13 @@ def _normalize_schema_recursive(schema: dict[str, Any]) -> None:
         # These are incomplete schemas that need additionalProperties: false
         # This makes them accept no properties at all (empty object)
         schema["additionalProperties"] = False
-    
+
     # Rule 2: Recurse into "properties" (nested object fields)
     if "properties" in schema and isinstance(schema["properties"], dict):
         for prop_schema in schema["properties"].values():
             if isinstance(prop_schema, dict):
                 _normalize_schema_recursive(prop_schema)
-    
+
     # Rule 3: Recurse into "items" (array element schemas)
     if "items" in schema:
         if isinstance(schema["items"], dict):
@@ -184,29 +184,29 @@ def _normalize_schema_recursive(schema: dict[str, Any]) -> None:
             for item_schema in schema["items"]:
                 if isinstance(item_schema, dict):
                     _normalize_schema_recursive(item_schema)
-    
+
     # Rule 4: Recurse into "$defs" (Pydantic-generated model definitions)
     if "$defs" in schema and isinstance(schema["$defs"], dict):
         for def_schema in schema["$defs"].values():
             if isinstance(def_schema, dict):
                 _normalize_schema_recursive(def_schema)
-    
+
     # Rule 5: Recurse into "anyOf", "oneOf", "allOf" (union/combinator types)
     for combinator in ["anyOf", "oneOf", "allOf"]:
         if combinator in schema and isinstance(schema[combinator], list):
             for sub_schema in schema[combinator]:
                 if isinstance(sub_schema, dict):
                     _normalize_schema_recursive(sub_schema)
-    
+
     # Rule 6: Recurse into "additionalProperties" if it's a schema
     # (for dict fields)
     # Don't set additionalProperties: false on the dict field itself,
     # but normalize the value schema if it's an object
     if "additionalProperties" in schema and isinstance(
-        schema["additionalProperties"], dict
+            schema["additionalProperties"], dict
     ):
         _normalize_schema_recursive(schema["additionalProperties"])
-    
+
     # Rule 7: Recurse into "patternProperties" (regex-matched properties)
     if "patternProperties" in schema and isinstance(schema["patternProperties"], dict):
         for pattern_schema in schema["patternProperties"].values():
@@ -248,9 +248,9 @@ def validate_schema_for_openai(schema: dict[str, Any]) -> list[str]:
 
 
 def _validate_schema_recursive(
-    schema: dict[str, Any],
-    errors: list[str],
-    path: str
+        schema: dict[str, Any],
+        errors: list[str],
+        path: str
 ) -> None:
     """Recursively validate a schema node.
     
@@ -261,14 +261,14 @@ def _validate_schema_recursive(
     """
     if not isinstance(schema, dict):
         return
-    
+
     # Check if this is an object schema
     is_object = schema.get("type") == "object" or "properties" in schema
-    
+
     if is_object:
         # Check 1: Object must have additionalProperties: false
         additional_props = schema.get("additionalProperties")
-        
+
         # Exception: If additionalProperties is a schema (dict field), that's OK
         if additional_props is None:
             errors.append(f"{path}: Object missing 'additionalProperties: false'")
@@ -277,12 +277,12 @@ def _validate_schema_recursive(
                 f"{path}: Object has 'additionalProperties: {additional_props}' "
                 f"instead of false (unless it's a dict field)"
             )
-        
+
         # Check 2: Object must have required array with ALL property keys
         if "properties" in schema and isinstance(schema["properties"], dict):
             all_props = set(schema["properties"].keys())
             required = schema.get("required")
-            
+
             if required is None:
                 errors.append(
                     f"{path}: Object missing 'required' array. "
@@ -297,7 +297,7 @@ def _validate_schema_recursive(
                 required_set = set(required)
                 missing_keys = all_props - required_set
                 extra_keys = required_set - all_props
-                
+
                 if missing_keys:
                     errors.append(
                         f"{path}: 'required' array missing keys: "
@@ -305,13 +305,13 @@ def _validate_schema_recursive(
                         f"OpenAI strict mode requires ALL properties "
                         f"to be in required."
                     )
-                
+
                 if extra_keys:
                     errors.append(
                         f"{path}: 'required' array has keys not in "
                         f"properties: {sorted(extra_keys)}"
                     )
-    
+
     # Recurse into nested schemas
     if "properties" in schema and isinstance(schema["properties"], dict):
         for prop_name, prop_schema in schema["properties"].items():
@@ -319,17 +319,17 @@ def _validate_schema_recursive(
                 _validate_schema_recursive(
                     prop_schema, errors, f"{path}.properties.{prop_name}"
                 )
-    
+
     if "items" in schema and isinstance(schema["items"], dict):
         _validate_schema_recursive(schema["items"], errors, f"{path}.items")
-    
+
     if "$defs" in schema and isinstance(schema["$defs"], dict):
         for def_name, def_schema in schema["$defs"].items():
             if isinstance(def_schema, dict):
                 _validate_schema_recursive(
                     def_schema, errors, f"{path}.$defs.{def_name}"
                 )
-    
+
     for combinator in ["anyOf", "oneOf", "allOf"]:
         if combinator in schema and isinstance(schema[combinator], list):
             for i, sub_schema in enumerate(schema[combinator]):
@@ -337,9 +337,9 @@ def _validate_schema_recursive(
                     _validate_schema_recursive(
                         sub_schema, errors, f"{path}.{combinator}[{i}]"
                     )
-    
+
     if "additionalProperties" in schema and isinstance(
-        schema["additionalProperties"], dict
+            schema["additionalProperties"], dict
     ):
         _validate_schema_recursive(
             schema["additionalProperties"], errors, f"{path}.additionalProperties"

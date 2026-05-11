@@ -1,6 +1,7 @@
 # Import API class from pexels_api package
 import os
 import random
+
 from pexels_api import API
 from pexels_api.tools import Photo
 
@@ -14,6 +15,7 @@ def get_photo(query: str) -> Photo:
     selected_photo = random.choice(photos)
     return selected_photo
 
+
 def get_photos(query: str, num_of_photos: int = 25) -> list[Photo]:
     # Search for photos
     api.search(query, page=1, results_per_page=num_of_photos)
@@ -21,4 +23,3 @@ def get_photos(query: str, num_of_photos: int = 25) -> list[Photo]:
     photos = api.get_entries()
 
     return photos
-

@@ -4,20 +4,6 @@ import datetime as DT
 import time
 from typing import List
 
-from selenium.common import (
-    NoSuchElementException,
-    StaleElementReferenceException,
-    TimeoutException,
-)
-from selenium.common.exceptions import UnexpectedTagNameException
-from selenium.webdriver import Keys
-from selenium.webdriver.common.by import By
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
-from selenium.webdriver.support.select import Select
-from selenium.webdriver.support.wait import WebDriverWait
-
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.utilities.date import (
     convert_date_to_datetime,
@@ -39,6 +25,19 @@ from cqc_cpcc.utilities.selenium_util import (
     wait_for_element_to_hide,
 )
 from cqc_cpcc.utilities.utils import login_if_needed
+from selenium.common import (
+    NoSuchElementException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
+from selenium.common.exceptions import UnexpectedTagNameException
+from selenium.webdriver import Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
+from selenium.webdriver.support.select import Select
+from selenium.webdriver.support.wait import WebDriverWait
 
 
 class MyColleges:
@@ -60,7 +59,7 @@ class MyColleges:
         faculty_url = MYCOLLEGE_URL + "/Student/Student/Faculty"
 
         self.driver.get(faculty_url)
-        logger.info("Navigated to MyColleges Faculty Page: "+faculty_url)
+        logger.info("Navigated to MyColleges Faculty Page: " + faculty_url)
 
         # Login if necessary
         login_if_needed(self.driver)
@@ -103,9 +102,9 @@ class MyColleges:
                                                     'end_date': course_end_date}
 
     def prompt_attendance_start_date(
-        self,
-        course_name: str,
-        course_start_date: DT.date | DT.datetime,
+            self,
+            course_name: str,
+            course_start_date: DT.date | DT.datetime,
     ) -> DT.datetime | None:
         """Prompt for the date from which attendance should start processing."""
         last_attendance_date = None
@@ -164,17 +163,17 @@ class MyColleges:
 
     @staticmethod
     def _merge_students_for_date(
-        pending_attendance_records: dict[DT.date, list[str]],
-        record_date: DT.date,
-        students: list[str],
+            pending_attendance_records: dict[DT.date, list[str]],
+            record_date: DT.date,
+            students: list[str],
     ) -> None:
         pending_students = pending_attendance_records.get(record_date, [])
         pending_attendance_records[record_date] = sorted(set(pending_students + students))
 
     def _get_optional_deadline_date(
-        self,
-        xpath: str,
-        wait_text: str,
+            self,
+            xpath: str,
+            wait_text: str,
     ) -> DT.datetime | None:
         """Return an optional deadline date when present, otherwise None."""
         try:
@@ -271,7 +270,6 @@ class MyColleges:
         for course_info in self.course_information.values():
             representative_course_date = course_info['start_date']
             break
-
 
         last_attendance_start_date = self.prompt_attendance_start_date(
             "All Courses",
@@ -395,8 +393,9 @@ class MyColleges:
                         # No date found then use start of course date
                         # last_attendance_record_date = get_datetime(check_date.strftime("%m-%d-%Y"))
                         last_attendance_record_date = course_start_date
-                        logger.info("No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
-                            "%m-%d-%Y"))
+                        logger.info(
+                            "No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
+                                "%m-%d-%Y"))
 
                 bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
                                          course_start_date, course_end_date,
@@ -491,17 +490,17 @@ class MyColleges:
                 {
                     parsed_date
                     for parsed_date in (
-                        self._parse_attendance_control_date(option.text.strip())
-                        for option in dropdown_options
-                    )
+                    self._parse_attendance_control_date(option.text.strip())
+                    for option in dropdown_options
+                )
                     if parsed_date is not None
                 }
             )
             return selectable_dates
         except (
-            NoSuchElementException,
-            StaleElementReferenceException,
-            UnexpectedTagNameException,
+                NoSuchElementException,
+                StaleElementReferenceException,
+                UnexpectedTagNameException,
         ):
             logger.debug("Attendance date dropdown not available while determining selectable dates.")
             return []
@@ -535,12 +534,12 @@ class MyColleges:
         return None
 
     def _carry_students_to_next_consecutive_date(
-        self,
-        pending_attendance_records: dict[DT.date, list[str]],
-        current_date: DT.date,
-        students: list[str],
-        final_course_date: DT.date,
-        selectable_attendance_dates: list[DT.date] | None = None,
+            self,
+            pending_attendance_records: dict[DT.date, list[str]],
+            current_date: DT.date,
+            students: list[str],
+            final_course_date: DT.date,
+            selectable_attendance_dates: list[DT.date] | None = None,
     ) -> bool:
         next_selectable_date = None
 
@@ -620,7 +619,7 @@ class MyColleges:
 
                     # Click the element
                     click_given_element_wait_retry(self.driver, self.wait, select_element,
-                                                  "Waiting for attendance select element %d" % (idx + 1))
+                                                   "Waiting for attendance select element %d" % (idx + 1))
 
                     # Re-find the element to avoid stale reference after click
                     select_elements_refreshed = self.driver.find_elements(By.XPATH, xpath_select)

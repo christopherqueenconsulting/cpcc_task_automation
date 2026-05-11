@@ -6,16 +6,15 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
-from streamlit.runtime.scriptrunner import add_script_run_ctx
-from streamlit.runtime.scriptrunner_utils.script_run_context import ScriptRunContext, get_script_run_ctx
-
 from cqc_cpcc.exam_review import parse_error_type_enum_name
 from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackGiver
 from cqc_cpcc.utilities.utils import read_file, extract_and_read_zip, wrap_code_in_markdown_backticks
+from cqc_streamlit_app.chatgpt_status_Callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, get_custom_llm, define_chatGPTModel, add_upload_file_element, \
-    create_zip_file, on_download_click, prefix_content_file_name, get_language_from_file_path, \
-    ChatGPTStatusCallbackHandler
+from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, add_upload_file_element, \
+    create_zip_file, on_download_click, prefix_content_file_name, get_language_from_file_path
+from streamlit.runtime.scriptrunner import add_script_run_ctx
+from streamlit.runtime.scriptrunner_utils.script_run_context import ScriptRunContext, get_script_run_ctx
 
 # Initialize session state variables
 init_session_state()
@@ -116,7 +115,8 @@ async def get_feedback_content():
                     read_content, solution_language)
 
             else:
-                st.text_area(label="Solution Content", value=read_content, key=f"feedback_solution_{solution_file_name}")
+                st.text_area(label="Solution Content", value=read_content,
+                             key=f"feedback_solution_{solution_file_name}")
             # Append the content to the list
             assignment_solution_contents.append(read_content)
 
@@ -280,7 +280,8 @@ async def add_feedback_status_extender(
                 student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
                     student_submission_file_path_contents, code_langauge)
             else:
-                st.text_area(label="Student Submission Content", value=student_submission_file_path_contents, key=f"{base_student_filename}_{filename}_text_area")
+                st.text_area(label="Student Submission Content", value=student_submission_file_path_contents,
+                             key=f"{base_student_filename}_{filename}_text_area")
                 student_submission_file_path_contents_final = student_submission_file_path_contents
             student_submission_file_path_contents_all.append(student_submission_file_path_contents_final)
 
@@ -321,8 +322,6 @@ async def add_feedback_status_extender(
             # Style the feedback and save to .docx file
             feedback_giver.save_feedback_to_docx(graded_feedback_temp_file.name)
             status.update(label=status_prefix_label + " | Feedback Saved to File")
-
-
 
             status.update(label=status_prefix_label + " | Reading Feedback File For Display")
             student_feedback_content = read_file(graded_feedback_temp_file.name, True)

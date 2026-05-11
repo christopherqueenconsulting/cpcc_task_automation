@@ -29,15 +29,13 @@ Usage:
 """
 
 from typing import Optional
-from langchain_core.callbacks import BaseCallbackHandler
 
 from cqc_cpcc.course_identifier import course_ids_match
-from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult, DetectedError
 from cqc_cpcc.error_definitions_models import ErrorDefinition
-from cqc_cpcc.error_scoring import compute_error_based_score, aggregate_error_counts, get_error_count_for_severity
+from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult, DetectedError
 from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
 from cqc_cpcc.utilities.logger import logger
-
+from langchain_core.callbacks import BaseCallbackHandler
 
 # Default model configuration
 DEFAULT_GRADING_MODEL = "gpt-5-mini"
@@ -46,7 +44,7 @@ DEFAULT_MAX_TOKENS = 16384
 
 
 def normalize_detected_errors_for_scoring(
-    detected_errors: Optional[list[DetectedError]],
+        detected_errors: Optional[list[DetectedError]],
 ) -> tuple[list[DetectedError], dict[str, int], dict[str, int]]:
     """Collapse duplicate error types for scoring while preserving occurrence details.
 
@@ -111,11 +109,11 @@ def normalize_detected_errors_for_scoring(
 
 
 def build_rubric_grading_prompt(
-    rubric: Rubric,
-    assignment_instructions: str,
-    student_submission: str,
-    reference_solution: Optional[str] = None,
-    error_definitions: Optional[list[ErrorDefinition]] = None,
+        rubric: Rubric,
+        assignment_instructions: str,
+        student_submission: str,
+        reference_solution: Optional[str] = None,
+        error_definitions: Optional[list[ErrorDefinition]] = None,
 ) -> str:
     """Build a deterministic prompt for rubric-based grading.
     
@@ -130,30 +128,30 @@ def build_rubric_grading_prompt(
         Formatted prompt string for OpenAI
     """
     prompt_parts = []
-    
+
     # Header - GPT-5.2: concise, direct role definition
     prompt_parts.append("# Rubric-Based Grading Task")
     prompt_parts.append("Grade a student submission using the provided rubric. Return structured JSON assessment.")
     prompt_parts.append("")
-    
+
     # Assignment instructions
     prompt_parts.append("## Assignment Instructions")
     prompt_parts.append(assignment_instructions)
     prompt_parts.append("")
-    
+
     # Reference solution if provided
     if reference_solution:
         prompt_parts.append("## Reference Solution")
         prompt_parts.append(reference_solution)
         prompt_parts.append("")
-    
+
     # Rubric details
     prompt_parts.append(f"## Grading Rubric: {rubric.title}")
     if rubric.description:
         prompt_parts.append(rubric.description)
     prompt_parts.append(f"**Total Points Possible:** {rubric.total_points_possible}")
     prompt_parts.append("")
-    
+
     # Criteria breakdown
     prompt_parts.append("### Criteria")
     prompt_parts.append("**IMPORTANT**: Use the exact `criterion_id` values shown below in your response.")
@@ -161,29 +159,29 @@ def build_rubric_grading_prompt(
     for criterion in rubric.criteria:
         if not criterion.enabled:
             continue  # Skip disabled criteria
-        
+
         prompt_parts.append(f"\n**Criterion ID: `{criterion.criterion_id}`**")
         prompt_parts.append(f"**Name:** {criterion.name}")
         prompt_parts.append(f"**Max Points:** {criterion.max_points}")
         if criterion.description:
             prompt_parts.append(f"**Description:** {criterion.description}")
-        
+
         if criterion.levels:
             prompt_parts.append("**Performance Levels:**")
             for level in sorted(criterion.levels, key=lambda l: l.score_max, reverse=True):
                 prompt_parts.append(
                     f"  - **{level.label}** ({int(level.score_min)}-{int(level.score_max)} points): {level.description}"
                 )
-    
+
     prompt_parts.append("")
-    
+
     # Overall bands if present
     if rubric.overall_bands:
         prompt_parts.append("### Overall Performance Bands")
         for band in sorted(rubric.overall_bands, key=lambda b: b.score_max, reverse=True):
             prompt_parts.append(f"- **{band.label}**: {int(band.score_min)}-{int(band.score_max)} points")
         prompt_parts.append("")
-    
+
     # Error definitions if provided
     enabled_errors = []
     if error_definitions:
@@ -196,20 +194,21 @@ def build_rubric_grading_prompt(
             else:
                 # No enabled field, include all
                 enabled_errors.append(e)
-        
+
         if enabled_errors:
             prompt_parts.append("### Error Definitions")
-            prompt_parts.append("Detect errors from the following list. For each detected error, report code, severity, and occurrence count.")
+            prompt_parts.append(
+                "Detect errors from the following list. For each detected error, report code, severity, and occurrence count.")
             prompt_parts.append("")
-            
+
             # Group by severity - handle both severity_category and severity fields
             def get_severity(error):
                 return getattr(error, 'severity_category', getattr(error, 'severity', 'unknown')).lower()
-            
+
             major_errors = [e for e in enabled_errors if get_severity(e) == "major"]
             minor_errors = [e for e in enabled_errors if get_severity(e) == "minor"]
             other_errors = [e for e in enabled_errors if get_severity(e) not in ["major", "minor"]]
-            
+
             if major_errors:
                 prompt_parts.append("**Major Errors:**")
                 for error in major_errors:
@@ -219,7 +218,7 @@ def build_rubric_grading_prompt(
                     prompt_parts.append(f"- **{error_code}**: {error_desc}")
                     if hasattr(error, 'examples') and error.examples:
                         prompt_parts.append(f"  Examples: {'; '.join(error.examples)}")
-            
+
             if minor_errors:
                 prompt_parts.append("\n**Minor Errors:**")
                 for error in minor_errors:
@@ -228,33 +227,37 @@ def build_rubric_grading_prompt(
                     prompt_parts.append(f"- **{error_code}**: {error_desc}")
                     if hasattr(error, 'examples') and error.examples:
                         prompt_parts.append(f"  Examples: {'; '.join(error.examples)}")
-            
+
             if other_errors:
                 prompt_parts.append("\n**Other Errors:**")
                 for error in other_errors:
                     prompt_parts.append(f"- **{error.error_id}** ({error.severity_category}): {error.description}")
                     if error.examples:
                         prompt_parts.append(f"  Examples: {'; '.join(error.examples)}")
-            
+
             prompt_parts.append("")
-    
+
     # Student submission
     prompt_parts.append("## Student Submission to Grade")
     # Note Need to wrap code in backticks. It is expected that the student submission is preprocessed to be safely included in a markdown code block with File Name included ahead of it.
     # If the submission is very long, it should be truncated with an indication that it was truncated.
     prompt_parts.append(student_submission)
     prompt_parts.append("")
-    
+
     # Grading instructions - GPT-5.2 methodology
     prompt_parts.append("## Grading Instructions")
-    prompt_parts.append("Grade exactly and only as specified. Do not add features or interpretation beyond what is requested.")
+    prompt_parts.append(
+        "Grade exactly and only as specified. Do not add features or interpretation beyond what is requested.")
     prompt_parts.append("")
-    
+
     if enabled_errors:
         prompt_parts.append("### Step 1: Error Detection (Do This First)")
-        prompt_parts.append("Before evaluating any rubric criteria, scan the entire submission for errors using the Error Definitions above:")
-        prompt_parts.append("- For each detected error: set 'code' to error_id, 'severity' to severity_category, 'occurrences' to count")
-        prompt_parts.append("- Populate error_counts_by_severity with aggregated counts (e.g., {'major': 2, 'minor': 5})")
+        prompt_parts.append(
+            "Before evaluating any rubric criteria, scan the entire submission for errors using the Error Definitions above:")
+        prompt_parts.append(
+            "- For each detected error: set 'code' to error_id, 'severity' to severity_category, 'occurrences' to count")
+        prompt_parts.append(
+            "- Populate error_counts_by_severity with aggregated counts (e.g., {'major': 2, 'minor': 5})")
         prompt_parts.append("- Optionally populate error_counts_by_id with per-error counts")
         prompt_parts.append("- Complete ALL error detection before proceeding to rubric evaluation")
         prompt_parts.append("")
@@ -263,23 +266,29 @@ def build_rubric_grading_prompt(
     else:
         prompt_parts.append("### Evaluation Process")
         prompt_parts.append("For each enabled criterion:")
-    
-    prompt_parts.append("- scoring_mode='manual': Assign points_earned (0 to max_points). Select performance level label if levels exist.")
-    prompt_parts.append("- scoring_mode='level_band': Select ONLY selected_level_label. DO NOT populate points_earned (backend computes from level). Explain level selection in feedback.")
-    prompt_parts.append("- scoring_mode='error_count': DO NOT populate points_earned (backend computes from error counts). Use the detected errors to determine the appropriate performance level. Describe detected errors in feedback.")
+
+    prompt_parts.append(
+        "- scoring_mode='manual': Assign points_earned (0 to max_points). Select performance level label if levels exist.")
+    prompt_parts.append(
+        "- scoring_mode='level_band': Select ONLY selected_level_label. DO NOT populate points_earned (backend computes from level). Explain level selection in feedback.")
+    prompt_parts.append(
+        "- scoring_mode='error_count': DO NOT populate points_earned (backend computes from error counts). Use the detected errors to determine the appropriate performance level. Describe detected errors in feedback.")
     prompt_parts.append("")
     prompt_parts.append("For all criteria:")
     prompt_parts.append("- Evaluate submission against criterion")
     prompt_parts.append("- Provide specific, actionable feedback with evidence from submission")
     prompt_parts.append("- Base assessment solely on assignment instructions and rubric criteria")
     prompt_parts.append("")
-    
+
     prompt_parts.append("### Output Requirements")
     prompt_parts.append("Return structured JSON matching RubricAssessmentResult schema.")
-    prompt_parts.append("- **CRITICAL**: Use EXACT criterion_id values from the rubric above (e.g., if rubric shows 'criterion_id: documentation', use 'documentation', NOT 'DOC' or 'doc_quality')")
+    prompt_parts.append(
+        "- **CRITICAL**: Use EXACT criterion_id values from the rubric above (e.g., if rubric shows 'criterion_id: documentation', use 'documentation', NOT 'DOC' or 'doc_quality')")
     prompt_parts.append("- Set total_points_earned=0 (backend recalculates from all criteria)")
-    prompt_parts.append("- For scoring_mode='level_band': DO NOT set points_earned in criteria_results (backend computes from selected_level_label)")
-    prompt_parts.append("- For scoring_mode='error_count': DO NOT set points_earned in criteria_results (backend computes from error counts)")
+    prompt_parts.append(
+        "- For scoring_mode='level_band': DO NOT set points_earned in criteria_results (backend computes from selected_level_label)")
+    prompt_parts.append(
+        "- For scoring_mode='error_count': DO NOT set points_earned in criteria_results (backend computes from error counts)")
     prompt_parts.append("- For scoring_mode='manual': SET points_earned in criteria_results (0 to max_points)")
     prompt_parts.append("- **CRITICAL**: Keep feedback concise and well-structured:")
     prompt_parts.append("  - Per-criterion feedback: 2-3 sentences max (100-150 chars each)")
@@ -290,9 +299,11 @@ def build_rubric_grading_prompt(
     prompt_parts.append("- Be objective, fair, and constructive")
     prompt_parts.append("")
     prompt_parts.append("### Scope Discipline")
-    prompt_parts.append("- Backend computes all point totals and percentages. Your role: identify performance levels, detect errors, provide feedback.")
+    prompt_parts.append(
+        "- Backend computes all point totals and percentages. Your role: identify performance levels, detect errors, provide feedback.")
     prompt_parts.append("- Do not invent requirements not in assignment instructions")
-    prompt_parts.append("- If information is missing or unclear, state assumptions in feedback or set field to null where schema allows")
+    prompt_parts.append(
+        "- If information is missing or unclear, state assumptions in feedback or set field to null where schema allows")
     prompt_parts.append("")
     prompt_parts.append("### Output Format")
     prompt_parts.append("**CRITICAL JSON Requirements:**")
@@ -308,23 +319,24 @@ def build_rubric_grading_prompt(
     prompt_parts.append('  {"criterion_id": "program_performance", "criterion_name": "Program Performance",')
     prompt_parts.append('   "points_possible": 100, "points_earned": null, "feedback": "Your feedback here.",')
     prompt_parts.append('   "selected_level_label": "Above Average", "evidence": null}')
-    prompt_parts.append("Do NOT return schema objects like {\"type\": \"Object\", \"properties\": {...}} or {\"completionState\": \"...\"}.")
+    prompt_parts.append(
+        "Do NOT return schema objects like {\"type\": \"Object\", \"properties\": {...}} or {\"completionState\": \"...\"}.")
     prompt_parts.append("Each `detected_errors` item must have actual values:")
     prompt_parts.append('  {"code": "MISSING_DOCS", "name": "Insufficient Documentation", "severity": "major",')
     prompt_parts.append('   "description": "What was found in the code.", "occurrences": 1, "notes": null}')
-    
+
     return "\n".join(prompt_parts)
 
 
 async def grade_with_rubric(
-    rubric: Rubric,
-    assignment_instructions: str,
-    student_submission: str,
-    reference_solution: Optional[str] = None,
-    error_definitions: Optional[list[ErrorDefinition]] = None,
-    model_name: str = DEFAULT_GRADING_MODEL,
-    temperature: float = DEFAULT_TEMPERATURE,
-    callback: Optional[BaseCallbackHandler] = None,
+        rubric: Rubric,
+        assignment_instructions: str,
+        student_submission: str,
+        reference_solution: Optional[str] = None,
+        error_definitions: Optional[list[ErrorDefinition]] = None,
+        model_name: str = DEFAULT_GRADING_MODEL,
+        temperature: float = DEFAULT_TEMPERATURE,
+        callback: Optional[BaseCallbackHandler] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -375,13 +387,13 @@ async def grade_with_rubric(
         reference_solution=reference_solution,
         error_definitions=error_definitions,
     )
-    
+
     logger.info(
         f"Grading with rubric '{rubric.rubric_id}': "
         f"{len([c for c in rubric.criteria if c.enabled])} enabled criteria, "
         f"{rubric.total_points_possible} total points"
     )
-    
+
     try:
         # Check if using OpenRouter model IDs (openrouter/auto or provider/model-name)
         is_openrouter_model = model_name.startswith("openrouter/") or "/" in model_name
@@ -424,10 +436,10 @@ async def grade_with_rubric(
         logger.debug(f"OpenAI criteria count: {len(result.criteria_results)}")
         for i, cr in enumerate(result.criteria_results):
             logger.debug(
-                f"  Criterion {i+1}/{len(result.criteria_results)}: {cr.criterion_id} = "
+                f"  Criterion {i + 1}/{len(result.criteria_results)}: {cr.criterion_id} = "
                 f"{cr.points_earned}/{cr.points_possible} (level: {cr.selected_level_label or 'N/A'})"
             )
-        
+
         # CRITICAL: Correct rubric_id and rubric_version if LLM returned incorrect/default values
         # This commonly happens in fallback JSON mode where the model might return generic values
         if result.rubric_id != rubric.rubric_id:
@@ -473,10 +485,10 @@ async def grade_with_rubric(
                 effective_major_errors=result.effective_major_errors,
                 effective_minor_errors=result.effective_minor_errors,
             )
-        
+
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
-        
+
         # Final validation checks
         if result.rubric_id != rubric.rubric_id:
             logger.error(
@@ -487,23 +499,23 @@ async def grade_with_rubric(
                 f"Rubric ID mismatch after correction: expected '{rubric.rubric_id}', "
                 f"got '{result.rubric_id}'"
             )
-        
+
         if result.total_points_possible != rubric.total_points_possible:
             logger.warning(
                 f"Result total_points_possible ({result.total_points_possible}) "
                 f"does not match rubric ({rubric.total_points_possible})"
             )
-        
+
         logger.info(
             f"Grading complete: {result.total_points_earned}/{result.total_points_possible} points "
             f"({len(result.criteria_results)} criteria assessed)"
         )
-        
+
         if result.detected_errors:
             logger.info(f"Detected {len(result.detected_errors)} errors")
-        
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Rubric grading failed: {e}")
         raise ValueError(f"Failed to grade with rubric: {e}")
@@ -527,35 +539,38 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     Returns:
         Updated RubricAssessmentResult with backend-computed scores
     """
-    from cqc_cpcc.error_scoring import normalize_errors, select_program_performance_level, select_csc134_program_performance_level, get_error_count_for_severity
+    from cqc_cpcc.error_scoring import normalize_errors, select_program_performance_level, \
+        select_csc134_program_performance_level, get_error_count_for_severity
     from cqc_cpcc.scoring import score_level_band_criterion, aggregate_rubric_result
-    
+
     logger.info(f"=== Backend Scoring Start ===")
-    logger.info(f"Input result: total_points_earned={result.total_points_earned}, total_points_possible={result.total_points_possible}")
+    logger.info(
+        f"Input result: total_points_earned={result.total_points_earned}, total_points_possible={result.total_points_possible}")
     logger.info(f"Input result has {len(result.criteria_results)} criterion results")
     logger.info(f"Input result error_counts_by_severity: {result.error_counts_by_severity}")
-    
+
     # Identify criteria that need backend scoring
     level_band_criteria = [c for c in rubric.criteria if c.enabled and c.scoring_mode == "level_band"]
     error_count_criteria = [c for c in rubric.criteria if c.enabled and c.scoring_mode == "error_count"]
-    
+
     # Check if this is CSC151 v2.0 rubric (has program_performance criterion)
     has_program_performance = any(
         c.criterion_id == "program_performance" for c in rubric.criteria if c.enabled
     )
-    
-    logger.info(f"Criteria analysis: level_band={len(level_band_criteria)}, error_count={len(error_count_criteria)}, has_program_performance={has_program_performance}")
-    
+
+    logger.info(
+        f"Criteria analysis: level_band={len(level_band_criteria)}, error_count={len(error_count_criteria)}, has_program_performance={has_program_performance}")
+
     # If no backend scoring needed, return as-is
     if not level_band_criteria and not error_count_criteria and not has_program_performance:
         logger.info("No backend scoring needed (all criteria are manual mode)")
         return result
-    
+
     logger.info(
         f"Applying backend scoring: {len(level_band_criteria)} level_band, "
         f"{len(error_count_criteria)} error_count criteria"
     )
-    
+
     normalized_detected_errors = result.detected_errors
     normalized_counts_by_severity = result.error_counts_by_severity
     normalized_counts_by_id = result.error_counts_by_id
@@ -572,7 +587,7 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     original_minor = 0
     effective_major = 0
     effective_minor = 0
-    
+
     if error_count_criteria or has_program_performance:
         has_error_counts = normalized_counts_by_severity is not None
 
@@ -580,15 +595,16 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
             logger.warning(
                 f"Rubric has error-based criteria but no error_counts_by_severity in result."
             )
-            
+
             # Try to compute error counts from detected_errors if present
             if normalized_detected_errors:
-                logger.info(f"Computing error_counts_by_severity from {len(normalized_detected_errors)} detected_errors")
+                logger.info(
+                    f"Computing error_counts_by_severity from {len(normalized_detected_errors)} detected_errors")
                 error_counts = {}
                 for error in normalized_detected_errors:
                     severity = error.severity.lower() if error.severity else "unknown"
                     error_counts[severity] = error_counts.get(severity, 0) + (error.occurrences or 1)
-                
+
                 logger.info(f"Computed error_counts_by_severity: {error_counts}")
                 # Use the computed counts
                 original_major = error_counts.get("major", 0)
@@ -606,7 +622,7 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         logger.info(
             f"Original error counts: {original_major} major, {original_minor} minor"
         )
-        
+
         # Apply error normalization only when any criterion has error_conversion defined.
         # CSC134 and other rubrics without error_conversion use original counts as-is.
         has_conversion = any(
@@ -627,18 +643,19 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 f"No error_conversion defined; effective counts equal original: "
                 f"{effective_major} major, {effective_minor} minor"
             )
-    
+
     # Update criterion results with computed scores
     updated_criteria_results = []
     for criterion_result in result.criteria_results:
-        logger.info(f"Processing criterion '{criterion_result.criterion_id}': current points_earned={criterion_result.points_earned}, selected_level_label='{criterion_result.selected_level_label}'")
-        
+        logger.info(
+            f"Processing criterion '{criterion_result.criterion_id}': current points_earned={criterion_result.points_earned}, selected_level_label='{criterion_result.selected_level_label}'")
+
         # Find corresponding rubric criterion
         rubric_criterion = next(
             (c for c in rubric.criteria if c.criterion_id == criterion_result.criterion_id),
             None
         )
-        
+
         if not rubric_criterion:
             logger.warning(
                 f"Criterion '{criterion_result.criterion_id}' in result not found in rubric. "
@@ -649,9 +666,10 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 criterion_result.points_earned = 0
             updated_criteria_results.append(criterion_result)
             continue
-        
-        logger.info(f"Rubric criterion found: scoring_mode='{rubric_criterion.scoring_mode}', criterion_id='{rubric_criterion.criterion_id}'")
-        
+
+        logger.info(
+            f"Rubric criterion found: scoring_mode='{rubric_criterion.scoring_mode}', criterion_id='{rubric_criterion.criterion_id}'")
+
         # Handle different scoring modes
         if rubric_criterion.criterion_id == "program_performance":
             # Dispatch to rubric-specific level selector
@@ -672,7 +690,8 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 log_prefix = "CSC134"
             else:
                 # CSC151/default: apply 4-minor→1-major conversion, use effective counts
-                logger.info(f"Using program_performance scoring with effective_major={effective_major}, effective_minor={effective_minor}")
+                logger.info(
+                    f"Using program_performance scoring with effective_major={effective_major}, effective_minor={effective_minor}")
                 level_label, score = select_program_performance_level(
                     effective_major,
                     effective_minor,
@@ -681,15 +700,15 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 )
                 logger.info(f"program_performance computed: level_label='{level_label}', score={score}")
                 log_prefix = "program_performance"
-            
+
             # Update the criterion result
             criterion_result.points_earned = score
             criterion_result.selected_level_label = level_label
-            
+
             logger.info(
                 f"{log_prefix}: {level_label} = {score}/{criterion_result.points_possible} points"
             )
-        
+
         elif rubric_criterion.scoring_mode == "level_band":
             # Level-band scoring: compute points from selected level
             if not criterion_result.selected_level_label:
@@ -707,10 +726,10 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                         rubric_criterion,
                         points_strategy=rubric_criterion.points_strategy
                     )
-                    
+
                     # Update the criterion result with computed points
                     criterion_result.points_earned = scoring_result["points_awarded"]
-                    
+
                     logger.info(
                         f"Level-band scoring for '{criterion_result.criterion_id}': "
                         f"{criterion_result.selected_level_label} = {scoring_result['points_awarded']}/{criterion_result.points_possible} "
@@ -723,26 +742,26 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                     # Default to 0 if scoring fails
                     if criterion_result.points_earned is None:
                         criterion_result.points_earned = 0
-        
+
         elif rubric_criterion.scoring_mode == "error_count":
             # Error-count scoring: compute points from error counts
             from cqc_cpcc.scoring import score_error_count_criterion
-            
+
             scoring_result = score_error_count_criterion(
                 effective_major,  # Use effective counts
                 effective_minor,
                 rubric_criterion
             )
-            
+
             # Update the criterion result
             criterion_result.points_earned = scoring_result["points_awarded"]
-            
+
             logger.info(
                 f"Error-count scoring for '{criterion_result.criterion_id}': "
                 f"{scoring_result['points_awarded']}/{criterion_result.points_possible} "
                 f"(effective: {scoring_result['effective_major']} major, {scoring_result['effective_minor']} minor)"
             )
-        
+
         else:
             # scoring_mode='manual' - keep LLM-assigned points as-is
             # If AI didn't populate points_earned, default to 0
@@ -752,14 +771,15 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                     f"but AI did not populate points_earned. Defaulting to 0."
                 )
                 criterion_result.points_earned = 0
-        
+
         updated_criteria_results.append(criterion_result)
-    
+
     # Use scoring engine to aggregate results
     aggregation = aggregate_rubric_result(rubric, updated_criteria_results, recalculate_overall_band=True)
-    
-    logger.info(f"Aggregation result: total_points_earned={aggregation['total_points_earned']}, percentage={aggregation['percentage']}, overall_band={aggregation['overall_band_label']}")
-    
+
+    logger.info(
+        f"Aggregation result: total_points_earned={aggregation['total_points_earned']}, percentage={aggregation['percentage']}, overall_band={aggregation['overall_band_label']}")
+
     # Log detailed breakdown for debugging
     logger.debug("=== Criterion Scoring Breakdown ===")
     for cr in updated_criteria_results:
@@ -768,7 +788,7 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
             f"(level: {cr.selected_level_label or 'N/A'})"
         )
     logger.debug(f"=== Total: {aggregation['total_points_earned']}/{aggregation['total_points_possible']} ===")
-    
+
     # Create updated result with backend-computed scores
     updated_result = result.model_copy(update={
         "criteria_results": updated_criteria_results,
@@ -785,13 +805,13 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         "error_counts_by_severity": normalized_counts_by_severity,
         "error_counts_by_id": normalized_counts_by_id,
     })
-    
+
     logger.info(
         f"Backend scoring complete: {updated_result.total_points_earned}/{updated_result.total_points_possible} "
         f"({aggregation['percentage']:.1f}%), band='{updated_result.overall_band_label}'"
     )
     logger.info(f"=== Backend Scoring End ===")
-    
+
     return updated_result
 
 
@@ -818,13 +838,13 @@ def apply_error_based_scoring(rubric: Rubric, result: RubricAssessmentResult) ->
     """
     logger.warning("apply_error_based_scoring is deprecated, use apply_backend_scoring instead")
     return apply_backend_scoring(rubric, result)
-    
+
     logger.info(
         f"Updated total score after error-based scoring: "
         f"{updated_result.total_points_earned}/{updated_result.total_points_possible} "
         f"(was {result.total_points_earned})"
     )
-    
+
     return updated_result
 
 
@@ -842,15 +862,15 @@ class RubricGrader:
         model_name: OpenAI model to use
         temperature: Sampling temperature
     """
-    
+
     def __init__(
-        self,
-        rubric: Rubric,
-        assignment_instructions: str,
-        reference_solution: Optional[str] = None,
-        error_definitions: Optional[list[ErrorDefinition]] = None,
-        model_name: str = DEFAULT_GRADING_MODEL,
-        temperature: float = DEFAULT_TEMPERATURE,
+            self,
+            rubric: Rubric,
+            assignment_instructions: str,
+            reference_solution: Optional[str] = None,
+            error_definitions: Optional[list[ErrorDefinition]] = None,
+            model_name: str = DEFAULT_GRADING_MODEL,
+            temperature: float = DEFAULT_TEMPERATURE,
     ):
         """Initialize rubric grader with configuration.
         
@@ -868,11 +888,11 @@ class RubricGrader:
         self.error_definitions = error_definitions
         self.model_name = model_name
         self.temperature = temperature
-    
+
     async def grade(
-        self,
-        student_submission: str,
-        callback: Optional[BaseCallbackHandler] = None,
+            self,
+            student_submission: str,
+            callback: Optional[BaseCallbackHandler] = None,
     ) -> RubricAssessmentResult:
         """Grade a student submission.
         

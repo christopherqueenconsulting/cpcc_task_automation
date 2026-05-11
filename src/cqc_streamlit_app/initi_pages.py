@@ -3,7 +3,6 @@
 import os
 
 import streamlit as st
-
 from cqc_cpcc.utilities import env_constants as ec
 
 
@@ -17,6 +16,7 @@ def get_env_config():
         "FEEDBACK_SIGNATURE": os.getenv("FEEDBACK_SIGNATURE") or ec.FEEDBACK_SIGNATURE,
         "ATTENDANCE_TRACKER_URL": os.getenv("ATTENDANCE_TRACKER_URL") or ec.ATTENDANCE_TRACKER_URL,
     }
+
 
 # Initialize session state variables
 def init_session_state():
@@ -39,23 +39,23 @@ def init_session_state():
 
     if 'attendance_tracker_url' not in st.session_state:
         st.session_state.attendance_tracker_url = config['ATTENDANCE_TRACKER_URL']
-    
+
     # Initialize grading results caching state
     if 'grading_run_key' not in st.session_state:
         st.session_state.grading_run_key = None
-    
+
     if 'grading_results_by_key' not in st.session_state:
         st.session_state.grading_results_by_key = {}
-    
+
     if 'grading_status_by_key' not in st.session_state:
         st.session_state.grading_status_by_key = {}
-    
+
     if 'grading_errors_by_key' not in st.session_state:
         st.session_state.grading_errors_by_key = {}
-    
+
     if 'grading_failures_by_key' not in st.session_state:
         st.session_state.grading_failures_by_key = {}
-    
+
     if 'feedback_zip_bytes_by_key' not in st.session_state:
         st.session_state.feedback_zip_bytes_by_key = {}
 
@@ -67,10 +67,10 @@ def init_session_state():
 
     if 'error_definitions_skipped' not in st.session_state:
         st.session_state.error_definitions_skipped = {}
-    
+
     # Action flags for grading
     if 'do_grade' not in st.session_state:
         st.session_state.do_grade = False
-    
+
     if 'expand_all_students' not in st.session_state:
         st.session_state.expand_all_students = False

@@ -349,7 +349,7 @@
         {
           "assignment_id": "Exam2",
           "assignment_name": "CSC 251 Exam 2",
-           "error_definitions": [
+          "error_definitions": [
             {
               "error_id": "CSC_251_EXAM_2_INSUFFICIENT_DOCUMENTATION",
               "name": "Insufficient Documentation",

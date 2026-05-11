@@ -18,16 +18,15 @@ Usage:
 import json
 from pathlib import Path
 from typing import Optional
+
 from cqc_cpcc.course_identifier import normalize_course_id
 from cqc_cpcc.error_definitions_models import (
     ErrorConfigRegistry,
     ErrorDefinition,
     CourseErrorConfig,
-    AssignmentErrorConfig,
-    create_registry_from_flat_list
+    AssignmentErrorConfig
 )
 from cqc_cpcc.utilities.logger import logger
-
 
 # Directory containing JSON config files (sibling config/ dir)
 _CONFIG_DIR = Path(__file__).parent / "config"
@@ -65,7 +64,7 @@ def load_error_config_registry() -> ErrorConfigRegistry:
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in {registry_path}: {e}")
         raise ValueError(f"Invalid JSON in {registry_path}: {e}") from e
-    
+
     if not isinstance(registry_data, dict):
         raise ValueError("error_definitions_registry.json must be a JSON object (dict)")
 
@@ -77,30 +76,30 @@ def load_error_config_registry() -> ErrorConfigRegistry:
 
     try:
         registry = ErrorConfigRegistry.model_validate(registry_data)
-        
+
         # Log summary
         total_errors = sum(
             len(assignment.error_definitions)
             for course in registry.courses
             for assignment in course.assignments
         )
-        
+
         logger.info(
             f"Loaded error config registry: {len(registry.courses)} courses, "
             f"{total_errors} total error definitions"
         )
-        
+
         return registry
-        
+
     except Exception as e:
         logger.error(f"Failed to validate error config registry: {e}")
         raise ValueError(f"Invalid error config registry: {e}")
 
 
 def get_error_definitions(
-    course_id: str,
-    assignment_id: str,
-    registry: Optional[ErrorConfigRegistry] = None
+        course_id: str,
+        assignment_id: str,
+        registry: Optional[ErrorConfigRegistry] = None
 ) -> list[ErrorDefinition]:
     """Get error definitions for a specific course and assignment.
     
@@ -119,13 +118,13 @@ def get_error_definitions(
     """
     if registry is None:
         registry = load_error_config_registry()
-    
+
     errors = registry.get_error_definitions(course_id, assignment_id)
-    
+
     logger.debug(
         f"Retrieved {len(errors)} error definitions for {course_id}/{assignment_id}"
     )
-    
+
     return errors
 
 
@@ -160,19 +159,19 @@ def get_assignments_for_course(course_id: str) -> list[AssignmentErrorConfig]:
     """
     registry = load_error_config_registry()
     assignments = registry.get_assignments_for_course(course_id)
-    
+
     logger.debug(
         f"Found {len(assignments)} assignments for course {course_id}"
     )
-    
+
     return assignments
 
 
 def add_assignment_to_course(
-    course_id: str,
-    assignment_id: str,
-    assignment_name: str,
-    registry: Optional[ErrorConfigRegistry] = None
+        course_id: str,
+        assignment_id: str,
+        assignment_name: str,
+        registry: Optional[ErrorConfigRegistry] = None
 ) -> AssignmentErrorConfig:
     """Add a new assignment to a course in the registry.
     
@@ -197,7 +196,7 @@ def add_assignment_to_course(
     """
     if registry is None:
         registry = load_error_config_registry()
-    
+
     # Get or create course
     course = registry.get_course(course_id)
     if not course:
@@ -205,26 +204,26 @@ def add_assignment_to_course(
         course = CourseErrorConfig(course_id=course_id, assignments=[])
         registry.courses.append(course)
         logger.info(f"Created new course: {course_id}")
-    
+
     # Check if assignment already exists
     existing = course.get_assignment(assignment_id)
     if existing:
         raise ValueError(
             f"Assignment '{assignment_id}' already exists in course '{course_id}'"
         )
-    
+
     # Create new assignment with empty error definitions
     new_assignment = AssignmentErrorConfig(
         assignment_id=assignment_id,
         assignment_name=assignment_name,
         error_definitions=[]
     )
-    
+
     course.assignments.append(new_assignment)
     logger.info(
         f"Added assignment '{assignment_id}' to course '{course_id}'"
     )
-    
+
     return new_assignment
 
 

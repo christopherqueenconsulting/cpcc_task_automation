@@ -2,6 +2,11 @@ import json
 from pprint import pprint
 from typing import Type, TypeVar
 
+from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_retry_model
+from cqc_cpcc.utilities.AI.llm_deprecated.prompts import *
+from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS, DEBUG
+from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.my_pydantic_parser import CustomPydanticOutputParser
 from langchain_classic.output_parsers import RetryWithErrorOutputParser
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.exceptions import OutputParserException
@@ -12,12 +17,6 @@ from langchain_core.runnables import RunnableSerializable
 from langchain_core.runnables.utils import Output
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-
-from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_retry_model
-from cqc_cpcc.utilities.AI.llm_deprecated.prompts import *
-from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS, DEBUG
-from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.my_pydantic_parser import CustomPydanticOutputParser
 
 T = TypeVar("T", bound=BaseModel)
 

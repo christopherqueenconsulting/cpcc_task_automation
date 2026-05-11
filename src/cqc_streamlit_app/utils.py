@@ -2,31 +2,21 @@
 import os
 import re
 import tempfile
-import threading
 import zipfile
-from datetime import datetime
 from random import randint
-from typing import Any, Optional, Tuple, TypeVar, Union, cast
+from typing import Any, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pandas as pd
 import streamlit as st
-from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.outputs import LLMResult
+from cqc_cpcc.utilities.logger import logger
 from langchain_openai import ChatOpenAI
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from streamlit.delta_generator import DeltaGenerator
-from streamlit.elements.lib.mutable_status_container import StatusContainer
-from streamlit.runtime.scriptrunner_utils.script_run_context import (
-    SCRIPT_RUN_CONTEXT_ATTR_NAME,
-    get_script_run_ctx,
-)
 from streamlit.runtime.uploaded_file_manager import UploadedFile
-
-from cqc_cpcc.utilities.logger import logger
 
 EXTENSION_TO_LANGUAGES = {
     # Python
@@ -901,7 +891,7 @@ def get_cpcc_css():
 
 
 @st.cache_resource(hash_funcs={ChatOpenAI: id})
-def get_custom_llm(temperature: float, model: str, service_tier: str ="default") -> ChatOpenAI:
+def get_custom_llm(temperature: float, model: str, service_tier: str = "default") -> ChatOpenAI:
     """
     This function returns a cached instance of ChatOpenAI based on the temperature and model.
     If the temperature or model changes, a new instance will be created and cached.
@@ -938,6 +928,7 @@ def get_language_from_file_path(file_path):
     langs = EXTENSION_TO_LANGUAGES.get(file_extension.lower(), [])
     # Return the first option or text otherwise
     return langs[0] if langs else "text"
+
 
 def get_unique_extensions() -> list[str]:
     """
@@ -1213,7 +1204,7 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
         Configuration dictionary for OpenRouter
     """
     uk = str(unique_key)
-    
+
     # Checkbox for auto-routing (default: True)
     use_auto_route = st.checkbox(
         label="Use Auto Router (Recommended)",
@@ -1221,7 +1212,7 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
         key=f"openrouter_auto_{uk}",
         help="Let OpenRouter automatically select the best model for your request"
     )
-    
+
     selected_model = "openrouter/auto"
 
     if not use_auto_route:
@@ -1233,11 +1224,12 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
             if not models:
                 # Fall back to allowed models from environment or default list
                 from cqc_cpcc.utilities.env_constants import OPENROUTER_ALLOWED_MODELS
-                
+
                 if OPENROUTER_ALLOWED_MODELS:
                     # Parse comma-separated list from environment
                     allowed_model_ids = [m.strip() for m in OPENROUTER_ALLOWED_MODELS.split(',') if m.strip()]
-                    st.info(f"Using allowed models from OPENROUTER_ALLOWED_MODELS environment variable ({len(allowed_model_ids)} models)")
+                    st.info(
+                        f"Using allowed models from OPENROUTER_ALLOWED_MODELS environment variable ({len(allowed_model_ids)} models)")
                 else:
                     # Use default list of known GPT-5 models
                     allowed_model_ids = [
@@ -1246,21 +1238,21 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
                         "openai/gpt-5-nano"
                     ]
                     st.info("Using default allowed models: GPT-5 family")
-                
+
                 # Create model options from allowed list
                 model_options = allowed_model_ids
                 model_id_map = {model_id: model_id for model_id in allowed_model_ids}
-                
+
                 # Sort alphabetically
                 model_options.sort()
-                
+
                 selected_display = st.selectbox(
                     label="Select OpenRouter Model",
                     key=f"openrouter_model_{uk}",
                     options=model_options,
                     help="Choose a specific model from the allowed models list"
                 )
-                
+
                 selected_model = model_id_map.get(selected_display, allowed_model_ids[0])
             else:
                 # Create model options from fetched models
@@ -1305,7 +1297,7 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
                     )
     else:
         st.info("**Auto Router:** OpenRouter will automatically select the best model for your request.")
-    
+
     return {
         "use_auto_route": use_auto_route,
         "model": selected_model,
@@ -1338,18 +1330,18 @@ def parse_google_drive_url(url: str) -> Optional[str]:
     """
     if not url or 'drive.google.com' not in url:
         return None
-    
+
     # Pattern 1: /file/d/{FILE_ID}/view or /file/d/{FILE_ID}/
     match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
     if match:
         return match.group(1)
-    
+
     # Pattern 2: ?id={FILE_ID} (from open?id= or uc?id=)
     parsed = urlparse(url)
     params = parse_qs(parsed.query)
     if 'id' in params and params['id']:
         return params['id'][0]
-    
+
     return None
 
 
@@ -1373,12 +1365,12 @@ def download_file_from_url(url: str, filename_hint: Optional[str] = None) -> Opt
             logger.info(f"Detected Google Drive file ID: {file_id}")
         else:
             download_url = url
-        
+
         # Download the file with httpx
         with httpx.Client(follow_redirects=True, timeout=30.0) as client:
             response = client.get(download_url)
             response.raise_for_status()
-            
+
             # Try to get filename from Content-Disposition header
             content_disposition = response.headers.get('content-disposition', '')
             filename = None
@@ -1386,12 +1378,12 @@ def download_file_from_url(url: str, filename_hint: Optional[str] = None) -> Opt
                 match = re.search(r'filename="?([^"]+)"?', content_disposition)
                 if match:
                     filename = match.group(1)
-            
+
             # Fall back to URL path or hint
             if not filename:
                 parsed_url = urlparse(url)
                 filename = os.path.basename(parsed_url.path) or filename_hint or "downloaded_file"
-            
+
             # Ensure filename has an extension - use precise MIME type mapping
             if '.' not in filename:
                 content_type = response.headers.get('content-type', '').lower().split(';')[0].strip()
@@ -1411,8 +1403,9 @@ def download_file_from_url(url: str, filename_hint: Optional[str] = None) -> Opt
                 else:
                     # If we can't determine extension, raise an error
                     logger.warning(f"Could not determine file extension for content-type: {content_type}")
-                    st.warning(f"Could not determine file type (content-type: {content_type}). File may not be processed correctly.")
-            
+                    st.warning(
+                        f"Could not determine file type (content-type: {content_type}). File may not be processed correctly.")
+
             # Create temp file with appropriate extension
             file_extension = os.path.splitext(filename)[1] or '.tmp'
             # Note: temp files with delete=False are cleaned up by the OS temp directory cleanup
@@ -1420,10 +1413,10 @@ def download_file_from_url(url: str, filename_hint: Optional[str] = None) -> Opt
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
             temp_file.write(response.content)
             temp_file.close()
-            
+
             logger.info(f"Successfully downloaded file from URL: {url} -> {temp_file.name}")
             return filename, temp_file.name
-            
+
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error downloading file from URL {url}: {e}")
         st.error(f"Failed to download file: HTTP {e.response.status_code}")
@@ -1439,11 +1432,11 @@ def download_file_from_url(url: str, filename_hint: Optional[str] = None) -> Opt
 
 
 def add_upload_file_element(
-    uploader_text: str, 
-    accepted_file_types: list[str], 
-    success_message: bool = True,
-    accept_multiple_files: bool = False, 
-    key_prefix: str = ""
+        uploader_text: str,
+        accepted_file_types: list[str],
+        success_message: bool = True,
+        accept_multiple_files: bool = False,
+        key_prefix: str = ""
 ) -> UploadedFileResult:
     """Add a file uploader element with unique key generation.
     
@@ -1469,7 +1462,7 @@ def add_upload_file_element(
     # Create compound widget key using both context-specific prefix and random value
     # This ensures global uniqueness even if random numbers collide across contexts
     widget_key = f"{reset_key}_{st.session_state[reset_key]}"
-    
+
     uploaded_files = st.file_uploader(label=uploader_text, type=accepted_file_types,
                                       accept_multiple_files=accept_multiple_files, key=widget_key)
 
@@ -1506,12 +1499,12 @@ def add_upload_file_element(
 
 
 def add_flexible_upload_element(
-    uploader_text: str,
-    accepted_file_types: list[str],
-    success_message: bool = True,
-    accept_multiple_files: bool = False,
-    key_prefix: str = "",
-    allow_url: bool = True
+        uploader_text: str,
+        accepted_file_types: list[str],
+        success_message: bool = True,
+        accept_multiple_files: bool = False,
+        key_prefix: str = "",
+        allow_url: bool = True
 ) -> UploadedFileResult:
     """
     Add a flexible file input element supporting local uploads, Google Drive URLs, and direct URLs.
@@ -1537,7 +1530,7 @@ def add_flexible_upload_element(
     else:
         tab1 = st.container()
         tab2 = None
-    
+
     with tab1:
         # Use existing upload function for file uploads
         result = add_upload_file_element(
@@ -1547,7 +1540,7 @@ def add_flexible_upload_element(
             accept_multiple_files=accept_multiple_files,
             key_prefix=key_prefix + "local_"
         )
-        
+
         # If we got files from upload, return them
         if accept_multiple_files:
             if result and len(result) > 0:
@@ -1555,13 +1548,13 @@ def add_flexible_upload_element(
         else:
             if result[0] is not None:
                 return result
-    
+
     if allow_url and tab2:
         with tab2:
             st.markdown("**Paste a URL to download:**")
             st.markdown("- Google Drive share link (e.g., `https://drive.google.com/file/d/FILE_ID/view`)")
             st.markdown("- Direct download URL (e.g., `https://example.com/file.pdf`)")
-            
+
             # URL input
             url_key = f"{key_prefix}url_input_{uploader_text.replace(' ', '_')}"
             url = st.text_input(
@@ -1570,46 +1563,46 @@ def add_flexible_upload_element(
                 placeholder="https://drive.google.com/file/d/FILE_ID/view",
                 help="Enter a Google Drive share link or direct download URL"
             )
-            
+
             if url:
                 download_button_key = f"{key_prefix}download_btn_{uploader_text.replace(' ', '_')}"
                 if st.button("📥 Download from URL", key=download_button_key):
                     with st.spinner("Downloading file..."):
                         result = download_file_from_url(url)
-                        
+
                         if result:
                             original_name, temp_path = result
                             if success_message:
                                 st.success(f"✅ Downloaded: {original_name}")
-                            
+
                             # Store in session state for persistence
                             state_key = f"{key_prefix}downloaded_file_{uploader_text.replace(' ', '_')}"
                             st.session_state[state_key] = result
-                            
+
                             if accept_multiple_files:
                                 return [result]
                             else:
                                 return result
-            
+
             # Check if we have a previously downloaded file in session state
             state_key = f"{key_prefix}downloaded_file_{uploader_text.replace(' ', '_')}"
             if state_key in st.session_state and st.session_state[state_key]:
                 original_name, temp_path = st.session_state[state_key]
-                
+
                 # Show current downloaded file
                 st.info(f"📄 Current file: {original_name}")
-                
+
                 # Add clear button
                 clear_key = f"{key_prefix}clear_btn_{uploader_text.replace(' ', '_')}"
                 if st.button("🗑️ Clear", key=clear_key):
                     del st.session_state[state_key]
                     st.rerun()
-                
+
                 if accept_multiple_files:
                     return [st.session_state[state_key]]
                 else:
                     return st.session_state[state_key]
-    
+
     # No files from either source
     if accept_multiple_files:
         return []
@@ -1734,8 +1727,8 @@ def create_zip_file(file_paths: list[tuple[str, str]]) -> str:
 
 
 def sanitize_zip_filename(
-    course_name: str,
-    timestamp: str
+        course_name: str,
+        timestamp: str
 ) -> str:
     """
     Sanitize and format zip filename to: department_number_section_assignmentname_Feedback_timestamp
@@ -1756,22 +1749,22 @@ def sanitize_zip_filename(
     """
     # Parse course_name to extract components
     course_parts = course_name.split('_')
-    
+
     # Build sanitized filename by replacing spaces with underscores
     # and removing any invalid characters
     sanitized_name = '_'.join(course_parts)
     sanitized_name = sanitized_name.replace(' ', '_')
     sanitized_name = re.sub(r'[<>:"/\\|?*]', '', sanitized_name)
-    
+
     # Build final filename
     zip_filename = f"{sanitized_name}_Feedback_{timestamp}.zip"
-    
+
     return zip_filename
 
 
 def export_grading_summary_to_excel(
-    summary_df: pd.DataFrame,
-    include_csv: bool = False
+        summary_df: pd.DataFrame,
+        include_csv: bool = False
 ) -> tuple[str, Optional[str]]:
     """
     Export grading summary dataframe to Excel file with professional formatting.
@@ -1794,18 +1787,18 @@ def export_grading_summary_to_excel(
     wb = Workbook()
     ws = wb.active
     ws.title = "Grading Summary"
-    
+
     # Define colors for header and alternating rows
     header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     header_font = Font(bold=True, color="FFFFFF", size=12)
-    
+
     # Light blue for alternating rows
     alt_row_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-    
+
     # Alignment settings
     center_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     left_alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    
+
     # Add header row
     for col_idx, column_title in enumerate(summary_df.columns, 1):
         cell = ws.cell(row=1, column=col_idx)
@@ -1813,7 +1806,7 @@ def export_grading_summary_to_excel(
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = center_alignment
-    
+
     # Add data rows with alternating colors
     for row_idx, row in enumerate(summary_df.itertuples(index=False), 2):
         # Determine if this is an even or odd row for alternating colors
@@ -1821,15 +1814,15 @@ def export_grading_summary_to_excel(
             row_fill = alt_row_fill
         else:
             row_fill = None
-        
+
         for col_idx, value in enumerate(row, 1):
             cell = ws.cell(row=row_idx, column=col_idx)
             cell.value = value
-            
+
             # Apply fill color if alternating row
             if row_fill:
                 cell.fill = row_fill
-            
+
             # Set alignment - center for numbers/percentages, left for text
             if isinstance(value, (int, float)):
                 cell.alignment = center_alignment
@@ -1838,40 +1831,40 @@ def export_grading_summary_to_excel(
                 cell.alignment = center_alignment
             else:
                 cell.alignment = left_alignment
-    
+
     # Auto-fit column widths
     for col_idx, column_title in enumerate(summary_df.columns, 1):
         max_length = len(str(column_title))
-        
+
         # Check all values in the column
         for row_idx in range(2, len(summary_df) + 2):
             cell_value = ws.cell(row=row_idx, column=col_idx).value
             if cell_value:
                 max_length = max(max_length, len(str(cell_value)))
-        
+
         # Set column width with padding
         adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
         ws.column_dimensions[get_column_letter(col_idx)].width = adjusted_width
-    
+
     # Save Excel file
     excel_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
     excel_file.close()
     wb.save(excel_file.name)
-    
+
     csv_file = None
     if include_csv:
         # Save CSV version as well
         csv_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
         csv_file.close()
         summary_df.to_csv(csv_file.name, index=False)
-    
+
     return excel_file.name, csv_file.name
 
 
 def add_grading_summary_to_zip(
-    zip_file_path: str,
-    summary_df: pd.DataFrame,
-    include_csv: bool = True
+        zip_file_path: str,
+        summary_df: pd.DataFrame,
+        include_csv: bool = True
 ) -> str:
     """
     Add grading summary Excel file to an existing zip file.
@@ -1892,11 +1885,11 @@ def add_grading_summary_to_zip(
         summary_df,
         include_csv=include_csv
     )
-    
+
     # Create new zip file with all contents
     new_zip_file = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
     new_zip_file.close()
-    
+
     # Copy original zip contents and add summary files
     with zipfile.ZipFile(zip_file_path, 'r') as original_zip:
         with zipfile.ZipFile(new_zip_file.name, 'w') as new_zip:
@@ -1904,14 +1897,14 @@ def add_grading_summary_to_zip(
             for item in original_zip.infolist():
                 data = original_zip.read(item.filename)
                 new_zip.writestr(item, data)
-            
+
             # Add Excel summary as primary export
             new_zip.write(excel_file_path, arcname="Grading_Summary.xlsx")
-            
+
             # Add CSV version if requested
             if include_csv and csv_file_path:
                 new_zip.write(csv_file_path, arcname="Grading_Summary.csv")
-    
+
     # Clean up temporary files
     try:
         os.unlink(excel_file_path)
@@ -1919,14 +1912,200 @@ def add_grading_summary_to_zip(
             os.unlink(csv_file_path)
     except Exception:
         pass
-    
+
     # Remove the old zip and rename new one
     try:
         os.unlink(zip_file_path)
     except Exception:
         pass
-    
+
     return new_zip_file.name
 
 
 def prefix_content_file_name(filename: str, content: str):
+    """Prefix content with a filename header.
+    
+    Adds a comment-style header with the filename at the start
+    of the content for better context when displaying code/files.
+    
+    Args:
+        filename: Name of the file to prefix
+        content: Content to prefix
+        
+    Returns:
+        Content with filename header prepended
+    """
+    return f"// File: {filename}\n{content}"
+
+
+def render_openai_debug_panel(
+        correlation_id: str | None = None,
+        error: Exception | None = None,
+) -> None:
+    """Render OpenAI debug panel in Streamlit UI when debug mode is enabled.
+
+    Shows request/response details, correlation ID, and decision notes for
+    troubleshooting OpenAI API calls.
+
+    Args:
+        correlation_id: Correlation ID for the request (if available)
+        error: Exception that occurred (if any)
+    """
+    import json
+
+    from cqc_cpcc.utilities.AI.openai_debug import get_debug_context
+    from cqc_cpcc.utilities.AI.openai_exceptions import (
+        OpenAISchemaValidationError,
+        OpenAITransportError,
+    )
+    from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
+
+    # Only show debug panel if debug mode is enabled
+    if not CQC_OPENAI_DEBUG:
+        return
+
+    # Create collapsible debug panel
+    with st.expander("🔍 OpenAI Debug Information", expanded=False):
+        st.markdown("**Debug Mode Enabled** - This panel shows OpenAI request/response details.")
+
+        # Show correlation ID
+        if correlation_id:
+            st.code(f"Correlation ID: {correlation_id}", language="text")
+        else:
+            st.warning("No correlation ID available (debug mode may have been off during request)")
+
+        # Show error details if present
+        if error:
+            st.error("**Error Occurred:**")
+
+            if isinstance(error, OpenAISchemaValidationError):
+                st.markdown("**Type:** Schema Validation Error")
+                st.markdown(f"**Schema:** {error.schema_name}")
+                if error.decision_notes:
+                    st.markdown(f"**Decision Notes:** {error.decision_notes}")
+                if error.validation_errors:
+                    st.markdown(f"**Validation Errors:** {len(error.validation_errors)}")
+                    with st.expander("Show Validation Errors"):
+                        st.json(error.validation_errors)
+                if error.raw_output:
+                    with st.expander("Show Raw Output"):
+                        st.code(error.raw_output[:1000], language="json")  # Truncate to 1000 chars
+
+            elif isinstance(error, OpenAITransportError):
+                st.markdown("**Type:** Transport Error")
+                if error.status_code:
+                    st.markdown(f"**Status Code:** {error.status_code}")
+                if error.retry_after:
+                    st.markdown(f"**Retry After:** {error.retry_after}s")
+
+            else:
+                st.markdown(f"**Type:** {type(error).__name__}")
+                st.markdown(f"**Message:** {str(error)}")
+
+        # Load and show debug context from files
+        if correlation_id:
+            debug_context = get_debug_context(correlation_id)
+
+            if debug_context:
+                # Show request details
+                if "request" in debug_context:
+                    with st.expander("📤 Request Details"):
+                        req = debug_context["request"]
+                        st.markdown(f"**Model:** {req.get('model')}")
+                        st.markdown(f"**Schema:** {req.get('schema_name')}")
+                        st.markdown(f"**Timestamp:** {req.get('timestamp')}")
+
+                        # Show messages (prompts)
+                        if "request" in req and "messages" in req["request"]:
+                            st.markdown("**Messages:**")
+                            for msg in req["request"]["messages"]:
+                                role = msg.get("role", "unknown")
+                                content = msg.get("content", "")
+                                st.text_area(
+                                    f"Message ({role})",
+                                    content[:500],  # Truncate to 500 chars
+                                    height=150,
+                                    key=f"msg_{role}_{correlation_id}"
+                                )
+
+                        # Download request JSON
+                        request_json = json.dumps(req, indent=2)
+                        st.download_button(
+                            label="📥 Download Request JSON",
+                            data=request_json,
+                            file_name=f"request_{correlation_id}.json",
+                            mime="application/json",
+                            key=f"download_request_{correlation_id}"
+                        )
+
+                # Show response details
+                if "response" in debug_context:
+                    with st.expander("📥 Response Details"):
+                        resp = debug_context["response"]
+                        st.markdown(f"**Schema:** {resp.get('schema_name')}")
+                        st.markdown(f"**Decision Notes:** {resp.get('decision_notes')}")
+                        st.markdown(f"**Timestamp:** {resp.get('timestamp')}")
+
+                        # Show metadata
+                        if "response_metadata" in resp:
+                            meta = resp["response_metadata"]
+                            st.markdown("**Response Metadata:**")
+                            st.json(meta)
+
+                        # Show usage
+                        if "usage" in resp:
+                            usage = resp["usage"]
+                            st.markdown("**Token Usage:**")
+                            st.json(usage)
+
+                        # Show refusal if present
+                        if "refusal" in resp:
+                            st.error(f"**Refusal:** {resp['refusal']}")
+
+                        # Show output
+                        if "output" in resp:
+                            output = resp["output"]
+                            st.markdown("**Output:**")
+                            st.markdown(f"- Parsed: {output.get('parsed_present')}")
+                            st.markdown(f"- Type: {output.get('parsed_type')}")
+                            if output.get("text"):
+                                st.text_area(
+                                    "Output Text (truncated)",
+                                    output["text"],
+                                    height=150,
+                                    key=f"output_{correlation_id}"
+                                )
+
+                        # Show error if present
+                        if "error" in resp:
+                            err = resp["error"]
+                            st.error(f"**Error:** {err.get('type')} - {err.get('message')}")
+
+                        # Download response JSON
+                        response_json = json.dumps(resp, indent=2)
+                        st.download_button(
+                            label="📥 Download Response JSON",
+                            data=response_json,
+                            file_name=f"response_{correlation_id}.json",
+                            mime="application/json",
+                            key=f"download_response_{correlation_id}"
+                        )
+
+                # Show notes
+                if "notes" in debug_context:
+                    with st.expander("📝 Decision Notes"):
+                        notes = debug_context["notes"]
+                        st.json(notes)
+
+            else:
+                st.info(
+                    "No debug files found. Set `CQC_OPENAI_DEBUG_SAVE_DIR` environment variable to save debug files.")
+
+        # Add instructions
+        st.markdown("---")
+        st.markdown("""
+        **Debug Mode Configuration:**
+        - `CQC_OPENAI_DEBUG=1` - Enable debug mode
+        - `CQC_OPENAI_DEBUG_REDACT=1` - Redact sensitive data (default: enabled)
+        - `CQC_OPENAI_DEBUG_SAVE_DIR=/path/to/dir` - Save debug files to directory
+        """)

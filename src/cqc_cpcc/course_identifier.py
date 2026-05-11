@@ -55,4 +55,3 @@ def format_course_id_for_display(course_id: str) -> str:
         return normalized_course_id
 
     return f"{match.group(1).upper()} {match.group(2)}"
-

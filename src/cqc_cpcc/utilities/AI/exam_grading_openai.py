@@ -15,10 +15,7 @@ Key changes from LangChain version:
 - Better error handling with custom exceptions
 """
 
-from typing import TYPE_CHECKING, Type, TypeVar
-
-from langchain_core.callbacks import BaseCallbackHandler
-from pydantic import BaseModel
+from typing import TYPE_CHECKING, TypeVar
 
 from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_prompt
 from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
@@ -27,6 +24,8 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAITransportError,
 )
 from cqc_cpcc.utilities.logger import logger
+from langchain_core.callbacks import BaseCallbackHandler
+from pydantic import BaseModel
 
 # Avoid circular import - only import for type checking
 if TYPE_CHECKING:
@@ -41,17 +40,17 @@ DEFAULT_MAX_TOKENS = 4096
 
 
 async def grade_exam_submission(
-    exam_instructions: str,
-    exam_solution: str,
-    student_submission: str,
-    major_error_type_list: list[str],
-    minor_error_type_list: list[str],
-    model_name: str = DEFAULT_GRADING_MODEL,
-    temperature: float = DEFAULT_TEMPERATURE,
-    callback: BaseCallbackHandler | None = None,
-    use_preprocessing: bool | None = None,
-    use_openrouter: bool = False,
-    openrouter_auto_route: bool = True,
+        exam_instructions: str,
+        exam_solution: str,
+        student_submission: str,
+        major_error_type_list: list[str],
+        minor_error_type_list: list[str],
+        model_name: str = DEFAULT_GRADING_MODEL,
+        temperature: float = DEFAULT_TEMPERATURE,
+        callback: BaseCallbackHandler | None = None,
+        use_preprocessing: bool | None = None,
+        use_openrouter: bool = False,
+        openrouter_auto_route: bool = True,
 ) -> "ErrorDefinitions":
     """Grade an exam submission using OpenAI structured outputs or OpenRouter.
     
@@ -100,20 +99,20 @@ async def grade_exam_submission(
         should_use_preprocessing,
         generate_preprocessing_digest,
     )
-    
+
     # Auto-detect if preprocessing should be used (unless explicitly specified)
     if use_preprocessing is None:
         use_preprocessing = should_use_preprocessing(student_submission)
-    
+
     # Generate preprocessing digest if needed
     preprocessing_digest_json = None
     if use_preprocessing:
         logger.info("Using preprocessing to generate grading digest (large submission)")
-        
+
         # Build rubric config string for preprocessing
         rubric_config = f"Major Errors:\n" + "\n".join(f"- {e}" for e in major_error_type_list)
         rubric_config += f"\n\nMinor Errors:\n" + "\n".join(f"- {e}" for e in minor_error_type_list)
-        
+
         # Generate digest (this has its own 2-attempt retry)
         digest = await generate_preprocessing_digest(
             student_code=student_submission,
@@ -121,14 +120,14 @@ async def grade_exam_submission(
             rubric_config=rubric_config,
             model_name=model_name,
         )
-        
+
         # Convert digest to JSON for grading prompt
         preprocessing_digest_json = digest.model_dump_json(indent=2)
         logger.info(
             f"Preprocessing digest generated: {len(preprocessing_digest_json)} chars "
             f"(reduced from {len(student_submission)} chars)"
         )
-    
+
     # Build the grading prompt
     # If preprocessing was used, pass digest instead of raw code
     if preprocessing_digest_json:
@@ -147,19 +146,19 @@ async def grade_exam_submission(
             major_error_types=major_error_type_list,
             minor_error_types=minor_error_type_list,
         )
-    
+
     logger.info(
         f"Grading exam submission with {model_name} "
         f"({len(major_error_type_list)} major, {len(minor_error_type_list)} minor error types, "
         f"preprocessing={'YES' if use_preprocessing else 'NO'}, "
         f"openrouter={'YES' if use_openrouter else 'NO'})"
     )
-    
+
     try:
         # Call OpenRouter or OpenAI based on configuration
         if use_openrouter:
             from cqc_cpcc.utilities.AI.openrouter_client import get_openrouter_completion
-            
+
             result = await get_openrouter_completion(
                 prompt=prompt,
                 schema_model=ErrorDefinitions,
@@ -176,21 +175,21 @@ async def grade_exam_submission(
                 temperature=temperature,
                 max_tokens=DEFAULT_MAX_TOKENS,
             )
-        
+
         logger.info(
             f"Grading complete: {len(result.all_major_errors or [])} major errors, "
             f"{len(result.all_minor_errors or [])} minor errors"
         )
-        
+
         return result
-        
+
     except OpenAISchemaValidationError as e:
         logger.error(
             f"Schema validation failed during exam grading: {e}. "
             f"This indicates the LLM returned JSON that doesn't match ErrorDefinitions."
         )
         raise
-        
+
     except OpenAITransportError as e:
         logger.error(f"API error during exam grading: {e}")
         raise
@@ -212,17 +211,17 @@ class ExamGraderOpenAI:
         use_openrouter: If True, use OpenRouter instead of OpenAI
         openrouter_auto_route: If True, use OpenRouter auto-routing
     """
-    
+
     def __init__(
-        self,
-        exam_instructions: str,
-        exam_solution: str,
-        major_error_type_list: list[str],
-        minor_error_type_list: list[str],
-        model_name: str = DEFAULT_GRADING_MODEL,
-        temperature: float = DEFAULT_TEMPERATURE,
-        use_openrouter: bool = False,
-        openrouter_auto_route: bool = True,
+            self,
+            exam_instructions: str,
+            exam_solution: str,
+            major_error_type_list: list[str],
+            minor_error_type_list: list[str],
+            model_name: str = DEFAULT_GRADING_MODEL,
+            temperature: float = DEFAULT_TEMPERATURE,
+            use_openrouter: bool = False,
+            openrouter_auto_route: bool = True,
     ):
         """Initialize exam grader with configuration.
         
@@ -244,11 +243,11 @@ class ExamGraderOpenAI:
         self.temperature = temperature
         self.use_openrouter = use_openrouter
         self.openrouter_auto_route = openrouter_auto_route
-    
+
     async def grade(
-        self,
-        student_submission: str,
-        callback: BaseCallbackHandler | None = None,
+            self,
+            student_submission: str,
+            callback: BaseCallbackHandler | None = None,
     ) -> "ErrorDefinitions":
         """Grade a student submission.
         

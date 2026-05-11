@@ -1,12 +1,11 @@
 from collections import defaultdict
 from typing import List
 
-from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
-
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.my_colleges import MyColleges
 from cqc_cpcc.utilities.selenium_util import *
-from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, are_you_satisfied
+from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last
+from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
 
 
 def take_attendance(attendance_tracker_url: str):
@@ -22,7 +21,7 @@ def take_attendance(attendance_tracker_url: str):
     logger.info("Finished Attendance")
 
     # Prompt the user before closing
-    #are_you_satisfied()
+    # are_you_satisfied()
 
     driver.quit()
 
@@ -95,7 +94,8 @@ def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: We
 
                 logger.info(
                     "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s" %
-                    (INSTRUCTOR_NAME,last_name, first_name, student_id, student_email, course_and_section, session_type, delivery_type, status, latest_activity,
+                    (INSTRUCTOR_NAME, last_name, first_name, student_id, student_email, course_and_section,
+                     session_type, delivery_type, status, latest_activity,
                      faculty_reason)
                 )
 

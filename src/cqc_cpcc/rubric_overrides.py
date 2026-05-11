@@ -29,9 +29,8 @@ Usage:
     >>> print(effective_rubric.total_points_possible)  # Reflects changes
 """
 
-from typing import Optional, Dict
-from pydantic import BaseModel, Field, field_validator
 from copy import deepcopy
+from typing import Optional, Dict
 
 from cqc_cpcc.rubric_models import (
     Rubric,
@@ -40,6 +39,7 @@ from cqc_cpcc.rubric_models import (
     OverallBand,
 )
 from cqc_cpcc.utilities.logger import logger
+from pydantic import BaseModel, Field
 
 
 class PerformanceLevelOverride(BaseModel):
@@ -121,8 +121,8 @@ class RubricOverrides(BaseModel):
 
 
 def merge_performance_level(
-    base_level: PerformanceLevel,
-    override: PerformanceLevelOverride
+        base_level: PerformanceLevel,
+        override: PerformanceLevelOverride
 ) -> PerformanceLevel:
     """Merge a performance level with its override.
     
@@ -142,8 +142,8 @@ def merge_performance_level(
 
 
 def merge_criterion(
-    base_criterion: Criterion,
-    override: CriterionOverride
+        base_criterion: Criterion,
+        override: CriterionOverride
 ) -> Criterion:
     """Merge a criterion with its override.
     
@@ -159,7 +159,7 @@ def merge_criterion(
     description = override.description if override.description is not None else base_criterion.description
     max_points = override.max_points if override.max_points is not None else base_criterion.max_points
     enabled = override.enabled if override.enabled is not None else base_criterion.enabled
-    
+
     # Merge levels if overrides provided
     levels = None
     if base_criterion.levels is not None:
@@ -176,7 +176,7 @@ def merge_criterion(
         else:
             # No level overrides, keep base levels
             levels = base_criterion.levels
-    
+
     return Criterion(
         criterion_id=base_criterion.criterion_id,
         name=name,
@@ -188,8 +188,8 @@ def merge_criterion(
 
 
 def merge_overall_band(
-    base_band: OverallBand,
-    override: OverallBandOverride
+        base_band: OverallBand,
+        override: OverallBandOverride
 ) -> OverallBand:
     """Merge an overall band with its override.
     
@@ -208,8 +208,8 @@ def merge_overall_band(
 
 
 def merge_rubric_overrides(
-    base_rubric: Rubric,
-    overrides: RubricOverrides
+        base_rubric: Rubric,
+        overrides: RubricOverrides
 ) -> Rubric:
     """Merge a base rubric with UI overrides.
     
@@ -239,13 +239,13 @@ def merge_rubric_overrides(
     """
     # Deep copy to avoid modifying base
     merged_rubric = deepcopy(base_rubric)
-    
+
     # Apply title and description overrides
     if overrides.title_override is not None:
         merged_rubric.title = overrides.title_override
     if overrides.description_override is not None:
         merged_rubric.description = overrides.description_override
-    
+
     # Apply criterion overrides
     if overrides.criterion_overrides:
         merged_criteria = []
@@ -254,16 +254,16 @@ def merge_rubric_overrides(
                 override = overrides.criterion_overrides[base_criterion.criterion_id]
                 merged_criterion = merge_criterion(base_criterion, override)
                 merged_criteria.append(merged_criterion)
-                
+
                 logger.debug(
                     f"Applied overrides to criterion '{base_criterion.criterion_id}': "
                     f"max_points={merged_criterion.max_points}, enabled={merged_criterion.enabled}"
                 )
             else:
                 merged_criteria.append(base_criterion)
-        
+
         merged_rubric.criteria = merged_criteria
-    
+
     # Apply overall band overrides
     if overrides.overall_bands_overrides and merged_rubric.overall_bands:
         merged_bands = []
@@ -274,31 +274,31 @@ def merge_rubric_overrides(
                 merged_bands.append(merged_band)
             else:
                 merged_bands.append(base_band)
-        
+
         merged_rubric.overall_bands = merged_bands
-    
+
     # Validate merged rubric
     # Pydantic will validate on creation, but we reconstruct to ensure validation
     try:
         validated_rubric = Rubric.model_validate(merged_rubric.model_dump())
-        
+
         disabled_count = sum(1 for c in validated_rubric.criteria if not c.enabled)
         logger.info(
             f"Merged rubric '{validated_rubric.rubric_id}': "
             f"{validated_rubric.total_points_possible} total points, "
             f"{len(validated_rubric.criteria)} criteria ({disabled_count} disabled)"
         )
-        
+
         return validated_rubric
-    
+
     except Exception as e:
         logger.error(f"Merged rubric validation failed: {e}")
         raise ValueError(f"Invalid merged rubric: {e}")
 
 
 def validate_overrides_compatible(
-    base_rubric: Rubric,
-    overrides: RubricOverrides
+        base_rubric: Rubric,
+        overrides: RubricOverrides
 ) -> tuple[bool, list[str]]:
     """Validate that overrides are compatible with base rubric.
     
@@ -324,10 +324,10 @@ def validate_overrides_compatible(
         >>> print(errors)  # ['Criterion "nonexistent" not found in base rubric']
     """
     errors = []
-    
+
     # Get criterion IDs from base rubric
     criterion_ids = {c.criterion_id for c in base_rubric.criteria}
-    
+
     # Check criterion overrides
     for criterion_id, criterion_override in overrides.criterion_overrides.items():
         if criterion_id not in criterion_ids:
@@ -347,7 +347,7 @@ def validate_overrides_compatible(
                     errors.append(
                         f'Criterion "{criterion_id}" has no levels, cannot override levels'
                     )
-    
+
     # Check overall band overrides
     if overrides.overall_bands_overrides:
         if base_rubric.overall_bands:
@@ -357,6 +357,6 @@ def validate_overrides_compatible(
                     errors.append(f'Overall band "{band_label}" not found in base rubric')
         else:
             errors.append('Base rubric has no overall bands, cannot override bands')
-    
+
     is_valid = len(errors) == 0
     return is_valid, errors

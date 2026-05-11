@@ -1,29 +1,29 @@
 from typing import List, Optional, Annotated
 
+from cqc_cpcc.utilities.AI.exam_grading_openai import (
+    DEFAULT_GRADING_MODEL,
+    DEFAULT_TEMPERATURE,
+    grade_exam_submission,
+)
+from cqc_cpcc.utilities.AI.llm_deprecated.chains import get_exam_error_definition_from_completion_chain, \
+    get_exam_error_definitions_completion_chain
+from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm
+from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
+from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
 from docx import Document
 from docx.shared import Pt
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from pydantic import Field, BaseModel, StrictStr
 
-from cqc_cpcc.utilities.AI.llm_deprecated.chains import get_exam_error_definition_from_completion_chain, \
-    get_exam_error_definitions_completion_chain
-from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm
-from cqc_cpcc.utilities.AI.exam_grading_openai import (
-    DEFAULT_GRADING_MODEL,
-    DEFAULT_TEMPERATURE,
-    grade_exam_submission,
-)
-from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
-from cqc_cpcc.utilities.utils import ExtendedEnum, CodeError, ErrorHolder, merge_lists
 
-
-def parse_error_type_enum_name(enum_name:str):
+def parse_error_type_enum_name(enum_name: str):
     parts = enum_name.split('_')  # Split the string by underscores
-    course = parts[0]+" "+parts[1]  # First part is the course
+    course = parts[0] + " " + parts[1]  # First part is the course
     exam = parts[3]  # Second part is the exam
     name = '_'.join(parts[4:])  # Join the remaining parts to get the name
     return course, exam, name
+
 
 class MajorErrorType(ExtendedEnum):
     """Enum representing various types of major coding errors."""
@@ -105,7 +105,6 @@ class MajorErrorType(ExtendedEnum):
     """Omit curly braces"""
     CSC_134_PROJECT_2_CURLY_BRACES_OMITTED = "The code has omission of curly braces"
 
-
     """Major Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
     CSC_152_EXAM_1_STEP_ONE = "PROC SORT does not correctly sort by year and distance as specified"
     CSC_152_EXAM_1_STEP_TWO = "PROC TABULATE does not generate the required two-dimensional table"
@@ -179,7 +178,6 @@ class MinorErrorType(ExtendedEnum):
     """Program does not compile"""
     CSC_251_EXAM_1_DOES_NOT_COMPILE = "The program does not compile"
 
-
     # CSC 134 Project 1 Minor Errors
 
     """Incorrect filenames"""
@@ -211,7 +209,7 @@ class MinorErrorType(ExtendedEnum):
     """Programming style (inconsistent or no indentation, inadequate white space, etc.)"""
     CSC_134_PROJECT_1_PROGRAMMING_STYLE = "Programming style (inconsistent or no indentation, inadequate white space, etc.)"
 
-    #"""Minor Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
+    # """Minor Error Definitions for the CSC 152 Exam 1 (MideTerm)"""
     CSC_152_EXAM_1_STEP_SIX = "The dataset for 2020 medalists is not properly filtered"
     CSC_152_EXAM_1_STEP_SEVEN = "PROC FORMAT does not correctly replace rank with Gold, Silver, or Bronze"
 
@@ -234,6 +232,7 @@ class MinorErrorType(ExtendedEnum):
     CSC_112_ASIGN_1_MISSING_DATA_NOT_REMOVED = "The missing data was not removed"
     CSC_112_ASIGN_1_STATISTIC_NOT_IDENTIFIED = "The statistic was not identified"
     CSC_112_ASIGN_1_PREDICTED_VALUE_NOT_CALCULATED = "The predicted value was not calculated"
+
 
 class MinorError(CodeError):
     """Class representing various types of minor coding errors."""
@@ -330,7 +329,7 @@ class CodeGrader:
     error_definitions_completion_chain = None
     error_definitions_parser = None
     error_definitions_prompt = None
-    
+
     # New OpenAI-based attributes
     exam_instructions: str = None
     exam_solution: str = None
@@ -363,12 +362,12 @@ class CodeGrader:
         self.temperature = temperature
         self.use_openrouter = use_openrouter
         self.openrouter_auto_route = openrouter_auto_route
-        
+
         if major_error_type_list is None:
             major_error_type_list = MajorErrorType.list()
         if minor_error_type_list is None:
             minor_error_type_list = MinorErrorType.list()
-        
+
         self.major_error_type_list = major_error_type_list
         self.minor_error_type_list = minor_error_type_list
 
@@ -437,7 +436,7 @@ class CodeGrader:
 
     async def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None):
         # print("Identifying Errors")
-        
+
         if self.use_openai_wrapper:
             # New OpenAI wrapper path (supports OpenRouter)
             error_definitions = await grade_exam_submission(
@@ -462,7 +461,7 @@ class CodeGrader:
                 callback=callback
             )
             error_definitions = ErrorDefinitions.model_validate(error_definitions_from_llm)
-        
+
         # print("Errors Identified")
 
         # print("\n\nFinal Output:")
@@ -490,7 +489,8 @@ class CodeGrader:
             # Sufficient comments so remove this error type
             unique_major_errors = [x for x in unique_major_errors if
                                    x.error_type != MajorErrorType.CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION]
-        elif MajorErrorType.CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION not in [x.error_type for x in unique_major_errors]:
+        elif MajorErrorType.CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION not in [x.error_type for x in
+                                                                              unique_major_errors]:
             # print("Did not find Insufficient comments error by LLM but true so adding it")
             # Insufficient comments but error type doesnt exist
             unique_major_errors.insert(0, insufficient_comment_error)

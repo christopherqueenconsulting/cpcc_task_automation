@@ -15,6 +15,7 @@ Functions:
 """
 
 from typing import Optional, Tuple
+
 from cqc_cpcc.rubric_models import Criterion, DetectedError, ErrorCountScoringRules
 from cqc_cpcc.utilities.logger import logger
 
@@ -51,31 +52,31 @@ def normalize_errors(major_count: int, minor_count: int, conversion_ratio: int =
     """
     if major_count < 0 or minor_count < 0:
         raise ValueError(f"Error counts cannot be negative: major={major_count}, minor={minor_count}")
-    
+
     if conversion_ratio <= 0:
         raise ValueError(f"Conversion ratio must be positive: {conversion_ratio}")
-    
+
     # Calculate conversion
     converted_major = minor_count // conversion_ratio
     remaining_minor = minor_count % conversion_ratio
-    
+
     # Calculate effective counts
     effective_major = major_count + converted_major
     effective_minor = remaining_minor
-    
+
     logger.debug(
         f"Error normalization: original=({major_count} major, {minor_count} minor) → "
         f"effective=({effective_major} major, {effective_minor} minor) "
         f"[ratio={conversion_ratio}:1, converted={converted_major} major]"
     )
-    
+
     return effective_major, effective_minor
 
 
 def compute_error_based_score(
-    criterion: Criterion,
-    major_error_count: int,
-    minor_error_count: int
+        criterion: Criterion,
+        major_error_count: int,
+        minor_error_count: int
 ) -> int:
     """Compute criterion score based on error counts.
     
@@ -120,46 +121,46 @@ def compute_error_based_score(
             f"Criterion '{criterion.criterion_id}' scoring_mode is '{criterion.scoring_mode}', "
             f"expected 'error_count'"
         )
-    
+
     if not criterion.error_rules:
         raise ValueError(
             f"Criterion '{criterion.criterion_id}' has no error_rules defined"
         )
-    
+
     rules = criterion.error_rules
     max_points = criterion.max_points
-    
+
     # Calculate total deduction
     deduction = (major_error_count * rules.major_weight) + (minor_error_count * rules.minor_weight)
-    
+
     # Apply max_deduction cap if specified
     if rules.max_deduction is not None:
         deduction = min(deduction, rules.max_deduction)
-    
+
     # Calculate raw score
     points_earned = max_points - deduction
-    
+
     # Apply floor_score if specified
     if rules.floor_score is not None:
         points_earned = max(rules.floor_score, points_earned)
-    
+
     # Ensure within valid range [0, max_points]
     points_earned = max(0, min(max_points, points_earned))
-    
+
     # Convert to integer
     points_earned_int = int(round(points_earned))
-    
+
     logger.debug(
         f"Error-based scoring for '{criterion.criterion_id}': "
         f"major={major_error_count}, minor={minor_error_count}, "
         f"deduction={deduction:.1f}, earned={points_earned_int}/{max_points}"
     )
-    
+
     return points_earned_int
 
 
 def aggregate_error_counts(
-    detected_errors: list[DetectedError]
+        detected_errors: list[DetectedError]
 ) -> tuple[dict[str, int], dict[str, int]]:
     """Aggregate error counts by severity and error_id.
     
@@ -188,35 +189,35 @@ def aggregate_error_counts(
     """
     counts_by_severity: dict[str, int] = {}
     counts_by_id: dict[str, int] = {}
-    
+
     for error in detected_errors:
         severity = error.severity.lower()
         error_id = error.code
-        
+
         # Count occurrences (default to 1 if not specified)
         occurrences = error.occurrences if error.occurrences is not None else 1
-        
+
         # Aggregate by severity
         if severity not in counts_by_severity:
             counts_by_severity[severity] = 0
         counts_by_severity[severity] += occurrences
-        
+
         # Aggregate by error_id
         if error_id not in counts_by_id:
             counts_by_id[error_id] = 0
         counts_by_id[error_id] += occurrences
-    
+
     logger.debug(
         f"Aggregated error counts: "
         f"{sum(counts_by_severity.values())} total errors across {len(counts_by_severity)} severity levels"
     )
-    
+
     return counts_by_severity, counts_by_id
 
 
 def get_error_count_for_severity(
-    counts_by_severity: dict[str, int],
-    severity: str
+        counts_by_severity: dict[str, int],
+        severity: str
 ) -> int:
     """Get error count for a specific severity level.
     
@@ -231,10 +232,10 @@ def get_error_count_for_severity(
 
 
 def select_program_performance_level(
-    effective_major: int,
-    effective_minor: int,
-    criterion: Optional[Criterion] = None,
-    assignment_submitted: bool = True
+        effective_major: int,
+        effective_minor: int,
+        criterion: Optional[Criterion] = None,
+        assignment_submitted: bool = True
 ) -> Tuple[str, int]:
     """Select program performance level based on effective error counts and rubric criterion.
     
@@ -279,13 +280,13 @@ def select_program_performance_level(
             "criterion parameter is required for select_program_performance_level. "
             "The function needs the PerformanceLevel definitions to compute scores."
         )
-    
+
     if not criterion.levels:
         raise ValueError(
             f"Criterion '{criterion.criterion_id}' has no performance levels defined. "
             f"Cannot select level without level definitions."
         )
-    
+
     if not assignment_submitted:
         # Find the "not submitted" level (typically score_min=0, score_max=0)
         not_submitted_level = next(
@@ -295,11 +296,11 @@ def select_program_performance_level(
         if not_submitted_level:
             return (not_submitted_level.label, 0)
         return ("0 (Not submitted or incomplete)", 0)
-    
+
     # Determine which level matches the error counts
     # Logic: Match label pattern to error counts
     level_to_select = None
-    
+
     if effective_major == 0:
         # No major errors - check minor errors
         if effective_minor == 0:
@@ -316,7 +317,7 @@ def select_program_performance_level(
                 f"Unexpected state: {effective_minor} minor errors after normalization. "
                 f"Expected 0-3 minor errors."
             )
-    
+
     # If no minor-only level matched, check major error levels
     if level_to_select is None:
         if effective_major == 1:
@@ -326,8 +327,9 @@ def select_program_performance_level(
         elif effective_major == 3:
             level_to_select = next((l for l in criterion.levels if "3 major error" in l.label.lower()), None)
         elif effective_major >= 4:
-            level_to_select = next((l for l in criterion.levels if "4+" in l.label or "4 major" in l.label.lower()), None)
-    
+            level_to_select = next((l for l in criterion.levels if "4+" in l.label or "4 major" in l.label.lower()),
+                                   None)
+
     # Fallback: if no level matched, use the worst level (excluding "not submitted")
     if level_to_select is None:
         logger.warning(
@@ -342,16 +344,15 @@ def select_program_performance_level(
         f"Program performance level selection: major={effective_major}, minor={effective_minor} → "
         f"'{level_to_select.label}' ({level_to_select.score_min}-{level_to_select.score_max}) → score={level_to_select.score_max}"
     )
-    
+
     return (level_to_select.label, level_to_select.score_max)
 
 
-
 def select_csc134_program_performance_level(
-    major_error_count: int,
-    minor_error_count: int,
-    criterion: Optional[Criterion] = None,
-    assignment_submitted: bool = True
+        major_error_count: int,
+        minor_error_count: int,
+        criterion: Optional[Criterion] = None,
+        assignment_submitted: bool = True
 ) -> Tuple[str, float]:
     """Select CSC134 C++ program performance level based on error counts.
 
@@ -469,4 +470,3 @@ def select_csc134_program_performance_level(
         f"'{label}' score_max={score}"
     )
     return (label, score)
-

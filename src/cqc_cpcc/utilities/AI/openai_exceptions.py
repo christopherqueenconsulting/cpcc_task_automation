@@ -20,14 +20,14 @@ class OpenAITransportError(Exception):
         correlation_id: Optional correlation ID for debug tracking
         attempt_count: Number of attempts made before failure
     """
-    
+
     def __init__(
-        self,
-        message: str,
-        status_code: int | None = None,
-        retry_after: int | None = None,
-        correlation_id: str | None = None,
-        attempt_count: int | None = None
+            self,
+            message: str,
+            status_code: int | None = None,
+            retry_after: int | None = None,
+            correlation_id: str | None = None,
+            attempt_count: int | None = None
     ):
         self.message = message
         self.status_code = status_code
@@ -35,7 +35,7 @@ class OpenAITransportError(Exception):
         self.correlation_id = correlation_id
         self.attempt_count = attempt_count
         super().__init__(self.message)
-    
+
     def __str__(self) -> str:
         parts = [self.message]
         if self.status_code:
@@ -64,16 +64,16 @@ class OpenAISchemaValidationError(Exception):
         decision_notes: Optional notes about why parsing failed
         attempt_count: Number of attempts made before failure
     """
-    
+
     def __init__(
-        self, 
-        message: str, 
-        schema_name: str | None = None, 
-        validation_errors: list | None = None,
-        raw_output: str | None = None,
-        correlation_id: str | None = None,
-        decision_notes: str | None = None,
-        attempt_count: int | None = None
+            self,
+            message: str,
+            schema_name: str | None = None,
+            validation_errors: list | None = None,
+            raw_output: str | None = None,
+            correlation_id: str | None = None,
+            decision_notes: str | None = None,
+            attempt_count: int | None = None
     ):
         self.message = message
         self.schema_name = schema_name
@@ -83,7 +83,7 @@ class OpenAISchemaValidationError(Exception):
         self.decision_notes = decision_notes
         self.attempt_count = attempt_count
         super().__init__(self.message)
-    
+
     def __str__(self) -> str:
         parts = [self.message]
         if self.schema_name:

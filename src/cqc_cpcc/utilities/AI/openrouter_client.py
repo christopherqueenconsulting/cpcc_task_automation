@@ -38,20 +38,16 @@ Example usage:
 import asyncio
 import json
 import os
-import time
 from typing import Optional, Type, TypeVar
 
 import httpx
-from openai import AsyncOpenAI
-from pydantic import BaseModel, ValidationError
-
+from cqc_cpcc.utilities.AI.openai_client import _normalize_fallback_json
 from cqc_cpcc.utilities.AI.openai_debug import (
     create_correlation_id,
     record_request,
     record_response,
     should_debug,
 )
-from cqc_cpcc.utilities.AI.openai_client import _normalize_fallback_json
 from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
     OpenAITransportError,
@@ -62,6 +58,8 @@ from cqc_cpcc.utilities.env_constants import (
     OPENROUTER_API_KEY as DEFAULT_OPENROUTER_API_KEY,
 )
 from cqc_cpcc.utilities.logger import logger
+from openai import AsyncOpenAI
+from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -73,7 +71,6 @@ OPENROUTER_APP_URL = "https://github.com/gitchrisqueen/cpcc_task_automation"
 # Retry configuration for OpenRouter
 DEFAULT_MAX_RETRIES = 3  # Total attempts (1 initial + 2 retries) - matches OpenAI for consistency
 DEFAULT_RETRY_DELAY = 1.0  # Base delay in seconds
-
 
 
 def _get_openrouter_api_key() -> str | None:
@@ -102,7 +99,7 @@ def _get_openrouter_client() -> AsyncOpenAI:
             "OPENROUTER_API_KEY environment variable is not set. "
             "Please set it in your .streamlit/secrets.toml or environment."
         )
-    
+
     # Use AsyncOpenAI with OpenRouter's base URL
     # OpenRouter provides OpenAI-compatible API at https://openrouter.ai/api/v1
     return AsyncOpenAI(
@@ -137,7 +134,7 @@ async def fetch_openrouter_models() -> list[dict]:
     api_key = _get_openrouter_api_key()
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY not set")
-    
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -176,9 +173,9 @@ def _parse_allowed_models() -> list[str] | None:
 def _get_auto_router_component_class(components):
     """Return a compatible OpenRouter auto-router plugin component class."""
     for component_name in (
-        "ChatGenerationParamsPluginAutoRouter",
-        "ChatRequestPluginAutoRouter",
-        "AutoRouterPlugin",
+            "ChatGenerationParamsPluginAutoRouter",
+            "ChatRequestPluginAutoRouter",
+            "AutoRouterPlugin",
     ):
         component_class = getattr(components, component_name, None)
         if component_class is not None:
@@ -224,12 +221,12 @@ def get_openrouter_plugins() -> Optional[list]:
 
 
 async def get_openrouter_completion(
-    prompt: str,
-    schema_model: Type[T],
-    use_auto_route: bool = True,
-    model_name: Optional[str] = None,
-    max_tokens: Optional[int] = None,
-    max_retries: int = DEFAULT_MAX_RETRIES,
+        prompt: str,
+        schema_model: Type[T],
+        use_auto_route: bool = True,
+        model_name: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> T:
     """Get structured completion from OpenRouter using OpenAI-compatible API.
 
@@ -266,14 +263,14 @@ async def get_openrouter_completion(
     """
     if not use_auto_route and not model_name:
         raise ValueError("model_name is required when use_auto_route=False")
-    
+
     # Use auto-routing model ID if enabled
     effective_model = "openrouter/auto" if use_auto_route else model_name
 
     # Generate and normalize schema
     raw_schema = schema_model.model_json_schema()
     normalized_schema = normalize_json_schema_for_openai(raw_schema)
-    
+
     # Build response format for OpenAI compatible API
     json_schema = {
         "name": schema_model.__name__,
@@ -282,18 +279,18 @@ async def get_openrouter_completion(
     }
 
     client = _get_openrouter_client()
-    
+
     # Debug logging setup
     correlation_id = create_correlation_id() if should_debug() else None
-    
+
     logger.info(
         f"Calling OpenRouter with model={effective_model}, "
         f"auto_route={use_auto_route}, schema={schema_model.__name__}, "
         f"max_retries={max_retries}, correlation_id={correlation_id}"
     )
-    
+
     last_error = None
-    
+
     for attempt in range(max_retries):
         try:
             # Build API call parameters for OpenAI-compatible endpoint
@@ -305,7 +302,7 @@ async def get_openrouter_completion(
                     "json_schema": json_schema,
                 },
             }
-            
+
             # Add optional parameters
             if max_tokens:
                 api_kwargs["max_completion_tokens"] = max_tokens
@@ -326,7 +323,7 @@ async def get_openrouter_completion(
                             }
                         ]
                     }
-            
+
             # Debug: Record request
             if correlation_id:
                 record_request(
@@ -337,20 +334,20 @@ async def get_openrouter_completion(
                     max_tokens=max_tokens,
                     schema_name=schema_model.__name__,
                 )
-            
+
             # Call OpenRouter API using OpenAI-compatible client
             response = await client.chat.completions.create(**api_kwargs)
 
             # Extract and validate response
             if not response.choices:
                 raise OpenAITransportError("No choices in OpenRouter response")
-            
+
             choice = response.choices[0]
-            
+
             # Check for refusal
             if hasattr(choice.message, 'refusal') and choice.message.refusal:
                 raise OpenAITransportError(f"Model refused: {choice.message.refusal}")
-            
+
             # Parse JSON content
             content = choice.message.content
             if not content:
@@ -366,7 +363,7 @@ async def get_openrouter_completion(
                     error_msg,
                     validation_errors=["No content returned"]
                 )
-            
+
             try:
                 parsed_data = json.loads(content)
             except json.JSONDecodeError as e:
@@ -382,7 +379,7 @@ async def get_openrouter_completion(
                     error_msg,
                     validation_errors=[str(e)]
                 )
-            
+
             # Normalize any string-encoded nested objects (some models return items as JSON strings)
             try:
                 parsed_data = _normalize_fallback_json(parsed_data, schema_model)
@@ -391,7 +388,7 @@ async def get_openrouter_completion(
                     f"Normalization warning (non-fatal): {norm_err}",
                     exc_info=True,
                 )
-            
+
             # Validate against Pydantic schema
             try:
                 result = schema_model.model_validate(parsed_data)
@@ -408,7 +405,7 @@ async def get_openrouter_completion(
                     error_msg,
                     validation_errors=[str(x) for x in e.errors()]
                 )
-            
+
             # Success! Debug log and return
             if correlation_id:
                 record_response(
@@ -417,14 +414,14 @@ async def get_openrouter_completion(
                     schema_name=schema_model.__name__,
                     decision_notes="Success",
                 )
-            
+
             logger.info(
                 f"OpenRouter completion successful with {effective_model}, "
                 f"used_model={response.model}, attempt={attempt + 1}"
             )
-            
+
             return result
-            
+
         except OpenAISchemaValidationError as e:
             # Retry JSON parse errors, but not schema validation errors
             last_error = e
@@ -441,7 +438,7 @@ async def get_openrouter_completion(
             # Schema validation errors - don't retry
             logger.error(f"Schema validation error (not retrying): {e}")
             raise
-            
+
         except OpenAITransportError as e:
             last_error = e
             logger.warning(
@@ -452,7 +449,7 @@ async def get_openrouter_completion(
                 await asyncio.sleep(DEFAULT_RETRY_DELAY * (attempt + 1))
                 continue
             raise
-            
+
         except Exception as e:
             last_error = e
             logger.error(f"Attempt {attempt + 1}/{max_retries} failed with unexpected error: {e}")
@@ -460,24 +457,24 @@ async def get_openrouter_completion(
                 await asyncio.sleep(DEFAULT_RETRY_DELAY * (attempt + 1))
                 continue
             raise OpenAITransportError(f"OpenRouter API error: {e}")
-    
+
     # If we exhausted all retries, raise the last error
     if last_error:
         logger.error(f"All {max_retries} attempts failed. Last error: {last_error}")
         raise last_error
-    
+
     # Should never reach here
     raise OpenAITransportError("Unknown error in OpenRouter completion")
 
 
 # Convenience function for sync contexts
 def get_openrouter_completion_sync(
-    prompt: str,
-    schema_model: Type[T],
-    use_auto_route: bool = True,
-    model_name: Optional[str] = None,
-    max_tokens: Optional[int] = None,
-    max_retries: int = DEFAULT_MAX_RETRIES,
+        prompt: str,
+        schema_model: Type[T],
+        use_auto_route: bool = True,
+        model_name: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> T:
     """Sync wrapper for get_openrouter_completion.
     

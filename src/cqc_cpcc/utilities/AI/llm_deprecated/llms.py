@@ -20,9 +20,10 @@ def get_default_llm_model() -> str:
     # model = "gpt-4"
     return model
 
+
 def get_default_retry_model() -> str:
     model = "gpt-5"
-    #model = 'gpt-3.5-turbo' # Deprecated 'gpt-3.5-turbo-16k-0613'
+    # model = 'gpt-3.5-turbo' # Deprecated 'gpt-3.5-turbo-16k-0613'
     return model
 
 
@@ -49,11 +50,11 @@ def get_llm_model_from_runnable_serializable(completion_chain: RunnableSerializa
     llm_model = None
     for step in completion_chain.steps:
         if isinstance(step, BaseChatModel):  # Check if the step is an LLM
-            #print("Model (from completion_chain): %s" % step.model_name )
+            # print("Model (from completion_chain): %s" % step.model_name )
             llm_model = step.model_name
             break
 
     if llm_model is None:
-        #raise ValueError("No LLM found in the RunnableSerializable steps.")
+        # raise ValueError("No LLM found in the RunnableSerializable steps.")
         llm_model = get_default_llm_model()
     return llm_model

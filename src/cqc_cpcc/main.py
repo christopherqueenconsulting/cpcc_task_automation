@@ -1,14 +1,15 @@
 import os
 from enum import Enum
+
 import cqc_cpcc.attendance as AT
 import cqc_cpcc.project_feedback as PF
 from cqc_cpcc.utilities.logger import logger
+
 
 class Instructor_Actions(Enum):
     TAKE_ATTENDANCE = 1
     GIVE_FEEDBACK = 2
     GRADE_EXAM = 3
-
 
 
 def prompt_action():
@@ -30,11 +31,13 @@ def prompt_action():
         logger.warning("Invalid selection.")
         return prompt_action()
 
+
 def prompt_attendance_tracker_url():
     """Prompts the user for the Attendance Tracker URL, using the default from the environment variable."""
     default_url = os.getenv('ATTENDANCE_TRACKER_URL', 'http://default.url')
     user_input = input(f'Enter Attendance Tracker URL [{default_url}]: ').strip()
     return user_input or default_url
+
 
 def take_action():
     action = prompt_action()
@@ -53,5 +56,3 @@ def take_action():
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     take_action()
-
-
