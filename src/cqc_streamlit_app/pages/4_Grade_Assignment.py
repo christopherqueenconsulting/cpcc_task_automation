@@ -61,15 +61,18 @@ from cqc_streamlit_app.utils import (
     ChatGPTStatusCallbackHandler,
     add_flexible_upload_element,
     add_upload_file_element,
+    add_grading_summary_to_zip,
     create_zip_file,
     define_chatGPTModel,
     define_openrouter_model,
+    export_grading_summary_to_excel,
     get_cpcc_css,
     get_custom_llm,
     get_file_extension_from_filepath,
     get_language_from_file_path,
     on_download_click,
     prefix_content_file_name,
+    sanitize_zip_filename,
 )
 
 # Initialize session state variables
@@ -1797,6 +1800,35 @@ async def process_error_only_grading_batch(
             summary_df = pd.DataFrame(summary_data)
             st.dataframe(summary_df, hide_index=True)
             
+            # Export options for grading summary
+            col1, col2 = st.columns(2)
+            with col1:
+                # Excel export (default)
+                excel_file_path, csv_file_path = export_grading_summary_to_excel(
+                    summary_df,
+                    include_csv=True
+                )
+                with open(excel_file_path, "rb") as f:
+                    st.download_button(
+                        label="📊 Download Summary (.xlsx)",
+                        data=f.read(),
+                        file_name=f"Grading_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_summary_xlsx"
+                    )
+            
+            with col2:
+                # CSV export (alternative)
+                if csv_file_path:
+                    with open(csv_file_path, "rb") as f:
+                        st.download_button(
+                            label="📄 Download Summary (.csv)",
+                            data=f.read(),
+                            file_name=f"Grading_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv",
+                            key="download_summary_csv"
+                        )
+            
             avg_score = summary_df["Points Earned"].mean()
             if max_points > 0:
                 avg_pct = (avg_score / max_points * 100)
@@ -1816,7 +1848,7 @@ async def process_error_only_grading_batch(
                 st.session_state.error_only_feedback_zip_by_key[run_key] = zip_file_path
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-            zip_filename = f"{course_name}_Feedback_{timestamp}.zip"
+            zip_filename = sanitize_zip_filename(course_name, timestamp)
             download_placeholder = st.empty()
             on_download_click(
                 download_placeholder,
@@ -1873,7 +1905,7 @@ def display_cached_error_only_results(run_key: str, course_name: str) -> None:
         st.subheader("📥 Download Feedback Documents")
         zip_file_path = st.session_state.error_only_feedback_zip_by_key[run_key]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        zip_filename = f"{course_name}_Feedback_{timestamp}.zip"
+        zip_filename = sanitize_zip_filename(course_name, timestamp)
         download_placeholder = st.empty()
         on_download_click(
             download_placeholder,
@@ -2442,6 +2474,35 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, hide_index=True)
         
+        # Export options for grading summary
+        col1, col2 = st.columns(2)
+        with col1:
+            # Excel export (default)
+            excel_file_path, csv_file_path = export_grading_summary_to_excel(
+                summary_df,
+                include_csv=True
+            )
+            with open(excel_file_path, "rb") as f:
+                st.download_button(
+                    label="📊 Download Summary (.xlsx)",
+                    data=f.read(),
+                    file_name=f"Grading_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="download_summary_xlsx_rubric"
+                )
+        
+        with col2:
+            # CSV export (alternative)
+            if csv_file_path:
+                with open(csv_file_path, "rb") as f:
+                    st.download_button(
+                        label="📄 Download Summary (.csv)",
+                        data=f.read(),
+                        file_name=f"Grading_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                        mime="text/csv",
+                        key="download_summary_csv_rubric"
+                    )
+        
         # Calculate statistics - exclude failure rows from average
         numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
         avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
@@ -2457,6 +2518,9 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             st.metric("Average Score", f"{avg_score:.1f}/{total_possible} ({avg_pct:.1f}%)")
         else:
             st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
+        
+        # Store summary_df in session state for use in _generate_feedback_docs_and_zip
+        st.session_state[f"grading_summary_df_{run_key}"] = summary_df
     
     # Display individual student results
     st.markdown("---")
@@ -2515,24 +2579,24 @@ def _generate_feedback_docs_and_zip(
     st.subheader("📥 Download Feedback Documents")
     st.markdown("*CPCC-branded Word documents containing student feedback (no scores)*")
     
-    # Check if we have cached ZIP bytes for this run_key
-    if run_key in st.session_state.feedback_zip_bytes_by_key:
-        st.info("📦 Using cached ZIP file")
-        zip_file_path = st.session_state.feedback_zip_bytes_by_key[run_key]
-        
-        # Generate ZIP filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        zip_filename = f"{course_name}_Feedback_{timestamp}.zip"
-        
-        # Add download button
-        download_placeholder = st.empty()
-        on_download_click(
-            download_placeholder,
-            zip_file_path,
-            "📥 Download All Feedback (.zip)",
-            zip_filename
-        )
-        return
+     # Check if we have cached ZIP bytes for this run_key
+     if run_key in st.session_state.feedback_zip_bytes_by_key:
+         st.info("📦 Using cached ZIP file")
+         zip_file_path = st.session_state.feedback_zip_bytes_by_key[run_key]
+         
+         # Generate ZIP filename with timestamp
+         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+         zip_filename = sanitize_zip_filename(course_name, timestamp)
+         
+         # Add download button
+         download_placeholder = st.empty()
+         on_download_click(
+             download_placeholder,
+             zip_file_path,
+             "📥 Download All Feedback (.zip)",
+             zip_filename
+         )
+         return
     
     with st.spinner("Generating Word documents..."):
         try:
@@ -2630,25 +2694,35 @@ def _generate_feedback_docs_and_zip(
                 
                 doc_files.append((doc_filename, temp_doc.name))
             
-            # Create ZIP file
-            st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
-            zip_file_path = create_zip_file(doc_files)
-            
-            # Cache the ZIP file path in session state
-            st.session_state.feedback_zip_bytes_by_key[run_key] = zip_file_path
-            
-            # Generate ZIP filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-            zip_filename = f"{course_name}_Feedback_{timestamp}.zip"
-            
-            # Add download button
-            download_placeholder = st.empty()
-            on_download_click(
-                download_placeholder,
-                zip_file_path,
-                "📥 Download All Feedback (.zip)",
-                zip_filename
-            )
+             # Create ZIP file
+             st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
+             zip_file_path = create_zip_file(doc_files)
+             
+             # Add grading summary to zip if available
+             if f"grading_summary_df_{run_key}" in st.session_state:
+                 summary_df = st.session_state[f"grading_summary_df_{run_key}"]
+                 st.info("📊 Adding grading summary to ZIP archive...")
+                 zip_file_path = add_grading_summary_to_zip(
+                     zip_file_path,
+                     summary_df,
+                     include_csv=True
+                 )
+             
+             # Cache the ZIP file path in session state
+             st.session_state.feedback_zip_bytes_by_key[run_key] = zip_file_path
+             
+             # Generate ZIP filename with timestamp
+             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+             zip_filename = sanitize_zip_filename(course_name, timestamp)
+             
+             # Add download button
+             download_placeholder = st.empty()
+             on_download_click(
+                 download_placeholder,
+                 zip_file_path,
+                 "📥 Download All Feedback (.zip)",
+                 zip_filename
+             )
             
             st.success(f"✅ Generated {len(doc_files)} Word document(s)")
             st.info(f"📄 Files included: {', '.join([fn for fn, _ in doc_files])}")

@@ -4,15 +4,20 @@ import re
 import tempfile
 import threading
 import zipfile
+from datetime import datetime
 from random import randint
 from typing import Any, Optional, Tuple, TypeVar, Union, cast
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import pandas as pd
 import streamlit as st
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_openai import ChatOpenAI
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 from streamlit.delta_generator import DeltaGenerator
 from streamlit.elements.lib.mutable_status_container import StatusContainer
 from streamlit.runtime.scriptrunner_utils.script_run_context import (
@@ -1728,242 +1733,200 @@ def create_zip_file(file_paths: list[tuple[str, str]]) -> str:
     return zip_file.name
 
 
-def prefix_content_file_name(filename: str, content: str):
-    return "# File: " + filename + "\n\n" + content
-
-
-T = TypeVar("T")
-
-
-def with_streamlit_context(fn: T) -> T:
-    """Fix bug in streamlit which raises streamlit.errors.NoSessionContext."""
-    ctx = get_script_run_ctx()
-
-    if ctx is None:
-        # Allow usage outside Streamlit (tests, CLI scripts) without raising.
-        def _cb(*args: Any, **kwargs: Any) -> Any:
-            return fn(*args, **kwargs)
-        return cast(T, _cb)
-
-    def _cb(*args: Any, **kwargs: Any) -> Any:
-        """Do it."""
-
-        thread = threading.current_thread()
-        do_nothing = hasattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) and (
-                getattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) == ctx
-        )
-
-        if not do_nothing:
-            setattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME, ctx)
-
-        # Call the callback.
-        ret = fn(*args, **kwargs)
-
-        if not do_nothing:
-            # Why delattr? Because tasks for different users may be done by
-            # the same thread at different times. Danger danger.
-            delattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME)
-        return ret
-
-    return cast(T, _cb)
-
-
-class ChatGPTStatusCallbackHandler(BaseCallbackHandler):
-
-    def __init__(
-            self,
-            status_container: StatusContainer,
-            prefix_label: str = None
-    ):
-        self._status_container = status_container
-        if prefix_label is None:
-            self._prefix_label = ""
-        else:
-            self._prefix_label = prefix_label + " | "
-
-    @with_streamlit_context
-    def on_llm_start(
-            self, serialized: dict[str, Any], prompts: list[str], **kwargs: Any
-    ) -> None:
-        self._status_container.update(label=self._prefix_label + "Getting response from ChatGPT")
-
-    @with_streamlit_context
-    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        # self._status_container.update(label=self._prefix_label + "From ChatGPT: " + str(response))
-        self._status_container.update(label=self._prefix_label + "ChatGPT Finished")
-
-    @with_streamlit_context
-    def on_llm_error(self, error: BaseException, *args: Any, **kwargs: Any) -> None:
-        self._status_container.update(label=self._prefix_label + "ChatGPT Error: " + str(error))
-
-
-def render_openai_debug_panel(
-    correlation_id: str | None = None,
-    error: Exception | None = None,
-) -> None:
-    """Render OpenAI debug panel in Streamlit UI when debug mode is enabled.
+def sanitize_zip_filename(
+    course_name: str,
+    timestamp: str
+) -> str:
+    """
+    Sanitize and format zip filename to: department_number_section_assignmentname_Feedback_timestamp
     
-    Shows request/response details, correlation ID, and decision notes for
-    troubleshooting OpenAI API calls.
+    Extracts course ID, section, and assignment name from course_name, formats with
+    underscores, and appends timestamp.
+    
+    Example:
+        Input: course_name="CSC_251_N804_Exam_2", timestamp="20260511_1543"
+        Output: "CSC_251_N804_Exam_2_Feedback_20260511_1543.zip"
     
     Args:
-        correlation_id: Correlation ID for the request (if available)
-        error: Exception that occurred (if any)
+        course_name: Course name string containing dept_number[_section][_assignment]
+        timestamp: Timestamp string in format YYYYMMDD_HHMM
+        
+    Returns:
+        Sanitized zip filename with .zip extension
     """
-    import json
+    # Parse course_name to extract components
+    course_parts = course_name.split('_')
+    
+    # Build sanitized filename by replacing spaces with underscores
+    # and removing any invalid characters
+    sanitized_name = '_'.join(course_parts)
+    sanitized_name = sanitized_name.replace(' ', '_')
+    sanitized_name = re.sub(r'[<>:"/\\|?*]', '', sanitized_name)
+    
+    # Build final filename
+    zip_filename = f"{sanitized_name}_Feedback_{timestamp}.zip"
+    
+    return zip_filename
 
-    from cqc_cpcc.utilities.AI.openai_debug import get_debug_context
-    from cqc_cpcc.utilities.AI.openai_exceptions import (
-        OpenAISchemaValidationError,
-        OpenAITransportError,
-    )
-    from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
+
+def export_grading_summary_to_excel(
+    summary_df: pd.DataFrame,
+    include_csv: bool = False
+) -> tuple[str, Optional[str]]:
+    """
+    Export grading summary dataframe to Excel file with professional formatting.
     
-    # Only show debug panel if debug mode is enabled
-    if not CQC_OPENAI_DEBUG:
-        return
+    Formats the Excel file with:
+    - Header row highlighted with background color
+    - Alternating row colors for better readability
+    - Auto-fit column widths based on content
+    - Proper alignment and borders
     
-    # Create collapsible debug panel
-    with st.expander("🔍 OpenAI Debug Information", expanded=False):
-        st.markdown("**Debug Mode Enabled** - This panel shows OpenAI request/response details.")
+    Args:
+        summary_df: pandas DataFrame with grading summary data
+        include_csv: If True, also generate CSV version and return both paths
         
-        # Show correlation ID
-        if correlation_id:
-            st.code(f"Correlation ID: {correlation_id}", language="text")
+    Returns:
+        Tuple of (excel_file_path, csv_file_path) if include_csv=True
+        Otherwise tuple of (excel_file_path, None)
+    """
+    # Create Excel workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Grading Summary"
+    
+    # Define colors for header and alternating rows
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=12)
+    
+    # Light blue for alternating rows
+    alt_row_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+    
+    # Alignment settings
+    center_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left_alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    
+    # Add header row
+    for col_idx, column_title in enumerate(summary_df.columns, 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.value = column_title
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center_alignment
+    
+    # Add data rows with alternating colors
+    for row_idx, row in enumerate(summary_df.itertuples(index=False), 2):
+        # Determine if this is an even or odd row for alternating colors
+        if row_idx % 2 == 0:
+            row_fill = alt_row_fill
         else:
-            st.warning("No correlation ID available (debug mode may have been off during request)")
+            row_fill = None
         
-        # Show error details if present
-        if error:
-            st.error("**Error Occurred:**")
+        for col_idx, value in enumerate(row, 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.value = value
             
-            if isinstance(error, OpenAISchemaValidationError):
-                st.markdown("**Type:** Schema Validation Error")
-                st.markdown(f"**Schema:** {error.schema_name}")
-                if error.decision_notes:
-                    st.markdown(f"**Decision Notes:** {error.decision_notes}")
-                if error.validation_errors:
-                    st.markdown(f"**Validation Errors:** {len(error.validation_errors)}")
-                    with st.expander("Show Validation Errors"):
-                        st.json(error.validation_errors)
-                if error.raw_output:
-                    with st.expander("Show Raw Output"):
-                        st.code(error.raw_output[:1000], language="json")  # Truncate to 1000 chars
+            # Apply fill color if alternating row
+            if row_fill:
+                cell.fill = row_fill
             
-            elif isinstance(error, OpenAITransportError):
-                st.markdown("**Type:** Transport Error")
-                if error.status_code:
-                    st.markdown(f"**Status Code:** {error.status_code}")
-                if error.retry_after:
-                    st.markdown(f"**Retry After:** {error.retry_after}s")
-            
+            # Set alignment - center for numbers/percentages, left for text
+            if isinstance(value, (int, float)):
+                cell.alignment = center_alignment
+                # Format percentages if they contain %
+            elif isinstance(value, str) and "%" in str(value):
+                cell.alignment = center_alignment
             else:
-                st.markdown(f"**Type:** {type(error).__name__}")
-                st.markdown(f"**Message:** {str(error)}")
+                cell.alignment = left_alignment
+    
+    # Auto-fit column widths
+    for col_idx, column_title in enumerate(summary_df.columns, 1):
+        max_length = len(str(column_title))
         
-        # Load and show debug context from files
-        if correlation_id:
-            debug_context = get_debug_context(correlation_id)
-            
-            if debug_context:
-                # Show request details
-                if "request" in debug_context:
-                    with st.expander("📤 Request Details"):
-                        req = debug_context["request"]
-                        st.markdown(f"**Model:** {req.get('model')}")
-                        st.markdown(f"**Schema:** {req.get('schema_name')}")
-                        st.markdown(f"**Timestamp:** {req.get('timestamp')}")
-                        
-                        # Show messages (prompts)
-                        if "request" in req and "messages" in req["request"]:
-                            st.markdown("**Messages:**")
-                            for msg in req["request"]["messages"]:
-                                role = msg.get("role", "unknown")
-                                content = msg.get("content", "")
-                                st.text_area(
-                                    f"Message ({role})",
-                                    content[:500],  # Truncate to 500 chars
-                                    height=150,
-                                    key=f"msg_{role}_{correlation_id}"
-                                )
-                        
-                        # Download request JSON
-                        request_json = json.dumps(req, indent=2)
-                        st.download_button(
-                            label="📥 Download Request JSON",
-                            data=request_json,
-                            file_name=f"request_{correlation_id}.json",
-                            mime="application/json",
-                            key=f"download_request_{correlation_id}"
-                        )
-                
-                # Show response details
-                if "response" in debug_context:
-                    with st.expander("📥 Response Details"):
-                        resp = debug_context["response"]
-                        st.markdown(f"**Schema:** {resp.get('schema_name')}")
-                        st.markdown(f"**Decision Notes:** {resp.get('decision_notes')}")
-                        st.markdown(f"**Timestamp:** {resp.get('timestamp')}")
-                        
-                        # Show metadata
-                        if "response_metadata" in resp:
-                            meta = resp["response_metadata"]
-                            st.markdown("**Response Metadata:**")
-                            st.json(meta)
-                        
-                        # Show usage
-                        if "usage" in resp:
-                            usage = resp["usage"]
-                            st.markdown("**Token Usage:**")
-                            st.json(usage)
-                        
-                        # Show refusal if present
-                        if "refusal" in resp:
-                            st.error(f"**Refusal:** {resp['refusal']}")
-                        
-                        # Show output
-                        if "output" in resp:
-                            output = resp["output"]
-                            st.markdown("**Output:**")
-                            st.markdown(f"- Parsed: {output.get('parsed_present')}")
-                            st.markdown(f"- Type: {output.get('parsed_type')}")
-                            if output.get("text"):
-                                st.text_area(
-                                    "Output Text (truncated)",
-                                    output["text"],
-                                    height=150,
-                                    key=f"output_{correlation_id}"
-                                )
-                        
-                        # Show error if present
-                        if "error" in resp:
-                            err = resp["error"]
-                            st.error(f"**Error:** {err.get('type')} - {err.get('message')}")
-                        
-                        # Download response JSON
-                        response_json = json.dumps(resp, indent=2)
-                        st.download_button(
-                            label="📥 Download Response JSON",
-                            data=response_json,
-                            file_name=f"response_{correlation_id}.json",
-                            mime="application/json",
-                            key=f"download_response_{correlation_id}"
-                        )
-                
-                # Show notes
-                if "notes" in debug_context:
-                    with st.expander("📝 Decision Notes"):
-                        notes = debug_context["notes"]
-                        st.json(notes)
-            
-            else:
-                st.info("No debug files found. Set `CQC_OPENAI_DEBUG_SAVE_DIR` environment variable to save debug files.")
+        # Check all values in the column
+        for row_idx in range(2, len(summary_df) + 2):
+            cell_value = ws.cell(row=row_idx, column=col_idx).value
+            if cell_value:
+                max_length = max(max_length, len(str(cell_value)))
         
-        # Add instructions
-        st.markdown("---")
-        st.markdown("""
-        **Debug Mode Configuration:**
-        - `CQC_OPENAI_DEBUG=1` - Enable debug mode
-        - `CQC_OPENAI_DEBUG_REDACT=1` - Redact sensitive data (default: enabled)
-        - `CQC_OPENAI_DEBUG_SAVE_DIR=/path/to/dir` - Save debug files to directory
-        """)
+        # Set column width with padding
+        adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
+        ws.column_dimensions[get_column_letter(col_idx)].width = adjusted_width
+    
+    # Save Excel file
+    excel_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+    excel_file.close()
+    wb.save(excel_file.name)
+    
+    csv_file = None
+    if include_csv:
+        # Save CSV version as well
+        csv_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+        csv_file.close()
+        summary_df.to_csv(csv_file.name, index=False)
+    
+    return excel_file.name, csv_file.name
+
+
+def add_grading_summary_to_zip(
+    zip_file_path: str,
+    summary_df: pd.DataFrame,
+    include_csv: bool = True
+) -> str:
+    """
+    Add grading summary Excel file to an existing zip file.
+    
+    Creates an Excel file from the summary dataframe with professional formatting,
+    then adds it to the zip file. Optionally includes CSV version.
+    
+    Args:
+        zip_file_path: Path to existing zip file
+        summary_df: pandas DataFrame with grading summary data
+        include_csv: If True, also add CSV version to zip
+        
+    Returns:
+        Path to updated zip file with grading summary included
+    """
+    # Export summary to Excel (and optionally CSV)
+    excel_file_path, csv_file_path = export_grading_summary_to_excel(
+        summary_df,
+        include_csv=include_csv
+    )
+    
+    # Create new zip file with all contents
+    new_zip_file = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    new_zip_file.close()
+    
+    # Copy original zip contents and add summary files
+    with zipfile.ZipFile(zip_file_path, 'r') as original_zip:
+        with zipfile.ZipFile(new_zip_file.name, 'w') as new_zip:
+            # Copy all files from original zip
+            for item in original_zip.infolist():
+                data = original_zip.read(item.filename)
+                new_zip.writestr(item, data)
+            
+            # Add Excel summary as primary export
+            new_zip.write(excel_file_path, arcname="Grading_Summary.xlsx")
+            
+            # Add CSV version if requested
+            if include_csv and csv_file_path:
+                new_zip.write(csv_file_path, arcname="Grading_Summary.csv")
+    
+    # Clean up temporary files
+    try:
+        os.unlink(excel_file_path)
+        if csv_file_path and os.path.exists(csv_file_path):
+            os.unlink(csv_file_path)
+    except Exception:
+        pass
+    
+    # Remove the old zip and rename new one
+    try:
+        os.unlink(zip_file_path)
+    except Exception:
+        pass
+    
+    return new_zip_file.name
+
+
+def prefix_content_file_name(filename: str, content: str):
