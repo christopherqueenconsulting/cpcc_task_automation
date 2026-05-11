@@ -14,6 +14,39 @@ from streamlit.runtime.scriptrunner_utils.script_run_context import (
 T = TypeVar("T")
 
 
+def with_streamlit_context(fn: T) -> T:
+    """Fix bug in streamlit which raises streamlit.errors.NoSessionContext."""
+    ctx = get_script_run_ctx()
+
+    if ctx is None:
+        # Allow usage outside Streamlit (tests, CLI scripts) without raising.
+        def _cb(*args: Any, **kwargs: Any) -> Any:
+            return fn(*args, **kwargs)
+
+        return cast(T, _cb)
+
+    def _cb(*args: Any, **kwargs: Any) -> Any:
+        """Do it."""
+
+        thread = threading.current_thread()
+        do_nothing = hasattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) and (
+                getattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) == ctx
+        )
+
+        if not do_nothing:
+            setattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME, ctx)
+
+        # Call the callback.
+        ret = fn(*args, **kwargs)
+
+        if not do_nothing:
+            # Why delattr? Because tasks for different users may be done by
+            # the same thread at different times. Danger danger.
+            delattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME)
+        return ret
+
+    return cast(T, _cb)
+
 class ChatGPTStatusCallbackHandler(BaseCallbackHandler):
 
     def __init__(
@@ -27,38 +60,7 @@ class ChatGPTStatusCallbackHandler(BaseCallbackHandler):
         else:
             self._prefix_label = prefix_label + " | "
 
-    def with_streamlit_context(self, fn: T) -> T:
-        """Fix bug in streamlit which raises streamlit.errors.NoSessionContext."""
-        ctx = get_script_run_ctx()
 
-        if ctx is None:
-            # Allow usage outside Streamlit (tests, CLI scripts) without raising.
-            def _cb(*args: Any, **kwargs: Any) -> Any:
-                return fn(*args, **kwargs)
-
-            return cast(T, _cb)
-
-        def _cb(*args: Any, **kwargs: Any) -> Any:
-            """Do it."""
-
-            thread = threading.current_thread()
-            do_nothing = hasattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) and (
-                    getattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME) == ctx
-            )
-
-            if not do_nothing:
-                setattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME, ctx)
-
-            # Call the callback.
-            ret = fn(*args, **kwargs)
-
-            if not do_nothing:
-                # Why delattr? Because tasks for different users may be done by
-                # the same thread at different times. Danger danger.
-                delattr(thread, SCRIPT_RUN_CONTEXT_ATTR_NAME)
-            return ret
-
-        return cast(T, _cb)
 
     @with_streamlit_context
     def on_llm_start(
