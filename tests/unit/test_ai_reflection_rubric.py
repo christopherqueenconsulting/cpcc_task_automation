@@ -28,8 +28,8 @@ def test_ai_reflection_rubric_loads():
     assert rubric.total_points_possible == 100
     
     # Check course IDs
-    assert "CSC151" in rubric.course_ids
-    assert "CSC251" in rubric.course_ids
+    assert "CSC_151" in rubric.course_ids
+    assert "CSC_251" in rubric.course_ids
 
 
 @pytest.mark.unit

@@ -320,8 +320,8 @@ class TestCSC151V2Rubric:
         assert rubric.rubric_version in ("2.0", "3.0")  # Version may vary
         assert "CSC" in rubric.title  # Title contains CSC reference
         assert "Exam" in rubric.title  # Title mentions Exam
-        assert "CSC151" in rubric.course_ids
-    
+        assert "CSC_151" in rubric.course_ids
+
     def test_csc151_v2_has_program_performance_criterion(self):
         """Test that CSC151 v2.0 has program_performance criterion."""
         rubric = get_rubric_by_id("csc151_java_exam_rubric")
@@ -418,7 +418,7 @@ class TestCSC134Rubric:
         assert rubric.rubric_id == "csc134_cpp_exam_rubric"
         assert rubric.rubric_version == "3.0"
         assert rubric.title == "CSC 134 C++ Program Performance Rubric"
-        assert "CSC134" in rubric.course_ids
+        assert "CSC_134" in rubric.course_ids
 
     def test_csc134_has_program_performance_criterion(self):
         """Test that CSC134 rubric has program_performance criterion."""
@@ -521,4 +521,4 @@ class TestCSC134Rubric:
         from cqc_cpcc.rubric_config import get_distinct_course_ids
 
         course_ids = get_distinct_course_ids()
-        assert "CSC134" in course_ids
+        assert "CSC_134" in course_ids

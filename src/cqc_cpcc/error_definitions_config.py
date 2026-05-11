@@ -18,6 +18,7 @@ Usage:
 import json
 from pathlib import Path
 from typing import Optional
+from cqc_cpcc.course_identifier import normalize_course_id
 from cqc_cpcc.error_definitions_models import (
     ErrorConfigRegistry,
     ErrorDefinition,
@@ -67,7 +68,13 @@ def load_error_config_registry() -> ErrorConfigRegistry:
     
     if not isinstance(registry_data, dict):
         raise ValueError("error_definitions_registry.json must be a JSON object (dict)")
-    
+
+    courses = registry_data.get("courses", [])
+    if isinstance(courses, list):
+        for course in courses:
+            if isinstance(course, dict) and isinstance(course.get("course_id"), str):
+                course["course_id"] = normalize_course_id(course["course_id"])
+
     try:
         registry = ErrorConfigRegistry.model_validate(registry_data)
         

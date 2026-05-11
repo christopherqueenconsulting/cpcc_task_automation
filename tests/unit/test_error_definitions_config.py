@@ -27,8 +27,8 @@ class TestLoadErrorConfigRegistry:
         
         assert isinstance(registry, ErrorConfigRegistry)
         assert len(registry.courses) > 0
-        assert registry.courses[0].course_id == "CSC151"
-    
+        assert registry.courses[0].course_id == "CSC_151"
+
     def test_load_logs_summary(self):
         """load_error_config_registry should log summary info."""
         with patch('cqc_cpcc.error_definitions_config.logger') as mock_logger:
@@ -106,6 +106,13 @@ class TestGetErrorDefinitions:
             assert "CSC151" in log_message
             assert "Exam1" in log_message
 
+    def test_get_accepts_canonical_course_id(self):
+        """get_error_definitions should also work with canonical CSC_### IDs."""
+        legacy_errors = get_error_definitions("CSC151", "Exam1")
+        canonical_errors = get_error_definitions("CSC_151", "Exam1")
+
+        assert len(canonical_errors) == len(legacy_errors)
+
 
 @pytest.mark.unit
 class TestGetDistinctCourseIdsFromErrors:
@@ -117,8 +124,8 @@ class TestGetDistinctCourseIdsFromErrors:
         
         assert isinstance(course_ids, list)
         assert len(course_ids) > 0
-        assert "CSC151" in course_ids
-    
+        assert "CSC_151" in course_ids
+
     def test_returns_unique_course_ids(self):
         """get_distinct_course_ids_from_errors should return unique IDs."""
         course_ids = get_distinct_course_ids_from_errors()
@@ -288,7 +295,7 @@ class TestCSC134ErrorDefinitions:
     def test_csc134_course_exists_in_registry(self):
         """Test that CSC134 course is present in the error registry."""
         course_ids = get_distinct_course_ids_from_errors()
-        assert "CSC134" in course_ids
+        assert "CSC_134" in course_ids
 
     def test_csc134_project_errors_load(self):
         """Test that CSC134 Project error definitions load correctly."""

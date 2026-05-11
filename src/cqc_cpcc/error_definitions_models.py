@@ -29,6 +29,7 @@ Usage:
 
 from typing import Optional, Annotated
 from pydantic import BaseModel, Field, field_validator
+from cqc_cpcc.course_identifier import course_ids_match, normalize_course_id
 
 
 class ErrorDefinition(BaseModel):
@@ -217,7 +218,7 @@ class ErrorConfigRegistry(BaseModel):
             CourseErrorConfig if found, None otherwise
         """
         for course in self.courses:
-            if course.course_id == course_id:
+            if course_ids_match(course.course_id, course_id):
                 return course
         return None
     
@@ -247,8 +248,8 @@ class ErrorConfigRegistry(BaseModel):
         Returns:
             Sorted list of course IDs
         """
-        return sorted([course.course_id for course in self.courses])
-    
+        return sorted({normalize_course_id(course.course_id) for course in self.courses})
+
     def get_assignments_for_course(self, course_id: str) -> list[AssignmentErrorConfig]:
         """Get all assignments for a specific course.
         

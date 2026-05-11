@@ -19,6 +19,7 @@ Usage:
 import json
 from pathlib import Path
 from typing import Dict
+from cqc_cpcc.course_identifier import course_ids_match, normalize_course_id
 from cqc_cpcc.rubric_models import Rubric, DetectedError
 from cqc_cpcc.utilities.logger import logger
 
@@ -79,7 +80,14 @@ def load_rubrics_from_config() -> Dict[str, Rubric]:
     rubrics = {}
     for rubric_id, rubric_dict in rubrics_data.items():
         try:
-            rubric = Rubric.model_validate(rubric_dict)
+            normalized_rubric_dict = dict(rubric_dict)
+            if "course_ids" in normalized_rubric_dict:
+                normalized_rubric_dict["course_ids"] = [
+                    normalize_course_id(course_id)
+                    for course_id in normalized_rubric_dict["course_ids"]
+                ]
+
+            rubric = Rubric.model_validate(normalized_rubric_dict)
             rubrics[rubric_id] = rubric
             logger.info(
                 f"Loaded rubric '{rubric_id}': {rubric.title} "
@@ -189,8 +197,8 @@ def get_distinct_course_ids() -> list[str]:
     course_ids_set = set()
     
     for rubric in rubrics.values():
-        course_ids_set.update(rubric.course_ids)
-    
+        course_ids_set.update(normalize_course_id(course_id) for course_id in rubric.course_ids)
+
     # Remove UNASSIGNED if there are other courses
     if len(course_ids_set) > 1 and "UNASSIGNED" in course_ids_set:
         course_ids_set.discard("UNASSIGNED")
@@ -212,12 +220,13 @@ def get_rubrics_for_course(course_id: str) -> Dict[str, Rubric]:
         >>> for rubric_id, rubric in rubrics.items():
         ...     print(f"{rubric_id}: {rubric.title}")
     """
+    normalized_course_id = normalize_course_id(course_id)
     all_rubrics = load_rubrics_from_config()
     filtered_rubrics = {
         rubric_id: rubric
         for rubric_id, rubric in all_rubrics.items()
-        if course_id in rubric.course_ids
+        if any(course_ids_match(normalized_course_id, rubric_course_id) for rubric_course_id in rubric.course_ids)
     }
     
-    logger.info(f"Found {len(filtered_rubrics)} rubrics for course '{course_id}'")
+    logger.info(f"Found {len(filtered_rubrics)} rubrics for course '{normalized_course_id}'")
     return filtered_rubrics

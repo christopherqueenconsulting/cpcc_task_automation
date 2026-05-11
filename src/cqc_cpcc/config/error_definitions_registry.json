@@ -1,7 +1,7 @@
 {
   "courses": [
     {
-      "course_id": "CSC151",
+      "course_id": "CSC_151",
       "assignments": [
         {
           "assignment_id": "Exam1",
@@ -186,7 +186,7 @@
       ]
     },
     {
-      "course_id": "CSC251",
+      "course_id": "CSC_251",
       "assignments": [
         {
           "assignment_id": "Exam1",
@@ -351,7 +351,7 @@
           "assignment_name": "CSC 251 Exam 2",
            "error_definitions": [
             {
-              "error_id": "CSC_251_EXAM_1_INSUFFICIENT_DOCUMENTATION",
+              "error_id": "CSC_251_EXAM_2_INSUFFICIENT_DOCUMENTATION",
               "name": "Insufficient Documentation",
               "description": "No documentation or insufficient amount of comments in the code",
               "severity_category": "major",
@@ -359,7 +359,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_SEQUENCE_AND_SELECTION_ERROR",
+              "error_id": "CSC_251_EXAM_2_SEQUENCE_AND_SELECTION_ERROR",
               "name": "Sequence and Selection Error",
               "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
               "severity_category": "major",
@@ -367,7 +367,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_OUTPUT_IMPACT_ERROR",
+              "error_id": "CSC_251_EXAM_2_OUTPUT_IMPACT_ERROR",
               "name": "Output Impact Error",
               "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
               "severity_category": "major",
@@ -375,7 +375,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_CONSTANTS_ERROR",
+              "error_id": "CSC_251_EXAM_2_CONSTANTS_ERROR",
               "name": "Constants Error",
               "description": "Constants are not properly declared or used",
               "severity_category": "major",
@@ -383,7 +383,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_DECIMAL_SCALE",
+              "error_id": "CSC_251_EXAM_2_DECIMAL_SCALE",
               "name": "Decimal Scale Error",
               "description": "There are issues with the expected code output where the decimal scale is not correct and/or missing commas separators",
               "severity_category": "major",
@@ -391,7 +391,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_CURLY_BRACES_OMITTED",
+              "error_id": "CSC_251_EXAM_2_CURLY_BRACES_OMITTED",
               "name": "Curly Braces Omitted",
               "description": "The code has omission of curly braces",
               "severity_category": "major",
@@ -399,7 +399,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_METHOD_ERRORS",
+              "error_id": "CSC_251_EXAM_2_METHOD_ERRORS",
               "name": "Method Errors",
               "description": "There are method errors (issues with parameters, return types, incorrect values, etc.)",
               "severity_category": "major",
@@ -407,7 +407,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_CLASS_DESIGN_ERRORS",
+              "error_id": "CSC_251_EXAM_2_CLASS_DESIGN_ERRORS",
               "name": "Class Design Errors",
               "description": "There are class design errors",
               "severity_category": "major",
@@ -415,7 +415,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_ARRAYLIST_ERRORS",
+              "error_id": "CSC_251_EXAM_2_ARRAYLIST_ERRORS",
               "name": "ArrayList Errors",
               "description": "There are errors involving ArrayList",
               "severity_category": "major",
@@ -439,7 +439,7 @@
               "default_penalty_points": 40
             },
             {
-              "error_id": "CSC_251_EXAM_1_SYNTAX_ERROR",
+              "error_id": "CSC_251_EXAM_2_SYNTAX_ERROR",
               "name": "Syntax Error",
               "description": "There are syntax errors in the code",
               "severity_category": "minor",
@@ -447,7 +447,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_NAMING_CONVENTION",
+              "error_id": "CSC_251_EXAM_2_NAMING_CONVENTION",
               "name": "Naming Convention Violation",
               "description": "Naming conventions are not followed",
               "severity_category": "minor",
@@ -455,7 +455,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_INEFFICIENT_CODE",
+              "error_id": "CSC_251_EXAM_2_INEFFICIENT_CODE",
               "name": "Inefficient Code",
               "description": "The code is inefficient and can be optimized",
               "severity_category": "minor",
@@ -463,7 +463,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_PROGRAMMING_STYLE",
+              "error_id": "CSC_251_EXAM_2_PROGRAMMING_STYLE",
               "name": "Programming Style Issues",
               "description": "There are programming style issues that do not adhere to language standards (indentation, white space, etc.)",
               "severity_category": "minor",
@@ -471,7 +471,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_FILE_CLASS_NAME_MISMATCH",
+              "error_id": "CSC_251_EXAM_2_FILE_CLASS_NAME_MISMATCH",
               "name": "File/Class Name Mismatch",
               "description": "The filename and class container are not the same",
               "severity_category": "minor",
@@ -479,7 +479,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_MINOR_FORMATTING",
+              "error_id": "CSC_251_EXAM_2_MINOR_FORMATTING",
               "name": "Minor Formatting Issues",
               "description": "There are formatting issues not matching Sample Input and Output (i.e spacing, missing dollar sign, not using print/println appropriately, etc.)",
               "severity_category": "minor",
@@ -487,7 +487,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_STALE_DATA",
+              "error_id": "CSC_251_EXAM_2_STALE_DATA",
               "name": "Stale Data",
               "description": "There is stale data in classes",
               "severity_category": "minor",
@@ -495,7 +495,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_UNUSED_VARIABLES",
+              "error_id": "CSC_251_EXAM_2_UNUSED_VARIABLES",
               "name": "Unused Variables",
               "description": "There are variables/fields declared that are not used in the program",
               "severity_category": "minor",
@@ -503,7 +503,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_INCORRECT_DATA_TYPE",
+              "error_id": "CSC_251_EXAM_2_INCORRECT_DATA_TYPE",
               "name": "Incorrect Data Type",
               "description": "The program has the incorrect data type(s) used",
               "severity_category": "minor",
@@ -511,7 +511,7 @@
               "default_penalty_points": 10
             },
             {
-              "error_id": "CSC_251_EXAM_1_DOES_NOT_COMPILE",
+              "error_id": "CSC_251_EXAM_2_DOES_NOT_COMPILE",
               "name": "Does Not Compile",
               "description": "The program does not compile",
               "severity_category": "minor",
@@ -523,7 +523,7 @@
       ]
     },
     {
-      "course_id": "CSC134",
+      "course_id": "CSC_134",
       "assignments": [
         {
           "assignment_id": "Project",

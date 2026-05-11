@@ -292,8 +292,8 @@ class TestErrorConfigRegistry:
         registry = ErrorConfigRegistry(courses=[course1, course2])
         
         course_ids = registry.get_all_course_ids()
-        assert course_ids == ["CSC151", "CSC251"]  # Sorted
-    
+        assert course_ids == ["CSC_151", "CSC_251"]  # Sorted canonical values
+
     def test_get_assignments_for_course(self):
         """Test getting assignments for a course."""
         assignment1 = AssignmentErrorConfig(assignment_id="Exam1", assignment_name="Exam 1", error_definitions=[])

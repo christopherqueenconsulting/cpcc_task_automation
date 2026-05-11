@@ -23,7 +23,7 @@ def test_load_error_config_registry_succeeds():
     
     assert registry is not None
     assert len(registry.courses) > 0
-    assert registry.courses[0].course_id == "CSC151"
+    assert registry.courses[0].course_id == "CSC_151"
 
 
 @pytest.mark.integration
@@ -117,11 +117,11 @@ def test_error_config_registry_course_hierarchy():
     """Test that the error config registry maintains correct course hierarchy."""
     registry = load_error_config_registry()
     
-    # Get CSC151 course
-    csc151 = next((c for c in registry.courses if c.course_id == "CSC151"), None)
+    # Get CSC_151 course
+    csc151 = next((c for c in registry.courses if c.course_id == "CSC_151"), None)
     assert csc151 is not None
     
-    # Check that CSC151 has assignments
+    # Check that CSC_151 has assignments
     assert len(csc151.assignments) > 0
     
     # Check that assignments have error definitions

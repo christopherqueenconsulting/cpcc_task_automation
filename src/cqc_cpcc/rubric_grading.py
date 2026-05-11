@@ -31,6 +31,7 @@ Usage:
 from typing import Optional
 from langchain_core.callbacks import BaseCallbackHandler
 
+from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult, DetectedError
 from cqc_cpcc.error_definitions_models import ErrorDefinition
 from cqc_cpcc.error_scoring import compute_error_based_score, aggregate_error_counts, get_error_count_for_severity
@@ -654,7 +655,7 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         # Handle different scoring modes
         if rubric_criterion.criterion_id == "program_performance":
             # Dispatch to rubric-specific level selector
-            if "CSC134" in rubric.course_ids:
+            if any(course_ids_match(course_id, "CSC_134") for course_id in rubric.course_ids):
                 # CSC134 C++ rubric: apply the rubric's configured normalization,
                 # then evaluate its rubric-specific performance thresholds.
                 logger.info(

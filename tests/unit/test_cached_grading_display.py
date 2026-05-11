@@ -271,6 +271,58 @@ class TestGenerateFeedbackDocsAndZip:
                             )
                         raise
 
+    @pytest.mark.parametrize(
+        "course_name, expected_course_id, expected_assignment_name",
+        [
+            (
+                "CSC251_N802_CSC 251_N802 Exam 2",
+                "CSC251_N802",
+                "Exam 2",
+            ),
+            (
+                "CSC251_CSC-251: Exam 2",
+                "CSC251",
+                "Exam 2",
+            ),
+        ],
+    )
+    def test_generate_docs_removes_redundant_course_prefix_from_assignment_name(
+        self,
+        sample_cached_results,
+        course_name,
+        expected_course_id,
+        expected_assignment_name,
+    ):
+        """Ensure assignment_name strips repeated course/section prefixes."""
+        grade_assignment = _import_grade_assignment_module()
+        with patch.object(grade_assignment, 'st') as mock_st:
+            mock_st.session_state = SessionState(feedback_zip_bytes_by_key={})
+            mock_st.spinner.return_value.__enter__ = MagicMock()
+            mock_st.spinner.return_value.__exit__ = MagicMock()
+
+            with patch.object(
+                grade_assignment,
+                'generate_student_feedback_doc',
+                return_value=b"doc-bytes",
+            ) as mock_generate_doc:
+                with patch.object(
+                    grade_assignment,
+                    'create_zip_file',
+                    return_value='/tmp/fake.zip',
+                ):
+                    grade_assignment._generate_feedback_docs_and_zip(
+                        all_results=[sample_cached_results[0]],
+                        course_name=course_name,
+                        total_points_possible=100,
+                        model_name="test",
+                        temperature=0.0,
+                        run_key="test_key",
+                    )
+
+            first_call_kwargs = mock_generate_doc.call_args.kwargs
+            assert first_call_kwargs["course_id"] == expected_course_id
+            assert first_call_kwargs["assignment_name"] == expected_assignment_name
+
 
 @pytest.mark.unit
 class TestCachedErrorOnlyDisplay:

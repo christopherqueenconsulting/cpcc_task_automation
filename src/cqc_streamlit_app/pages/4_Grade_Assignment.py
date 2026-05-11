@@ -1,6 +1,7 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import asyncio
 import os
+import re
 import tempfile
 from datetime import datetime
 from typing import Optional
@@ -20,6 +21,7 @@ from cqc_cpcc.exam_review import (
     MinorErrorType,
     parse_error_type_enum_name,
 )
+from cqc_cpcc.course_identifier import format_course_id_for_display
 from cqc_cpcc.feedback_doc_generator import (
     generate_student_feedback_doc,
     sanitize_filename,
@@ -372,14 +374,15 @@ def select_course_from_error_definitions() -> str | None:
     if "selected_error_course_id" not in st.session_state:
         st.session_state.selected_error_course_id = None
     
-    course_display_options = ["-- Select Course --"] + [
-        c.replace("CSC", "CSC ") if c.startswith("CSC") else c
-        for c in course_ids
-    ]
+    course_display_map = {
+        "-- Select Course --": None,
+        **{format_course_id_for_display(course_id): course_id for course_id in course_ids},
+    }
+    course_display_options = list(course_display_map.keys())
     
     current_index = 0
     if st.session_state.selected_error_course_id:
-        display_label = st.session_state.selected_error_course_id.replace("CSC", "CSC ") if st.session_state.selected_error_course_id.startswith("CSC") else st.session_state.selected_error_course_id
+        display_label = format_course_id_for_display(st.session_state.selected_error_course_id)
         if display_label in course_display_options:
             current_index = course_display_options.index(display_label)
     
@@ -393,7 +396,7 @@ def select_course_from_error_definitions() -> str | None:
     if selected_course_display == "-- Select Course --":
         selected_course_id = None
     else:
-        selected_course_id = selected_course_display.replace("CSC ", "CSC") if "CSC " in selected_course_display else selected_course_display
+        selected_course_id = course_display_map[selected_course_display]
     
     if selected_course_id != st.session_state.selected_error_course_id:
         st.session_state.selected_error_course_id = selected_course_id
@@ -425,15 +428,16 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
         st.session_state.selected_course_id = None
     
     # Create display labels for courses (e.g., "CSC151" -> "CSC 151")
-    course_display_options = ["-- Select Course --"] + [
-        c.replace("CSC", "CSC ") if c.startswith("CSC") else c 
-        for c in course_ids
-    ]
+    course_display_map = {
+        "-- Select Course --": None,
+        **{format_course_id_for_display(course_id): course_id for course_id in course_ids},
+    }
+    course_display_options = list(course_display_map.keys())
     
     # Find current index
     current_index = 0
     if st.session_state.selected_course_id:
-        display_label = st.session_state.selected_course_id.replace("CSC", "CSC ") if st.session_state.selected_course_id.startswith("CSC") else st.session_state.selected_course_id
+        display_label = format_course_id_for_display(st.session_state.selected_course_id)
         if display_label in course_display_options:
             current_index = course_display_options.index(display_label)
     
@@ -448,8 +452,7 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
     if selected_course_display == "-- Select Course --":
         selected_course_id = None
     else:
-        # Reverse the display transformation
-        selected_course_id = selected_course_display.replace("CSC ", "CSC") if "CSC " in selected_course_display else selected_course_display
+        selected_course_id = course_display_map[selected_course_display]
     
     # Check if course changed
     if selected_course_id != st.session_state.selected_course_id:
@@ -2536,10 +2539,50 @@ def _generate_feedback_docs_and_zip(
             # Generate Word docs for each student
             doc_files: list[tuple[str, str]] = []  # (filename, temp_file_path)
             
-            # Extract course ID from course_name (e.g., "CSC151_Exam1" -> "CSC151")
+            # Extract course ID and optional section token from course_name.
+            # Section format: one letter immediately followed by digits (e.g., A01).
             course_parts = course_name.split('_')
-            course_id = course_parts[0] if course_parts else course_name
-            assignment_name = '_'.join(course_parts[1:]) if len(course_parts) > 1 else "Assignment"
+            assignment_start_index = 1
+
+            if len(course_parts) > 1 and re.fullmatch(r"[A-Za-z]\d+", course_parts[1]):
+                course_id = f"{course_parts[0]}_{course_parts[1]}"
+                assignment_start_index = 2
+            elif course_parts:
+                course_id = course_parts[0]
+            else:
+                course_id = course_name
+                assignment_start_index = 0
+
+            assignment_name = (
+                '_'.join(course_parts[assignment_start_index:])
+                if len(course_parts) > assignment_start_index
+                else "Assignment"
+            )
+
+            # Remove redundant course prefix from assignment names while tolerating
+            # spacing/underscore/hyphen differences (e.g., CSC251 vs CSC 251).
+            base_course_id = course_parts[0] if course_parts else course_id
+            section_token = course_parts[1] if assignment_start_index == 2 else ""
+
+            def _build_flexible_token_pattern(token: str) -> str:
+                token_no_spaces = ''.join(ch for ch in token if not ch.isspace())
+                return r"[\s_-]*".join(re.escape(ch) for ch in token_no_spaces)
+
+            course_prefix_pattern = r"^\s*" + _build_flexible_token_pattern(base_course_id)
+            if section_token:
+                course_prefix_pattern += r"(?:[\s_-]*" + _build_flexible_token_pattern(section_token) + r")?"
+            course_prefix_pattern += r"[\s_:-]*"
+
+            assignment_name = re.sub(
+                course_prefix_pattern,
+                "",
+                assignment_name,
+                count=1,
+                flags=re.IGNORECASE,
+            ).strip(" _-:")
+
+            if not assignment_name:
+                assignment_name = "Assignment"
             
             for student_id, result in all_results:
                 # Generate sanitized filename

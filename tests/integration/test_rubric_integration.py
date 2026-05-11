@@ -55,9 +55,9 @@ def test_get_rubrics_for_course_returns_rubrics():
     assert rubrics is not None
     assert len(rubrics) > 0
     
-    # Check that all returned rubrics include CSC151
+    # Check that all returned rubrics include canonical CSC_151
     for rubric in rubrics.values():
-        assert "CSC151" in rubric.course_ids
+        assert "CSC_151" in rubric.course_ids
 
 
 @pytest.mark.integration
