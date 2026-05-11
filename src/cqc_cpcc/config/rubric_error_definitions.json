@@ -162,12 +162,6 @@
     "description": "The code has omission of curly braces"
   },
   {
-    "code": "CSC_251_EXAM_2_SECURITY_HOLES",
-    "name": "Security Holes",
-    "severity": "major",
-    "description": "There are security holes in the code"
-  },
-  {
     "code": "CSC_251_EXAM_1_METHOD_ERRORS",
     "name": "Method Errors",
     "severity": "major",
@@ -184,12 +178,6 @@
     "name": "ArrayList Errors",
     "severity": "major",
     "description": "There are errors involving ArrayList"
-  },
-  {
-    "code": "CSC_251_EXAM_2_AGGREGATION_ERRORS",
-    "name": "Aggregation Errors",
-    "severity": "major",
-    "description": "There are aggregation errors"
   },
   {
     "code": "CSC_251_EXAM_1_SYNTAX_ERROR",
@@ -247,6 +235,132 @@
   },
   {
     "code": "CSC_251_EXAM_1_DOES_NOT_COMPILE",
+    "name": "Does Not Compile",
+    "severity": "minor",
+    "description": "The program does not compile"
+  },
+  {
+    "code": "CSC_251_EXAM_2_INSUFFICIENT_DOCUMENTATION",
+    "name": "Insufficient Documentation",
+    "severity": "major",
+    "description": "No documentation or insufficient amount of comments in the code"
+  },
+  {
+    "code": "CSC_251_EXAM_2_SEQUENCE_AND_SELECTION_ERROR",
+    "name": "Sequence and Selection Error",
+    "severity": "major",
+    "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators"
+  },
+  {
+    "code": "CSC_251_EXAM_2_OUTPUT_IMPACT_ERROR",
+    "name": "Output Impact Error",
+    "severity": "major",
+    "description": "Errors that adversely impact the expected output, such as calculation errors or omissions"
+  },
+  {
+    "code": "CSC_251_EXAM_2_CONSTANTS_ERROR",
+    "name": "Constants Error",
+    "severity": "major",
+    "description": "Constants are not properly declared or used"
+  },
+  {
+    "code": "CSC_251_EXAM_2_DECIMAL_SCALE",
+    "name": "Decimal Scale Error",
+    "severity": "major",
+    "description": "There are issues with the expected code output where the decimal scale is not correct and/or missing commas separators"
+  },
+  {
+    "code": "CSC_251_EXAM_2_CURLY_BRACES_OMITTED",
+    "name": "Curly Braces Omitted",
+    "severity": "major",
+    "description": "The code has omission of curly braces"
+  },
+  {
+    "code": "CSC_251_EXAM_2_METHOD_ERRORS",
+    "name": "Method Errors",
+    "severity": "major",
+    "description": "There are method errors (issues with parameters, return types, incorrect values, etc.)"
+  },
+  {
+    "code": "CSC_251_EXAM_2_CLASS_DESIGN_ERRORS",
+    "name": "Class Design Errors",
+    "severity": "major",
+    "description": "There are class design errors"
+  },
+  {
+    "code": "CSC_251_EXAM_2_ARRAYLIST_ERRORS",
+    "name": "ArrayList Errors",
+    "severity": "major",
+    "description": "There are errors involving ArrayList"
+  },
+  {
+    "code": "CSC_251_EXAM_2_SECURITY_HOLES",
+    "name": "Security Holes",
+    "severity": "major",
+    "description": "There are security holes in the code"
+  },
+  {
+    "code": "CSC_251_EXAM_2_AGGREGATION_ERRORS",
+    "name": "Aggregation Errors",
+    "severity": "major",
+    "description": "There are aggregation errors"
+  },
+  {
+    "code": "CSC_251_EXAM_2_SYNTAX_ERROR",
+    "name": "Syntax Error",
+    "severity": "minor",
+    "description": "There are syntax errors in the code"
+  },
+  {
+    "code": "CSC_251_EXAM_2_NAMING_CONVENTION",
+    "name": "Naming Convention Violation",
+    "severity": "minor",
+    "description": "Naming conventions are not followed"
+  },
+  {
+    "code": "CSC_251_EXAM_2_INEFFICIENT_CODE",
+    "name": "Inefficient Code",
+    "severity": "minor",
+    "description": "The code is inefficient and can be optimized"
+  },
+  {
+    "code": "CSC_251_EXAM_2_PROGRAMMING_STYLE",
+    "name": "Programming Style Issues",
+    "severity": "minor",
+    "description": "There are programming style issues that do not adhere to language standards (indentation, white space, etc.)"
+  },
+  {
+    "code": "CSC_251_EXAM_2_FILE_CLASS_NAME_MISMATCH",
+    "name": "File/Class Name Mismatch",
+    "severity": "minor",
+    "description": "The filename and class container are not the same"
+  },
+  {
+    "code": "CSC_251_EXAM_2_MINOR_FORMATTING",
+    "name": "Minor Formatting Issues",
+    "severity": "minor",
+    "description": "There are formatting issues not matching Sample Input and Output (i.e spacing, missing dollar sign, not using print/println appropriately, etc.)"
+  },
+  {
+    "code": "CSC_251_EXAM_2_STALE_DATA",
+    "name": "Stale Data",
+    "severity": "minor",
+    "description": "There is stale data in classes"
+  },
+  {
+    "code": "CSC_251_EXAM_2_UNUSED_VARIABLES",
+    "name": "Unused Variables",
+    "severity": "minor",
+    "description": "There are variables/fields declared that are not used in the program"
+  },
+  {
+    "code": "CSC_251_EXAM_2_INCORRECT_DATA_TYPE",
+    "name": "Incorrect Data Type",
+    "severity": "minor",
+    "description": "The program has the incorrect data type(s) used"
+  },
+  {
+    "code": "CSC_251_EXAM_2_DOES_NOT_COMPILE",
     "name": "Does Not Compile",
     "severity": "minor",
     "description": "The program does not compile"
