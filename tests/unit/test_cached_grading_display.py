@@ -274,14 +274,28 @@ class TestGenerateFeedbackDocsAndZip:
     @pytest.mark.parametrize(
         "course_name, expected_course_id, expected_assignment_name",
         [
+            # Canonical CSC_### format with section — the real-world case that was broken
             (
-                "CSC251_N802_CSC 251_N802 Exam 2",
-                "CSC251_N802",
+                "CSC_251_N804_CSC 251 Exam 2",
+                "CSC 251 N804",
                 "Exam 2",
             ),
+            # Legacy compact format with section — normalised to display form
+            (
+                "CSC251_N802_CSC 251_N802 Exam 2",
+                "CSC 251 N802",
+                "Exam 2",
+            ),
+            # Canonical without section
+            (
+                "CSC_251_CSC-251: Exam 2",
+                "CSC 251",
+                "Exam 2",
+            ),
+            # Legacy compact without section — normalised to display form
             (
                 "CSC251_CSC-251: Exam 2",
-                "CSC251",
+                "CSC 251",
                 "Exam 2",
             ),
         ],

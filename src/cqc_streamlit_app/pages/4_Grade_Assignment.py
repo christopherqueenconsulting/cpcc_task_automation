@@ -2539,19 +2539,38 @@ def _generate_feedback_docs_and_zip(
             # Generate Word docs for each student
             doc_files: list[tuple[str, str]] = []  # (filename, temp_file_path)
             
-            # Extract course ID and optional section token from course_name.
-            # Section format: one letter immediately followed by digits (e.g., A01).
+            # Extract course ID, optional section, and assignment from course_name.
+            #
+            # Handles canonical CSC_### format (splitting on "_" yields ["CSC","251",...])
+            # as well as legacy compact format ("CSC251", ...).
+            #
+            # Section format: one letter immediately followed by digits (e.g., N804, A01).
             course_parts = course_name.split('_')
-            assignment_start_index = 1
+            idx = 0
+            base_course_id = None
+            section_token = ""
 
-            if len(course_parts) > 1 and re.fullmatch(r"[A-Za-z]\d+", course_parts[1]):
-                course_id = f"{course_parts[0]}_{course_parts[1]}"
-                assignment_start_index = 2
-            elif course_parts:
-                course_id = course_parts[0]
+            if not course_parts:
+                base_course_id = course_name
             else:
-                course_id = course_name
-                assignment_start_index = 0
+                # Detect canonical split: short alpha prefix + 3-digit number (e.g. "CSC" + "251")
+                if (
+                    len(course_parts) > 1
+                    and re.fullmatch(r"[A-Za-z]{2,}", course_parts[0])
+                    and re.fullmatch(r"\d{3}", course_parts[1])
+                ):
+                    base_course_id = f"{course_parts[0]}_{course_parts[1]}"
+                    idx = 2
+                else:
+                    base_course_id = course_parts[0]
+                    idx = 1
+
+                # Detect optional section token right after the base course id
+                if idx < len(course_parts) and re.fullmatch(r"[A-Za-z]\d+", course_parts[idx]):
+                    section_token = course_parts[idx]
+                    idx += 1
+
+            assignment_start_index = idx
 
             assignment_name = (
                 '_'.join(course_parts[assignment_start_index:])
@@ -2559,14 +2578,19 @@ def _generate_feedback_docs_and_zip(
                 else "Assignment"
             )
 
-            # Remove redundant course prefix from assignment names while tolerating
-            # spacing/underscore/hyphen differences (e.g., CSC251 vs CSC 251).
-            base_course_id = course_parts[0] if course_parts else course_id
-            section_token = course_parts[1] if assignment_start_index == 2 else ""
+            # Build display-friendly course_id for the feedback document
+            # e.g. base="CSC_251", section="N804" → "CSC 251 N804"
+            course_id_display = format_course_id_for_display(base_course_id)
+            if section_token:
+                course_id_display = f"{course_id_display} {section_token}"
+            course_id = course_id_display  # used in generate_student_feedback_doc
 
+            # Remove redundant course prefix from assignment_name while tolerating
+            # spacing/underscore/hyphen differences (e.g., CSC251 vs CSC 251).
+            # Build the pattern from the compact form (no internal separators).
             def _build_flexible_token_pattern(token: str) -> str:
-                token_no_spaces = ''.join(ch for ch in token if not ch.isspace())
-                return r"[\s_-]*".join(re.escape(ch) for ch in token_no_spaces)
+                token_compact = re.sub(r'[\s_-]', '', token)
+                return r"[\s_-]*".join(re.escape(ch) for ch in token_compact)
 
             course_prefix_pattern = r"^\s*" + _build_flexible_token_pattern(base_course_id)
             if section_token:
