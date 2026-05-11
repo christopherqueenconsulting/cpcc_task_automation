@@ -24,23 +24,23 @@ def main():
     st.write('The information entered on this page is not stored online. It is only available in the browser for the other pages to use and run properly')
 
     # Get API keys
-    openrouter_api_key = st.text_input("Openrouter API Key", value=st.session_state.openrouter_api_key, type="password")
+    openrouter_api_key = st.text_input("Openrouter API Key", value=st.session_state.openrouter_api_key or "", type="password")
     st.caption("*Required for all apps")
 
-    openai_api_key = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key, type="password")
+    openai_api_key = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key or "", type="password")
     st.caption("*Required for all apps; get it [here](https://platform.openai.com/account/api-keys).*")
 
     # Get CPCC variables
-    instructor_user_id = st.text_input("Instructor User ID", value=st.session_state.instructor_user_id)
+    instructor_user_id = st.text_input("Instructor User ID", value=st.session_state.instructor_user_id or "")
     st.caption("*Required for all apps")
-    instructor_password = st.text_input("Instructor Password", value=st.session_state.instructor_password, type="password")
+    instructor_password = st.text_input("Instructor Password", value=st.session_state.instructor_password or "", type="password")
     st.caption("*Required for all apps")
 
-    instructor_signature = st.text_input("Instructor Signature", value=st.session_state.instructor_signature)
+    instructor_signature = st.text_input("Instructor Signature", value=st.session_state.instructor_signature or "")
     st.caption("Used at end of feedback.")
 
-    attendance_tracker_url = st.text_input("Attendance Tracker URL", value=st.session_state.attendance_tracker_url)
-    st.caption("URL to the Attendance Tracker")
+    attendance_tracker_url = st.text_input("Advanced Tracker URL", value=st.session_state.attendance_tracker_url or "")
+    st.caption("URL to the Attendance Tracker (`ATTENDANCE_TRACKER_URL`).")
 
     required_vars = [openai_api_key, openrouter_api_key, instructor_user_id, instructor_password]
 

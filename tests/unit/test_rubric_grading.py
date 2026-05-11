@@ -17,11 +17,17 @@ from cqc_cpcc.rubric_models import (
     RubricAssessmentResult,
     CriterionResult,
     DetectedError,
+    Criterion,
+    ErrorCountScoringRules,
+    ErrorConversionRules,
+    Rubric,
 )
 from cqc_cpcc.rubric_grading import (
     build_rubric_grading_prompt,
     grade_with_rubric,
     RubricGrader,
+    apply_backend_scoring,
+    normalize_detected_errors_for_scoring,
 )
 
 
@@ -278,6 +284,158 @@ class TestRubricGrading:
             )
         
         assert "Failed to grade with rubric" in str(exc_info.value)
+
+    async def test_grade_with_rubric_routes_openrouter_models(self, base_rubric, mocker):
+        """OpenRouter model IDs should use OpenRouter client, not OpenAI client."""
+        mock_response = create_valid_rubric_assessment()
+        mock_openrouter = mocker.patch(
+            "cqc_cpcc.utilities.AI.openrouter_client.get_openrouter_completion",
+            new_callable=AsyncMock,
+        )
+        mock_openrouter.return_value = RubricAssessmentResult.model_validate(mock_response)
+        mock_openai = mocker.patch(
+            "cqc_cpcc.rubric_grading.get_structured_completion",
+            new_callable=AsyncMock,
+        )
+
+        result = await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            model_name="openrouter/auto",
+        )
+
+        assert isinstance(result, RubricAssessmentResult)
+        mock_openrouter.assert_called_once()
+        mock_openai.assert_not_called()
+
+
+@pytest.mark.unit
+class TestDetectedErrorNormalization:
+    """Test duplicate error normalization used for error-count scoring."""
+
+    def test_normalize_detected_errors_for_scoring_deduplicates_types(self):
+        detected_errors = [
+            DetectedError(
+                code="CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR",
+                name="Output Impact",
+                severity="major",
+                description="Wrong value printed on line 12",
+                occurrences=1,
+            ),
+            DetectedError(
+                code="CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR",
+                name="Output Impact",
+                severity="major",
+                description="Wrong value printed on line 19",
+                occurrences=2,
+            ),
+            DetectedError(
+                code="CSC_151_EXAM_1_PROGRAMMING_STYLE",
+                name="Style",
+                severity="minor",
+                description="Indentation issue",
+                occurrences=1,
+            ),
+        ]
+
+        normalized, counts_by_severity, counts_by_id = normalize_detected_errors_for_scoring(detected_errors)
+
+        assert len(normalized) == 2
+        major = next(e for e in normalized if e.code == "CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR")
+        assert major.occurrences == 3
+        assert "line 12" in major.description
+        assert "line 19" in major.description
+        assert counts_by_severity == {"major": 1, "minor": 1}
+        assert counts_by_id == {
+            "CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR": 1,
+            "CSC_151_EXAM_1_PROGRAMMING_STYLE": 1,
+        }
+
+    def test_apply_backend_scoring_uses_unique_error_types_for_error_count(self):
+        rubric = Rubric(
+            rubric_id="dedup_test",
+            rubric_version="1.0",
+            title="Dedup Test Rubric",
+            criteria=[
+                Criterion(
+                    criterion_id="error_count_quality",
+                    name="Program Performance",
+                    max_points=100,
+                    scoring_mode="error_count",
+                    error_rules=ErrorCountScoringRules(
+                        major_weight=40,
+                        minor_weight=10,
+                        floor_score=0,
+                        error_conversion=ErrorConversionRules(minor_to_major_ratio=4),
+                    ),
+                ),
+            ],
+        )
+
+        result = RubricAssessmentResult(
+            rubric_id="dedup_test",
+            rubric_version="1.0",
+            total_points_possible=100,
+            total_points_earned=0,
+            criteria_results=[
+                CriterionResult(
+                    criterion_id="error_count_quality",
+                    criterion_name="Program Performance",
+                    points_possible=100,
+                    points_earned=None,
+                    selected_level_label=None,
+                    feedback="Detected issues",
+                    evidence=None,
+                )
+            ],
+            overall_band_label=None,
+            overall_feedback="Overall feedback",
+            detected_errors=[
+                DetectedError(
+                    code="CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR",
+                    name="Output Impact",
+                    severity="major",
+                    description="Issue on line 10",
+                    occurrences=1,
+                ),
+                DetectedError(
+                    code="CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR",
+                    name="Output Impact",
+                    severity="major",
+                    description="Issue on line 20",
+                    occurrences=1,
+                ),
+                DetectedError(
+                    code="CSC_151_EXAM_1_PROGRAMMING_STYLE",
+                    name="Style",
+                    severity="minor",
+                    description="Spacing issue line 5",
+                    occurrences=1,
+                ),
+                DetectedError(
+                    code="CSC_151_EXAM_1_PROGRAMMING_STYLE",
+                    name="Style",
+                    severity="minor",
+                    description="Spacing issue line 7",
+                    occurrences=1,
+                ),
+            ],
+            # Simulate LLM occurrence-based counts; backend should normalize to unique types for scoring
+            error_counts_by_severity={"major": 2, "minor": 2},
+            error_counts_by_id={
+                "CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR": 2,
+                "CSC_151_EXAM_1_PROGRAMMING_STYLE": 2,
+            },
+        )
+
+        scored = apply_backend_scoring(rubric, result)
+
+        # Unique types should count once each: 1 major + 1 minor => 100 - 40 - 10 = 50
+        assert scored.total_points_earned == 50
+        assert scored.original_major_errors == 1
+        assert scored.original_minor_errors == 1
+        assert scored.error_counts_by_severity == {"major": 1, "minor": 1}
 
 
 @pytest.mark.unit

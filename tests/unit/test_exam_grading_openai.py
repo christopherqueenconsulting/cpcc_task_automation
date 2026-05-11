@@ -263,6 +263,36 @@ class TestExamGradingOpenAI:
         assert len(result.all_major_errors) == 1
         assert len(result.all_minor_errors) == 1
 
+    async def test_grade_exam_submission_routes_openrouter_when_enabled(self, mocker):
+        """When use_openrouter=True, grading should not call OpenAI wrapper."""
+        valid_response = create_valid_error_definitions_response()
+
+        mock_openrouter = mocker.patch(
+            "cqc_cpcc.utilities.AI.openrouter_client.get_openrouter_completion",
+            new_callable=AsyncMock,
+        )
+        mock_openrouter.return_value = ErrorDefinitions.model_validate(valid_response)
+
+        mock_openai = mocker.patch(
+            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
+            new_callable=AsyncMock,
+        )
+
+        result = await grade_exam_submission(
+            exam_instructions=EXAM_INSTRUCTIONS,
+            exam_solution=EXAM_SOLUTION,
+            student_submission=STUDENT_SUBMISSION,
+            major_error_type_list=MAJOR_ERROR_TYPES,
+            minor_error_type_list=MINOR_ERROR_TYPES,
+            use_openrouter=True,
+            openrouter_auto_route=False,
+            model_name="openai/gpt-5-mini",
+        )
+
+        assert isinstance(result, ErrorDefinitions)
+        mock_openrouter.assert_called_once()
+        mock_openai.assert_not_called()
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio

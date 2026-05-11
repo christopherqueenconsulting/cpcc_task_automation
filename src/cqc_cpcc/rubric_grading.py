@@ -44,6 +44,70 @@ DEFAULT_TEMPERATURE = 0.2
 DEFAULT_MAX_TOKENS = 16384
 
 
+def normalize_detected_errors_for_scoring(
+    detected_errors: Optional[list[DetectedError]],
+) -> tuple[list[DetectedError], dict[str, int], dict[str, int]]:
+    """Collapse duplicate error types for scoring while preserving occurrence details.
+
+    Scoring should count each error type once per severity bucket. If the same
+    error code appears multiple times, descriptions/notes are combined and
+    occurrences are summed for display transparency.
+    """
+    if not detected_errors:
+        return [], {}, {}
+
+    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    for error in detected_errors:
+        severity = (error.severity or "unknown").strip().lower() or "unknown"
+        code = (error.code or "UNKNOWN_ERROR").strip() or "UNKNOWN_ERROR"
+        key = (severity, code)
+        entry = grouped.setdefault(
+            key,
+            {
+                "name": error.name or code,
+                "descriptions": [],
+                "notes": [],
+                "occurrences": 0,
+            },
+        )
+
+        if error.description and error.description not in entry["descriptions"]:
+            entry["descriptions"].append(error.description)
+        if error.notes and error.notes not in entry["notes"]:
+            entry["notes"].append(error.notes)
+
+        occurrences = error.occurrences if (error.occurrences is not None and error.occurrences > 0) else 1
+        entry["occurrences"] += occurrences
+
+    normalized_errors: list[DetectedError] = []
+    counts_by_severity: dict[str, int] = {}
+    counts_by_id: dict[str, int] = {}
+
+    for (severity, code), entry in grouped.items():
+        descriptions = entry["descriptions"]
+        combined_description = "\n".join(descriptions) if descriptions else f"Detected {code}"
+
+        notes = list(entry["notes"])
+        notes.append(f"Total occurrences: {entry['occurrences']}")
+        combined_notes = "\n".join(notes)
+
+        normalized_errors.append(
+            DetectedError(
+                code=code,
+                name=entry["name"],
+                severity=severity,
+                description=combined_description,
+                occurrences=entry["occurrences"],
+                notes=combined_notes,
+            )
+        )
+
+        counts_by_severity[severity] = counts_by_severity.get(severity, 0) + 1
+        counts_by_id[code] = 1
+
+    return normalized_errors, counts_by_severity, counts_by_id
+
+
 def build_rubric_grading_prompt(
     rubric: Rubric,
     assignment_instructions: str,
@@ -490,6 +554,17 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         f"{len(error_count_criteria)} error_count criteria"
     )
     
+    normalized_detected_errors = result.detected_errors
+    normalized_counts_by_severity = result.error_counts_by_severity
+    normalized_counts_by_id = result.error_counts_by_id
+
+    if result.detected_errors:
+        (
+            normalized_detected_errors,
+            normalized_counts_by_severity,
+            normalized_counts_by_id,
+        ) = normalize_detected_errors_for_scoring(result.detected_errors)
+
     # Extract error counts if needed
     original_major = 0
     original_minor = 0
@@ -497,18 +572,18 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     effective_minor = 0
     
     if error_count_criteria or has_program_performance:
-        has_error_counts = result.error_counts_by_severity is not None
-        
+        has_error_counts = normalized_counts_by_severity is not None
+
         if not has_error_counts:
             logger.warning(
                 f"Rubric has error-based criteria but no error_counts_by_severity in result."
             )
             
             # Try to compute error counts from detected_errors if present
-            if result.detected_errors:
-                logger.info(f"Computing error_counts_by_severity from {len(result.detected_errors)} detected_errors")
+            if normalized_detected_errors:
+                logger.info(f"Computing error_counts_by_severity from {len(normalized_detected_errors)} detected_errors")
                 error_counts = {}
-                for error in result.detected_errors:
+                for error in normalized_detected_errors:
                     severity = error.severity.lower() if error.severity else "unknown"
                     error_counts[severity] = error_counts.get(severity, 0) + (error.occurrences or 1)
                 
@@ -523,9 +598,9 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 original_minor = 0
         else:
             # Extract error counts by severity
-            original_major = get_error_count_for_severity(result.error_counts_by_severity, "major")
-            original_minor = get_error_count_for_severity(result.error_counts_by_severity, "minor")
-        
+            original_major = get_error_count_for_severity(normalized_counts_by_severity, "major")
+            original_minor = get_error_count_for_severity(normalized_counts_by_severity, "minor")
+
         logger.info(
             f"Original error counts: {original_major} major, {original_minor} minor"
         )
@@ -704,6 +779,9 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         "original_minor_errors": original_minor if (error_count_criteria or has_program_performance) else None,
         "effective_major_errors": effective_major if (error_count_criteria or has_program_performance) else None,
         "effective_minor_errors": effective_minor if (error_count_criteria or has_program_performance) else None,
+        "detected_errors": normalized_detected_errors,
+        "error_counts_by_severity": normalized_counts_by_severity,
+        "error_counts_by_id": normalized_counts_by_id,
     })
     
     logger.info(

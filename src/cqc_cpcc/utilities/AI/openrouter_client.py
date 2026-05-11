@@ -37,6 +37,7 @@ Example usage:
 
 import asyncio
 import json
+import os
 import time
 from typing import Optional, Type, TypeVar
 
@@ -57,8 +58,8 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
 )
 from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
 from cqc_cpcc.utilities.env_constants import (
-    OPENROUTER_ALLOWED_MODELS,
-    OPENROUTER_API_KEY,
+    OPENROUTER_ALLOWED_MODELS as DEFAULT_OPENROUTER_ALLOWED_MODELS,
+    OPENROUTER_API_KEY as DEFAULT_OPENROUTER_API_KEY,
 )
 from cqc_cpcc.utilities.logger import logger
 
@@ -75,6 +76,14 @@ DEFAULT_RETRY_DELAY = 1.0  # Base delay in seconds
 
 
 
+def _get_openrouter_api_key() -> str | None:
+    return os.getenv("OPENROUTER_API_KEY") or DEFAULT_OPENROUTER_API_KEY
+
+
+def _get_openrouter_allowed_models_raw() -> str | None:
+    return os.getenv("OPENROUTER_ALLOWED_MODELS") or DEFAULT_OPENROUTER_ALLOWED_MODELS
+
+
 def _get_openrouter_client() -> AsyncOpenAI:
     """Get configured AsyncOpenAI client pointing to OpenRouter API.
 
@@ -87,7 +96,8 @@ def _get_openrouter_client() -> AsyncOpenAI:
     Raises:
         ValueError: If OPENROUTER_API_KEY is not set
     """
-    if not OPENROUTER_API_KEY:
+    api_key = _get_openrouter_api_key()
+    if not api_key:
         raise ValueError(
             "OPENROUTER_API_KEY environment variable is not set. "
             "Please set it in your .streamlit/secrets.toml or environment."
@@ -96,7 +106,7 @@ def _get_openrouter_client() -> AsyncOpenAI:
     # Use AsyncOpenAI with OpenRouter's base URL
     # OpenRouter provides OpenAI-compatible API at https://openrouter.ai/api/v1
     return AsyncOpenAI(
-        api_key=OPENROUTER_API_KEY,
+        api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
         default_headers={
             "X-Title": OPENROUTER_APP_NAME,
@@ -124,7 +134,8 @@ async def fetch_openrouter_models() -> list[dict]:
     Raises:
         OpenAITransportError: If API call fails
     """
-    if not OPENROUTER_API_KEY:
+    api_key = _get_openrouter_api_key()
+    if not api_key:
         raise ValueError("OPENROUTER_API_KEY not set")
     
     try:
@@ -132,7 +143,7 @@ async def fetch_openrouter_models() -> list[dict]:
             response = await client.get(
                 OPENROUTER_MODELS_URL,
                 headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Authorization": f"Bearer {api_key}",
                 },
                 timeout=30.0,
             )
@@ -151,11 +162,12 @@ def _parse_allowed_models() -> list[str] | None:
 
     Returns None when no restriction is configured.
     """
-    if not OPENROUTER_ALLOWED_MODELS:
+    configured_allowed_models = _get_openrouter_allowed_models_raw()
+    if not configured_allowed_models:
         return None
     allowed_models = [
         model.strip()
-        for model in OPENROUTER_ALLOWED_MODELS.split(",")
+        for model in configured_allowed_models.split(",")
         if model.strip()
     ]
     return allowed_models or None

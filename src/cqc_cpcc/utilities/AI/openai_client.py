@@ -67,7 +67,7 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAITransportError,
 )
 from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
-from cqc_cpcc.utilities.env_constants import OPENAI_API_KEY
+from cqc_cpcc.utilities.env_constants import OPENAI_API_KEY as DEFAULT_OPENAI_API_KEY
 from cqc_cpcc.utilities.logger import logger
 
 T = TypeVar("T", bound=BaseModel)
@@ -162,6 +162,7 @@ MODEL_TOKEN_LIMITS = {
 
 # Global client instance for connection pooling
 _client: AsyncOpenAI | None = None
+_client_api_key: str | None = None
 _client_lock = asyncio.Lock()
 
 
@@ -815,19 +816,27 @@ async def get_client() -> AsyncOpenAI:
     Raises:
         ValueError: If OPENAI_API_KEY is not set
     """
-    global _client
+    global _client, _client_api_key
+    current_api_key = os.getenv("OPENAI_API_KEY") or DEFAULT_OPENAI_API_KEY
     
-    if _client is None:
+    if not current_api_key:
+        raise ValueError(
+            "OPENAI_API_KEY environment variable is not set. "
+            "Please configure it in .env or secrets.toml"
+        )
+
+    if _client is None or _client_api_key != current_api_key:
         async with _client_lock:
             # Double-check pattern to avoid race condition
+            if _client is not None and _client_api_key != current_api_key:
+                await _client.close()
+                _client = None
+                logger.info("OpenAI API key changed at runtime; rebuilding AsyncOpenAI client")
+
             if _client is None:
-                if not OPENAI_API_KEY:
-                    raise ValueError(
-                        "OPENAI_API_KEY environment variable is not set. "
-                        "Please configure it in .env or secrets.toml"
-                    )
                 # Disable SDK-level retries to implement single-layer retry
-                _client = AsyncOpenAI(api_key=OPENAI_API_KEY, max_retries=0)
+                _client = AsyncOpenAI(api_key=current_api_key, max_retries=0)
+                _client_api_key = current_api_key
                 logger.info("Initialized AsyncOpenAI client with max_retries=0 (single-layer retry)")
     
     return _client
@@ -1388,12 +1397,13 @@ async def close_client() -> None:
     Should be called during application shutdown. After calling this,
     the next call to get_structured_completion will create a new client.
     """
-    global _client
+    global _client, _client_api_key
     
     async with _client_lock:
         if _client is not None:
             await _client.close()
             _client = None
+            _client_api_key = None
             logger.info("Closed AsyncOpenAI client")
 
 

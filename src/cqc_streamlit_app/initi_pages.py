@@ -1,19 +1,21 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
+import os
+
 import streamlit as st
 
-from cqc_cpcc.utilities.env_constants import *
+from cqc_cpcc.utilities import env_constants as ec
 
-@st.cache_resource
+
 def get_env_config():
-    # This runs once and caches the result for all users/reruns
+    """Read the latest environment values with module-level defaults as fallback."""
     return {
-        "OPENROUTER_API_KEY": OPENROUTER_API_KEY,
-        "OPENAI_API_KEY": OPENAI_API_KEY,
-        "INSTRUCTOR_USERID": INSTRUCTOR_USERID,
-        "INSTRUCTOR_PASS": INSTRUCTOR_PASS,
-        "FEEDBACK_SIGNATURE": FEEDBACK_SIGNATURE,
-        "ATTENDANCE_TRACKER_URL": ATTENDANCE_TRACKER_URL
+        "OPENROUTER_API_KEY": os.getenv("OPENROUTER_API_KEY") or ec.OPENROUTER_API_KEY,
+        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY") or ec.OPENAI_API_KEY,
+        "INSTRUCTOR_USERID": os.getenv("INSTRUCTOR_USERID") or ec.INSTRUCTOR_USERID,
+        "INSTRUCTOR_PASS": os.getenv("INSTRUCTOR_PASS") or ec.INSTRUCTOR_PASS,
+        "FEEDBACK_SIGNATURE": os.getenv("FEEDBACK_SIGNATURE") or ec.FEEDBACK_SIGNATURE,
+        "ATTENDANCE_TRACKER_URL": os.getenv("ATTENDANCE_TRACKER_URL") or ec.ATTENDANCE_TRACKER_URL,
     }
 
 # Initialize session state variables

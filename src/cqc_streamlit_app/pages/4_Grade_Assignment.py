@@ -1585,6 +1585,8 @@ async def grade_single_error_only_student(
     deduction_per_minor_error: int,
     model_name: str,
     temperature: float,
+    use_openrouter: bool,
+    openrouter_auto_route: bool,
 ) -> tuple[str, dict, tuple[str, str]]:
     add_script_run_ctx(ctx=ctx)
     
@@ -1617,9 +1619,11 @@ async def grade_single_error_only_student(
                 minor_error_type_list=minor_error_type_list,
                 model_name=model_name,
                 temperature=temperature,
+                use_openrouter=use_openrouter,
+                openrouter_auto_route=openrouter_auto_route,
             )
             
-            status.update(label=f"{status_label} | Calling OpenAI...")
+            status.update(label=f"{status_label} | Calling grading model...")
             await code_grader.grade_submission(
                 submission_text,
                 callback=ChatGPTStatusCallbackHandler(status, status_label),
@@ -1684,6 +1688,8 @@ async def process_error_only_grading_batch(
     deduction_per_minor_error: int,
     model_name: str,
     temperature: float,
+    use_openrouter: bool,
+    openrouter_auto_route: bool,
     course_name: str,
     accepted_file_types: list[str],
     run_key: str,
@@ -1746,6 +1752,8 @@ async def process_error_only_grading_batch(
                 deduction_per_minor_error=deduction_per_minor_error,
                 model_name=model_name,
                 temperature=temperature,
+                use_openrouter=use_openrouter,
+                openrouter_auto_route=openrouter_auto_route,
             )
         )
     
@@ -2163,6 +2171,8 @@ async def get_rubric_based_exam_grading():
                     deduction_per_minor_error=int(deduction_per_minor_error or 0),
                     model_name=selected_model,
                     temperature=0.0,  # Temperature not used with OpenRouter
+                    use_openrouter=use_openrouter,
+                    openrouter_auto_route=use_auto_route,
                     course_name=course_name,
                     accepted_file_types=student_submission_accepted_file_types,
                     run_key=current_run_key,
