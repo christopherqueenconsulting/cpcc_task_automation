@@ -88,7 +88,8 @@ def normalize_detected_errors_for_scoring(
         combined_description = "\n".join(descriptions) if descriptions else f"Detected {code}"
 
         notes = list(entry["notes"])
-        notes.append(f"Total occurrences: {entry['occurrences']}")
+        # No need to attache the totoal occurences to the nots. Just kept here for reference and debugging
+        # notes.append(f"Total occurrences: {entry['occurrences']}")
         combined_notes = "\n".join(notes)
 
         normalized_errors.append(
