@@ -98,8 +98,20 @@ class MyColleges:
             # If course has ended then append "ended" to the course name
             if is_date_in_range(course_start_date, course_end_date, check_date):
                 course_name += " (ended)"
-            self.course_information[course_name] = {'href': course_href, 'start_date': course_start_date,
+            self.course_information[course_href] = {'name': course_name, 'start_date': course_start_date,
                                                     'end_date': course_end_date}
+
+        # TODO: Comment out below
+        # Display all course info
+        # logger.info(f"Processed {len(self.course_information)} courses")
+        # for course_url, course_info in self.course_information.items():
+        #    course_name = course_info['name']
+        #    course_start_date = course_info['start_date']
+        #    course_end_date = course_info['end_date']
+        #    logger.info("Course: %s | Dates %s - %s | Url: %s" % (
+        #        course_name, course_start_date.strftime("%-m/%-d/%Y"), course_end_date.strftime("%-m/%-d/%Y"),
+        #        course_url))
+        # TODO: Comment out above
 
     def prompt_attendance_start_date(
             self,
@@ -253,7 +265,8 @@ class MyColleges:
             # Filter courses to only those the user wants to process
             filtered_course_information = {}
 
-            for course_name, course_info in self.course_information.items():
+            for course_url, course_info in self.course_information.items():
+                course_name = course_info['name']
                 course_start_date = course_info['start_date']
                 course_end_date = course_info['end_date']
 
@@ -268,6 +281,7 @@ class MyColleges:
         # Find a representative course to get a start date from
         representative_course_date = None
         for course_info in self.course_information.values():
+            # TODO: Pick a course that has not ended and has the earliest start date
             representative_course_date = course_info['start_date']
             break
 
@@ -276,8 +290,8 @@ class MyColleges:
             representative_course_date or DT.datetime.now(),
         ) if representative_course_date else None
 
-        for course_name, course_info in self.course_information.items():
-            course_url = course_info['href']
+        for course_url, course_info in self.course_information.items():
+            course_name = course_info['name']
             course_start_date = course_info['start_date']
             course_end_date = course_info['end_date']
 
@@ -311,19 +325,19 @@ class MyColleges:
                     "//span[@data-bind='text: AddEndDateDisplay()']",
                     "Waiting for Deadline End Date",
                 ) or course_end_date
-                self.course_information[course_name]["last_day_to_add"] = last_day_to_add
+                self.course_information[course_url]["last_day_to_add"] = last_day_to_add
 
                 first_day_to_drop = self._get_optional_deadline_date(
                     "//span[@data-bind='text: DropStartDateDisplay()']",
                     "Waiting for Deadline Start Date",
                 ) or course_start_date
-                self.course_information[course_name]["first_day_to_drop"] = first_day_to_drop
+                self.course_information[course_url]["first_day_to_drop"] = first_day_to_drop
 
                 last_day_to_drop_without_grade = self._get_optional_deadline_date(
                     "//span[@data-bind='text: DropGradesRequiredDateDisplay()']",
                     "Waiting for Deadline Drop Without Grade Date",
                 ) or course_end_date
-                self.course_information[course_name][
+                self.course_information[course_url][
                     "last_day_to_drop_without_grade"
                 ] = last_day_to_drop_without_grade
 
@@ -331,7 +345,7 @@ class MyColleges:
                     "//span[@data-bind='text: DropEndDateDisplay()']",
                     "Waiting for Deadline Drop With Grade Date",
                 ) or course_end_date
-                self.course_information[course_name][
+                self.course_information[course_url][
                     "last_day_to_drop_with_grade"
                 ] = final_day_to_drop
 
@@ -361,7 +375,7 @@ class MyColleges:
                     if selectable_attendance_dates
                     else (self._get_last_selectable_attendance_date() or final_course_date)
                 )
-                self.course_information[course_name][
+                self.course_information[course_url][
                     "last_selectable_attendance_date"
                 ] = last_selectable_attendance_date
 
@@ -684,8 +698,8 @@ class MyColleges:
         original_tab = self.driver.current_window_handle
 
         # Filter through the courses where today is between course_start_date and course_end_date
-        for course_name, course_info in self.course_information.items():
-            course_url = course_info['href']
+        for course_url, course_info in self.course_information.items():
+            course_name = course_info['name']
             course_start_date = course_info['start_date']
             course_end_date = course_info['end_date']
             if not active_courses_only or is_date_in_range(course_start_date, DT.date.today(), course_end_date):
