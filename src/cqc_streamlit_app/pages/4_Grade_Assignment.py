@@ -1541,6 +1541,9 @@ async def process_rubric_grading_batch(
             summary_df = pd.DataFrame(summary_data)
             st.dataframe(summary_df, hide_index=True)
 
+            # Make the summary available to ZIP export in this same run.
+            st.session_state[f"grading_summary_df_{run_key}"] = summary_df
+
             # Calculate statistics - exclude failure rows from average
             numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
             avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
@@ -2528,8 +2531,6 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         else:
             st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
 
-        # Store summary_df in session state for use in _generate_feedback_docs_and_zip
-        st.session_state[f"grading_summary_df_{run_key}"] = summary_df
 
     # Display individual student results
     st.markdown("---")

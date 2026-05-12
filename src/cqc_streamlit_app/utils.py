@@ -1730,36 +1730,69 @@ def sanitize_zip_filename(
         course_name: str,
         timestamp: str
 ) -> str:
+    """Build a deterministic ZIP filename from course metadata.
+
+    Output format:
+    ``department_number[_section]_assignment_Feedback_<timestamp>.zip``
     """
-    Sanitize and format zip filename to: department_number_section_assignmentname_Feedback_timestamp
-    
-    Extracts course ID, section, and assignment name from course_name, formats with
-    underscores, and appends timestamp.
-    
-    Example:
-        Input: course_name="CSC_251_N804_Exam_2", timestamp="20260511_1543"
-        Output: "CSC_251_N804_Exam_2_Feedback_20260511_1543.zip"
-    
-    Args:
-        course_name: Course name string containing dept_number[_section][_assignment]
-        timestamp: Timestamp string in format YYYYMMDD_HHMM
-        
-    Returns:
-        Sanitized zip filename with .zip extension
-    """
-    # Parse course_name to extract components
-    course_parts = course_name.split('_')
 
-    # Build sanitized filename by replacing spaces with underscores
-    # and removing any invalid characters
-    sanitized_name = '_'.join(course_parts)
-    sanitized_name = sanitized_name.replace(' ', '_')
-    sanitized_name = re.sub(r'[<>:"/\\|?*]', '', sanitized_name)
+    def _normalize_component(value: str) -> str:
+        sanitized = value.replace(" ", "_")
+        sanitized = re.sub(r'[<>:"/\\|?*]', '', sanitized)
+        sanitized = re.sub(r'_+', '_', sanitized)
+        return sanitized.strip('_')
 
-    # Build final filename
-    zip_filename = f"{sanitized_name}_Feedback_{timestamp}.zip"
+    def _build_flexible_token_pattern(token: str) -> str:
+        token_compact = re.sub(r"[\s_-]", "", token)
+        return r"[\s_-]*".join(re.escape(ch) for ch in token_compact)
 
-    return zip_filename
+    course_parts = course_name.split('_') if course_name else []
+    idx = 0
+    base_course_id = "Course"
+    section_token = ""
+
+    if course_parts:
+        if (
+                len(course_parts) > 1
+                and re.fullmatch(r"[A-Za-z]{2,}", course_parts[0])
+                and re.fullmatch(r"\d{3}", course_parts[1])
+        ):
+            base_course_id = f"{course_parts[0]}_{course_parts[1]}"
+            idx = 2
+        else:
+            base_course_id = course_parts[0]
+            idx = 1
+
+        if idx < len(course_parts) and re.fullmatch(r"[A-Za-z]\d+", course_parts[idx]):
+            section_token = course_parts[idx]
+            idx += 1
+
+    assignment_name = "_".join(course_parts[idx:]) if idx < len(course_parts) else "Assignment"
+
+    # Remove redundant course/section prefix from assignment segment.
+    course_prefix_pattern = r"^\s*" + _build_flexible_token_pattern(base_course_id)
+    if section_token:
+        course_prefix_pattern += r"(?:[\s_-]*" + _build_flexible_token_pattern(section_token) + r")?"
+    course_prefix_pattern += r"[\s_:-]*"
+
+    assignment_name = re.sub(
+        course_prefix_pattern,
+        "",
+        assignment_name,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip(" _-:")
+
+    if not assignment_name:
+        assignment_name = "Assignment"
+
+    parts = [_normalize_component(base_course_id)]
+    if section_token:
+        parts.append(_normalize_component(section_token))
+    parts.append(_normalize_component(assignment_name))
+
+    stem = "_".join([part for part in parts if part])
+    return f"{stem}_Feedback_{timestamp}.zip"
 
 
 def export_grading_summary_to_excel(
