@@ -22,9 +22,9 @@ from pathlib import Path
 from random import randint
 from typing import Optional
 
+from cqc_cpcc.utilities.language_utils import get_language_from_file_path
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.utils import read_file, wrap_code_in_markdown_backticks
-from cqc_streamlit_app.utils import get_language_from_file_path
 
 # Token estimation constants
 # GPT-5 family models have 128K context window

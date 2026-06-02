@@ -735,47 +735,47 @@ class TestGoogleDriveUrlParsing:
     
     def test_parse_google_drive_file_url(self):
         """Test parsing standard Google Drive file URL."""
-        from cqc_streamlit_app.utils import parse_google_drive_url
-        
+        from cqc_cpcc.utilities.file_url_utils import parse_google_drive_url
+
         url = "https://drive.google.com/file/d/1a2b3c4d5e6f7g8h9i/view?usp=sharing"
         file_id = parse_google_drive_url(url)
         assert file_id == "1a2b3c4d5e6f7g8h9i"
     
     def test_parse_google_drive_open_url(self):
         """Test parsing Google Drive open?id= URL."""
-        from cqc_streamlit_app.utils import parse_google_drive_url
-        
+        from cqc_cpcc.utilities.file_url_utils import parse_google_drive_url
+
         url = "https://drive.google.com/open?id=1a2b3c4d5e6f7g8h9i"
         file_id = parse_google_drive_url(url)
         assert file_id == "1a2b3c4d5e6f7g8h9i"
     
     def test_parse_google_drive_uc_url(self):
         """Test parsing Google Drive uc?id= URL."""
-        from cqc_streamlit_app.utils import parse_google_drive_url
-        
+        from cqc_cpcc.utilities.file_url_utils import parse_google_drive_url
+
         url = "https://drive.google.com/uc?id=1a2b3c4d5e6f7g8h9i&export=download"
         file_id = parse_google_drive_url(url)
         assert file_id == "1a2b3c4d5e6f7g8h9i"
     
     def test_parse_non_google_drive_url_returns_none(self):
         """Test that non-Google Drive URLs return None."""
-        from cqc_streamlit_app.utils import parse_google_drive_url
-        
+        from cqc_cpcc.utilities.file_url_utils import parse_google_drive_url
+
         url = "https://example.com/file.pdf"
         file_id = parse_google_drive_url(url)
         assert file_id is None
     
     def test_parse_empty_url_returns_none(self):
         """Test that empty URL returns None."""
-        from cqc_streamlit_app.utils import parse_google_drive_url
-        
+        from cqc_cpcc.utilities.file_url_utils import parse_google_drive_url
+
         file_id = parse_google_drive_url("")
         assert file_id is None
     
     def test_parse_none_url_returns_none(self):
         """Test that None URL returns None."""
-        from cqc_streamlit_app.utils import parse_google_drive_url
-        
+        from cqc_cpcc.utilities.file_url_utils import parse_google_drive_url
+
         file_id = parse_google_drive_url(None)
         assert file_id is None
 
@@ -786,8 +786,8 @@ class TestDownloadFileFromUrl:
     
     def test_download_from_direct_url(self, mocker):
         """Test downloading from a direct URL."""
-        from cqc_streamlit_app.utils import download_file_from_url
-        
+        from cqc_cpcc.utilities.file_url_utils import download_file_from_url
+
         # Mock httpx client
         mock_response = mocker.Mock()
         mock_response.status_code = 200
@@ -817,8 +817,8 @@ class TestDownloadFileFromUrl:
     
     def test_download_from_google_drive_url(self, mocker):
         """Test downloading from Google Drive URL."""
-        from cqc_streamlit_app.utils import download_file_from_url
-        
+        from cqc_cpcc.utilities.file_url_utils import download_file_from_url
+
         # Mock httpx client
         mock_response = mocker.Mock()
         mock_response.status_code = 200
@@ -851,7 +851,7 @@ class TestDownloadFileFromUrl:
     
     def test_download_handles_http_error(self, mocker):
         """Test handling HTTP errors gracefully."""
-        from cqc_streamlit_app.utils import download_file_from_url
+        from cqc_cpcc.utilities.file_url_utils import download_file_from_url
         import httpx
         
         # Mock httpx client to raise error
@@ -868,16 +868,13 @@ class TestDownloadFileFromUrl:
         
         mocker.patch('httpx.Client', return_value=mock_client)
         
-        # Mock streamlit error to avoid issues in test
-        mocker.patch('streamlit.error')
-        
         result = download_file_from_url("https://example.com/nonexistent.pdf")
         
         assert result is None
     
     def test_download_handles_timeout(self, mocker):
         """Test handling timeout errors."""
-        from cqc_streamlit_app.utils import download_file_from_url
+        from cqc_cpcc.utilities.file_url_utils import download_file_from_url
         import httpx
         
         # Mock httpx client to raise timeout
@@ -887,16 +884,14 @@ class TestDownloadFileFromUrl:
         mock_client.get = mocker.Mock(side_effect=httpx.TimeoutException("Timeout"))
         
         mocker.patch('httpx.Client', return_value=mock_client)
-        mocker.patch('streamlit.error')
-        
         result = download_file_from_url("https://example.com/slow.pdf")
         
         assert result is None
     
     def test_download_infers_extension_from_content_type(self, mocker):
         """Test inferring file extension from content-type header."""
-        from cqc_streamlit_app.utils import download_file_from_url
-        
+        from cqc_cpcc.utilities.file_url_utils import download_file_from_url
+
         # Mock httpx client with no filename in headers
         mock_response = mocker.Mock()
         mock_response.status_code = 200
@@ -924,8 +919,8 @@ class TestDownloadFileFromUrl:
     
     def test_download_handles_docx_content_type(self, mocker):
         """Test proper MIME type detection for DOCX files."""
-        from cqc_streamlit_app.utils import download_file_from_url
-        
+        from cqc_cpcc.utilities.file_url_utils import download_file_from_url
+
         # Mock httpx client with DOCX content-type
         mock_response = mocker.Mock()
         mock_response.status_code = 200
@@ -940,8 +935,6 @@ class TestDownloadFileFromUrl:
         mock_client.get = mocker.Mock(return_value=mock_response)
         
         mocker.patch('httpx.Client', return_value=mock_client)
-        mocker.patch('streamlit.warning')  # Mock warning for unknown types
-        
         result = download_file_from_url("https://example.com/document")
         
         assert result is not None
@@ -954,8 +947,8 @@ class TestDownloadFileFromUrl:
     
     def test_download_warns_on_unknown_content_type(self, mocker):
         """Test that unknown content-types trigger a warning."""
-        from cqc_streamlit_app.utils import download_file_from_url
-        
+        from cqc_cpcc.utilities.file_url_utils import download_file_from_url
+
         # Mock httpx client with unknown content-type
         mock_response = mocker.Mock()
         mock_response.status_code = 200
@@ -970,15 +963,15 @@ class TestDownloadFileFromUrl:
         mock_client.get = mocker.Mock(return_value=mock_response)
         
         mocker.patch('httpx.Client', return_value=mock_client)
-        mock_warning = mocker.patch('streamlit.warning')
-        
+        mock_warning = mocker.patch('cqc_cpcc.utilities.file_url_utils.logger.warning')
+
         result = download_file_from_url("https://example.com/custom")
         
         assert result is not None
-        # Should have called warning about unknown content-type
+        # Should have called logger warning about unknown content-type
         mock_warning.assert_called_once()
-        assert "Could not determine file type" in mock_warning.call_args[0][0]
-        
+        assert "Could not determine file extension" in mock_warning.call_args[0][0]
+
         # Cleanup
         _, temp_path = result
         os.unlink(temp_path)

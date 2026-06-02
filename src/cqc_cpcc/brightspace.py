@@ -604,7 +604,7 @@ class BrightSpace_Course:
     def click_max_results_select(self, select_xpath: str, retry=1) -> bool:
         select_successful = False
 
-        while not select_successful and retry > 0:
+        while not select_successful and retry >= 0:
             try:
 
                 # Click the Results per page select element

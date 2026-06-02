@@ -127,6 +127,9 @@ JITTER_MAX = 1.5  # seconds
 # Default model configuration
 DEFAULT_MODEL = "gpt-5-mini"
 
+# Backward-compatible module-level constant (tests patch this name directly)
+OPENAI_API_KEY = DEFAULT_OPENAI_API_KEY
+
 
 def _calculate_jittered_delay(base_delay: float) -> float:
     """Calculate delay with jitter to avoid thundering herd problem.
@@ -819,7 +822,12 @@ async def get_client() -> AsyncOpenAI:
         ValueError: If OPENAI_API_KEY is not set
     """
     global _client, _client_api_key
-    current_api_key = os.getenv("OPENAI_API_KEY") or DEFAULT_OPENAI_API_KEY
+    # Backward-compatible patching behavior:
+    # if tests monkeypatch module-level OPENAI_API_KEY, respect that override.
+    if OPENAI_API_KEY != DEFAULT_OPENAI_API_KEY:
+        current_api_key = OPENAI_API_KEY
+    else:
+        current_api_key = os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY
 
     if not current_api_key:
         raise ValueError(

@@ -4,7 +4,7 @@
 
 import pytest
 
-from cqc_streamlit_app.utils import sanitize_zip_filename
+from cqc_cpcc.utilities.file_url_utils import sanitize_zip_filename
 
 
 @pytest.mark.unit

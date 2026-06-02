@@ -357,11 +357,12 @@ class TestOptionalDeadlineDate:
         driver.window_handles = ["main-tab"]
         wait = MagicMock()
         my_colleges = MyColleges(driver, wait)
+        course_url = "https://example.com/course"
         course_start_date = DT.datetime(2026, 1, 10)
         course_end_date = DT.datetime(2026, 5, 10)
         my_colleges.course_information = {
-            "CSC-151": {
-                "href": "https://example.com/course",
+            course_url: {
+                "name": "CSC-151",
                 "start_date": course_start_date,
                 "end_date": course_end_date,
             }
@@ -378,19 +379,19 @@ class TestOptionalDeadlineDate:
         assert brightspace_args[3] == course_start_date
         assert brightspace_args[4] == course_end_date
         assert (
-            my_colleges.course_information["CSC-151"]["last_day_to_add"]
+            my_colleges.course_information[course_url]["last_day_to_add"]
             == course_end_date
         )
         assert (
-            my_colleges.course_information["CSC-151"]["first_day_to_drop"]
+            my_colleges.course_information[course_url]["first_day_to_drop"]
             == course_start_date
         )
         assert (
-            my_colleges.course_information["CSC-151"]["last_day_to_drop_without_grade"]
+            my_colleges.course_information[course_url]["last_day_to_drop_without_grade"]
             == course_end_date
         )
         assert (
-            my_colleges.course_information["CSC-151"]["last_day_to_drop_with_grade"]
+            my_colleges.course_information[course_url]["last_day_to_drop_with_grade"]
             == course_end_date
         )
 

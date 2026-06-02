@@ -72,13 +72,21 @@ OPENROUTER_APP_URL = "https://github.com/gitchrisqueen/cpcc_task_automation"
 DEFAULT_MAX_RETRIES = 3  # Total attempts (1 initial + 2 retries) - matches OpenAI for consistency
 DEFAULT_RETRY_DELAY = 1.0  # Base delay in seconds
 
+# Backward-compatible module-level constants (tests patch these names directly)
+OPENROUTER_API_KEY = DEFAULT_OPENROUTER_API_KEY
+OPENROUTER_ALLOWED_MODELS = DEFAULT_OPENROUTER_ALLOWED_MODELS
+
 
 def _get_openrouter_api_key() -> str | None:
-    return os.getenv("OPENROUTER_API_KEY") or DEFAULT_OPENROUTER_API_KEY
+    if OPENROUTER_API_KEY != DEFAULT_OPENROUTER_API_KEY:
+        return OPENROUTER_API_KEY
+    return os.getenv("OPENROUTER_API_KEY") or OPENROUTER_API_KEY
 
 
 def _get_openrouter_allowed_models_raw() -> str | None:
-    return os.getenv("OPENROUTER_ALLOWED_MODELS") or DEFAULT_OPENROUTER_ALLOWED_MODELS
+    if OPENROUTER_ALLOWED_MODELS != DEFAULT_OPENROUTER_ALLOWED_MODELS:
+        return OPENROUTER_ALLOWED_MODELS
+    return os.getenv("OPENROUTER_ALLOWED_MODELS") or OPENROUTER_ALLOWED_MODELS
 
 
 def _get_openrouter_client() -> AsyncOpenAI:

@@ -1,5 +1,33 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DOCKER_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+DOCKER_USAGE_FLAG_FILE="${TMPDIR:-/tmp}/cqc_cpcc_docker_browser_used.flag"
+export CQC_DOCKER_USAGE_FLAG_FILE="$DOCKER_USAGE_FLAG_FILE"
+
+clear_docker_usage_flag() {
+    rm -f "$DOCKER_USAGE_FLAG_FILE"
+}
+
+prompt_to_stop_docker_container() {
+    if [ ! -f "$DOCKER_USAGE_FLAG_FILE" ]; then
+        return 0
+    fi
+
+    read -r -p "Do you want to stop the docker container? [y/N]: " stop_container_choice
+    case "$stop_container_choice" in
+        [yY]|[yY][eE][sS])
+            echo "Stopping Docker Compose services..."
+            docker compose -f "$DOCKER_COMPOSE_FILE" down
+            ;;
+        *)
+            echo "Keeping Docker container running."
+            ;;
+    esac
+
+    clear_docker_usage_flag
+}
+
 # Check if the .env file exists
 if [ -f .env ]; then
     # Automatically export all variables
@@ -47,7 +75,11 @@ run_app() {
             ;;
         "${options[1]}")
             echo "Running via ${options[1]}"
+            clear_docker_usage_flag
             poetry run python -m cqc_cpcc.main
+            app_exit_code=$?
+            prompt_to_stop_docker_container
+            return $app_exit_code
             ;;
         *)
             echo "Invalid option. Please select a valid option."

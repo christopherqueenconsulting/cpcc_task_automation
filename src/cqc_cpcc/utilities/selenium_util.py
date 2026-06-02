@@ -1,14 +1,14 @@
-import platform
+import os
 import platform
 import subprocess
 import tempfile
 import time
+import webbrowser
 from enum import Enum
+from pathlib import Path
 from typing import Callable
 
 import chromedriver_autoinstaller
-from cqc_cpcc.utilities.env_constants import *
-from cqc_cpcc.utilities.logger import logger
 from pyvirtualdisplay import Display
 from selenium import webdriver
 from selenium.common import NoSuchElementException, StaleElementReferenceException, ElementNotInteractableException, \
@@ -23,10 +23,36 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
+from cqc_cpcc.utilities.env_constants import *
+from cqc_cpcc.utilities.logger import logger
+
 # Module-level reference to the running virtual display (Linux only).
 _virtual_display = None
 # DISPLAY value on the user's real X server before a virtual display is started.
 _original_display: str | None = None
+DOCKER_COMPOSE_FILE_PATH = Path(__file__).resolve().parents[3] / "docker-compose.yml"
+DOCKER_USAGE_FLAG_ENV_VAR = "CQC_DOCKER_USAGE_FLAG_FILE"
+DEFAULT_DOCKER_USAGE_FLAG_FILE = Path(tempfile.gettempdir()) / "cqc_cpcc_docker_browser_used.flag"
+
+
+def get_docker_usage_flag_file() -> Path:
+    """Return the temp file path used to signal Docker browser usage to shell flows."""
+    return Path(os.environ.get(DOCKER_USAGE_FLAG_ENV_VAR, str(DEFAULT_DOCKER_USAGE_FLAG_FILE)))
+
+
+def set_docker_usage_flag(is_used: bool) -> None:
+    """Persist or clear Docker usage marker for post-run shell handling."""
+    flag_file = get_docker_usage_flag_file()
+    try:
+        if is_used:
+            flag_file.parent.mkdir(parents=True, exist_ok=True)
+            flag_file.write_text("docker-browser-used\n", encoding="utf-8")
+            logger.debug("Set Docker usage flag at %s", flag_file)
+        elif flag_file.exists():
+            flag_file.unlink()
+            logger.debug("Cleared Docker usage flag at %s", flag_file)
+    except OSError as e:
+        logger.warning("Unable to update Docker usage flag (%s): %s", flag_file, e)
 
 
 def start_virtual_display(width: int = 1920, height: int = 1080):
@@ -176,6 +202,11 @@ class BrowserType(Enum):
     BROWSERLESS = 3
 
 
+class DockerType(Enum):
+    LOCAL = 1
+    REMOTE = 2
+
+
 def which_browser():
     """Prompts the user to select a value from the given enum."""
     enum = BrowserType
@@ -184,7 +215,7 @@ def which_browser():
     for i, member in enumerate(enum):
         logger.info("%s: %s", member.value, member.name)
 
-    default = BrowserType.LOCAL_CHROME.value
+    default = BrowserType.DOCKER_CHROME.value
     user_input = int(input('Enter your selection [' + str(default) + ']: ').strip() or default)
 
     try:
@@ -194,6 +225,26 @@ def which_browser():
     except ValueError:
         logger.warning("Invalid selection.")
         return which_browser()
+
+
+def which_docker():
+    """Prompts the user to select a value from the given enum."""
+    enum = DockerType
+
+    logger.info("Please select a docker type:")
+    for i, member in enumerate(enum):
+        logger.info("%s: %s", member.value, member.name)
+
+    default = DockerType.LOCAL.value
+    user_input = int(input('Enter your selection [' + str(default) + ']: ').strip() or default)
+
+    try:
+        dt = DockerType(user_input)
+        logger.info("You selected %s", dt.name)
+        return dt
+    except ValueError:
+        logger.warning("Invalid selection.")
+        return which_docker()
 
 
 def close_tab(driver: WebDriver, handles: list[str] = None, max_retry=3):
@@ -218,6 +269,9 @@ def close_tab(driver: WebDriver, handles: list[str] = None, max_retry=3):
 
 
 def get_browser_driver():
+    # Always reset marker first so non-Docker runs are unaffected.
+    set_docker_usage_flag(False)
+
     if IS_GITHUB_ACTION:
         browser_type = BrowserType.LOCAL_CHROME
     elif HEADLESS_BROWSER:
@@ -256,21 +310,118 @@ def get_browser_driver():
 
 
 def get_docker_driver(headless=True):
+    # Mark Docker browser usage so command-line wrappers can offer teardown prompts.
+    set_docker_usage_flag(True)
+
+    # Use same base configuration as local driver
     options = getBaseOptions()
-    # options.headless = headless
+    
+    # Docker requires explicit headless options for stability
     if headless:
         options = add_headless_options(options)
 
     options.add_argument('--ignore-ssl-errors=yes')
     options.add_argument('--ignore-certificate-errors')
+    
+    # CRITICAL: Add options that reduce stale element exceptions in Docker
+    # These help with stability in the remote Selenium environment
+    options.add_argument('--disable-web-resources')  # Reduce network overhead
+    options.add_argument('--disable-client-side-phishing-detection')  # Reduce overhead
+    options.add_argument('--disable-sync')  # Disable browser sync
+    options.add_argument('--disable-default-apps')  # Reduce startup overhead
+    options.add_argument('--no-first-run')  # Skip first-run pages
+    options.add_argument('--no-pings')  # Disable pings
+    
+    # Set page load strategy to 'eager' to return faster on Docker (helps with timeouts)
+    # 'eager' means wait for DOMContentLoaded, not full page load
+    options.page_load_strategy = 'eager'
+
+    # prompt user for local docker or remote docker
+    docker_type = which_docker()
+    driver = None
+    command_executor = 'http://'
+    match docker_type:
+        case DockerType.LOCAL:
+            # Ensure Docker service is running before opening the remote session.
+            start_container_if_not_running(
+                compose_service_name=DOCKER_SERVICE_NAME,
+                compose_file_path=DOCKER_COMPOSE_FILE_PATH,
+            )
+            command_executor+='localhost'
+        case DockerType.REMOTE:
+            # TODO: Prompt for remote url or get default from environment variable
+            default = '172.0.0.1'
+            remote_url = int(input('Enter your remote url (domain only. no http://)').strip() or default)
+            command_executor += remote_url
+
+    # Open the command executor URL in the user's local browser
+    webbrowser.open(command_executor+":7900/?autoconnect=1&view_only=true&resize=scale&password=secret")
+    logger.info("The VNC password is: secret")
+
+    # Complete the command executor URL by adding the port and path
+    command_executor += ':4444/wd/hub'
+
+    # Build the driver with connection timeout for remote connections
+    # Remote Selenium connections are slower than local, so increase timeout
     driver = webdriver.Remote(
-        command_executor='http://chrome:4444/wd/hub',
-        options=options
+        command_executor=command_executor,
+        options=options,
+        keep_alive=True,  # Reuse connections to reduce latency
     )
+    
+    # Set implicit wait for Docker (helps handle network delays)
+    # This provides a baseline wait for all element finds
+    driver.implicitly_wait(WAIT_DEFAULT_TIMEOUT)
+    
+    # Set window size explicitly for Docker environment
     if not headless:
         driver.maximize_window()
+    else:
+        # Set explicit size for consistent rendering across Docker containers
+        driver.set_window_size(1920, 1080)
+
+    # Give extra time for Docker container to fully initialize
+    # (Docker startup is slower than local)
+    time.sleep(3)
 
     return driver
+
+
+def start_container_if_not_running(
+        compose_service_name: str = DOCKER_SERVICE_NAME,
+        compose_file_path: str | Path = DOCKER_COMPOSE_FILE_PATH,
+) -> str:
+    """Ensure the Docker Compose Selenium service is running."""
+    compose_file = str(Path(compose_file_path).resolve())
+    ps_cmd = ["docker", "compose", "-f", compose_file, "ps", "-q", compose_service_name]
+
+    result = subprocess.run(ps_cmd, capture_output=True, text=True, check=False)
+    container_id = result.stdout.strip() if result.returncode == 0 else ""
+
+    if result.returncode != 0:
+        logger.warning(
+            "Could not inspect Docker Compose service '%s' (rc=%s): %s",
+            compose_service_name,
+            result.returncode,
+            result.stderr.strip(),
+        )
+
+    is_running = False
+    if container_id:
+        inspect_cmd = ["docker", "inspect", "-f", "{{.State.Running}}", container_id]
+        inspect_result = subprocess.run(inspect_cmd, capture_output=True, text=True, check=False)
+        is_running = inspect_result.returncode == 0 and inspect_result.stdout.strip() == "true"
+
+    if is_running:
+        logger.info("Docker service '%s' is already running.", compose_service_name)
+        return container_id
+
+    logger.info("Starting Docker service '%s' via docker compose.", compose_service_name)
+    up_cmd = ["docker", "compose", "-f", compose_file, "up", "-d", compose_service_name]
+    result = subprocess.run(up_cmd, capture_output=True, text=True, check=True)
+    container_id = result.stdout.strip() if result.returncode == 0 else ""
+
+    return container_id
 
 
 def create_folder_if_not_exists(folder_path):
@@ -303,7 +454,6 @@ def get_local_chrome_driver(headless=True):
         options.add_argument("--profile-directory=" + INSTRUCTOR_USERID)
 
     options.add_experimental_option("detach", detached)  # Change if you want to close when program ends
-    # options.headless = headless
     driver = webdriver.Chrome(
         # TODO: Working before below but checking for streamlit cloud
         # service=Service(
@@ -441,15 +591,41 @@ def get_session_driver() -> tuple[WebDriver, WebDriverWait]:
 
 
 def get_driver_wait(driver, wait_default_timeout=None):
+    """Create a WebDriverWait instance with optimized settings for both local and Docker environments.
+    
+    Args:
+        driver: Selenium WebDriver instance
+        wait_default_timeout: Custom timeout in seconds (default: WAIT_DEFAULT_TIMEOUT from env)
+        
+    Returns:
+        WebDriverWait: Configured wait instance with ignored exceptions
+        
+    Note:
+        - For Docker environments: Uses a slightly longer poll frequency (0.3s) to reduce
+          network communication overhead compared to local browser which can poll faster (0.1s)
+        - Ignores NoSuchElementException and StaleElementReferenceException by default
+        - Always pair with explicit wait conditions (EC.presence_of_element_located, etc.)
+    """
     if wait_default_timeout is None:
         wait_default_timeout = WAIT_DEFAULT_TIMEOUT
+    
+    # Detect if this is a Docker/Remote driver (slower communication)
+    is_remote = isinstance(driver, webdriver.Remote)
+    
+    # Docker environments need slower polling to handle network latency
+    # Local browser can poll faster (0.1s is typical)
+    # Remote Docker needs 0.5s+ to avoid overwhelming the network
+    poll_frequency = 0.5 if is_remote else 0.1
 
-    return WebDriverWait(driver, wait_default_timeout,
-                         # poll_frequency=3,
-                         ignored_exceptions=[
-                             NoSuchElementException,  # This is handled individually
-                             StaleElementReferenceException  # This is handled by our click_element_wait_retry method
-                         ])
+    return WebDriverWait(
+        driver, 
+        wait_default_timeout,
+        poll_frequency=poll_frequency,  # Optimize for Docker network latency
+        ignored_exceptions=[
+            NoSuchElementException,  # This is handled individually
+            StaleElementReferenceException  # This is handled by our click_element_wait_retry method
+        ]
+    )
 
 
 def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
@@ -601,7 +777,7 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
 def get_elements_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait, find_by_value: str, wait_text: str,
                                     find_by: str = By.XPATH, max_retry=3, refresh_on_stale: bool = False,
                                     additional_lambda_function: Callable[[WebElement], str | None] | None = None) -> \
-list[WebElement | str]:
+        list[WebElement | str]:
     """Return a list of WebElement found by the locator.
 
     Behavior:
@@ -706,12 +882,37 @@ def get_elements_href_as_list_wait_stale(driver: WebDriver, wait: WebDriverWait,
 
 
 def wait_for_ajax(driver):
-    wait = get_driver_wait(driver)
+    """Wait for AJAX/jQuery operations to complete and DOM to be ready.
+    
+    This is critical for Docker environments where:
+    - Network latency can cause delayed AJAX completion
+    - DOM updates may take longer to propagate back to the client
+    - Document.readyState can be inconsistent in remote browsers
+    
+    Args:
+        driver: Selenium WebDriver instance (local or remote)
+        
+    Note:
+        Uses shorter timeout for local browser (5s) and longer for Docker (15s)
+        to account for network communication delays.
+    """
+    wait_timeout = 5 if not isinstance(driver, webdriver.Remote) else 15
+    wait = WebDriverWait(driver, wait_timeout, poll_frequency=0.5)
+    
     try:
+        # Check if jQuery is present (BrightSpace uses it)
         wait.until(lambda d: d.execute_script('return jQuery.active') == 0)
-        wait.until(lambda d: d.execute_script('return document.readyState') == 'complete')
-    except Exception as e:
+    except Exception:
+        # jQuery not present or errored - continue anyway
         pass
+    
+    try:
+        # Wait for document ready state (more reliable than jQuery alone)
+        wait.until(lambda d: d.execute_script('return document.readyState') == 'complete')
+    except Exception:
+        # If document readyState check fails, do a short sleep as fallback
+        # This is safer than raising an exception which would fail the whole automation
+        time.sleep(0.5)
 
 
 def wait_for_element_to_hide(wait: WebDriverWait, find_by_value: str, wait_text: str,

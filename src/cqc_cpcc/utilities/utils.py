@@ -4,6 +4,7 @@ import tempfile
 import time
 import zipfile
 from enum import Enum, StrEnum
+from functools import lru_cache
 from random import randint
 from typing import Optional, Annotated, List, Union
 
@@ -11,7 +12,6 @@ import docx
 import mammoth
 # import markdownify
 import pandas as pd
-import streamlit
 import textract
 from bs4 import BeautifulSoup
 from cqc_cpcc.utilities.date import get_datetime
@@ -313,12 +313,12 @@ def convert_tables_to_json_in_tmp__file(doc: Document) -> str:
     return temp_file.name
 
 
-@streamlit.cache_data
+@lru_cache(maxsize=None)
 def convert_content_to_markdown(content: str) -> str:
     return md(content)
 
 
-@streamlit.cache_data
+@lru_cache(maxsize=None)
 def convert_xlsx_to_markdown(file_path: str) -> str:
     """Convert Excel sheets into well-formatted markdown."""
     try:
@@ -342,7 +342,7 @@ def convert_xlsx_to_markdown(file_path: str) -> str:
         return f"Error converting Excel file to markdown: {str(e)}"
 
 
-@streamlit.cache_data
+@lru_cache(maxsize=None)
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format.
     

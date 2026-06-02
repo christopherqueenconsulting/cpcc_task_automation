@@ -255,8 +255,9 @@ class MyColleges:
             # Filter courses to only those the user wants to process
             filtered_course_information = {}
 
+
             for course_url, course_info in self.course_information.items():
-                course_name = course_info['name']
+                course_name = course_info.get('name', str(course_url))
                 course_start_date = course_info['start_date']
                 course_end_date = course_info['end_date']
 
@@ -264,7 +265,7 @@ class MyColleges:
                 if is_date_in_range(course_start_date, a_week_ago_date, course_end_date) or is_date_in_range(course_start_date, today_date, course_end_date):
                     process_course = input(f"Do you want to process course: {course_name} (Y/N)? ")
                     if process_course.strip().lower() == 'y':
-                        filtered_course_information[course_name] = self.course_information[course_name]
+                        filtered_course_information[course_url] = self.course_information[course_url]
             self.course_information = filtered_course_information
 
         # Prompt user once for attendance start date - applies to all courses
@@ -281,7 +282,7 @@ class MyColleges:
         ) if representative_course_date else None
 
         for course_url, course_info in self.course_information.items():
-            course_name = course_info['name']
+            course_name = course_info.get('name', str(course_url))
             course_start_date = course_info['start_date']
             course_end_date = course_info['end_date']
 

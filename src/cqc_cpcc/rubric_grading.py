@@ -540,7 +540,7 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         Updated RubricAssessmentResult with backend-computed scores
     """
     from cqc_cpcc.error_scoring import normalize_errors, select_program_performance_level, \
-        select_csc134_program_performance_level, get_error_count_for_severity
+        select_csc134_program_performance_level, get_error_count_for_severity, aggregate_error_counts
     from cqc_cpcc.scoring import score_level_band_criterion, aggregate_rubric_result
 
     logger.info(f"=== Backend Scoring Start ===")
@@ -589,7 +589,17 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     effective_minor = 0
 
     if error_count_criteria or has_program_performance:
-        has_error_counts = normalized_counts_by_severity is not None
+        # Scoring source differs by criterion type:
+        # - program_performance should use occurrence totals (authoritative LLM counts if provided)
+        # - generic error_count criteria use normalized unique error-type counts
+        scoring_counts_by_severity = normalized_counts_by_severity
+        if has_program_performance:
+            if result.error_counts_by_severity is not None:
+                scoring_counts_by_severity = result.error_counts_by_severity
+            elif normalized_detected_errors:
+                scoring_counts_by_severity, _ = aggregate_error_counts(normalized_detected_errors)
+
+        has_error_counts = scoring_counts_by_severity is not None
 
         if not has_error_counts:
             logger.warning(
@@ -616,8 +626,8 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 original_minor = 0
         else:
             # Extract error counts by severity
-            original_major = get_error_count_for_severity(normalized_counts_by_severity, "major")
-            original_minor = get_error_count_for_severity(normalized_counts_by_severity, "minor")
+            original_major = get_error_count_for_severity(scoring_counts_by_severity, "major")
+            original_minor = get_error_count_for_severity(scoring_counts_by_severity, "minor")
 
         logger.info(
             f"Original error counts: {original_major} major, {original_minor} minor"

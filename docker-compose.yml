@@ -6,13 +6,33 @@ networks:
       driver:  bridge
 
 services:
-    chrome:
+    selenium-chrome:
         image: selenium/standalone-chrome:latest
-        hostname: chrome
+        hostname: selenium-chrome
         networks:
           - web
         privileged: true
         shm_size: 2g
+        ports:
+          - "4444:4444"
+          - "7900:7900"
+          - "5900:5900"
+        environment:
+          - SE_NODE_MAX_SESSIONS=2
+          - SE_NODE_SESSION_TIMEOUT=600
+          - SE_LOG_LEVEL=WARN
+        restart: unless-stopped
+        deploy:
+          resources:
+            limits:
+              cpus: '2.0'
+              memory: 4g
+        healthcheck:
+          test: ["CMD-SHELL", "curl -fsS http://localhost:4444/wd/hub/status >/dev/null || exit 1"]
+          interval: 30s
+          timeout: 10s
+          retries: 5
+          start_period: 20s
     #framework:
     #    build: .
     #   networks:

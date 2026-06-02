@@ -1,6 +1,7 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
 import pytest
+import subprocess
 from unittest.mock import Mock, MagicMock, patch, call
 from selenium.common.exceptions import (
     TimeoutException,
@@ -285,6 +286,61 @@ class TestGetBrowserDriver:
         assert result == mock_driver
         # Falls back to BROWSERLESS (headless=True) because virtual display is None
         mock_get_local.assert_called_once_with(True)
+
+
+@pytest.mark.unit
+class TestDockerComposeHelpers:
+    """Test Docker Compose startup and usage-flag helpers."""
+
+    @patch('cqc_cpcc.utilities.selenium_util.subprocess.run')
+    def test_start_container_if_not_running_skips_when_running(self, mock_run):
+        from cqc_cpcc.utilities.selenium_util import start_container_if_not_running
+
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout='abc123\n', stderr=''),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout='true\n', stderr=''),
+        ]
+
+        container_id = start_container_if_not_running('chrome', '/tmp/docker-compose.yml')
+        # Assert container_id is a set string
+        assert isinstance(container_id, str)
+
+        assert mock_run.call_count == 2
+        ps_call = mock_run.call_args_list[0][0][0]
+        assert ps_call[0:3] == ['docker', 'compose', '-f']
+        assert ps_call[3].endswith('/docker-compose.yml')
+        assert ps_call[4:6] == ['ps', '-q']
+
+    @patch('cqc_cpcc.utilities.selenium_util.subprocess.run')
+    def test_start_container_if_not_running_starts_when_not_running(self, mock_run):
+        from cqc_cpcc.utilities.selenium_util import start_container_if_not_running
+
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=0, stdout='\n', stderr=''),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout='started\n', stderr=''),
+        ]
+
+        container_id = start_container_if_not_running('chrome', '/tmp/docker-compose.yml')
+        # Assert container_id is a set string
+        assert isinstance(container_id, str)
+
+        assert mock_run.call_count == 2
+        up_call = mock_run.call_args_list[1][0][0]
+        assert up_call[0:3] == ['docker', 'compose', '-f']
+        assert up_call[3].endswith('/docker-compose.yml')
+        assert up_call[4:] == ['up', '-d', 'chrome']
+
+    def test_set_docker_usage_flag_sets_and_clears_marker(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.selenium_util import set_docker_usage_flag, get_docker_usage_flag_file
+
+        flag_file = tmp_path / 'docker.flag'
+        monkeypatch.setenv('CQC_DOCKER_USAGE_FLAG_FILE', str(flag_file))
+
+        set_docker_usage_flag(True)
+        assert get_docker_usage_flag_file().exists()
+
+        set_docker_usage_flag(False)
+        assert not get_docker_usage_flag_file().exists()
 
 
 @pytest.mark.unit

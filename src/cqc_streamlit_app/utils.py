@@ -1,15 +1,18 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import os
-import re
 import tempfile
 import zipfile
 from random import randint
-from typing import Any, Optional, Tuple, Union
-from urllib.parse import parse_qs, urlparse
+from typing import Any, Optional, Union
 
-import httpx
 import pandas as pd
 import streamlit as st
+from cqc_cpcc.utilities.file_url_utils import (
+    download_file_from_url,
+    parse_google_drive_url,
+    sanitize_zip_filename,
+)
+from cqc_cpcc.utilities.language_utils import get_language_from_file_path
 from cqc_cpcc.utilities.logger import logger
 from langchain_openai import ChatOpenAI
 from openpyxl import Workbook
@@ -920,16 +923,6 @@ def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = 
     return file_extension
 
 
-def get_language_from_file_path(file_path):
-    # Extract file extension from the file path
-    file_extension = get_file_extension_from_filepath(file_path, True)
-
-    # Get the languages associated with the file extension
-    langs = EXTENSION_TO_LANGUAGES.get(file_extension.lower(), [])
-    # Return the first option or text otherwise
-    return langs[0] if langs else "text"
-
-
 def get_unique_extensions() -> list[str]:
     """
     Returns a sorted list of unique file extensions.
@@ -1313,124 +1306,6 @@ def reset_session_key_value(key: str):
 UploadedFileResult = Union[list[tuple[Any, str]], tuple[Any, str], tuple[None, None]]
 
 
-def parse_google_drive_url(url: str) -> Optional[str]:
-    """
-    Parse a Google Drive URL and return the file ID.
-    
-    Supports various Google Drive URL formats:
-    - https://drive.google.com/file/d/{FILE_ID}/view
-    - https://drive.google.com/open?id={FILE_ID}
-    - https://drive.google.com/uc?id={FILE_ID}
-    
-    Args:
-        url: Google Drive URL
-        
-    Returns:
-        File ID if valid Google Drive URL, None otherwise
-    """
-    if not url or 'drive.google.com' not in url:
-        return None
-
-    # Pattern 1: /file/d/{FILE_ID}/view or /file/d/{FILE_ID}/
-    match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
-    if match:
-        return match.group(1)
-
-    # Pattern 2: ?id={FILE_ID} (from open?id= or uc?id=)
-    parsed = urlparse(url)
-    params = parse_qs(parsed.query)
-    if 'id' in params and params['id']:
-        return params['id'][0]
-
-    return None
-
-
-def download_file_from_url(url: str, filename_hint: Optional[str] = None) -> Optional[Tuple[str, str]]:
-    """
-    Download a file from a URL (Google Drive or direct URL) and save to temp file.
-    
-    Args:
-        url: URL to download from (Google Drive URL or direct download URL)
-        filename_hint: Optional filename hint for extension detection
-        
-    Returns:
-        Tuple of (original_filename, temp_file_path) on success, None on failure
-    """
-    try:
-        # Check if it's a Google Drive URL
-        file_id = parse_google_drive_url(url)
-        if file_id:
-            # Convert to direct download URL
-            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            logger.info(f"Detected Google Drive file ID: {file_id}")
-        else:
-            download_url = url
-
-        # Download the file with httpx
-        with httpx.Client(follow_redirects=True, timeout=30.0) as client:
-            response = client.get(download_url)
-            response.raise_for_status()
-
-            # Try to get filename from Content-Disposition header
-            content_disposition = response.headers.get('content-disposition', '')
-            filename = None
-            if content_disposition:
-                match = re.search(r'filename="?([^"]+)"?', content_disposition)
-                if match:
-                    filename = match.group(1)
-
-            # Fall back to URL path or hint
-            if not filename:
-                parsed_url = urlparse(url)
-                filename = os.path.basename(parsed_url.path) or filename_hint or "downloaded_file"
-
-            # Ensure filename has an extension - use precise MIME type mapping
-            if '.' not in filename:
-                content_type = response.headers.get('content-type', '').lower().split(';')[0].strip()
-                mime_to_ext = {
-                    'application/pdf': '.pdf',
-                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-                    'application/msword': '.doc',
-                    'text/plain': '.txt',
-                    'application/zip': '.zip',
-                    'application/x-zip-compressed': '.zip',
-                    'text/html': '.html',
-                    'application/json': '.json',
-                }
-                extension = mime_to_ext.get(content_type)
-                if extension:
-                    filename += extension
-                else:
-                    # If we can't determine extension, raise an error
-                    logger.warning(f"Could not determine file extension for content-type: {content_type}")
-                    st.warning(
-                        f"Could not determine file type (content-type: {content_type}). File may not be processed correctly.")
-
-            # Create temp file with appropriate extension
-            file_extension = os.path.splitext(filename)[1] or '.tmp'
-            # Note: temp files with delete=False are cleaned up by the OS temp directory cleanup
-            # or when the session ends. Streamlit manages temp file lifecycle.
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
-            temp_file.write(response.content)
-            temp_file.close()
-
-            logger.info(f"Successfully downloaded file from URL: {url} -> {temp_file.name}")
-            return filename, temp_file.name
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error downloading file from URL {url}: {e}")
-        st.error(f"Failed to download file: HTTP {e.response.status_code}")
-        return None
-    except httpx.TimeoutException:
-        logger.error(f"Timeout downloading file from URL: {url}")
-        st.error("Download timeout. Please check the URL and try again.")
-        return None
-    except Exception as e:
-        logger.error(f"Error downloading file from URL {url}: {e}", exc_info=True)
-        st.error(f"Error downloading file: {str(e)}")
-        return None
-
-
 def add_upload_file_element(
         uploader_text: str,
         accepted_file_types: list[str],
@@ -1726,73 +1601,6 @@ def create_zip_file(file_paths: list[tuple[str, str]]) -> str:
     return zip_file.name
 
 
-def sanitize_zip_filename(
-        course_name: str,
-        timestamp: str
-) -> str:
-    """Build a deterministic ZIP filename from course metadata.
-
-    Output format:
-    ``department_number[_section]_assignment_Feedback_<timestamp>.zip``
-    """
-
-    def _normalize_component(value: str) -> str:
-        sanitized = value.replace(" ", "_")
-        sanitized = re.sub(r'[<>:"/\\|?*]', '', sanitized)
-        sanitized = re.sub(r'_+', '_', sanitized)
-        return sanitized.strip('_')
-
-    def _build_flexible_token_pattern(token: str) -> str:
-        token_compact = re.sub(r"[\s_-]", "", token)
-        return r"[\s_-]*".join(re.escape(ch) for ch in token_compact)
-
-    course_parts = course_name.split('_') if course_name else []
-    idx = 0
-    base_course_id = "Course"
-    section_token = ""
-
-    if course_parts:
-        if (
-                len(course_parts) > 1
-                and re.fullmatch(r"[A-Za-z]{2,}", course_parts[0])
-                and re.fullmatch(r"\d{3}", course_parts[1])
-        ):
-            base_course_id = f"{course_parts[0]}_{course_parts[1]}"
-            idx = 2
-        else:
-            base_course_id = course_parts[0]
-            idx = 1
-
-        if idx < len(course_parts) and re.fullmatch(r"[A-Za-z]\d+", course_parts[idx]):
-            section_token = course_parts[idx]
-            idx += 1
-
-    assignment_name = "_".join(course_parts[idx:]) if idx < len(course_parts) else "Assignment"
-
-    # Remove redundant course/section prefix from assignment segment.
-    course_prefix_pattern = r"^\s*" + _build_flexible_token_pattern(base_course_id)
-    if section_token:
-        course_prefix_pattern += r"(?:[\s_-]*" + _build_flexible_token_pattern(section_token) + r")?"
-    course_prefix_pattern += r"[\s_:-]*"
-
-    assignment_name = re.sub(
-        course_prefix_pattern,
-        "",
-        assignment_name,
-        count=1,
-        flags=re.IGNORECASE,
-    ).strip(" _-:")
-
-    if not assignment_name:
-        assignment_name = "Assignment"
-
-    parts = [_normalize_component(base_course_id)]
-    if section_token:
-        parts.append(_normalize_component(section_token))
-    parts.append(_normalize_component(assignment_name))
-
-    stem = "_".join([part for part in parts if part])
-    return f"{stem}_Feedback_{timestamp}.zip"
 
 
 def export_grading_summary_to_excel(
