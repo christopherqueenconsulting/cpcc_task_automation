@@ -101,17 +101,6 @@ class MyColleges:
             self.course_information[course_href] = {'name': course_name, 'start_date': course_start_date,
                                                     'end_date': course_end_date}
 
-        # TODO: Comment out below
-        # Display all course info
-        # logger.info(f"Processed {len(self.course_information)} courses")
-        # for course_url, course_info in self.course_information.items():
-        #    course_name = course_info['name']
-        #    course_start_date = course_info['start_date']
-        #    course_end_date = course_info['end_date']
-        #    logger.info("Course: %s | Dates %s - %s | Url: %s" % (
-        #        course_name, course_start_date.strftime("%-m/%-d/%Y"), course_end_date.strftime("%-m/%-d/%Y"),
-        #        course_url))
-        # TODO: Comment out above
 
     def prompt_attendance_start_date(
             self,
@@ -252,7 +241,8 @@ class MyColleges:
         original_tab = self.driver.current_window_handle
 
         # Use check date of a week ago
-        check_date = DT.date.today() - DT.timedelta(days=7)
+        a_week_ago_date = DT.date.today() - DT.timedelta(days=7)
+        today_date = DT.date.today()
 
         # Keep an array of all the BrightSpace courses
         bs_courses = []
@@ -271,7 +261,7 @@ class MyColleges:
                 course_end_date = course_info['end_date']
 
                 # Skip courses that have not started or have ended within the last week
-                if is_date_in_range(course_start_date, check_date, course_end_date):
+                if is_date_in_range(course_start_date, a_week_ago_date, course_end_date) or is_date_in_range(course_start_date, today_date, course_end_date):
                     process_course = input(f"Do you want to process course: {course_name} (Y/N)? ")
                     if process_course.strip().lower() == 'y':
                         filtered_course_information[course_name] = self.course_information[course_name]
@@ -295,8 +285,10 @@ class MyColleges:
             course_start_date = course_info['start_date']
             course_end_date = course_info['end_date']
 
-            # Skip courses that have not started or have ended within the last week
-            if is_date_in_range(course_start_date, check_date, course_end_date):
+            # Process courses where the last attendance start date is within the course start and end date.
+            # When last_attendance_start_date is None (user chose "Last Attendance Date" which is unresolved),
+            # fall back to processing all courses.
+            if last_attendance_start_date is None or is_date_in_range(course_start_date, last_attendance_start_date, course_end_date):
 
                 # Switch back to original_tab
                 self.driver.switch_to.window(original_tab)
@@ -405,7 +397,6 @@ class MyColleges:
                             "Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
                     except ValueError:
                         # No date found then use start of course date
-                        # last_attendance_record_date = get_datetime(check_date.strftime("%m-%d-%Y"))
                         last_attendance_record_date = course_start_date
                         logger.info(
                             "No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
@@ -468,6 +459,7 @@ class MyColleges:
                 close_tab(self.driver)
 
             else:
+                # Skip courses where the last attendance start date is not within the course start and end date
                 logger.info("Course: %s | Dates %s - %s | Not in Date Range. | Skipping " % (
                     course_name, course_start_date.strftime("%-m/%-d/%Y"), course_end_date.strftime("%-m/%-d/%Y")))
 

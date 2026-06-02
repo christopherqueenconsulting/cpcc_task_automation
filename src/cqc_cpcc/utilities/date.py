@@ -442,7 +442,9 @@ def convert_date_to_datetime(date: DT.date) -> DT.datetime:
     return DT.datetime.combine(date, DT.datetime.min.time())
 
 
-def _is_timezone_aware(value: DT.datetime) -> bool:
+def _is_timezone_aware(value: DT.datetime | None) -> bool:
+    if value is None:
+        return False
     return value.tzinfo is not None and value.utcoffset() is not None
 
 
@@ -453,14 +455,16 @@ def _strip_timezone(value: DT.datetime) -> DT.datetime:
     return (value - offset).replace(tzinfo=None)
 
 
-def _ensure_naive_datetime(value: DT.datetime) -> DT.datetime:
+def _ensure_naive_datetime(value: DT.datetime | None) -> DT.datetime | None:
     """Return a timezone-naive datetime for reliable comparisons."""
+    if value is None:
+        return None
     if isinstance(value, DT.datetime) and _is_timezone_aware(value):
         return _strip_timezone(value)
     return value
 
 
-def _normalize_datetimes_for_compare(values: list[DT.datetime]) -> list[DT.datetime]:
+def _normalize_datetimes_for_compare(values: list[DT.datetime | None]) -> list[DT.datetime | None]:
     if any(_is_timezone_aware(value) for value in values):
         return [_ensure_naive_datetime(value) for value in values]
     return values
