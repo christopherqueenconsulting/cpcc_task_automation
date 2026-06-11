@@ -11,16 +11,20 @@ services:
         hostname: selenium-chrome
         networks:
           - web
-        privileged: true
+        # privileged: true
         shm_size: 2g
         ports:
           - "4444:4444"
           - "7900:7900"
-          - "5900:5900"
+          #- "5900:5900"
         environment:
-          - SE_NODE_MAX_SESSIONS=2
+          - SE_NODE_MAX_SESSIONS=1
           - SE_NODE_SESSION_TIMEOUT=600
           - SE_LOG_LEVEL=WARN
+          - SE_BROWSER_ARGS_USER_DATA_DIR=--user-data-dir=/home/seluser/chrome-profile
+          - SE_BROWSER_ARGS_PROFILE=--profile-directory=Default
+        volumes:
+          - ./chrome-profile:/home/seluser/chrome-profile
         restart: unless-stopped
         deploy:
           resources:

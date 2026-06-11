@@ -638,6 +638,7 @@ def _click_use_another_account_if_present(
 ) -> bool:
     """Click "Use another account" when available and wait for the identifier step."""
     use_another_xpath = "//div[contains(text(),'Use another')]/parent::div"
+
     if not _is_xpath_present(driver, use_another_xpath) and not _is_xpath_present_with_short_wait(
             wait_probe,
             use_another_xpath,
@@ -647,10 +648,11 @@ def _click_use_another_account_if_present(
 
     click_element_wait_retry(
         driver,
-        wait,
+        wait_probe,
         use_another_xpath,
         "Waiting for use another account button",
     )
+
     _wait_for_microsoft_identifier_step(wait_short)
     return True
 
@@ -670,21 +672,19 @@ def _resolve_microsoft_account_path(
 
     if _is_xpath_present(driver, expected_display_name_xpath):
         return True
-
     if _is_xpath_present(driver, pick_account_xpath) or _is_xpath_present_with_short_wait(
             wait_probe,
             pick_account_xpath,
             "Waiting briefly to see if pick account is visible",
     ):
-        click_element_wait_retry(driver, wait, pick_account_xpath, "Waiting for pick account selection")
+        click_element_wait_retry(driver, wait_probe, pick_account_xpath, "Waiting for pick account selection")
         return True
-
     if _is_xpath_present(driver, any_display_name_xpath) or _is_xpath_present_with_short_wait(
             wait_probe,
             any_display_name_xpath,
             "Waiting briefly to see if another username is present",
     ):
-        click_element_wait_retry(driver, wait, "//button[@class='backButton']", "Waiting for back button")
+        click_element_wait_retry(driver, wait_probe, "//button[@class='backButton']", "Waiting for back button")
         _click_use_another_account_if_present(driver, wait, wait_short, wait_probe)
         return False
 
@@ -706,13 +706,19 @@ def microsoft_login(driver: WebDriver):
 
     original_window = driver.current_window_handle
 
+    logger.info("Microsoft login page detected — checking for existing account selection or username entry.")
+
     # Wait for the title to change
-    wait.until(EC.title_is("Sign in to your account"))
+    wait_short.until(EC.title_is("Sign in to your account"))
+
+    logger.info("Microsoft login page loaded — proceeding with authentication.")
 
     wait_short.until(
         EC.presence_of_element_located((By.XPATH, "//div[@id='loginHeader']")),
         "Waiting for login screen presence",
     )
+
+    logger.info("Checking for existing account selection or username entry.")
 
     # Username may already be prefilled; if a different user is shown, clear it.
     user_name_already_entered = _resolve_microsoft_account_path(
@@ -725,24 +731,35 @@ def microsoft_login(driver: WebDriver):
     )
 
     if not user_name_already_entered:
-        wait_short.until(
-            EC.presence_of_element_located((By.NAME, "loginfmt")),
-            "Waiting for username input",
-        )
+        logger.info("Username Not already entered")
+
         # Enter username / email
-        username_field = driver.find_element(By.NAME, "loginfmt")
+        # username_field = driver.find_element(By.NAME, "loginfmt")
+        username_field = wait_short.until(EC.element_to_be_clickable((By.NAME, "loginfmt")), "Waiting for username input")
+
+        # Note : Avoid plain send_keys
+        username_field.click()
+        username_field.clear()
         username_field.send_keys(instructor_user_id + "@cpcc.edu")
+
+
         # Click Next
         click_element_wait_retry(driver, wait,
                                  "//input[contains(@class, 'button_primary') and contains(@value,'Next')]",
                                  "Waiting for Next Button", By.XPATH)
-    wait_short.until(
-        EC.presence_of_element_located((By.NAME, "passwd")),
-        "Waiting for password input",
-    )
+
+    logger.info("Wating for password input")
+
     # Enter password
-    password_field = driver.find_element(By.NAME, "passwd")
+    # password_field = driver.find_element(By.NAME, "passwd")
+    password_field = wait_short.until(EC.element_to_be_clickable((By.NAME, "passwd")), "Waiting for password input")
+    # Note : Avoid plain send_keys
+    password_field.click()
+    password_field.clear()
     password_field.send_keys(instructor_password)
+
+    logger.info("Waiting for Sign in Button")
+
     # Click Sign In
     click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Sign in')]",
                              "Waiting for Sign in Button", By.XPATH)

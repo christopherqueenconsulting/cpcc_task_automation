@@ -20,7 +20,7 @@ def prompt_action():
     for i, member in enumerate(enum):
         logger.info(f"{member.value}: {member.name}")
 
-    default = Instructor_Actions.GIVE_FEEDBACK.value
+    default = Instructor_Actions.TAKE_ATTENDANCE.value
     user_input = int(input('Enter your selection [' + str(default) + ']: ').strip() or default)
 
     try:
