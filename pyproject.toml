@@ -48,7 +48,7 @@ tabulate = "^0"
 pypdf = "^6"
 pymupdf = "^1"
 # onnxruntime is only used for a small subset of tests, so we specify a wide version range to avoid dependency conflicts for users who don't need it. The upper bound is set to 1.23.2 because that's the latest version that supports Python 3.12 as of the knowledge cutoff date.
-onnxruntime = ">=1.20,<=1.23.2"
+onnxruntime = ">=1.20,<=1.26.0"
 pandas-stubs = ">=2,<4"
 
 
