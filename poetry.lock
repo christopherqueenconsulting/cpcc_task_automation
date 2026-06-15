@@ -4152,14 +4152,14 @@ et-xmlfile = "*"
 
 [[package]]
 name = "openrouter"
-version = "0.9.1"
+version = "0.9.2"
 description = "Official Python Client SDK for OpenRouter."
 optional = false
 python-versions = ">=3.9.2"
 groups = ["main"]
 files = [
-    {file = "openrouter-0.9.1-py3-none-any.whl", hash = "sha256:2f1dcaa956778781855f473bad28400cf310ad5626df8747ec888997fbdb6223"},
-    {file = "openrouter-0.9.1.tar.gz", hash = "sha256:0fe00c3640c2b956a244b75b46feb02c2526cda9187f5d5edfbedca87cc18fab"},
+    {file = "openrouter-0.9.2-py3-none-any.whl", hash = "sha256:c79f9df71bd96572090e26b65514088f989a27ca45b520d50740c0cfd0fd9f06"},
+    {file = "openrouter-0.9.2.tar.gz", hash = "sha256:a3d2d6e2a1f14dcfbe5cc0590fe82fb3073a8834c0a3987e391fc51f222acdcd"},
 ]
 
 [package.dependencies]
@@ -8570,4 +8570,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "9c4fe9426a3e44b73bde4fcf2af24b4685688b472affa762b45071a41f5819a8"
+content-hash = "f45a843693acd3ee5a75590e5860e5633c7e84a856d83fccd2f44b1eb77f173a"
