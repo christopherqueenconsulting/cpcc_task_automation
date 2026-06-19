@@ -601,19 +601,22 @@ class BrightSpace_Course:
 
             # logger.info("Attendance Records (after quizzes):\n%s" % self.attendance_records)
 
-    def click_max_results_select(self, select_xpath: str, retry=1) -> bool:
+    def click_max_results_select_old(self, select_xpath: str, retry=1) -> bool:
         select_successful = False
 
         while not select_successful and retry >= 0:
             try:
 
-                # Click the Results per page select element
+                # Define the options xpath based on the select_xpath
                 select_option_xpath = select_xpath + "//option"
 
-                select_options = self.wait.until(
-                    lambda d: d.find_elements(By.XPATH,
-                                              select_option_xpath),
-                    "Waiting for Select options")
+                # Wait for the select element to be visible
+                #select_options = self.wait.until(
+                #    lambda d: d.find_elements(By.XPATH,
+                #                              select_option_xpath),
+                #"Waiting for Select options")
+                # select_options = self.driver.find_elements(By.XPATH, select_xpath)
+                select_options = self.wait.until(EC.presence_of_all_elements_located((By.XPATH, select_option_xpath)), "Waiting for Select Options")
 
                 # Get Max Value
                 option_values = [x.get_attribute('value') for x in
@@ -636,8 +639,7 @@ class BrightSpace_Course:
                 wait_for_ajax(self.driver)
                 select_element.send_keys(Keys.TAB)  # Use to blur the select element
                 # Explicit wait 1 second
-                time.sleep(3)
-                # self.driver.implicitly_wait(3)
+                time.sleep(1)
                 select_successful = True
             except (NoSuchElementException, ElementNotInteractableException):
                 # Break the while loop
@@ -645,12 +647,73 @@ class BrightSpace_Course:
             except (StaleElementReferenceException, TimeoutException) as ste:
                 logger.info("Exception while looking for: %s | Error: %s" % (select_xpath, ste))
                 retry -= 1
-                # self.driver.implicitly_wait(3)  # wait 3 seconds
                 time.sleep(3)
 
             # are_you_satisfied()
 
         return select_successful
+
+    def click_max_results_select(self, select_xpath: str, retry: int = 1) -> bool:
+        attempts = retry + 1
+
+        for attempt in range(attempts):
+            try:
+                select_option_xpath = f"{select_xpath}//option"
+
+                # Wait until options are present
+                select_options = self.wait.until(
+                    EC.presence_of_all_elements_located((By.XPATH, select_option_xpath)),
+                    "Waiting for select options"
+                )
+
+                # Extract numeric option values safely
+                numeric_values = [
+                    int(option.get_attribute("value").strip())
+                    for option in select_options
+                    if option.get_attribute("value")
+                       and option.get_attribute("value").strip().isdigit()
+                ]
+
+                if not numeric_values:
+                    logger.info("No numeric select option values found for: %s", select_xpath)
+                    return False
+
+                max_value = max(numeric_values)
+
+                # Re-locate the select after reading options to reduce stale risk
+                select_element = self.wait.until(
+                    EC.element_to_be_clickable((By.XPATH, select_xpath)),
+                    "Waiting for max per page select"
+                )
+
+                select = Select(select_element)
+                select.select_by_value(str(max_value))
+
+                # Blur the field to trigger onchange handlers if needed
+                select_element.send_keys(Keys.TAB)
+
+                wait_for_ajax(self.driver)
+
+                return True
+
+            except (NoSuchElementException, ElementNotInteractableException) as e:
+                logger.info("Select not interactable or missing: %s | Error: %s", select_xpath, e)
+                return False
+
+            except (StaleElementReferenceException, TimeoutException) as e:
+                logger.info(
+                    "Retrying select max results. Attempt %s/%s | XPath: %s",
+                    attempt + 1,
+                    attempts,
+                    select_xpath
+                )
+
+                if attempt == attempts - 1:
+                    return False
+
+                time.sleep(1)
+
+        return False
 
     def get_attendance_from_brightspace_quizzes_urls(self, quizzes_urls: list):
         # Keep track of current tab

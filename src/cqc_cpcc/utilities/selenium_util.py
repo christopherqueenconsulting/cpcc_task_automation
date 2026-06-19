@@ -1,6 +1,7 @@
 import os
 import platform
 import subprocess
+import requests
 import tempfile
 import time
 import webbrowser
@@ -301,7 +302,7 @@ def get_browser_driver():
     driver = None
     match browser_type:
         case BrowserType.DOCKER_CHROME:
-            driver = get_docker_driver(HEADLESS_BROWSER)
+            driver = get_docker_driver()
         case BrowserType.LOCAL_CHROME:
             driver = get_local_chrome_driver(HEADLESS_BROWSER)
         case BrowserType.BROWSERLESS:
@@ -309,7 +310,7 @@ def get_browser_driver():
     return driver
 
 
-def get_docker_driver(headless=True):
+def get_docker_driver(headless=False):
     # Mark Docker browser usage so command-line wrappers can offer teardown prompts.
     set_docker_usage_flag(True)
 
@@ -320,26 +321,13 @@ def get_docker_driver(headless=True):
     if headless:
         options = add_headless_options(options)
 
-    options.add_argument('--ignore-ssl-errors=yes')
-    options.add_argument('--ignore-certificate-errors')
-    
-    # CRITICAL: Add options that reduce stale element exceptions in Docker
-    # These help with stability in the remote Selenium environment
-    options.add_argument('--disable-web-resources')  # Reduce network overhead
-    options.add_argument('--disable-client-side-phishing-detection')  # Reduce overhead
-    options.add_argument('--disable-sync')  # Disable browser sync
-    options.add_argument('--disable-default-apps')  # Reduce startup overhead
-    options.add_argument('--no-first-run')  # Skip first-run pages
-    options.add_argument('--no-pings')  # Disable pings
-    
-    # Set page load strategy to 'eager' to return faster on Docker (helps with timeouts)
-    # 'eager' means wait for DOMContentLoaded, not full page load
-    options.page_load_strategy = 'eager'
+    # Must add docker options
+    options = add_docker_chrome_options(options)
 
     # prompt user for local docker or remote docker
     docker_type = which_docker()
     driver = None
-    command_executor = 'http://'
+    selenium_container_url = 'http://'
     match docker_type:
         case DockerType.LOCAL:
             # Ensure Docker service is running before opening the remote session.
@@ -347,32 +335,34 @@ def get_docker_driver(headless=True):
                 compose_service_name=DOCKER_SERVICE_NAME,
                 compose_file_path=DOCKER_COMPOSE_FILE_PATH,
             )
-            command_executor+='localhost'
+            selenium_container_url+='localhost'
         case DockerType.REMOTE:
             # TODO: Prompt for remote url or get default from environment variable
             default = '172.0.0.1'
             remote_url = int(input('Enter your remote url (domain only. no http://)').strip() or default)
-            command_executor += remote_url
+            selenium_container_url += remote_url
 
-    # Open the command executor URL in the user's local browser
-    webbrowser.open(command_executor+":7900/?autoconnect=1&view_only=true&resize=scale&password=secret")
-    logger.info("The VNC password is: secret")
+    # Poll the selenium container till its ready
+    for _ in range(60):
+        try:
+            r = requests.get(selenium_container_url+":4444/status", timeout=2)
+            if r.json().get("value", {}).get("ready") is True:
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    else:
+        raise RuntimeError("Selenium container did not become ready")
 
-    # Complete the command executor URL by adding the port and path
-    command_executor += ':4444/wd/hub'
 
     # Build the driver with connection timeout for remote connections
     # Remote Selenium connections are slower than local, so increase timeout
     driver = webdriver.Remote(
-        command_executor=command_executor,
+        command_executor=selenium_container_url+':4444/wd/hub',
         options=options,
         keep_alive=True,  # Reuse connections to reduce latency
     )
-    
-    # Set implicit wait for Docker (helps handle network delays)
-    # This provides a baseline wait for all element finds
-    driver.implicitly_wait(WAIT_DEFAULT_TIMEOUT)
-    
+
     # Set window size explicitly for Docker environment
     if not headless:
         driver.maximize_window()
@@ -383,6 +373,10 @@ def get_docker_driver(headless=True):
     # Give extra time for Docker container to fully initialize
     # (Docker startup is slower than local)
     time.sleep(3)
+
+    # Open the command executor URL in the user's local browser
+    webbrowser.open(selenium_container_url + ":7900/?autoconnect=1&view_only=true&resize=scale&password=secret")
+    #logger.info("The VNC password is: secret")
 
     return driver
 
@@ -484,6 +478,23 @@ def get_local_chrome_driver(headless=True):
 
     return driver
 
+def add_docker_chrome_options(options: Options) -> Options:
+    options.add_argument('--ignore-certificate-errors')
+    options.add_argument('--no-sandbox')
+
+    # CRITICAL: Add options that reduce stale element exceptions in Docker
+    # These help with stability in the remote Selenium environment
+    options.add_argument('--disable-client-side-phishing-detection')  # Reduce overhead
+    options.add_argument('--disable-sync')  # Disable browser sync
+    options.add_argument('--disable-default-apps')  # Reduce startup overhead
+    options.add_argument('--no-first-run')  # Skip first-run pages
+    options.add_argument('--no-pings')  # Disable pings
+
+    # Set page load strategy to 'eager' to return faster on Docker (helps with timeouts)
+    # 'eager' means wait for DOMContentLoaded, not full page load
+    options.page_load_strategy = 'eager'
+
+    return options
 
 def add_headless_options(options: Options) -> Options:
     # options.add_argument("--headless=new") # <--- DOES NOT WORK
@@ -501,7 +512,7 @@ def add_headless_options(options: Options) -> Options:
     options.add_argument('--disable-extensions')  # Working
     options.add_argument('--disable-infobars')  # Working
     options.add_argument('--disable-browser-side-navigation')  # Working
-    options.add_argument('--disable-dev-shm-usage')  # Working
+    #options.add_argument('--disable-dev-shm-usage')  # Working
     options.add_argument('--disable-features=VizDisplayCompositor')  # Working
     options.add_argument('--dns-prefetch-disable')  # Working
     options.add_argument("--force-device-scale-factor=1")  # Working
@@ -524,7 +535,6 @@ def getBaseOptions(base_download_directory: str = None):
 
     options.add_argument('--disable-gpu')
     options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
 
     # Options to prevent detection
     # options.add_argument("--disable-blink-features=AutomationControlled")
@@ -696,7 +706,6 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
     except (StaleElementReferenceException, ElementNotInteractableException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale or Not Interactable | .....retrying")
         time.sleep(5)  # wait 5 seconds
-        # driver.implicitly_wait(5)  # wait on driver 5 seconds
         if max_try > 0:
             # Still have retries left, decrement and retry
             element = click_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
@@ -764,7 +773,6 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
     except (StaleElementReferenceException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale | .....retrying")
         time.sleep(5)  # wait 5 seconds
-        # driver.implicitly_wait(5)  # wait on driver 5 seconds
         if max_try > 1:
             element = get_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)
         else:
