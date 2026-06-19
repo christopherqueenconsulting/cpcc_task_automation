@@ -52,9 +52,9 @@ class TestPromptAction:
     @patch('builtins.input', return_value='')
     @patch('builtins.print')
     def test_prompt_uses_default_when_empty(self, mock_print, mock_input):
-        """Empty input uses default value (GIVE_FEEDBACK)."""
+        """Empty input uses default value (TAKE_ATTENDANCE)."""
         result = prompt_action()
-        assert result == Instructor_Actions.GIVE_FEEDBACK
+        assert result == Instructor_Actions.TAKE_ATTENDANCE
     
     @patch('builtins.input', side_effect=['99', '2'])
     @patch('builtins.print')

@@ -1032,13 +1032,13 @@ class TestMicrosoftLoginHelpers:
         assert click_retry.call_count == 2
         assert click_retry.call_args_list[0] == call(
             driver,
-            wait,
+            wait_probe,
             "//button[@class='backButton']",
             "Waiting for back button",
         )
         assert click_retry.call_args_list[1] == call(
             driver,
-            wait,
+            wait_probe,
             "//div[contains(text(),'Use another')]/parent::div",
             "Waiting for use another account button",
         )
@@ -1071,13 +1071,12 @@ class TestMicrosoftLoginBranchBehavior:
         driver.current_window_handle = "window-main"
         username_field = Mock()
         password_field = Mock()
-        driver.find_element.side_effect = [username_field, password_field]
 
         wait_main = Mock()
         wait_short = Mock()
         wait_long = Mock()
         wait_main.until.return_value = True
-        wait_short.until.return_value = True
+        wait_short.until.side_effect = [True, True, username_field, password_field]
         wait_long.until.return_value = True
 
         wait_probe = Mock()
@@ -1107,13 +1106,12 @@ class TestMicrosoftLoginBranchBehavior:
         driver = Mock()
         driver.current_window_handle = "window-main"
         password_field = Mock()
-        driver.find_element.return_value = password_field
 
         wait_main = Mock()
         wait_short = Mock()
         wait_long = Mock()
         wait_main.until.return_value = True
-        wait_short.until.return_value = True
+        wait_short.until.side_effect = [True, True, password_field]
         wait_long.until.return_value = True
 
         wait_probe = Mock()
