@@ -345,7 +345,7 @@ def get_docker_driver(headless=False):
     # Poll the selenium container till its ready
     for _ in range(60):
         try:
-            r = requests.get(selenium_container_url+":4444/status", timeout=2)
+            r = requests.get(f"{selenium_container_url}:{SELENIUM_HOST_PORT}/status", timeout=2)
             if r.json().get("value", {}).get("ready") is True:
                 break
         except Exception:
@@ -358,7 +358,7 @@ def get_docker_driver(headless=False):
     # Build the driver with connection timeout for remote connections
     # Remote Selenium connections are slower than local, so increase timeout
     driver = webdriver.Remote(
-        command_executor=selenium_container_url+':4444/wd/hub',
+        command_executor=f"{selenium_container_url}:{SELENIUM_HOST_PORT}/wd/hub",
         options=options,
         keep_alive=True,  # Reuse connections to reduce latency
     )
@@ -375,7 +375,7 @@ def get_docker_driver(headless=False):
     time.sleep(3)
 
     # Open the command executor URL in the user's local browser
-    webbrowser.open(selenium_container_url + ":7900/?autoconnect=1&view_only=true&resize=scale&password=secret")
+    webbrowser.open(f"{selenium_container_url}:{SELENIUM_VNC_PORT}/?autoconnect=1&view_only=true&resize=scale&password=secret")
     #logger.info("The VNC password is: secret")
 
     return driver
@@ -387,7 +387,10 @@ def start_container_if_not_running(
 ) -> str:
     """Ensure the Docker Compose Selenium service is running."""
     compose_file = str(Path(compose_file_path).resolve())
-    ps_cmd = ["docker", "compose", "-f", compose_file, "ps", "-q", compose_service_name]
+    # -p namespaces the stack so containers are project-prefixed and don't collide
+    # with other projects running a service of the same name.
+    compose_base = ["docker", "compose", "-p", DOCKER_PROJECT_NAME, "-f", compose_file]
+    ps_cmd = compose_base + ["ps", "-q", compose_service_name]
 
     result = subprocess.run(ps_cmd, capture_output=True, text=True, check=False)
     container_id = result.stdout.strip() if result.returncode == 0 else ""
@@ -411,7 +414,7 @@ def start_container_if_not_running(
         return container_id
 
     logger.info("Starting Docker service '%s' via docker compose.", compose_service_name)
-    up_cmd = ["docker", "compose", "-f", compose_file, "up", "-d", compose_service_name]
+    up_cmd = compose_base + ["up", "-d", compose_service_name]
     result = subprocess.run(up_cmd, capture_output=True, text=True, check=True)
     container_id = result.stdout.strip() if result.returncode == 0 else ""
 

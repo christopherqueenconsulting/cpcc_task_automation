@@ -63,3 +63,11 @@ CQC_OPENAI_DEBUG_SAVE_DIR = CQC_AI_DEBUG_SAVE_DIR
 
 # Docker Configs
 DOCKER_SERVICE_NAME = "selenium-chrome"
+# Compose project name namespaces the stack/containers so they don't collide with
+# other projects' selenium services. Containers are named "<project>-<service>".
+DOCKER_PROJECT_NAME = get_constant_from_env('COMPOSE_PROJECT_NAME', default_value='cpcc_task_automation')
+# Host ports for the Selenium container. Defaults are intentionally non-standard
+# (Selenium defaults are 4444/7900) so they don't conflict with other projects
+# that bind the default ports. Override via .env if needed.
+SELENIUM_HOST_PORT = int(get_constant_from_env('SELENIUM_HOST_PORT', default_value='14444'))
+SELENIUM_VNC_PORT = int(get_constant_from_env('SELENIUM_VNC_PORT', default_value='17900'))

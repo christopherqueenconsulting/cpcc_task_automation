@@ -1,5 +1,10 @@
 version: '3.8'
 
+# Project name namespaces this stack so its containers/networks don't collide
+# with other projects that also run a "selenium-chrome" service.
+# Override with COMPOSE_PROJECT_NAME in .env if needed.
+name: cpcc_task_automation
+
 networks:
     web:
       #external: true
@@ -8,14 +13,19 @@ networks:
 services:
     selenium-chrome:
         image: selenium/standalone-chrome:latest
+        # Explicit, project-prefixed container name to avoid conflicts with other
+        # projects' default "selenium-chrome" containers.
+        container_name: cpcc_selenium-chrome
         hostname: selenium-chrome
         networks:
           - web
         # privileged: true
         shm_size: 2g
+        # Host ports come from the .env file with project-unique defaults so they
+        # don't clash with other projects binding the Selenium defaults (4444/7900).
         ports:
-          - "4444:4444"
-          - "7900:7900"
+          - "${SELENIUM_HOST_PORT:-14444}:4444"
+          - "${SELENIUM_VNC_PORT:-17900}:7900"
           #- "5900:5900"
         environment:
           - SE_NODE_MAX_SESSIONS=1
