@@ -376,3 +376,59 @@ def test_fetch_quiz_file_uploads_orchestrates_attempts(mocker, tmp_path):
     assert captured.call_count == 2
     opened_ids = {c.args[3]["attemptId"] for c in opened.call_args_list}
     assert opened_ids == {"20", "30"}
+
+
+@pytest.mark.unit
+def test_fetch_quiz_file_uploads_skips_attempt_that_wont_open(mocker, tmp_path):
+    driver = MagicMock(); wait = MagicMock()
+    mocker.patch.object(bf, "_open_and_login")
+    mocker.patch.object(bf, "_set_max_results_per_page")
+    mocker.patch.object(bf.tempfile, "mkdtemp", return_value=str(tmp_path))
+    mocker.patch.object(bf, "_gather_quiz_attempts", return_value=[
+        {"userId": "1", "attemptId": "10", "label": "attempt 1", "name": "Ann"},
+    ])
+    mocker.patch.object(bf, "_open_quiz_attempt", return_value=False)  # cannot open
+    captured = mocker.patch.object(bf, "_capture_quiz_attempt")
+    bf.fetch_quiz_file_uploads(driver, wait, QUIZ_EDIT_URL, [".java"])
+    captured.assert_not_called()  # never capture when the attempt page won't open
+
+
+@pytest.mark.unit
+def test_gather_quiz_attempts_returns_empty_on_js_error():
+    driver = MagicMock()
+    driver.execute_script.side_effect = RuntimeError("boom")
+    assert bf._gather_quiz_attempts(driver) == []
+
+
+@pytest.mark.unit
+def test_open_quiz_attempt_clicks_link_and_waits(mocker):
+    driver = MagicMock(); wait = MagicMock()
+    mocker.patch.object(bf, "wait_for_ajax")
+    link = MagicMock()
+    driver.find_element.return_value = link
+    ok = bf._open_quiz_attempt(driver, wait, "https://grid",
+                               {"attemptId": "10", "userId": "1", "name": "Ann"})
+    assert ok is True
+    driver.get.assert_called_once_with("https://grid")
+    link.click.assert_called_once()
+
+
+@pytest.mark.unit
+def test_open_quiz_attempt_returns_false_when_link_missing(mocker):
+    from selenium.common import NoSuchElementException
+    driver = MagicMock(); wait = MagicMock()
+    mocker.patch.object(bf, "wait_for_ajax")
+    driver.find_element.side_effect = NoSuchElementException("no link")
+    ok = bf._open_quiz_attempt(driver, wait, "https://grid",
+                               {"attemptId": "10", "userId": "1", "name": "Ann"})
+    assert ok is False
+
+
+@pytest.mark.unit
+def test_capture_quiz_attempt_reports_zero_when_no_answer(mocker, tmp_path):
+    driver = MagicMock()
+    driver.execute_script.return_value = {"responses": [], "attachments": []}
+    msgs = []
+    o = bf._capture_quiz_attempt(driver, str(tmp_path / "Ann"), [".java"], msgs.append, "Ann")
+    assert o == 0
+    assert any("No answer files" in m for m in msgs)
