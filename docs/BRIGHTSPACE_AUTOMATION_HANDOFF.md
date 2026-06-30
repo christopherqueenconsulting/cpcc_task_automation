@@ -211,20 +211,40 @@ selector/mechanism below was confirmed against the live read-only quiz (qi=10154
   - Plain `<a href>` `fileId`/`viewFile`/`download` links kept as a fallback.
   - Question text: `.d2l-html-block-rendered`.
 
-## Draft grade write-back — live DOM map (for Feature #4)
+## Draft grade write-back — Feature #4 (BUILT; field selectors VERIFIED live 2026-06-30)
 
-The same Consistent Evaluation page (`/d2l/le/activities/iterator/<id>`) is where grades
-+ feedback are entered, so write-back drives it per student:
-- **Per-question score input:** `.d2l-consistent-eval-quiz-question-score`.
-- **Per-question feedback editor:** `<d2l-htmleditor class="d2l-consistent-eval-quiz-question-feedback">`
-  (same nested shadow-DOM/TinyMCE write target style as the assignment editor).
-- **Overall feedback + overall score:** present on the same page (overall-grade nav =
-  `markoverall,0,<userId>`).
-- **Draft vs Publish:** publishing is a separate action (rows showed
-  `Status: Published:<date>`). **Save without Publish = draft** — the feature must Save
-  as draft only and never click Publish, so the instructor reviews then publishes later.
-- Apply the **+10% error-buffer** to the computed score before writing; honor the
-  rubric if the assignment/quiz uses one.
+Implemented in **`src/cqc_cpcc/utilities/brightspace_writeback.py`** +
+`add_brightspace_writeback_element` (UI) on the Grade Assignment page (after the
+feedback-docs/ZIP step). Pure core (buffer math, feedback HTML, result→item mapping,
+name matching) is fully unit-tested; the Selenium write is isolated and `dry_run`-guarded
+(default True: navigate + LOCATE targets, fill/save nothing).
+
+**Score buffer:** configurable via the web app (number input, default 10%); add
+`buffer_pct%` of max points to each score, **capped at max** — NOT hard-coded
+(`apply_score_buffer`).
+
+**Quiz Consistent Evaluation page (`/d2l/le/activities/iterator/<id>`) — VERIFIED LIVE
+(read-only; dry-run locate matched both targets):**
+- **Overall score input:** `<input aria-label="Attempt grade out of 200">` (wrapped by
+  `<d2l-input-number>`/`<d2l-input-text aria-label="Attempt grade">`). Per-question:
+  `<input aria-label="Question score out of 200">`. The previously-inferred
+  `.d2l-consistent-eval-quiz-question-score` class is NOT present — score is aria-label
+  based (`SCORE_INPUT_SELECTORS` leads with `input[aria-label^='Attempt grade']`).
+- **Overall feedback editor:** `<d2l-htmleditor label="Overall Feedback">` (per-question:
+  `<d2l-htmleditor label="Feedback" class="d2l-consistent-eval-quiz-question-feedback">`).
+  `FEEDBACK_EDITOR_SELECTORS` leads with `d2l-htmleditor[label='Overall Feedback']`.
+- ⚠️ **Draft vs Publish (the one unverified write step):** an already-published attempt
+  shows primary **"Update"** + **"Retract"** — there is NO "Save Draft" button here. The
+  ASSIGNMENT (dropbox) eval page has the cleaner "Save Draft" vs "Publish" pair. So
+  `_save_draft` matches Save/"Save Draft" and EXCLUDES publish/update/retract; for the
+  quiz route the actual draft-save control is publish-state-dependent and **must be
+  confirmed on an UNPUBLISHED attempt in a safe (non-ended) course before any real save.**
+
+**Still UNVERIFIED (needs a safe write target):** the actual field FILL + Save-as-draft
+click (both routes), and the assignment route's per-student evaluate-link discovery
+(`_gather_assignment_learners` / `_open_assignment_evaluation` are best-effort).
+Per the owner's decision this session is **dry-run only** — full write path built + tested,
+real Save to be exercised later on a designated safe target.
 
 ---
 
