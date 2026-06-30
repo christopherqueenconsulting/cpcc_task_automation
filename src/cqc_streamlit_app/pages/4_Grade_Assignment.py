@@ -53,6 +53,7 @@ from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallb
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import (
     add_brightspace_source_element,
+    add_brightspace_writeback_element,
     add_flexible_upload_element,
     add_upload_file_element,
     add_grading_summary_to_zip,
@@ -1566,6 +1567,15 @@ async def process_rubric_grading_batch(
             model_name=model_name,
             temperature=temperature,
             run_key=run_key
+        )
+
+        # Optional: push these grades back into BrightSpace as drafts. Pre-fill the URL
+        # from the BrightSpace source fetch (if this run was sourced from one).
+        st.markdown("---")
+        add_brightspace_writeback_element(
+            results=all_results,
+            key_prefix=f"rubric_exam_wb_{run_key}_",
+            default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
         )
 
     if failure_count > 0:

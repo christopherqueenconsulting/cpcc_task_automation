@@ -1555,6 +1555,52 @@ class _BrightSpaceJob:
             self.done.set()
 
 
+class _BrightSpaceWritebackJob:
+    """Runs the BrightSpace draft grade write-back on a background thread.
+
+    Like ``_BrightSpaceJob``, the thread must not touch Streamlit APIs; it writes
+    only to plain attributes + the thread-safe ``MfaBridge``. ``dry_run`` (default
+    True) navigates and locates the write targets but never fills or saves.
+    """
+
+    def __init__(self, url: str, items: list, bridge, dry_run: bool = True):
+        import threading
+        self.url = url
+        self.items = items
+        self.bridge = bridge
+        self.dry_run = dry_run
+        self.report = None  # GradeWriteReport
+        self.error: Optional[str] = None
+        self.done = threading.Event()
+        self._progress: list[str] = []
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _record(self, message: str):
+        with self._lock:
+            self._progress.append(message)
+
+    def latest_progress(self) -> Optional[str]:
+        with self._lock:
+            return self._progress[-1] if self._progress else None
+
+    def _run(self):
+        from cqc_cpcc.utilities.brightspace_writeback import push_grades_to_brightspace
+        try:
+            self.report = push_grades_to_brightspace(
+                self.url, self.items, progress=self._record,
+                mfa_handler=self.bridge, dry_run=self.dry_run,
+            )
+        except Exception as e:  # noqa: BLE001 - surfaced to the UI
+            self.error = str(e)
+            logger.exception("BrightSpace write-back failed")
+        finally:
+            self.done.set()
+
+
 def _render_mfa_prompt(bridge) -> None:
     """Show the MFA number-matching prompt prominently (number + screenshot).
 
@@ -1721,6 +1767,143 @@ def add_brightspace_source_element(
         key_prefix=key_prefix,
         success_message=success_message,
     )
+
+
+def _render_writeback_report(report) -> None:
+    """Render a GradeWriteReport: per-student outcomes + unmatched lists."""
+    saved = report.saved_count
+    mode = "DRY RUN — nothing was saved" if report.dry_run else f"saved {saved} draft(s)"
+    st.success(f"Write-back ({report.route}) complete — matched "
+               f"{report.matched_count}/{len(report.outcomes)} shown · {mode}.")
+
+    if report.outcomes:
+        rows = [{
+            "Student": o.display_name,
+            "Score to write": o.score_written if o.score_written is not None else "—",
+            "Fields found": "✅" if o.fields_found else "❌",
+            "Saved draft": "✅" if o.saved else ("—" if report.dry_run else "❌"),
+            "Note": o.note,
+        } for o in report.outcomes]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    if report.unmatched_students:
+        st.warning("⚠️ Graded students with NO matching BrightSpace learner (skipped): "
+                   + ", ".join(report.unmatched_students))
+    if report.unmatched_learners:
+        st.caption("BrightSpace learners with no grading result: "
+                   + ", ".join(report.unmatched_learners))
+    for w in report.warnings:
+        st.caption(f"• {w}")
+
+
+def add_brightspace_writeback_element(
+        results: list,
+        key_prefix: str = "wb_",
+        default_url: str = "",
+) -> None:
+    """Render the "Write grades back to BrightSpace (draft)" panel.
+
+    Pushes each graded student's buffered score + composed feedback onto their
+    BrightSpace evaluation page and saves it as a DRAFT (never published). Defaults to
+    a safe **dry run** that locates the write targets without filling or saving.
+
+    Args:
+        results: ``list[tuple[student_id, RubricAssessmentResult]]`` from
+            ``st.session_state.grading_results_by_key[run_key]``.
+        key_prefix: Session-state key prefix (unique per grading run).
+        default_url: Pre-fill the BrightSpace URL (e.g. the fetched source URL).
+    """
+    import time
+    from cqc_cpcc.utilities.brightspace_writeback import (
+        build_write_items_from_results, DEFAULT_SCORE_BUFFER_PCT,
+    )
+
+    if not results:
+        return
+
+    job_key = key_prefix + "job"
+    report_key = key_prefix + "report"
+
+    st.markdown("#### 📤 Write grades back to BrightSpace (draft)")
+    st.caption(
+        "Pushes each student's score + feedback onto their BrightSpace evaluation "
+        "page and **saves as a draft** (never published) so you can review, then "
+        "publish later. Start with a dry run to confirm matches and field targets."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        buffer_pct = st.number_input(
+            "Error-buffer % added to each score (capped at max)",
+            min_value=0.0, max_value=100.0, value=float(DEFAULT_SCORE_BUFFER_PCT),
+            step=1.0, key=key_prefix + "buffer",
+            help="Adds this percent of the max points to each score before writing. "
+                 "0 disables the buffer.",
+        )
+    with col2:
+        include_criteria = st.checkbox(
+            "Include per-criterion feedback", value=True,
+            key=key_prefix + "include_criteria",
+        )
+
+    url = st.text_input(
+        "BrightSpace Assignment or Quiz URL (the one these grades belong to)",
+        value=default_url, key=key_prefix + "url",
+        placeholder="https://brightspace.cpcc.edu/d2l/lms/...",
+    )
+
+    job = st.session_state.get(job_key)
+
+    def _launch(dry_run: bool):
+        from cqc_cpcc.utilities.selenium_util import MfaBridge
+        items = build_write_items_from_results(
+            results, buffer_pct=buffer_pct, include_criteria_feedback=include_criteria,
+        )
+        bridge = MfaBridge()
+        new_job = _BrightSpaceWritebackJob(url, items, bridge, dry_run=dry_run)
+        new_job.start()
+        st.session_state[job_key] = new_job
+        st.session_state.pop(report_key, None)
+        st.rerun()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔍 Preview write (dry run)", key=key_prefix + "dry",
+                     disabled=not url, use_container_width=True):
+            _launch(dry_run=True)
+    with c2:
+        confirm = st.checkbox("I reviewed the dry run — write drafts for real",
+                              key=key_prefix + "confirm")
+        if st.button("✍️ Write drafts to BrightSpace", key=key_prefix + "real",
+                     disabled=not (url and confirm), use_container_width=True):
+            _launch(dry_run=False)
+
+    # Job in progress: status + MFA prompt, then poll.
+    if job is not None and not job.done.is_set():
+        st.info(f"⏳ {job.latest_progress() or 'Starting...'}")
+        _render_mfa_prompt(job.bridge)
+        if st.button("✖ Cancel", key=key_prefix + "cancel"):
+            job.bridge.cancel()
+            st.session_state.pop(job_key, None)
+            st.rerun()
+        time.sleep(1.5)
+        st.rerun()
+
+    if job is not None and job.done.is_set():
+        if job.error:
+            st.error(f"❌ Write-back failed: {job.error}")
+            if st.button("Try again", key=key_prefix + "retry"):
+                st.session_state.pop(job_key, None)
+                st.rerun()
+            return
+        if report_key not in st.session_state:
+            st.session_state[report_key] = job.report
+            st.session_state.pop(job_key, None)
+            st.rerun()
+
+    report = st.session_state.get(report_key)
+    if report is not None:
+        _render_writeback_report(report)
 
 
 def _render_zip_keep_table(zip_path: str, key_prefix: str) -> Optional[set]:
