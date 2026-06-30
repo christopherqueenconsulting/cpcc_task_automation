@@ -211,4 +211,161 @@ def test_push_quiz_grades_reports_unmatched(mocker):
 def test_save_draft_constants_never_target_publish():
     # The publish exclusion list is what keeps drafts from being published.
     assert "publish" in wb.PUBLISH_BUTTON_TEXTS
+    assert "update" in wb.PUBLISH_BUTTON_TEXTS and "retract" in wb.PUBLISH_BUTTON_TEXTS
     assert all("publish" != s for s in wb.SAVE_DRAFT_BUTTON_TEXTS)
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers: _get / _fmt_num / build_feedback_html + name-parser fallback
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_get_reads_dict_and_object_and_missing():
+    assert wb._get({"a": 1}, "a") == 1
+    assert wb._get(SimpleNamespace(a=2), "a") == 2
+    assert wb._get(None, "a") is None
+    assert wb._get({"a": 1}, "b") is None
+
+
+@pytest.mark.unit
+def test_fmt_num_handles_ints_floats_and_garbage():
+    assert wb._fmt_num(23.0) == "23"
+    assert wb._fmt_num(23.5) == "23.5"
+    assert wb._fmt_num("n/a") == "n/a"
+
+
+@pytest.mark.unit
+def test_build_feedback_html_empty_returns_empty():
+    assert wb.build_feedback_html("", criteria=None) == ""
+
+
+@pytest.mark.unit
+def test_build_write_items_name_parser_exception_falls_back_to_key():
+    def boom(_s):
+        raise ValueError("bad")
+    items = wb.build_write_items_from_results(
+        [("weird_key", _result(10, 20))], buffer_pct=0, name_parser=boom)
+    assert items[0].display_name == "weird_key"
+
+
+# ---------------------------------------------------------------------------
+# Selenium helpers (mocked driver): locate / save-draft / write-one / assignment
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_locate_write_targets_parses_result_and_handles_error():
+    driver = MagicMock()
+    driver.execute_script.return_value = {"score": True, "feedback": False}
+    assert wb._locate_write_targets(driver) == {"score": True, "feedback": False}
+    driver.execute_script.side_effect = RuntimeError("boom")
+    assert wb._locate_write_targets(driver) == {"score": False, "feedback": False}
+
+
+@pytest.mark.unit
+def test_save_draft_returns_bool_and_swallows_errors():
+    driver = MagicMock()
+    driver.execute_script.return_value = True
+    assert wb._save_draft(driver) is True
+    driver.execute_script.return_value = False
+    assert wb._save_draft(driver) is False
+    driver.execute_script.side_effect = RuntimeError("x")
+    assert wb._save_draft(driver) is False
+
+
+@pytest.mark.unit
+def test_write_one_student_dry_run_does_not_fill_or_save(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    save = mocker.patch.object(wb, "_save_draft")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
+    assert o.fields_found and o.score_written == 90.0 and not o.saved
+    save.assert_not_called()
+    driver.execute_script.assert_not_called()   # dry run fills nothing
+
+
+@pytest.mark.unit
+def test_write_one_student_real_fills_and_saves_draft(mocker):
+    driver = MagicMock()
+    driver.execute_script.return_value = {"score": True, "feedback": True}
+    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    save = mocker.patch.object(wb, "_save_draft", return_value=True)
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
+    assert o.score_written == 90.0 and o.saved and o.note == "saved as draft"
+    save.assert_called_once()
+
+
+@pytest.mark.unit
+def test_write_one_student_no_score_field_reports_not_found(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": False, "feedback": False})
+    save = mocker.patch.object(wb, "_save_draft")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
+    assert not o.fields_found and not o.saved
+    assert "not found" in o.note
+    save.assert_not_called()
+
+
+@pytest.mark.unit
+def test_write_one_student_filled_but_no_save_button(mocker):
+    driver = MagicMock()
+    driver.execute_script.return_value = {"score": True, "feedback": True}
+    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_save_draft", return_value=False)
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
+    assert not o.saved and "NOT saved" in o.note
+
+
+@pytest.mark.unit
+def test_gather_assignment_learners_filters_and_handles_error():
+    driver = MagicMock()
+    driver.execute_script.return_value = [
+        {"name": "Jane Doe", "url": "https://bs/evaluate?userId=1"},
+        {"name": "", "url": "x"},          # no name -> dropped
+        {"name": "No URL"},                # no url -> dropped
+    ]
+    rows = wb._gather_assignment_learners(driver)
+    assert [r["name"] for r in rows] == ["Jane Doe"]
+    driver.execute_script.side_effect = RuntimeError("boom")
+    assert wb._gather_assignment_learners(driver) == []
+
+
+@pytest.mark.unit
+def test_open_assignment_evaluation_navigates_or_skips(mocker):
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
+    driver = MagicMock()
+    assert wb._open_assignment_evaluation(driver, MagicMock(), {"url": "https://bs/eval"}) is True
+    driver.get.assert_called_once_with("https://bs/eval")
+    assert wb._open_assignment_evaluation(driver, MagicMock(), {}) is False  # no url
+
+
+@pytest.mark.unit
+def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
+    import cqc_cpcc.utilities.brightspace_fetch as bf
+    driver = MagicMock(); wait = MagicMock()
+    driver.execute_script.return_value = {"score": True, "feedback": True}
+    mocker.patch("cqc_cpcc.utilities.brightspace_submissions.detect_route",
+                 return_value="assignment")
+    mocker.patch.object(bf, "_open_and_login")
+    mocker.patch.object(bf, "_set_max_results_per_page")
+    mocker.patch.object(wb, "_gather_assignment_learners", return_value=[
+        {"name": "Jane Doe", "url": "https://bs/eval?userId=1"},
+    ])
+    mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+    save = mocker.patch.object(wb, "_save_draft")
+
+    items = [wb.GradeWriteItem("k1", "Jane Doe", 80, 90, 100, "<p>fb</p>")]
+    report = wb.push_grades_to_brightspace(
+        "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/x?ou=1",
+        items, driver=driver, wait=wait, dry_run=True,
+    )
+    assert report.route == "assignment" and report.matched_count == 1
+    assert report.saved_count == 0
+    save.assert_not_called()
