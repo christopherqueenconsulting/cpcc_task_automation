@@ -1080,7 +1080,11 @@ class TestMicrosoftLoginBranchBehavior:
         wait_long.until.return_value = True
 
         wait_probe = Mock()
-        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long])
+        wait_mfa = Mock()
+        # No Microsoft number-matching challenge present (probe times out).
+        wait_probe.until.side_effect = TimeoutException("no number matching")
+        wait_mfa.until.side_effect = TimeoutException("no number matching")
+        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long, wait_mfa])
         mocker.patch("cqc_cpcc.utilities.utils._resolve_microsoft_account_path", return_value=False)
         click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry", side_effect=[Mock(), Mock(), Mock()])
         screenshot = mocker.patch("cqc_cpcc.utilities.utils.take_and_show_screenshot")
@@ -1115,7 +1119,11 @@ class TestMicrosoftLoginBranchBehavior:
         wait_long.until.return_value = True
 
         wait_probe = Mock()
-        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long])
+        wait_mfa = Mock()
+        # No Microsoft number-matching challenge present (probe times out).
+        wait_probe.until.side_effect = TimeoutException("no number matching")
+        wait_mfa.until.side_effect = TimeoutException("no number matching")
+        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long, wait_mfa])
         mocker.patch("cqc_cpcc.utilities.utils._resolve_microsoft_account_path", return_value=True)
         click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry", side_effect=[Mock(), Mock()])
         mocker.patch("cqc_cpcc.utilities.utils.take_and_show_screenshot")
@@ -1133,3 +1141,90 @@ class TestMicrosoftLoginBranchBehavior:
 
         password_field.send_keys.assert_called_once_with("secret-pass")
         assert not any("Next" in c.args[2] for c in click_retry.call_args_list)
+
+    def test_microsoft_login_notifies_mfa_handler_on_number_matching(self, mocker):
+        """When a number-matching challenge appears, the MFA handler is invoked."""
+        driver = Mock()
+        driver.current_window_handle = "window-main"
+        password_field = Mock()
+
+        wait_main = Mock()
+        wait_short = Mock()
+        wait_long = Mock()
+        wait_main.until.return_value = True
+        wait_short.until.side_effect = [True, True, password_field]
+        wait_long.until.return_value = True
+
+        wait_probe = Mock()
+        wait_mfa = Mock()
+        # Number-matching challenge IS present (detection succeeds).
+        wait_probe.until.return_value = True
+        wait_mfa.until.return_value = True
+        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long, wait_mfa])
+        mocker.patch("cqc_cpcc.utilities.utils._resolve_microsoft_account_path", return_value=True)
+        mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry", side_effect=[Mock(), Mock()])
+        mocker.patch("cqc_cpcc.utilities.utils._mfa_settle_before_capture")  # no real sleep
+        mocker.patch("cqc_cpcc.utilities.utils._wait_for_mfa_approval")  # no real polling
+        captured = mocker.patch(
+            "cqc_cpcc.utilities.selenium_util.capture_mfa_challenge",
+            return_value=Mock(number="42", message=""),
+        )
+        mocker.patch.dict(
+            os.environ,
+            {
+                "INSTRUCTOR_USERID": "cqueen",
+                "INSTRUCTOR_EMAIL": "email@cpcc.edu",
+                "INSTRUCTOR_PASS": "secret-pass",
+            },
+            clear=False,
+        )
+
+        handler = Mock()
+        microsoft_login(driver, mfa_handler=handler)
+
+        captured.assert_called_once()
+        handler.on_challenge.assert_called_once()
+        handler.on_resolved.assert_called_once()
+
+    def test_microsoft_login_completes_when_stay_signed_in_prompt_absent(self, mocker):
+        """KMSI 'Stay signed in?' may be skipped — login must not hang/raise."""
+        driver = Mock()
+        driver.current_window_handle = "window-main"
+        password_field = Mock()
+
+        wait_main = Mock()
+        wait_short = Mock()
+        wait_long = Mock()
+        wait_main.until.return_value = True
+        wait_short.until.side_effect = [True, True, password_field]
+        wait_long.until.return_value = True
+
+        wait_probe = Mock()
+        wait_mfa = Mock()
+        wait_probe.until.side_effect = TimeoutException("no number matching")
+        wait_mfa.until.side_effect = TimeoutException("no number matching")
+        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long, wait_mfa])
+        mocker.patch("cqc_cpcc.utilities.utils._resolve_microsoft_account_path", return_value=True)
+        # KMSI prompt absent: the 'No' button is never present.
+        driver.find_elements.return_value = []
+        mocker.patch("cqc_cpcc.utilities.utils.KMSI_PROMPT_TIMEOUT_SECONDS", 0)
+        # Only the Sign-in click happens (no KMSI click).
+        click_retry = mocker.patch(
+            "cqc_cpcc.utilities.utils.click_element_wait_retry",
+            side_effect=[Mock()],
+        )
+        mocker.patch.dict(
+            os.environ,
+            {
+                "INSTRUCTOR_USERID": "cqueen",
+                "INSTRUCTOR_EMAIL": "email@cpcc.edu",
+                "INSTRUCTOR_PASS": "secret-pass",
+            },
+            clear=False,
+        )
+
+        # Should not raise despite the missing KMSI prompt.
+        microsoft_login(driver)
+
+        driver.switch_to.window.assert_called_once_with("window-main")
+        assert click_retry.call_count == 1  # only the Sign-in click
