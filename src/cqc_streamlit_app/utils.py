@@ -1615,6 +1615,29 @@ def add_brightspace_submission_element(
         st.success(f"✅ Using generated file: {confirmed['name']}")
         if confirmed.get("instructions"):
             st.caption("📝 Instructions captured from this URL will be used below.")
+
+        # Persisted review: let the instructor re-open the file picker and
+        # select/de-select student folders/files after confirming, without
+        # re-fetching. Operates on the ORIGINAL fetched ZIP (full set) and rebuilds
+        # the confirmed ZIP. Route-agnostic (assignment + quiz).
+        orig = st.session_state.get(fetch_result_key)
+        if orig is not None and getattr(orig, "zip_path", None):
+            with st.expander("📂 Review / change selected files", expanded=False):
+                keep_arcs = _render_zip_keep_table(orig.zip_path, key_prefix + "review_")
+                if st.button("✅ Apply selection", key=key_prefix + "reapply"):
+                    if keep_arcs:
+                        new_path = _rebuild_zip_from_kept(orig.zip_path, keep_arcs)
+                        ok, detail = _validate_submissions_zip(new_path, keep_arcs)
+                        if ok:
+                            confirmed = {**confirmed, "path": new_path}
+                            st.session_state[confirmed_key] = confirmed
+                            st.success(f"Updated: {detail} student submission(s).")
+                            st.rerun()
+                        else:
+                            st.error(f"Selection failed validation: {detail}")
+                    else:
+                        st.error("Select at least one file to keep.")
+
         if st.button("🔄 Start over", key=key_prefix + "startover"):
             for k in (job_key, fetch_result_key, confirmed_key):
                 st.session_state.pop(k, None)
@@ -1700,6 +1723,80 @@ def add_brightspace_source_element(
     )
 
 
+def _render_zip_keep_table(zip_path: str, key_prefix: str) -> Optional[set]:
+    """Render an editable keep/deselect table for every file in ``zip_path``.
+
+    Returns the set of kept arcnames, or ``None`` if the ZIP holds no files. Shared
+    by the initial preview and the post-confirm "review files" panel so the picker is
+    identical wherever it appears.
+    """
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        arcnames = [i.filename for i in zf.infolist() if not i.is_dir()]
+    if not arcnames:
+        st.error("The generated ZIP is empty.")
+        return None
+
+    rows = []
+    for arc in arcnames:
+        folder, _, fname = arc.partition("/")
+        rows.append({"keep": True, "student folder": folder, "file": fname, "_arc": arc})
+    df = pd.DataFrame(rows)
+
+    edited = st.data_editor(
+        df,
+        key=key_prefix + "editor",
+        column_config={
+            "keep": st.column_config.CheckboxColumn("keep", help="Uncheck to remove"),
+            "student folder": st.column_config.TextColumn(disabled=True),
+            "file": st.column_config.TextColumn(disabled=True),
+            "_arc": None,  # hidden
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    kept = edited[edited["keep"]]
+    n_folders = kept["student folder"].nunique()
+    st.caption(f"Will include {len(kept)} file(s) across {n_folders} student folder(s).")
+    return set(kept["_arc"].tolist())
+
+
+def _rebuild_zip_from_kept(src_zip_path: str, keep_arcs: set) -> str:
+    """Write a new ZIP containing only ``keep_arcs`` from ``src_zip_path``.
+
+    Preserves the original folder/file arcnames so the grader's extractor still sees
+    one folder per student. Returns the new ZIP's path.
+    """
+    out = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    out.close()
+    with zipfile.ZipFile(src_zip_path, "r") as src, \
+            zipfile.ZipFile(out.name, "w", zipfile.ZIP_DEFLATED) as dst:
+        for arc in keep_arcs:
+            with src.open(arc) as f:
+                dst.writestr(arc, f.read())
+    return out.name
+
+
+def _validate_submissions_zip(zip_path: str, keep_arcs: set) -> tuple[bool, str]:
+    """Check a rebuilt submissions ZIP parses the way the grader expects.
+
+    Returns ``(True, "<count>")`` with the student-submission count on success, or
+    ``(False, "<error message>")`` on failure.
+    """
+    kept_extensions = sorted({
+        os.path.splitext(arc)[1].lstrip(".").lower()
+        for arc in keep_arcs if os.path.splitext(arc)[1]
+    })
+    try:
+        from cqc_cpcc.utilities.zip_grading_utils import (
+            extract_student_submissions_from_zip,
+        )
+        submissions = extract_student_submissions_from_zip(zip_path, kept_extensions)
+        return True, str(len(submissions))
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
 def render_zip_preview_editor(fetch_result, key_prefix: str) -> Optional[dict]:
     """Preview a generated submissions ZIP and let the user prune folders/files.
 
@@ -1735,35 +1832,10 @@ def render_zip_preview_editor(fetch_result, key_prefix: str) -> Optional[dict]:
             "submissions — add instructions in the Assignment Instructions section."
         )
 
-    # Build an editable table of every file in the ZIP (default: keep all).
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        arcnames = [i.filename for i in zf.infolist() if not i.is_dir()]
-    if not arcnames:
-        st.error("The generated ZIP is empty.")
+    # Editable keep/deselect table of every file in the ZIP (default: keep all).
+    keep_arcs = _render_zip_keep_table(zip_path, key_prefix)
+    if keep_arcs is None:
         return None
-
-    rows = []
-    for arc in arcnames:
-        folder, _, fname = arc.partition("/")
-        rows.append({"keep": True, "student folder": folder, "file": fname, "_arc": arc})
-    df = pd.DataFrame(rows)
-
-    edited = st.data_editor(
-        df,
-        key=key_prefix + "editor",
-        column_config={
-            "keep": st.column_config.CheckboxColumn("keep", help="Uncheck to remove"),
-            "student folder": st.column_config.TextColumn(disabled=True),
-            "file": st.column_config.TextColumn(disabled=True),
-            "_arc": None,  # hidden
-        },
-        hide_index=True,
-        use_container_width=True,
-    )
-
-    kept = edited[edited["keep"]]
-    n_folders = kept["student folder"].nunique()
-    st.caption(f"Will include {len(kept)} file(s) across {n_folders} student folder(s).")
 
     col1, col2 = st.columns(2)
     use_clicked = col1.button("✅ Use the generated file", key=key_prefix + "use")
@@ -1775,40 +1847,21 @@ def render_zip_preview_editor(fetch_result, key_prefix: str) -> Optional[dict]:
         st.rerun()
 
     if use_clicked:
-        keep_arcs = set(kept["_arc"].tolist())
         if not keep_arcs:
             st.error("Select at least one file to keep.")
             return None
 
-        # Rebuild a ZIP from the kept entries, preserving folder/file arcnames.
-        out = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-        out.close()
-        with zipfile.ZipFile(zip_path, "r") as src, \
-                zipfile.ZipFile(out.name, "w", zipfile.ZIP_DEFLATED) as dst:
-            for arc in keep_arcs:
-                with src.open(arc) as f:
-                    dst.writestr(arc, f.read())
-
-        # Validate it parses the way the grader expects before handing it off.
-        kept_extensions = sorted({
-            os.path.splitext(arc)[1].lstrip(".").lower()
-            for arc in keep_arcs if os.path.splitext(arc)[1]
-        })
-        try:
-            from cqc_cpcc.utilities.zip_grading_utils import (
-                extract_student_submissions_from_zip,
-            )
-            submissions = extract_student_submissions_from_zip(out.name, kept_extensions)
-            st.success(
-                f"✅ Generated file ready: {len(submissions)} student submission(s)."
-            )
-        except Exception as e:  # noqa: BLE001
-            st.error(f"Generated ZIP failed validation: {e}")
+        out_path = _rebuild_zip_from_kept(zip_path, keep_arcs)
+        ok, detail = _validate_submissions_zip(out_path, keep_arcs)
+        if ok:
+            st.success(f"✅ Generated file ready: {detail} student submission(s).")
+        else:
+            st.error(f"Generated ZIP failed validation: {detail}")
             return None
 
         return {
             "name": "brightspace_submissions.zip",
-            "path": out.name,
+            "path": out_path,
             "instructions": (edited_instructions or "").strip() or None,
             "route": getattr(fetch_result, "route", None),
         }
