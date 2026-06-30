@@ -808,6 +808,13 @@ def derive_quiz_grading_url(url: str) -> str:
 # gradeable attempt link: {attemptId, userId, name, label}. The onclick regex
 # requires ``mark,<digits>,<digits>`` so the ``markoverall,0,<userId>`` link is
 # excluded automatically (after "mark" comes "overall", not a comma).
+#
+# VERIFIED LIVE 2026-06-29: the grid is grouped by learner — a NAME row (a single
+# <td> holding just the learner's name), then one or more ATTEMPT rows (each with the
+# mark link, a Completed date, a score, and a status), then an "overall grade" summary
+# row. The attempt row does NOT contain the name, so we walk backward over preceding
+# <tr> siblings to the nearest name row (one that has no mark link and whose text is
+# not a date / score / "attempt" / "overall grade" / "published").
 _GATHER_QUIZ_ATTEMPTS_JS = r"""
 function* deep(root) {
   const stack = [root.documentElement || root];
@@ -819,7 +826,16 @@ function* deep(root) {
     for (const c of (n.children || [])) stack.push(c);
   }
 }
-const STATUS_RE = /^(attempt|overall|score|grade|published|graded|in progress|completed|not)/i;
+function rowName(tr) {
+  if (tr.querySelector('a[onclick*="mark,"]')) return null;
+  const txt = (tr.innerText || '').replace(/\s+/g, ' ').trim();
+  if (!txt) return null;
+  if (/^(attempt|overall grade|published|completed|learner\b|score|grade|status)/i.test(txt)) return null;
+  if (/^[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}/.test(txt)) return null;  // a date cell
+  if (/^\d/.test(txt)) return null;                                 // a numeric cell
+  if (/learner/i.test(txt) && /completed/i.test(txt)) return null;  // the header row
+  return txt;
+}
 const out = [];
 const seen = new Set();
 for (const a of deep(document)) {
@@ -832,14 +848,12 @@ for (const a of deep(document)) {
   if (seen.has(key)) continue;
   seen.add(key);
   let name = '';
-  const tr = a.closest && a.closest('tr');
-  if (tr) {
-    for (const c of tr.querySelectorAll('th, td')) {
-      if (c.querySelector && c.querySelector('input[type=checkbox]')) continue;
-      const t = (c.innerText || c.textContent || '').trim();
-      if (!t || STATUS_RE.test(t)) continue;
-      name = t; break;
-    }
+  let r = a.closest && a.closest('tr');
+  while (r) {
+    r = r.previousElementSibling;
+    if (!r) break;
+    const nm = rowName(r);
+    if (nm) { name = nm; break; }
   }
   out.push({attemptId: attemptId, userId: userId, name: name,
             label: (a.innerText || a.textContent || '').trim()});
@@ -849,6 +863,15 @@ return out;
 
 # Deep-scans a Consistent Evaluation attempt page (crossing shadow roots AND iframes)
 # for the student's typed written-response answers and any uploaded-file links.
+#
+# VERIFIED LIVE 2026-06-29 (CSC151 Programming Exam 1):
+#   - File uploads render as <d2l-list-item key="<download-url>"> whose inner <a> has
+#     NO href (Lit click handler); the real download URL is the item's ``key`` attr,
+#     e.g. .../d2l/common/viewFile.d2lfile/Database/<id>/<filename>?ou=<ou>. Fetching
+#     it with the session cookies returns the raw file (confirmed: a 3KB .java file).
+#   - A typed answer lives in .d2l-questions-written-response-question-response; when
+#     empty it instead contains a .d2l-questions-written-response-no-response marker
+#     (text "- No text entered -"), which we must skip.
 _READ_QUIZ_ATTEMPT_JS = r"""
 function* deep(root) {
   const stack = [root.documentElement || root];
@@ -867,22 +890,35 @@ const responses = [];
 const attachments = [];
 const seenR = new Set();
 const seenA = new Set();
+function addAttach(url, name) {
+  if (url && !seenA.has(url)) { seenA.add(url); attachments.push({href: url, name: name || ''}); }
+}
+const FILE_RE = /viewFile|fileId|\.d2lfile|\/download/i;
 for (const el of deep(document)) {
   if (!el.getAttribute) continue;
+  const tag = (el.tagName || '').toLowerCase();
   const cls = el.getAttribute('class') || '';
+  // Typed written-response answer (skip the explicit "no response" placeholder).
   if (cls.indexOf('d2l-questions-written-response-question-response') >= 0) {
+    if (el.querySelector && el.querySelector('.d2l-questions-written-response-no-response')) continue;
     const t = (el.innerText || el.textContent || '').trim();
-    if (t && !seenR.has(t)) { seenR.add(t); responses.push(t); }
+    if (t && !/^-?\s*no text entered/i.test(t) && !seenR.has(t)) { seenR.add(t); responses.push(t); }
   }
-  if ((el.tagName || '').toLowerCase() === 'a') {
-    const href = el.href || el.getAttribute('href') || '';
-    if (href && (href.indexOf('fileId') >= 0 || href.indexOf('viewFile') >= 0
-                 || href.indexOf('/download') >= 0)) {
-      if (!seenA.has(href)) {
-        seenA.add(href);
-        attachments.push({href: href, name: (el.innerText || el.textContent || '').trim()});
+  // Uploaded file: download URL is on the <d2l-list-item> 'key' attribute.
+  if (tag === 'd2l-list-item') {
+    const key = el.getAttribute('key') || '';
+    if (FILE_RE.test(key)) {
+      let fname = '';
+      for (const c of deep(el)) {
+        if ((c.tagName || '').toLowerCase() === 'a') { fname = (c.innerText || c.textContent || '').trim(); break; }
       }
+      addAttach(key, fname);
     }
+  }
+  // Fallback: a plain anchor whose href is a file link.
+  if (tag === 'a') {
+    const href = el.href || el.getAttribute('href') || '';
+    if (FILE_RE.test(href)) addAttach(href, (el.innerText || el.textContent || '').trim());
   }
 }
 return {responses: responses, attachments: attachments};

@@ -149,9 +149,10 @@ Selenium — nothing exercises a real browser or the real BrightSpace DOM.**
    ✅ **FIXED & verified live 2026-06-29** (editor-first ordering; see §4 above).
 2. **Quiz instructions** = first question — ✅ **selector fixed & verified live 2026-06-29**
    (`.question-text` on the quiz edit page; see "Quiz route — live DOM" below).
-3. **Quiz submissions** — ⚠️ **mechanism discovered, `fetch_quiz_file_uploads` needs a
-   rewrite** (attempt links are JS `NavInfo`, not hrefs; written-response answers
-   aren't files). See "Quiz route — live DOM" below.
+3. **Quiz submissions** — ✅ **REWRITTEN & verified live 2026-06-29.** `fetch_quiz_file_uploads`
+   now drives the Consistent Evaluation UI (NavInfo onclick attempts; per-learner grouping;
+   file URL from `d2l-list-item[key]`; written-response capture). See "Quiz route — live DOM"
+   below.
 4. **MFA prompt** rendering on the web-app page — ✅ **VERIFIED live 2026-06-29**
    (number rendered on the Grade Assignment page: "🔐 Two-factor approval needed → 40";
    approved → login completed).
@@ -182,23 +183,32 @@ question is `<div class="question-item">` → `<div class="question-text">` (cle
 2,096 chars live) + `<div class="question-content">` (type, e.g. "Written Response").
 `QUIZ_QUESTION_XPATH` updated to match `question-text`.
 
-**Quiz submissions (⚠️ needs rewrite — `fetch_quiz_file_uploads`):**
-- Attempts grid = `<table class="d2l-table d2l-grid">` (no `summary` attr; selector
-  loosened). Header: `[<checkbox>, Learner, Completed, Score, Grade, Status]`, one row
-  per learner (77 live).
-- **Attempt links are NOT hrefs.** Each "attempt N" link is `href="javascript://"` with
-  `onclick="var n=new D2L.NavInfo(); n.action='Custom';
-  n.actionParam='mark,<attemptId>,<userId>'; Nav.Go(n,false,false);"`
-  (overall grade = `markoverall,0,<userId>`). So the current href-iteration is stale —
-  the rewrite must execute the onclick / `Nav.Go` (or map `mark,<ai>,<ui>` to the
-  evaluation URL) per attempt.
-- Clicking lands on the **Consistent Evaluation** page
-  `/d2l/le/activities/iterator/<id>?selectedItem=...` where:
-  - **Written-response answer:** `.d2l-questions-written-response-question-response`
-    (`QUIZ_WRITTEN_RESPONSE_XPATH`). `fetch_quiz_file_uploads` only grabs file
-    attachments, so written-response quizzes currently yield nothing — the rewrite must
-    also capture this typed text.
-  - **File-upload answer:** `fileId`/`viewFile` attachment links (`QUIZ_UPLOAD_ATTACHMENT_XPATH`).
+**Quiz submissions — ✅ REWRITTEN & VERIFIED LIVE 2026-06-29 (`fetch_quiz_file_uploads`).**
+The new `fetch_quiz_file_uploads` drives the Consistent Evaluation UI end-to-end; every
+selector/mechanism below was confirmed against the live read-only quiz (qi=1015474 ou=304048):
+- **Grid URL** derived from the pasted quiz URL by `derive_quiz_grading_url` →
+  `/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=<ou>&qi=<qi>` (also scans a nested
+  `returnUrl` for qi/ou). Reaching the grid opened all 16 learner attempts.
+- **Grid is grouped by learner** (not one flat row each): a NAME row (single `<td>` =
+  learner name), then 1+ ATTEMPT rows (mark link + Completed date + score + status), then an
+  "overall grade" summary row. The attempt row has NO name — `_GATHER_QUIZ_ATTEMPTS_JS`
+  deep-scans for each `mark,<attemptId>,<userId>` onclick and walks BACKWARD to the nearest
+  name row (all 16 names resolved correctly live). `markoverall,0,<userId>` is excluded by
+  the `mark,<id>,<id>` regex. `_keep_last_attempt_per_user` prunes to each learner's latest.
+- **Opening an attempt:** Selenium light-DOM XPath `//a[contains(@onclick,'mark,<ai>,<ui>')]`
+  finds the link (confirmed found+visible); `.click()` fires `Nav.Go(...,false,false)`
+  same-window → lands on `/d2l/le/activities/iterator/<id>?...cft=quiz-attempts-users`.
+  `_open_quiz_attempt` re-loads the grid each iteration so the link element is never stale.
+- **Capturing the answer (`_READ_QUIZ_ATTEMPT_JS`, deep-scans shadow roots + iframes):**
+  - **File upload (verified):** renders as `<d2l-list-item key="<download-url>">` whose inner
+    `<a>` has NO href. The real URL is the item's `key` attr, e.g.
+    `/d2l/common/viewFile.d2lfile/Database/<id>/<filename>?ou=<ou>`. Fetching it with the
+    session cookies returned the raw file (a 3 KB `.java`). Filename = inner anchor text.
+  - **Written-response answer:** `.d2l-questions-written-response-question-response`; an empty
+    answer instead has a `.d2l-questions-written-response-no-response` marker ("- No text
+    entered -") which is SKIPPED. Captured text is saved with the first accepted extension
+    (`_written_response_ext`) so the grader keeps it.
+  - Plain `<a href>` `fileId`/`viewFile`/`download` links kept as a fallback.
   - Question text: `.d2l-html-block-rendered`.
 
 ## Draft grade write-back — live DOM map (for Feature #4)
