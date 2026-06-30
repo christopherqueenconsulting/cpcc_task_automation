@@ -2123,7 +2123,11 @@ async def get_rubric_based_exam_grading():
     if bs_submission:
         # Auto-filled from the BrightSpace fetch above.
         st.success(f"📦 Using submissions fetched from BrightSpace: {bs_submission[0]}")
-        st.caption("Manage/Start over from the BrightSpace Source section above.")
+        st.caption(
+            "📂 To see the ZIP contents and select/de-select student folders or files "
+            "before grading, use **\"Review / change selected files\"** in the "
+            "🎓 BrightSpace Source section above. You can also Start over there."
+        )
         student_submission_file_paths = [bs_submission]
     else:
         student_submission_file_paths = add_flexible_upload_element(

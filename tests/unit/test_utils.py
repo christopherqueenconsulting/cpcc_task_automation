@@ -545,12 +545,58 @@ class TestExtractAndReadZip:
     def test_extract_non_zip_file(self, tmp_path):
         """Test with non-zip file returns empty dict."""
         from cqc_cpcc.utilities.utils import extract_and_read_zip
-        
+
         text_file = tmp_path / "not_a_zip.txt"
         text_file.write_text("text")
-        
+
         result = extract_and_read_zip(str(text_file), ['.java'])
         assert result == {}
+
+
+@pytest.mark.unit
+class TestBrightSpaceZipPicker:
+    """The reusable keep/deselect ZIP helpers behind the submissions preview."""
+
+    def _make_zip(self, tmp_path):
+        import zipfile
+        zip_path = tmp_path / "submissions.zip"
+        with zipfile.ZipFile(zip_path, "w") as z:
+            z.writestr("Alice_123/sol.cpp", "int main(){}")
+            z.writestr("Bob_456/sol.cpp", "int main(){}")
+            z.writestr("Bob_456/notes.txt", "hi")
+        return str(zip_path)
+
+    def test_rebuild_zip_keeps_only_selected_arcs(self, tmp_path):
+        import zipfile
+        from cqc_streamlit_app.utils import _rebuild_zip_from_kept
+
+        src = self._make_zip(tmp_path)
+        keep = {"Alice_123/sol.cpp", "Bob_456/sol.cpp"}
+        out = _rebuild_zip_from_kept(src, keep)
+        with zipfile.ZipFile(out) as z:
+            assert sorted(z.namelist()) == ["Alice_123/sol.cpp", "Bob_456/sol.cpp"]
+
+    def test_rebuild_then_validate_parses_per_student(self, tmp_path):
+        from cqc_streamlit_app.utils import _rebuild_zip_from_kept, _validate_submissions_zip
+
+        src = self._make_zip(tmp_path)
+        keep = {"Alice_123/sol.cpp", "Bob_456/sol.cpp"}
+        out = _rebuild_zip_from_kept(src, keep)
+        ok, detail = _validate_submissions_zip(out, keep)
+        assert ok is True
+        assert detail == "2"  # two student folders survive
+
+    def test_deselecting_a_student_drops_their_folder(self, tmp_path):
+        import zipfile
+        from cqc_streamlit_app.utils import _rebuild_zip_from_kept
+
+        src = self._make_zip(tmp_path)
+        keep = {"Alice_123/sol.cpp"}  # Bob deselected entirely
+        out = _rebuild_zip_from_kept(src, keep)
+        with zipfile.ZipFile(out) as z:
+            names = z.namelist()
+        assert names == ["Alice_123/sol.cpp"]
+        assert not any(n.startswith("Bob_456/") for n in names)
 
 
 @pytest.mark.unit
