@@ -145,6 +145,11 @@ QUIZ_WRITTEN_RESPONSE_XPATH = (
     "//*[contains(@class,'d2l-questions-written-response-question-response')]"
 )
 
+# The quiz submissions/attempts grid does NOT live at the quiz edit/build URL the
+# instructor pastes — it lives at quiz_mark_users.d2l, derived from ou (org unit) and
+# qi (quiz id). VERIFIED LIVE (2026-06-29, CSC151 quiz qi=1015474 ou=304048).
+QUIZ_MARK_USERS_PATH = "/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l"
+
 # --- Instructions scraping (verify live via the walkthrough script) -----------
 # Assignment instructions live in the dropbox folder's description. D2L renders
 # rich content inside a <d2l-html-block> web component (shadow DOM) or a
@@ -740,8 +745,286 @@ def _scrape_assignment_files(driver, wait, extract_dir: str, progress: ProgressC
 
 
 # ---------------------------------------------------------------------------
-# Quiz route (file-upload questions)
+# Quiz route (Consistent Evaluation: written-response + file-upload questions)
 # ---------------------------------------------------------------------------
+#
+# The current D2L quiz UI ("Consistent Evaluation") works very differently from the
+# old href-per-attempt grid the original code assumed. VERIFIED LIVE 2026-06-29:
+#   1. The attempts grid lives at quiz_mark_users.d2l (derive_quiz_grading_url), one
+#      row per learner with one or more "attempt N" links.
+#   2. Each attempt link is NOT a navigable href — it is
+#         <a href="javascript://" onclick="var n=new D2L.NavInfo(); n.action='Custom';
+#            n.actionParam='mark,<attemptId>,<userId>'; Nav.Go(n,false,false);">attempt 1</a>
+#      (the overall-grade link uses 'markoverall,0,<userId>', which we ignore). So we
+#      read each link's onclick to get (attemptId, userId), then trigger that link in
+#      the page to navigate (Nav.Go runs same-window).
+#   3. Clicking lands on the Consistent Evaluation page (/le/activities/iterator/<id>)
+#      where a student's typed answer renders in
+#      .d2l-questions-written-response-question-response and any uploaded files render
+#      as fileId/viewFile attachment links. We capture BOTH.
+
+
+def derive_quiz_grading_url(url: str) -> str:
+    """Map any quiz URL (edit/build/manage) to its quiz_mark_users grading page.
+
+    The submissions/attempts grid lives at a different URL than the quiz edit page:
+    ``/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=<ou>&qi=<qi>``. We pull
+    ``ou`` (org unit) and ``qi`` (quiz id) from the URL's query string; either may
+    instead be buried in a nested ``returnUrl``, so we also scan the unquoted URL for
+    ``ou=<digits>`` / ``qi=<digits>`` as a fallback.
+
+    Raises:
+        ValueError: when ``ou`` and ``qi`` cannot both be found.
+    """
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+
+    def _first(key: str) -> Optional[str]:
+        vals = qs.get(key)
+        return vals[0] if vals else None
+
+    ou = _first("ou")
+    qi = _first("qi")
+    raw = unquote(url or "")
+    if not qi:
+        m = re.search(r"[?&]qi=(\d+)", raw)
+        qi = m.group(1) if m else None
+    if not ou:
+        m = re.search(r"[?&]ou=(\d+)", raw)
+        ou = m.group(1) if m else None
+    if not (ou and qi):
+        raise ValueError(
+            f"Could not derive the quiz grading URL (need both ou and qi) from: {url}"
+        )
+
+    if parsed.scheme and parsed.netloc:
+        base = f"{parsed.scheme}://{parsed.netloc}"
+    else:
+        base = (BRIGHTSPACE_URL or "").rstrip("/")
+    return f"{base}{QUIZ_MARK_USERS_PATH}?ou={ou}&qi={qi}"
+
+
+# Deep-scans the attempts grid (crossing shadow roots) and returns one record per
+# gradeable attempt link: {attemptId, userId, name, label}. The onclick regex
+# requires ``mark,<digits>,<digits>`` so the ``markoverall,0,<userId>`` link is
+# excluded automatically (after "mark" comes "overall", not a comma).
+_GATHER_QUIZ_ATTEMPTS_JS = r"""
+function* deep(root) {
+  const stack = [root.documentElement || root];
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n) continue;
+    yield n;
+    if (n.shadowRoot) stack.push(n.shadowRoot);
+    for (const c of (n.children || [])) stack.push(c);
+  }
+}
+const STATUS_RE = /^(attempt|overall|score|grade|published|graded|in progress|completed|not)/i;
+const out = [];
+const seen = new Set();
+for (const a of deep(document)) {
+  if ((a.tagName || '').toLowerCase() !== 'a') continue;
+  const oc = (a.getAttribute && a.getAttribute('onclick')) || '';
+  const m = oc.match(/mark,(\d+),(\d+)/);
+  if (!m) continue;
+  const attemptId = m[1], userId = m[2];
+  const key = attemptId + '|' + userId;
+  if (seen.has(key)) continue;
+  seen.add(key);
+  let name = '';
+  const tr = a.closest && a.closest('tr');
+  if (tr) {
+    for (const c of tr.querySelectorAll('th, td')) {
+      if (c.querySelector && c.querySelector('input[type=checkbox]')) continue;
+      const t = (c.innerText || c.textContent || '').trim();
+      if (!t || STATUS_RE.test(t)) continue;
+      name = t; break;
+    }
+  }
+  out.push({attemptId: attemptId, userId: userId, name: name,
+            label: (a.innerText || a.textContent || '').trim()});
+}
+return out;
+"""
+
+# Deep-scans a Consistent Evaluation attempt page (crossing shadow roots AND iframes)
+# for the student's typed written-response answers and any uploaded-file links.
+_READ_QUIZ_ATTEMPT_JS = r"""
+function* deep(root) {
+  const stack = [root.documentElement || root];
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n) continue;
+    yield n;
+    if (n.shadowRoot) stack.push(n.shadowRoot);
+    if ((n.tagName || '').toLowerCase() === 'iframe') {
+      try { const d = n.contentDocument; if (d) stack.push(d.documentElement || d); } catch (e) {}
+    }
+    for (const c of (n.children || [])) stack.push(c);
+  }
+}
+const responses = [];
+const attachments = [];
+const seenR = new Set();
+const seenA = new Set();
+for (const el of deep(document)) {
+  if (!el.getAttribute) continue;
+  const cls = el.getAttribute('class') || '';
+  if (cls.indexOf('d2l-questions-written-response-question-response') >= 0) {
+    const t = (el.innerText || el.textContent || '').trim();
+    if (t && !seenR.has(t)) { seenR.add(t); responses.push(t); }
+  }
+  if ((el.tagName || '').toLowerCase() === 'a') {
+    const href = el.href || el.getAttribute('href') || '';
+    if (href && (href.indexOf('fileId') >= 0 || href.indexOf('viewFile') >= 0
+                 || href.indexOf('/download') >= 0)) {
+      if (!seenA.has(href)) {
+        seenA.add(href);
+        attachments.push({href: href, name: (el.innerText || el.textContent || '').trim()});
+      }
+    }
+  }
+}
+return {responses: responses, attachments: attachments};
+"""
+
+
+def _attempt_index(att: dict) -> int:
+    """Numeric attempt ordinal for an attempt record (higher = later attempt).
+
+    Prefers the trailing number in the link label ("attempt 2" -> 2); falls back to
+    the attemptId (later attempts get later ids), so "last attempt" pruning is stable
+    even when the label is missing.
+    """
+    m = re.search(r"(\d+)", att.get("label", "") or "")
+    if m:
+        return int(m.group(1))
+    try:
+        return int(att.get("attemptId", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _keep_last_attempt_per_user(attempts: list[dict]) -> list[dict]:
+    """Reduce many attempts to the single latest attempt per learner (by userId)."""
+    best: dict[str, dict] = {}
+    for att in attempts:
+        uid = att.get("userId")
+        if uid is None:
+            continue
+        if uid not in best or _attempt_index(att) > _attempt_index(best[uid]):
+            best[uid] = att
+    return list(best.values())
+
+
+def _written_response_ext(accepted_file_types: list[str]) -> str:
+    """Pick an extension for a saved written-response so the grader keeps the file.
+
+    The grader filters by accepted file types, so a typed answer must be saved with
+    an accepted extension (e.g. ``java``); falls back to ``txt`` when none is given.
+    """
+    for ext in (accepted_file_types or []):
+        e = (ext or "").lower().lstrip(".")
+        if e:
+            return e
+    return "txt"
+
+
+def _gather_quiz_attempts(driver) -> list[dict]:
+    """Read every gradeable attempt link (attemptId, userId, name, label) from grid."""
+    try:
+        rows = driver.execute_script(_GATHER_QUIZ_ATTEMPTS_JS) or []
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to gather quiz attempts via JS: %s", e)
+        rows = []
+    cleaned: list[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if not r.get("attemptId") or not r.get("userId"):
+            continue
+        if not r.get("name"):
+            r["name"] = f"user_{r.get('userId')}"
+        cleaned.append(r)
+    return cleaned
+
+
+def _open_quiz_attempt(driver, wait, grading_url: str, att: dict) -> bool:
+    """Navigate to a single attempt's Consistent Evaluation page; True on success.
+
+    Re-loads the grid first (so the link element is fresh, not stale), finds the
+    anchor whose onclick targets this ``mark,<attemptId>,<userId>``, and triggers it.
+    Nav.Go runs same-window, so we just wait for the URL to leave the grid.
+    """
+    needle = f"mark,{att['attemptId']},{att['userId']}"
+    driver.get(grading_url)
+    wait_for_ajax(driver)
+    try:
+        link = driver.find_element(By.XPATH, f"//a[contains(@onclick, \"{needle}\")]")
+    except NoSuchElementException:
+        logger.info("Attempt link not found for %s (%s)", att.get("name"), needle)
+        return False
+
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
+        link.click()
+    except Exception as e:  # noqa: BLE001
+        logger.info("Native click failed for %s (%s); trying JS onclick", att.get("name"), e)
+        try:
+            driver.execute_script(link.get_attribute("onclick") or "")
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("JS onclick failed for %s: %s", att.get("name"), e2)
+            return False
+
+    try:
+        wait.until(lambda d: "quiz_mark_users" not in (d.current_url or "").lower())
+    except TimeoutException:
+        logger.info("Did not leave the attempts grid for %s", att.get("name"))
+    wait_for_ajax(driver)
+    return True
+
+
+def _capture_quiz_attempt(
+        driver, folder: str, accepted_file_types: list[str],
+        progress: ProgressCallback, name: str,
+) -> int:
+    """Save a learner's quiz answer(s) into ``folder``; return number of items saved.
+
+    Captures BOTH typed written-response answers (saved as one file with an accepted
+    extension) and any uploaded-file attachments.
+    """
+    try:
+        data = driver.execute_script(_READ_QUIZ_ATTEMPT_JS) or {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to read quiz attempt for %s: %s", name, e)
+        data = {}
+    responses = data.get("responses") or []
+    attachments = data.get("attachments") or []
+
+    saved = 0
+    for att in attachments:
+        href = att.get("href")
+        if not href:
+            continue
+        fname = _safe_name(att.get("name") or os.path.basename(urlparse(href).path) or "attachment")
+        if not os.path.splitext(fname)[1]:
+            fname += ".dat"
+        if download_with_driver_session(driver, href, os.path.join(folder, fname)):
+            saved += 1
+
+    if responses:
+        ext = _written_response_ext(accepted_file_types)
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, f"response.{ext}"), "w", encoding="utf-8") as f:
+            f.write("\n\n".join(responses))
+        saved += 1
+
+    if saved:
+        progress(f"Captured {saved} item(s) for {name}")
+    else:
+        progress(f"No answer files found for {name}")
+    return saved
+
 
 def fetch_quiz_file_uploads(
         driver, wait, url: str,
@@ -749,54 +1032,30 @@ def fetch_quiz_file_uploads(
         progress: ProgressCallback = _noop,
         mfa_handler=None,
 ) -> str:
-    """Collect file-upload-question attachments from a quiz; return extract dir."""
+    """Collect each learner's quiz answers (written-response + file uploads).
+
+    Navigates the Consistent Evaluation grid, keeps only each learner's latest
+    attempt, opens each attempt page, and saves the typed answer and/or uploaded
+    files into a per-student folder. Returns the extract directory.
+    """
     progress = progress or _noop
-    _open_and_login(driver, wait, url, progress, mfa_handler)
+    grading_url = derive_quiz_grading_url(url)
+    progress("Opening the quiz attempts grid...")
+    _open_and_login(driver, wait, grading_url, progress, mfa_handler)
     _set_max_results_per_page(driver, wait, progress)
 
     extract_dir = tempfile.mkdtemp(prefix="bs_quiz_")
 
-    # Gather (student name, attempt url) pairs first to avoid stale elements.
-    attempts: list[tuple[str, str]] = []
-    rows = driver.find_elements(By.XPATH, QUIZ_ROW_XPATH)
-    for idx, row in enumerate(rows):
-        try:
-            name = row.find_element(By.XPATH, ".//td[3]").text.strip()
-        except NoSuchElementException:
-            name = f"student_{idx}"
-        try:
-            link = row.find_element(By.XPATH, QUIZ_ATTEMPT_LINK_XPATH)
-            attempts.append((name, link.get_attribute("href")))
-        except NoSuchElementException:
-            logger.info("No attempt link for row %d (%s)", idx, name)
+    attempts = _gather_quiz_attempts(driver)
+    attempts = _keep_last_attempt_per_user(attempts)
+    progress(f"Found {len(attempts)} learner attempt(s) to collect")
 
-    progress(f"Found {len(attempts)} quiz attempt(s)")
-
-    main_tab = driver.current_window_handle
-    for name, attempt_url in attempts:
+    for att in attempts:
+        name = att.get("name") or f"user_{att.get('userId')}"
         folder = os.path.join(extract_dir, _safe_name(name))
-        try:
-            handles = set(driver.window_handles)
-            driver.switch_to.new_window("tab")
-            wait.until(EC.new_window_is_opened(handles))
-            driver.get(attempt_url)
-            wait_for_ajax(driver)
-
-            attachments = driver.find_elements(By.XPATH, QUIZ_UPLOAD_ATTACHMENT_XPATH)
-            for link in attachments:
-                href = link.get_attribute("href")
-                fname = _safe_name(link.text or os.path.basename(href.split("?")[0]))
-                if not os.path.splitext(fname)[1]:
-                    fname += ".dat"
-                if href:
-                    download_with_driver_session(driver, href, os.path.join(folder, fname))
-            progress(f"Collected attachments for {name}")
-        finally:
-            try:
-                driver.close()
-            except Exception:  # noqa: BLE001
-                pass
-            driver.switch_to.window(main_tab)
+        if not _open_quiz_attempt(driver, wait, grading_url, att):
+            continue
+        _capture_quiz_attempt(driver, folder, accepted_file_types, progress, name)
 
     return extract_dir
 

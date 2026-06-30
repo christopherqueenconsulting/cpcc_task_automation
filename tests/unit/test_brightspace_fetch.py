@@ -248,3 +248,131 @@ def test_fetch_quiz_instructions_prefers_first_question(mocker):
 
     text = bf.fetch_quiz_instructions(driver, wait, "https://bs/d2l/lms/quizzing/x")
     assert text == "Question 1: explain recursion."
+
+
+# ---------------------------------------------------------------------------
+# Quiz route — Consistent Evaluation rewrite
+# ---------------------------------------------------------------------------
+
+QUIZ_EDIT_URL = (
+    "https://brightspace.cpcc.edu/d2l/le/activities/edit/"
+    "TmpZd05sODFNVEF3TUY4eE1ERTFORGMwLjMwNDA0OA?cft=quiz&ou=304048"
+    "&returnUrl=%2Fd2l%2Flms%2Fquizzing%2Fadmin%2Fquizzes_manage.d2l%3Fou%3D304048"
+    "&qi=1015474"
+)
+
+
+@pytest.mark.unit
+def test_derive_quiz_grading_url_from_query():
+    out = bf.derive_quiz_grading_url(QUIZ_EDIT_URL)
+    assert out == (
+        "https://brightspace.cpcc.edu/d2l/lms/quizzing/admin/mark/"
+        "quiz_mark_users.d2l?ou=304048&qi=1015474"
+    )
+
+
+@pytest.mark.unit
+def test_derive_quiz_grading_url_finds_qi_in_return_url():
+    # qi/ou only present inside an encoded returnUrl, not the top-level query.
+    url = (
+        "https://brightspace.cpcc.edu/d2l/le/activities/edit/X?cft=quiz"
+        "&returnUrl=%2Fd2l%2Flms%2Fquizzing%2Fadmin%2Fmark%2Fquiz_mark_users.d2l"
+        "%3Fou%3D304048%26qi%3D1015474"
+    )
+    out = bf.derive_quiz_grading_url(url)
+    assert out.endswith("quiz_mark_users.d2l?ou=304048&qi=1015474")
+
+
+@pytest.mark.unit
+def test_derive_quiz_grading_url_raises_without_ou_qi():
+    with pytest.raises(ValueError):
+        bf.derive_quiz_grading_url("https://brightspace.cpcc.edu/d2l/le/activities/edit/X?cft=quiz")
+
+
+@pytest.mark.unit
+def test_attempt_index_prefers_label_then_attempt_id():
+    assert bf._attempt_index({"label": "attempt 3", "attemptId": "999"}) == 3
+    assert bf._attempt_index({"label": "", "attemptId": "42"}) == 42
+    assert bf._attempt_index({"label": "overall", "attemptId": "x"}) == 0
+
+
+@pytest.mark.unit
+def test_keep_last_attempt_per_user_keeps_latest():
+    attempts = [
+        {"userId": "1", "attemptId": "10", "label": "attempt 1", "name": "Ann"},
+        {"userId": "1", "attemptId": "20", "label": "attempt 2", "name": "Ann"},
+        {"userId": "2", "attemptId": "30", "label": "attempt 1", "name": "Bob"},
+    ]
+    kept = bf._keep_last_attempt_per_user(attempts)
+    by_user = {a["userId"]: a for a in kept}
+    assert set(by_user) == {"1", "2"}
+    assert by_user["1"]["attemptId"] == "20"  # Ann's 2nd attempt wins
+    assert by_user["2"]["attemptId"] == "30"
+
+
+@pytest.mark.unit
+def test_written_response_ext_uses_first_accepted_then_txt():
+    assert bf._written_response_ext([".java", ".txt"]) == "java"
+    assert bf._written_response_ext(["py"]) == "py"
+    assert bf._written_response_ext([]) == "txt"
+
+
+@pytest.mark.unit
+def test_gather_quiz_attempts_filters_incomplete_rows():
+    driver = MagicMock()
+    driver.execute_script.return_value = [
+        {"attemptId": "10", "userId": "1", "name": "Ann", "label": "attempt 1"},
+        {"attemptId": "", "userId": "2", "name": "Bad", "label": "attempt 1"},  # no attemptId
+        {"attemptId": "11", "userId": "3", "name": "", "label": "attempt 1"},   # name backfilled
+    ]
+    rows = bf._gather_quiz_attempts(driver)
+    assert [r["userId"] for r in rows] == ["1", "3"]
+    assert rows[1]["name"] == "user_3"
+
+
+@pytest.mark.unit
+def test_capture_quiz_attempt_saves_written_response_and_files(tmp_path, mocker):
+    driver = MagicMock()
+    driver.execute_script.return_value = {
+        "responses": ["public class Main { }"],
+        "attachments": [
+            {"href": "https://bs/d2l/le/viewFile?fileId=99", "name": "Main.java"},
+        ],
+    }
+    downloaded = []
+    mocker.patch.object(
+        bf, "download_with_driver_session",
+        side_effect=lambda d, href, dest: downloaded.append((href, dest)) or True,
+    )
+    folder = str(tmp_path / "Ann")
+    saved = bf._capture_quiz_attempt(driver, folder, [".java"], lambda *_: None, "Ann")
+
+    assert saved == 2  # one attachment + one written-response file
+    # Written response saved with the first accepted extension.
+    resp_path = tmp_path / "Ann" / "response.java"
+    assert resp_path.read_text() == "public class Main { }"
+    assert downloaded and downloaded[0][0].endswith("fileId=99")
+
+
+@pytest.mark.unit
+def test_fetch_quiz_file_uploads_orchestrates_attempts(mocker, tmp_path):
+    driver = MagicMock()
+    wait = MagicMock()
+    mocker.patch.object(bf, "_open_and_login")
+    mocker.patch.object(bf, "_set_max_results_per_page")
+    mocker.patch.object(bf.tempfile, "mkdtemp", return_value=str(tmp_path))
+    mocker.patch.object(bf, "_gather_quiz_attempts", return_value=[
+        {"userId": "1", "attemptId": "10", "label": "attempt 1", "name": "Ann"},
+        {"userId": "1", "attemptId": "20", "label": "attempt 2", "name": "Ann"},
+        {"userId": "2", "attemptId": "30", "label": "attempt 1", "name": "Bob"},
+    ])
+    opened = mocker.patch.object(bf, "_open_quiz_attempt", return_value=True)
+    captured = mocker.patch.object(bf, "_capture_quiz_attempt", return_value=1)
+
+    out = bf.fetch_quiz_file_uploads(driver, wait, QUIZ_EDIT_URL, [".java"])
+    assert out == str(tmp_path)
+    # Pruned to one attempt per user => 2 attempts opened/captured, Ann's latest (20).
+    assert opened.call_count == 2
+    assert captured.call_count == 2
+    opened_ids = {c.args[3]["attemptId"] for c in opened.call_args_list}
+    assert opened_ids == {"20", "30"}
