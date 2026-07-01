@@ -290,29 +290,30 @@ def describe_mfa_dom(driver: WebDriver) -> str:
     plus any element whose visible text is just a 2-3 digit number. Helpful when
     confirming the number element against the live login page.
     """
-    # Diagnostics only: we report *which* selectors matched and how many
-    # elements, never the element text/HTML — that would contain the MFA
-    # matching number (an auth challenge value that must not reach the log).
+    # Diagnostics only: we report *counts* of matching elements, never any
+    # element text or attribute values. The MFA number element's text is the
+    # matching number and its class can contain "passcode"/"verification-code",
+    # so emitting those would leak an auth challenge value into the log.
     lines: list[str] = []
     for idx, (by, sel) in enumerate(_MFA_NUMBER_SELECTORS):
-        # Report the selector by index, not its literal string: some selector
-        # strings contain words like "passcode" that would otherwise be treated
-        # as sensitive when logged.
+        # Reference the selector by index, not its literal string: some selector
+        # strings contain words like "passcode" that would be treated as
+        # sensitive when logged.
         try:
-            els = driver.find_elements(by, sel)
+            count = len(driver.find_elements(by, sel))
         except Exception as e:  # noqa: BLE001
             lines.append(f"  [selector #{idx}] error: {type(e).__name__}")
             continue
-        lines.append(f"  [selector #{idx}] matched {len(els)} element(s)")
+        lines.append(f"  [selector #{idx}] matched {count} element(s)")
 
-    # Also scan generically for short numeric text nodes as a fallback hint —
-    # report only their identity (tag/id/class), not the numeric value.
+    # Also count short numeric text nodes as a fallback hint. We only test each
+    # node's text against a regex (a boolean); the value itself is never kept.
     try:
+        generic = 0
         for el in driver.find_elements(By.XPATH, "//*[string-length(normalize-space(text()))<=3]"):
             if re.fullmatch(r"\d{2,3}", (el.text or "").strip()):
-                el_id = el.get_attribute("id") or ""
-                cls = el.get_attribute("class") or ""
-                lines.append(f"  [generic] <{el.tag_name} id={el_id!r} class={cls!r}> (short numeric text)")
+                generic += 1
+        lines.append(f"  [generic] {generic} short numeric text node(s)")
     except Exception as e:  # noqa: BLE001
         lines.append(f"  [generic scan] error: {type(e).__name__}")
 
