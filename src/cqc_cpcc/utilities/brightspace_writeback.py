@@ -210,8 +210,20 @@ def build_write_items_from_results(
 # ---------------------------------------------------------------------------
 
 def _normalize_name(name: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace — for tolerant name matching."""
-    s = (name or "").lower()
+    """Lowercase, strip punctuation, collapse whitespace — for tolerant name matching.
+
+    Also reconciles BrightSpace's ``"Last, First"`` ordering with the grader's
+    ``"First Last"`` (parsed from ``Id - Name - Date`` folders): a single top-level
+    comma is treated as a ``Last, First`` separator and flipped before normalizing,
+    so ``"Patel, Dharma"`` and ``"Dharma Patel"`` produce the same key.
+    """
+    s = (name or "").strip()
+    if "," in s:
+        last, _, first = s.partition(",")
+        last, first = last.strip(), first.strip()
+        if last and first:
+            s = f"{first} {last}"
+    s = s.lower()
     s = re.sub(r"[^a-z0-9\s]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
@@ -279,6 +291,7 @@ def match_items_to_learners(
 SCORE_INPUT_SELECTORS = (
     "input[aria-label^='Attempt grade' i]",          # quiz OVERALL grade (verified live)
     "d2l-input-number[aria-label^='Attempt grade' i]",
+    "input[aria-label^='Overall grade' i]",          # assignment OVERALL grade (verified live)
     "input[aria-label*='grade' i][aria-label*='out of' i]",
     "input[aria-label^='Question score' i]",         # quiz per-question (verified live)
     "input[aria-label*='Score' i]",                  # assignment fallback (unverified)
@@ -461,9 +474,11 @@ def _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run) 
 def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry_run) -> GradeWriteReport:
     """Assignment route: open each student's evaluation page from the submissions list.
 
-    UNVERIFIED navigation: the per-student "Evaluate" link discovery on the dropbox
-    submissions page is best-effort and must be confirmed live before real saves. In
-    dry-run it simply reports that the route ran and which students matched by name.
+    Navigation VERIFIED LIVE 2026-07-01: learners + userIds are scraped from the
+    dropbox submissions page (name-link onclick ``feedback,<userId>``), matched by
+    normalized name, and each evaluation page is opened by clicking that name link.
+    In dry-run we open the page and LOCATE the score/feedback fields but write
+    nothing. The actual fill + Save-as-draft click is still guarded by ``dry_run``.
     """
     from cqc_cpcc.utilities.brightspace_fetch import _open_and_login, _set_max_results_per_page
 
@@ -481,7 +496,7 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
         outcome = StudentWriteOutcome(
             student_key=m.item.student_key, display_name=m.item.display_name, matched=True,
         )
-        if not _open_assignment_evaluation(driver, wait, m.learner):
+        if not _open_assignment_evaluation(driver, wait, url, m.learner):
             outcome.note = "could not open evaluation page"
             report.outcomes.append(outcome)
             continue
@@ -490,9 +505,14 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
     return report
 
 
-# Deep-DOM JS: scrape (name, evaluation-url) pairs from the assignment submissions table.
-# UNVERIFIED — the dropbox marking page's per-student evaluate link shape must be
-# confirmed live. Returns whatever evaluate links it can find for name matching.
+# Deep-DOM JS: scrape (name, userId) pairs from the dropbox submissions table.
+# VERIFIED LIVE 2026-07-01 (folder_submissions_users.d2l): each learner's NAME cell is
+# an <a> whose onclick opens the evaluation page via
+#   SetReturnPoint('D2L.LE.Dropbox.EvaluateDropboxSubmission.<db>');
+#   var n=new D2L.NavInfo(); n.action='Custom'; n.actionParam='feedback,<userId>, 2';
+#   Nav.Go(n,false,false);
+# (The file-download links use SetReturnPointAndEvaluateOrDownload(...) and have NO
+# "feedback,<id>" token, so filtering on that uniquely selects the name links.)
 _GATHER_ASSIGNMENT_LEARNERS_JS = r"""
 function* deep(root) {
   const stack = [root.documentElement || root];
@@ -508,42 +528,79 @@ const out = [];
 const seen = new Set();
 for (const a of deep(document)) {
   if ((a.tagName || '').toLowerCase() !== 'a') continue;
-  const href = a.href || a.getAttribute('href') || '';
-  if (!/evaluate|grade|drop_box|folderSubmission|userId|markSubmission/i.test(href)) continue;
+  const oc = a.getAttribute('onclick') || '';
+  if (!/EvaluateDropboxSubmission/.test(oc)) continue;
+  const m = oc.match(/feedback,\s*(\d+)/);   // name link only (not file download link)
+  if (!m) continue;
   const name = (a.innerText || a.textContent || '').trim();
   if (!name) continue;
-  const key = name + '|' + href;
-  if (seen.has(key)) continue;
-  seen.add(key);
-  out.push({name: name, url: href});
+  const userId = m[1];
+  if (seen.has(userId)) continue;
+  seen.add(userId);
+  out.push({name: name, userId: userId});
 }
 return out;
 """
 
 
 def _gather_assignment_learners(driver) -> list[dict]:
-    """Best-effort scrape of (name, evaluation url) for assignment submissions."""
+    """Scrape (name, userId) for each learner on the dropbox submissions page."""
     try:
         rows = driver.execute_script(_GATHER_ASSIGNMENT_LEARNERS_JS) or []
     except Exception as e:  # noqa: BLE001
         logger.info("Could not gather assignment learners: %s", e)
         rows = []
-    return [r for r in rows if isinstance(r, dict) and r.get("name") and r.get("url")]
+    return [r for r in rows if isinstance(r, dict) and r.get("name") and r.get("userId")]
 
 
-def _open_assignment_evaluation(driver, wait, learner: dict) -> bool:
-    """Navigate to an assignment student's evaluation page (UNVERIFIED)."""
+def _open_assignment_evaluation(driver, wait, url: str, learner: dict) -> bool:
+    """Open a learner's assignment evaluation page from the submissions list.
+
+    Re-loads the submissions list (so the name link is fresh, not stale), then
+    clicks the learner's name anchor whose onclick carries ``feedback,<userId>``.
+    Nav.Go runs same-window, so we wait for the URL to leave the submissions page
+    (it lands on ``/d2l/le/activities/iterator/...cft=assignment-submissions``).
+    Mirrors the verified quiz-attempt opener.
+    """
+    from selenium.webdriver.common.by import By
+    from selenium.common.exceptions import NoSuchElementException, TimeoutException
     from cqc_cpcc.utilities.selenium_util import wait_for_ajax
-    url = learner.get("url")
-    if not url:
+
+    uid = learner.get("userId")
+    if not uid:
         return False
+    needle = f"feedback,{uid}"
     try:
         driver.get(url)
         wait_for_ajax(driver)
-        return True
-    except Exception as e:  # noqa: BLE001
-        logger.info("Could not open evaluation for %s: %s", learner.get("name"), e)
+        link = driver.find_element(
+            By.XPATH,
+            f"//a[contains(@onclick, 'EvaluateDropboxSubmission') and contains(@onclick, \"{needle}\")]",
+        )
+    except NoSuchElementException:
+        logger.info("Evaluation link not found for %s (%s)", learner.get("name"), needle)
         return False
+    except Exception as e:  # noqa: BLE001
+        logger.info("Could not reach submissions list for %s: %s", learner.get("name"), e)
+        return False
+
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
+        link.click()
+    except Exception as e:  # noqa: BLE001
+        logger.info("Native click failed for %s (%s); trying JS onclick", learner.get("name"), e)
+        try:
+            driver.execute_script(link.get_attribute("onclick") or "")
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("JS onclick failed for %s: %s", learner.get("name"), e2)
+            return False
+
+    try:
+        wait.until(lambda d: "folder_submissions_users" not in (d.current_url or "").lower())
+    except TimeoutException:
+        logger.info("Did not leave the submissions list for %s", learner.get("name"))
+    wait_for_ajax(driver)
+    return True
 
 
 # Deep-DOM JS: set the score input value and write the feedback editor body, dispatching

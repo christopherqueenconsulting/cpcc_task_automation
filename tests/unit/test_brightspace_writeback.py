@@ -124,6 +124,15 @@ def test_normalize_name():
 
 
 @pytest.mark.unit
+def test_normalize_name_flips_last_comma_first():
+    # BrightSpace "Last, First" must key the same as the grader's "First Last".
+    assert wb._normalize_name("Patel, Dharma") == "dharma patel"
+    assert wb._normalize_name("Patel, Dharma") == wb._normalize_name("Dharma Patel")
+    # A comma that isn't a name separator (missing a side) is left as punctuation.
+    assert wb._normalize_name("Doe,") == "doe"
+
+
+@pytest.mark.unit
 def test_match_items_to_learners_exact_and_unmatched():
     items = [
         wb.GradeWriteItem("k1", "Jane Doe", 80, 90, 100, "<p>x</p>"),
@@ -327,9 +336,9 @@ def test_write_one_student_filled_but_no_save_button(mocker):
 def test_gather_assignment_learners_filters_and_handles_error():
     driver = MagicMock()
     driver.execute_script.return_value = [
-        {"name": "Jane Doe", "url": "https://bs/evaluate?userId=1"},
-        {"name": "", "url": "x"},          # no name -> dropped
-        {"name": "No URL"},                # no url -> dropped
+        {"name": "Jane Doe", "userId": "1"},
+        {"name": "", "userId": "2"},       # no name -> dropped
+        {"name": "No Id"},                 # no userId -> dropped
     ]
     rows = wb._gather_assignment_learners(driver)
     assert [r["name"] for r in rows] == ["Jane Doe"]
@@ -338,12 +347,24 @@ def test_gather_assignment_learners_filters_and_handles_error():
 
 
 @pytest.mark.unit
-def test_open_assignment_evaluation_navigates_or_skips(mocker):
+def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
     mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
     driver = MagicMock()
-    assert wb._open_assignment_evaluation(driver, MagicMock(), {"url": "https://bs/eval"}) is True
-    driver.get.assert_called_once_with("https://bs/eval")
-    assert wb._open_assignment_evaluation(driver, MagicMock(), {}) is False  # no url
+    wait = MagicMock()
+    url = "https://bs/d2l/lms/dropbox/admin/mark/folder_submissions_users.d2l?db=1&ou=2"
+
+    ok = wb._open_assignment_evaluation(driver, wait, url, {"name": "Jane Doe", "userId": "117059"})
+    assert ok is True
+    driver.get.assert_called_once_with(url)
+    # located the name link by its feedback,<userId> onclick, then clicked it
+    xpath = driver.find_element.call_args[0][1]
+    assert "feedback,117059" in xpath and "EvaluateDropboxSubmission" in xpath
+    driver.find_element.return_value.click.assert_called_once()
+
+    # no userId -> skip without navigating
+    driver.reset_mock()
+    assert wb._open_assignment_evaluation(driver, wait, url, {"name": "x"}) is False
+    driver.get.assert_not_called()
 
 
 @pytest.mark.unit
@@ -356,7 +377,7 @@ def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
     mocker.patch.object(bf, "_open_and_login")
     mocker.patch.object(bf, "_set_max_results_per_page")
     mocker.patch.object(wb, "_gather_assignment_learners", return_value=[
-        {"name": "Jane Doe", "url": "https://bs/eval?userId=1"},
+        {"name": "Jane Doe", "userId": "1"},
     ])
     mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
     save = mocker.patch.object(wb, "_save_draft")
