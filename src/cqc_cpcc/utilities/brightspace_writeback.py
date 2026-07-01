@@ -354,6 +354,7 @@ class StudentWriteOutcome:
     score_written: Optional[float] = None
     fields_found: bool = False
     saved: bool = False
+    feedback_written: bool = False      # overall feedback set + committed (real write only)
     rubric_selected: int = 0            # rubric levels selected (or matched, in dry-run)
     rubric_missing: list = field(default_factory=list)  # [{criterion, level, reason}]
     note: str = ""
@@ -461,14 +462,13 @@ def push_grades_to_brightspace(
             report = _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run)
         else:
             report = _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry_run)
-        if not dry_run and any(o.saved for o in report.outcomes):
-            # See _FILL_GRADE_JS KNOWN LIMITATION: score + rubric persist, but overall
-            # feedback written programmatically may not survive Save Draft.
-            report.warnings.append(
-                "Overall feedback is best-effort and may not have persisted — "
-                "spot-check each student's feedback in BrightSpace. Scores and rubric "
-                "levels are saved reliably."
-            )
+        if not dry_run:
+            missed_fb = [o.display_name for o in report.outcomes if o.saved and not o.feedback_written]
+            if missed_fb:
+                report.warnings.append(
+                    "Overall feedback could not be written for: " + ", ".join(missed_fb)
+                    + " — scores/rubric saved; add feedback manually for these."
+                )
         return report
     finally:
         if own_driver and driver is not None:
@@ -712,24 +712,15 @@ def _select_rubric_levels(driver, selections: list, dry_run: bool) -> dict:
         return {"selected": [], "missing": [{"reason": str(e)}]}
 
 
-# Deep-DOM JS: set the score input value and write the feedback editor body. The score
-# input is a D2L Lit component, so we set it via the native value setter + composed
-# input/change events (a plain assignment isn't observed). VERIFIED LIVE: the overall
-# grade set this way sticks even when it differs from the rubric-derived total. Runs
-# AFTER _SELECT_RUBRIC_LEVELS_JS so the buffered score is the final value. Only runs
-# when dry_run=False. Returns which fields were written.
-#
-# KNOWN LIMITATION (overall feedback): the feedback field is a TinyMCE editor inside
-# <d2l-htmleditor>. Writing its body innerHTML here is BEST-EFFORT and was found NOT to
-# persist through Save Draft in live testing (2026-07-01) — D2L serializes feedback from
-# the editor's own model, which programmatic DOM/property/editor-API writes did not
-# reliably commit. SCORE and RUBRIC selections DO persist. Treat written feedback as
-# unverified and spot-check it in BrightSpace until a committing path is implemented.
-_FILL_GRADE_JS = r"""
+# Deep-DOM JS: set the overall SCORE input. It's a D2L Lit component, so we set it via
+# the native value setter + composed input/change events (a plain assignment isn't
+# observed). VERIFIED LIVE: the grade set this way sticks even when it differs from the
+# rubric-derived total. Runs AFTER _SELECT_RUBRIC_LEVELS_JS so the buffered score is the
+# final value. Feedback is written separately (see _write_feedback_via_editor) because a
+# TinyMCE editor only persists content committed through a real edit. Returns {score}.
+_FILL_SCORE_JS = r"""
 const SCORE_SELS = arguments[0];
-const FB_SELS = arguments[1];
-const scoreVal = arguments[2];
-const feedbackHtml = arguments[3];
+const scoreVal = arguments[1];
 function* deep(root) {
   const stack = [root.documentElement || root];
   while (stack.length) {
@@ -737,9 +728,6 @@ function* deep(root) {
     if (!n) continue;
     yield n;
     if (n.shadowRoot) stack.push(n.shadowRoot);
-    if ((n.tagName || '').toLowerCase() === 'iframe') {
-      try { const d = n.contentDocument; if (d) stack.push(d.documentElement || d); } catch (e) {}
-    }
     for (const c of (n.children || [])) stack.push(c);
   }
 }
@@ -756,36 +744,104 @@ function setNativeValue(input, val) {
   } catch (e) {}
   input.value = String(val);
 }
-let scoreSet = false, feedbackSet = false;
 for (const el of deep(document)) {
-  if (!scoreSet && matchesAny(el, SCORE_SELS)) {
+  if (matchesAny(el, SCORE_SELS)) {
     // Resolve to the actual <input> (may be inside a web component's shadow root).
     let input = (el.tagName || '').toLowerCase() === 'input' ? el
       : (el.shadowRoot && el.shadowRoot.querySelector('input')) || el.querySelector && el.querySelector('input');
     if (input) {
       setNativeValue(input, scoreVal);
       fire(input, 'input'); fire(input, 'change');
-      scoreSet = true;
+      return {score: true};
     }
   }
-  if (!feedbackSet && matchesAny(el, FB_SELS)) {
-    // Find the editing surface (TinyMCE iframe body, or any contenteditable) within.
-    for (const node of deep(el)) {
-      const tag = (node.tagName || '').toLowerCase();
-      const editable = (tag === 'body' && node.isContentEditable)
-        || (node.getAttribute && node.getAttribute('contenteditable') === 'true');
-      if (editable) {
-        node.innerHTML = feedbackHtml;
-        fire(node, 'input');
-        feedbackSet = true;
-        break;
-      }
-    }
-  }
-  if (scoreSet && feedbackSet) break;
 }
-return {score: scoreSet, feedback: feedbackSet};
+return {score: false};
 """
+
+
+# Overall-feedback writing. VERIFIED LIVE 2026-07-01 that this PERSISTS through Save Draft
+# (a plain innerHTML / property / editor-API write does NOT — D2L only commits feedback
+# that the editor sees as a genuine edit). Two steps:
+#   1. Set the rich HTML via the editor's own API (formatting preserved):
+#      d2l-htmleditor._getEditor() resolves to the TinyMCE instance -> setContent(html).
+#   2. Type ONE real keystroke inside the editor iframe (space then backspace) so TinyMCE
+#      marks itself dirty and D2L persists the content on save.
+_SCHEDULE_FB_EDITOR_JS = r"""
+function* deep(root){const st=[root.documentElement||root];while(st.length){const n=st.pop();if(!n)continue;yield n;if(n.shadowRoot)st.push(n.shadowRoot);for(const c of (n.children||[]))st.push(c);}}
+const all=[...deep(document)];
+const ed=all.find(el=>(el.tagName||'').toLowerCase()==='d2l-htmleditor'&&/overall feedback/i.test(el.getAttribute('label')||''))
+      || all.find(el=>(el.tagName||'').toLowerCase()==='d2l-htmleditor'&&/feedback/i.test(el.getAttribute('label')||''));
+window.__cqcFbEd=null;
+if(!ed)return false;
+try{ Promise.resolve(ed._getEditor()).then(e=>{window.__cqcFbEd=e;}).catch(()=>{}); }catch(e){}
+return true;
+"""
+
+_SET_FB_CONTENT_JS = r"""
+const inst=window.__cqcFbEd;
+if(!inst||typeof inst.setContent!=='function')return false;
+inst.setContent(arguments[0]);
+try{ if(inst.undoManager&&inst.undoManager.add)inst.undoManager.add(); }catch(e){}
+return true;
+"""
+
+_FIND_FB_IFRAME_JS = r"""
+function* deep(root){const st=[root.documentElement||root];while(st.length){const n=st.pop();if(!n)continue;yield n;if(n.shadowRoot)st.push(n.shadowRoot);for(const c of (n.children||[]))st.push(c);}}
+const all=[...deep(document)];
+const ed=all.find(el=>(el.tagName||'').toLowerCase()==='d2l-htmleditor'&&/overall feedback/i.test(el.getAttribute('label')||''))
+      || all.find(el=>(el.tagName||'').toLowerCase()==='d2l-htmleditor'&&/feedback/i.test(el.getAttribute('label')||''));
+if(!ed)return null;
+for(const n of deep(ed)){ if((n.tagName||'').toLowerCase()==='iframe')return n; }
+return null;
+"""
+
+
+def _write_feedback_via_editor(driver, wait, feedback_html: str) -> bool:
+    """Write Overall Feedback so it PERSISTS on save (rich formatting preserved).
+
+    setContent() via the editor API puts the HTML in; then one real keystroke inside the
+    editor iframe (space + backspace) makes TinyMCE treat it as a genuine edit so D2L
+    commits it. Returns True if content was set and committed. Best-effort — never raises.
+    """
+    if not feedback_html:
+        return False
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    import time as _time
+    try:
+        if not driver.execute_script(_SCHEDULE_FB_EDITOR_JS):
+            return False
+        # d2l-htmleditor._getEditor() is async; wait for it to resolve.
+        deadline = _time.time() + 5
+        while _time.time() < deadline:
+            if driver.execute_script("return !!window.__cqcFbEd;"):
+                break
+            _time.sleep(0.25)
+        else:
+            return False
+        if not driver.execute_script(_SET_FB_CONTENT_JS, feedback_html):
+            return False
+        iframe = driver.execute_script(_FIND_FB_IFRAME_JS)
+        if iframe is None:
+            return False
+        driver.switch_to.frame(iframe)
+        try:
+            body = driver.find_element(By.CSS_SELECTOR, "body")
+            body.click()
+            body.send_keys(Keys.END)
+            body.send_keys(" ")
+            body.send_keys(Keys.BACKSPACE)
+        finally:
+            driver.switch_to.default_content()
+        return True
+    except Exception as e:  # noqa: BLE001 - feedback is best-effort; never break the write
+        try:
+            driver.switch_to.default_content()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info("Feedback write failed: %s", e)
+        return False
 
 
 def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
@@ -815,15 +871,16 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         rres = _select_rubric_levels(driver, item.rubric_selections, dry_run=False)
         outcome.rubric_selected = len(rres.get("selected") or [])
         outcome.rubric_missing = rres.get("missing") or []
-        # 2) Feedback + overall score LAST, so the buffered score overrides the
-        #    rubric-derived total (verified live that this override sticks).
+        # 2) Overall feedback (persisted via the editor API + a real keystroke).
+        outcome.feedback_written = _write_feedback_via_editor(driver, wait, item.feedback_html)
+        # 3) Overall score LAST, so the buffered score overrides the rubric-derived
+        #    total (verified live that this override sticks).
         res = driver.execute_script(
-            _FILL_GRADE_JS, list(SCORE_INPUT_SELECTORS), list(FEEDBACK_EDITOR_SELECTORS),
-            item.score, item.feedback_html,
+            _FILL_SCORE_JS, list(SCORE_INPUT_SELECTORS), item.score,
         ) or {}
         if res.get("score"):
             outcome.score_written = item.score
-        # 3) Save as DRAFT (never publish).
+        # 4) Save as DRAFT (never publish).
         if _save_draft(driver):
             outcome.saved = True
             outcome.note = "saved as draft"
