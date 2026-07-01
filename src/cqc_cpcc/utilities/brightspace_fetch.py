@@ -365,7 +365,11 @@ def _on_brightspace(driver) -> bool:
     if not isinstance(cur, str):
         return False
     cur = cur.lower()
-    return "brightspace.cpcc.edu" in cur and not any(h in cur for h in _LOGIN_HOST_HINTS)
+    # Match the *host* exactly (or a subdomain of it) rather than a substring, so
+    # a lookalike like ``brightspace.cpcc.edu.evil.com`` can't pass.
+    host = (urlparse(cur).hostname or "")
+    on_bs = host == "brightspace.cpcc.edu" or host.endswith(".brightspace.cpcc.edu")
+    return on_bs and not any(h in cur for h in _LOGIN_HOST_HINTS)
 
 
 def _await_brightspace_after_login(
