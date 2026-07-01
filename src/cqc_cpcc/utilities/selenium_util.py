@@ -284,16 +284,15 @@ def extract_mfa_number(driver: WebDriver) -> str | None:
 
 
 def describe_mfa_dom(driver: WebDriver) -> str:
-    """Return a human-readable dump of candidate MFA-number elements on the page.
+    """Return a diagnostic summary of how many known MFA-number selectors matched.
 
-    Used for diagnostics/selector-tuning: shows which of the known selectors match,
-    plus any element whose visible text is just a 2-3 digit number. Helpful when
-    confirming the number element against the live login page.
+    Used for selector-tuning: reports, per known selector, how many elements it
+    matched on the current page. It deliberately reads no element text or
+    attribute values — the MFA number element's text is the matching number and
+    its class can contain "passcode"/"verification-code", so surfacing either
+    would leak an auth challenge value into the log. For richer, interactive
+    inspection use ``scripts/brightspace_selector_probe.py``.
     """
-    # Diagnostics only: we report *counts* of matching elements, never any
-    # element text or attribute values. The MFA number element's text is the
-    # matching number and its class can contain "passcode"/"verification-code",
-    # so emitting those would leak an auth challenge value into the log.
     lines: list[str] = []
     for idx, (by, sel) in enumerate(_MFA_NUMBER_SELECTORS):
         # Reference the selector by index, not its literal string: some selector
@@ -306,18 +305,7 @@ def describe_mfa_dom(driver: WebDriver) -> str:
             continue
         lines.append(f"  [selector #{idx}] matched {count} element(s)")
 
-    # Also count short numeric text nodes as a fallback hint. We only test each
-    # node's text against a regex (a boolean); the value itself is never kept.
-    try:
-        generic = 0
-        for el in driver.find_elements(By.XPATH, "//*[string-length(normalize-space(text()))<=3]"):
-            if re.fullmatch(r"\d{2,3}", (el.text or "").strip()):
-                generic += 1
-        lines.append(f"  [generic] {generic} short numeric text node(s)")
-    except Exception as e:  # noqa: BLE001
-        lines.append(f"  [generic scan] error: {type(e).__name__}")
-
-    return "MFA DOM candidates:\n" + ("\n".join(lines) if lines else "  (none found)")
+    return "MFA DOM candidate selectors:\n" + ("\n".join(lines) if lines else "  (none found)")
 
 
 def capture_mfa_challenge(driver: WebDriver, context: str) -> MfaChallenge:
