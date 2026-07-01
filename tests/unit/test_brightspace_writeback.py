@@ -299,12 +299,41 @@ def test_write_one_student_real_fills_and_saves_draft(mocker):
     driver = MagicMock()
     driver.execute_script.return_value = {"score": True, "feedback": True}
     mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     save = mocker.patch.object(wb, "_save_draft", return_value=True)
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
     assert o.score_written == 90.0 and o.saved and o.note == "saved as draft"
+    assert o.feedback_written is True
     save.assert_called_once()
+
+
+@pytest.mark.unit
+def test_write_feedback_via_editor_empty_returns_false():
+    driver = MagicMock()
+    assert wb._write_feedback_via_editor(driver, MagicMock(), "") is False
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.unit
+def test_write_feedback_via_editor_types_into_iframe():
+    driver = MagicMock()
+    # schedule -> True, poll -> True, setContent -> True, find iframe -> element
+    driver.execute_script.side_effect = [True, True, True, "IFRAME_EL"]
+    ok = wb._write_feedback_via_editor(driver, MagicMock(), "<p>fb</p>")
+    assert ok is True
+    driver.switch_to.frame.assert_called_once_with("IFRAME_EL")
+    assert driver.find_element.return_value.send_keys.called   # real keystrokes typed
+    driver.switch_to.default_content.assert_called()           # frame restored
+
+
+@pytest.mark.unit
+def test_write_feedback_via_editor_no_iframe_returns_false():
+    driver = MagicMock()
+    driver.execute_script.side_effect = [True, True, True, None]  # iframe not found
+    assert wb._write_feedback_via_editor(driver, MagicMock(), "<p>fb</p>") is False
+    driver.switch_to.frame.assert_not_called()
 
 
 @pytest.mark.unit

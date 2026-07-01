@@ -1785,6 +1785,7 @@ def _render_writeback_report(report) -> None:
                 f"{o.rubric_selected}"
                 + (f" (⚠️ {len(o.rubric_missing)} unmatched)" if o.rubric_missing else "")
             ),
+            "Feedback": ("—" if report.dry_run else ("✅" if o.feedback_written else "❌")),
             "Saved draft": "✅" if o.saved else ("—" if report.dry_run else "❌"),
             "Note": o.note,
         } for o in report.outcomes]
