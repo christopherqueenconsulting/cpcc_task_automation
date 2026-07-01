@@ -2612,6 +2612,17 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         run_key=run_key
     )
 
+    # Optional: push these grades back into BrightSpace as drafts. Rendered here too
+    # (not only in the live-grading path) so the section persists across reruns
+    # triggered by "Download Feedback" and other cached-display interactions. The
+    # run_key-scoped key_prefix matches the live path, so widget state carries over.
+    st.markdown("---")
+    add_brightspace_writeback_element(
+        results=all_results,
+        key_prefix=f"rubric_exam_wb_{run_key}_",
+        default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
+    )
+
 
 def _generate_feedback_docs_and_zip(
         all_results: list[tuple[str, RubricAssessmentResult]],
