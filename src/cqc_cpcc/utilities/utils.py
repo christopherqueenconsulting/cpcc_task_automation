@@ -642,16 +642,20 @@ def _notify_mfa(driver: WebDriver, context: str, mfa_handler, message: str) -> N
             "" if number else " (number still loading; will retry)",
         )
     else:
-        from cqc_cpcc.utilities.selenium_util import describe_mfa_dom, extract_mfa_number
+        from cqc_cpcc.utilities.selenium_util import extract_mfa_number
         number = extract_mfa_number(driver)
         take_and_show_screenshot(driver, f"{context}_mfa")
         if number:
             # Displayed on the screenshot shown to the user; not logged.
             logger.info("🔐 MFA matching number read from page (shown on screen).")
         else:
-            # Selector didn't match — dump candidates so the selector can be tuned.
-            logger.info("Could not read the MFA number from the page selectors.")
-            logger.info(describe_mfa_dom(driver))
+            # Selector didn't match. Tune selectors interactively with
+            # scripts/brightspace_selector_probe.py rather than dumping candidate
+            # elements here — their text/attributes are the sensitive matching
+            # number (describe_mfa_dom remains available for manual/REPL use).
+            logger.info(
+                "Could not read the MFA number from the page selectors; "
+                "run scripts/brightspace_selector_probe.py to tune them.")
         # The full instruction is surfaced to the user via the on-screen
         # screenshot; keep the log line static (no interpolated message).
         logger.info("Approve the MFA prompt on your device (enter the number shown if prompted).")
