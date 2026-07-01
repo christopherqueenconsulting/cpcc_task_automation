@@ -307,9 +307,11 @@ class TestDockerComposeHelpers:
 
         assert mock_run.call_count == 2
         ps_call = mock_run.call_args_list[0][0][0]
-        assert ps_call[0:3] == ['docker', 'compose', '-f']
-        assert ps_call[3].endswith('/docker-compose.yml')
-        assert ps_call[4:6] == ['ps', '-q']
+        # Compose stack is namespaced with -p <project> before -f <file>.
+        assert ps_call[0:3] == ['docker', 'compose', '-p']
+        assert ps_call[4] == '-f'
+        assert ps_call[5].endswith('/docker-compose.yml')
+        assert ps_call[6:8] == ['ps', '-q']
 
     @patch('cqc_cpcc.utilities.selenium_util.subprocess.run')
     def test_start_container_if_not_running_starts_when_not_running(self, mock_run):
@@ -326,9 +328,11 @@ class TestDockerComposeHelpers:
 
         assert mock_run.call_count == 2
         up_call = mock_run.call_args_list[1][0][0]
-        assert up_call[0:3] == ['docker', 'compose', '-f']
-        assert up_call[3].endswith('/docker-compose.yml')
-        assert up_call[4:] == ['up', '-d', 'chrome']
+        # Compose stack is namespaced with -p <project> before -f <file>.
+        assert up_call[0:3] == ['docker', 'compose', '-p']
+        assert up_call[4] == '-f'
+        assert up_call[5].endswith('/docker-compose.yml')
+        assert up_call[6:] == ['up', '-d', 'chrome']
 
     def test_set_docker_usage_flag_sets_and_clears_marker(self, tmp_path, monkeypatch):
         from cqc_cpcc.utilities.selenium_util import set_docker_usage_flag, get_docker_usage_flag_file

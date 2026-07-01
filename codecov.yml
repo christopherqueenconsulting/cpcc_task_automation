@@ -58,21 +58,34 @@ coverage:
       default:
         # Target: 80% coverage on all new/modified code
         target: 80%
-        
+
         # Threshold: 0% - no drops allowed for new code
         # New code must meet the 80% bar
         threshold: 0%
-        
+
         # Only evaluate on pull requests
         only_pulls: true
-        
+
         # Fail if coverage upload is missing
         # This prevents bypassing the gate by not uploading coverage
         if_not_found: failure
-        
-        # Paths to include in patch coverage calculation
+
+        # Paths included in the ENFORCING patch gate: all backend logic EXCEPT the
+        # browser-automation surface. Selenium/WebDriver + MFA/login + BrightSpace
+        # fetch/write-back code is driven through a live browser and is exercised by
+        # the integration/e2e suites, not unit tests — gating it at 80% would only
+        # reward low-value mock churn. Those modules are still REPORTED (see the
+        # informational "Browser Automation & MFA" component below); they just don't
+        # block PRs. This mirrors how "Core Automation" (brightspace.py et al.) is
+        # already treated. New PURE logic (grading, rubric, parsing, zip, dates) stays
+        # gated at 80%.
         paths:
           - "src/cqc_cpcc/"
+          - "!src/cqc_cpcc/utilities/selenium_util.py"
+          - "!src/cqc_cpcc/utilities/brightspace_fetch.py"
+          - "!src/cqc_cpcc/utilities/brightspace_writeback.py"
+          - "!src/cqc_cpcc/utilities/brightspace_submissions.py"
+          - "!src/cqc_cpcc/utilities/utils.py"
 
 # Comment configuration for PR feedback
 comment:
@@ -207,15 +220,15 @@ component_management:
         - type: patch
           target: 95%  # High coverage for student-facing output
     
-    # Utilities - general helper functions
-    # Currently at 63.01% - needs improvement
+    # Utilities - general, unit-testable helper functions only.
+    # NOTE: utils.py (Selenium MFA/login bridge) and selenium_util.py (WebDriver
+    # helpers) moved to the informational "Browser Automation & MFA" component — they
+    # are browser-driven and tested via integration/e2e, not unit tests.
     - component_id: utilities
       name: Utilities
       paths:
-        - "src/cqc_cpcc/utilities/utils.py"
         - "src/cqc_cpcc/utilities/date.py"
         - "src/cqc_cpcc/utilities/logger.py"
-        - "src/cqc_cpcc/utilities/selenium_util.py"
         - "src/cqc_cpcc/utilities/pdf_utils.py"
         - "src/cqc_cpcc/utilities/zip_grading_utils.py"
       statuses:
@@ -236,3 +249,27 @@ component_management:
           target: 25%  # Current baseline - UI tested via E2E
           threshold: 5%
           informational: true  # Don't block PRs
+
+    # Browser Automation & MFA - Selenium/WebDriver-driven modules.
+    # These collect submissions/instructions from BrightSpace, drive the MFA/login
+    # flow, and write grades back — all against a LIVE browser. They are exercised by
+    # the integration/e2e suites (and verified manually against the live site), not by
+    # unit tests, so their coverage is tracked INFORMATIONALLY (reported, never blocks)
+    # — same philosophy as "Core Automation". This keeps the patch gate honest for
+    # pure logic while still surfacing these modules' coverage trend.
+    - component_id: browser_automation
+      name: Browser Automation & MFA
+      paths:
+        - "src/cqc_cpcc/utilities/selenium_util.py"
+        - "src/cqc_cpcc/utilities/utils.py"
+        - "src/cqc_cpcc/utilities/brightspace_fetch.py"
+        - "src/cqc_cpcc/utilities/brightspace_submissions.py"
+        - "src/cqc_cpcc/utilities/brightspace_writeback.py"
+      statuses:
+        - type: project
+          target: 50%  # Current baseline; tracked, not enforced
+          threshold: 5%
+          informational: true  # Don't block PRs
+        - type: patch
+          target: 80%
+          informational: true  # Reported on PRs, but never blocks
