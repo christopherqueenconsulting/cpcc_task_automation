@@ -294,13 +294,16 @@ def describe_mfa_dom(driver: WebDriver) -> str:
     # elements, never the element text/HTML — that would contain the MFA
     # matching number (an auth challenge value that must not reach the log).
     lines: list[str] = []
-    for by, sel in _MFA_NUMBER_SELECTORS:
+    for idx, (by, sel) in enumerate(_MFA_NUMBER_SELECTORS):
+        # Report the selector by index, not its literal string: some selector
+        # strings contain words like "passcode" that would otherwise be treated
+        # as sensitive when logged.
         try:
             els = driver.find_elements(by, sel)
         except Exception as e:  # noqa: BLE001
-            lines.append(f"  [{sel}] error: {type(e).__name__}")
+            lines.append(f"  [selector #{idx}] error: {type(e).__name__}")
             continue
-        lines.append(f"  [{sel}] matched {len(els)} element(s)")
+        lines.append(f"  [selector #{idx}] matched {len(els)} element(s)")
 
     # Also scan generically for short numeric text nodes as a fallback hint —
     # report only their identity (tag/id/class), not the numeric value.

@@ -638,9 +638,8 @@ def _notify_mfa(driver: WebDriver, context: str, mfa_handler, message: str) -> N
         # surfaced to the user via the MFA handler + on-screen screenshot, not the
         # server log. Log only whether it has been read yet.
         logger.info(
-            "🔐 MFA number matching%s — %s",
-            "" if number else " (number not read yet; will retry)",
-            message,
+            "🔐 MFA number-matching prompt published to the UI%s.",
+            "" if number else " (number still loading; will retry)",
         )
     else:
         from cqc_cpcc.utilities.selenium_util import describe_mfa_dom, extract_mfa_number
@@ -653,7 +652,9 @@ def _notify_mfa(driver: WebDriver, context: str, mfa_handler, message: str) -> N
             # Selector didn't match — dump candidates so the selector can be tuned.
             logger.info("Could not read the MFA number from the page selectors.")
             logger.info(describe_mfa_dom(driver))
-        logger.info(message)
+        # The full instruction is surfaced to the user via the on-screen
+        # screenshot; keep the log line static (no interpolated message).
+        logger.info("Approve the MFA prompt on your device (enter the number shown if prompted).")
 
 
 def _wait_for_mfa_approval(
@@ -697,7 +698,7 @@ def _wait_for_mfa_approval(
                 # logged (auth challenge value — shown on screen instead).
                 logger.info("🔐 MFA matching number updated — see the on-screen prompt.")
         time.sleep(1)
-    logger.warning("Timed out waiting for MFA approval after %ss.", timeout)
+    logger.warning("Timed out waiting for MFA approval.")
 
 
 # Max seconds to wait for the "Stay signed in?" (KMSI) prompt to appear before
