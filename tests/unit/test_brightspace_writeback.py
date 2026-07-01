@@ -321,6 +321,74 @@ def test_write_one_student_no_score_field_reports_not_found(mocker):
 
 
 @pytest.mark.unit
+def test_build_write_items_populates_rubric_selections():
+    crit1 = SimpleNamespace(criterion_name="Program Performance", points_earned=24,
+                            points_possible=30, selected_level_label="Above Average", feedback="")
+    crit2 = SimpleNamespace(criterion_name="Style", points_earned=5, points_possible=5,
+                            selected_level_label=None, feedback="")  # no level -> skipped
+    results = [("id - Jane Doe - Oct 1, 2025 100 PM", _result(29, 35, criteria=[crit1, crit2]))]
+    items = wb.build_write_items_from_results(results, buffer_pct=0)
+    sels = items[0].rubric_selections
+    assert len(sels) == 1
+    assert sels[0].criterion_name == "Program Performance"
+    assert sels[0].level_label == "Above Average"
+
+
+@pytest.mark.unit
+def test_select_rubric_levels_empty_skips_script():
+    driver = MagicMock()
+    assert wb._select_rubric_levels(driver, [], dry_run=True) == {"selected": [], "missing": []}
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.unit
+def test_select_rubric_levels_passes_payload_and_dryrun_flag():
+    driver = MagicMock()
+    driver.execute_script.return_value = {"selected": [{"criterion": "C", "level": "L"}], "missing": []}
+    out = wb._select_rubric_levels(driver, [wb.RubricLevelSelection("C", "L")], dry_run=True)
+    args = driver.execute_script.call_args[0]
+    assert args[1] == [{"criterion": "C", "level": "L"}]   # payload
+    assert args[2] is True                                  # dry_run flag
+    assert out["selected"][0]["criterion"] == "C"
+
+
+@pytest.mark.unit
+def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
+    driver = MagicMock()
+    driver.execute_script.return_value = {"score": True, "feedback": True}
+    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    rub = mocker.patch.object(wb, "_select_rubric_levels", return_value={
+        "selected": [{"criterion": "Program Performance", "level": "Above Average"}], "missing": []})
+    mocker.patch.object(wb, "_save_draft", return_value=True)
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 24, 27, 30, "<p>fb</p>",
+                             rubric_selections=[wb.RubricLevelSelection("Program Performance", "Above Average")])
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
+    rub.assert_called_once()
+    assert rub.call_args.kwargs.get("dry_run") is False    # real selection, not dry-run
+    assert o.rubric_selected == 1 and o.saved and o.score_written == 27.0
+
+
+@pytest.mark.unit
+def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    rub = mocker.patch.object(wb, "_select_rubric_levels", return_value={
+        "selected": [{"criterion": "Program Performance", "level": "Above Average"}],
+        "missing": [{"criterion": "Style", "level": "Full", "reason": "level not found"}]})
+    save = mocker.patch.object(wb, "_save_draft")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 24, 27, 30, "<p>fb</p>", rubric_selections=[
+        wb.RubricLevelSelection("Program Performance", "Above Average"),
+        wb.RubricLevelSelection("Style", "Full")])
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
+    rub.assert_called_once()
+    assert rub.call_args.kwargs.get("dry_run") is True     # matched only, not clicked
+    assert o.rubric_selected == 1 and len(o.rubric_missing) == 1 and not o.saved
+    save.assert_not_called()
+
+
+@pytest.mark.unit
 def test_write_one_student_filled_but_no_save_button(mocker):
     driver = MagicMock()
     driver.execute_script.return_value = {"score": True, "feedback": True}

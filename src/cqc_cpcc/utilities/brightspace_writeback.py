@@ -147,6 +147,17 @@ def _fmt_num(n) -> str:
 
 
 @dataclass
+class RubricLevelSelection:
+    """A rubric criterion + the performance level the grader chose for it.
+
+    Drives the on-page rubric: we click the level whose label matches
+    ``level_label`` within the criterion whose name matches ``criterion_name``.
+    """
+    criterion_name: str
+    level_label: str
+
+
+@dataclass
 class GradeWriteItem:
     """One student's final, ready-to-write grade + feedback."""
     student_key: str           # the grader's student_id (usually the ZIP folder name)
@@ -155,6 +166,11 @@ class GradeWriteItem:
     score: float               # score to actually write (after the buffer, capped)
     max_points: float
     feedback_html: str
+    # Per-criterion rubric level selections (from the grader's criteria_results).
+    # Applied to the on-page rubric BEFORE the overall score is written, because
+    # selecting rubric levels auto-recomputes the overall score — which we then
+    # override with ``score`` (buffered) so our value is what's saved.
+    rubric_selections: list = field(default_factory=list)  # list[RubricLevelSelection]
 
 
 def build_write_items_from_results(
@@ -198,9 +214,19 @@ def build_write_items_from_results(
             display = name_parser(student_id)
         except Exception:  # noqa: BLE001 - tolerant of odd folder names
             display = student_id
+        # Per-criterion rubric level selections (only those the AI actually chose).
+        selections: list[RubricLevelSelection] = []
+        for cr in (_get(result, "criteria_results") or []):
+            cname = _get(cr, "criterion_name")
+            level = _get(cr, "selected_level_label")
+            if cname and level:
+                selections.append(RubricLevelSelection(
+                    criterion_name=str(cname), level_label=str(level),
+                ))
         items.append(GradeWriteItem(
             student_key=student_id, display_name=display or student_id,
             raw_score=raw, score=buffered, max_points=max_pts, feedback_html=feedback,
+            rubric_selections=selections,
         ))
     return items
 
@@ -328,6 +354,8 @@ class StudentWriteOutcome:
     score_written: Optional[float] = None
     fields_found: bool = False
     saved: bool = False
+    rubric_selected: int = 0            # rubric levels selected (or matched, in dry-run)
+    rubric_missing: list = field(default_factory=list)  # [{criterion, level, reason}]
     note: str = ""
 
 
@@ -430,8 +458,18 @@ def push_grades_to_brightspace(
 
     try:
         if route == ROUTE_QUIZ:
-            return _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run)
-        return _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry_run)
+            report = _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run)
+        else:
+            report = _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry_run)
+        if not dry_run and any(o.saved for o in report.outcomes):
+            # See _FILL_GRADE_JS KNOWN LIMITATION: score + rubric persist, but overall
+            # feedback written programmatically may not survive Save Draft.
+            report.warnings.append(
+                "Overall feedback is best-effort and may not have persisted — "
+                "spot-check each student's feedback in BrightSpace. Scores and rubric "
+                "levels are saved reliably."
+            )
+        return report
     finally:
         if own_driver and driver is not None:
             try:
@@ -603,9 +641,90 @@ def _open_assignment_evaluation(driver, wait, url: str, learner: dict) -> bool:
     return True
 
 
-# Deep-DOM JS: set the score input value and write the feedback editor body, dispatching
-# input/change so the D2L app registers the change. UNVERIFIED — only runs when
-# dry_run=False. Returns which fields were written.
+# Deep-DOM JS: select rubric performance levels. VERIFIED LIVE 2026-07-01 on the
+# assignment Consistent Evaluation page. Each criterion is a role="radiogroup" whose
+# name is resolved via aria-labelledby -> #criterion-name in the group's OWN shadow
+# root; each level is a role="radio" whose text is "<label>, <pts> out of <max>: ...".
+# A plain .click() does NOT register with the Lit component — a full synthetic
+# pointer/mouse sequence (composed:true) is required. Selecting a level auto-updates
+# the overall grade, so this runs BEFORE the overall score is written. With
+# dryRun=true it only reports matches (never clicks). Returns {selected, missing}.
+_SELECT_RUBRIC_LEVELS_JS = r"""
+const SELECTIONS = arguments[0];   // [{criterion, level}]
+const dryRun = arguments[1];
+function* deep(root) {
+  const stack = [root.documentElement || root];
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n) continue;
+    yield n;
+    if (n.shadowRoot) stack.push(n.shadowRoot);
+    for (const c of (n.children || [])) stack.push(c);
+  }
+}
+function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function critNameOf(g) {
+  const root = g.getRootNode();
+  const id = g.getAttribute('aria-labelledby');
+  if (root && root.getElementById && id) {
+    const e = root.getElementById(id);
+    if (e) return (e.textContent || '').trim();
+  }
+  return '';
+}
+function fireClick(el) {
+  try { el.scrollIntoView && el.scrollIntoView({block: 'center'}); } catch (e) {}
+  const r = el.getBoundingClientRect();
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    el.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, view: window}));
+  }
+}
+const all = [...deep(document)];
+const groups = all.filter(el => el.getAttribute && el.getAttribute('role') === 'radiogroup');
+const selected = [], missing = [];
+for (const sel of (SELECTIONS || [])) {
+  const g = groups.find(gr => norm(critNameOf(gr)) === norm(sel.criterion));
+  if (!g) { missing.push({criterion: sel.criterion, level: sel.level, reason: 'criterion not found'}); continue; }
+  const radios = [...deep(g)].filter(r => r.getAttribute && r.getAttribute('role') === 'radio');
+  const want = norm(sel.level);
+  let target = radios.find(r => norm((r.textContent || '').trim().split(/[,:]/)[0]) === want)
+            || radios.find(r => norm((r.textContent || '').trim()).indexOf(want) === 0);
+  if (!target) { missing.push({criterion: sel.criterion, level: sel.level, reason: 'level not found'}); continue; }
+  if (!dryRun) fireClick(target);
+  selected.push({criterion: sel.criterion, level: sel.level});
+}
+return {selected: selected, missing: missing};
+"""
+
+
+def _select_rubric_levels(driver, selections: list, dry_run: bool) -> dict:
+    """Select each criterion's rubric level (or, in dry-run, just report matches)."""
+    payload = [{"criterion": s.criterion_name, "level": s.level_label} for s in selections]
+    if not payload:
+        return {"selected": [], "missing": []}
+    try:
+        return driver.execute_script(_SELECT_RUBRIC_LEVELS_JS, payload, dry_run) or {
+            "selected": [], "missing": []
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.info("Rubric level selection failed: %s", e)
+        return {"selected": [], "missing": [{"reason": str(e)}]}
+
+
+# Deep-DOM JS: set the score input value and write the feedback editor body. The score
+# input is a D2L Lit component, so we set it via the native value setter + composed
+# input/change events (a plain assignment isn't observed). VERIFIED LIVE: the overall
+# grade set this way sticks even when it differs from the rubric-derived total. Runs
+# AFTER _SELECT_RUBRIC_LEVELS_JS so the buffered score is the final value. Only runs
+# when dry_run=False. Returns which fields were written.
+#
+# KNOWN LIMITATION (overall feedback): the feedback field is a TinyMCE editor inside
+# <d2l-htmleditor>. Writing its body innerHTML here is BEST-EFFORT and was found NOT to
+# persist through Save Draft in live testing (2026-07-01) — D2L serializes feedback from
+# the editor's own model, which programmatic DOM/property/editor-API writes did not
+# reliably commit. SCORE and RUBRIC selections DO persist. Treat written feedback as
+# unverified and spot-check it in BrightSpace until a committing path is implemented.
 _FILL_GRADE_JS = r"""
 const SCORE_SELS = arguments[0];
 const FB_SELS = arguments[1];
@@ -628,7 +747,15 @@ function matchesAny(el, sels) {
   for (const s of sels) { try { if (el.matches && el.matches(s)) return true; } catch (e) {} }
   return false;
 }
-function fire(el, type) { try { el.dispatchEvent(new Event(type, {bubbles: true})); } catch (e) {} }
+function fire(el, type) { try { el.dispatchEvent(new Event(type, {bubbles: true, composed: true})); } catch (e) {} }
+function setNativeValue(input, val) {
+  // Use the prototype's native setter so Lit/React value tracking observes the change.
+  try {
+    const d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    if (d && d.set) { d.set.call(input, String(val)); return; }
+  } catch (e) {}
+  input.value = String(val);
+}
 let scoreSet = false, feedbackSet = false;
 for (const el of deep(document)) {
   if (!scoreSet && matchesAny(el, SCORE_SELS)) {
@@ -636,7 +763,7 @@ for (const el of deep(document)) {
     let input = (el.tagName || '').toLowerCase() === 'input' ? el
       : (el.shadowRoot && el.shadowRoot.querySelector('input')) || el.querySelector && el.querySelector('input');
     if (input) {
-      input.value = String(scoreVal);
+      setNativeValue(input, scoreVal);
       fire(input, 'input'); fire(input, 'change');
       scoreSet = true;
     }
@@ -672,24 +799,39 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         return
 
     if dry_run:
-        outcome.note = "dry run — would write score and feedback (not saved)"
+        # Report which rubric levels WOULD be selected (matched, not clicked).
+        rres = _select_rubric_levels(driver, item.rubric_selections, dry_run=True)
+        outcome.rubric_selected = len(rres.get("selected") or [])
+        outcome.rubric_missing = rres.get("missing") or []
         outcome.score_written = item.score
-        progress(f"{item.display_name}: would write {item.score}/{item.max_points} (dry run)")
+        rub = (f"; {outcome.rubric_selected}/{len(item.rubric_selections)} rubric level(s) matched"
+               if item.rubric_selections else "")
+        outcome.note = f"dry run — would set rubric + write {item.score} (not saved){rub}"
+        progress(f"{item.display_name}: would write {item.score}/{item.max_points}{rub} (dry run)")
         return
 
     try:
+        # 1) Rubric levels FIRST — selecting a level auto-recomputes the overall score.
+        rres = _select_rubric_levels(driver, item.rubric_selections, dry_run=False)
+        outcome.rubric_selected = len(rres.get("selected") or [])
+        outcome.rubric_missing = rres.get("missing") or []
+        # 2) Feedback + overall score LAST, so the buffered score overrides the
+        #    rubric-derived total (verified live that this override sticks).
         res = driver.execute_script(
             _FILL_GRADE_JS, list(SCORE_INPUT_SELECTORS), list(FEEDBACK_EDITOR_SELECTORS),
             item.score, item.feedback_html,
         ) or {}
         if res.get("score"):
             outcome.score_written = item.score
+        # 3) Save as DRAFT (never publish).
         if _save_draft(driver):
             outcome.saved = True
             outcome.note = "saved as draft"
         else:
             outcome.note = "filled but Save Draft not found — NOT saved"
-        progress(f"{item.display_name}: wrote {item.score}/{item.max_points} "
+        rub = (f"; {outcome.rubric_selected}/{len(item.rubric_selections)} rubric level(s)"
+               if item.rubric_selections else "")
+        progress(f"{item.display_name}: wrote {item.score}/{item.max_points}{rub} "
                  f"({'saved draft' if outcome.saved else 'not saved'})")
     except Exception as e:  # noqa: BLE001
         outcome.note = f"write error: {e}"
@@ -729,7 +871,14 @@ if (target.shadowRoot) {
   const inner = target.shadowRoot.querySelector('button, a');
   if (inner) clickEl = inner;
 }
-clickEl.click();
+// d2l-button is a Lit component: a bare .click() may not register, so dispatch a
+// full synthetic pointer/mouse sequence (verified live for the rubric radios).
+try { clickEl.scrollIntoView && clickEl.scrollIntoView({block: 'center'}); } catch (e) {}
+const r = clickEl.getBoundingClientRect();
+const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+  clickEl.dispatchEvent(new MouseEvent(t, {bubbles: true, cancelable: true, composed: true, clientX: cx, clientY: cy, view: window}));
+}
 return true;
 """
 
