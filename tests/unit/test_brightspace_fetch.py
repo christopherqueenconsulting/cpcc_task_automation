@@ -219,6 +219,13 @@ def test_on_brightspace_distinguishes_login_host():
     # Mid-SSO on the Microsoft login host must NOT count as "on BrightSpace".
     driver.current_url = "https://login.microsoftonline.com/abc/saml2?SAMLRequest=xyz"
     assert bf._on_brightspace(driver) is False
+    # A lookalike host that merely *contains* the domain as a substring must NOT
+    # pass (guards against incomplete URL-substring sanitization).
+    driver.current_url = "https://brightspace.cpcc.edu.evil.example.com/d2l/home"
+    assert bf._on_brightspace(driver) is False
+    # A legitimate subdomain still counts.
+    driver.current_url = "https://learn.brightspace.cpcc.edu/d2l/home"
+    assert bf._on_brightspace(driver) is True
 
 
 @pytest.mark.unit

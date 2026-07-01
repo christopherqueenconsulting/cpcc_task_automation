@@ -279,7 +279,7 @@ def extract_mfa_number(driver: WebDriver) -> str | None:
                 if match:
                     return match.group(0)
         except Exception as e:  # noqa: BLE001 - selector probing is best-effort
-            logger.debug("MFA number selector %s failed: %s", sel, e)
+            logger.debug("MFA number selector probe failed: %s", type(e).__name__)
     return None
 
 
@@ -290,32 +290,28 @@ def describe_mfa_dom(driver: WebDriver) -> str:
     plus any element whose visible text is just a 2-3 digit number. Helpful when
     confirming the number element against the live login page.
     """
+    # Diagnostics only: we report *which* selectors matched and how many
+    # elements, never the element text/HTML — that would contain the MFA
+    # matching number (an auth challenge value that must not reach the log).
     lines: list[str] = []
     for by, sel in _MFA_NUMBER_SELECTORS:
         try:
             els = driver.find_elements(by, sel)
         except Exception as e:  # noqa: BLE001
-            lines.append(f"  [{sel}] error: {e}")
+            lines.append(f"  [{sel}] error: {type(e).__name__}")
             continue
-        for el in els:
-            text = (el.text or "").strip()
-            try:
-                outer = (el.get_attribute("outerHTML") or "")[:200]
-            except Exception:  # noqa: BLE001
-                outer = "(no outerHTML)"
-            lines.append(f"  [{sel}] text={text!r} html={outer!r}")
+        lines.append(f"  [{sel}] matched {len(els)} element(s)")
 
-    # Also scan generically for short numeric text nodes as a fallback hint.
+    # Also scan generically for short numeric text nodes as a fallback hint —
+    # report only their identity (tag/id/class), not the numeric value.
     try:
         for el in driver.find_elements(By.XPATH, "//*[string-length(normalize-space(text()))<=3]"):
-            text = (el.text or "").strip()
-            if re.fullmatch(r"\d{2,3}", text):
-                tag = el.tag_name
+            if re.fullmatch(r"\d{2,3}", (el.text or "").strip()):
                 el_id = el.get_attribute("id") or ""
                 cls = el.get_attribute("class") or ""
-                lines.append(f"  [generic] <{tag} id={el_id!r} class={cls!r}> text={text!r}")
+                lines.append(f"  [generic] <{el.tag_name} id={el_id!r} class={cls!r}> (short numeric text)")
     except Exception as e:  # noqa: BLE001
-        lines.append(f"  [generic scan] error: {e}")
+        lines.append(f"  [generic scan] error: {type(e).__name__}")
 
     return "MFA DOM candidates:\n" + ("\n".join(lines) if lines else "  (none found)")
 

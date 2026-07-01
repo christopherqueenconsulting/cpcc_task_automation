@@ -634,9 +634,12 @@ def _notify_mfa(driver: WebDriver, context: str, mfa_handler, message: str) -> N
 
     if mfa_handler is not None:
         number = _publish_mfa_challenge(driver, context, mfa_handler, message)
+        # Never log the raw matching number — it's an auth challenge value. It's
+        # surfaced to the user via the MFA handler + on-screen screenshot, not the
+        # server log. Log only whether it has been read yet.
         logger.info(
             "🔐 MFA number matching%s — %s",
-            f" ({number})" if number else " (number not read yet; will retry)",
+            "" if number else " (number not read yet; will retry)",
             message,
         )
     else:
@@ -644,7 +647,8 @@ def _notify_mfa(driver: WebDriver, context: str, mfa_handler, message: str) -> N
         number = extract_mfa_number(driver)
         take_and_show_screenshot(driver, f"{context}_mfa")
         if number:
-            logger.info("🔐 MFA matching number (from page): %s", number)
+            # Displayed on the screenshot shown to the user; not logged.
+            logger.info("🔐 MFA matching number read from page (shown on screen).")
         else:
             # Selector didn't match — dump candidates so the selector can be tuned.
             logger.info("Could not read the MFA number from the page selectors.")
@@ -689,7 +693,9 @@ def _wait_for_mfa_approval(
             number = _publish_mfa_challenge(driver, context, mfa_handler, message)
             if number and number != last_number:
                 last_number = number
-                logger.info("🔐 MFA matching number is %s — enter it in your app.", number)
+                # Republished to the UI/handler above; the value itself is not
+                # logged (auth challenge value — shown on screen instead).
+                logger.info("🔐 MFA matching number updated — see the on-screen prompt.")
         time.sleep(1)
     logger.warning("Timed out waiting for MFA approval after %ss.", timeout)
 
