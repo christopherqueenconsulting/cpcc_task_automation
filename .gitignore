@@ -178,3 +178,10 @@ src/cqc_streamlit_app/screenshots/*
 
 # Ruff cache
 .ruff_cache/
+
+# Persisted browser-session profile (Docker standalone-chrome volume mount).
+# Contains login cookies/session data — never commit.
+chrome-profile/
+
+# Playwright MCP working directory
+.playwright-mcp/

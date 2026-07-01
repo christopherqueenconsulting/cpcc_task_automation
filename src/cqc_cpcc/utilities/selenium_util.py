@@ -1,5 +1,7 @@
 import os
 import platform
+import re
+import shutil
 import subprocess
 import requests
 import tempfile
@@ -34,6 +36,40 @@ _original_display: str | None = None
 DOCKER_COMPOSE_FILE_PATH = Path(__file__).resolve().parents[3] / "docker-compose.yml"
 DOCKER_USAGE_FLAG_ENV_VAR = "CQC_DOCKER_USAGE_FLAG_FILE"
 DEFAULT_DOCKER_USAGE_FLAG_FILE = Path(tempfile.gettempdir()) / "cqc_cpcc_docker_browser_used.flag"
+
+
+# Persisted Chrome profile locations. These keep the user logged in across
+# sessions and container restarts (login once, reuse for many assignments). Both
+# are repo-local and gitignored.
+DOCKER_CHROME_PROFILE_DIR = DOCKER_COMPOSE_FILE_PATH.parent / "chrome-profile"
+LOCAL_CHROME_PROFILE_DIR = Path(__file__).resolve().parent / "selenium_profiles"
+
+
+def clear_persisted_browser_profile() -> list[str]:
+    """Clear persisted browser-profile session data to force a fresh login.
+
+    Wipes the *contents* of both the Docker standalone-chrome profile
+    (``<repo>/chrome-profile``) and the local Chrome profile
+    (``selenium_profiles/``), keeping the directories themselves (the Docker one
+    is a volume mount point). Sessions otherwise persist across runs and new
+    container instances, so callers only need this when deliberately
+    re-authenticating. Returns the list of profile directories that were cleared.
+    """
+    cleared: list[str] = []
+    for profile_dir in (DOCKER_CHROME_PROFILE_DIR, LOCAL_CHROME_PROFILE_DIR):
+        if not profile_dir.is_dir():
+            continue
+        for child in profile_dir.iterdir():
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning("Could not remove profile entry %s: %s", child, e)
+        cleared.append(str(profile_dir))
+        logger.info("Cleared persisted browser profile: %s", profile_dir)
+    return cleared
 
 
 def get_docker_usage_flag_file() -> Path:
@@ -197,6 +233,135 @@ def wait_for_user_action(
     ).strip()
 
 
+# ---------------------------------------------------------------------------
+# MFA (number-matching) support for headless / web-app login
+# ---------------------------------------------------------------------------
+#
+# When Selenium runs headless on a server (e.g. the Streamlit web app) the
+# instructor cannot see the browser, so a Microsoft Authenticator / Duo
+# "number matching" challenge — where a 2-digit number must be typed into the
+# phone app — would otherwise be invisible. ``capture_mfa_challenge`` scrapes the
+# on-screen number (with a screenshot fallback) so the UI can surface it, and
+# ``MfaBridge`` relays that between a background login thread and the UI.
+
+import threading  # noqa: E402  (kept local to the MFA section)
+from dataclasses import dataclass  # noqa: E402
+
+# Selectors where the matching number is rendered, tried in order. These are
+# best-effort and may need tuning against the live login pages (Microsoft uses
+# ``#idRichContext_DisplaySign``; Duo Universal Prompt uses a verification-code
+# element). ``extract_mfa_number`` returns ``None`` when none are found.
+_MFA_NUMBER_SELECTORS = (
+    (By.ID, "idRichContext_DisplaySign"),  # Microsoft number matching
+    (By.CSS_SELECTOR, ".verification-code"),  # Duo Universal Prompt
+    (By.CSS_SELECTOR, "[class*='verification-code']"),
+    (By.CSS_SELECTOR, "[class*='passcode']"),
+)
+
+
+@dataclass
+class MfaChallenge:
+    """A captured MFA number-matching prompt to surface to the user."""
+
+    context: str  # "duo" | "microsoft"
+    number: str | None = None
+    screenshot_png: bytes | None = None
+    message: str = ""
+
+
+def extract_mfa_number(driver: WebDriver) -> str | None:
+    """Scrape the on-screen MFA matching number, or ``None`` if not present."""
+    for by, sel in _MFA_NUMBER_SELECTORS:
+        try:
+            for el in driver.find_elements(by, sel):
+                text = (el.text or "").strip()
+                match = re.search(r"\d{2,}", text)
+                if match:
+                    return match.group(0)
+        except Exception as e:  # noqa: BLE001 - selector probing is best-effort
+            logger.debug("MFA number selector probe failed: %s", type(e).__name__)
+    return None
+
+
+def describe_mfa_dom(driver: WebDriver) -> str:
+    """Return a diagnostic summary of how many known MFA-number selectors matched.
+
+    Used for selector-tuning: reports, per known selector, how many elements it
+    matched on the current page. It deliberately reads no element text or
+    attribute values — the MFA number element's text is the matching number and
+    its class can contain "passcode"/"verification-code", so surfacing either
+    would leak an auth challenge value into the log. For richer, interactive
+    inspection use ``scripts/brightspace_selector_probe.py``.
+    """
+    lines: list[str] = []
+    for idx, (by, sel) in enumerate(_MFA_NUMBER_SELECTORS):
+        # Reference the selector by index, not its literal string: some selector
+        # strings contain words like "passcode" that would be treated as
+        # sensitive when logged.
+        try:
+            count = len(driver.find_elements(by, sel))
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"  [selector #{idx}] error: {type(e).__name__}")
+            continue
+        lines.append(f"  [selector #{idx}] matched {count} element(s)")
+
+    return "MFA DOM candidate selectors:\n" + ("\n".join(lines) if lines else "  (none found)")
+
+
+def capture_mfa_challenge(driver: WebDriver, context: str) -> MfaChallenge:
+    """Capture the current MFA prompt: the matching number plus a screenshot."""
+    number = extract_mfa_number(driver)
+    screenshot: bytes | None = None
+    try:
+        screenshot = driver.get_screenshot_as_png()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Could not capture MFA screenshot: %s", e)
+    return MfaChallenge(context=context, number=number, screenshot_png=screenshot)
+
+
+class MfaBridge:
+    """Thread-safe relay between a background Selenium login thread and the UI.
+
+    The login thread (producer) publishes a challenge via :meth:`on_challenge`
+    and signals completion via :meth:`on_resolved`; the UI thread (consumer)
+    polls :attr:`challenge` / :attr:`resolved` and may request :meth:`cancel`.
+
+    This is also the default ``mfa_handler`` shape expected by ``login_if_needed``:
+    any object exposing ``on_challenge(challenge)`` and ``on_resolved()`` works.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._challenge: MfaChallenge | None = None
+        self._resolved = threading.Event()
+        self._cancelled = threading.Event()
+
+    # -- producer (login thread) --
+    def on_challenge(self, challenge: MfaChallenge) -> None:
+        with self._lock:
+            self._challenge = challenge
+
+    def on_resolved(self) -> None:
+        self._resolved.set()
+
+    # -- consumer (UI thread) --
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    @property
+    def challenge(self) -> MfaChallenge | None:
+        with self._lock:
+            return self._challenge
+
+    @property
+    def resolved(self) -> bool:
+        return self._resolved.is_set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+
 class BrowserType(Enum):
     DOCKER_CHROME = 1
     LOCAL_CHROME = 2
@@ -208,9 +373,43 @@ class DockerType(Enum):
     REMOTE = 2
 
 
+def _enum_from_env(enum, value):
+    """Resolve an env value to an enum member by name or numeric value.
+
+    Accepts the member name (case-insensitive, e.g. ``"DOCKER_CHROME"``) or its
+    integer value (e.g. ``"1"``). Returns ``None`` when the value is unset/blank
+    or not recognized (caller then falls back to prompting).
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for member in enum:
+        if member.name.lower() == text.lower():
+            return member
+    try:
+        return enum(int(text))
+    except (ValueError, KeyError):
+        logger.warning(
+            "Invalid %s value in environment: %r (valid: %s)",
+            enum.__name__, value, ", ".join(m.name for m in enum),
+        )
+        return None
+
+
 def which_browser():
-    """Prompts the user to select a value from the given enum."""
+    """Select the browser type, honoring the BROWSER_TYPE env default if set.
+
+    When ``BROWSER_TYPE`` is present in the environment it is used directly (no
+    console prompt); otherwise the user is prompted interactively.
+    """
     enum = BrowserType
+
+    preset = _enum_from_env(enum, BROWSER_TYPE)
+    if preset is not None:
+        logger.info("Using BROWSER_TYPE from environment: %s", preset.name)
+        return preset
 
     logger.info("Please select a browser:")
     for i, member in enumerate(enum):
@@ -229,8 +428,17 @@ def which_browser():
 
 
 def which_docker():
-    """Prompts the user to select a value from the given enum."""
+    """Select the docker type, honoring the DOCKER_TYPE env default if set.
+
+    When ``DOCKER_TYPE`` is present in the environment it is used directly (no
+    console prompt); otherwise the user is prompted interactively.
+    """
     enum = DockerType
+
+    preset = _enum_from_env(enum, DOCKER_TYPE)
+    if preset is not None:
+        logger.info("Using DOCKER_TYPE from environment: %s", preset.name)
+        return preset
 
     logger.info("Please select a docker type:")
     for i, member in enumerate(enum):

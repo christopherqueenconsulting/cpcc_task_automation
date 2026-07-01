@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "selenium": {
+      "command": "npx",
+      "args": ["-y", "@angiejones/mcp-selenium@0.2.3"],
+      "env": {
+        "SELENIUM_REMOTE_URL": "http://localhost:14444/wd/hub"
+      }
+    }
+  }
+}

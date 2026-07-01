@@ -31,6 +31,50 @@ class TestBrowserType:
 
 
 @pytest.mark.unit
+class TestEnvDefaultSelection:
+    """BROWSER_TYPE / DOCKER_TYPE env defaults skip the interactive prompts."""
+
+    def test_enum_from_env_accepts_name_case_insensitive(self):
+        from cqc_cpcc.utilities.selenium_util import _enum_from_env, BrowserType
+        assert _enum_from_env(BrowserType, 'docker_chrome') == BrowserType.DOCKER_CHROME
+        assert _enum_from_env(BrowserType, 'LOCAL_CHROME') == BrowserType.LOCAL_CHROME
+
+    def test_enum_from_env_accepts_numeric(self):
+        from cqc_cpcc.utilities.selenium_util import _enum_from_env, DockerType
+        assert _enum_from_env(DockerType, '1') == DockerType.LOCAL
+        assert _enum_from_env(DockerType, '2') == DockerType.REMOTE
+
+    def test_enum_from_env_returns_none_for_unset_or_bad(self):
+        from cqc_cpcc.utilities.selenium_util import _enum_from_env, BrowserType
+        assert _enum_from_env(BrowserType, None) is None
+        assert _enum_from_env(BrowserType, '') is None
+        assert _enum_from_env(BrowserType, '   ') is None
+        assert _enum_from_env(BrowserType, 'bogus') is None
+
+    def test_which_browser_honors_env_without_prompting(self):
+        import cqc_cpcc.utilities.selenium_util as su
+        from cqc_cpcc.utilities.selenium_util import BrowserType
+        with patch.object(su, 'BROWSER_TYPE', 'LOCAL_CHROME'), \
+                patch('builtins.input', side_effect=AssertionError('should not prompt')):
+            assert su.which_browser() == BrowserType.LOCAL_CHROME
+
+    def test_which_docker_honors_env_without_prompting(self):
+        import cqc_cpcc.utilities.selenium_util as su
+        from cqc_cpcc.utilities.selenium_util import DockerType
+        with patch.object(su, 'DOCKER_TYPE', 'REMOTE'), \
+                patch('builtins.input', side_effect=AssertionError('should not prompt')):
+            assert su.which_docker() == DockerType.REMOTE
+
+    def test_which_browser_prompts_when_env_unset(self):
+        import cqc_cpcc.utilities.selenium_util as su
+        from cqc_cpcc.utilities.selenium_util import BrowserType
+        with patch.object(su, 'BROWSER_TYPE', None), \
+                patch('builtins.input', return_value='2') as mock_input:
+            assert su.which_browser() == BrowserType.LOCAL_CHROME
+            mock_input.assert_called_once()
+
+
+@pytest.mark.unit
 class TestCloseTab:
     """Test the close_tab function."""
     
@@ -619,3 +663,36 @@ class TestWaitForUserAction:
              patch('builtins.input', return_value=''):
             result = sel_util.wait_for_user_action(mock_driver, "Press Enter")
             assert result == ""
+
+
+@pytest.mark.unit
+def test_clear_persisted_browser_profile_clears_contents_keeps_dirs(tmp_path, mocker):
+    """Fresh-login clears profile contents but keeps the (mount-point) dirs."""
+    import cqc_cpcc.utilities.selenium_util as sel_util
+
+    docker_dir = tmp_path / "chrome-profile"
+    local_dir = tmp_path / "selenium_profiles"
+    for d in (docker_dir, local_dir):
+        (d / "Default").mkdir(parents=True)
+        (d / "Default" / "Cookies").write_text("session")
+        (d / "First Run").write_text("x")
+
+    mocker.patch.object(sel_util, "DOCKER_CHROME_PROFILE_DIR", docker_dir)
+    mocker.patch.object(sel_util, "LOCAL_CHROME_PROFILE_DIR", local_dir)
+
+    cleared = sel_util.clear_persisted_browser_profile()
+
+    assert set(cleared) == {str(docker_dir), str(local_dir)}
+    for d in (docker_dir, local_dir):
+        assert d.is_dir()  # dir kept (mount point)
+        assert list(d.iterdir()) == []  # contents removed
+
+
+@pytest.mark.unit
+def test_clear_persisted_browser_profile_skips_missing_dirs(tmp_path, mocker):
+    import cqc_cpcc.utilities.selenium_util as sel_util
+
+    mocker.patch.object(sel_util, "DOCKER_CHROME_PROFILE_DIR", tmp_path / "nope")
+    mocker.patch.object(sel_util, "LOCAL_CHROME_PROFILE_DIR", tmp_path / "also-nope")
+
+    assert sel_util.clear_persisted_browser_profile() == []

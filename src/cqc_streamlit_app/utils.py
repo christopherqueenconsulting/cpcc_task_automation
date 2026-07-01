@@ -1379,13 +1379,14 @@ def add_flexible_upload_element(
         success_message: bool = True,
         accept_multiple_files: bool = False,
         key_prefix: str = "",
-        allow_url: bool = True
+        allow_url: bool = True,
+        allow_brightspace: bool = False
 ) -> UploadedFileResult:
     """
     Add a flexible file input element supporting local uploads, Google Drive URLs, and direct URLs.
-    
+
     This function extends add_upload_file_element with URL download capabilities.
-    
+
     Args:
         uploader_text: Label for the file input
         accepted_file_types: List of accepted file extensions
@@ -1393,18 +1394,38 @@ def add_flexible_upload_element(
         accept_multiple_files: Whether to accept multiple files
         key_prefix: Prefix for widget keys to ensure uniqueness
         allow_url: Whether to show URL input option
-        
+        allow_brightspace: Whether to show the "From BrightSpace URL" tab (made the
+            first/default tab when enabled). Builds a submissions ZIP from a
+            BrightSpace Assignment or Quiz URL with a preview/edit step.
+
     Returns:
         If accept_multiple_files=True: List of (original_name, temp_path) tuples
         If accept_multiple_files=False: Single (original_name, temp_path) tuple
         If no files provided: (None, None)
     """
-    # Create tabs for different input methods
-    if allow_url:
+    # Create tabs for different input methods. When BrightSpace is enabled it
+    # becomes the first/default tab.
+    tab_bs = None
+    if allow_brightspace and allow_url:
+        tab_bs, tab1, tab2 = st.tabs(
+            ["🎓 From BrightSpace URL", "📁 Upload File(s)", "🔗 From URL/Google Drive"])
+    elif allow_url:
         tab1, tab2 = st.tabs(["📁 Upload File(s)", "🔗 From URL/Google Drive"])
     else:
         tab1 = st.container()
         tab2 = None
+
+    # BrightSpace tab takes precedence when it has produced a confirmed ZIP.
+    if tab_bs is not None:
+        with tab_bs:
+            bs_result = add_brightspace_submission_element(
+                accepted_file_types=accepted_file_types,
+                key_prefix=key_prefix + "bs_",
+                success_message=success_message,
+            )
+        if bs_result and bs_result.get("path"):
+            file_tuple = (bs_result["name"], bs_result["path"])
+            return [file_tuple] if accept_multiple_files else file_tuple
 
     with tab1:
         # Use existing upload function for file uploads
@@ -1483,6 +1504,552 @@ def add_flexible_upload_element(
         return []
     else:
         return None, None
+
+
+class _BrightSpaceJob:
+    """Runs the BrightSpace fetch on a background thread (Selenium is blocking).
+
+    The thread must not touch Streamlit APIs / session_state. It writes only to
+    plain attributes here and to the thread-safe ``MfaBridge``; the Streamlit
+    script polls those on rerun.
+    """
+
+    def __init__(self, url: str, accepted_file_types: list[str], bridge):
+        import threading
+        self.url = url
+        self.accepted_file_types = accepted_file_types
+        self.bridge = bridge
+        self.result = None  # BrightSpaceFetchResult
+        self.error: Optional[str] = None
+        self.done = threading.Event()
+        self._progress: list[str] = []
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _record(self, message: str):
+        with self._lock:
+            self._progress.append(message)
+
+    def latest_progress(self) -> Optional[str]:
+        with self._lock:
+            return self._progress[-1] if self._progress else None
+
+    def _run(self):
+        from cqc_cpcc.utilities.brightspace_submissions import (
+            build_submissions_zip_from_brightspace_url,
+        )
+        try:
+            self.result = build_submissions_zip_from_brightspace_url(
+                self.url,
+                self.accepted_file_types,
+                progress=self._record,
+                mfa_handler=self.bridge,
+            )
+        except Exception as e:  # noqa: BLE001 - surfaced to the UI
+            self.error = str(e)
+            logger.exception("BrightSpace fetch failed")
+        finally:
+            self.done.set()
+
+
+class _BrightSpaceWritebackJob:
+    """Runs the BrightSpace draft grade write-back on a background thread.
+
+    Like ``_BrightSpaceJob``, the thread must not touch Streamlit APIs; it writes
+    only to plain attributes + the thread-safe ``MfaBridge``. ``dry_run`` (default
+    True) navigates and locates the write targets but never fills or saves.
+    """
+
+    def __init__(self, url: str, items: list, bridge, dry_run: bool = True):
+        import threading
+        self.url = url
+        self.items = items
+        self.bridge = bridge
+        self.dry_run = dry_run
+        self.report = None  # GradeWriteReport
+        self.error: Optional[str] = None
+        self.done = threading.Event()
+        self._progress: list[str] = []
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _record(self, message: str):
+        with self._lock:
+            self._progress.append(message)
+
+    def latest_progress(self) -> Optional[str]:
+        with self._lock:
+            return self._progress[-1] if self._progress else None
+
+    def _run(self):
+        from cqc_cpcc.utilities.brightspace_writeback import push_grades_to_brightspace
+        try:
+            self.report = push_grades_to_brightspace(
+                self.url, self.items, progress=self._record,
+                mfa_handler=self.bridge, dry_run=self.dry_run,
+            )
+        except Exception as e:  # noqa: BLE001 - surfaced to the UI
+            self.error = str(e)
+            logger.exception("BrightSpace write-back failed")
+        finally:
+            self.done.set()
+
+
+def _render_mfa_prompt(bridge) -> None:
+    """Show the MFA number-matching prompt prominently (number + screenshot).
+
+    Rendered inline rather than as a modal dialog because the running-job view
+    auto-refreshes via a poll/rerun loop, which does not compose with a modal.
+    """
+    challenge = bridge.challenge
+    if challenge is None:
+        return
+    with st.container(border=True):
+        st.subheader("🔐 Two-factor approval needed")
+        if challenge.number:
+            st.markdown("### Enter this number in your Authenticator app, then approve:")
+            # Large, prominent number for easy reading on the same page.
+            st.markdown(
+                f"<div style='font-size:4rem;font-weight:700;letter-spacing:0.25rem;"
+                f"text-align:center;padding:0.5rem 0;'>{challenge.number}</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info(
+                "A sign-in approval is pending — reading the matching number from the "
+                "login page… Approve the push on your device (the number will appear "
+                "here in a moment if your app asks for one)."
+            )
+        if challenge.message:
+            st.caption(challenge.message)
+        if challenge.screenshot_png:
+            with st.expander("Show live browser view", expanded=not challenge.number):
+                st.image(
+                    challenge.screenshot_png,
+                    caption="Live browser view",
+                    use_container_width=True,
+                )
+
+
+def add_brightspace_submission_element(
+        accepted_file_types: list[str],
+        key_prefix: str = "",
+        success_message: bool = True,
+) -> Optional[dict]:
+    """Render the "From BrightSpace URL" input + preview/edit, returning results.
+
+    A single fetch yields both the student submissions ZIP and the scraped
+    instructions (assignment description or first quiz question). Returns a dict
+    ``{"name", "path", "instructions", "route"}`` once the user confirms via the
+    preview/edit panel, otherwise ``None``.
+    """
+    import time
+
+    job_key = key_prefix + "job"
+    fetch_result_key = key_prefix + "fetch_result"
+    confirmed_key = key_prefix + "confirmed"
+
+    # If the user already confirmed a generated ZIP, keep returning it.
+    if st.session_state.get(confirmed_key):
+        confirmed = st.session_state[confirmed_key]
+        st.success(f"✅ Using generated file: {confirmed['name']}")
+        if confirmed.get("instructions"):
+            st.caption("📝 Instructions captured from this URL will be used below.")
+
+        # Persisted review: let the instructor re-open the file picker and
+        # select/de-select student folders/files after confirming, without
+        # re-fetching. Operates on the ORIGINAL fetched ZIP (full set) and rebuilds
+        # the confirmed ZIP. Route-agnostic (assignment + quiz).
+        orig = st.session_state.get(fetch_result_key)
+        if orig is not None and getattr(orig, "zip_path", None):
+            with st.expander("📂 Review / change selected files", expanded=False):
+                keep_arcs = _render_zip_keep_table(orig.zip_path, key_prefix + "review_")
+                if st.button("✅ Apply selection", key=key_prefix + "reapply"):
+                    if keep_arcs:
+                        new_path = _rebuild_zip_from_kept(orig.zip_path, keep_arcs)
+                        ok, detail = _validate_submissions_zip(new_path, keep_arcs)
+                        if ok:
+                            confirmed = {**confirmed, "path": new_path}
+                            st.session_state[confirmed_key] = confirmed
+                            st.success(f"Updated: {detail} student submission(s).")
+                            st.rerun()
+                        else:
+                            st.error(f"Selection failed validation: {detail}")
+                    else:
+                        st.error("Select at least one file to keep.")
+
+        if st.button("🔄 Start over", key=key_prefix + "startover"):
+            for k in (job_key, fetch_result_key, confirmed_key):
+                st.session_state.pop(k, None)
+            st.rerun()
+        return confirmed
+
+    st.markdown("**Paste a BrightSpace Assignment or Quiz URL:**")
+    st.caption(
+        "Assignments use BrightSpace's native download; quizzes collect each "
+        "student's file-upload answers. Only the last attempt is kept (review below)."
+    )
+    url = st.text_input(
+        "BrightSpace URL",
+        key=key_prefix + "url",
+        placeholder="https://brightspace.cpcc.edu/d2l/lms/dropbox/...",
+    )
+
+    job = st.session_state.get(job_key)
+    fetch_clicked = st.button(
+        "📥 Fetch submissions", key=key_prefix + "fetch", disabled=not url
+    )
+
+    if fetch_clicked and url:
+        from cqc_cpcc.utilities.selenium_util import MfaBridge
+        bridge = MfaBridge()
+        job = _BrightSpaceJob(url, accepted_file_types, bridge)
+        job.start()
+        st.session_state[job_key] = job
+        st.session_state.pop(fetch_result_key, None)
+        st.rerun()
+
+    # Job in progress: show status + MFA prompt, then poll.
+    if job is not None and not job.done.is_set():
+        status_msg = job.latest_progress() or "Starting..."
+        st.info(f"⏳ {status_msg}")
+        _render_mfa_prompt(job.bridge)
+        if st.button("✖ Cancel", key=key_prefix + "cancel"):
+            job.bridge.cancel()
+            st.session_state.pop(job_key, None)
+            st.rerun()
+        # Poll: brief sleep then rerun to refresh progress / MFA number.
+        time.sleep(1.5)
+        st.rerun()
+
+    # Job finished.
+    if job is not None and job.done.is_set():
+        if job.error:
+            st.error(f"❌ Fetch failed: {job.error}")
+            if st.button("Try again", key=key_prefix + "retry"):
+                st.session_state.pop(job_key, None)
+                st.rerun()
+            return None
+        if fetch_result_key not in st.session_state:
+            st.session_state[fetch_result_key] = job.result
+
+    fetch_result = st.session_state.get(fetch_result_key)
+    if fetch_result is not None:
+        confirmed = render_zip_preview_editor(fetch_result, key_prefix)
+        if confirmed:
+            st.session_state[confirmed_key] = confirmed
+            st.session_state.pop(job_key, None)
+            st.rerun()
+    return None
+
+
+def add_brightspace_source_element(
+        accepted_file_types: list[str],
+        key_prefix: str = "",
+        success_message: bool = True,
+) -> Optional[dict]:
+    """Top-level BrightSpace fetch: one URL yields BOTH submissions + instructions.
+
+    Thin wrapper over ``add_brightspace_submission_element`` intended to be placed
+    near the top of a grading flow so the confirmed result can auto-fill both the
+    Assignment Instructions and Student Submissions steps. Returns the confirmed
+    dict ``{"name", "path", "instructions", "route"}`` once the user clicks
+    "Use the generated file", otherwise ``None``.
+    """
+    return add_brightspace_submission_element(
+        accepted_file_types=accepted_file_types,
+        key_prefix=key_prefix,
+        success_message=success_message,
+    )
+
+
+def _render_writeback_report(report) -> None:
+    """Render a GradeWriteReport: per-student outcomes + unmatched lists."""
+    saved = report.saved_count
+    mode = "DRY RUN — nothing was saved" if report.dry_run else f"saved {saved} draft(s)"
+    st.success(f"Write-back ({report.route}) complete — matched "
+               f"{report.matched_count}/{len(report.outcomes)} shown · {mode}.")
+
+    if report.outcomes:
+        rows = [{
+            "Student": o.display_name,
+            "Score to write": o.score_written if o.score_written is not None else "—",
+            "Fields found": "✅" if o.fields_found else "❌",
+            "Saved draft": "✅" if o.saved else ("—" if report.dry_run else "❌"),
+            "Note": o.note,
+        } for o in report.outcomes]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    if report.unmatched_students:
+        st.warning("⚠️ Graded students with NO matching BrightSpace learner (skipped): "
+                   + ", ".join(report.unmatched_students))
+    if report.unmatched_learners:
+        st.caption("BrightSpace learners with no grading result: "
+                   + ", ".join(report.unmatched_learners))
+    for w in report.warnings:
+        st.caption(f"• {w}")
+
+
+def add_brightspace_writeback_element(
+        results: list,
+        key_prefix: str = "wb_",
+        default_url: str = "",
+) -> None:
+    """Render the "Write grades back to BrightSpace (draft)" panel.
+
+    Pushes each graded student's buffered score + composed feedback onto their
+    BrightSpace evaluation page and saves it as a DRAFT (never published). Defaults to
+    a safe **dry run** that locates the write targets without filling or saving.
+
+    Args:
+        results: ``list[tuple[student_id, RubricAssessmentResult]]`` from
+            ``st.session_state.grading_results_by_key[run_key]``.
+        key_prefix: Session-state key prefix (unique per grading run).
+        default_url: Pre-fill the BrightSpace URL (e.g. the fetched source URL).
+    """
+    import time
+    from cqc_cpcc.utilities.brightspace_writeback import (
+        build_write_items_from_results, DEFAULT_SCORE_BUFFER_PCT,
+    )
+
+    if not results:
+        return
+
+    job_key = key_prefix + "job"
+    report_key = key_prefix + "report"
+
+    st.markdown("#### 📤 Write grades back to BrightSpace (draft)")
+    st.caption(
+        "Pushes each student's score + feedback onto their BrightSpace evaluation "
+        "page and **saves as a draft** (never published) so you can review, then "
+        "publish later. Start with a dry run to confirm matches and field targets."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        buffer_pct = st.number_input(
+            "Error-buffer % added to each score (capped at max)",
+            min_value=0.0, max_value=100.0, value=float(DEFAULT_SCORE_BUFFER_PCT),
+            step=1.0, key=key_prefix + "buffer",
+            help="Adds this percent of the max points to each score before writing. "
+                 "0 disables the buffer.",
+        )
+    with col2:
+        include_criteria = st.checkbox(
+            "Include per-criterion feedback", value=True,
+            key=key_prefix + "include_criteria",
+        )
+
+    url = st.text_input(
+        "BrightSpace Assignment or Quiz URL (the one these grades belong to)",
+        value=default_url, key=key_prefix + "url",
+        placeholder="https://brightspace.cpcc.edu/d2l/lms/...",
+    )
+
+    job = st.session_state.get(job_key)
+
+    def _launch(dry_run: bool):
+        from cqc_cpcc.utilities.selenium_util import MfaBridge
+        items = build_write_items_from_results(
+            results, buffer_pct=buffer_pct, include_criteria_feedback=include_criteria,
+        )
+        bridge = MfaBridge()
+        new_job = _BrightSpaceWritebackJob(url, items, bridge, dry_run=dry_run)
+        new_job.start()
+        st.session_state[job_key] = new_job
+        st.session_state.pop(report_key, None)
+        st.rerun()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔍 Preview write (dry run)", key=key_prefix + "dry",
+                     disabled=not url, use_container_width=True):
+            _launch(dry_run=True)
+    with c2:
+        confirm = st.checkbox("I reviewed the dry run — write drafts for real",
+                              key=key_prefix + "confirm")
+        if st.button("✍️ Write drafts to BrightSpace", key=key_prefix + "real",
+                     disabled=not (url and confirm), use_container_width=True):
+            _launch(dry_run=False)
+
+    # Job in progress: status + MFA prompt, then poll.
+    if job is not None and not job.done.is_set():
+        st.info(f"⏳ {job.latest_progress() or 'Starting...'}")
+        _render_mfa_prompt(job.bridge)
+        if st.button("✖ Cancel", key=key_prefix + "cancel"):
+            job.bridge.cancel()
+            st.session_state.pop(job_key, None)
+            st.rerun()
+        time.sleep(1.5)
+        st.rerun()
+
+    if job is not None and job.done.is_set():
+        if job.error:
+            st.error(f"❌ Write-back failed: {job.error}")
+            if st.button("Try again", key=key_prefix + "retry"):
+                st.session_state.pop(job_key, None)
+                st.rerun()
+            return
+        if report_key not in st.session_state:
+            st.session_state[report_key] = job.report
+            st.session_state.pop(job_key, None)
+            st.rerun()
+
+    report = st.session_state.get(report_key)
+    if report is not None:
+        _render_writeback_report(report)
+
+
+def _render_zip_keep_table(zip_path: str, key_prefix: str) -> Optional[set]:
+    """Render an editable keep/deselect table for every file in ``zip_path``.
+
+    Returns the set of kept arcnames, or ``None`` if the ZIP holds no files. Shared
+    by the initial preview and the post-confirm "review files" panel so the picker is
+    identical wherever it appears.
+    """
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        arcnames = [i.filename for i in zf.infolist() if not i.is_dir()]
+    if not arcnames:
+        st.error("The generated ZIP is empty.")
+        return None
+
+    rows = []
+    for arc in arcnames:
+        folder, _, fname = arc.partition("/")
+        rows.append({"keep": True, "student folder": folder, "file": fname, "_arc": arc})
+    df = pd.DataFrame(rows)
+
+    edited = st.data_editor(
+        df,
+        key=key_prefix + "editor",
+        column_config={
+            "keep": st.column_config.CheckboxColumn("keep", help="Uncheck to remove"),
+            "student folder": st.column_config.TextColumn(disabled=True),
+            "file": st.column_config.TextColumn(disabled=True),
+            "_arc": None,  # hidden
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    kept = edited[edited["keep"]]
+    n_folders = kept["student folder"].nunique()
+    st.caption(f"Will include {len(kept)} file(s) across {n_folders} student folder(s).")
+    return set(kept["_arc"].tolist())
+
+
+def _rebuild_zip_from_kept(src_zip_path: str, keep_arcs: set) -> str:
+    """Write a new ZIP containing only ``keep_arcs`` from ``src_zip_path``.
+
+    Preserves the original folder/file arcnames so the grader's extractor still sees
+    one folder per student. Returns the new ZIP's path.
+    """
+    out = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    out.close()
+    with zipfile.ZipFile(src_zip_path, "r") as src, \
+            zipfile.ZipFile(out.name, "w", zipfile.ZIP_DEFLATED) as dst:
+        for arc in keep_arcs:
+            with src.open(arc) as f:
+                dst.writestr(arc, f.read())
+    return out.name
+
+
+def _validate_submissions_zip(zip_path: str, keep_arcs: set) -> tuple[bool, str]:
+    """Check a rebuilt submissions ZIP parses the way the grader expects.
+
+    Returns ``(True, "<count>")`` with the student-submission count on success, or
+    ``(False, "<error message>")`` on failure.
+    """
+    kept_extensions = sorted({
+        os.path.splitext(arc)[1].lstrip(".").lower()
+        for arc in keep_arcs if os.path.splitext(arc)[1]
+    })
+    try:
+        from cqc_cpcc.utilities.zip_grading_utils import (
+            extract_student_submissions_from_zip,
+        )
+        submissions = extract_student_submissions_from_zip(zip_path, kept_extensions)
+        return True, str(len(submissions))
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+def render_zip_preview_editor(fetch_result, key_prefix: str) -> Optional[dict]:
+    """Preview a generated submissions ZIP and let the user prune folders/files.
+
+    Also previews the scraped instructions (editable) so one BrightSpace fetch
+    confirms both the submissions and the assignment instructions.
+
+    Returns a dict ``{"name", "path", "instructions", "route"}`` when the user
+    clicks "Use the generated file" (a new ZIP rebuilt from the kept entries),
+    otherwise ``None``.
+    """
+    zip_path = fetch_result.zip_path
+
+    st.markdown(f"**Preview generated submissions** — route: `{fetch_result.route}`")
+    for warning in getattr(fetch_result, "warnings", []) or []:
+        st.warning(f"⚠️ {warning}")
+
+    # Instructions captured from the same URL (assignment description or first
+    # quiz question). Editable so the instructor can correct/trim before grading.
+    scraped_instructions = getattr(fetch_result, "instructions", None)
+    instructions_key = key_prefix + "instructions_text"
+    if scraped_instructions:
+        st.markdown("**Captured instructions** (edit if needed):")
+        edited_instructions = st.text_area(
+            "Assignment instructions",
+            value=st.session_state.get(instructions_key, scraped_instructions),
+            key=instructions_key,
+            height=160,
+        )
+    else:
+        edited_instructions = st.session_state.get(instructions_key)
+        st.info(
+            "No instructions were auto-captured from this URL. You can still grade "
+            "submissions — add instructions in the Assignment Instructions section."
+        )
+
+    # Editable keep/deselect table of every file in the ZIP (default: keep all).
+    keep_arcs = _render_zip_keep_table(zip_path, key_prefix)
+    if keep_arcs is None:
+        return None
+
+    col1, col2 = st.columns(2)
+    use_clicked = col1.button("✅ Use the generated file", key=key_prefix + "use")
+    refetch_clicked = col2.button("🔄 Re-fetch", key=key_prefix + "refetch")
+
+    if refetch_clicked:
+        for k in ("job", "fetch_result", "confirmed"):
+            st.session_state.pop(key_prefix + k, None)
+        st.rerun()
+
+    if use_clicked:
+        if not keep_arcs:
+            st.error("Select at least one file to keep.")
+            return None
+
+        out_path = _rebuild_zip_from_kept(zip_path, keep_arcs)
+        ok, detail = _validate_submissions_zip(out_path, keep_arcs)
+        if ok:
+            st.success(f"✅ Generated file ready: {detail} student submission(s).")
+        else:
+            st.error(f"Generated ZIP failed validation: {detail}")
+            return None
+
+        return {
+            "name": "brightspace_submissions.zip",
+            "path": out_path,
+            "instructions": (edited_instructions or "").strip() or None,
+            "route": getattr(fetch_result, "route", None),
+        }
+
+    return None
 
 
 def upload_file_to_temp_path(uploaded_file: UploadedFile):
