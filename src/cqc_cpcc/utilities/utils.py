@@ -27,7 +27,12 @@ from docx import Document
 from markdownify import markdownify as md
 from ordered_set import OrderedSet
 from pydantic import BaseModel, Field, StrictStr, PositiveInt
-from selenium.common import TimeoutException
+from selenium.common import (
+    TimeoutException,
+    StaleElementReferenceException,
+    ElementNotInteractableException,
+    NoSuchElementException,
+)
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
@@ -572,15 +577,183 @@ def extract_and_read_zip(file_path: str, accepted_file_types: list[str]) -> dict
     return students_data
 
 
-def login_if_needed(driver: WebDriver):
+# Seconds to let the MFA prompt finish its slide-in animation before we capture
+# the screenshot / matching number, so the number isn't caught mid-transition.
+MFA_SCREENSHOT_SETTLE_SECONDS = 2.5
+
+# Max seconds to wait for the number-matching challenge to render after Sign in
+# before concluding MFA wasn't required (e.g. a cached session skipped it).
+MFA_DETECT_TIMEOUT_SECONDS = 8
+
+# Max seconds to wait for the user to approve the MFA prompt on their device
+# before giving up. The "Stay signed in?" page only appears after approval, so
+# this must comfortably exceed the time to notice + open the app + approve.
+MFA_APPROVAL_TIMEOUT_SECONDS = 120
+
+
+class MfaCancelled(Exception):
+    """Raised when the user cancels a pending MFA approval (web app)."""
+
+
+def _mfa_settle_before_capture() -> None:
+    """Pause briefly so the MFA prompt animation settles before capture."""
+    time.sleep(MFA_SCREENSHOT_SETTLE_SECONDS)
+
+
+def _publish_mfa_challenge(driver: WebDriver, context: str, mfa_handler, message: str) -> str | None:
+    """Capture the current matching number + screenshot and publish to the handler.
+
+    Returns the captured number (or ``None``). Best-effort: never raises so it
+    can't break login or the approval-wait loop.
+    """
+    try:
+        from cqc_cpcc.utilities.selenium_util import capture_mfa_challenge
+        challenge = capture_mfa_challenge(driver, context)
+        challenge.message = message
+        mfa_handler.on_challenge(challenge)
+        return challenge.number
+    except Exception as e:  # noqa: BLE001 - never let MFA notify break login
+        logger.warning("Could not notify MFA handler: %s", e)
+        return None
+
+
+def _notify_mfa(driver: WebDriver, context: str, mfa_handler, message: str) -> None:
+    """Surface an MFA number-matching prompt.
+
+    When ``mfa_handler`` is provided (e.g. the headless web app's ``MfaBridge``),
+    capture the on-screen matching number + screenshot and hand them off so the
+    UI can display them on the same page. The number is re-published continuously
+    while we wait for approval (see ``_wait_for_mfa_approval``), so an initial
+    miss (number still animating in) is corrected on the next poll. Otherwise
+    fall back to the existing CLI behavior: open a screenshot on the user's real
+    display and log the instruction — and also extract + print the number.
+    """
+    # The matching number slides into the center; wait for it to settle so the
+    # screenshot/number aren't captured mid-animation.
+    _mfa_settle_before_capture()
+
+    if mfa_handler is not None:
+        number = _publish_mfa_challenge(driver, context, mfa_handler, message)
+        # Never log the raw matching number — it's an auth challenge value. It's
+        # surfaced to the user via the MFA handler + on-screen screenshot, not the
+        # server log. Log only whether it has been read yet.
+        logger.info(
+            "🔐 MFA number-matching prompt published to the UI%s.",
+            "" if number else " (number still loading; will retry)",
+        )
+    else:
+        from cqc_cpcc.utilities.selenium_util import extract_mfa_number
+        number = extract_mfa_number(driver)
+        take_and_show_screenshot(driver, f"{context}_mfa")
+        if number:
+            # Displayed on the screenshot shown to the user; not logged.
+            logger.info("🔐 MFA matching number read from page (shown on screen).")
+        else:
+            # Selector didn't match. Tune selectors interactively with
+            # scripts/brightspace_selector_probe.py rather than dumping candidate
+            # elements here — their text/attributes are the sensitive matching
+            # number (describe_mfa_dom remains available for manual/REPL use).
+            logger.info(
+                "Could not read the MFA number from the page selectors; "
+                "run scripts/brightspace_selector_probe.py to tune them.")
+        # The full instruction is surfaced to the user via the on-screen
+        # screenshot; keep the log line static (no interpolated message).
+        logger.info("Approve the MFA prompt on your device (enter the number shown if prompted).")
+
+
+def _wait_for_mfa_approval(
+        driver: WebDriver,
+        display_xpath: str,
+        mfa_handler=None,
+        timeout: int = MFA_APPROVAL_TIMEOUT_SECONDS,
+        context: str = "",
+        message: str = "",
+) -> None:
+    """Block until the MFA number-matching screen clears (user approved).
+
+    Polls for the prompt element to disappear, which signals approval, so the
+    login can proceed to the post-MFA page. While the prompt is still present and
+    an ``mfa_handler`` is provided, the matching number + screenshot are
+    re-published every poll so the web-app page reliably shows the current number
+    (even if it wasn't readable on the first capture). Honors
+    ``mfa_handler.cancelled`` so the web app's Cancel button can abort. Returns
+    quietly on timeout (the caller then attempts the next step, which will
+    surface a clearer error if needed).
+    """
+    deadline = time.time() + timeout
+    last_number = None
+    while time.time() < deadline:
+        if mfa_handler is not None and getattr(mfa_handler, "cancelled", False):
+            raise MfaCancelled("MFA approval cancelled by user")
+        try:
+            still_present = bool(driver.find_elements(By.XPATH, display_xpath))
+        except Exception:  # noqa: BLE001
+            still_present = False
+        if not still_present:
+            logger.info("MFA prompt cleared — approval detected.")
+            return
+        # Re-publish so the UI keeps an up-to-date number/screenshot. This fixes
+        # the case where the number was still animating in at first capture.
+        if mfa_handler is not None:
+            number = _publish_mfa_challenge(driver, context, mfa_handler, message)
+            if number and number != last_number:
+                last_number = number
+                # Republished to the UI/handler above; the value itself is not
+                # logged (auth challenge value — shown on screen instead).
+                logger.info("🔐 MFA matching number updated — see the on-screen prompt.")
+        time.sleep(1)
+    logger.warning("Timed out waiting for MFA approval.")
+
+
+# Max seconds to wait for the "Stay signed in?" (KMSI) prompt to appear before
+# concluding the tenant skipped it. Kept short so login isn't delayed when absent.
+KMSI_PROMPT_TIMEOUT_SECONDS = 3
+
+
+def _dismiss_stay_signed_in(driver: WebDriver, wait_short, wait_long) -> None:
+    """Click "No" on the "Stay signed in?" page if it appears, else skip fast.
+
+    The prompt is optional (some tenants skip it / we may already be redirected
+    back to the app after MFA), so this probes briefly with a direct presence
+    check rather than a long element wait that would hang when it never shows.
+    """
+    kmsi_no_xpath = "//input[contains(@class, 'button-secondary') and contains(@value,'No')]"
+    deadline = time.time() + KMSI_PROMPT_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        if driver.find_elements(By.XPATH, kmsi_no_xpath):
+            try:
+                no_btn = click_element_wait_retry(
+                    driver, wait_short, kmsi_no_xpath,
+                    "Clicking 'No' to Stay Signed in", max_try=0)
+                wait_long.until(
+                    EC.invisibility_of_element(no_btn),
+                    'Waiting for login to be successful')
+            except (TimeoutException, StaleElementReferenceException,
+                    ElementNotInteractableException, NoSuchElementException):
+                logger.info("'Stay signed in?' prompt vanished before dismissal.")
+            return
+        time.sleep(0.5)
+    logger.info("No 'Stay signed in?' prompt — login already completed.")
+
+
+def _resolve_mfa(mfa_handler) -> None:
+    """Signal the MFA handler that login completed (UI can close the prompt)."""
+    if mfa_handler is not None:
+        try:
+            mfa_handler.on_resolved()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("MFA handler on_resolved failed: %s", e)
+
+
+def login_if_needed(driver: WebDriver, mfa_handler=None):
     # sleep for 3 seconds
     time.sleep(3)
     if "Web Login Service" in driver.title:
         # Duo Login
-        duo_login(driver)
+        duo_login(driver, mfa_handler=mfa_handler)
     elif "Sign in to your account" in driver.title:
         # Microsoft Login
-        microsoft_login(driver)
+        microsoft_login(driver, mfa_handler=mfa_handler)
 
 
 def _get_microsoft_account_tile_xpath(instructor_user_id: str, instructor_email: str) -> str:
@@ -693,7 +866,7 @@ def _resolve_microsoft_account_path(
     return False
 
 
-def microsoft_login(driver: WebDriver):
+def microsoft_login(driver: WebDriver, mfa_handler=None):
     # Enter in user info and password
     instructor_user_id = os.environ["INSTRUCTOR_USERID"]
     instructor_email = os.getenv("INSTRUCTOR_EMAIL", f"{instructor_user_id}@cpcc.edu")
@@ -764,26 +937,44 @@ def microsoft_login(driver: WebDriver):
     click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Sign in')]",
                              "Waiting for Sign in Button", By.XPATH)
 
-    # Screenshot so the user can see the post-sign-in state when running headlessly.
-    # TODO: Make this happen only when running headlessly
-    # take_and_show_screenshot(driver, "microsoft_login_submitted")
-    # logger.info("🔔 Microsoft login submitted — waiting for sign-in to complete.")
+    # A Microsoft Authenticator "number matching" challenge may appear here. When
+    # running headless (web app) the instructor can't see the browser, so surface
+    # the matching number + screenshot via the MFA handler so they can approve it
+    # on their phone. Detection is best-effort; absence is fine (push/no-MFA).
+    number_match_xpath = "//*[@id='idRichContext_DisplaySign']"
+    # The number-matching screen can take a few seconds to render after Sign in,
+    # so use a longer wait than the 1s account-picker probe. presence_of_element
+    # returns as soon as it appears, so the full timeout is only spent when MFA is
+    # genuinely absent (e.g. a cached session that skipped the challenge).
+    wait_mfa = get_driver_wait(driver, MFA_DETECT_TIMEOUT_SECONDS)
+    if _is_xpath_present_with_short_wait(
+            wait_mfa,
+            number_match_xpath,
+            "Checking for Microsoft number-matching challenge",
+    ):
+        mfa_message = "Enter the number shown into your Microsoft Authenticator app, then approve."
+        _notify_mfa(driver, "microsoft", mfa_handler, mfa_message)
+        # The "Stay signed in?" page only appears after the user approves, which
+        # can take a while — wait for the number prompt to clear before moving on.
+        # Pass context/message so the number + screenshot are re-published to the
+        # web-app page every poll until approval.
+        _wait_for_mfa_approval(
+            driver, number_match_xpath, mfa_handler,
+            context="microsoft", message=mfa_message,
+        )
 
-    # Click the no button for Stay signed in
-    no_stay_signed_in_button = click_element_wait_retry(driver, wait,
-                                                        "//input[contains(@class, 'button-secondary') and contains(@value,'No')]",
-                                                        "Waiting to click 'No' button to Stay Signed in")
+    # Dismiss "Stay signed in?" (KMSI) if it appears. Some tenants skip it — after
+    # MFA approval we may already be redirected back to the app.
+    _dismiss_stay_signed_in(driver, wait_short, wait_long)
 
-    # Wait until login accepted
-    wait_long.until(
-        EC.invisibility_of_element(no_stay_signed_in_button),
-        'Waiting for login to be successful')
+    # Login completed — let the MFA handler close any prompt it was showing.
+    _resolve_mfa(mfa_handler)
 
     # Switch back to original window
     driver.switch_to.window(original_window)
 
 
-def duo_login(driver: WebDriver):
+def duo_login(driver: WebDriver, mfa_handler=None):
     # TODO: This is not working when in streamlit cloud. Need to get values set before this line
     # from cqc_cpcc.utilities.env_constants import INSTRUCTOR_USERID, INSTRUCTOR_PASS
 
@@ -811,12 +1002,15 @@ def duo_login(driver: WebDriver):
     # login_field.click()
     click_element_wait_retry(driver, wait, "_eventId_proceed", "Waiting for login field", By.NAME)
 
-    # Duo sends an automatic push to the instructor's device at this point.
-    # Take a screenshot so the user can confirm the browser reached the Duo
-    # waiting screen even when running headlessly or in a virtual display.
-    take_and_show_screenshot(driver, "duo_push_sent")
-    logger.info(
-        "🔔 Duo push notification sent — please approve it on your device to continue."
+    # Duo sends an automatic push to the instructor's device at this point. When a
+    # number-matching prompt is shown, surface the number + screenshot through the
+    # MFA handler (web app); otherwise fall back to opening the screenshot locally.
+    _notify_mfa(
+        driver,
+        "duo",
+        mfa_handler,
+        "Duo push sent — approve it on your device "
+        "(enter the number shown if prompted) to continue.",
     )
 
     # Switch to Duo Iframe
@@ -837,13 +1031,24 @@ def duo_login(driver: WebDriver):
         wait.until(
             EC.invisibility_of_element(login_message),
             'Waiting for login to be successful')
+        _resolve_mfa(mfa_handler)
     except TimeoutException:
         # The "No, other people use this device" button did not appear in time.
         # This may mean Duo approval is still pending or an unexpected prompt
-        # appeared.  Take a screenshot so the user can see what happened and,
-        # unless we are in a CI environment, pause for manual intervention.
-        take_and_show_screenshot(driver, "duo_timeout")
-        if not IS_GITHUB_ACTION:
+        # appeared.
+        if mfa_handler is not None:
+            # Web app: never block on stdin. Surface the prompt/screenshot to the
+            # UI and let the caller wait for login to complete or be cancelled.
+            _notify_mfa(
+                driver,
+                "duo",
+                mfa_handler,
+                "Duo authentication is still pending — approve the push "
+                "(enter the number shown if prompted) on your device.",
+            )
+        elif not IS_GITHUB_ACTION:
+            # CLI: take a screenshot and pause for manual intervention.
+            take_and_show_screenshot(driver, "duo_timeout")
             wait_for_user_action(
                 driver,
                 "Duo authentication did not complete automatically.\n"
@@ -851,6 +1056,7 @@ def duo_login(driver: WebDriver):
                 "prompt shown in the screenshot above), then press Enter to continue.",
                 take_screenshot=False,  # already taken above
             )
+        _resolve_mfa(mfa_handler)
 
     # Switch back to original window
     driver.switch_to.window(original_window)

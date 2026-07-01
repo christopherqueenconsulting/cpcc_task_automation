@@ -52,6 +52,8 @@ from cqc_cpcc.utilities.zip_grading_utils import (
 from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import (
+    add_brightspace_source_element,
+    add_brightspace_writeback_element,
     add_flexible_upload_element,
     add_upload_file_element,
     add_grading_summary_to_zip,
@@ -1567,6 +1569,15 @@ async def process_rubric_grading_batch(
             run_key=run_key
         )
 
+        # Optional: push these grades back into BrightSpace as drafts. Pre-fill the URL
+        # from the BrightSpace source fetch (if this run was sourced from one).
+        st.markdown("---")
+        add_brightspace_writeback_element(
+            results=all_results,
+            key_prefix=f"rubric_exam_wb_{run_key}_",
+            default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
+        )
+
     if failure_count > 0:
         st.error(f"❌ {failure_count} submission(s) failed to grade")
 
@@ -1990,6 +2001,28 @@ async def get_rubric_based_exam_grading():
     course_name_parts.append(selected_assignment_name)
     course_name = "_".join(course_name_parts)
 
+    # Step 2.5: BrightSpace Source (optional) — one URL fetch grabs BOTH the
+    # student submissions AND the instructions (assignment description, or the
+    # first quiz question), auto-filling the Instructions and Submissions steps.
+    st.header("🎓 BrightSpace Source (optional)")
+    st.caption(
+        "Paste a BrightSpace Assignment or Quiz URL to auto-fetch student "
+        "submissions and instructions in one step. Or skip this and provide them "
+        "manually below."
+    )
+    brightspace_submission_file_types = [
+        "txt", "docx", "pdf", "java", "cpp", "sas", "zip",
+        "html", "htm", "mp3", "wav", "m4a", "ogg", "mp4", "avi", "mov", "webm",
+    ]
+    brightspace_source = add_brightspace_source_element(
+        accepted_file_types=brightspace_submission_file_types,
+        key_prefix="rubric_exam_bs_source_",
+    )
+    bs_instructions = (brightspace_source or {}).get("instructions")
+    bs_submission = None
+    if brightspace_source and brightspace_source.get("path"):
+        bs_submission = (brightspace_source["name"], brightspace_source["path"])
+
     # Step 3: Rubric Overrides Editor (if rubric mode)
     if use_rubric:
         rubric_overrides = display_rubric_overrides_editor(selected_rubric)
@@ -2015,23 +2048,33 @@ async def get_rubric_based_exam_grading():
 
     # Step 4: Assignment Instructions
     st.header("Assignment Instructions")
-    _orig_file_name, instructions_file_path = add_flexible_upload_element(
-        "Upload Exam Instructions",
-        ["txt", "docx", "pdf"],
-        key_prefix="rubric_exam_",
-        allow_url=True
-    )
-    convert_instructions_to_markdown = st.checkbox(
-        "Convert To Markdown",
-        True,
-        key="convert_rubric_exam_instruction_to_markdown"
-    )
-
     assignment_instructions_content = None
-    if instructions_file_path:
-        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-        if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
-            st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+    if bs_instructions:
+        # Auto-filled from the BrightSpace fetch above (editable).
+        st.success("📝 Using instructions captured from BrightSpace (edit if needed).")
+        assignment_instructions_content = st.text_area(
+            "Assignment instructions (from BrightSpace)",
+            value=bs_instructions,
+            key="rubric_exam_bs_instructions_area",
+            height=200,
+        )
+    else:
+        _orig_file_name, instructions_file_path = add_flexible_upload_element(
+            "Upload Exam Instructions",
+            ["txt", "docx", "pdf"],
+            key_prefix="rubric_exam_",
+            allow_url=True
+        )
+        convert_instructions_to_markdown = st.checkbox(
+            "Convert To Markdown",
+            True,
+            key="convert_rubric_exam_instruction_to_markdown"
+        )
+
+        if instructions_file_path:
+            assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+            if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
+                st.markdown(assignment_instructions_content, unsafe_allow_html=True)
 
     # Step 5: Solution File (Optional)
     st.header("Solution File (Optional)")
@@ -2087,13 +2130,24 @@ async def get_rubric_based_exam_grading():
         "mp3", "wav", "m4a", "ogg",
         "mp4", "avi", "mov", "webm"
     ]
-    student_submission_file_paths = add_flexible_upload_element(
-        "Upload Student Exam Submission",
-        student_submission_accepted_file_types,
-        accept_multiple_files=True,
-        key_prefix="rubric_exam_",
-        allow_url=True
-    )
+    if bs_submission:
+        # Auto-filled from the BrightSpace fetch above.
+        st.success(f"📦 Using submissions fetched from BrightSpace: {bs_submission[0]}")
+        st.caption(
+            "📂 To see the ZIP contents and select/de-select student folders or files "
+            "before grading, use **\"Review / change selected files\"** in the "
+            "🎓 BrightSpace Source section above. You can also Start over there."
+        )
+        student_submission_file_paths = [bs_submission]
+    else:
+        student_submission_file_paths = add_flexible_upload_element(
+            "Upload Student Exam Submission",
+            student_submission_accepted_file_types,
+            accept_multiple_files=True,
+            key_prefix="rubric_exam_",
+            allow_url=True,
+            # BrightSpace is now hoisted to the "BrightSpace Source" section above.
+        )
 
     # Step 9: Generate Run Key and Check Cache
     # If files are not uploaded but we have a previous run_key in session state,
@@ -2556,6 +2610,17 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         model_name="cached",
         temperature=0.0,
         run_key=run_key
+    )
+
+    # Optional: push these grades back into BrightSpace as drafts. Rendered here too
+    # (not only in the live-grading path) so the section persists across reruns
+    # triggered by "Download Feedback" and other cached-display interactions. The
+    # run_key-scoped key_prefix matches the live path, so widget state carries over.
+    st.markdown("---")
+    add_brightspace_writeback_element(
+        results=all_results,
+        key_prefix=f"rubric_exam_wb_{run_key}_",
+        default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
     )
 
 

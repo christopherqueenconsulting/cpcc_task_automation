@@ -15,6 +15,7 @@ Used by both legacy and rubric-based exam grading tabs.
 """
 
 import os
+import re
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -146,6 +147,54 @@ def estimate_tokens(text: str) -> int:
         Estimated token count
     """
     return len(text) // CHARS_PER_TOKEN
+
+
+_FOLDER_NAME_DELIMITER = ' - '
+
+# Month tokens used to recognize a trailing BrightSpace timestamp segment, e.g.
+# "Jun 24, 2026 11:21 PM" or "Oct 10, 2025 1022 AM".
+_TIMESTAMP_MONTH_RE = re.compile(
+    r'\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', re.IGNORECASE
+)
+
+
+def _segment_looks_like_timestamp(segment: str) -> bool:
+    """True if a folder segment looks like a BrightSpace date/time stamp."""
+    s = segment.strip()
+    return bool(_TIMESTAMP_MONTH_RE.search(s) and re.search(r'\b(19|20)\d{2}\b', s))
+
+
+def parse_student_folder_name(directory_name: str) -> str:
+    """Extract the student name from a submission folder name.
+
+    Handles BrightSpace's ``"{orgId}-{submissionId} - {Student Name} - {Date}"``
+    and the simpler ``"{Assignment} - {Student Name}"`` formats. The leading
+    prefix segment (assignment name or numeric id pair) and a trailing timestamp
+    segment are dropped, and the remaining middle segments are rejoined — so names
+    with multiple words, hyphens (``Anne-Marie``), or even a spaced dash
+    (``Anne - Marie``) survive intact, instead of naively taking index ``[1]``.
+
+    Examples:
+        "104470-789761 - Kurtis Karshner - Jun 24, 2026 11:21 PM" -> "Kurtis Karshner"
+        "39786 - Anne - Marie Smith - Oct 10, 2025 1022 AM"       -> "Anne - Marie Smith"
+        "Assignment1 - John Doe"                                  -> "John Doe"
+        "Student1/subfolder"                                      -> "Student1"
+    """
+    path = directory_name.replace('\\', '/')
+    if _FOLDER_NAME_DELIMITER not in path:
+        # No delimiter: the student's own folder is the first path segment
+        # (handles "Student1/subfolder" -> "Student1").
+        return path.split('/')[0].strip()
+
+    # Delimiter present: split the whole path so a leading prefix segment absorbs
+    # any un-stripped wrapper folder + the id/assignment (e.g. "Wrapper/123"); the
+    # trailing timestamp is dropped; the middle segments are the student's name.
+    parts = [p.strip() for p in path.split(_FOLDER_NAME_DELIMITER)]
+    end = len(parts) - 1 if (len(parts) >= 3 and _segment_looks_like_timestamp(parts[-1])) else len(parts)
+    name = _FOLDER_NAME_DELIMITER.join(parts[1:end]).strip()
+    # Defensively collapse any residual path separator to the deepest segment.
+    name = name.split('/')[-1].strip()
+    return name or path.split('/')[0].strip()
 
 
 def should_ignore_file(filepath: str) -> bool:
@@ -314,24 +363,10 @@ def extract_student_submissions_from_zip(
                     logger.debug(f"Skipping file directly in wrapper folder: {file_name}")
                     continue
 
-            # Parse student identifier from directory
-            # Handle "Assignment - Student Name" format (BrightSpace)
-            # BrightSpace format is typically: "ID - Student Name - Timestamp"
-            # or "Assignment - Student Name"
-            # We want the second part (index 1) which is the student name
-            folder_name_delimiter = ' - '
-            if folder_name_delimiter in directory_name:
-                parts = directory_name.split(folder_name_delimiter)
-                if len(parts) >= 2:
-                    # Take the second part (index 1) as student name
-                    student_id = parts[1]
-                else:
-                    # Fallback if split doesn't work as expected
-                    student_id = directory_name.split('/')[0].split('\\')[0]
-            else:
-                # Use top-level folder name as student ID
-                # Handle nested paths: "Student1/subfolder/file.java" -> "Student1"
-                student_id = directory_name.split('/')[0].split('\\')[0]
+            # Parse student name from the folder. Handles both BrightSpace
+            # "{id} - {Student Name} - {Timestamp}" and "{Assignment} - {Name}",
+            # preserving multi-word and dashed names (see parse_student_folder_name).
+            student_id = parse_student_folder_name(directory_name)
 
             # Check file extension
             # accepted_file_types can contain extensions with or without dots

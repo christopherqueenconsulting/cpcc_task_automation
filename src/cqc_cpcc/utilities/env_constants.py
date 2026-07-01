@@ -35,6 +35,13 @@ INSTRUCTOR_PASS = get_constant_from_env('INSTRUCTOR_PASS')
 INSTRUCTOR_NAME = get_constant_from_env('INSTRUCTOR_NAME')
 HEADLESS_BROWSER = isTrue(get_constant_from_env('HEADLESS_BROWSER', default_value='True'))
 USE_VIRTUAL_DISPLAY = isTrue(get_constant_from_env('USE_VIRTUAL_DISPLAY', default_value='False'))
+# Optional defaults that skip the interactive console selection prompts in
+# selenium_util.which_browser() / which_docker(). Accept either the enum name
+# (e.g. "DOCKER_CHROME", "LOCAL") or its numeric value (e.g. "1"). Leave unset to
+# be prompted. Valid BROWSER_TYPE: DOCKER_CHROME | LOCAL_CHROME | BROWSERLESS.
+# Valid DOCKER_TYPE: LOCAL | REMOTE.
+BROWSER_TYPE = get_constant_from_env('BROWSER_TYPE', default_value=None)
+DOCKER_TYPE = get_constant_from_env('DOCKER_TYPE', default_value=None)
 WAIT_DEFAULT_TIMEOUT = float(get_constant_from_env('WAIT_DEFAULT_TIMEOUT', default_value='15'))
 MAX_WAIT_RETRY = int(get_constant_from_env('MAX_WAIT_RETRY', default_value='2'))
 RETRY_PARSER_MAX_RETRY = int(get_constant_from_env('RETRY_PARSER_MAX_RETRY', default_value='5'))
