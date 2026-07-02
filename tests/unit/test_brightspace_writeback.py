@@ -124,6 +124,15 @@ def test_normalize_name():
 
 
 @pytest.mark.unit
+def test_normalize_name_flips_last_comma_first():
+    # BrightSpace "Last, First" must key the same as the grader's "First Last".
+    assert wb._normalize_name("Patel, Dharma") == "dharma patel"
+    assert wb._normalize_name("Patel, Dharma") == wb._normalize_name("Dharma Patel")
+    # A comma that isn't a name separator (missing a side) is left as punctuation.
+    assert wb._normalize_name("Doe,") == "doe"
+
+
+@pytest.mark.unit
 def test_match_items_to_learners_exact_and_unmatched():
     items = [
         wb.GradeWriteItem("k1", "Jane Doe", 80, 90, 100, "<p>x</p>"),
@@ -290,12 +299,41 @@ def test_write_one_student_real_fills_and_saves_draft(mocker):
     driver = MagicMock()
     driver.execute_script.return_value = {"score": True, "feedback": True}
     mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     save = mocker.patch.object(wb, "_save_draft", return_value=True)
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
     assert o.score_written == 90.0 and o.saved and o.note == "saved as draft"
+    assert o.feedback_written is True
     save.assert_called_once()
+
+
+@pytest.mark.unit
+def test_write_feedback_via_editor_empty_returns_false():
+    driver = MagicMock()
+    assert wb._write_feedback_via_editor(driver, MagicMock(), "") is False
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.unit
+def test_write_feedback_via_editor_types_into_iframe():
+    driver = MagicMock()
+    # schedule -> True, poll -> True, setContent -> True, find iframe -> element
+    driver.execute_script.side_effect = [True, True, True, "IFRAME_EL"]
+    ok = wb._write_feedback_via_editor(driver, MagicMock(), "<p>fb</p>")
+    assert ok is True
+    driver.switch_to.frame.assert_called_once_with("IFRAME_EL")
+    assert driver.find_element.return_value.send_keys.called   # real keystrokes typed
+    driver.switch_to.default_content.assert_called()           # frame restored
+
+
+@pytest.mark.unit
+def test_write_feedback_via_editor_no_iframe_returns_false():
+    driver = MagicMock()
+    driver.execute_script.side_effect = [True, True, True, None]  # iframe not found
+    assert wb._write_feedback_via_editor(driver, MagicMock(), "<p>fb</p>") is False
+    driver.switch_to.frame.assert_not_called()
 
 
 @pytest.mark.unit
@@ -308,6 +346,74 @@ def test_write_one_student_no_score_field_reports_not_found(mocker):
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
     assert not o.fields_found and not o.saved
     assert "not found" in o.note
+    save.assert_not_called()
+
+
+@pytest.mark.unit
+def test_build_write_items_populates_rubric_selections():
+    crit1 = SimpleNamespace(criterion_name="Program Performance", points_earned=24,
+                            points_possible=30, selected_level_label="Above Average", feedback="")
+    crit2 = SimpleNamespace(criterion_name="Style", points_earned=5, points_possible=5,
+                            selected_level_label=None, feedback="")  # no level -> skipped
+    results = [("id - Jane Doe - Oct 1, 2025 100 PM", _result(29, 35, criteria=[crit1, crit2]))]
+    items = wb.build_write_items_from_results(results, buffer_pct=0)
+    sels = items[0].rubric_selections
+    assert len(sels) == 1
+    assert sels[0].criterion_name == "Program Performance"
+    assert sels[0].level_label == "Above Average"
+
+
+@pytest.mark.unit
+def test_select_rubric_levels_empty_skips_script():
+    driver = MagicMock()
+    assert wb._select_rubric_levels(driver, [], dry_run=True) == {"selected": [], "missing": []}
+    driver.execute_script.assert_not_called()
+
+
+@pytest.mark.unit
+def test_select_rubric_levels_passes_payload_and_dryrun_flag():
+    driver = MagicMock()
+    driver.execute_script.return_value = {"selected": [{"criterion": "C", "level": "L"}], "missing": []}
+    out = wb._select_rubric_levels(driver, [wb.RubricLevelSelection("C", "L")], dry_run=True)
+    args = driver.execute_script.call_args[0]
+    assert args[1] == [{"criterion": "C", "level": "L"}]   # payload
+    assert args[2] is True                                  # dry_run flag
+    assert out["selected"][0]["criterion"] == "C"
+
+
+@pytest.mark.unit
+def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
+    driver = MagicMock()
+    driver.execute_script.return_value = {"score": True, "feedback": True}
+    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    rub = mocker.patch.object(wb, "_select_rubric_levels", return_value={
+        "selected": [{"criterion": "Program Performance", "level": "Above Average"}], "missing": []})
+    mocker.patch.object(wb, "_save_draft", return_value=True)
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 24, 27, 30, "<p>fb</p>",
+                             rubric_selections=[wb.RubricLevelSelection("Program Performance", "Above Average")])
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
+    rub.assert_called_once()
+    assert rub.call_args.kwargs.get("dry_run") is False    # real selection, not dry-run
+    assert o.rubric_selected == 1 and o.saved and o.score_written == 27.0
+
+
+@pytest.mark.unit
+def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    rub = mocker.patch.object(wb, "_select_rubric_levels", return_value={
+        "selected": [{"criterion": "Program Performance", "level": "Above Average"}],
+        "missing": [{"criterion": "Style", "level": "Full", "reason": "level not found"}]})
+    save = mocker.patch.object(wb, "_save_draft")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 24, 27, 30, "<p>fb</p>", rubric_selections=[
+        wb.RubricLevelSelection("Program Performance", "Above Average"),
+        wb.RubricLevelSelection("Style", "Full")])
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
+    rub.assert_called_once()
+    assert rub.call_args.kwargs.get("dry_run") is True     # matched only, not clicked
+    assert o.rubric_selected == 1 and len(o.rubric_missing) == 1 and not o.saved
     save.assert_not_called()
 
 
@@ -327,9 +433,9 @@ def test_write_one_student_filled_but_no_save_button(mocker):
 def test_gather_assignment_learners_filters_and_handles_error():
     driver = MagicMock()
     driver.execute_script.return_value = [
-        {"name": "Jane Doe", "url": "https://bs/evaluate?userId=1"},
-        {"name": "", "url": "x"},          # no name -> dropped
-        {"name": "No URL"},                # no url -> dropped
+        {"name": "Jane Doe", "userId": "1"},
+        {"name": "", "userId": "2"},       # no name -> dropped
+        {"name": "No Id"},                 # no userId -> dropped
     ]
     rows = wb._gather_assignment_learners(driver)
     assert [r["name"] for r in rows] == ["Jane Doe"]
@@ -338,12 +444,24 @@ def test_gather_assignment_learners_filters_and_handles_error():
 
 
 @pytest.mark.unit
-def test_open_assignment_evaluation_navigates_or_skips(mocker):
+def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
     mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
     driver = MagicMock()
-    assert wb._open_assignment_evaluation(driver, MagicMock(), {"url": "https://bs/eval"}) is True
-    driver.get.assert_called_once_with("https://bs/eval")
-    assert wb._open_assignment_evaluation(driver, MagicMock(), {}) is False  # no url
+    wait = MagicMock()
+    url = "https://bs/d2l/lms/dropbox/admin/mark/folder_submissions_users.d2l?db=1&ou=2"
+
+    ok = wb._open_assignment_evaluation(driver, wait, url, {"name": "Jane Doe", "userId": "117059"})
+    assert ok is True
+    driver.get.assert_called_once_with(url)
+    # located the name link by its feedback,<userId> onclick, then clicked it
+    xpath = driver.find_element.call_args[0][1]
+    assert "feedback,117059" in xpath and "EvaluateDropboxSubmission" in xpath
+    driver.find_element.return_value.click.assert_called_once()
+
+    # no userId -> skip without navigating
+    driver.reset_mock()
+    assert wb._open_assignment_evaluation(driver, wait, url, {"name": "x"}) is False
+    driver.get.assert_not_called()
 
 
 @pytest.mark.unit
@@ -356,7 +474,7 @@ def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
     mocker.patch.object(bf, "_open_and_login")
     mocker.patch.object(bf, "_set_max_results_per_page")
     mocker.patch.object(wb, "_gather_assignment_learners", return_value=[
-        {"name": "Jane Doe", "url": "https://bs/eval?userId=1"},
+        {"name": "Jane Doe", "userId": "1"},
     ])
     mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
     save = mocker.patch.object(wb, "_save_draft")
