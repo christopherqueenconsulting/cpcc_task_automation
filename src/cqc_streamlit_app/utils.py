@@ -1781,6 +1781,11 @@ def _render_writeback_report(report) -> None:
             "Student": o.display_name,
             "Score to write": o.score_written if o.score_written is not None else "—",
             "Fields found": "✅" if o.fields_found else "❌",
+            "Rubric levels": (
+                f"{o.rubric_selected}"
+                + (f" (⚠️ {len(o.rubric_missing)} unmatched)" if o.rubric_missing else "")
+            ),
+            "Feedback": ("—" if report.dry_run else ("✅" if o.feedback_written else "❌")),
             "Saved draft": "✅" if o.saved else ("—" if report.dry_run else "❌"),
             "Note": o.note,
         } for o in report.outcomes]
