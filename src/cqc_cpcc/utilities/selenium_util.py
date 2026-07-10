@@ -43,6 +43,13 @@ DEFAULT_DOCKER_USAGE_FLAG_FILE = Path(tempfile.gettempdir()) / "cqc_cpcc_docker_
 # are repo-local and gitignored.
 DOCKER_CHROME_PROFILE_DIR = DOCKER_COMPOSE_FILE_PATH.parent / "chrome-profile"
 LOCAL_CHROME_PROFILE_DIR = Path(__file__).resolve().parent / "selenium_profiles"
+# Path INSIDE the Selenium container that ``./chrome-profile`` is volume-mounted to
+# (see docker-compose.yml). The container also sets --user-data-dir to this via
+# SE_BROWSER_ARGS_USER_DATA_DIR, but we pass it (plus --profile-directory) on the
+# driver options too so the product uses the SAME persisted, named profile the
+# MCP browser / docs use — otherwise Chrome falls back to the ephemeral "Default"
+# sub-profile and login never persists across runs.
+DOCKER_CHROME_CONTAINER_PROFILE_DIR = "/home/seluser/chrome-profile"
 
 
 def clear_persisted_browser_profile() -> list[str]:
@@ -531,6 +538,15 @@ def get_docker_driver(headless=False):
 
     # Must add docker options
     options = add_docker_chrome_options(options)
+
+    # Use the SAME persisted, named profile the login is stored in (the volume-mounted
+    # ./chrome-profile → /home/seluser/chrome-profile, sub-profile INSTRUCTOR_USERID).
+    # Without an explicit --profile-directory, Chrome uses the ephemeral "Default"
+    # sub-profile and the login is re-prompted (MFA) on every run. The container path
+    # (not a host path) is required because the browser runs inside the container.
+    if not headless:
+        options.add_argument("--user-data-dir=" + DOCKER_CHROME_CONTAINER_PROFILE_DIR)
+        options.add_argument("--profile-directory=" + INSTRUCTOR_USERID)
 
     # prompt user for local docker or remote docker
     docker_type = which_docker()

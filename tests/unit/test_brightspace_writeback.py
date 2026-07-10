@@ -319,8 +319,8 @@ def test_write_feedback_via_editor_empty_returns_false():
 @pytest.mark.unit
 def test_write_feedback_via_editor_types_into_iframe():
     driver = MagicMock()
-    # schedule -> True, poll -> True, setContent -> True, find iframe -> element
-    driver.execute_script.side_effect = [True, True, True, "IFRAME_EL"]
+    # schedule, poll, setContent, scroll-into-view, find-iframe, focus
+    driver.execute_script.side_effect = [True, True, True, True, "IFRAME_EL", None]
     ok = wb._write_feedback_via_editor(driver, MagicMock(), "<p>fb</p>")
     assert ok is True
     driver.switch_to.frame.assert_called_once_with("IFRAME_EL")
@@ -331,7 +331,8 @@ def test_write_feedback_via_editor_types_into_iframe():
 @pytest.mark.unit
 def test_write_feedback_via_editor_no_iframe_returns_false():
     driver = MagicMock()
-    driver.execute_script.side_effect = [True, True, True, None]  # iframe not found
+    # schedule, poll, setContent, scroll, find-iframe -> None
+    driver.execute_script.side_effect = [True, True, True, True, None]
     assert wb._write_feedback_via_editor(driver, MagicMock(), "<p>fb</p>") is False
     driver.switch_to.frame.assert_not_called()
 
@@ -339,7 +340,8 @@ def test_write_feedback_via_editor_no_iframe_returns_false():
 @pytest.mark.unit
 def test_write_one_student_no_score_field_reports_not_found(mocker):
     driver = MagicMock()
-    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": False, "feedback": False})
+    # Patch the hydration wait directly so the test doesn't sit through the poll timeout.
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": False, "feedback": False})
     save = mocker.patch.object(wb, "_save_draft")
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
@@ -427,6 +429,110 @@ def test_write_one_student_filled_but_no_save_button(mocker):
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
     assert not o.saved and "NOT saved" in o.note
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_dry_run_reports_would_post(mocker):
+    """Quiz dry-run: fields hydrate, Completion Summary feedback editor reachable."""
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    switch = mocker.patch.object(wb, "_switch_quiz_view", return_value=True)
+    mocker.patch.object(wb, "_locate_feedback_editor", return_value=True)
+    save = mocker.patch.object(wb, "_click_commit")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
+
+    assert o.fields_found and o.score_written == 90 and not o.saved
+    assert "would POST" in o.note and "overall feedback" in o.note
+    save.assert_not_called()                 # dry run must never post
+    # switched to completion summary to check feedback, then back to attempt
+    assert switch.call_count == 2
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_dry_run_flags_missing_feedback_editor(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": False})
+    mocker.patch.object(wb, "_switch_quiz_view", return_value=True)
+    mocker.patch.object(wb, "_locate_feedback_editor", return_value=False)
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
+    assert o.fields_found and "feedback editor NOT found" in o.note
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_no_score_field(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": False, "feedback": False})
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
+    assert not o.fields_found and "score field not found" in o.note
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_real_posts_score_and_feedback(mocker):
+    """Real quiz write: fill score, post, switch to Completion Summary, feedback, save."""
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    fill = mocker.patch.object(wb, "_fill_score", return_value=True)
+    confirm = mocker.patch.object(wb, "_confirm_dialog", return_value=True)
+    switch = mocker.patch.object(wb, "_switch_quiz_view", return_value=True)
+    fb = mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    commit = mocker.patch.object(wb, "_click_commit", return_value=True)
+    mocker.patch("time.sleep")  # skip the inter-step sleeps
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
+
+    assert o.score_written == 90
+    assert o.feedback_written is True
+    assert o.saved is True and "posted score" in o.note
+    fill.assert_called_once_with(driver, 90)         # keystroke score fill
+    fb.assert_called_once()
+    switch.assert_called_once_with(driver, "completion summary")
+    assert commit.call_count == 2            # post score, then save feedback
+    assert confirm.called                    # the score-sum warning is confirmed
+
+
+@pytest.mark.unit
+def test_confirm_dialog_excludes_destructive_by_default():
+    """SAFETY: the discard/reset-auto-evaluation dialog must be in the exclude list."""
+    driver = MagicMock()
+    driver.execute_script.return_value = True
+    assert wb._confirm_dialog(driver, ("continue anyway",)) is True
+    include_arg, exclude_arg = driver.execute_script.call_args[0][1], driver.execute_script.call_args[0][2]
+    assert "continue anyway" in include_arg
+    # Never confirm the destructive dialog.
+    assert "discard" in exclude_arg and "auto-evaluation" in exclude_arg and "reset to" in exclude_arg
+
+
+@pytest.mark.unit
+def test_fill_score_uses_real_keystrokes():
+    driver = MagicMock()
+    el = MagicMock()
+    driver.execute_script.return_value = el   # _FIND_SCORE_INPUT_JS returns the input
+    assert wb._fill_score(driver, 42) is True
+    assert el.send_keys.called                # typed via real keystrokes, not a JS value set
+    # No input element -> False.
+    driver.execute_script.return_value = None
+    assert wb._fill_score(driver, 42) is False
+
+
+@pytest.mark.unit
+def test_is_quiz_writeback_url():
+    from cqc_streamlit_app.utils import _is_quiz_writeback_url
+    assert _is_quiz_writeback_url(
+        "https://brightspace.cpcc.edu/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?qi=1&ou=2"
+    )
+    assert not _is_quiz_writeback_url(
+        "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/folders_manage.d2l?ou=2"
+    )
+    assert not _is_quiz_writeback_url("")
 
 
 @pytest.mark.unit

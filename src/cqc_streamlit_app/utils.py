@@ -1772,9 +1772,15 @@ def add_brightspace_source_element(
 def _render_writeback_report(report) -> None:
     """Render a GradeWriteReport: per-student outcomes + unmatched lists."""
     saved = report.saved_count
-    mode = "DRY RUN — nothing was saved" if report.dry_run else f"saved {saved} draft(s)"
+    is_quiz = getattr(report, "route", "") == "quiz"
+    saved_word = "posted" if is_quiz else "saved"
+    saved_unit = "grade(s)" if is_quiz else "draft(s)"
+    mode = "DRY RUN — nothing was saved" if report.dry_run else f"{saved_word} {saved} {saved_unit}"
     st.success(f"Write-back ({report.route}) complete — matched "
                f"{report.matched_count}/{len(report.outcomes)} shown · {mode}.")
+    if is_quiz and not report.dry_run and saved:
+        st.warning("⚠️ Quiz grades & feedback were **posted (published)** to students. "
+                   "Review them in BrightSpace.")
 
     if report.outcomes:
         rows = [{
@@ -1786,7 +1792,7 @@ def _render_writeback_report(report) -> None:
                 + (f" (⚠️ {len(o.rubric_missing)} unmatched)" if o.rubric_missing else "")
             ),
             "Feedback": ("—" if report.dry_run else ("✅" if o.feedback_written else "❌")),
-            "Saved draft": "✅" if o.saved else ("—" if report.dry_run else "❌"),
+            ("Posted" if is_quiz else "Saved draft"): "✅" if o.saved else ("—" if report.dry_run else "❌"),
             "Note": o.note,
         } for o in report.outcomes]
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
@@ -1799,6 +1805,17 @@ def _render_writeback_report(report) -> None:
                    + ", ".join(report.unmatched_learners))
     for w in report.warnings:
         st.caption(f"• {w}")
+
+
+def _is_quiz_writeback_url(url: str) -> bool:
+    """True when ``url`` is a BrightSpace quiz URL (best-effort, never raises)."""
+    if not url:
+        return False
+    try:
+        from cqc_cpcc.utilities.brightspace_submissions import detect_route, ROUTE_QUIZ
+        return detect_route(url) == ROUTE_QUIZ
+    except Exception:  # noqa: BLE001 - unknown/partial URL: treat as non-quiz
+        return False
 
 
 def add_brightspace_writeback_element(
@@ -1829,12 +1846,32 @@ def add_brightspace_writeback_element(
     job_key = key_prefix + "job"
     report_key = key_prefix + "report"
 
-    st.markdown("#### 📤 Write grades back to BrightSpace (draft)")
-    st.caption(
-        "Pushes each student's score + feedback onto their BrightSpace evaluation "
-        "page and **saves as a draft** (never published) so you can review, then "
-        "publish later. Start with a dry run to confirm matches and field targets."
-    )
+    # Route-aware copy: quizzes have NO draft — entered scores/feedback are POSTED
+    # (published) immediately. Detect from the URL (already in session state if the
+    # instructor typed/pre-filled it) so the header, notice, and button reflect that.
+    current_url = st.session_state.get(key_prefix + "url", default_url) or ""
+    is_quiz = _is_quiz_writeback_url(current_url)
+
+    if is_quiz:
+        st.markdown("#### 📤 Write grades & feedback to BrightSpace (quiz)")
+        st.caption(
+            "Pushes each student's score + feedback onto their quiz attempt. Start with "
+            "a dry run to confirm matches and field targets."
+        )
+        st.warning(
+            "⚠️ **Quizzes have no draft.** For quizzes, the score is entered on the "
+            "attempt and the overall feedback on the **Completion Summary**, and both are "
+            "**POSTED (published) to students immediately** — there is no draft to review "
+            "later. **Review the dry run carefully first**, and verify the posted grades "
+            "in BrightSpace afterward."
+        )
+    else:
+        st.markdown("#### 📤 Write grades back to BrightSpace (draft)")
+        st.caption(
+            "Pushes each student's score + feedback onto their BrightSpace evaluation "
+            "page and **saves as a draft** (never published) so you can review, then "
+            "publish later. Start with a dry run to confirm matches and field targets."
+        )
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1871,15 +1908,25 @@ def add_brightspace_writeback_element(
         st.session_state.pop(report_key, None)
         st.rerun()
 
+    # Re-evaluate the route from the URL the user actually entered above.
+    is_quiz = _is_quiz_writeback_url(url)
+    real_button_label = (
+        "✍️ Write Grades and Feedback to Brightspace" if is_quiz
+        else "✍️ Write drafts to BrightSpace"
+    )
+    confirm_label = (
+        "I reviewed the dry run — POST grades & feedback to the quiz" if is_quiz
+        else "I reviewed the dry run — write drafts for real"
+    )
+
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Preview write (dry run)", key=key_prefix + "dry",
                      disabled=not url, use_container_width=True):
             _launch(dry_run=True)
     with c2:
-        confirm = st.checkbox("I reviewed the dry run — write drafts for real",
-                              key=key_prefix + "confirm")
-        if st.button("✍️ Write drafts to BrightSpace", key=key_prefix + "real",
+        confirm = st.checkbox(confirm_label, key=key_prefix + "confirm")
+        if st.button(real_button_label, key=key_prefix + "real",
                      disabled=not (url and confirm), use_container_width=True):
             _launch(dry_run=False)
 
