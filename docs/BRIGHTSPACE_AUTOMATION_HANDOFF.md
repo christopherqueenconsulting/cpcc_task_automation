@@ -331,11 +331,23 @@ and are skipped). This route writes NO scores — scores/rubric use inline mode.
 `d2l-button-icon`/`button` aria-label `"Remove Attachment: <filename>"` inside
 `d2l-consistent-evaluation-attachments-editor`.
 
+**ASSIGNMENT LEARNER DISCOVERY — HARDENED & VERIFIED LIVE 2026-07-10 (ou=338873 db=789783).**
+The flaky "0 learners" was a WRONG-VIEW bug: `_open_and_login`'s "Submissions" tab click
+redirects the pasted `folder_submissions_users.d2l` (per-USER view, whose name links carry
+`feedback,<userId>`) to `folder_submissions_files.d2l` (per-FILE view, whose links are
+`SetReturnPointAndEvaluateFileOrDownload(...)` with no `feedback,<userId>` token) — so the
+scrape found nothing. Fix: `_submissions_users_url(url)` rebuilds the per-user URL from ou+db;
+`_gather_assignment_learners(driver, url)` re-navigates there and polls ~8×1s for render;
+`_open_assignment_evaluation` navigates to the per-user URL; `_push_assignment_grades` forces
+the view + maxes page size, and warns (no crash) on 0 submitters. Verified live: reproduced the
+per-file landing, then gathered all 7 submitters, matched by name, and located each eval page's
+write targets in DRY RUN. The per-user view is SUBMITTERS-only (matches the graded set); the
+`feedback,<userId>` userId == the leading number of the download folder name / `student_key`.
+
 **Still UNVERIFIED (needs a safe write target):** the ASSIGNMENT route's real Save-as-draft
-FILL was verified 2026-07-01 (CSC134 Project 2); its per-student evaluate-link discovery
-(`_gather_assignment_learners` / `_open_assignment_evaluation`) remains best-effort (used only
-by INLINE mode now — attach mode bypasses it). The per-attempt `_attach_feedback_file` flow is
-verified on the QUIZ route only.
+FILL was verified 2026-07-01 (CSC134 Project 2) — unchanged by the discovery hardening above;
+the 2026-07-10 live check was dry-run (located targets, wrote nothing). The per-attempt
+`_attach_feedback_file` flow is verified on the QUIZ route only.
 
 ---
 

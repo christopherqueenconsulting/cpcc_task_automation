@@ -606,9 +606,25 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
         return _import_assignment_feedback_docs(
             driver, url, items, doc_items, report, progress, dry_run)
 
+    # Learner name links (feedback,<userId>) live ONLY on the per-user submissions view;
+    # _open_and_login's Submissions-tab click lands on the per-file view. Force the
+    # per-user view, THEN maximize page size so every submitter is scraped in one pass.
+    from cqc_cpcc.utilities.selenium_util import wait_for_ajax
+    users_url = _submissions_users_url(url)
+    try:
+        if "folder_submissions_users" not in (driver.current_url or "").lower():
+            driver.get(users_url)
+            wait_for_ajax(driver)
+    except Exception as e:  # noqa: BLE001
+        logger.info("Could not open submissions-users view: %s", e)
     _set_max_results_per_page(driver, wait, progress)
 
-    learners = _gather_assignment_learners(driver)
+    learners = _gather_assignment_learners(driver, users_url)
+    if not learners:
+        report.warnings.append(
+            "No submitters found on the assignment's per-user submissions view "
+            f"({users_url}) — scores/rubric were not written. Confirm the URL points "
+            "to the assignment's submissions and that students have submitted.")
     matches, unmatched_items, unmatched_learners = match_items_to_learners(items, learners)
     report.unmatched_students = [it.display_name for it in unmatched_items]
     report.unmatched_learners = [lr.get("name", "?") for lr in unmatched_learners]
@@ -665,14 +681,62 @@ return out;
 """
 
 
-def _gather_assignment_learners(driver) -> list[dict]:
-    """Scrape (name, userId) for each learner on the dropbox submissions page."""
+def _submissions_users_url(url: str) -> str:
+    """Return the per-USER submissions view URL (``folder_submissions_users.d2l``).
+
+    The learner name links carrying ``feedback,<userId>`` render ONLY on the per-user
+    view. The write-back URL usually already points there, but ``_open_and_login``
+    clicks the "Submissions" tab, which redirects to the per-FILE view
+    (``folder_submissions_files.d2l``) whose file links carry no ``feedback,<userId>``
+    token — so we must navigate back to the users view before scraping. VERIFIED LIVE
+    2026-07-10 (ou=338873 db=789783): the users view exposes all submitter name links;
+    the files view does not.
+    """
+    import urllib.parse
     try:
-        rows = driver.execute_script(_GATHER_ASSIGNMENT_LEARNERS_JS) or []
+        parts = urllib.parse.urlparse(url)
+        q = urllib.parse.parse_qs(parts.query)
+        ou = (q.get("ou") or [None])[0]
+        db = (q.get("db") or [None])[0]
+        if ou and db:
+            base = f"{parts.scheme}://{parts.netloc}" if parts.scheme else url.split("/d2l/")[0]
+            return (f"{base}/d2l/lms/dropbox/admin/mark/folder_submissions_users.d2l"
+                    f"?ou={ou}&db={db}")
     except Exception as e:  # noqa: BLE001
-        logger.info("Could not gather assignment learners: %s", e)
-        rows = []
-    return [r for r in rows if isinstance(r, dict) and r.get("name") and r.get("userId")]
+        logger.info("Could not derive submissions-users URL from %s: %s", url, e)
+    return url
+
+
+def _gather_assignment_learners(driver, url: str = "") -> list[dict]:
+    """Scrape (name, userId) for each learner on the per-user submissions page.
+
+    Ensures we're on ``folder_submissions_users.d2l`` first (``_open_and_login`` may
+    have left us on the per-file view, where no ``feedback,<userId>`` links exist), then
+    polls briefly so a lazy/paginated grid has time to render before we give up.
+    """
+    from cqc_cpcc.utilities.selenium_util import wait_for_ajax
+    import time as _t
+
+    if url:
+        try:
+            if "folder_submissions_users" not in (driver.current_url or "").lower():
+                driver.get(_submissions_users_url(url))
+                wait_for_ajax(driver)
+        except Exception as e:  # noqa: BLE001
+            logger.info("Could not open submissions-users view: %s", e)
+
+    rows: list = []
+    for attempt in range(8):  # ~8s max: beat the grid's lazy render / AJAX repaint
+        try:
+            rows = driver.execute_script(_GATHER_ASSIGNMENT_LEARNERS_JS) or []
+        except Exception as e:  # noqa: BLE001
+            logger.info("Could not gather assignment learners: %s", e)
+            rows = []
+        rows = [r for r in rows if isinstance(r, dict) and r.get("name") and r.get("userId")]
+        if rows:
+            break
+        _t.sleep(1.0)
+    return rows
 
 
 def _open_assignment_evaluation(driver, wait, url: str, learner: dict) -> bool:
@@ -693,7 +757,7 @@ def _open_assignment_evaluation(driver, wait, url: str, learner: dict) -> bool:
         return False
     needle = f"feedback,{uid}"
     try:
-        driver.get(url)
+        driver.get(_submissions_users_url(url))  # name links live on the per-user view
         wait_for_ajax(driver)
         link = driver.find_element(
             By.XPATH,
