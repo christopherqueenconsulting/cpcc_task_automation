@@ -87,6 +87,7 @@ def build_feedback_html(
         criteria: Optional[list] = None,
         include_criteria: bool = True,
         band_label: Optional[str] = None,
+        errors: Optional[list] = None,
 ) -> str:
     """Compose a student's feedback into HTML for the BrightSpace feedback editor.
 
@@ -97,6 +98,9 @@ def build_feedback_html(
             ``selected_level_label`` and ``feedback`` (duck-typed; dicts also work).
         include_criteria: When True, append a per-criterion breakdown.
         band_label: Optional overall band (e.g. "Proficient") shown under the summary.
+        errors: Optional iterable of detected-error objects exposing ``name``,
+            ``description``, ``severity`` and (optionally) ``notes`` — rendered as an
+            "Errors Observed" section (grouped Major/Minor), mirroring the .docx.
 
     Returns:
         An HTML string (``<p>``/``<ul>``) safe to inject into the editor.
@@ -125,7 +129,54 @@ def build_feedback_html(
         if items:
             parts.append("<ul>" + "".join(items) + "</ul>")
 
+    errors_html = _errors_html(errors)
+    if errors_html:
+        parts.append(errors_html)
+
     return "\n".join(parts).strip()
+
+
+def _errors_html(errors: Optional[list]) -> str:
+    """Render detected errors as an "Errors Observed" HTML block (grouped by severity).
+
+    Mirrors the student-facing ``.docx`` "Errors Observed" section so the inline
+    editor feedback and the attached feedback document carry the same content.
+    Returns an empty string when there are no errors.
+    """
+    if not errors:
+        return ""
+
+    def _severity(e) -> str:
+        return str(_get(e, "severity") or "").strip().lower()
+
+    def _group_items(group: list) -> str:
+        items: list[str] = []
+        for e in group:
+            name = _get(e, "name") or "Issue"
+            desc = _get(e, "description") or ""
+            notes = _get(e, "notes") or ""
+            body = f"<strong>{_esc(str(name))}</strong>"
+            if desc:
+                body += f": {_esc(str(desc))}"
+            if notes:
+                body += f"<br><em>{_esc(str(notes))}</em>"
+            items.append(f"<li>{body}</li>")
+        return "<ul>" + "".join(items) + "</ul>"
+
+    major = [e for e in errors if _severity(e) == "major"]
+    minor = [e for e in errors if _severity(e) == "minor"]
+    other = [e for e in errors if _severity(e) not in ("major", "minor")]
+
+    parts = ["<p><strong>Errors Observed:</strong></p>"]
+    if major:
+        parts.append("<p><em>Major Issues:</em></p>")
+        parts.append(_group_items(major))
+    if minor:
+        parts.append("<p><em>Minor Issues:</em></p>")
+        parts.append(_group_items(minor))
+    if other:
+        parts.append(_group_items(other))
+    return "\n".join(parts)
 
 
 def _get(obj, key):
@@ -171,6 +222,10 @@ class GradeWriteItem:
     # selecting rubric levels auto-recomputes the overall score — which we then
     # override with ``score`` (buffered) so our value is what's saved.
     rubric_selections: list = field(default_factory=list)  # list[RubricLevelSelection]
+    # Path to this student's generated feedback .docx. When feedback_mode == "attach"
+    # this file is uploaded to the evaluation page's attachment widget (the clean,
+    # CPCC-branded document) instead of injecting feedback_html into the editor.
+    feedback_doc_path: Optional[str] = None
 
 
 def build_write_items_from_results(
@@ -209,6 +264,7 @@ def build_write_items_from_results(
             _get(result, "criteria_results"),
             include_criteria=include_criteria_feedback,
             band_label=_get(result, "overall_band_label"),
+            errors=_get(result, "detected_errors"),
         )
         try:
             display = name_parser(student_id)
@@ -355,6 +411,7 @@ class StudentWriteOutcome:
     fields_found: bool = False
     saved: bool = False
     feedback_written: bool = False      # overall feedback set + committed (real write only)
+    feedback_attached: bool = False     # feedback .docx uploaded as an attachment (attach mode)
     rubric_selected: int = 0            # rubric levels selected (or matched, in dry-run)
     rubric_missing: list = field(default_factory=list)  # [{criterion, level, reason}]
     note: str = ""
@@ -429,6 +486,7 @@ def push_grades_to_brightspace(
         progress: Optional[ProgressCallback] = None,
         mfa_handler=None,
         dry_run: bool = True,
+        feedback_mode: str = "attach",
 ) -> GradeWriteReport:
     """Write each student's buffered score + feedback as a DRAFT (never Publish).
 
@@ -441,6 +499,10 @@ def push_grades_to_brightspace(
         mfa_handler: Forwarded to login for headless number-matching prompts.
         dry_run: When True (default) navigate + locate fields but write/save nothing —
             safe against a live page. When False, fill fields and click Save Draft.
+        feedback_mode: ``"attach"`` (default) uploads each student's clean feedback
+            ``.docx`` (``item.feedback_doc_path``) to the evaluation page's attachment
+            widget; ``"inline"`` injects ``item.feedback_html`` into the feedback editor.
+            Attach mode falls back to inline for any item lacking a doc path.
 
     Returns:
         A :class:`GradeWriteReport` describing per-student matched/written/saved state.
@@ -459,11 +521,16 @@ def push_grades_to_brightspace(
 
     try:
         if route == ROUTE_QUIZ:
-            report = _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run)
+            report = _push_quiz_grades(driver, wait, url, items, progress, mfa_handler,
+                                       dry_run, feedback_mode)
         else:
-            report = _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry_run)
+            report = _push_assignment_grades(driver, wait, url, items, progress, mfa_handler,
+                                             dry_run, feedback_mode)
         if not dry_run:
-            missed_fb = [o.display_name for o in report.outcomes if o.saved and not o.feedback_written]
+            missed_fb = [
+                o.display_name for o in report.outcomes
+                if o.saved and not o.feedback_written and not o.feedback_attached
+            ]
             if missed_fb:
                 report.warnings.append(
                     "Overall feedback could not be written for: " + ", ".join(missed_fb)
@@ -478,7 +545,8 @@ def push_grades_to_brightspace(
                 pass
 
 
-def _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run) -> GradeWriteReport:
+def _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run,
+                      feedback_mode: str = "attach") -> GradeWriteReport:
     """Quiz route: match learners on the attempts grid, open each Consistent Eval page."""
     from cqc_cpcc.utilities.brightspace_fetch import (
         derive_quiz_grading_url, _gather_quiz_attempts, _keep_last_attempt_per_user,
@@ -504,12 +572,13 @@ def _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run) 
             outcome.note = "could not open attempt page"
             report.outcomes.append(outcome)
             continue
-        _write_one_quiz_student(driver, wait, m.item, outcome, progress, dry_run)
+        _write_one_quiz_student(driver, wait, m.item, outcome, progress, dry_run, feedback_mode)
         report.outcomes.append(outcome)
     return report
 
 
-def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry_run) -> GradeWriteReport:
+def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry_run,
+                            feedback_mode: str = "attach") -> GradeWriteReport:
     """Assignment route: open each student's evaluation page from the submissions list.
 
     Navigation VERIFIED LIVE 2026-07-01: learners + userIds are scraped from the
@@ -538,7 +607,7 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
             outcome.note = "could not open evaluation page"
             report.outcomes.append(outcome)
             continue
-        _write_one_student(driver, wait, m.item, outcome, progress, dry_run)
+        _write_one_student(driver, wait, m.item, outcome, progress, dry_run, feedback_mode)
         report.outcomes.append(outcome)
     return report
 
@@ -863,8 +932,13 @@ def _write_feedback_via_editor(driver, wait, feedback_html: str) -> bool:
         return False
 
 
+def _use_attach(feedback_mode: str, item: GradeWriteItem) -> bool:
+    """True when this item should attach its .docx (attach mode + a doc path exists)."""
+    return feedback_mode == "attach" and bool(item.feedback_doc_path)
+
+
 def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
-                       progress, dry_run: bool) -> None:
+                       progress, dry_run: bool, feedback_mode: str = "attach") -> None:
     """Locate (and, when not dry_run, fill + save-draft) one student's score + feedback."""
     # Wait for the Lit inputs to hydrate before locating (they render a beat after nav).
     targets = _wait_for_write_targets(driver)
@@ -874,6 +948,8 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         progress(f"{item.display_name}: write targets not found")
         return
 
+    attach = _use_attach(feedback_mode, item)
+
     if dry_run:
         # Report which rubric levels WOULD be selected (matched, not clicked).
         rres = _select_rubric_levels(driver, item.rubric_selections, dry_run=True)
@@ -882,7 +958,12 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         outcome.score_written = item.score
         rub = (f"; {outcome.rubric_selected}/{len(item.rubric_selections)} rubric level(s) matched"
                if item.rubric_selections else "")
-        outcome.note = f"dry run — would set rubric + write {item.score} (not saved){rub}"
+        if attach:
+            fb = (" + attach feedback doc" if _locate_attach_control(driver)
+                  else " (attach control NOT found)")
+        else:
+            fb = " + inline feedback"
+        outcome.note = f"dry run — would set rubric + write {item.score}{fb} (not saved){rub}"
         progress(f"{item.display_name}: would write {item.score}/{item.max_points}{rub} (dry run)")
         return
 
@@ -891,8 +972,12 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         rres = _select_rubric_levels(driver, item.rubric_selections, dry_run=False)
         outcome.rubric_selected = len(rres.get("selected") or [])
         outcome.rubric_missing = rres.get("missing") or []
-        # 2) Overall feedback (persisted via the editor API + a real keystroke).
-        outcome.feedback_written = _write_feedback_via_editor(driver, wait, item.feedback_html)
+        # 2) Overall feedback — attach the clean .docx, or inject inline HTML.
+        if attach:
+            outcome.feedback_attached = _attach_feedback_file(
+                driver, item.feedback_doc_path, progress)
+        else:
+            outcome.feedback_written = _write_feedback_via_editor(driver, wait, item.feedback_html)
         # 3) Overall score LAST, so the buffered score overrides the rubric-derived
         #    total (verified live that this override sticks).
         res = driver.execute_script(
@@ -1144,8 +1229,243 @@ def _locate_feedback_editor(driver) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Feedback FILE ATTACHMENT (upload the clean .docx to the evaluation page)
+#
+# Flow VERIFIED LIVE 2026-07-10 on the quiz Completion Summary view. The
+# Consistent-Evaluation feedback area exposes an "Attach" dropdown
+# (aria-label "Attach") whose menu has a "File Upload" item. Selecting it opens
+# D2L's LEGACY "Add a File" picker inside a nested <iframe title="Add a File">
+# (two sibling frames render; the LAST one is the active/top dialog). Steps:
+#   1. JS-click "Attach" (top-level shadow DOM).
+#   2. Synthetic pointer-click "File Upload" (a Lit menu item — a bare .click()
+#      is ignored) -> the "Add a File" iframe dialog opens.
+#   3. Inside the ACTIVE (last) "Add a File" frame, click the D2L datalist
+#      action control  a.d2l-datalist-item-actioncontrol[title='My Computer'] ->
+#      the Upload pane ("Drop files here… Upload") renders.
+#   4. REAL Selenium .click() on the Upload button (div.d2l-fileinput-addbuttons
+#      button). This MUST be a real WebDriver click: it carries user activation,
+#      which the legacy "MFI" uploader requires to create its <input type=file>.
+#      A JS/synthetic click is blocked by Chrome's file-picker user-activation
+#      rule and never creates the input.
+#   5. The input appears in the frame within ~1s; send_keys the absolute path
+#      (Selenium's LocalFileDetector uploads it to the remote Docker node).
+#   6. Click "Add" in the dialog -> the file lands under "Attachments" in the
+#      feedback area. It is committed to the student on the same Save/Publish
+#      that posts the grade.
+# ---------------------------------------------------------------------------
+
+# Deep-find (crossing shadow roots) an element whose aria-label matches `want`
+# (exact, case-insensitive) and click it. Used for the "Attach" opener.
+_CLICK_BY_ARIA_JS = r"""
+const WANT = (arguments[0]||'').toLowerCase();
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
+let fallback=null;
+for(const el of deep(document)){
+  const al=((el.getAttribute&&el.getAttribute('aria-label'))||'').trim().toLowerCase();
+  if(al !== WANT) continue;
+  const t=(el.tagName||'').toLowerCase();
+  if(!(t==='button'||t==='d2l-button-icon'||t==='d2l-menu-item'||(el.getAttribute&&el.getAttribute('role')==='menuitem'))) continue;
+  let vis=false; try{const r=el.getBoundingClientRect(); vis=(r.width>0&&r.height>0);}catch(e){}
+  try{ el.scrollIntoView({block:'center'}); }catch(e){}
+  if(vis){ el.click(); return true; }
+  if(!fallback) fallback=el;
+}
+if(fallback){ try{fallback.click(); return true;}catch(e){} }
+return false;
+"""
+
+# Deep-find an aria-labelled element and fire a FULL synthetic pointer/mouse
+# sequence (Lit menu items ignore a bare .click()). Used for "File Upload".
+_SYNTH_CLICK_BY_ARIA_JS = r"""
+const WANT=(arguments[0]||'').toLowerCase();
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
+function synth(el){const o={bubbles:true,composed:true,cancelable:true,view:window};['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(ty){try{el.dispatchEvent(new (ty.indexOf('pointer')===0?PointerEvent:MouseEvent)(ty,o));}catch(e){}});}
+let vis=null,any=null;
+for(const el of deep(document)){
+  const al=((el.getAttribute&&el.getAttribute('aria-label'))||'').trim().toLowerCase();
+  if(al!==WANT) continue; any=any||el;
+  try{const r=el.getBoundingClientRect(); if(r.width>0&&r.height>0){vis=el;break;}}catch(e){}
+}
+const el=vis||any; if(!el) return false;
+try{el.scrollIntoView({block:'center'});}catch(e){}
+try{el.click();}catch(e){} synth(el); return true;
+"""
+
+# Inside an "Add a File" frame: click the D2L datalist action control for
+# "My Computer" (an offscreen <a> the framework binds the click handler to).
+_CLICK_MY_COMPUTER_JS = r"""
+function fire(el){try{el.click();}catch(e){} const o={bubbles:true,cancelable:true,composed:true,view:window};['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(ty){try{el.dispatchEvent(new (ty.indexOf('pointer')===0?PointerEvent:MouseEvent)(ty,o));}catch(e){}});}
+let el=document.querySelector("a.d2l-datalist-item-actioncontrol[title='My Computer']");
+if(!el){ el=[...document.querySelectorAll('a.d2l-datalist-item-actioncontrol')].find(a=>/my computer/i.test(a.title||a.textContent||'')); }
+if(!el) return false;
+el.scrollIntoView({block:'center'}); fire(el); return true;
+"""
+
+# Inside a frame: click a button/anchor whose trimmed text equals `want` (e.g. "Add").
+_CLICK_TEXT_EXACT_JS = r"""
+const W=(arguments[0]||'').toLowerCase();
+for(const el of document.querySelectorAll('button,a,input[type=button],input[type=submit]')){
+  const t=((el.textContent||'')+' '+(el.value||'')).replace(/\s+/g,' ').trim().toLowerCase();
+  if(t===W){ try{el.scrollIntoView({block:'center'}); el.click();}catch(e){} return true; }
+}
+return false;
+"""
+
+# True once the uploaded file (name contains `fname`) shows in the current frame
+# (used to confirm the upload finished before clicking "Add").
+_FILE_LISTED_JS = r"""
+const FN=(arguments[0]||'').toLowerCase();
+return (document.body ? document.body.innerText.toLowerCase().indexOf(FN)!==-1 : false);
+"""
+
+# True once an attachment whose name contains `fname` shows in the feedback
+# Attachments area (top document, crossing shadow roots — NOT iframes).
+_ATTACHMENT_PRESENT_JS = r"""
+const FN = (arguments[0]||'').toLowerCase();
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
+if(!FN) return false;
+for(const el of deep(document)){
+  const t=(el.tagName||'').toLowerCase();
+  if(t==='a' || t==='span' || t==='d2l-link' || /attachment/.test(t)){
+    const txt=((el.getAttribute&&(el.getAttribute('name')||el.getAttribute('aria-label')||''))+' '+(el.textContent||'')).toLowerCase();
+    if(txt.indexOf(FN) !== -1) return true;
+  }
+}
+return false;
+"""
+
+# Deep-find the "Attach" dropdown opener (for dry-run: does the control exist?).
+_LOCATE_ATTACH_CONTROL_JS = r"""
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
+for(const el of deep(document)){
+  const al=((el.getAttribute&&el.getAttribute('aria-label'))||'').trim().toLowerCase();
+  if(al==='attach') return true;
+}
+return false;
+"""
+
+
+def _locate_attach_control(driver) -> bool:
+    """True if the feedback "Attach" control is present on the current view."""
+    try:
+        return bool(driver.execute_script(_LOCATE_ATTACH_CONTROL_JS))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _enter_frame_path(driver, path) -> None:
+    """Switch from the top document down through the iframe indices in ``path``."""
+    from selenium.webdriver.common.by import By
+    driver.switch_to.default_content()
+    for idx in path:
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+        driver.switch_to.frame(frames[idx])
+
+
+def _attach_feedback_file(driver, path: str, progress=_noop) -> bool:
+    """Upload ``path`` to the evaluation page's feedback attachment widget.
+
+    Drives the full "Attach -> File Upload -> My Computer -> Upload -> Add" flow
+    (see the module comment above for the verified mechanics). Returns True once
+    the file appears under the feedback Attachments. Always restores the default
+    frame. Does NOT save/publish — the caller commits it with the grade.
+    """
+    import os
+    import time as _t
+    from selenium.webdriver.common.by import By
+    if not path or not os.path.exists(path):
+        return False
+    abspath = os.path.abspath(path)
+    fname = os.path.basename(path)
+    try:
+        # The feedback toolbar (with the Attach control) renders a beat after the
+        # Completion Summary view switch — wait for it before clicking.
+        attach_ready = False
+        for _ in range(24):
+            if _locate_attach_control(driver):
+                attach_ready = True
+                break
+            _t.sleep(0.5)
+        if not attach_ready:
+            progress("attach: 'Attach' control not found")
+            return False
+        # 1) Open the Attach menu and 2) choose File Upload (opens the iframe dialog).
+        if not driver.execute_script(_CLICK_BY_ARIA_JS, "Attach"):
+            progress("attach: 'Attach' control not found")
+            return False
+        _t.sleep(1.0)
+        if not driver.execute_script(_SYNTH_CLICK_BY_ARIA_JS, "File Upload"):
+            progress("attach: 'File Upload' item not found")
+            return False
+        _t.sleep(2.5)
+
+        # The active dialog is the LAST <iframe title="Add a File"> (it stacks on top).
+        driver.switch_to.default_content()
+        af = [i for i, f in enumerate(driver.find_elements(By.TAG_NAME, "iframe"))
+              if (f.get_attribute("title") or "") == "Add a File"]
+        if not af:
+            progress("attach: 'Add a File' dialog did not open")
+            return False
+        active = [af[-1]]
+
+        # 3) My Computer -> Upload pane.
+        _enter_frame_path(driver, active)
+        if not driver.execute_script(_CLICK_MY_COMPUTER_JS):
+            progress("attach: 'My Computer' not found")
+            return False
+        _t.sleep(2.5)
+
+        # 4) REAL Selenium click on Upload (trusted gesture creates the input).
+        _enter_frame_path(driver, active)
+        ups = driver.find_elements(By.CSS_SELECTOR, "div.d2l-fileinput-addbuttons button")
+        if not ups:
+            progress("attach: Upload button not found")
+            return False
+        ups[0].click()
+
+        # 5) The <input type=file> appears within ~1s; send the path to it.
+        inp = None
+        for _ in range(25):
+            _t.sleep(0.4)
+            found = driver.find_elements(By.CSS_SELECTOR, "input[type=file]")
+            if found:
+                inp = found[0]
+                break
+        if inp is None:
+            progress("attach: file input was not created")
+            return False
+        inp.send_keys(abspath)
+
+        # 6) Wait for the upload to be listed in the dialog, then click Add.
+        for _ in range(60):  # up to ~30s for larger docs
+            if driver.execute_script(_FILE_LISTED_JS, fname):
+                break
+            _t.sleep(0.5)
+        driver.execute_script(_CLICK_TEXT_EXACT_JS, "Add")
+        _t.sleep(3.0)
+
+        # 7) Confirm the attachment landed in the feedback Attachments area.
+        driver.switch_to.default_content()
+        for _ in range(20):
+            if driver.execute_script(_ATTACHMENT_PRESENT_JS, fname):
+                return True
+            _t.sleep(0.5)
+        progress(f"attach: '{fname}' did not appear in the attachment list")
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Attach feedback file failed: %s", e)
+        progress(f"attach error: {e}")
+        return False
+    finally:
+        try:
+            driver.switch_to.default_content()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _write_one_quiz_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
-                            progress, dry_run: bool) -> None:
+                            progress, dry_run: bool, feedback_mode: str = "attach") -> None:
     """Quiz write: score on the attempt view, overall feedback on Completion Summary, POST.
 
     Quizzes have NO draft — entered scores/feedback are published. Flow (DOM verified
@@ -1168,23 +1488,27 @@ def _write_one_quiz_student(driver, wait, item: GradeWriteItem, outcome: Student
         progress(f"{item.display_name}: score field not found")
         return
 
+    attach = _use_attach(feedback_mode, item)
+
     if dry_run:
-        # Non-destructively confirm the Completion Summary feedback editor is reachable,
-        # then switch back to the attempt view. Switching a <select> saves nothing.
+        # Non-destructively confirm the Completion Summary feedback target is reachable
+        # (the Attach control in attach mode, else the feedback editor), then switch back
+        # to the attempt view. Switching a <select> saves nothing.
         fb_ok = False
         if _switch_quiz_view(driver, "completion summary"):
             _t.sleep(1.5)
-            fb_ok = _locate_feedback_editor(driver)
+            fb_ok = _locate_attach_control(driver) if attach else _locate_feedback_editor(driver)
             _switch_quiz_view(driver, "attempt")
         outcome.score_written = item.score
+        what = "attach feedback doc" if attach else "overall feedback"
         outcome.note = (
             f"dry run — would POST {item.score}/{item.max_points}"
-            + (" + overall feedback" if fb_ok else " (feedback editor NOT found)")
+            + (f" + {what}" if fb_ok else f" ({what} target NOT found)")
             + " (nothing saved)"
         )
         progress(
             f"{item.display_name}: would POST {item.score}/{item.max_points}"
-            + ("" if fb_ok else " [feedback editor missing]") + " (dry run)"
+            + ("" if fb_ok else f" [{what} missing]") + " (dry run)"
         )
         return
 
@@ -1202,11 +1526,17 @@ def _write_one_quiz_student(driver, wait, item: GradeWriteItem, outcome: Student
         #     "discard changes / reset to auto-evaluation" dialog.
         if _confirm_dialog(driver, ("continue anyway", "final score", "not equal to the sum")):
             _t.sleep(1.5)
-        # 3) Switch to Completion Summary for the overall feedback.
+        # 3) Switch to Completion Summary for the overall feedback (attach the .docx
+        #    or type inline HTML), then Save to post it.
         posted_fb = False
         if _switch_quiz_view(driver, "completion summary"):
             _t.sleep(1.5)
-            outcome.feedback_written = _write_feedback_via_editor(driver, wait, item.feedback_html)
+            if attach:
+                outcome.feedback_attached = _attach_feedback_file(
+                    driver, item.feedback_doc_path, progress)
+            else:
+                outcome.feedback_written = _write_feedback_via_editor(
+                    driver, wait, item.feedback_html)
             # 4) Save the feedback (Completion Summary view), confirming the score-sum
             #    warning if it reappears here too.
             posted_fb = _click_commit(driver, ("save",), ("save draft", "cancel", "close"))
@@ -1214,8 +1544,11 @@ def _write_one_quiz_student(driver, wait, item: GradeWriteItem, outcome: Student
             if _confirm_dialog(driver, ("continue anyway", "final score", "not equal to the sum")):
                 _t.sleep(1.0)
         outcome.saved = bool(posted_score or posted_fb)
+        fb_done = (outcome.feedback_written or outcome.feedback_attached) and posted_fb
         if outcome.saved:
-            outcome.note = "posted score" + (" + feedback" if (outcome.feedback_written and posted_fb) else "")
+            outcome.note = "posted score" + (
+                (" + feedback doc" if outcome.feedback_attached else " + feedback")
+                if fb_done else "")
         else:
             outcome.note = "filled but post button not found — NOT saved"
         progress(

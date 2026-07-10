@@ -290,9 +290,32 @@ server = both persisted, then reset to 0/empty. Key mechanics (all in `brightspa
 KMSI now clicks **"Yes"** (`_accept_stay_signed_in`, persistent cookie). Verified: consecutive
 runs skip MFA.
 
+**FEEDBACK DELIVERY: attach .docx (default) vs inline — added 2026-07-10.**
+`push_grades_to_brightspace(..., feedback_mode="attach"|"inline")` + a web-app radio. Attach
+uploads each student's clean `Feedback.docx` (`GradeWriteItem.feedback_doc_path`, sourced from
+`st.session_state["feedback_doc_paths_by_key"][run_key]`) to the eval page's attachment widget;
+inline injects `feedback_html`. Also `build_feedback_html` now renders an **"Errors Observed"**
+section from `result.detected_errors` (matches the .docx).
+
+**FILE ATTACH FLOW — VERIFIED LIVE 2026-07-10 (`_attach_feedback_file`, quiz Completion
+Summary).** Legacy nested-iframe picker; the working mechanics:
+1. JS-click "Attach" opener → 2. **synthetic** pointer-click "File Upload" (Lit menu item —
+   bare `.click()` ignored) → opens `<iframe title="Add a File">` (TWO siblings render; the
+   **LAST is the active/top** dialog) → 3. in the active frame, click
+   `a.d2l-datalist-item-actioncontrol[title='My Computer']` (offscreen `<a>` the framework
+   binds; drive via JS, Selenium `is_displayed()` lies) → Upload pane →
+   4. **REAL Selenium `.click()`** on `div.d2l-fileinput-addbuttons button` — a trusted
+   user-gesture is REQUIRED for the legacy "MFI" uploader to create its `<input type=file>`
+   (a JS/synthetic click is blocked by Chrome's file-picker user-activation rule) →
+   5. the input appears in ~1s; `send_keys(abspath)` (LocalFileDetector uploads to the Docker
+   node) → 6. JS-click "Add" → the file lands under feedback "Attachments", committed on Save.
+   The widget (`d2l-consistent-evaluation-attachments-editor`) is SHARED by the assignment eval
+   page — **assignment route uses the same UI; verify with a real assignment URL**.
+
 **Still UNVERIFIED (needs a safe write target):** the ASSIGNMENT route's real Save-as-draft
 FILL was verified 2026-07-01 (CSC134 Project 2); its per-student evaluate-link discovery
-(`_gather_assignment_learners` / `_open_assignment_evaluation`) remains best-effort.
+(`_gather_assignment_learners` / `_open_assignment_evaluation`) remains best-effort. The
+attach flow above is verified on the QUIZ route only.
 
 ---
 

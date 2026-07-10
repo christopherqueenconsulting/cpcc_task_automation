@@ -1563,12 +1563,14 @@ class _BrightSpaceWritebackJob:
     True) navigates and locates the write targets but never fills or saves.
     """
 
-    def __init__(self, url: str, items: list, bridge, dry_run: bool = True):
+    def __init__(self, url: str, items: list, bridge, dry_run: bool = True,
+                 feedback_mode: str = "attach"):
         import threading
         self.url = url
         self.items = items
         self.bridge = bridge
         self.dry_run = dry_run
+        self.feedback_mode = feedback_mode
         self.report = None  # GradeWriteReport
         self.error: Optional[str] = None
         self.done = threading.Event()
@@ -1593,6 +1595,7 @@ class _BrightSpaceWritebackJob:
             self.report = push_grades_to_brightspace(
                 self.url, self.items, progress=self._record,
                 mfa_handler=self.bridge, dry_run=self.dry_run,
+                feedback_mode=self.feedback_mode,
             )
         except Exception as e:  # noqa: BLE001 - surfaced to the UI
             self.error = str(e)
@@ -1791,7 +1794,11 @@ def _render_writeback_report(report) -> None:
                 f"{o.rubric_selected}"
                 + (f" (⚠️ {len(o.rubric_missing)} unmatched)" if o.rubric_missing else "")
             ),
-            "Feedback": ("—" if report.dry_run else ("✅" if o.feedback_written else "❌")),
+            "Feedback": (
+                "—" if report.dry_run
+                else ("📎" if o.feedback_attached
+                      else ("✅" if o.feedback_written else "❌"))
+            ),
             ("Posted" if is_quiz else "Saved draft"): "✅" if o.saved else ("—" if report.dry_run else "❌"),
             "Note": o.note,
         } for o in report.outcomes]
@@ -1822,6 +1829,7 @@ def add_brightspace_writeback_element(
         results: list,
         key_prefix: str = "wb_",
         default_url: str = "",
+        feedback_docs: Optional[dict] = None,
 ) -> None:
     """Render the "Write grades back to BrightSpace (draft)" panel.
 
@@ -1834,6 +1842,9 @@ def add_brightspace_writeback_element(
             ``st.session_state.grading_results_by_key[run_key]``.
         key_prefix: Session-state key prefix (unique per grading run).
         default_url: Pre-fill the BrightSpace URL (e.g. the fetched source URL).
+        feedback_docs: Optional ``{student_id: path-to-Feedback.docx}`` map. When the
+            "Attach feedback document" delivery option is chosen, each student's clean
+            ``.docx`` is uploaded to their evaluation page instead of inline HTML.
     """
     import time
     from cqc_cpcc.utilities.brightspace_writeback import (
@@ -1894,6 +1905,25 @@ def add_brightspace_writeback_element(
         placeholder="https://brightspace.cpcc.edu/d2l/lms/...",
     )
 
+    # Feedback delivery: attach the clean CPCC-branded .docx (default) or type the
+    # feedback text directly into the evaluation editor. Attach needs the generated docs.
+    have_docs = bool(feedback_docs)
+    delivery_options = ["📎 Attach feedback document (.docx)", "📝 Add feedback directly"]
+    delivery = st.radio(
+        "Feedback delivery",
+        options=delivery_options,
+        index=0 if have_docs else 1,
+        key=key_prefix + "delivery",
+        help="Attach uploads each student's generated Feedback.docx to their evaluation "
+             "page. Add feedback directly types the composed feedback (summary, criteria, "
+             "and Errors Observed) into the feedback editor instead.",
+        horizontal=True,
+    )
+    feedback_mode = "attach" if delivery == delivery_options[0] else "inline"
+    if feedback_mode == "attach" and not have_docs:
+        st.info("ℹ️ Generate the feedback documents above first to attach them; "
+                "otherwise feedback is added directly.")
+
     job = st.session_state.get(job_key)
 
     def _launch(dry_run: bool):
@@ -1901,8 +1931,16 @@ def add_brightspace_writeback_element(
         items = build_write_items_from_results(
             results, buffer_pct=buffer_pct, include_criteria_feedback=include_criteria,
         )
+        # Attach each student's generated .docx (matched by the grader's student_id key)
+        # so attach mode can upload it; harmless when the map is empty (falls back inline).
+        if feedback_docs:
+            for it in items:
+                doc_path = feedback_docs.get(it.student_key)
+                if doc_path:
+                    it.feedback_doc_path = doc_path
         bridge = MfaBridge()
-        new_job = _BrightSpaceWritebackJob(url, items, bridge, dry_run=dry_run)
+        new_job = _BrightSpaceWritebackJob(
+            url, items, bridge, dry_run=dry_run, feedback_mode=feedback_mode)
         new_job.start()
         st.session_state[job_key] = new_job
         st.session_state.pop(report_key, None)

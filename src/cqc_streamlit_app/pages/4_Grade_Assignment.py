@@ -1577,6 +1577,7 @@ async def process_rubric_grading_batch(
             results=all_results,
             key_prefix=f"rubric_exam_wb_{run_key}_",
             default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
+            feedback_docs=st.session_state.get("feedback_doc_paths_by_key", {}).get(run_key),
         )
 
     if failure_count > 0:
@@ -2644,6 +2645,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         results=all_results,
         key_prefix=f"rubric_exam_wb_{run_key}_",
         default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
+        feedback_docs=st.session_state.get("feedback_doc_paths_by_key", {}).get(run_key),
     )
 
 
@@ -2789,6 +2791,10 @@ def _generate_feedback_docs_and_zip(
             if not assignment_name:
                 assignment_name = "Assignment"
 
+            # Per-student doc paths, so the BrightSpace write-back can attach each
+            # student's clean .docx (keyed by the grader's student_id).
+            doc_paths_by_student: dict[str, str] = {}
+
             for student_id, result in all_results:
                 # Generate sanitized filename
                 # Try to parse student_id as "LastName_FirstName" or use as-is
@@ -2810,6 +2816,11 @@ def _generate_feedback_docs_and_zip(
                 temp_doc.close()
 
                 doc_files.append((doc_filename, temp_doc.name))
+                doc_paths_by_student[student_id] = temp_doc.name
+
+            # Cache the per-student doc paths for the write-back attach option.
+            st.session_state.setdefault("feedback_doc_paths_by_key", {})[run_key] = \
+                doc_paths_by_student
 
             # Create ZIP file
             st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
