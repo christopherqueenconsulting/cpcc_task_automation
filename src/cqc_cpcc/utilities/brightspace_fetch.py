@@ -40,6 +40,7 @@ from cqc_cpcc.utilities.utils import login_if_needed
 from selenium.common import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 
 ProgressCallback = Callable[[str], None]
 
@@ -428,13 +429,34 @@ def _open_and_login(driver, wait, url: str, progress: ProgressCallback, mfa_hand
     _await_brightspace_after_login(driver, url, progress)
 
     progress("Opening Submissions view...")
+    # The "Submissions" tab exists only on the assignment (dropbox) page; the quiz
+    # grading grid (quiz_mark_users.d2l) has no such tab. Probe with a SHORT wait
+    # and only click when it's actually present — otherwise the click-retry logic
+    # waits out the full timeout on every nested retry (~4 min for a missing tab),
+    # which made the quiz route appear hung right after login. VERIFIED LIVE
+    # 2026-07-09: SUBMISSIONS_TAB_XPATH matches 0 elements on the quiz grid.
     try:
-        click_element_wait_retry(
-            driver, wait, SUBMISSIONS_TAB_XPATH, "Waiting for Submissions link"
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.XPATH, SUBMISSIONS_TAB_XPATH))
         )
-        wait_for_ajax(driver)
+        has_submissions_tab = True
     except TimeoutException:
-        logger.info("Submissions tab not found (may already be on submissions view).")
+        has_submissions_tab = False
+
+    if has_submissions_tab:
+        try:
+            click_element_wait_retry(
+                driver, wait, SUBMISSIONS_TAB_XPATH, "Waiting for Submissions link",
+                max_try=1,
+            )
+            wait_for_ajax(driver)
+        except TimeoutException:
+            logger.info("Submissions tab present but not clickable; continuing.")
+    else:
+        logger.info(
+            "No Submissions tab on this page (quiz grid or already on the "
+            "submissions view); continuing."
+        )
 
 
 def _set_max_results_per_page(driver, wait, progress: ProgressCallback) -> None:
@@ -1024,6 +1046,67 @@ def _open_quiz_attempt(driver, wait, grading_url: str, att: dict) -> bool:
     return True
 
 
+# Readiness probe for the Consistent Evaluation attempt page. The Lit-based UI
+# renders the question shell first and only *then* fills in the answer body (typed
+# response text or the uploaded-file <d2l-list-item key="viewFile...">) a beat later.
+# Reading before that content lands returns nothing, so we poll this until a question
+# AND a definitive answer signal are present: an uploaded-file item, real response
+# text, or the explicit "- No text entered -" empty marker (a legitimately-empty
+# answer, so we stop waiting and let the read record zero items).
+# VERIFIED LIVE 2026-07-09: the Exam2Dula.java file item appears ~1-2s after nav.
+_QUIZ_ATTEMPT_READY_JS = r"""
+function* deep(root) {
+  const stack = [root.documentElement || root];
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n) continue;
+    yield n;
+    if (n.shadowRoot) stack.push(n.shadowRoot);
+    if ((n.tagName || '').toLowerCase() === 'iframe') {
+      try { const d = n.contentDocument; if (d) stack.push(d.documentElement || d); } catch (e) {}
+    }
+    for (const c of (n.children || [])) stack.push(c);
+  }
+}
+const FILE_RE = /viewFile|fileId|\.d2lfile|\/download/i;
+let hasQuestion = false, hasSignal = false;
+for (const el of deep(document)) {
+  if (!el.getAttribute) continue;
+  const tag = (el.tagName || '').toLowerCase();
+  const cls = el.getAttribute('class') || '';
+  if (tag === 'd2l-questions-question') hasQuestion = true;
+  if (cls.indexOf('d2l-questions-written-response-no-response') >= 0) hasSignal = true;
+  if (cls.indexOf('d2l-questions-written-response-question-response') >= 0) {
+    if (!(el.querySelector && el.querySelector('.d2l-questions-written-response-no-response'))) {
+      const t = (el.innerText || el.textContent || '').trim();
+      if (t && !/^-?\s*no text entered/i.test(t)) hasSignal = true;
+    }
+  }
+  if (tag === 'd2l-list-item' && FILE_RE.test(el.getAttribute('key') || '')) hasSignal = true;
+  if (tag === 'a' && FILE_RE.test(el.getAttribute('href') || el.href || '')) hasSignal = true;
+}
+return hasQuestion && hasSignal;
+"""
+
+
+def _wait_for_quiz_attempt_content(driver, timeout: int = 15) -> bool:
+    """Poll until the attempt page's answer content has rendered; True once ready.
+
+    Best-effort: returns True as soon as a question and an answer signal (file, text,
+    or the empty marker) are present, or False after ``timeout`` so the caller still
+    reads whatever is there rather than blocking indefinitely.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if driver.execute_script(_QUIZ_ATTEMPT_READY_JS):
+                return True
+        except Exception as e:  # noqa: BLE001 - page may still be initializing
+            logger.debug("Quiz attempt readiness probe failed: %s", e)
+        time.sleep(0.5)
+    return False
+
+
 def _capture_quiz_attempt(
         driver, folder: str, accepted_file_types: list[str],
         progress: ProgressCallback, name: str,
@@ -1033,6 +1116,9 @@ def _capture_quiz_attempt(
     Captures BOTH typed written-response answers (saved as one file with an accepted
     extension) and any uploaded-file attachments.
     """
+    # The answer body renders after the question shell — wait for it before reading,
+    # otherwise fast reads miss uploaded files / typed responses.
+    _wait_for_quiz_attempt_content(driver)
     try:
         data = driver.execute_script(_READ_QUIZ_ATTEMPT_JS) or {}
     except Exception as e:  # noqa: BLE001
@@ -1090,10 +1176,13 @@ def fetch_quiz_file_uploads(
     attempts = _keep_last_attempt_per_user(attempts)
     progress(f"Found {len(attempts)} learner attempt(s) to collect")
 
-    for att in attempts:
+    total = len(attempts)
+    for i, att in enumerate(attempts, 1):
         name = att.get("name") or f"user_{att.get('userId')}"
         folder = os.path.join(extract_dir, _safe_name(name))
+        progress(f"Collecting attempt {i}/{total}: {name}...")
         if not _open_quiz_attempt(driver, wait, grading_url, att):
+            progress(f"Could not open attempt for {name} — skipping")
             continue
         _capture_quiz_attempt(driver, folder, accepted_file_types, progress, name)
 
@@ -1244,44 +1333,129 @@ def fetch_assignment_instructions(
     return text
 
 
+# Reads the quiz *question prompt* (the exam instructions) from a Consistent
+# Evaluation attempt page. These exam quizzes are one written-response question whose
+# prompt IS the instructions. The prompt renders in a <d2l-html-block> tagged
+# ``d2l-questions-written-response-question-text`` whose rich text lives in its SHADOW
+# ROOT (a ``d2l-html-block-rendered`` div) — the light-DOM innerText is empty, so a
+# plain XPath ``.text`` read returns nothing. We scope to the question-text block and
+# deep-scan into it (crossing shadow roots) for the rendered body. We deliberately do
+# NOT read ``...-question-response`` (that is the student's ANSWER, not the prompt).
+# VERIFIED LIVE 2026-07-09 (qi=1089471): returns the full 5,265-char Exam 2 prompt.
+_READ_QUIZ_QUESTION_JS = r"""
+function* deep(root) {
+  const stack = [root.documentElement || root];
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n) continue;
+    yield n;
+    if (n.shadowRoot) stack.push(n.shadowRoot);
+    if ((n.tagName || '').toLowerCase() === 'iframe') {
+      try { const d = n.contentDocument; if (d) stack.push(d.documentElement || d); } catch (e) {}
+    }
+    for (const c of (n.children || [])) stack.push(c);
+  }
+}
+const parts = [];
+const seen = new Set();
+for (const el of deep(document)) {
+  const cls = (el.getAttribute && el.getAttribute('class')) || '';
+  const isPrompt = cls.indexOf('d2l-questions-written-response-question-text') >= 0
+                || cls.indexOf('question-text') >= 0;
+  if (!isPrompt) continue;
+  let best = '';
+  for (const c of deep(el)) {
+    const ccls = (c.getAttribute && c.getAttribute('class')) || '';
+    if (ccls.indexOf('d2l-html-block-rendered') >= 0) {
+      const t = (c.innerText || c.textContent || '').trim();
+      if (t.length > best.length) best = t;
+    }
+  }
+  if (!best) best = (el.innerText || el.textContent || '').trim();
+  if (best && !seen.has(best)) { seen.add(best); parts.push(best); }
+}
+return parts.join('\n\n');
+"""
+
+
+def _read_quiz_question_text(driver, timeout: int = 15) -> Optional[str]:
+    """Read the quiz question prompt (instructions) from the current attempt page.
+
+    The prompt is lazily rendered into a shadow-DOM ``d2l-html-block-rendered`` body,
+    so poll briefly until it has text. Returns the prompt or ``None``.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            text = driver.execute_script(_READ_QUIZ_QUESTION_JS)
+        except Exception as e:  # noqa: BLE001 - page may still be initializing
+            logger.debug("Quiz question read JS failed: %s", e)
+            text = None
+        if text and text.strip():
+            return text.strip()
+        time.sleep(0.5)
+    return None
+
+
 def fetch_quiz_instructions(
         driver, wait, url: str,
         progress: ProgressCallback = _noop,
         mfa_handler=None,
 ) -> Optional[str]:
-    """Best-effort scrape of a quiz's instructions from its first question.
+    """Best-effort scrape of a quiz's instructions from its (single) question.
 
-    Quizzes have no dedicated instructions field here, so the first question's
-    prompt text is used as the assignment instructions. Returns the text or
+    These are exam-style quizzes: one written-response question whose prompt IS the
+    instructions. The prompt only renders on a learner's Consistent Evaluation
+    *attempt* page (the grading grid has no question text), so we open the first
+    learner attempt and read the question prompt from there. Returns the text or
     ``None`` (the instructor can paste/upload manually).
     """
     progress = progress or _noop
-    progress("Reading first quiz question for instructions...")
+    progress("Reading quiz question for instructions...")
+
     try:
-        driver.get(url)
+        grading_url = derive_quiz_grading_url(url)
+    except ValueError:
+        grading_url = url
+
+    # Reach the grading grid (the session is normally already authenticated from the
+    # submissions fetch; log in / settle defensively in case this is called alone).
+    try:
+        driver.get(grading_url)
         wait_for_ajax(driver)
         login_if_needed(driver, mfa_handler=mfa_handler)
         wait_for_ajax(driver)
+        _await_brightspace_after_login(driver, grading_url, progress)
     except Exception as e:  # noqa: BLE001
-        logger.info("Could not navigate to quiz for instructions: %s", e)
-        return None
+        logger.info("Could not navigate to quiz grid for instructions: %s", e)
 
-    # The first question's rich body is a <d2l-html-block>, so the shared
-    # rich-text collector usually captures it. Prefer the first question container
-    # when present so we don't pull in unrelated rich-text blocks.
+    # Primary source: open the first learner attempt and read the question prompt.
+    # The prompt renders even when that learner left the answer blank, so any attempt
+    # works; try a few in case the first attempt page is unusual.
+    attempts = _gather_quiz_attempts(driver)
+    for att in attempts[:3]:
+        if not _open_quiz_attempt(driver, wait, grading_url, att):
+            continue
+        text = _read_quiz_question_text(driver)
+        if text:
+            progress("Captured quiz question as instructions")
+            return text
+
+    # Fallback: light-DOM question-text (e.g. an edit/build page view). This is still
+    # a *question* container, so it's a safe secondary source. We deliberately do NOT
+    # fall back to a generic page scrape (`_collect_instructions_text`) here: on a quiz
+    # that would grab unrelated rich text (course-home widgets, a student's submission)
+    # and report it as instructions. If we can't read the question prompt, return None
+    # so the instructor pastes it manually.
     try:
         questions = driver.find_elements(By.XPATH, QUIZ_QUESTION_XPATH)
-        if questions:
-            first = (questions[0].text or "").strip()
+        for q in questions:
+            first = (q.text or "").strip()
             if first:
-                progress("Captured first quiz question as instructions")
+                progress("Captured quiz question as instructions")
                 return first
     except Exception as e:  # noqa: BLE001
-        logger.debug("Quiz question XPath failed: %s", e)
+        logger.debug("Quiz question XPath fallback failed: %s", e)
 
-    text = _collect_instructions_text(driver)
-    if text:
-        progress("Captured quiz instructions")
-    else:
-        progress("Quiz instructions not found — enter them manually if needed")
-    return text
+    progress("Quiz instructions not found — enter them manually if needed")
+    return None

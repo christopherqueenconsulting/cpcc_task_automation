@@ -147,8 +147,17 @@ Selenium — nothing exercises a real browser or the real BrightSpace DOM.**
 
 1. ~~**Assignment instructions extraction** — highest priority, known broken.~~
    ✅ **FIXED & verified live 2026-06-29** (editor-first ordering; see §4 above).
-2. **Quiz instructions** = first question — ✅ **selector fixed & verified live 2026-06-29**
-   (`.question-text` on the quiz edit page; see "Quiz route — live DOM" below).
+2. **Quiz instructions** = the (single) question prompt — ✅ **REWRITTEN & verified live
+   2026-07-09.** These are exam quizzes: one written-response question whose prompt IS the
+   instructions. `fetch_quiz_instructions` now opens the first learner **attempt** and reads
+   the prompt from the Consistent Evaluation page — the prompt is a `<d2l-html-block>` tagged
+   `d2l-questions-written-response-question-text` whose rich text lives in its **shadow root**
+   (`d2l-html-block-rendered` div), so a light-DOM `.text` read returns empty. New
+   `_READ_QUIZ_QUESTION_JS` scopes to that block and deep-scans its shadow DOM (returned the
+   full 5,265-char Exam 2 prompt live). The old `.question-text` edit-page XPath is a
+   secondary fallback. **The generic `_collect_instructions_text` fallback was REMOVED from
+   the quiz route** — it grabbed course-home widgets / student text and mislabeled them as
+   instructions; when the prompt can't be read we now return `None` (paste manually).
 3. **Quiz submissions** — ✅ **REWRITTEN & verified live 2026-06-29.** `fetch_quiz_file_uploads`
    now drives the Consistent Evaluation UI (NavInfo onclick attempts; per-learner grouping;
    file URL from `d2l-list-item[key]`; written-response capture). See "Quiz route — live DOM"
@@ -183,9 +192,29 @@ question is `<div class="question-item">` → `<div class="question-text">` (cle
 2,096 chars live) + `<div class="question-content">` (type, e.g. "Written Response").
 `QUIZ_QUESTION_XPATH` updated to match `question-text`.
 
-**Quiz submissions — ✅ REWRITTEN & VERIFIED LIVE 2026-06-29 (`fetch_quiz_file_uploads`).**
-The new `fetch_quiz_file_uploads` drives the Consistent Evaluation UI end-to-end; every
-selector/mechanism below was confirmed against the live read-only quiz (qi=1015474 ou=304048):
+**Quiz submissions — ✅ RE-VERIFIED & TWO BUGS FIXED LIVE 2026-07-09 (`fetch_quiz_file_uploads`).**
+End-to-end run on a real graded quiz (qi=1089471 ou=338659, CSC151 "Programming Exam 2",
+8 learners) produced a correct ZIP of 6 `.java` files (2 learners genuinely submitted
+nothing). Two real bugs — the source of the "stuck building the zip" report — were fixed:
+- **The hang: `_open_and_login` retry storm.** It called `click_element_wait_retry`
+  on `SUBMISSIONS_TAB_XPATH` unconditionally, but that tab exists only on the assignment
+  (dropbox) page — the quiz grid (`quiz_mark_users.d2l`) has none. With `WAIT_DEFAULT_TIMEOUT=30`
+  + `MAX_WAIT_RETRY=3`, the nested `get_/click_element_wait_retry` retries burned **~4 min**
+  before giving up, all under one "Opening Submissions view..." message → looked frozen.
+  Fix: probe with a short `WebDriverWait(5)` and only click when the tab is present
+  (else log + continue). Benefits the quiz-writeback route too.
+- **Empty captures: lazy-load race.** The Consistent Evaluation UI renders the question
+  shell first and fills the answer body (typed text / uploaded-file `<d2l-list-item
+  key="viewFile...">`) ~1-2 s later. `_capture_quiz_attempt` read immediately → missed
+  files. Fix: `_wait_for_quiz_attempt_content` (`_QUIZ_ATTEMPT_READY_JS`) polls until a
+  question + an answer signal (file item, real response text, or the explicit "- No text
+  entered -" empty marker) is present before reading.
+- Also added **per-student progress** (`Collecting attempt i/N: <name>...`) so the loop
+  never looks stuck. NOTE: quiz *instructions* (`fetch_quiz_instructions`) returned empty
+  on this quiz — still to tune; unrelated to submissions.
+
+The original 2026-06-29 write-up (still accurate for the mechanism) — confirmed against the
+live read-only quiz (qi=1015474 ou=304048):
 - **Grid URL** derived from the pasted quiz URL by `derive_quiz_grading_url` →
   `/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=<ou>&qi=<qi>` (also scans a nested
   `returnUrl` for qi/ou). Reaching the grid opened all 16 learner attempts.
