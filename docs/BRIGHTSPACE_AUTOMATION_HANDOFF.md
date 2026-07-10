@@ -293,9 +293,11 @@ runs skip MFA.
 **FEEDBACK DELIVERY: attach .docx (default) vs inline — added 2026-07-10.**
 `push_grades_to_brightspace(..., feedback_mode="attach"|"inline")` + a web-app radio. Attach
 uploads each student's clean `Feedback.docx` (`GradeWriteItem.feedback_doc_path`, sourced from
-`st.session_state["feedback_doc_paths_by_key"][run_key]`) to the eval page's attachment widget;
-inline injects `feedback_html`. Also `build_feedback_html` now renders an **"Errors Observed"**
-section from `result.detected_errors` (matches the .docx).
+`st.session_state["feedback_doc_paths_by_key"][run_key]`): on the QUIZ route per-attempt to the
+eval page's attachment widget alongside the posted score; on the ASSIGNMENT route as ONE bulk
+"Add Feedback Files" ZIP import (see below). Inline injects `feedback_html` per student. Also
+`build_feedback_html` now renders an **"Errors Observed"** section from
+`result.detected_errors` (matches the .docx).
 
 **FILE ATTACH FLOW — VERIFIED LIVE 2026-07-10 (`_attach_feedback_file`, quiz Completion
 Summary).** Legacy nested-iframe picker; the working mechanics:
@@ -312,10 +314,28 @@ Summary).** Legacy nested-iframe picker; the working mechanics:
    The widget (`d2l-consistent-evaluation-attachments-editor`) is SHARED by the assignment eval
    page — **assignment route uses the same UI; verify with a real assignment URL**.
 
+**ASSIGNMENT ATTACH = BULK "ADD FEEDBACK FILES" ZIP IMPORT — VERIFIED LIVE 2026-07-10
+(ou=338873 db=789783; imported Donovan Brace's Feedback.docx as a draft, then removed it
+cleanly).** The assignment route does NOT reuse the per-attempt `_attach_feedback_file`.
+Instead, ATTACH mode delivers ALL clean feedback `.docx` files in ONE bulk upload via the
+dropbox submissions page's header button **"Add Feedback Files"** — BrightSpace distributes
+each file to the matching submitter as DRAFT feedback, matched PURELY by the **leading
+submission-ID** in its enclosing folder name (the same ID-bearing name the download produced =
+`GradeWriteItem.student_key`). Only SUBMITTERS are matched (non-submitters have no download ID
+and are skipped). This route writes NO scores — scores/rubric use inline mode. Code:
+`build_feedback_docs_zip` (packs `{student_key}/Feedback.docx`), `import_feedback_zip` (JS-click
+"Add Feedback Files" → LAST `iframe[title='Add Feedback Files']` = active dialog → **REAL**
+`.click()` on `div.d2l-fileinput-addbuttons button` → `send_keys(zip)` → JS-click "Add", keep
+"Overwrite Duplicate Files" checked), `_import_assignment_feedback_docs` (wires it into
+`_push_assignment_grades` when `feedback_mode=="attach"`). Cleanup/remove control:
+`d2l-button-icon`/`button` aria-label `"Remove Attachment: <filename>"` inside
+`d2l-consistent-evaluation-attachments-editor`.
+
 **Still UNVERIFIED (needs a safe write target):** the ASSIGNMENT route's real Save-as-draft
 FILL was verified 2026-07-01 (CSC134 Project 2); its per-student evaluate-link discovery
-(`_gather_assignment_learners` / `_open_assignment_evaluation`) remains best-effort. The
-attach flow above is verified on the QUIZ route only.
+(`_gather_assignment_learners` / `_open_assignment_evaluation`) remains best-effort (used only
+by INLINE mode now — attach mode bypasses it). The per-attempt `_attach_feedback_file` flow is
+verified on the QUIZ route only.
 
 ---
 
