@@ -54,6 +54,7 @@ from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import (
     add_brightspace_source_element,
     add_brightspace_writeback_element,
+    add_file_to_zip,
     add_flexible_upload_element,
     add_upload_file_element,
     add_grading_summary_to_zip,
@@ -1865,6 +1866,14 @@ async def process_error_only_grading_batch(
                 zip_file_path = st.session_state.error_only_feedback_zip_by_key[run_key]
             else:
                 zip_file_path = create_zip_file(doc_files)
+                # Include the auto-gathered BrightSpace submissions ZIP (if any).
+                submissions_zip_path, submissions_zip_name = _get_brightspace_submissions_zip()
+                if submissions_zip_path:
+                    zip_file_path = add_file_to_zip(
+                        zip_file_path,
+                        submissions_zip_path,
+                        arcname=f"Student_Submissions/{submissions_zip_name}",
+                    )
                 st.session_state.error_only_feedback_zip_by_key[run_key] = zip_file_path
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -2049,32 +2058,46 @@ async def get_rubric_based_exam_grading():
     # Step 4: Assignment Instructions
     st.header("Assignment Instructions")
     assignment_instructions_content = None
+
+    # When BrightSpace instructions were fetched, pre-fill an editable text area —
+    # but the instructor can still override them with an uploaded file below.
     if bs_instructions:
-        # Auto-filled from the BrightSpace fetch above (editable).
-        st.success("📝 Using instructions captured from BrightSpace (edit if needed).")
+        st.success(
+            "📝 Using instructions captured from BrightSpace (edit if needed, or "
+            "override with a file below)."
+        )
         assignment_instructions_content = st.text_area(
             "Assignment instructions (from BrightSpace)",
             value=bs_instructions,
             key="rubric_exam_bs_instructions_area",
             height=200,
         )
-    else:
-        _orig_file_name, instructions_file_path = add_flexible_upload_element(
-            "Upload Exam Instructions",
-            ["txt", "docx", "pdf"],
-            key_prefix="rubric_exam_",
-            allow_url=True
-        )
-        convert_instructions_to_markdown = st.checkbox(
-            "Convert To Markdown",
-            True,
-            key="convert_rubric_exam_instruction_to_markdown"
-        )
 
-        if instructions_file_path:
-            assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-            if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
-                st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+    # File override — always available. .docx/.html are decoded to markdown (what the
+    # LLM is given); .md/.txt pass through. A file here takes precedence over the
+    # BrightSpace text above.
+    override_label = (
+        "Override instructions with a file (optional)"
+        if bs_instructions else "Upload Exam Instructions"
+    )
+    _orig_file_name, instructions_file_path = add_flexible_upload_element(
+        override_label,
+        ["txt", "md", "docx", "html", "htm", "pdf"],
+        key_prefix="rubric_exam_",
+        allow_url=True,
+    )
+    convert_instructions_to_markdown = st.checkbox(
+        "Convert To Markdown",
+        True,
+        key="convert_rubric_exam_instruction_to_markdown",
+    )
+
+    if instructions_file_path:
+        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+        if bs_instructions:
+            st.info("Using the uploaded instructions file (overrides the BrightSpace text above).")
+        if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
+            st.markdown(assignment_instructions_content, unsafe_allow_html=True)
 
     # Step 5: Solution File (Optional)
     st.header("Solution File (Optional)")
@@ -2624,6 +2647,25 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
     )
 
 
+def _get_brightspace_submissions_zip() -> tuple[Optional[str], Optional[str]]:
+    """Return (path, filename) of the auto-gathered BrightSpace submissions ZIP.
+
+    Only returns a path when submissions were fetched from BrightSpace and the
+    confirmed source dict still points at a real ``.zip`` on disk; otherwise
+    ``(None, None)`` so manually-uploaded submissions are never bundled.
+    """
+    confirmed = st.session_state.get("rubric_exam_bs_source_confirmed")
+    if not isinstance(confirmed, dict):
+        return None, None
+    path = confirmed.get("path")
+    if not path or not os.path.exists(path) or not str(path).lower().endswith(".zip"):
+        return None, None
+    name = confirmed.get("name") or "brightspace_submissions.zip"
+    if not name.lower().endswith(".zip"):
+        name += ".zip"
+    return path, name
+
+
 def _generate_feedback_docs_and_zip(
         all_results: list[tuple[str, RubricAssessmentResult]],
         course_name: str,
@@ -2781,6 +2823,18 @@ def _generate_feedback_docs_and_zip(
                     zip_file_path,
                     summary_df,
                     include_csv=True
+                )
+
+            # If the submissions were auto-gathered from BrightSpace, include that
+            # (user-confirmed) student-submissions ZIP so the instructor keeps a copy
+            # of exactly what was graded alongside the generated feedback.
+            submissions_zip_path, submissions_zip_name = _get_brightspace_submissions_zip()
+            if submissions_zip_path:
+                st.info("🗂️ Including the fetched student submissions ZIP...")
+                zip_file_path = add_file_to_zip(
+                    zip_file_path,
+                    submissions_zip_path,
+                    arcname=f"Student_Submissions/{submissions_zip_name}",
                 )
 
             # Cache the ZIP file path in session state

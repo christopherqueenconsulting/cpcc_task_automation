@@ -14,10 +14,68 @@ from cqc_cpcc.utilities.utils import (
     ExtendedEnum,
     CodeError,
     ErrorHolder,
+    read_file,
     _get_microsoft_account_tile_xpath,
     _resolve_microsoft_account_path,
     microsoft_login,
 )
+
+
+def _write_tmp(content, suffix, binary=False):
+    mode = "wb" if binary else "w"
+    f = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, mode=mode)
+    f.write(content)
+    f.close()
+    return f.name
+
+
+@pytest.mark.unit
+class TestReadFileMarkdownDecoding:
+    """read_file(convert_to_markdown=True) must decode by type, not assume .docx."""
+
+    def test_html_converts_to_markdown(self):
+        path = _write_tmp(
+            "<h1>Exam</h1><p>Do <strong>this</strong>:</p><ol><li>one</li><li>two</li></ol>",
+            ".html",
+        )
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert "Exam" in out
+        assert "**this**" in out          # bold preserved as markdown
+        assert "1. one" in out and "2. two" in out  # ordered list preserved
+
+    def test_txt_with_convert_does_not_error(self):
+        # A non-Word upload with "Convert To Markdown" on must not blow up on mammoth.
+        path = _write_tmp("Plain line 1\nPlain line 2", ".txt")
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert "Plain line 1" in out and "Plain line 2" in out
+
+    def test_markdown_passthrough(self):
+        path = _write_tmp("# Title\n- a\n- b", ".md")
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert out.strip() == "# Title\n- a\n- b"
+
+    def test_docx_converts_to_markdown(self):
+        import docx
+        d = docx.Document()
+        d.add_heading("Exam 2", level=1)
+        d.add_paragraph("Reads input", style="List Number")
+        path = _write_tmp(b"", ".docx", binary=True)
+        d.save(path)
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert "Exam 2" in out
+        assert "1. Reads input" in out
 
 
 @pytest.mark.unit

@@ -165,3 +165,52 @@ def test_zip_with_empty_file_list():
     
     finally:
         Path(zip_temp.name).unlink(missing_ok=True)
+
+
+@pytest.mark.unit
+def test_add_file_to_zip_bundles_submissions_zip():
+    """add_file_to_zip copies existing entries and adds the new file under arcname."""
+    from cqc_streamlit_app.utils import add_file_to_zip, create_zip_file
+
+    # base feedback zip with two docs
+    docs = []
+    for name in ("Ann_Feedback.docx", "Bob_Feedback.docx"):
+        f = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+        f.write(b"doc"); f.close()
+        docs.append((name, f.name))
+    base = create_zip_file(docs)
+
+    # a submissions zip to bundle in
+    subs = tempfile.NamedTemporaryFile(delete=False, suffix=".zip"); subs.close()
+    with zipfile.ZipFile(subs.name, "w") as z:
+        z.writestr("Ann/Exam.java", "class A{}")
+
+    try:
+        out = add_file_to_zip(base, subs.name, "Student_Submissions/brightspace_submissions.zip")
+        with zipfile.ZipFile(out) as z:
+            names = z.namelist()
+        assert "Ann_Feedback.docx" in names
+        assert "Bob_Feedback.docx" in names
+        assert "Student_Submissions/brightspace_submissions.zip" in names
+    finally:
+        for _, p in docs:
+            Path(p).unlink(missing_ok=True)
+        Path(subs.name).unlink(missing_ok=True)
+        Path(out).unlink(missing_ok=True)
+
+
+@pytest.mark.unit
+def test_add_file_to_zip_missing_source_returns_original():
+    """A missing source file leaves the zip untouched (same path returned)."""
+    from cqc_streamlit_app.utils import add_file_to_zip, create_zip_file
+
+    f = tempfile.NamedTemporaryFile(delete=False, suffix=".docx"); f.write(b"x"); f.close()
+    base = create_zip_file([("Ann_Feedback.docx", f.name)])
+    try:
+        same = add_file_to_zip(base, "/no/such/file.zip", "x.zip")
+        assert same == base
+        with zipfile.ZipFile(base) as z:
+            assert z.namelist() == ["Ann_Feedback.docx"]
+    finally:
+        Path(f.name).unlink(missing_ok=True)
+        Path(base).unlink(missing_ok=True)

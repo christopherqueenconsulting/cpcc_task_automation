@@ -365,11 +365,32 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
         from cqc_cpcc.utilities.pdf_utils import extract_text_from_pdf
         contents = extract_text_from_pdf(file_path)
     elif convert_to_markdown:
-        with open(file_path, mode='rb') as f:
-            # results = mammoth.convert_to_markdown(f)
-            results = mammoth.convert_to_html(f)
-            contents = convert_content_to_markdown(results.value)
-        # contents = results.value
+        # Convert-to-markdown must be extension-aware: mammoth reads ONLY .docx
+        # (a zip). Running it on .html/.txt raises, so dispatch by type here and
+        # fall back to reading as text for anything that isn't a Word doc / HTML.
+        if file_extension in ['.html', '.htm']:
+            # Already HTML — go straight to markdown (no mammoth).
+            with open(file_path, mode='r', encoding='utf-8', errors='replace') as f:
+                contents = convert_content_to_markdown(f.read())
+        elif file_extension in ['.md', '.markdown']:
+            # Already markdown — pass through unchanged.
+            with open(file_path, mode='r', encoding='utf-8', errors='replace') as f:
+                contents = f.read()
+        elif file_extension in ['.docx', '.doc']:
+            # Word doc → HTML (mammoth) → markdown.
+            with open(file_path, mode='rb') as f:
+                results = mammoth.convert_to_html(f)
+                contents = convert_content_to_markdown(results.value)
+        else:
+            # Unknown type (e.g. .txt): try mammoth, else read as plain text so a
+            # non-Word upload with "Convert To Markdown" checked never errors out.
+            try:
+                with open(file_path, mode='rb') as f:
+                    results = mammoth.convert_to_html(f)
+                    contents = convert_content_to_markdown(results.value)
+            except Exception:  # noqa: BLE001 - not a Word doc; fall back to text
+                with open(file_path, mode='r', encoding='utf-8', errors='replace') as f:
+                    contents = f.read()
     # If file is HTML, extract text content
     elif file_extension in ['.html', '.htm']:
         with open(file_path, mode='r', encoding='utf-8') as f:

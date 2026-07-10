@@ -2274,6 +2274,34 @@ def export_grading_summary_to_excel(
     return excel_file.name, csv_file.name
 
 
+def add_file_to_zip(zip_file_path: str, source_file_path: str, arcname: str) -> str:
+    """Add a single file to an existing zip, returning the (new) zip path.
+
+    Rewrites the archive (zip entries can't be appended in place reliably here) by
+    copying all existing entries into a fresh zip and writing ``source_file_path``
+    under ``arcname``. The original zip is removed. If the source file is missing the
+    original zip path is returned unchanged.
+    """
+    if not source_file_path or not os.path.exists(source_file_path):
+        return zip_file_path
+
+    new_zip_file = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    new_zip_file.close()
+
+    with zipfile.ZipFile(zip_file_path, 'r') as original_zip:
+        with zipfile.ZipFile(new_zip_file.name, 'w') as new_zip:
+            for item in original_zip.infolist():
+                new_zip.writestr(item, original_zip.read(item.filename))
+            new_zip.write(source_file_path, arcname=arcname)
+
+    try:
+        os.unlink(zip_file_path)
+    except Exception:
+        pass
+
+    return new_zip_file.name
+
+
 def add_grading_summary_to_zip(
         zip_file_path: str,
         summary_df: pd.DataFrame,
