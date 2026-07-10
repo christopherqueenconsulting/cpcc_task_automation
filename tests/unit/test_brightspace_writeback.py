@@ -649,6 +649,128 @@ def test_attach_feedback_file_happy_path(mocker, tmp_path):
 
 
 @pytest.mark.unit
+def test_build_feedback_docs_zip_uses_id_bearing_folders(tmp_path):
+    """Each doc is placed under its ID-bearing student_key folder; missing paths skipped."""
+    import zipfile
+    a = tmp_path / "a.docx"; a.write_bytes(b"x")
+    b = tmp_path / "b.docx"; b.write_bytes(b"y")
+    out = tmp_path / "fb.zip"
+    z = wb.build_feedback_docs_zip(
+        {
+            "100003-600002 - Ben Sample - Jul 7, 2026": str(a),
+            "99-1 - Jane Doe": str(b),
+            "no-doc": None,                       # skipped (falsy path)
+            "gone": str(tmp_path / "missing.docx"),  # skipped (not on disk)
+        },
+        out_path=str(out),
+    )
+    assert z == str(out)
+    with zipfile.ZipFile(z) as zf:
+        assert sorted(zf.namelist()) == [
+            "100003-600002 - Ben Sample - Jul 7, 2026/a.docx",
+            "99-1 - Jane Doe/b.docx",
+        ]
+
+
+@pytest.mark.unit
+def test_build_feedback_docs_zip_returns_none_when_no_docs(tmp_path):
+    assert wb.build_feedback_docs_zip({}) is None
+    assert wb.build_feedback_docs_zip({"k": None}) is None
+    assert wb.build_feedback_docs_zip({"k": str(tmp_path / "nope.docx")}) is None
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_happy_path(mocker, tmp_path):
+    """Add Feedback Files -> active iframe -> REAL Upload click -> send_keys -> Add."""
+    from selenium.webdriver.common.by import By
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK\x03\x04")
+    input_el = MagicMock()
+    upload_btn = MagicMock()
+    iframe = MagicMock()
+    iframe.get_attribute.return_value = "Add Feedback Files"
+    driver = MagicMock()
+    driver.execute_script.return_value = True   # button click, file-listed, Add all succeed
+
+    def find_elements(by, value):
+        if by == By.TAG_NAME and value == "iframe":
+            return [iframe]
+        if "d2l-fileinput-addbuttons" in value:
+            return [upload_btn]
+        if "input[type=file]" in value:
+            return [input_el]
+        return []
+    driver.find_elements.side_effect = find_elements
+    mocker.patch("time.sleep")
+
+    assert wb.import_feedback_zip(driver, str(z)) is True
+    upload_btn.click.assert_called_once()                # trusted gesture creates the input
+    input_el.send_keys.assert_called_once_with(str(z))   # absolute ZIP path sent
+    driver.switch_to.default_content.assert_called()     # frame restored
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_missing_button_returns_false(mocker, tmp_path):
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK")
+    driver = MagicMock()
+    driver.execute_script.return_value = False   # 'Add Feedback Files' button not found
+    mocker.patch("time.sleep")
+    assert wb.import_feedback_zip(driver, str(z)) is False
+    assert wb.import_feedback_zip(driver, "/no/such/file.zip") is False
+
+
+@pytest.mark.unit
+def test_import_assignment_feedback_docs_marks_outcomes(mocker, tmp_path):
+    """Live import: submitters with a doc are flagged attached+saved; others noted."""
+    doc = tmp_path / "Donovan_Feedback.docx"; doc.write_bytes(b"x")
+    imp = mocker.patch.object(wb, "import_feedback_zip", return_value=True)
+    items = [
+        wb.GradeWriteItem("100003-600002 - Ben Sample", "Ben Sample",
+                          80, 90, 100, "<p>fb</p>", feedback_doc_path=str(doc)),
+        wb.GradeWriteItem("no-sub - Carol", "Carol", 0, 0, 100, "<p>fb</p>"),
+    ]
+    report = wb.GradeWriteReport(route="assignment", dry_run=False)
+    out = wb._import_assignment_feedback_docs(
+        MagicMock(), "url", items, [items[0]], report, lambda *_: None, dry_run=False)
+
+    imp.assert_called_once()
+    by_name = {o.display_name: o for o in out.outcomes}
+    assert by_name["Ben Sample"].feedback_attached is True
+    assert by_name["Ben Sample"].saved is True
+    assert by_name["Carol"].feedback_attached is False
+    assert "no feedback doc" in by_name["Carol"].note
+
+
+@pytest.mark.unit
+def test_import_assignment_feedback_docs_dry_run_does_not_upload(mocker, tmp_path):
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    imp = mocker.patch.object(wb, "import_feedback_zip", return_value=True)
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+    report = wb.GradeWriteReport(route="assignment", dry_run=True)
+    out = wb._import_assignment_feedback_docs(
+        MagicMock(), "url", [item], [item], report, lambda *_: None, dry_run=True)
+    imp.assert_not_called()
+    assert out.outcomes[0].feedback_attached is False
+    assert "dry run" in out.outcomes[0].note
+
+
+@pytest.mark.unit
+def test_push_assignment_grades_attach_mode_uses_bulk_import(mocker, tmp_path):
+    """Attach mode on the assignment route bulk-imports instead of per-student nav."""
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs",
+                               return_value=wb.GradeWriteReport(route="assignment", dry_run=False))
+    gather = mocker.patch.object(wb, "_gather_assignment_learners", return_value=[])
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+    wb._push_assignment_grades(MagicMock(), MagicMock(), "url", [item], lambda *_: None,
+                               None, dry_run=False, feedback_mode="attach")
+    bulk.assert_called_once()
+    gather.assert_not_called()   # no per-student navigation in bulk attach mode
+
+
+@pytest.mark.unit
 def test_confirm_dialog_excludes_destructive_by_default():
     """SAFETY: the discard/reset-auto-evaluation dialog must be in the exclude list."""
     driver = MagicMock()

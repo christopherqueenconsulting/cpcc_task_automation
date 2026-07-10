@@ -1923,6 +1923,14 @@ def add_brightspace_writeback_element(
     if feedback_mode == "attach" and not have_docs:
         st.info("ℹ️ Generate the feedback documents above first to attach them; "
                 "otherwise feedback is added directly.")
+    # Assignment route: attach mode delivers docs via BrightSpace's bulk "Add Feedback
+    # Files" ZIP import (matched to submitters by submission-ID) and does NOT write
+    # scores — run "Add feedback directly" for scores/rubric.
+    if feedback_mode == "attach" and have_docs and url and not _is_quiz_writeback_url(url):
+        st.caption(
+            "📦 On an assignment, attaching bulk-imports all Feedback.docx files as "
+            "drafts in one step (only students who submitted are matched). Scores/rubric "
+            "are written separately — choose “Add feedback directly” for those.")
 
     job = st.session_state.get(job_key)
 
