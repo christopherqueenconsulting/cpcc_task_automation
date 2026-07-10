@@ -504,7 +504,7 @@ def _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run) 
             outcome.note = "could not open attempt page"
             report.outcomes.append(outcome)
             continue
-        _write_one_student(driver, wait, m.item, outcome, progress, dry_run)
+        _write_one_quiz_student(driver, wait, m.item, outcome, progress, dry_run)
         report.outcomes.append(outcome)
     return report
 
@@ -796,6 +796,19 @@ for(const n of deep(ed)){ if((n.tagName||'').toLowerCase()==='iframe')return n; 
 return null;
 """
 
+# Scroll the Overall Feedback editor into view so its iframe is on-screen before we
+# type into it — otherwise a Selenium click/send_keys can be "intercepted" by an
+# overlay (verified live 2026-07-10: click intercepted at an off-view coordinate).
+_SCROLL_FB_EDITOR_JS = r"""
+function* deep(root){const st=[root.documentElement||root];while(st.length){const n=st.pop();if(!n)continue;yield n;if(n.shadowRoot)st.push(n.shadowRoot);for(const c of (n.children||[]))st.push(c);}}
+const all=[...deep(document)];
+const ed=all.find(el=>(el.tagName||'').toLowerCase()==='d2l-htmleditor'&&/overall feedback/i.test(el.getAttribute('label')||''))
+      || all.find(el=>(el.tagName||'').toLowerCase()==='d2l-htmleditor'&&/feedback/i.test(el.getAttribute('label')||''));
+if(!ed)return false;
+try{ ed.scrollIntoView({block:'center', inline:'center'}); }catch(e){ try{ ed.scrollIntoView(); }catch(e2){} }
+return true;
+"""
+
 
 def _write_feedback_via_editor(driver, wait, feedback_html: str) -> bool:
     """Write Overall Feedback so it PERSISTS on save (rich formatting preserved).
@@ -822,13 +835,19 @@ def _write_feedback_via_editor(driver, wait, feedback_html: str) -> bool:
             return False
         if not driver.execute_script(_SET_FB_CONTENT_JS, feedback_html):
             return False
+        # Bring the editor on-screen so typing into its iframe isn't click-intercepted.
+        driver.execute_script(_SCROLL_FB_EDITOR_JS)
+        _time.sleep(0.3)
         iframe = driver.execute_script(_FIND_FB_IFRAME_JS)
         if iframe is None:
             return False
         driver.switch_to.frame(iframe)
         try:
             body = driver.find_element(By.CSS_SELECTOR, "body")
-            body.click()
+            # Focus via JS (a coordinate-based .click() can be intercepted by an overlay),
+            # then type one real keystroke (space + backspace) so TinyMCE marks itself
+            # dirty and D2L commits the setContent() HTML on save.
+            driver.execute_script("arguments[0].focus();", body)
             body.send_keys(Keys.END)
             body.send_keys(" ")
             body.send_keys(Keys.BACKSPACE)
@@ -847,7 +866,8 @@ def _write_feedback_via_editor(driver, wait, feedback_html: str) -> bool:
 def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
                        progress, dry_run: bool) -> None:
     """Locate (and, when not dry_run, fill + save-draft) one student's score + feedback."""
-    targets = _locate_write_targets(driver)
+    # Wait for the Lit inputs to hydrate before locating (they render a beat after nav).
+    targets = _wait_for_write_targets(driver)
     outcome.fields_found = bool(targets.get("score"))
     if not targets.get("score"):
         outcome.note = "score field not found"
@@ -949,3 +969,259 @@ def _save_draft(driver) -> bool:
     except Exception as e:  # noqa: BLE001
         logger.info("Save Draft click failed: %s", e)
         return False
+
+
+def _click_commit(driver, include: tuple, exclude: tuple) -> bool:
+    """Click the first button whose text matches ``include`` and not ``exclude``.
+
+    Reuses the deep-DOM matcher + Lit-safe pointer sequence from ``_SAVE_DRAFT_JS``
+    (include-list, exclude-list). Used to POST quiz grades/feedback (Publish/Update/Save)
+    — the opposite of the assignment draft-save.
+    """
+    try:
+        return bool(driver.execute_script(_SAVE_DRAFT_JS, list(include), list(exclude)))
+    except Exception as e:  # noqa: BLE001
+        logger.info("Commit click failed (%s): %s", include, e)
+        return False
+
+
+# Return the actual <input> for the overall score (crossing shadow roots), resolving a
+# matched web-component wrapper to its inner input. We type into it with real keystrokes
+# because the score field is a D2L Lit <d2l-input-number>: a JS native-setter write
+# updates the inner <input> but NOT the component's tracked value, so a later Publish/
+# Update posts the stale value. VERIFIED LIVE 2026-07-10: send_keys updates the component
+# (d2l-input-number.value 0 -> 42) while the native-setter left it at 0.
+_FIND_SCORE_INPUT_JS = r"""
+const SELS = arguments[0];
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
+function matchesAny(el,sels){for(const s of sels){try{if(el.matches&&el.matches(s))return true;}catch(e){}}return false;}
+for(const el of deep(document)){
+  if(!matchesAny(el, SELS)) continue;
+  if((el.tagName||'').toLowerCase()==='input') return el;
+  const inp = (el.shadowRoot && el.shadowRoot.querySelector('input')) || (el.querySelector && el.querySelector('input'));
+  if(inp) return inp;
+}
+return null;
+"""
+
+
+def _fill_score(driver, score) -> bool:
+    """Type the overall score into the grade input with REAL keystrokes; True on success.
+
+    Real keystrokes (vs a JS value write) are required so the D2L Lit input component
+    registers the change and the subsequent Publish/Update/Save posts the new value.
+    """
+    from selenium.webdriver.common.keys import Keys
+    try:
+        el = driver.execute_script(_FIND_SCORE_INPUT_JS, list(SCORE_INPUT_SELECTORS))
+    except Exception as e:  # noqa: BLE001
+        logger.info("Score input lookup failed: %s", e)
+        return False
+    if el is None:
+        return False
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+        try:
+            el.click()
+        except Exception:  # noqa: BLE001 - fall back to JS focus if a click is intercepted
+            driver.execute_script("arguments[0].focus();", el)
+        # Robustly clear any existing value first (Ctrl+A/Delete is unreliable on this
+        # Lit input and can append -> "42" + "42" = "4242"): go to end, backspace enough
+        # to clear, then type the new value.
+        el.send_keys(Keys.END)
+        el.send_keys(Keys.BACKSPACE * 12)
+        el.send_keys(_fmt_num(score))
+        el.send_keys(Keys.TAB)  # blur commits the value in the component
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.info("Score keystroke fill failed: %s", e)
+        return False
+
+
+# Click "Yes"/"Continue" on an OPEN confirmation dialog whose text matches ``include``
+# and NOT ``exclude`` — used to confirm the "final score ≠ sum of question points"
+# warning that D2L raises after Update on a quiz. SAFETY: ``exclude`` MUST list the
+# destructive "discard changes / reset to auto-evaluation" dialog so we never confirm
+# THAT one (it would wipe manual scores + feedback). We only act on VISIBLE buttons.
+_CONFIRM_DIALOG_JS = r"""
+const INCLUDE = arguments[0], EXCLUDE = arguments[1];
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
+function visible(el){ try{ const r=el.getBoundingClientRect(); return r.width>0&&r.height>0&&r.bottom>0&&r.top<(window.innerHeight||9999);}catch(e){return false;} }
+for(const el of deep(document)){
+  const tag=(el.tagName||'').toLowerCase();
+  const isDialog = tag==='d2l-dialog-confirm' || tag==='d2l-dialog' || (el.getAttribute&&el.getAttribute('role')==='dialog');
+  if(!isDialog) continue;
+  const txt=(((el.getAttribute&&(el.getAttribute('title')||el.getAttribute('text')))||'')+' '+(el.textContent||'')).toLowerCase();
+  if(EXCLUDE.some(x=>txt.indexOf(x)>=0)) continue;
+  if(!INCLUDE.some(i=>txt.indexOf(i)>=0)) continue;
+  for(const b of deep(el)){
+    const bt=(b.tagName||'').toLowerCase();
+    if(bt!=='d2l-button'&&bt!=='button') continue;
+    if(!visible(b)) continue;
+    const t=(((b.getAttribute&&(b.getAttribute('text')||b.getAttribute('aria-label')))||'')+' '+(b.textContent||'')).toLowerCase().trim();
+    if(/\bno\b|cancel/.test(t)) continue;
+    if(!/\byes\b|continue|confirm|^ok\b/.test(t)) continue;
+    let c=b; if(b.shadowRoot){const inner=b.shadowRoot.querySelector('button,a'); if(inner)c=inner;}
+    try{ c.scrollIntoView && c.scrollIntoView({block:'center'}); }catch(e){}
+    const r=c.getBoundingClientRect(); const cx=r.left+r.width/2, cy=r.top+r.height/2;
+    for(const e of ['pointerdown','mousedown','pointerup','mouseup','click']) c.dispatchEvent(new MouseEvent(e,{bubbles:true,cancelable:true,composed:true,clientX:cx,clientY:cy,view:window}));
+    return true;
+  }
+}
+return false;
+"""
+
+# Substrings that identify the DESTRUCTIVE "discard / reset auto-evaluation" dialog — we
+# must NEVER confirm it.
+_DESTRUCTIVE_DIALOG_TEXTS = ("discard", "reset to", "auto-evaluation", "resubmitted", "in progress")
+
+
+def _confirm_dialog(driver, include: tuple, exclude: tuple = _DESTRUCTIVE_DIALOG_TEXTS) -> bool:
+    """Confirm (click Yes) an open dialog matching ``include``; never one matching ``exclude``."""
+    try:
+        return bool(driver.execute_script(_CONFIRM_DIALOG_JS, list(include), list(exclude)))
+    except Exception as e:  # noqa: BLE001
+        logger.info("Confirm-dialog handling failed: %s", e)
+        return False
+
+
+def _wait_for_write_targets(driver, timeout: int = 15) -> dict:
+    """Poll until the evaluation page's write targets hydrate; return {'score','feedback'}.
+
+    The Consistent Evaluation UI renders its Lit score input a beat AFTER navigation, so
+    an immediate ``_locate_write_targets`` reports nothing — the dry-run "fields not
+    found" bug. Poll until the score input appears (or timeout) so dry-run and real
+    writes both see the real fields.
+    """
+    import time as _t
+    deadline = _t.time() + timeout
+    targets = {"score": False, "feedback": False}
+    while _t.time() < deadline:
+        targets = _locate_write_targets(driver)
+        if targets.get("score"):
+            return targets
+        _t.sleep(0.5)
+    return targets
+
+
+# Switch the quiz attempt <select aria-label="User Attempts"> to the option matching a
+# regex ("attempt" or "completion summary"). Deep-scans shadow roots and fires input +
+# change so D2L re-renders the view. VERIFIED LIVE 2026-07-10: options are "Attempt 1"
+# (value=<attemptId>) and "Completion Summary" (value="completion-summary"). The
+# Completion Summary view holds the OVERALL FEEDBACK editor + a "Save" button and has NO
+# score input; the attempt view holds the "Attempt grade" input + Publish/Update.
+_SWITCH_ATTEMPT_VIEW_JS = r"""
+const WANT = arguments[0];
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
+const re = new RegExp(WANT, 'i');
+for(const el of deep(document)){
+  if((el.tagName||'').toLowerCase()!=='select')continue;
+  if(!/attempt/i.test(el.getAttribute('aria-label')||''))continue;
+  const opt=[...el.querySelectorAll('option')].find(o=>re.test(o.textContent||''));
+  if(opt){ el.value=opt.value; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return opt.value; }
+}
+return null;
+"""
+
+
+def _switch_quiz_view(driver, want: str) -> bool:
+    """Switch the quiz attempt selector to 'attempt' or 'completion summary'. True on switch."""
+    try:
+        return bool(driver.execute_script(_SWITCH_ATTEMPT_VIEW_JS, want))
+    except Exception as e:  # noqa: BLE001
+        logger.info("Could not switch quiz view to '%s': %s", want, e)
+        return False
+
+
+def _locate_feedback_editor(driver) -> bool:
+    """True if an Overall Feedback editor is present on the current view."""
+    try:
+        res = driver.execute_script(
+            _LOCATE_WRITE_TARGETS_JS, ["__none__"], list(FEEDBACK_EDITOR_SELECTORS)
+        )
+        return bool(isinstance(res, dict) and res.get("feedback"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _write_one_quiz_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
+                            progress, dry_run: bool) -> None:
+    """Quiz write: score on the attempt view, overall feedback on Completion Summary, POST.
+
+    Quizzes have NO draft — entered scores/feedback are published. Flow (DOM verified
+    live 2026-07-10):
+      1. Attempt view: fill the "Attempt grade" input, then Publish/Update to post it.
+      2. Switch the "User Attempts" select to "Completion Summary".
+      3. Fill the Overall Feedback editor there, then Save to post the feedback.
+
+    The dry run waits for the fields to hydrate and validates the full path
+    non-destructively (confirms the Completion Summary feedback editor is reachable),
+    writing/saving nothing.
+    """
+    import time as _t
+
+    # Wait for the attempt-view Lit inputs to hydrate (fixes "fields not found").
+    targets = _wait_for_write_targets(driver)
+    outcome.fields_found = bool(targets.get("score"))
+    if not targets.get("score"):
+        outcome.note = "score field not found (attempt view)"
+        progress(f"{item.display_name}: score field not found")
+        return
+
+    if dry_run:
+        # Non-destructively confirm the Completion Summary feedback editor is reachable,
+        # then switch back to the attempt view. Switching a <select> saves nothing.
+        fb_ok = False
+        if _switch_quiz_view(driver, "completion summary"):
+            _t.sleep(1.5)
+            fb_ok = _locate_feedback_editor(driver)
+            _switch_quiz_view(driver, "attempt")
+        outcome.score_written = item.score
+        outcome.note = (
+            f"dry run — would POST {item.score}/{item.max_points}"
+            + (" + overall feedback" if fb_ok else " (feedback editor NOT found)")
+            + " (nothing saved)"
+        )
+        progress(
+            f"{item.display_name}: would POST {item.score}/{item.max_points}"
+            + ("" if fb_ok else " [feedback editor missing]") + " (dry run)"
+        )
+        return
+
+    try:
+        # 1) Score on the attempt view — REAL keystrokes so the Lit input registers it.
+        if _fill_score(driver, item.score):
+            outcome.score_written = item.score
+        # 2) POST the score (Publish/Update — quizzes have no draft).
+        posted_score = _click_commit(
+            driver, ("publish", "update"), ("retract", "cancel", "close", "publish all"),
+        )
+        _t.sleep(1.0)
+        # 2a) D2L warns when the overall score != the sum of per-question points ("Do you
+        #     wish to continue anyway?"). Confirm ONLY that warning — never the destructive
+        #     "discard changes / reset to auto-evaluation" dialog.
+        if _confirm_dialog(driver, ("continue anyway", "final score", "not equal to the sum")):
+            _t.sleep(1.5)
+        # 3) Switch to Completion Summary for the overall feedback.
+        posted_fb = False
+        if _switch_quiz_view(driver, "completion summary"):
+            _t.sleep(1.5)
+            outcome.feedback_written = _write_feedback_via_editor(driver, wait, item.feedback_html)
+            # 4) Save the feedback (Completion Summary view), confirming the score-sum
+            #    warning if it reappears here too.
+            posted_fb = _click_commit(driver, ("save",), ("save draft", "cancel", "close"))
+            _t.sleep(1.0)
+            if _confirm_dialog(driver, ("continue anyway", "final score", "not equal to the sum")):
+                _t.sleep(1.0)
+        outcome.saved = bool(posted_score or posted_fb)
+        if outcome.saved:
+            outcome.note = "posted score" + (" + feedback" if (outcome.feedback_written and posted_fb) else "")
+        else:
+            outcome.note = "filled but post button not found — NOT saved"
+        progress(
+            f"{item.display_name}: posted {item.score}/{item.max_points} "
+            f"({'saved' if outcome.saved else 'not saved'})"
+        )
+    except Exception as e:  # noqa: BLE001
+        outcome.note = f"write error: {e}"
+        logger.warning("Quiz write failed for %s: %s", item.display_name, e)

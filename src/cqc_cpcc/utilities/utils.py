@@ -731,27 +731,37 @@ def _wait_for_mfa_approval(
 KMSI_PROMPT_TIMEOUT_SECONDS = 3
 
 
-def _dismiss_stay_signed_in(driver: WebDriver, wait_short, wait_long) -> None:
-    """Click "No" on the "Stay signed in?" page if it appears, else skip fast.
+def _accept_stay_signed_in(driver: WebDriver, wait_short, wait_long) -> None:
+    """Click "Yes" on the "Stay signed in?" (KMSI) page if it appears, else skip fast.
 
-    The prompt is optional (some tenants skip it / we may already be redirected
-    back to the app after MFA), so this probes briefly with a direct presence
-    check rather than a long element wait that would hang when it never shows.
+    Clicking **Yes** makes Microsoft issue a PERSISTENT auth cookie that survives a
+    browser restart, so the automation's Chrome profile stays logged in across runs
+    (login once, reuse for many assignments). Clicking "No" would issue a session-only
+    cookie that is cleared on browser close — forcing MFA on every run.
+
+    The prompt is optional (some tenants skip it / we may already be redirected back to
+    the app after MFA), so probe briefly with a direct presence check rather than a long
+    element wait that would hang when it never shows.
     """
-    kmsi_no_xpath = "//input[contains(@class, 'button-secondary') and contains(@value,'No')]"
+    # "Yes" is the primary submit (id=idSIButton9); match by id or value for robustness.
+    kmsi_yes_xpath = (
+        "//input[@id='idSIButton9'] | "
+        "//input[@type='submit' and contains(@value,'Yes')] | "
+        "//input[contains(@class, 'button_primary') and contains(@value,'Yes')]"
+    )
     deadline = time.time() + KMSI_PROMPT_TIMEOUT_SECONDS
     while time.time() < deadline:
-        if driver.find_elements(By.XPATH, kmsi_no_xpath):
+        if driver.find_elements(By.XPATH, kmsi_yes_xpath):
             try:
-                no_btn = click_element_wait_retry(
-                    driver, wait_short, kmsi_no_xpath,
-                    "Clicking 'No' to Stay Signed in", max_try=0)
+                yes_btn = click_element_wait_retry(
+                    driver, wait_short, kmsi_yes_xpath,
+                    "Clicking 'Yes' to Stay Signed in (persist login)", max_try=0)
                 wait_long.until(
-                    EC.invisibility_of_element(no_btn),
+                    EC.invisibility_of_element(yes_btn),
                     'Waiting for login to be successful')
             except (TimeoutException, StaleElementReferenceException,
                     ElementNotInteractableException, NoSuchElementException):
-                logger.info("'Stay signed in?' prompt vanished before dismissal.")
+                logger.info("'Stay signed in?' prompt vanished before acceptance.")
             return
         time.sleep(0.5)
     logger.info("No 'Stay signed in?' prompt — login already completed.")
@@ -984,9 +994,9 @@ def microsoft_login(driver: WebDriver, mfa_handler=None):
             context="microsoft", message=mfa_message,
         )
 
-    # Dismiss "Stay signed in?" (KMSI) if it appears. Some tenants skip it — after
-    # MFA approval we may already be redirected back to the app.
-    _dismiss_stay_signed_in(driver, wait_short, wait_long)
+    # Accept "Stay signed in?" (KMSI) if it appears so the login persists across runs.
+    # Some tenants skip it — after MFA approval we may already be redirected to the app.
+    _accept_stay_signed_in(driver, wait_short, wait_long)
 
     # Login completed — let the MFA handler close any prompt it was showing.
     _resolve_mfa(mfa_handler)

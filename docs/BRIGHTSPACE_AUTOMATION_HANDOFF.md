@@ -240,7 +240,7 @@ live read-only quiz (qi=3000001 ou=200003):
   - Plain `<a href>` `fileId`/`viewFile`/`download` links kept as a fallback.
   - Question text: `.d2l-html-block-rendered`.
 
-## Draft grade write-back — Feature #4 (BUILT; field selectors VERIFIED live 2026-06-30)
+## Grade write-back — Feature #4 (assignment=draft VERIFIED 2026-07-01; quiz=POST VERIFIED 2026-07-09/10)
 
 Implemented in **`src/cqc_cpcc/utilities/brightspace_writeback.py`** +
 `add_brightspace_writeback_element` (UI) on the Grade Assignment page (after the
@@ -262,18 +262,37 @@ name matching) is fully unit-tested; the Selenium write is isolated and `dry_run
 - **Overall feedback editor:** `<d2l-htmleditor label="Overall Feedback">` (per-question:
   `<d2l-htmleditor label="Feedback" class="d2l-consistent-eval-quiz-question-feedback">`).
   `FEEDBACK_EDITOR_SELECTORS` leads with `d2l-htmleditor[label='Overall Feedback']`.
-- ⚠️ **Draft vs Publish (the one unverified write step):** an already-published attempt
-  shows primary **"Update"** + **"Retract"** — there is NO "Save Draft" button here. The
-  ASSIGNMENT (dropbox) eval page has the cleaner "Save Draft" vs "Publish" pair. So
-  `_save_draft` matches Save/"Save Draft" and EXCLUDES publish/update/retract; for the
-  quiz route the actual draft-save control is publish-state-dependent and **must be
-  confirmed on an UNPUBLISHED attempt in a safe (non-ended) course before any real save.**
+- ⚠️ **Quiz has NO draft — it POSTS immediately.** An already-published attempt shows
+  primary **"Update"** + **"Retract"** (an unpublished one shows **"Publish"**); there is
+  NO "Save Draft" here. The ASSIGNMENT (dropbox) eval page has the cleaner "Save Draft" vs
+  "Publish" pair. So on the quiz route the score+feedback are published on write — the web
+  app relabels the button **"Write Grades and Feedback to Brightspace"** and shows a warning
+  notice when `_is_quiz_writeback_url(url)` is true; the report says "posted".
 
-**Still UNVERIFIED (needs a safe write target):** the actual field FILL + Save-as-draft
-click (both routes), and the assignment route's per-student evaluate-link discovery
-(`_gather_assignment_learners` / `_open_assignment_evaluation` are best-effort).
-Per the owner's decision this session is **dry-run only** — full write path built + tested,
-real Save to be exercised later on a designated safe target.
+**QUIZ WRITE — FIXED & VERIFIED LIVE 2026-07-09/10.** Real POST on qi=3000002 ou=200004
+("Programming Exam 2"): posted 42/200 + overall feedback to a learner, re-read fresh from the
+server = both persisted, then reset to 0/empty. Key mechanics (all in `brightspace_writeback.py`):
+- **Score = REAL keystrokes** (`_fill_score`): the `d2l-input-number` Lit component ignores the
+  native value setter — must `send_keys` (scrollIntoView → focus → `Keys.END` →
+  `Keys.BACKSPACE*12` to CLEAR, since Ctrl+A+Delete appended → "4242" → type → `Keys.TAB`).
+- **Commit** clicks Update/Publish, then D2L pops **"final score ≠ sum of question points…
+  continue anyway?"** → `_confirm_dialog` clicks **Yes**; it EXCLUDES `_DESTRUCTIVE_DIALOG_TEXTS`
+  ("discard/reset auto-evaluation/resubmitted/in progress") and must NEVER confirm that one.
+- **Overall feedback is on the "Completion Summary" attempt view** (`_switch_quiz_view` flips
+  `<select aria-label="User Attempts">`), then `_write_feedback_via_editor` into
+  `d2l-htmleditor[label='Overall Feedback']`, then Save.
+- **Lazy-load race fixed** by `_wait_for_write_targets` (polls until the score input renders) —
+  this was the dry-run "fields not found" failure.
+
+**DOCKER PROFILE PERSISTENCE — FIXED 2026-07-09.** `get_docker_driver` never set
+`--profile-directory` (ephemeral `Default` → re-MFA every run). Now (non-headless) adds
+`--user-data-dir=/home/seluser/chrome-profile` + `--profile-directory=<INSTRUCTOR_USERID>`;
+KMSI now clicks **"Yes"** (`_accept_stay_signed_in`, persistent cookie). Verified: consecutive
+runs skip MFA.
+
+**Still UNVERIFIED (needs a safe write target):** the ASSIGNMENT route's real Save-as-draft
+FILL was verified 2026-07-01 (CSC134 Project 2); its per-student evaluate-link discovery
+(`_gather_assignment_learners` / `_open_assignment_evaluation`) remains best-effort.
 
 ---
 
