@@ -807,8 +807,10 @@ def test_is_quiz_writeback_url():
 
 
 @pytest.mark.unit
-def test_gather_assignment_learners_filters_and_handles_error():
+def test_gather_assignment_learners_filters_and_handles_error(mocker):
+    mocker.patch("time.sleep")
     driver = MagicMock()
+    driver.current_url = "https://bs/folder_submissions_users.d2l?ou=2"  # no re-nav
     driver.execute_script.return_value = [
         {"name": "Jane Doe", "userId": "1"},
         {"name": "", "userId": "2"},       # no name -> dropped
@@ -821,6 +823,34 @@ def test_gather_assignment_learners_filters_and_handles_error():
 
 
 @pytest.mark.unit
+def test_submissions_users_url_derives_per_user_view():
+    # Any dropbox mark URL with ou+db -> the per-user submissions view.
+    out = wb._submissions_users_url(
+        "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/"
+        "folder_submissions_files.d2l?d2l_isfromtab=1&db=600002&ou=200002")
+    assert out == ("https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/"
+                   "folder_submissions_users.d2l?ou=200002&db=600002")
+    # Missing db -> return the URL unchanged (can't safely rebuild it).
+    same = "https://bs/d2l/lms/dropbox/admin/mark/x.d2l?ou=1"
+    assert wb._submissions_users_url(same) == same
+
+
+@pytest.mark.unit
+def test_gather_assignment_learners_navigates_to_users_view(mocker):
+    """When on the per-file view, gather re-navigates to the per-user view first."""
+    mocker.patch("time.sleep")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
+    driver = MagicMock()
+    driver.current_url = "https://bs/folder_submissions_files.d2l?db=1&ou=2"
+    driver.execute_script.return_value = [{"name": "Jane Doe", "userId": "9"}]
+    rows = wb._gather_assignment_learners(
+        driver, "https://bs/d2l/lms/dropbox/admin/mark/folder_submissions_files.d2l?db=1&ou=2")
+    assert [r["userId"] for r in rows] == ["9"]
+    dest = driver.get.call_args[0][0]
+    assert "folder_submissions_users.d2l" in dest and "ou=2" in dest and "db=1" in dest
+
+
+@pytest.mark.unit
 def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
     mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
     driver = MagicMock()
@@ -829,7 +859,9 @@ def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
 
     ok = wb._open_assignment_evaluation(driver, wait, url, {"name": "Jane Doe", "userId": "117059"})
     assert ok is True
-    driver.get.assert_called_once_with(url)
+    # navigated to the per-user view (name links live only there)
+    dest = driver.get.call_args[0][0]
+    assert "folder_submissions_users.d2l" in dest and "ou=2" in dest and "db=1" in dest
     # located the name link by its feedback,<userId> onclick, then clicked it
     xpath = driver.find_element.call_args[0][1]
     assert "feedback,117059" in xpath and "EvaluateDropboxSubmission" in xpath
@@ -845,7 +877,9 @@ def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
 def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
     import cqc_cpcc.utilities.brightspace_fetch as bf
     driver = MagicMock(); wait = MagicMock()
+    driver.current_url = "https://bs/folder_submissions_users.d2l?ou=1"  # already on users view
     driver.execute_script.return_value = {"score": True, "feedback": True}
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
     mocker.patch("cqc_cpcc.utilities.brightspace_submissions.detect_route",
                  return_value="assignment")
     mocker.patch.object(bf, "_open_and_login")
