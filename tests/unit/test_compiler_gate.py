@@ -1,0 +1,251 @@
+#  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+
+"""Unit tests for the real-compiler gate that backstops "Does Not Compile".
+
+Covers:
+- compiler_gate: language detection, per-language compile checks, compile-error matching
+- rubric_grading.apply_compile_gate: remove false positive / add missed / confirm / skip
+- output-truncation guards (finish_reason == "length") in both LLM client paths
+"""
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from pydantic import BaseModel
+
+from cqc_cpcc.utilities import compiler_gate as cg
+
+
+class _TruncModel(BaseModel):
+    message: str
+
+
+# --------------------------------------------------------------------------- #
+# compiler_gate core
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+@pytest.mark.parametrize("filename,expected", [
+    ("Foo.cpp", "cpp"), ("Foo.cc", "cpp"), ("Foo.h", "cpp"),
+    ("Foo.java", "java"), ("foo.py", "python"), ("foo.sas", "sas"),
+    ("foo.txt", "unknown"),
+])
+def test_detect_language_by_extension(filename, expected):
+    assert cg.detect_language(filename) == expected
+
+
+@pytest.mark.unit
+def test_detect_language_by_content_when_no_extension():
+    assert cg.detect_language("", "#include <iostream>\nint main(){}") == "cpp"
+    assert cg.detect_language("", "public class X { }") == "java"
+    assert cg.detect_language("", "def f():\n    return 1") == "python"
+    assert cg.detect_language("", "proc print data=a; run;") == "sas"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("label,expected", [
+    ("Does Not Compile", True),
+    ("CSC_134_PROJECT_1_DOES_NOT_COMPILE", True),
+    ("The program does not compile", True),
+    ("Major Formatting Issues", False),
+    ("", False),
+])
+def test_is_compile_error(label, expected):
+    assert cg.is_compile_error(label) is expected
+
+
+@pytest.mark.unit
+def test_python_compiles_and_fails_in_process():
+    ok = cg.check_code("def f():\n    return 1\n", "a.py")
+    assert ok.supported and ok.compiles is True and ok.language == "python"
+    bad = cg.check_code("def f(:\n    return\n", "b.py")
+    assert bad.supported and bad.compiles is False and "SyntaxError" in bad.errors
+
+
+@pytest.mark.unit
+def test_sas_and_unknown_are_unsupported():
+    assert cg.check_code("proc print data=a; run;", "x.sas").supported is False
+    assert cg.check_code("some prose", "x.txt").supported is False
+
+
+@pytest.mark.unit
+def test_cpp_compiles_when_toolchain_present():
+    import shutil
+    if not (shutil.which("g++") or shutil.which("clang++")):
+        pytest.skip("no C++ compiler available")
+    good = cg.check_code("#include <iostream>\nint main(){ std::cout<<1; return 0; }", "g.cpp")
+    assert good.compiles is True
+    bad = cg.check_code("int main(){ return }", "b.cpp")  # missing expression/semicolon
+    assert bad.compiles is False and bad.errors
+
+
+@pytest.mark.unit
+def test_check_submission_all_must_compile():
+    files = [("a.py", "x = 1\n"), ("b.py", "def f(:\n")]  # second is broken
+    res = cg.check_submission(files)
+    assert res.supported and res.compiles is False and "b.py" in res.errors
+
+
+@pytest.mark.unit
+def test_check_submission_skips_when_no_supported_files():
+    res = cg.check_submission([("notes.txt", "hello"), ("x.sas", "proc print; run;")])
+    assert res.supported is False
+
+
+@pytest.mark.unit
+def test_check_submission_multifile_cpp_resolves_cross_includes():
+    """Multi-file C++ must compile as a GROUP so cross-file #include resolves (no false fail)."""
+    import shutil
+    if not (shutil.which("g++") or shutil.which("clang++")):
+        pytest.skip("no C++ compiler available")
+    files = [
+        ("util.h", "#ifndef U\n#define U\nint add(int,int);\n#endif\n"),
+        ("util.cpp", "#include \"util.h\"\nint add(int a,int b){return a+b;}\n"),
+        ("main.cpp", "#include \"util.h\"\n#include <iostream>\nint main(){ std::cout<<add(1,2); }\n"),
+    ]
+    res = cg.check_submission(files)
+    assert res.supported and res.compiles is True
+    # a genuinely broken call across files is still caught
+    broken = files[:2] + [("main.cpp", "#include \"util.h\"\nint main(){ return add(1); }\n")]
+    assert cg.check_submission(broken).compiles is False
+
+
+@pytest.mark.unit
+def test_check_submission_ignores_non_source_files():
+    res = cg.check_submission([("readme.txt", "hi"), ("a.py", "x = 1\n"), ("data.pdf", "%PDF")])
+    assert res.supported and res.compiles is True and res.language == "python"
+
+
+# --------------------------------------------------------------------------- #
+# rubric_grading.apply_compile_gate
+# --------------------------------------------------------------------------- #
+def _make_result(errors):
+    from cqc_cpcc.rubric_models import RubricAssessmentResult, CriterionResult
+    cr = CriterionResult(criterion_id="c1", criterion_name="Program Performance",
+                         points_possible=30, points_earned=4.5, feedback="x")
+    return RubricAssessmentResult(
+        rubric_id="r", rubric_version="1", total_points_possible=30, total_points_earned=4.5,
+        criteria_results=[cr], overall_band_label="Unsatisfactory", overall_feedback="",
+        detected_errors=errors, error_counts_by_severity={"major": 1},
+        error_counts_by_id={"CSC_X_DOES_NOT_COMPILE": 1},
+    )
+
+
+def _dnc():
+    from cqc_cpcc.rubric_models import DetectedError
+    return DetectedError(code="CSC_X_DOES_NOT_COMPILE", name="Does Not Compile",
+                         severity="major", description="does not compile", occurrences=1)
+
+
+def _compile_def():
+    from cqc_cpcc.error_definitions_models import ErrorDefinition
+    return ErrorDefinition(error_id="CSC_X_DOES_NOT_COMPILE", name="Does Not Compile",
+                           description="The program does not compile", severity_category="major")
+
+
+GOOD_PY = {"a.py": "def f():\n    return 1\n"}
+BAD_PY = {"b.py": "def f(:\n    return\n"}
+
+
+@pytest.mark.unit
+def test_gate_removes_false_does_not_compile():
+    from cqc_cpcc.rubric_grading import apply_compile_gate
+    res, info = apply_compile_gate(_make_result([_dnc()]), GOOD_PY, [_compile_def()])
+    assert info["action"] == "removed"
+    assert not any(e.name == "Does Not Compile" for e in res.detected_errors)
+    # cached counts reset so scoring recomputes from the corrected error list
+    assert res.error_counts_by_severity is None and res.error_counts_by_id is None
+
+
+@pytest.mark.unit
+def test_gate_adds_missed_does_not_compile_with_diagnostics():
+    from cqc_cpcc.rubric_grading import apply_compile_gate
+    res, info = apply_compile_gate(_make_result([]), BAD_PY, [_compile_def()])
+    assert info["action"] == "added"
+    added = [e for e in res.detected_errors if e.name == "Does Not Compile"]
+    assert len(added) == 1 and "does not compile" in (added[0].notes or "").lower()
+    assert res.error_counts_by_severity is None
+
+
+@pytest.mark.unit
+def test_gate_confirms_without_duplicating():
+    from cqc_cpcc.rubric_grading import apply_compile_gate
+    res, info = apply_compile_gate(_make_result([_dnc()]), BAD_PY, [_compile_def()])
+    assert info["action"] == "confirmed_no_compile"
+    assert sum(1 for e in res.detected_errors if e.name == "Does Not Compile") == 1
+
+
+@pytest.mark.unit
+def test_gate_skips_unsupported_language_untouched():
+    from cqc_cpcc.rubric_grading import apply_compile_gate
+    res, info = apply_compile_gate(_make_result([_dnc()]), {"x.sas": "proc print; run;"}, [_compile_def()])
+    assert info["action"] == "skipped"
+    assert any(e.name == "Does Not Compile" for e in res.detected_errors)  # LLM judgment kept
+
+
+@pytest.mark.unit
+def test_gate_no_definition_leaves_errors_unchanged():
+    from cqc_cpcc.rubric_grading import apply_compile_gate
+    res, info = apply_compile_gate(_make_result([]), BAD_PY, [])  # rubric defines no compile error
+    assert info["action"] == "no_compile_definition"
+    assert not res.detected_errors
+
+
+@pytest.mark.unit
+def test_gate_no_source_files_is_noop():
+    from cqc_cpcc.rubric_grading import apply_compile_gate
+    r = _make_result([_dnc()])
+    res, info = apply_compile_gate(r, None, [_compile_def()])
+    assert info["ran"] is False and res is r
+
+
+# --------------------------------------------------------------------------- #
+# Output-truncation guards (finish_reason == "length")
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_openrouter_raises_on_truncated_output(mocker):
+    from cqc_cpcc.utilities.AI import openrouter_client as orc
+    from cqc_cpcc.utilities.AI.openai_exceptions import OpenAISchemaValidationError
+    mocker.patch("asyncio.sleep", return_value=None)
+
+    resp = MagicMock()
+    choice = MagicMock()
+    choice.finish_reason = "length"
+    choice.message.refusal = None
+    choice.message.content = '{"message": "partial and cut o'  # truncated JSON
+    resp.choices = [choice]
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=resp)
+    mocker.patch.object(orc, "_get_openrouter_client", return_value=client)
+
+    with pytest.raises(OpenAISchemaValidationError) as ei:
+        await orc.get_openrouter_completion(
+            prompt="x", schema_model=_TruncModel, use_auto_route=False,
+            model_name="openai/gpt-5", max_tokens=16,
+        )
+    assert "truncat" in str(ei.value).lower()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_openai_client_raises_on_nonempty_truncated_output(mocker):
+    from cqc_cpcc.utilities.AI import openai_client as oc
+    from cqc_cpcc.utilities.AI.openai_exceptions import OpenAISchemaValidationError
+    mocker.patch("asyncio.sleep", return_value=None)
+    mocker.patch("cqc_cpcc.utilities.env_constants.TEST_MODE", False)
+
+    resp = MagicMock()
+    resp.choices = [MagicMock()]
+    resp.choices[0].message.content = '{"message": "partial cut o'  # non-empty + truncated
+    resp.choices[0].message.refusal = None
+    resp.choices[0].finish_reason = "length"
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=resp)
+    mocker.patch("cqc_cpcc.utilities.AI.openai_client.get_client", return_value=client)
+
+    with pytest.raises(OpenAISchemaValidationError) as ei:
+        await oc.get_structured_completion(
+            prompt="x", model_name="gpt-5", schema_model=_TruncModel,
+            max_tokens=16, max_retries=0,
+        )
+    assert "truncat" in str(ei.value).lower()
