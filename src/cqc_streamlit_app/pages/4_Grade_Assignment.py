@@ -1195,6 +1195,82 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
         return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
 
 
+def _render_compile_gate_badge(gate_report: dict, model_name: str, student_id: str) -> None:
+    """Show a compile-gate tracking badge in the Streamlit report (display ONLY).
+
+    NEVER writes to feedback docs, grades, exports, or anything student-facing — it only
+    surfaces, for the instructor, whether the real local compiler agreed with the model's
+    "Does Not Compile" call, and tallies it per model across the session so they can see
+    how often different models get it wrong.
+    """
+    if not gate_report or not gate_report.get("ran"):
+        return
+    action = gate_report.get("action", "none")
+    lang = gate_report.get("language", "?")
+    tool = gate_report.get("tool", "")
+    compiles = gate_report.get("compiles")
+
+    badges = {
+        "removed": ("🛠️ Compile gate CORRECTED the model",
+                    f"code **compiles** ({tool}) — removed the model's false “Does Not Compile” for **{student_id}**",
+                    "warning"),
+        "added": ("🛠️ Compile gate CORRECTED the model",
+                  f"code **does not compile** ({tool}) — added “Does Not Compile” the model missed for **{student_id}**",
+                  "warning"),
+        "confirmed_compiles": ("✅ Compile gate: agrees", f"verified compiles ({tool}, {lang})", "caption"),
+        "confirmed_no_compile": ("✅ Compile gate: agrees", f"verified does not compile ({tool}, {lang})", "caption"),
+        "no_compile_definition": ("ℹ️ Compile gate", f"does not compile but rubric has no compile error ({lang})", "caption"),
+        "skipped": ("⏭️ Compile gate skipped", gate_report.get("reason", f"{lang} not verifiable"), "caption"),
+    }
+    title, detail, kind = badges.get(action, ("ℹ️ Compile gate", action, "caption"))
+    if kind == "warning":
+        st.warning(f"{title} — {detail}")
+    else:
+        st.caption(f"{title} — {detail}")
+
+    # Per-model session tally (display-only tracking).
+    stats = st.session_state.setdefault("compile_gate_stats", {})
+    m = stats.setdefault(model_name or "unknown",
+                         {"corrected": 0, "removed": 0, "added": 0, "agreed": 0,
+                          "skipped": 0, "checked": 0})
+    m["checked"] += 1
+    if action == "removed":
+        m["removed"] += 1; m["corrected"] += 1
+    elif action == "added":
+        m["added"] += 1; m["corrected"] += 1
+    elif action in ("confirmed_compiles", "confirmed_no_compile"):
+        m["agreed"] += 1
+    elif action == "skipped":
+        m["skipped"] += 1
+
+
+def render_compile_gate_summary() -> None:
+    """Render the session-wide compile-gate tally (per model) in the Streamlit report."""
+    stats = st.session_state.get("compile_gate_stats") or {}
+    if not stats:
+        return
+    with st.expander("🛠️ Compile-gate tracking (this session)", expanded=False):
+        st.caption(
+            "How often the real local compiler overrode each model's “Does Not Compile” "
+            "call. Tracking only — never affects grades or student feedback."
+        )
+        rows = []
+        for model, m in stats.items():
+            verified = m["checked"] - m["skipped"]
+            rate = f"{(m['corrected'] / verified * 100):.0f}%" if verified else "—"
+            rows.append({
+                "Model": model,
+                "Checked": m["checked"],
+                "Corrected": m["corrected"],
+                "  ↳ removed false DNC": m["removed"],
+                "  ↳ added missed DNC": m["added"],
+                "Agreed": m["agreed"],
+                "Skipped (unsupported)": m["skipped"],
+                "Correction rate": rate,
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
 async def grade_single_rubric_student(
         ctx: ScriptRunContext,
         student_id: str,
@@ -1268,6 +1344,7 @@ async def grade_single_rubric_student(
                 grading_correlation_id = create_correlation_id()
                 logger.info(f"Starting grading for {student_id} with correlation_id={grading_correlation_id}")
 
+            gate_report: dict = {}
             result = await grade_with_rubric(
                 rubric=effective_rubric,
                 assignment_instructions=assignment_instructions,
@@ -1279,9 +1356,16 @@ async def grade_single_rubric_student(
                 # Real-compiler gate: verify "Does Not Compile" against the actual
                 # toolchain using the student's real source files (name -> temp path).
                 source_files=student_submission.files,
+                gate_report=gate_report,
             )
 
             status.update(label=f"{status_label} | Processing results...")
+
+            # Compile-gate tracking badge (Streamlit report ONLY — never enters the
+            # feedback docx, grades, or anything student-facing). Lets the instructor see
+            # how often the real compiler overrode the model's "Does Not Compile" call,
+            # per model, as they try different models.
+            _render_compile_gate_badge(gate_report, model_name, student_id)
 
             # Log grading summary for debugging
             logger.info(
@@ -1561,6 +1645,9 @@ async def process_rubric_grading_batch(
                 logger.warning(
                     "Effective rubric has zero total_points_possible; skipping average percentage calculation.")
                 st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
+
+        # Compile-gate tracking tally (Streamlit report only; per model, this session).
+        render_compile_gate_summary()
 
         # Generate Word docs and ZIP download
         st.markdown("---")

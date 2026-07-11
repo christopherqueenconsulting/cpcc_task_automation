@@ -601,10 +601,26 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
     report = GradeWriteReport(route="assignment", dry_run=dry_run)
     _open_and_login(driver, wait, url, progress, mfa_handler)
 
-    doc_items = [it for it in items if it.feedback_doc_path]
-    if feedback_mode == "attach" and doc_items:
-        return _import_assignment_feedback_docs(
-            driver, url, items, doc_items, report, progress, dry_run)
+    import os
+    # Gate attach on files that actually EXIST on disk (a truthy-but-stale temp path
+    # otherwise produced an empty report that looked like a total failure).
+    doc_items = [it for it in items if it.feedback_doc_path and os.path.exists(it.feedback_doc_path)]
+    if feedback_mode == "attach":
+        if doc_items:
+            return _import_assignment_feedback_docs(
+                driver, url, items, doc_items, report, progress, dry_run)
+        # Attach chosen but no feedback docs are on disk — report clearly (non-empty)
+        # instead of silently failing, so the instructor knows exactly what to do.
+        report.warnings.append(
+            "Attach mode: no feedback .docx files were found on disk for these students. "
+            "Re-generate the feedback documents above, then retry — or switch “Feedback "
+            "delivery” to “Add feedback directly”. (Attach mode writes feedback docs only, "
+            "not scores.)")
+        for it in items:
+            report.outcomes.append(StudentWriteOutcome(
+                student_key=it.student_key, display_name=it.display_name, matched=False,
+                note="no feedback .docx on disk to import"))
+        return report
 
     # Learner name links (feedback,<userId>) live ONLY on the per-user submissions view;
     # _open_and_login's Submissions-tab click lands on the per-file view. Force the
@@ -1016,6 +1032,38 @@ def _use_attach(feedback_mode: str, item: GradeWriteItem) -> bool:
     return feedback_mode == "attach" and bool(item.feedback_doc_path)
 
 
+def _ensure_score_committed(driver, score, attempts: int = 4) -> bool:
+    """Blur + verify the overall-score field actually holds ``score`` before saving.
+
+    VERIFIED LIVE 2026-07-10: with a LARGE feedback body, ``_write_feedback_via_editor``'s
+    async ``setContent`` is still committing when the score is typed, and an immediate
+    Save Draft then persists an EMPTY score (the field re-reads blank on reload). This
+    polls the field, blurs to commit the D2L Lit input, and re-types until the value has
+    actually landed — so the subsequent save persists it. Returns True once verified.
+    """
+    import time as _t
+    want = _fmt_num(score)
+    for _ in range(max(1, attempts)):
+        try:
+            el = driver.execute_script(_FIND_SCORE_INPUT_JS, list(SCORE_INPUT_SELECTORS))
+        except Exception:  # noqa: BLE001
+            el = None
+        if el is not None:
+            try:
+                driver.execute_script("arguments[0].blur();", el)
+            except Exception:  # noqa: BLE001
+                pass
+            _t.sleep(0.4)
+            try:
+                if (el.get_attribute("value") or "").strip() == want:
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+        _fill_score(driver, score)
+        _t.sleep(0.6)
+    return False
+
+
 def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
                        progress, dry_run: bool, feedback_mode: str = "attach") -> None:
     """Locate (and, when not dry_run, fill + save-draft) one student's score + feedback."""
@@ -1047,29 +1095,41 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         return
 
     try:
+        import time as _t
         # 1) Rubric levels FIRST — selecting a level auto-recomputes the overall score.
         rres = _select_rubric_levels(driver, item.rubric_selections, dry_run=False)
         outcome.rubric_selected = len(rres.get("selected") or [])
         outcome.rubric_missing = rres.get("missing") or []
-        # 2) Overall feedback — attach the clean .docx, or inject inline HTML.
+
+        # TWO-PHASE SAVE (inline). VERIFIED LIVE 2026-07-10: writing feedback then the
+        # score then ONE save persists an EMPTY score whenever the feedback body is more
+        # than trivial — the editor's async setContent()/dirty is still committing and the
+        # save serializes stale form state, dropping the score. Fix: commit the feedback
+        # in its OWN Save Draft first, let it settle, THEN type the score (no editor commit
+        # in flight) and Save Draft again. The score field is a D2L Lit <d2l-input-text>
+        # that ignores the JS native-value setter, so we type with REAL keystrokes
+        # (_fill_score) and blur+verify (_ensure_score_committed) before saving.
         if attach:
+            # Attach mode has no editor race — attach the .docx, set score, single save.
             outcome.feedback_attached = _attach_feedback_file(
                 driver, item.feedback_doc_path, progress)
+            _fill_score(driver, item.score)
+            if _ensure_score_committed(driver, item.score):
+                outcome.score_written = item.score
+            outcome.saved = _save_draft(driver)
         else:
+            # PHASE A: feedback (+ rubric) -> Save Draft.
             outcome.feedback_written = _write_feedback_via_editor(driver, wait, item.feedback_html)
-        # 3) Overall score LAST, so the buffered score overrides the rubric-derived
-        #    total (verified live that this override sticks).
-        res = driver.execute_script(
-            _FILL_SCORE_JS, list(SCORE_INPUT_SELECTORS), item.score,
-        ) or {}
-        if res.get("score"):
-            outcome.score_written = item.score
-        # 4) Save as DRAFT (never publish).
-        if _save_draft(driver):
-            outcome.saved = True
-            outcome.note = "saved as draft"
-        else:
-            outcome.note = "filled but Save Draft not found — NOT saved"
+            _t.sleep(0.6)
+            _save_draft(driver)
+            _t.sleep(1.5)  # let the feedback commit settle before the score save cycle
+            # PHASE B: score LAST, in its own save cycle (no editor commit in flight).
+            _fill_score(driver, item.score)
+            if _ensure_score_committed(driver, item.score):
+                outcome.score_written = item.score
+            outcome.saved = _save_draft(driver)
+
+        outcome.note = "saved as draft" if outcome.saved else "filled but Save Draft not found — NOT saved"
         rub = (f"; {outcome.rubric_selected}/{len(item.rubric_selections)} rubric level(s)"
                if item.rubric_selections else "")
         progress(f"{item.display_name}: wrote {item.score}/{item.max_points}{rub} "
