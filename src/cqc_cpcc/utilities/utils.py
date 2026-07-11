@@ -376,14 +376,16 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
             # Already markdown — pass through unchanged.
             with open(file_path, mode='r', encoding='utf-8', errors='replace') as f:
                 contents = f.read()
-        elif file_extension in ['.docx', '.doc']:
-            # Word doc → HTML (mammoth) → markdown.
+        elif file_extension == '.docx':
+            # Word doc → HTML (mammoth) → markdown. NOTE: mammoth reads ONLY .docx
+            # (a zip); the legacy binary .doc format is NOT supported, so it falls
+            # through to the try/except-with-text-fallback below instead of raising.
             with open(file_path, mode='rb') as f:
                 results = mammoth.convert_to_html(f)
                 contents = convert_content_to_markdown(results.value)
         else:
-            # Unknown type (e.g. .txt): try mammoth, else read as plain text so a
-            # non-Word upload with "Convert To Markdown" checked never errors out.
+            # Unknown type (e.g. .txt, .doc): try mammoth, else read as plain text so a
+            # non-.docx upload with "Convert To Markdown" checked never errors out.
             try:
                 with open(file_path, mode='rb') as f:
                     results = mammoth.convert_to_html(f)
