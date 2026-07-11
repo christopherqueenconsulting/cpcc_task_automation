@@ -1179,7 +1179,14 @@ def _fetch_openrouter_models_cached() -> list:
         return []
 
 
-def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool = True) -> Dict[str, Any]:
+RECOMMENDED_GRADING_MODEL = "openai/gpt-5"
+
+
+def define_openrouter_model(
+        unique_key: str | int,
+        default_use_auto_route: bool = False,
+        default_model: str = RECOMMENDED_GRADING_MODEL,
+) -> Dict[str, Any]:
     """
     Presents OpenRouter model configuration with auto-routing option.
     Returns JSON-serializable dict:
@@ -1188,23 +1195,42 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
         "model": str,  # "openrouter/auto" or specific model ID
         "use_openrouter": True,
       }
-    
+
+    Defaults to the specific model ``openai/gpt-5`` (NOT the Auto Router). Grading is
+    correctness-critical: the Auto Router can silently pick a cheaper/weaker model
+    (e.g. gpt-5-mini), which has produced wrong determinations such as flagging valid
+    code as "Does Not Compile". gpt-5 is the recommended default for grading accuracy;
+    the compiler gate independently backstops the compile call regardless of model.
+
     Args:
         unique_key: Unique key for widget state management
-        default_use_auto_route: Default state of auto-routing checkbox
-    
+        default_use_auto_route: Default state of the auto-routing checkbox (default False)
+        default_model: Model pre-selected when auto-routing is off (default openai/gpt-5)
+
     Returns:
         Configuration dictionary for OpenRouter
     """
     uk = str(unique_key)
 
-    # Checkbox for auto-routing (default: True)
+    # Checkbox for auto-routing (default: OFF — grading prefers a known strong model).
     use_auto_route = st.checkbox(
-        label="Use Auto Router (Recommended)",
+        label="Use Auto Router",
         value=default_use_auto_route,
         key=f"openrouter_auto_{uk}",
-        help="Let OpenRouter automatically select the best model for your request"
+        help="Let OpenRouter pick a model automatically. NOT recommended for grading — "
+             "it may choose a cheaper/weaker model. Leave OFF to grade with "
+             f"{default_model}."
     )
+    if use_auto_route:
+        st.warning(
+            "⚠️ Auto Router may select a weaker/cheaper model. For grading accuracy, "
+            f"prefer **{default_model}** (uncheck Auto Router)."
+        )
+    else:
+        st.caption(
+            f"✅ Recommended for grading: **{default_model}**. A local compiler gate also "
+            "verifies every 'Does Not Compile' determination independent of the model."
+        )
 
     selected_model = "openrouter/auto"
 
@@ -1232,18 +1258,23 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
                     ]
                     st.info("Using default allowed models: GPT-5 family")
 
-                # Create model options from allowed list
+                # Create model options from allowed list; guarantee the recommended
+                # default is present and pre-selected.
+                if default_model not in allowed_model_ids:
+                    allowed_model_ids.append(default_model)
                 model_options = allowed_model_ids
                 model_id_map = {model_id: model_id for model_id in allowed_model_ids}
 
                 # Sort alphabetically
                 model_options.sort()
 
+                default_idx = model_options.index(default_model) if default_model in model_options else 0
                 selected_display = st.selectbox(
                     label="Select OpenRouter Model",
                     key=f"openrouter_model_{uk}",
                     options=model_options,
-                    help="Choose a specific model from the allowed models list"
+                    index=default_idx,
+                    help=f"Choose a specific model. Default (recommended for grading): {default_model}"
                 )
 
                 selected_model = model_id_map.get(selected_display, allowed_model_ids[0])
@@ -1263,11 +1294,19 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
                 # Sort alphabetically
                 model_options.sort()
 
+                # Pre-select the recommended default model if it's in the fetched list.
+                default_idx = 0
+                for i, disp in enumerate(model_options):
+                    if model_id_map.get(disp) == default_model:
+                        default_idx = i
+                        break
+
                 selected_display = st.selectbox(
                     label="Select OpenRouter Model",
                     key=f"openrouter_model_{uk}",
                     options=model_options,
-                    help="Choose a specific model from OpenRouter's available models"
+                    index=default_idx,
+                    help=f"Choose a specific model. Recommended for grading: {default_model}"
                 )
 
                 selected_model = model_id_map.get(selected_display, "openrouter/auto")

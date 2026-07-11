@@ -962,7 +962,7 @@ async def get_grade_exam_content():
 
     # Model Configuration - Use OpenRouter
     st.header("Model Configuration")
-    model_cfg = define_openrouter_model("grade_exam_assigment", default_use_auto_route=True)
+    model_cfg = define_openrouter_model("grade_exam_assigment", default_use_auto_route=False)
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
     selected_model = model_cfg.get("model", "openrouter/auto")
@@ -1276,6 +1276,9 @@ async def grade_single_rubric_student(
                 error_definitions=error_definitions,
                 model_name=model_name,
                 temperature=temperature,
+                # Real-compiler gate: verify "Does Not Compile" against the actual
+                # toolchain using the student's real source files (name -> temp path).
+                source_files=student_submission.files,
             )
 
             status.update(label=f"{status_label} | Processing results...")
@@ -2141,7 +2144,7 @@ async def get_rubric_based_exam_grading():
 
     # Step 7: Model Configuration
     st.header("Model Configuration")
-    model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=True)
+    model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=False)
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
     selected_model = model_cfg.get("model", "openrouter/auto")
