@@ -334,16 +334,19 @@ def test_write_one_student_dry_run_does_not_fill_or_save(mocker):
 @pytest.mark.unit
 def test_write_one_student_real_fills_and_saves_draft(mocker):
     driver = MagicMock()
-    driver.execute_script.return_value = {"score": True, "feedback": True}
-    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
     mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
     save = mocker.patch.object(wb, "_save_draft", return_value=True)
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
     assert o.score_written == 90.0 and o.saved and o.note == "saved as draft"
     assert o.feedback_written is True
-    save.assert_called_once()
+    # Two-phase save: feedback commit, then score commit (fixes the score-drop race).
+    assert save.call_count == 2
 
 
 @pytest.mark.unit
@@ -423,8 +426,11 @@ def test_select_rubric_levels_passes_payload_and_dryrun_flag():
 @pytest.mark.unit
 def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
     driver = MagicMock()
-    driver.execute_script.return_value = {"score": True, "feedback": True}
-    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
     rub = mocker.patch.object(wb, "_select_rubric_levels", return_value={
         "selected": [{"criterion": "Program Performance", "level": "Above Average"}], "missing": []})
     mocker.patch.object(wb, "_save_draft", return_value=True)
@@ -459,13 +465,34 @@ def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker)
 @pytest.mark.unit
 def test_write_one_student_filled_but_no_save_button(mocker):
     driver = MagicMock()
-    driver.execute_script.return_value = {"score": True, "feedback": True}
-    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
     mocker.patch.object(wb, "_save_draft", return_value=False)
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
     assert not o.saved and "NOT saved" in o.note
+
+
+@pytest.mark.unit
+def test_ensure_score_committed_verifies_and_repairs(mocker):
+    """Blurs + verifies the field value; re-fills until it lands, else returns False."""
+    driver = MagicMock()
+    mocker.patch("time.sleep")
+    el = MagicMock()
+    driver.execute_script.return_value = el
+    fill = mocker.patch.object(wb, "_fill_score", return_value=True)
+    # Field reads back the wanted value -> committed on first check, no re-fill.
+    el.get_attribute.return_value = "7.5"
+    assert wb._ensure_score_committed(driver, 7.5) is True
+    fill.assert_not_called()
+    # Field never shows the value -> retries exhausted -> False (+ re-fills each round).
+    el.get_attribute.return_value = ""
+    assert wb._ensure_score_committed(driver, 7.5, attempts=2) is False
+    assert fill.call_count == 2
 
 
 @pytest.mark.unit
@@ -594,10 +621,12 @@ def test_write_one_student_attach_mode_uploads_doc(mocker, tmp_path):
     doc = tmp_path / "Jane_Feedback.docx"
     doc.write_bytes(b"PK\x03\x04docx")
     driver = MagicMock()
-    driver.execute_script.return_value = {"score": True}
+    mocker.patch("time.sleep")
     mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
     mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
-    mocker.patch.object(wb, "_save_draft", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    save = mocker.patch.object(wb, "_save_draft", return_value=True)
     inline = mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     attach = mocker.patch.object(wb, "_attach_feedback_file", return_value=True)
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
@@ -610,6 +639,7 @@ def test_write_one_student_attach_mode_uploads_doc(mocker, tmp_path):
     attach.assert_called_once_with(driver, str(doc), mocker.ANY)
     inline.assert_not_called()
     assert o.feedback_attached is True and o.saved is True
+    save.assert_called_once()   # attach mode = single save (no editor race)
 
 
 @pytest.mark.unit
@@ -893,8 +923,27 @@ def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
     items = [wb.GradeWriteItem("k1", "Jane Doe", 80, 90, 100, "<p>fb</p>")]
     report = wb.push_grades_to_brightspace(
         "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/x?ou=1",
-        items, driver=driver, wait=wait, dry_run=True,
+        items, driver=driver, wait=wait, dry_run=True, feedback_mode="inline",
     )
     assert report.route == "assignment" and report.matched_count == 1
     assert report.saved_count == 0
-    save.assert_not_called()
+
+
+@pytest.mark.unit
+def test_push_assignment_grades_attach_no_docs_reports_clearly(mocker):
+    """Attach mode with no feedback docs ON DISK -> clear warning, not an empty failure."""
+    import cqc_cpcc.utilities.brightspace_fetch as bf
+    driver = MagicMock(); wait = MagicMock()
+    mocker.patch("cqc_cpcc.utilities.brightspace_submissions.detect_route", return_value="assignment")
+    mocker.patch.object(bf, "_open_and_login")
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs")
+    gather = mocker.patch.object(wb, "_gather_assignment_learners")
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path="/no/such/file.docx")  # stale/missing path
+    report = wb.push_grades_to_brightspace(
+        "https://bs/d2l/lms/dropbox/admin/mark/x?ou=1&db=2", [item],
+        driver=driver, wait=wait, dry_run=True, feedback_mode="attach")
+    bulk.assert_not_called()    # no real docs -> no bulk import attempted
+    gather.assert_not_called()  # and no per-student navigation
+    assert any("feedback" in w.lower() and "docx" in w.lower() for w in report.warnings)
+    assert report.outcomes and not report.outcomes[0].matched

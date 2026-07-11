@@ -338,6 +338,7 @@ async def grade_with_rubric(
         temperature: float = DEFAULT_TEMPERATURE,
         callback: Optional[BaseCallbackHandler] = None,
         source_files: Optional[dict] = None,
+        gate_report: Optional[dict] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -492,6 +493,8 @@ async def grade_with_rubric(
         # reflect the truth (a false "Does Not Compile" otherwise floors the grade).
         if source_files:
             result, gate_info = apply_compile_gate(result, source_files, error_definitions)
+            if gate_report is not None:
+                gate_report.update(gate_info)
             if gate_info.get("action") in ("removed", "added"):
                 logger.warning(
                     "Compile gate %s 'Does Not Compile' (language=%s, compiles=%s, tool=%s)",
