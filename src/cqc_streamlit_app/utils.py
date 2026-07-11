@@ -1821,7 +1821,11 @@ def _render_writeback_report(report) -> None:
     st.success(f"Write-back ({report.route}) complete — matched "
                f"{report.matched_count}/{len(report.outcomes)} shown · {mode}.")
     if is_quiz and not report.dry_run and saved:
-        st.warning("⚠️ Quiz grades & feedback were **posted (published)** to students. "
+        # Only claim feedback was posted if it actually was — o.saved can be true with
+        # just the score posted (feedback write/attach may have failed for a student).
+        posted_fb = any(o.feedback_written or o.feedback_attached for o in report.outcomes)
+        what = "grades and feedback" if posted_fb else "grades"
+        st.warning(f"⚠️ Quiz {what} were **posted (published)** to students. "
                    "Review them in BrightSpace.")
 
     if report.outcomes:

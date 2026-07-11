@@ -1428,6 +1428,10 @@ def fetch_quiz_instructions(
         _await_brightspace_after_login(driver, grading_url, progress)
     except Exception as e:  # noqa: BLE001
         logger.info("Could not navigate to quiz grid for instructions: %s", e)
+        # Bail rather than scrape whatever page we're on: _gather_quiz_attempts on the
+        # wrong page can raise or mislabel unrelated text as the prompt. Instructions are
+        # best-effort (the user can paste them), so returning None here is the safe result.
+        return None
 
     # Primary source: open the first learner attempt and read the question prompt.
     # The prompt renders even when that learner left the answer blank, so any attempt

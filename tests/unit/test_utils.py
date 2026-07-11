@@ -77,6 +77,16 @@ class TestReadFileMarkdownDecoding:
         assert "Exam 2" in out
         assert "1. Reads input" in out
 
+    def test_legacy_doc_falls_back_to_text_not_mammoth(self):
+        # A real .doc is the old binary format mammoth can't read; convert_to_markdown
+        # must NOT raise — it falls back to reading the file as text.
+        path = _write_tmp(b"plain doc body text", ".doc", binary=True)
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert "plain doc body text" in out
+
 
 @pytest.mark.unit
 class TestFirstTwoUppercase:
