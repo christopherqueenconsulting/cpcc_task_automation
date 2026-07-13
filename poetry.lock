@@ -4164,14 +4164,14 @@ et-xmlfile = "*"
 
 [[package]]
 name = "openrouter"
-version = "0.11.3"
+version = "0.11.23"
 description = "Official Python Client SDK for OpenRouter."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "openrouter-0.11.3-py3-none-any.whl", hash = "sha256:3d9c7483fb94f2d4f5f1256d619daac0698cb08b537997fbbc6240c5a8e5890f"},
-    {file = "openrouter-0.11.3.tar.gz", hash = "sha256:349ec72ccb1c879205eafc201baca0569f3031d87b4700d1820d539f65ecdf75"},
+    {file = "openrouter-0.11.23-py3-none-any.whl", hash = "sha256:132b505cc3efce60923a3b761b2f949bd02b6f79f478eac0bf31e671e135bcb9"},
+    {file = "openrouter-0.11.23.tar.gz", hash = "sha256:9b533c0a284b5d2b92b552e41df71eac1de1c2a531a6e4a8f1b1a60b1c6d501d"},
 ]
 
 [package.dependencies]
