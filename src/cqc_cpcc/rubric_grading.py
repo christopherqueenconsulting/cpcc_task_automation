@@ -32,7 +32,12 @@ from typing import Optional
 
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
-from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult, DetectedError
+from cqc_cpcc.rubric_models import (
+    Criterion,
+    DetectedError,
+    Rubric,
+    RubricAssessmentResult,
+)
 from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
 from cqc_cpcc.utilities.logger import logger
 from langchain_core.callbacks import BaseCallbackHandler
@@ -316,9 +321,27 @@ def build_rubric_grading_prompt(
     prompt_parts.append("")
     prompt_parts.append("**CRITICAL: Return DATA VALUES, not JSON Schema definitions.**")
     prompt_parts.append("Each `criteria_results` item must have actual field values like this example:")
+    # The example below is the strongest signal the model gets about points_earned,
+    # so it has to agree with the scoring modes actually in play. A blanket
+    # '"points_earned": null' overrode the manual-mode instruction above and
+    # produced all-zero grades.
+    has_manual_criteria = any(
+        criterion.enabled and criterion.scoring_mode == "manual"
+        for criterion in rubric.criteria
+    )
+    example_points_earned = "85" if has_manual_criteria else "null"
     prompt_parts.append('  {"criterion_id": "program_performance", "criterion_name": "Program Performance",')
-    prompt_parts.append('   "points_possible": 100, "points_earned": null, "feedback": "Your feedback here.",')
+    prompt_parts.append(
+        f'   "points_possible": 100, "points_earned": {example_points_earned}, '
+        f'"feedback": "Your feedback here.",'
+    )
     prompt_parts.append('   "selected_level_label": "Above Average", "evidence": null}')
+    if has_manual_criteria:
+        prompt_parts.append(
+            "This rubric contains scoring_mode='manual' criteria: points_earned "
+            "MUST be a number for those criteria. Only level_band and error_count "
+            "criteria use null."
+        )
     prompt_parts.append(
         "Do NOT return schema objects like {\"type\": \"Object\", \"properties\": {...}} or {\"completionState\": \"...\"}.")
     prompt_parts.append("Each `detected_errors` item must have actual values:")
@@ -521,6 +544,36 @@ async def grade_with_rubric(
         raise ValueError(f"Failed to grade with rubric: {e}")
 
 
+def points_from_level_label(
+        selected_level_label: Optional[str],
+        criterion: Criterion,
+) -> Optional[float]:
+    """Resolve points from a performance level label, for any scoring mode.
+
+    ``score_level_band_criterion`` refuses criteria that are not ``level_band``.
+    Manual criteria may still define levels, and a model that selects a level but
+    omits ``points_earned`` has told us enough to score the criterion. Falling back
+    to 0 in that case silently understates the grade.
+
+    Returns None when the label is missing or does not match any defined level.
+    """
+    if not selected_level_label or not criterion.levels:
+        return None
+
+    matching_level = next(
+        (level for level in criterion.levels if level.label == selected_level_label),
+        None,
+    )
+    if matching_level is None:
+        return None
+
+    if criterion.points_strategy == "max":
+        return matching_level.score_max
+    if criterion.points_strategy == "mid":
+        return (matching_level.score_min + matching_level.score_max) // 2
+    return matching_level.score_min
+
+
 def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> RubricAssessmentResult:
     """Apply backend deterministic scoring for non-manual criteria.
     
@@ -561,15 +614,19 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     logger.info(
         f"Criteria analysis: level_band={len(level_band_criteria)}, error_count={len(error_count_criteria)}, has_program_performance={has_program_performance}")
 
-    # If no backend scoring needed, return as-is
+    # Manual-only rubrics still need aggregation: the prompt tells the model to set
+    # total_points_earned=0 and let the backend recalculate, so returning early here
+    # would ship a 0 score for every all-manual rubric.
     if not level_band_criteria and not error_count_criteria and not has_program_performance:
-        logger.info("No backend scoring needed (all criteria are manual mode)")
-        return result
-
-    logger.info(
-        f"Applying backend scoring: {len(level_band_criteria)} level_band, "
-        f"{len(error_count_criteria)} error_count criteria"
-    )
+        logger.info(
+            "No per-criterion backend scoring needed (all criteria are manual mode); "
+            "recalculating totals from the AI-assigned criterion points"
+        )
+    else:
+        logger.info(
+            f"Applying backend scoring: {len(level_band_criteria)} level_band, "
+            f"{len(error_count_criteria)} error_count criteria"
+        )
 
     normalized_detected_errors = result.detected_errors
     normalized_counts_by_severity = result.error_counts_by_severity
@@ -774,13 +831,26 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
 
         else:
             # scoring_mode='manual' - keep LLM-assigned points as-is
-            # If AI didn't populate points_earned, default to 0
             if criterion_result.points_earned is None:
-                logger.warning(
-                    f"Criterion '{criterion_result.criterion_id}' has scoring_mode='manual' "
-                    f"but AI did not populate points_earned. Defaulting to 0."
+                recovered_points = points_from_level_label(
+                    criterion_result.selected_level_label, rubric_criterion
                 )
-                criterion_result.points_earned = 0
+                if recovered_points is not None:
+                    logger.warning(
+                        f"Criterion '{criterion_result.criterion_id}' has "
+                        f"scoring_mode='manual' but AI did not populate "
+                        f"points_earned. Recovered {recovered_points} from selected "
+                        f"level '{criterion_result.selected_level_label}'."
+                    )
+                    criterion_result.points_earned = recovered_points
+                else:
+                    logger.warning(
+                        f"Criterion '{criterion_result.criterion_id}' has "
+                        f"scoring_mode='manual' but AI did not populate "
+                        f"points_earned and no performance level was selected. "
+                        f"Defaulting to 0."
+                    )
+                    criterion_result.points_earned = 0
 
         updated_criteria_results.append(criterion_result)
 

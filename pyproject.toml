@@ -50,6 +50,7 @@ pymupdf = "^1"
 # onnxruntime is only used for a small subset of tests, so we specify a wide version range to avoid dependency conflicts for users who don't need it. The upper bound is set to 1.23.2 because that's the latest version that supports Python 3.12 as of the knowledge cutoff date.
 onnxruntime = ">=1.20,<=1.27.0"
 pandas-stubs = ">=2,<4"
+posthog = {version = "^6", optional = true}
 
 
 
@@ -115,6 +116,9 @@ select = [
     "T201", # print
 ]
 
+
+[tool.poetry.extras]
+telemetry = ["posthog"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

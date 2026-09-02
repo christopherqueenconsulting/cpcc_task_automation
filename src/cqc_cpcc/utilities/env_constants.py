@@ -49,6 +49,23 @@ SHOW_ERROR_LINE_NUMBERS = isTrue(get_constant_from_env('SHOW_ERROR_LINE_NUMBERS'
 FEEDBACK_SIGNATURE = get_constant_from_env('FEEDBACK_SIGNATURE', default_value='Your Instructor')
 ATTENDANCE_TRACKER_URL = get_constant_from_env('ATTENDANCE_TRACKER_URL', required=False)
 
+# Withdrawals: local CSV storage and online tracker sync.
+# WITHDRAWALS_CSV_DIR has no default on purpose - a withdrawals run fails with a
+# clear message rather than writing student data to a surprise location.
+WITHDRAWALS_CSV_DIR = get_constant_from_env('WITHDRAWALS_CSV_DIR', required=False)
+WITHDRAWALS_TRACKER_DRY_RUN = isTrue(
+    get_constant_from_env('WITHDRAWALS_TRACKER_DRY_RUN', default_value='True')
+)
+# Percentage of the instructional period at which the EVA / census date falls.
+# Used only when the date cannot be read from the MyColleges deadline dates dialog.
+EVA_DATE_PERCENT = float(get_constant_from_env('EVA_DATE_PERCENT', default_value='10'))
+# Verified live: the MyColleges deadline dialog has no census-named field, and
+# "last day to drop without a grade" IS the census date. This percentage is only the
+# fallback for courses (typically ended ones) where that span is blank.
+EVA_DATE_DRIFT_WARNING_DAYS = int(
+    get_constant_from_env('EVA_DATE_DRIFT_WARNING_DAYS', default_value='2')
+)
+
 # Set other constants
 BRIGHTSPACE_URL = "https://brightspace.cpcc.edu"
 MYCOLLEGE_URL = "https://mycollegess.cpcc.edu"

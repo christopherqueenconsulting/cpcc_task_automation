@@ -6,6 +6,7 @@ from typing import Callable
 import urllib3
 from cqc_cpcc.attendance import update_attendance_tracker
 from cqc_cpcc.my_colleges import MyColleges
+from cqc_cpcc.run_plan import RunPlan
 from cqc_cpcc.screenshot_listener import ScreenshotListener
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import get_session_driver
@@ -40,8 +41,17 @@ class AttendanceScreenShot:
         return self._running
 
     def main(self):
+        # This runs on a background thread with no console attached, so the plan must
+        # be built without prompting: every course, last-attendance-date start.
+        self.mc.get_course_info()
+        plan = RunPlan.non_interactive(
+            self.mc.course_information,
+            tracker_url=self.attendance_tracker_url,
+            process_withdrawals=True,
+        )
+
         # Process attendance
-        bs_courses = self.mc.process_attendance()
+        bs_courses = self.mc.process_attendance(plan)
 
         # Update the Attendance Tracker
         update_attendance_tracker(self.driver, self.wait, bs_courses, self.attendance_tracker_url)

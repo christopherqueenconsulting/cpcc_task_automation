@@ -46,7 +46,7 @@ Automatically calculates student attendance by analyzing activity completion in 
    - Identifies students who completed activities in the date range
 3. **Recording**: Records attendance in:
    - MyColleges official attendance system
-   - Google Sheets tracking spreadsheet (configurable URL)
+   - SharePoint/Excel Online tracking workbook (configurable URL)
 
 ### Who Should Use This
 
@@ -64,7 +64,7 @@ Automatically calculates student attendance by analyzing activity completion in 
 ### Configuration Required
 
 - **Credentials**: MyColleges username and password
-- **Attendance Tracker URL**: URL to your Google Sheets attendance tracker
+- **Attendance Tracker URL**: URL to your SharePoint/Excel Online attendance tracker
 - **Date Range**: Defaults to last 7 days (ending 2 days ago), customizable
 
 ### Usage
@@ -450,7 +450,7 @@ Point Deduction: 10
 - OpenAI API key (for AI features)
 
 **Optional**:
-- Google Sheets access (for attendance tracker)
+- SharePoint/Excel Online access (for the attendance tracker)
 
 ### For Developers
 
