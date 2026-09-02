@@ -369,7 +369,15 @@ class BrightSpace_Course:
                 self.course_start_date.strftime(date_format), self.final_drop_day.strftime(date_format), student_names))
 
         else:
-            logger.info("No withdrawals found for course: %s" % self.get_course_and_section())
+            # This branch is a UI failure, not an empty table: the results-per-page
+            # select could not be clicked, so the withdrawals grid was never read.
+            # Reporting it as "no withdrawals" hides a scrape that did not happen.
+            logger.warning(
+                "Could not open the withdrawals list for course %s: the "
+                "results-per-page control (%s) did not respond, so no withdrawal "
+                "rows were read. This is a page-load or selector failure, NOT a "
+                "course with zero withdrawals.",
+                self.get_course_and_section(), self.select_xpath)
 
     def click_course_tools_link(self):
         """Click the Course Tools link"""

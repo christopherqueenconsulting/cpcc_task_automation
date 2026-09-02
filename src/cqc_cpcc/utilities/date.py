@@ -339,8 +339,18 @@ def filter_dates_in_range(date_strings: list[str], start_date: DT.datetime | DT.
 
 
 def purge_empty_and_invalid_dates(date_strings: list[str]) -> list[str]:
-    # Purge the list of any empty strings
-    date_strings = [x for x in date_strings if x.strip()]
+    """Keep only the entries that are really dates.
+
+    The digit guard is not redundant with the try/except below it: dateparser
+    resolves "N/A" (and "TBD", and "-") to a real date without raising, so
+    relying on ValueError alone lets a placeholder through as the newest date in
+    the list. That is how a roster full of "N/A" cells ends up choosing an
+    attendance start date nobody recorded.
+    """
+    # Purge the list of any empty strings and anything holding no digits.
+    date_strings = [
+        x for x in date_strings if x.strip() and looks_like_a_scraped_date(x)
+    ]
 
     # Remove any dates that throw ValueError from get_datetime function
     valid_dates = []
@@ -460,13 +470,21 @@ def term_for_date(value: DT.date | DT.datetime | str) -> tuple[str, str] | None:
     fall into the term their start month implies, which is what an instructor means
     by "this term".
     """
+    # A string with no digits is a placeholder, not a date. Without this, "N/A"
+    # parses into today and the course silently lands in the current term -- the
+    # one term where it is most likely to be selected by mistake.
+    if isinstance(value, str) and not looks_like_a_scraped_date(value):
+        return None
+
     try:
         as_date = _coerce_to_date(value)
     except (TypeError, ValueError):
         return None
 
+    # Every month maps to a semester, so this is a guard against a future edit to
+    # _TERM_BY_START_MONTH rather than a reachable branch today.
     semester = _TERM_BY_START_MONTH.get(as_date.month)
-    if semester is None:
+    if semester is None:  # pragma: no cover - unreachable while all 12 months map
         return None
 
     return semester, str(as_date.year)
