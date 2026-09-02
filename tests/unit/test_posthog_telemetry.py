@@ -223,3 +223,82 @@ class TestTraceIdContext:
 
     def test_reset_with_a_foreign_token_does_not_raise(self):
         telemetry.reset_trace_id(object())
+
+
+@pytest.mark.unit
+class TestClientConstruction:
+    """The client is built once, asynchronously, and never at grading's expense."""
+
+    def test_a_configured_key_builds_a_client_in_async_mode(self, monkeypatch):
+        """sync_mode=False is the promise that analytics adds no latency."""
+        monkeypatch.setenv("POSTHOG_API_KEY", "phc_test")
+        telemetry._reset_for_tests()
+        posthog_module = MagicMock()
+
+        with patch.dict("sys.modules", {"posthog": posthog_module}):
+            client = telemetry._get_client()
+
+        assert client is posthog_module.Posthog.return_value
+        kwargs = posthog_module.Posthog.call_args.kwargs
+        assert kwargs["project_api_key"] == "phc_test"
+        assert kwargs["sync_mode"] is False
+
+    def test_the_host_is_configurable(self, monkeypatch):
+        monkeypatch.setenv("POSTHOG_API_KEY", "phc_test")
+        monkeypatch.setenv("POSTHOG_HOST", "https://eu.i.posthog.com")
+        telemetry._reset_for_tests()
+        posthog_module = MagicMock()
+
+        with patch.dict("sys.modules", {"posthog": posthog_module}):
+            telemetry._get_client()
+
+        assert posthog_module.Posthog.call_args.kwargs["host"] == \
+            "https://eu.i.posthog.com"
+
+    def test_a_client_that_will_not_construct_disables_telemetry_silently(
+        self, monkeypatch
+    ):
+        """A bad key or unreachable host must not surface as a grading failure."""
+        monkeypatch.setenv("POSTHOG_API_KEY", "phc_test")
+        telemetry._reset_for_tests()
+        posthog_module = MagicMock()
+        posthog_module.Posthog.side_effect = RuntimeError("bad project key")
+
+        with patch.dict("sys.modules", {"posthog": posthog_module}):
+            assert telemetry._get_client() is None
+
+    def test_capture_is_a_no_op_when_there_is_no_client(self, monkeypatch):
+        """_capture is reached from paths that do not re-check is_enabled()."""
+        telemetry._reset_for_tests()
+
+        telemetry._capture("$ai_generation", {"$ai_model": "gpt-5"})  # must not raise
+
+
+@pytest.mark.unit
+class TestExtraProperties:
+    def test_caller_supplied_properties_are_merged_into_the_event(self, monkeypatch):
+        monkeypatch.setenv("POSTHOG_API_KEY", "phc_test")
+        telemetry._reset_for_tests()
+        client = MagicMock()
+
+        with patch.object(telemetry, "_get_client", return_value=client):
+            telemetry.capture_generation(
+                trace_id="corr-1", model="gpt-5", provider="openai",
+                span_name="grade", extra={"cqc_rubric": "CSC-151 Project 1"},
+            )
+
+        properties = client.capture.call_args.kwargs["properties"]
+        assert properties["cqc_rubric"] == "CSC-151 Project 1"
+        assert properties["$ai_model"] == "gpt-5"
+
+
+@pytest.mark.unit
+class TestGenerationTimer:
+    def test_elapsed_grows_with_the_clock(self, monkeypatch):
+        """Latency has to come from a monotonic clock, not wall time."""
+        ticks = iter([100.0, 100.25])
+        monkeypatch.setattr(telemetry.time, "monotonic", lambda: next(ticks))
+
+        timer = telemetry.GenerationTimer()
+
+        assert timer.elapsed() == pytest.approx(0.25)

@@ -45,6 +45,17 @@ WORKBOOK_FETCH_TIMEOUT_SECONDS = 120
 CELL_ENTRY_PAUSE_SECONDS = 1.0
 AUTOSAVE_SETTLE_SECONDS = 4.0
 
+# After a write, SharePoint's download.aspx keeps serving the PRE-SAVE workbook for
+# a while. Verified live 2026-09-01: `cache: reload`, `cache: no-store` and a URL
+# cache-buster all returned the same stale bytes, and the same URL returned fresh
+# data minutes later -- so this is server-side propagation, not browser caching, and
+# no amount of sleeping is guaranteed to cover it. A run that finished without
+# confirming its own rows would leave the NEXT run reading a snapshot that lacks
+# them, and the duplicate check would then wave the same students through again.
+# So the write is confirmed by re-reading until the rows appear.
+WORKBOOK_PROPAGATION_ATTEMPTS = 6
+WORKBOOK_PROPAGATION_PAUSE_SECONDS = 5.0
+
 # Excel Online renders its grid inside a nested web-application iframe.
 _EXCEL_FRAME_SELECTORS = (
     "iframe.WACFrame",
@@ -359,7 +370,56 @@ class SharePointExcelAdapter(TrackerAdapter):
 
         # Excel Online autosaves; give it a moment before anything re-reads.
         time.sleep(AUTOSAVE_SETTLE_SECONDS)
+
+        if written:
+            self._confirm_rows_landed(driver, self._next_free_row - 2 + written)
         return written
+
+    def _confirm_rows_landed(self, driver, expected_data_rows: int) -> None:
+        """Re-read the workbook until the appended rows are actually visible.
+
+        Returning while ``download.aspx`` still serves the pre-save workbook is what
+        makes two syncs in close succession append the same students twice: the
+        second run reads a snapshot without the first run's rows and treats them as
+        missing. Polling here pays that cost once, in the run that did the writing.
+
+        Raises ``TrackerSyncError`` if the rows never appear. The rows may well have
+        landed -- the point is that this run cannot prove it, and a later run must
+        not append on top of an unverified state without a human looking first.
+        """
+        for attempt in range(1, WORKBOOK_PROPAGATION_ATTEMPTS + 1):
+            try:
+                _, data = self.load_sheet(
+                    self.fetch_workbook(driver, self._tracker_url))
+            except TrackerSyncError as read_error:
+                logger.warning(
+                    "Could not re-read the tracker to confirm the append "
+                    "(attempt %s/%s): %s",
+                    attempt, WORKBOOK_PROPAGATION_ATTEMPTS, read_error)
+            else:
+                if len(data) >= expected_data_rows:
+                    logger.info(
+                        "Confirmed the tracker now holds %s data row(s) "
+                        "(attempt %s/%s).",
+                        len(data), attempt, WORKBOOK_PROPAGATION_ATTEMPTS)
+                    return
+                logger.info(
+                    "Tracker still reports %s data row(s); waiting for %s "
+                    "(attempt %s/%s).",
+                    len(data), expected_data_rows, attempt,
+                    WORKBOOK_PROPAGATION_ATTEMPTS)
+
+            if attempt < WORKBOOK_PROPAGATION_ATTEMPTS:
+                time.sleep(WORKBOOK_PROPAGATION_PAUSE_SECONDS)
+
+        raise TrackerSyncError(
+            "Appended %s row(s), but the tracker still does not report them after "
+            "%s attempt(s). The rows may have landed -- SharePoint's download "
+            "endpoint lags behind a save -- but this run cannot confirm it. Check "
+            "the workbook before syncing again; re-running now could append the "
+            "same students twice."
+            % (expected_data_rows, WORKBOOK_PROPAGATION_ATTEMPTS)
+        )
 
 
 def build_adapter(tracker_url: str) -> TrackerAdapter:
