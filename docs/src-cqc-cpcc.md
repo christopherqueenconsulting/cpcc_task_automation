@@ -42,6 +42,7 @@ src/cqc_cpcc/
   - `TAKE_ATTENDANCE = 1`
   - `GIVE_FEEDBACK = 2`
   - `GRADE_EXAM = 3`
+  - `PROCESS_WITHDRAWALS = 4`
 
 **Key Functions**:
 - `prompt_action()` - Interactive menu for action selection
@@ -80,7 +81,7 @@ Main entry point for attendance automation.
 6. Cleans up resources
 
 **Parameters**:
-- `attendance_tracker_url` - URL to Google Sheets attendance tracker
+- `attendance_tracker_url` - URL to the SharePoint/Excel Online attendance tracker
 
 **Dependencies**:
 - `MyColleges` class (from my_colleges.py)
@@ -546,7 +547,10 @@ All modules respect these environment variables (from `env_constants.py`):
 - `OPENAI_API_KEY` - OpenAI API key
 - `INSTRUCTOR_USERID` - Instructor username
 - `INSTRUCTOR_PASS` - Instructor password
-- `ATTENDANCE_TRACKER_URL` - Google Sheets URL
+- `ATTENDANCE_TRACKER_URL` - SharePoint/Excel Online workbook URL
+- `WITHDRAWALS_CSV_DIR` - directory for the per-term withdrawal CSV files
+- `WITHDRAWALS_TRACKER_DRY_RUN` - dry-run the online tracker sync (default true)
+- `EVA_DATE_PERCENT` / `EVA_DATE_XPATH` - EVA (census) date resolution
 - `HEADLESS_BROWSER` - Run browser in headless mode (true/false)
 - `WAIT_DEFAULT_TIMEOUT` - Selenium wait timeout (seconds)
 - `MAX_WAIT_RETRY` - Max retries for operations

@@ -185,3 +185,8 @@ chrome-profile/
 
 # Playwright MCP working directory
 .playwright-mcp/
+
+# Local withdrawal records (student PII) and their timestamped backups.
+output/withdrawals/
+withdrawals_*.csv
+*.csv.*.bak

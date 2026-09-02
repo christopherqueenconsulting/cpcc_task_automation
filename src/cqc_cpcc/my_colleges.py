@@ -2,29 +2,9 @@
 
 import datetime as DT
 import time
+from dataclasses import dataclass
 from typing import List
 
-from cqc_cpcc.brightspace import BrightSpace_Course
-from cqc_cpcc.utilities.date import (
-    convert_date_to_datetime,
-    get_datetime,
-    get_latest_date,
-    is_date_in_range,
-)
-from cqc_cpcc.utilities.env_constants import MYCOLLEGE_URL
-from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.selenium_util import (
-    click_element_wait_retry,
-    click_given_element_wait_retry,
-    close_tab,
-    get_driver_wait,
-    get_element_wait_retry,
-    get_elements_text_as_list_wait_stale,
-    getText,
-    wait_for_ajax,
-    wait_for_element_to_hide,
-)
-from cqc_cpcc.utilities.utils import login_if_needed
 from selenium.common import (
     NoSuchElementException,
     StaleElementReferenceException,
@@ -38,6 +18,69 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
+
+from cqc_cpcc.brightspace import BrightSpace_Course
+from cqc_cpcc.run_plan import RunPlan
+from cqc_cpcc.run_plan import (
+    prompt_attendance_start_date as _prompt_attendance_start_date,
+)
+from cqc_cpcc.utilities.date import (
+    calculate_census_date,
+    convert_date_to_datetime,
+    get_datetime,
+    get_latest_date,
+    is_date_in_range,
+)
+from cqc_cpcc.utilities.env_constants import (
+    EVA_DATE_DRIFT_WARNING_DAYS,
+    EVA_DATE_PERCENT,
+    MYCOLLEGE_URL,
+)
+from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.selenium_util import (
+    click_element_wait_retry,
+    click_given_element_wait_retry,
+    close_tab,
+    get_driver_wait,
+    get_element_wait_retry,
+    get_elements_text_as_list_wait_stale,
+    getText,
+    wait_for_ajax,
+    wait_for_element_to_hide,
+)
+from cqc_cpcc.utilities.utils import login_if_needed
+
+
+def _looks_like_a_scraped_date(text: str) -> bool:
+    """Reject placeholder text before it reaches dateparser.
+
+    dateparser is deliberately permissive: it resolves "N/A" to a real date (and
+    "a" and "b" too). That is fine for natural-language input like "yesterday",
+    but a scraped deadline cell holding "N/A" must not silently become a date --
+    these values drive the drop window, and a wrong window mis-classifies
+    withdrawals. Every real date contains a digit; the placeholders do not.
+    """
+    return any(character.isdigit() for character in (text or ""))
+
+
+@dataclass
+class CourseContext:
+    """Everything read off a course page before any per-course work happens."""
+
+    course_url: str
+    course_name: str
+    course_start_date: DT.datetime
+    course_end_date: DT.datetime
+    term_semester: str = ""
+    term_year: str = ""
+    first_day_to_drop: DT.datetime = None
+    final_day_to_drop: DT.datetime = None
+    last_day_to_add: DT.datetime = None
+    last_day_to_drop_without_grade: DT.datetime = None
+    eva_date: DT.date = None
+    last_attendance_record_date: DT.datetime = None
+    last_selectable_attendance_date: DT.date = None
+    selectable_attendance_dates: list = None
 
 
 class MyColleges:
@@ -91,15 +134,54 @@ class MyColleges:
         for index, atag in enumerate(course_section_atags):
             course_name = getText(atag)
             course_href = atag.get_attribute("href")
-            course_dates = getText(course_section_dates[index])
-            course_start_date, course_end_date = course_dates.split(" - ")
-            course_start_date = get_datetime(course_start_date)
-            course_end_date = get_datetime(course_end_date)
-            # If course has ended then append "ended" to the course name
+
+            if index >= len(course_section_dates):
+                logger.warning(
+                    "No date range found for course: %s. Skipping.", course_name
+                )
+                continue
+
+            date_range = self._parse_course_date_range(
+                getText(course_section_dates[index])
+            )
+            if date_range is None:
+                logger.warning(
+                    "Could not parse the date range for course: %s. Skipping.",
+                    course_name,
+                )
+                continue
+
+            course_start_date, course_end_date = date_range
+
+            # If course has ended then append "ended" to the course name.
+            # NOTE: is_date_in_range takes (start, check, end); passing the course end
+            # date as the check against today is intentional and correct here.
             if is_date_in_range(course_start_date, course_end_date, check_date):
                 course_name += " (ended)"
             self.course_information[course_href] = {'name': course_name, 'start_date': course_start_date,
                                                     'end_date': course_end_date}
+
+    @staticmethod
+    def _parse_course_date_range(
+            course_dates: str,
+    ) -> tuple[DT.datetime, DT.datetime] | None:
+        """Parse a "<start> - <end>" course date range, or None when unparseable."""
+        parts = (course_dates or "").split(" - ")
+        if len(parts) != 2:
+            logger.warning("Unexpected course date range format: %r", course_dates)
+            return None
+
+        if not all(_looks_like_a_scraped_date(part) for part in parts):
+            logger.warning("Course date range holds no dates: %r", course_dates)
+            return None
+
+        try:
+            return get_datetime(parts[0]), get_datetime(parts[1])
+        except ValueError:
+            logger.warning(
+                "Course date range holds unparseable dates: %r", course_dates
+            )
+            return None
 
 
     def prompt_attendance_start_date(
@@ -107,43 +189,12 @@ class MyColleges:
             course_name: str,
             course_start_date: DT.date | DT.datetime,
     ) -> DT.datetime | None:
-        """Prompt for the date from which attendance should start processing."""
-        last_attendance_date = None
-        course_start_datetime = convert_date_to_datetime(course_start_date)
+        """Prompt for the attendance start date.
 
-        logger.info("Select attendance start date for Course: %s", course_name)
-        logger.info("1: Last Attendance Date")
-        logger.info("2: Course Start Date (%s)", course_start_datetime.strftime("%m-%d-%Y"))
-        logger.info("3: Custom Date")
-
-        user_input = input("Enter your selection [1]: ").strip() or "1"
-
-        try:
-            selection = int(user_input)
-        except ValueError:
-            logger.warning("Invalid selection.")
-            return self.prompt_attendance_start_date(course_name, course_start_datetime)
-
-        if selection == 1:
-            logger.info("Using Last Attendance Date")
-            return last_attendance_date
-
-        if selection == 2:
-            logger.info("Using Course Start Date: %s", course_start_datetime.strftime("%m-%d-%Y"))
-            return course_start_datetime
-
-        if selection == 3:
-            custom_date = input("Enter custom attendance start date [MM-DD-YYYY]: ").strip()
-            try:
-                custom_datetime = get_datetime(custom_date)
-                logger.info("Using Custom Attendance Start Date: %s", custom_datetime.strftime("%m-%d-%Y"))
-                return custom_datetime
-            except ValueError:
-                logger.warning("Invalid custom date.")
-                return self.prompt_attendance_start_date(course_name, course_start_datetime)
-
-        logger.warning("Invalid selection.")
-        return self.prompt_attendance_start_date(course_name, course_start_datetime)
+        Kept as a method for callers and tests; the implementation now lives in
+        ``run_plan`` so the plan can gather it up front without a MyColleges instance.
+        """
+        return _prompt_attendance_start_date(course_name, course_start_date)
 
     @staticmethod
     def _normalize_attendance_record_date(record_date: str | DT.date | DT.datetime) -> DT.date:
@@ -187,9 +238,34 @@ class MyColleges:
             )
             if not deadline_element:
                 return None
-            return get_datetime(getText(deadline_element))
-        except (NoSuchElementException, TimeoutException):
+            raw_text = getText(deadline_element)
+        except (
+                NoSuchElementException,
+                StaleElementReferenceException,
+                TimeoutException,
+        ):
             logger.info("%s not found. Using fallback date when needed.", wait_text)
+            return None
+
+        if not _looks_like_a_scraped_date(raw_text):
+            logger.warning(
+                "%s: %r holds no date. Using fallback date when needed.",
+                wait_text,
+                raw_text,
+            )
+            return None
+
+        try:
+            return get_datetime(raw_text)
+        except ValueError:
+            # The element exists but holds something that is not a date (commonly an
+            # empty span on an ended course). Log the raw value so the real content is
+            # diagnosable, then fall back the same way a missing element does.
+            logger.warning(
+                "%s: %r is not a parseable date. Using fallback date when needed.",
+                wait_text,
+                raw_text,
+            )
             return None
 
     def _select_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
@@ -234,241 +310,539 @@ class MyColleges:
 
         return datepicker_avail
 
-    def process_attendance(self) -> List[BrightSpace_Course]:
-        self.get_course_info()
+    # ------------------------------------------------------------------
+    # Course tab lifecycle
+    # ------------------------------------------------------------------
+
+    def _open_course_tab(self, course_url: str) -> None:
+        """Open a fresh tab on the course and record it as the current tab."""
+        handles = set(self.driver.window_handles)
+        self.driver.switch_to.new_window('tab')
+        self.wait.until(EC.new_window_is_opened(handles))
+        self.current_tab = self.driver.current_window_handle
+        self.driver.get(course_url)
+
+    def _close_current_course_tab(self, original_tab: str) -> None:
+        """Close the course tab and return to the faculty tab, whatever happened.
+
+        Called from a ``finally`` so a course that raises mid-processing cannot leak
+        its tab and strand the rest of the run.
+        """
+        try:
+            if self.current_tab and self.current_tab in self.driver.window_handles:
+                self.driver.switch_to.window(self.current_tab)
+                close_tab(self.driver)
+        except Exception:
+            logger.debug("Unable to close the course tab cleanly.", exc_info=True)
+        finally:
+            self.current_tab = None
+            try:
+                self.driver.switch_to.window(original_tab)
+            except Exception:
+                logger.debug(
+                    "Unable to switch back to the original tab.", exc_info=True
+                )
+
+    # ------------------------------------------------------------------
+    # Course page reads
+    # ------------------------------------------------------------------
+
+    def _log_deadline_dialog_candidates(self) -> None:
+        """Dump the deadline dialog's data-bind names, for selector drift.
+
+        Runs only when debug logging is on. Verified live (2026-09-01) that the
+        dialog exposes exactly four date fields -- AddEndDateDisplay,
+        DropStartDateDisplay, DropGradesRequiredDateDisplay, DropEndDateDisplay --
+        and no census-named field. Keep this so a future D2L/Colleague change that
+        renames them is diagnosable in one debug run rather than by guesswork.
+        """
+        if not logger.isEnabledFor(10):  # logging.DEBUG
+            return
+
+        try:
+            candidates = self.driver.execute_script(
+                "return Array.from(document.querySelectorAll('[data-bind]'))"
+                ".map(function (el) { return el.getAttribute('data-bind') + ' => ' "
+                "+ (el.textContent || '').trim(); });"
+            )
+        except Exception:
+            logger.debug(
+                "Unable to enumerate deadline dialog data-bind names.", exc_info=True
+            )
+            return
+
+        logger.debug("Deadline dialog data-bind candidates:")
+        for candidate in candidates or []:
+            logger.debug("  %s", candidate)
+
+    def _resolve_eva_date(
+            self,
+            last_day_to_drop_without_grade: DT.datetime | None,
+            course_start_date: DT.datetime,
+            course_end_date: DT.datetime,
+    ) -> DT.date | None:
+        """Resolve the EVA / census date for a course.
+
+        The MyColleges deadline dialog has no census-named field, but "last day to
+        drop without a grade" (``DropGradesRequiredDateDisplay``) *is* the census
+        date by definition: after census the enrollment is official and a drop
+        earns a W. Verified live against the 10%-of-term rule on 28-, 57- and
+        120-day terms, agreeing to within a single day in every case.
+
+        Ended courses often render that span empty, so the percentage calculation
+        stays as a fallback. ``None`` means no census rules are applied at all.
+        """
+        calculated = calculate_census_date(
+            course_start_date, course_end_date, EVA_DATE_PERCENT
+        )
+
+        if last_day_to_drop_without_grade is not None:
+            scraped_date = convert_date_to_datetime(
+                last_day_to_drop_without_grade
+            ).date()
+
+            drifted = calculated is not None and abs(
+                (scraped_date - calculated).days
+            ) > EVA_DATE_DRIFT_WARNING_DAYS
+            if drifted:
+                # Either the course has an unusual calendar or the drop-date policy
+                # changed. Worth surfacing, but the scraped value still wins.
+                logger.warning(
+                    "EVA/Census date %s is %s days from the %s%%-of-term estimate %s. "
+                    "Using the scraped value; check the course calendar if this "
+                    "repeats.",
+                    scraped_date, abs((scraped_date - calculated).days),
+                    EVA_DATE_PERCENT, calculated,
+                )
+            else:
+                logger.info(
+                    "EVA/Census date (last day to drop without a grade): %s",
+                    scraped_date,
+                )
+
+            return scraped_date
+
+        if calculated is not None:
+            logger.info(
+                "EVA/Census date unavailable on the page; calculated at %s%% of "
+                "the course: %s",
+                EVA_DATE_PERCENT, calculated,
+            )
+            return calculated
+
+        logger.info(
+            "EVA/Census date could not be determined. "
+            "Census rules will not be applied."
+        )
+        return None
+
+    def _read_deadline_dates(
+            self,
+            course_url: str,
+            course_start_date: DT.datetime,
+            course_end_date: DT.datetime,
+    ) -> dict:
+        """Read the deadline dates dialog, falling back to the course date range."""
+        click_element_wait_retry(self.driver, self.wait,
+                                 "deadline-dates-label",
+                                 "Waiting for Deadline Dates", By.ID)
+
+        self._log_deadline_dialog_candidates()
+
+        # Captured before fallbacks are applied: a missing drop-without-grade span
+        # must not be mistaken for a census date equal to the course end date.
+        raw_drop_without_grade = self._get_optional_deadline_date(
+            "//span[@data-bind='text: DropGradesRequiredDateDisplay()']",
+            "Waiting for Deadline Drop Without Grade Date",
+        )
+
+        deadlines = {
+            "last_day_to_add": self._get_optional_deadline_date(
+                "//span[@data-bind='text: AddEndDateDisplay()']",
+                "Waiting for Deadline End Date",
+            ) or course_end_date,
+            "first_day_to_drop": self._get_optional_deadline_date(
+                "//span[@data-bind='text: DropStartDateDisplay()']",
+                "Waiting for Deadline Start Date",
+            ) or course_start_date,
+            "last_day_to_drop_without_grade": raw_drop_without_grade or course_end_date,
+            "last_day_to_drop_with_grade": self._get_optional_deadline_date(
+                "//span[@data-bind='text: DropEndDateDisplay()']",
+                "Waiting for Deadline Drop With Grade Date",
+            ) or course_end_date,
+            "eva_date": self._resolve_eva_date(
+                raw_drop_without_grade, course_start_date, course_end_date
+            ),
+        }
+
+        if course_url in self.course_information:
+            self.course_information[course_url].update(deadlines)
+
+        # Close the Deadline Dates Dialog
+        click_element_wait_retry(self.driver, self.wait,
+                                 "//button[@title='Close' "
+                                 "and contains(text(),'Close')]",
+                                 "Waiting for Deadline Dates Close Button")
+
+        return deadlines
+
+    def _read_term(self, course_name: str) -> tuple[str, str]:
+        """Read the course term, tolerating anything that is not "<Semester> <Year>"."""
+        term = getText(get_element_wait_retry(self.driver, self.wait,
+                                              "section-header-term",
+                                              "Waiting For Course Term Text",
+                                              By.ID))
+        parts = (term or "").split()
+
+        if len(parts) >= 2:
+            logger.info("Term Semester: %s | Year: %s" % (parts[0], parts[1]))
+            return parts[0], parts[1]
+
+        logger.warning(
+            "Unexpected course term text %r for course: %s", term, course_name
+        )
+        return (parts[0] if parts else ""), ""
+
+    def _open_attendance_tab(
+            self, course_url: str, course_end_date: DT.datetime
+    ) -> tuple:
+        """Open the Attendance tab and read the dates the UI currently allows."""
+        click_element_wait_retry(self.driver, self.wait,
+                                 "//a[contains(@class, 'esg-tab__link') "
+                                 "and contains(text(),'Attendance')]",
+                                 "Waiting for Attendance Tab")
+
+        # Find the latest attendance record to use as start date
+        last_attendance_record_dates = get_elements_text_as_list_wait_stale(
+            self.driver, self.wait,
+            "//td[@data-role='Last Attendance Recorded']",
+            "Waiting for Latest Attendance Records")
+
+        # Cap attendance processing/carry-forward to what the UI currently allows.
+        final_course_date = convert_date_to_datetime(course_end_date).date()
+        selectable_attendance_dates = (
+            self._get_selectable_attendance_dates_from_dropdown()
+        )
+        last_selectable_attendance_date = (
+            max(selectable_attendance_dates)
+            if selectable_attendance_dates
+            else (self._get_last_selectable_attendance_date() or final_course_date)
+        )
+
+        if course_url in self.course_information:
+            self.course_information[course_url][
+                "last_selectable_attendance_date"
+            ] = last_selectable_attendance_date
+
+        return (
+            last_attendance_record_dates,
+            selectable_attendance_dates,
+            last_selectable_attendance_date,
+        )
+
+    @staticmethod
+    def _resolve_attendance_start_date(
+            plan_start_date: DT.datetime | None,
+            last_attendance_record_dates: list,
+            course_start_date: DT.datetime,
+    ) -> DT.datetime:
+        """Use the plan's start date when set, else the latest recorded attendance."""
+        if plan_start_date:
+            return plan_start_date
+
+        try:
+            resolved = get_datetime(get_latest_date(last_attendance_record_dates))
+            logger.info(
+                "Latest Attendance Recorded Date: %s", resolved.strftime("%m-%d-%Y")
+            )
+            return resolved
+        except ValueError:
+            logger.info(
+                "No Attendance Records Found. Using Date: %s",
+                convert_date_to_datetime(course_start_date).strftime("%m-%d-%Y"),
+            )
+            return course_start_date
+
+    def _open_course_context(
+            self,
+            course_url: str,
+            course_info: dict,
+            plan: RunPlan,
+            need_attendance_ui: bool,
+    ) -> CourseContext:
+        """Open the course and read everything both actions depend on."""
+        course_name = course_info.get('name', str(course_url))
+        course_start_date = course_info['start_date']
+        course_end_date = course_info['end_date']
+
+        self._open_course_tab(course_url)
+
+        deadlines = self._read_deadline_dates(
+            course_url, course_start_date, course_end_date
+        )
+
+        context = CourseContext(
+            course_url=course_url,
+            course_name=course_name,
+            course_start_date=course_start_date,
+            course_end_date=course_end_date,
+            first_day_to_drop=deadlines["first_day_to_drop"],
+            final_day_to_drop=deadlines["last_day_to_drop_with_grade"],
+            last_day_to_add=deadlines["last_day_to_add"],
+            last_day_to_drop_without_grade=deadlines["last_day_to_drop_without_grade"],
+            eva_date=deadlines["eva_date"],
+            last_attendance_record_date=course_start_date,
+            selectable_attendance_dates=[],
+        )
+
+        if need_attendance_ui:
+            (
+                last_attendance_record_dates,
+                selectable_attendance_dates,
+                last_selectable_attendance_date,
+            ) = self._open_attendance_tab(course_url, course_end_date)
+
+            context.selectable_attendance_dates = selectable_attendance_dates
+            context.last_selectable_attendance_date = last_selectable_attendance_date
+            context.last_attendance_record_date = self._resolve_attendance_start_date(
+                plan.attendance_start_date,
+                last_attendance_record_dates,
+                course_start_date,
+            )
+
+        context.term_semester, context.term_year = self._read_term(course_name)
+
+        return context
+
+    # ------------------------------------------------------------------
+    # Per-course work
+    # ------------------------------------------------------------------
+
+    def _mark_attendance_for_course(
+            self, context: CourseContext, bsc: BrightSpace_Course
+    ) -> None:
+        """Record attendance on the MyColleges Faculty page for one course."""
+        pending_attendance_records = self._build_pending_attendance_records(
+            bsc.attendance_records
+        )
+
+        # Flag for if datepicker available for this course
+        datepicker_avail = True
+
+        # For each date update the attendance on MyColleges Faculty page
+        while pending_attendance_records:
+            record_date = min(pending_attendance_records)
+            students = pending_attendance_records.pop(record_date)
+            formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
+
+            logger.info(
+                "Attendance Date: %s | Name(s): %s "
+                % (formatted_date, " | ".join(students))
+            )
+
+            try:
+                datepicker_avail = self._select_attendance_date(
+                    record_date, datepicker_avail
+                )
+
+                # Update the attendance for each student
+                logger.info("Updating Attendance for Date: %s" % formatted_date)
+                for student_name in students:
+                    logger.info("Present: %s" % student_name)
+
+                    # Set the present for OCLS and OLAB
+                    success = self.mark_student_present(student_name)
+                    if success:
+                        logger.info("Marked Present: %s" % student_name)
+                    else:
+                        logger.info("Could Not Mark Present: %s" % student_name)
+
+            except (NoSuchElementException, TimeoutException):
+                self._carry_students_to_next_consecutive_date(
+                    pending_attendance_records,
+                    record_date,
+                    students,
+                    context.last_selectable_attendance_date,
+                    context.selectable_attendance_dates,
+                )
+
+    # Verified live 2026-09-01: the roster keeps a row for students who stop early,
+    # with their real last-attendance date, and the student id sits in the same row's
+    # Student cell. The id matches BrightSpace's "Org Defined ID" exactly.
+    _LAST_ATTENDANCE_BY_STUDENT_JS = """
+        var out = {};
+        Array.from(document.querySelectorAll(
+            "td[data-role='Last Attendance Recorded']"
+        ))
+          .forEach(function (cell) {
+            var row = cell.closest('tr');
+            if (!row) { return; }
+            var studentCell = row.querySelector("td[data-role='Student']");
+            var idText = studentCell ? (studentCell.innerText || '') : '';
+            var idMatch = idText.match(/\\b\\d{6,9}\\b/);
+            var recorded = (cell.innerText || '').trim();
+            if (idMatch && recorded) { out[idMatch[0]] = recorded; }
+          });
+        return out;
+    """
+
+    def _collect_last_attendance_by_student(self) -> dict[str, DT.date]:
+        """Map student id -> last attendance date from the attendance roster.
+
+        Read *row-wise* rather than as two independent column lists: zipping
+        separately-scraped columns silently truncates on any length mismatch.
+
+        Must be called after attendance has been recorded, so a student marked
+        present in this run reports the date this run just gave them.
+        """
+        try:
+            raw = self.driver.execute_script(self._LAST_ATTENDANCE_BY_STUDENT_JS) or {}
+        except Exception:
+            logger.debug(
+                "Could not read last-attendance dates from the roster.", exc_info=True
+            )
+            return {}
+
+        last_attendance: dict[str, DT.date] = {}
+        for student_id, recorded_text in raw.items():
+            parsed = self._parse_attendance_control_date(recorded_text)
+            if parsed is not None:
+                last_attendance[str(student_id).strip()] = parsed
+
+        logger.info(
+            "Read last-attendance dates for %s of %s roster row(s).",
+            len(last_attendance), len(raw),
+        )
+        return last_attendance
+
+    def _process_single_course(
+            self,
+            course_url: str,
+            course_info: dict,
+            plan: RunPlan,
+            *,
+            collect_attendance: bool,
+            mark_attendance: bool,
+            collect_withdrawals: bool,
+            force_withdrawals: bool,
+    ) -> BrightSpace_Course:
+        context = self._open_course_context(
+            course_url, course_info, plan,
+            need_attendance_ui=collect_attendance or mark_attendance,
+        )
+
+        logger.info("Processing Course: %s" % context.course_name)
+
+        bsc = BrightSpace_Course(
+            context.course_name, context.term_semester, context.term_year,
+            context.first_day_to_drop, context.final_day_to_drop,
+            context.course_start_date, context.course_end_date,
+            self.driver, self.wait, context.last_attendance_record_date,
+            collect_attendance=collect_attendance,
+            collect_withdrawals=collect_withdrawals,
+            force_withdrawals=force_withdrawals,
+            eva_date=context.eva_date,
+        )
+
+        if mark_attendance:
+            # Switch back to the MyColleges course tab; BrightSpace used its own.
+            self.driver.switch_to.window(self.current_tab)
+            self._mark_attendance_for_course(context, bsc)
+
+        if collect_withdrawals and bsc.get_withdrawal_records():
+            # Read AFTER marking, so the dates reflect what this run just recorded.
+            self.driver.switch_to.window(self.current_tab)
+            bsc.last_activity_by_student = self._collect_last_attendance_by_student()
+
+        return bsc
+
+    def _run_courses(
+            self,
+            plan: RunPlan | None,
+            *,
+            collect_attendance: bool,
+            mark_attendance: bool,
+            collect_withdrawals: bool,
+            force_withdrawals: bool,
+    ) -> List[BrightSpace_Course]:
+        """Run the selected courses, isolating failures to the causing course."""
+        if not self.course_information:
+            # Already populated when the caller scraped courses to build the plan.
+            self.get_course_info()
+
+        if plan is None:
+            plan = RunPlan.non_interactive(self.course_information)
+
+        selected_courses = plan.filter_course_information(self.course_information)
+        if not selected_courses:
+            logger.warning("No courses selected. Nothing to process.")
+            return []
 
         # Keep track of the original tab
         original_tab = self.driver.current_window_handle
 
-        # Use check date of a week ago
-        a_week_ago_date = DT.date.today() - DT.timedelta(days=7)
-        today_date = DT.date.today()
+        bs_courses: List[BrightSpace_Course] = []
+        failed_courses: list[tuple[str, Exception]] = []
 
-        # Keep an array of all the BrightSpace courses
-        bs_courses = []
-
-        # Prompt user if they want to process all courses or specific courses
-        process = input("Do you want to process all courses (Y/N)? If no, you will be prompted for each course. ")
-        process_all = process.strip().lower() == 'y'
-
-        if not process_all:
-            # Filter courses to only those the user wants to process
-            filtered_course_information = {}
-
-
-            for course_url, course_info in self.course_information.items():
-                course_name = course_info.get('name', str(course_url))
-                course_start_date = course_info['start_date']
-                course_end_date = course_info['end_date']
-
-                # Skip courses that have not started or have ended within the last week
-                if is_date_in_range(course_start_date, a_week_ago_date, course_end_date) or is_date_in_range(course_start_date, today_date, course_end_date):
-                    process_course = input(f"Do you want to process course: {course_name} (Y/N)? ")
-                    if process_course.strip().lower() == 'y':
-                        filtered_course_information[course_url] = self.course_information[course_url]
-            self.course_information = filtered_course_information
-
-        # Prompt user once for attendance start date - applies to all courses
-        # Find a representative course to get a start date from
-        representative_course_date = None
-        for course_info in self.course_information.values():
-            # TODO: Pick a course that has not ended and has the earliest start date
-            representative_course_date = course_info['start_date']
-            break
-
-        last_attendance_start_date = self.prompt_attendance_start_date(
-            "All Courses",
-            representative_course_date or DT.datetime.now(),
-        ) if representative_course_date else None
-
-        for course_url, course_info in self.course_information.items():
+        for course_url, course_info in selected_courses.items():
             course_name = course_info.get('name', str(course_url))
-            course_start_date = course_info['start_date']
-            course_end_date = course_info['end_date']
 
-            # Process courses where the last attendance start date is within the course start and end date.
-            # When last_attendance_start_date is None (user chose "Last Attendance Date" which is unresolved),
-            # fall back to processing all courses.
-            if last_attendance_start_date is None or is_date_in_range(course_start_date, last_attendance_start_date, course_end_date):
-
-                # Switch back to original_tab
+            try:
                 self.driver.switch_to.window(original_tab)
-
-                handles = set(self.driver.window_handles)
-
-                # Opens a new tab and switches to new tab
-                self.driver.switch_to.new_window('tab')
-
-                # Wait for the new window or tab
-                self.wait.until(EC.new_window_is_opened(handles))
-
-                # Keep track of the current tab
-                self.current_tab = self.driver.current_window_handle
-
-                # Navigate to course url
-                self.driver.get(course_url)
-
-                # Get the Deadline Dates and add to the course information
-                click_element_wait_retry(self.driver, self.wait,
-                                         "deadline-dates-label",
-                                         "Waiting for Attendance Tab", By.ID)
-
-                # TODO: Set default dates if these elements below dont exist
-                last_day_to_add = self._get_optional_deadline_date(
-                    "//span[@data-bind='text: AddEndDateDisplay()']",
-                    "Waiting for Deadline End Date",
-                ) or course_end_date
-                self.course_information[course_url]["last_day_to_add"] = last_day_to_add
-
-                first_day_to_drop = self._get_optional_deadline_date(
-                    "//span[@data-bind='text: DropStartDateDisplay()']",
-                    "Waiting for Deadline Start Date",
-                ) or course_start_date
-                self.course_information[course_url]["first_day_to_drop"] = first_day_to_drop
-
-                last_day_to_drop_without_grade = self._get_optional_deadline_date(
-                    "//span[@data-bind='text: DropGradesRequiredDateDisplay()']",
-                    "Waiting for Deadline Drop Without Grade Date",
-                ) or course_end_date
-                self.course_information[course_url][
-                    "last_day_to_drop_without_grade"
-                ] = last_day_to_drop_without_grade
-
-                final_day_to_drop = self._get_optional_deadline_date(
-                    "//span[@data-bind='text: DropEndDateDisplay()']",
-                    "Waiting for Deadline Drop With Grade Date",
-                ) or course_end_date
-                self.course_information[course_url][
-                    "last_day_to_drop_with_grade"
-                ] = final_day_to_drop
-
-                # TODO: Set default dates if these elements above dont exist
-
-                # Close the Deadline Dates Dialog
-                click_element_wait_retry(self.driver, self.wait,
-                                         "//button[@title='Close' and contains(text(),'Close')]",
-                                         "Waiting for Deadline Dates Close Button")
-
-                # Click on attendance link when available
-                click_element_wait_retry(self.driver, self.wait,
-                                         "//a[contains(@class, 'esg-tab__link') and contains(text(),'Attendance')]",
-                                         "Waiting for Attendance Tab")
-
-                # Find the latest attendance record to use as start date
-                last_attendance_record_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
-                                                                                    "//td[@data-role='Last Attendance Recorded']",
-
-                                                                                    "Waiting for Latest Attendance Records")
-
-                # Cap attendance processing/carry-forward to what the UI currently allows.
-                final_course_date = convert_date_to_datetime(course_end_date).date()
-                selectable_attendance_dates = self._get_selectable_attendance_dates_from_dropdown()
-                last_selectable_attendance_date = (
-                    max(selectable_attendance_dates)
-                    if selectable_attendance_dates
-                    else (self._get_last_selectable_attendance_date() or final_course_date)
+                bsc = self._process_single_course(
+                    course_url, course_info, plan,
+                    collect_attendance=collect_attendance,
+                    mark_attendance=mark_attendance,
+                    collect_withdrawals=collect_withdrawals,
+                    force_withdrawals=force_withdrawals,
                 )
-                self.course_information[course_url][
-                    "last_selectable_attendance_date"
-                ] = last_selectable_attendance_date
-
-                logger.info("Processing Course: : %s" % course_name)
-
-                # Find the corresponding BrightSpace course
-                term = getText(get_element_wait_retry(self.driver, self.wait,
-                                                      "section-header-term", "Waiting For Course Term Text", By.ID))
-                term_semester, term_year = term.split()
-
-                logger.info("Term Semester: %s | Year: %s" % (term_semester, term_year))
-
-                # Use the global attendance start date if set, otherwise use the course's date
-                if last_attendance_start_date:
-                    last_attendance_record_date = last_attendance_start_date
-
-                else:
-
-                    try:
-                        # logger.debug("Latest Attendance Recorded Dates: %s" % last_attendance_record_dates)
-                        latest_date_str = get_latest_date(last_attendance_record_dates)
-                        # logger.debug("Latest Attendance Recorded Date (string): %s" % latest_date_str)
-
-                        # Get the Latest Date and Convert To date time
-                        last_attendance_record_date = get_datetime(latest_date_str)
-                        logger.info(
-                            "Latest Attendance Recorded Date: %s  " % last_attendance_record_date.strftime("%m-%d-%Y"))
-                    except ValueError:
-                        # No date found then use start of course date
-                        last_attendance_record_date = course_start_date
-                        logger.info(
-                            "No Attendance Records Found. Using Date: %s" % last_attendance_record_date.strftime(
-                                "%m-%d-%Y"))
-
-                bsc = BrightSpace_Course(course_name, term_semester, term_year, first_day_to_drop, final_day_to_drop,
-                                         course_start_date, course_end_date,
-                                         self.driver, self.wait, last_attendance_record_date)
-
-                # Add to list of BrightSpace courses
-                bs_courses.append(bsc)
-
-                # Switch back to tab
-                self.driver.switch_to.window(self.current_tab)
-
-                pending_attendance_records = self._build_pending_attendance_records(bsc.attendance_records)
-
-                # Flag for if datepicker available for this course
-                datepicker_avail = True
-
-                # For each date update the attendance on MyColleges Faculty page
-                while pending_attendance_records:
-                    record_date = min(pending_attendance_records)
-                    students = pending_attendance_records.pop(record_date)
-                    formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
-
-                    logger.info("Attendance Date: %s | Name(s): %s " % (formatted_date, " | ".join(students)))
-
-                    try:
-                        datepicker_avail = self._select_attendance_date(record_date, datepicker_avail)
-
-                        # Update the attendance for each student
-                        logger.info("Updating Attendance for Date: %s" % formatted_date)
-                        for student_name in students:
-                            logger.info("Present: %s" % student_name)
-
-                            # Set the present for OCLS and OLAB
-                            success = self.mark_student_present(student_name)
-                            if success:
-                                logger.info("Marked Present: %s" % student_name)
-                            else:
-                                logger.info("Could Not Mark Present: %s" % student_name)
-
-                    except (NoSuchElementException, TimeoutException):
-                        self._carry_students_to_next_consecutive_date(
-                            pending_attendance_records,
-                            record_date,
-                            students,
-                            last_selectable_attendance_date,
-                            selectable_attendance_dates,
-                        )
-
-                # Ask user to review before moving on - give them a chance to review
-                # satisfied = are_you_satisfied()
-
+                if bsc is not None:
+                    bs_courses.append(bsc)
+            except Exception as course_error:
+                # One course's DOM quirk must not discard the courses already processed.
+                failed_courses.append((course_name, course_error))
+                logger.exception(
+                    "Failed to process course: %s. Continuing with the remaining "
+                    "courses.",
+                    course_name,
+                )
+            finally:
                 logger.info("Closing Tab for Course: %s" % course_name)
-                # Switch back to tab
-                self.driver.switch_to.window(self.current_tab)
-                # Close tab when done
-                close_tab(self.driver)
+                self._close_current_course_tab(original_tab)
 
-            else:
-                # Skip courses where the last attendance start date is not within the course start and end date
-                logger.info("Course: %s | Dates %s - %s | Not in Date Range. | Skipping " % (
-                    course_name, course_start_date.strftime("%-m/%-d/%Y"), course_end_date.strftime("%-m/%-d/%Y")))
+        if failed_courses:
+            logger.error("%s course(s) failed and were skipped:", len(failed_courses))
+            for course_name, course_error in failed_courses:
+                logger.error("  %s: %s", course_name, course_error)
 
         # Switch back to original_tab
         self.driver.switch_to.window(original_tab)
 
-        # Return the list of BrightSpaceCourses
         return bs_courses
+
+    # ------------------------------------------------------------------
+    # Entry points
+    # ------------------------------------------------------------------
+
+    def process_attendance(self, plan: RunPlan = None) -> List[BrightSpace_Course]:
+        """Record attendance for the planned courses, collecting withdrawals too."""
+        return self._run_courses(
+            plan,
+            collect_attendance=True,
+            mark_attendance=True,
+            collect_withdrawals=True,
+            force_withdrawals=False,
+        )
+
+    def process_withdrawals(self, plan: RunPlan = None) -> List[BrightSpace_Course]:
+        """Collect withdrawals only: no attendance scraping, nobody marked present."""
+        return self._run_courses(
+            plan,
+            collect_attendance=False,
+            mark_attendance=False,
+            collect_withdrawals=True,
+            force_withdrawals=True,
+        )
 
     @staticmethod
     def _parse_attendance_control_date(date_text: str | None) -> DT.date | None:
@@ -480,7 +854,9 @@ class MyColleges:
             return None
 
         normalized_date = date_text.split("(")[0].strip()
-        if not normalized_date:
+        if not _looks_like_a_scraped_date(normalized_date):
+            # Same guard as the deadline dates: dateparser resolves "N/A" to a real
+            # date, which here would invent a last-attendance day for a student.
             return None
 
         try:

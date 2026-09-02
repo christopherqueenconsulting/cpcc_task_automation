@@ -435,7 +435,7 @@ logger.error("Error occurred", exc_info=True)  # Include stack trace
 ### URLs
 - `BRIGHTSPACE_URL` - Base URL for BrightSpace LMS
 - `MYCOLLEGES_URL` - Base URL for MyColleges SIS
-- `ATTENDANCE_TRACKER_URL` - Google Sheets URL for attendance tracking
+- `ATTENDANCE_TRACKER_URL` - SharePoint/Excel Online workbook URL for attendance tracking
 
 ### Timeouts and Limits
 - `WAIT_DEFAULT_TIMEOUT` - Selenium wait timeout in seconds (default: 30)

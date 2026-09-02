@@ -2,16 +2,20 @@
 
 """Unit tests for attendance.py module."""
 
+import pathlib
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, call
-from collections import defaultdict
 
 from cqc_cpcc.attendance import (
-    normalize_attendance_records,
     get_merged_attendance_dict,
+    normalize_attendance_records,
     open_attendance_tracker,
     update_attendance_tracker,
 )
+from cqc_cpcc.withdrawals import read_csv
+
+CSV_DIR_TARGET = "cqc_cpcc.withdrawals.resolve_csv_dir"
 
 
 @pytest.mark.unit
@@ -147,104 +151,143 @@ class TestOpenAttendanceTracker:
         assert mock_driver.get.called
 
 
+
 @pytest.mark.unit
 class TestUpdateAttendanceTracker:
-    """Test update_attendance_tracker function."""
-    
-    def test_update_logs_withdrawal_records(self):
-        """Update should log withdrawal records for each course."""
-        mock_driver = MagicMock()
-        mock_wait = MagicMock()
-        
-        # Create mock BrightSpace courses
-        mock_course = MagicMock()
-        mock_course.get_withdrawal_records.return_value = {
-            "Doe, John": [
-                ("123456", "john@email.com", "CTS101-01", "Session1", "Online", "Withdrawn", "2024-01-15", "No activity")
-            ],
-            "Smith, Jane": [
-                ("789012", "jane@email.com", "CTS102-02", "Session2", "In-person", "Active", "2024-01-20", "Present")
-            ]
-        }
-        
-        bs_courses = [mock_course]
-        
-        with patch('cqc_cpcc.attendance.logger') as mock_logger:
-            update_attendance_tracker(mock_driver, mock_wait, bs_courses, "https://tracker.url")
-            
-            # Should call get_withdrawal_records
-            mock_course.get_withdrawal_records.assert_called_once()
-            
-            # Should log header
-            assert any("Instructor,Last Name,First Name" in str(call) for call in mock_logger.info.call_args_list)
-            
-            # Should log student records
-            log_calls = [str(call) for call in mock_logger.info.call_args_list]
-            assert any("Doe" in call and "John" in call for call in log_calls)
-            assert any("Smith" in call and "Jane" in call for call in log_calls)
-    
-    def test_update_handles_empty_withdrawals(self):
-        """Update should handle courses with no withdrawal records."""
-        mock_driver = MagicMock()
-        mock_wait = MagicMock()
-        
-        mock_course = MagicMock()
-        mock_course.get_withdrawal_records.return_value = {}
-        
-        bs_courses = [mock_course]
-        
-        with patch('cqc_cpcc.attendance.logger') as mock_logger:
-            update_attendance_tracker(mock_driver, mock_wait, bs_courses, "https://tracker.url")
-            
-            # Should still call get_withdrawal_records
-            mock_course.get_withdrawal_records.assert_called_once()
-            
-            # Should log end message
-            assert any("End Logging" in str(call) for call in mock_logger.info.call_args_list)
-    
-    def test_update_processes_multiple_courses(self):
-        """Update should process withdrawal records for multiple courses."""
-        mock_driver = MagicMock()
-        mock_wait = MagicMock()
-        
-        # Create multiple mock courses with properly formatted names
-        mock_course1 = MagicMock()
-        mock_course1.get_withdrawal_records.return_value = {
-            "One, Student": [("111", "one@email.com", "Course1", "S1", "Online", "Active", "2024-01-15", "Present")]
-        }
-        
-        mock_course2 = MagicMock()
-        mock_course2.get_withdrawal_records.return_value = {
-            "Two, Student": [("222", "two@email.com", "Course2", "S2", "In-person", "Active", "2024-01-20", "Present")]
-        }
-        
-        bs_courses = [mock_course1, mock_course2]
-        
-        with patch('cqc_cpcc.attendance.logger'):
-            update_attendance_tracker(mock_driver, mock_wait, bs_courses, "https://tracker.url")
-            
-            # Should process both courses
-            mock_course1.get_withdrawal_records.assert_called_once()
-            mock_course2.get_withdrawal_records.assert_called_once()
-    
-    def test_update_strips_underscores_from_names(self):
-        """Update should remove underscores from student names."""
-        mock_driver = MagicMock()
-        mock_wait = MagicMock()
-        
-        mock_course = MagicMock()
-        mock_course.get_withdrawal_records.return_value = {
-            "Doe_Junior, John_Paul": [
-                ("123456", "john@email.com", "CTS101", "S1", "Online", "Active", "2024-01-15", "Present")
-            ]
-        }
-        
-        bs_courses = [mock_course]
-        
-        with patch('cqc_cpcc.attendance.logger') as mock_logger:
-            update_attendance_tracker(mock_driver, mock_wait, bs_courses, "https://tracker.url")
-            
-            # Verify underscores are removed in logged output
-            log_calls = [str(call) for call in mock_logger.info.call_args_list]
-            assert any("DoeJunior" in call and "JohnPaul" in call for call in log_calls)
+    """update_attendance_tracker now persists records instead of only logging them."""
 
+    @staticmethod
+    def _course(withdrawals, term=("Fall", "2026")):
+        course = MagicMock()
+        course.get_withdrawal_records.return_value = withdrawals
+        course.term_semester, course.term_year = term
+        return course
+
+    def test_update_writes_withdrawal_records_to_csv(self, tmp_path):
+        """Each withdrawal becomes a CSV row with the name split correctly."""
+        course = self._course({
+            "Doe,_John": [
+                ("123456", "john@email.com", "CTS-101-01", "Full Session",
+                 "Online", "W", "N/A",
+                 "Student withdrew without contacting the instructor")
+            ],
+            "Smith,_Jane": [
+                ("789012", "jane@email.com", "CTS-102-02", "8 Week", "Hybrid", "S",
+                 "N/A", "Student stopped submitting work")
+            ],
+        })
+
+        with patch("cqc_cpcc.withdrawals.resolve_csv_dir", return_value=str(tmp_path)):
+            results = update_attendance_tracker(
+                MagicMock(), MagicMock(), [course], "", dry_run=True
+            )
+
+        course.get_withdrawal_records.assert_called_once()
+
+        (csv_path, merge_result), = results.items()
+        assert csv_path.endswith("withdrawals_Fall_2026.csv")
+        assert len(merge_result.added) == 2
+
+        written = read_csv(csv_path)
+        by_id = {record.student_id: record for record in written}
+        assert by_id["123456"].last_name == "Doe"
+        assert by_id["123456"].first_name == "John"
+        assert by_id["123456"].course_and_section == "CTS-101-01"
+        assert by_id["789012"].last_name == "Smith"
+
+    def test_update_handles_empty_withdrawals(self, tmp_path):
+        """A course with no withdrawals still writes an (empty) CSV without failing."""
+        course = self._course({})
+
+        with patch("cqc_cpcc.withdrawals.resolve_csv_dir", return_value=str(tmp_path)):
+            results = update_attendance_tracker(
+                MagicMock(), MagicMock(), [course], "", dry_run=True
+            )
+
+        course.get_withdrawal_records.assert_called_once()
+        (csv_path, merge_result), = results.items()
+        assert merge_result.added == []
+        assert read_csv(csv_path) == []
+
+    def test_update_processes_multiple_courses(self, tmp_path):
+        """Courses in the same term merge into one CSV; different terms split."""
+        course1 = self._course(
+            {"One,_Student": [("111", "one@email.com", "CSC-151-N01", "Full Session",
+                               "Online", "W", "N/A", "reason")]},
+            term=("Fall", "2026"),
+        )
+        course2 = self._course(
+            {"Two,_Student": [("222", "two@email.com", "CSC-134-N02", "Full Session",
+                               "Online", "W", "N/A", "reason")]},
+            term=("Spring", "2027"),
+        )
+
+        with patch("cqc_cpcc.withdrawals.resolve_csv_dir", return_value=str(tmp_path)):
+            results = update_attendance_tracker(
+                MagicMock(), MagicMock(), [course1, course2], "", dry_run=True
+            )
+
+        course1.get_withdrawal_records.assert_called_once()
+        course2.get_withdrawal_records.assert_called_once()
+        assert {pathlib.Path(path).name for path in results} == {
+            "withdrawals_Fall_2026.csv",
+            "withdrawals_Spring_2027.csv",
+        }
+
+    def test_update_restores_spaces_in_multi_word_names(self, tmp_path):
+        """Underscores are separators, not noise.
+
+        "Van_Doe" is "Van Doe", not "VanDoe".
+        """
+        course = self._course({
+            "Van_Doe,_John_Paul": [
+                ("123456", "john@email.com", "CTS-101-01", "Full Session",
+                 "Online", "W", "N/A", "reason")
+            ]
+        })
+
+        with patch("cqc_cpcc.withdrawals.resolve_csv_dir", return_value=str(tmp_path)):
+            results = update_attendance_tracker(
+                MagicMock(), MagicMock(), [course], "", dry_run=True
+            )
+
+        (csv_path, _), = results.items()
+        record, = read_csv(csv_path)
+        assert record.last_name == "Van Doe"
+        assert record.first_name == "John Paul"
+
+    def test_update_is_idempotent(self, tmp_path):
+        """Re-running adds nothing: the composite key already exists."""
+        withdrawals = {
+            "Doe,_John": [("123456", "john@email.com", "CTS-101-01", "Full Session",
+                           "Online", "W", "N/A", "reason")]
+        }
+
+        with patch("cqc_cpcc.withdrawals.resolve_csv_dir", return_value=str(tmp_path)):
+            first = update_attendance_tracker(
+                MagicMock(), MagicMock(), [self._course(withdrawals)], "", dry_run=True
+            )
+            second = update_attendance_tracker(
+                MagicMock(), MagicMock(), [self._course(withdrawals)], "", dry_run=True
+            )
+
+        assert len(list(first.values())[0].added) == 1
+        second_result = list(second.values())[0]
+        assert second_result.added == []
+        assert len(second_result.duplicates_skipped) == 1
+
+    def test_update_skips_tracker_sync_without_a_url(self, tmp_path):
+        """No tracker URL means no browser work at all."""
+        course = self._course({
+            "Doe,_John": [("123456", "john@email.com", "CTS-101-01", "Full Session",
+                           "Online", "W", "N/A", "reason")]
+        })
+
+        sync_target = "cqc_cpcc.withdrawal_processing.sync_records_to_tracker"
+        with patch(CSV_DIR_TARGET, return_value=str(tmp_path)), \
+                patch(sync_target) as mock_sync:
+            update_attendance_tracker(
+                MagicMock(), MagicMock(), [course], "", dry_run=True
+            )
+
+        mock_sync.assert_not_called()
