@@ -128,6 +128,38 @@ class TestPromptAttendanceStartDate:
                 "CSC-151", DT.datetime(2026, 1, 10)
             ) == DT.datetime(2026, 1, 10)
 
+    def test_a_number_outside_the_menu_reprompts(self, caplog):
+        """4 is one past the last option -- the classic off-by-one."""
+        with patch("builtins.input", side_effect=["4", "2"]), \
+                caplog.at_level("WARNING"):
+            assert prompt_attendance_start_date(
+                "CSC-151", DT.datetime(2026, 1, 10)
+            ) == DT.datetime(2026, 1, 10)
+
+        assert "Invalid selection" in caplog.text
+
+    def test_a_placeholder_custom_date_reprompts_rather_than_being_accepted(self):
+        """dateparser resolves "N/A" to a real date; the start date must not."""
+        with patch("builtins.input", side_effect=["3", "N/A", "2"]):
+            assert prompt_attendance_start_date(
+                "CSC-151", DT.datetime(2026, 1, 10)
+            ) == DT.datetime(2026, 1, 10)
+
+    def test_a_date_shaped_but_impossible_value_still_reprompts(self):
+        """The digit guard lets this through; the parser has to reject it.
+
+        Proves the guard did not turn the parse failure below it into dead code.
+        The parser really does reject this value -- pinned once, against the real
+        dateparser, in test_date.py's TestPurgeRejectsPlaceholders; stubbed here
+        because each real rejection costs several seconds.
+        """
+        with patch("builtins.input", side_effect=["3", "2026-99-99", "2"]), \
+                patch("cqc_cpcc.run_plan.get_datetime",
+                      side_effect=[ValueError, DT.datetime(2026, 1, 10)]):
+            assert prompt_attendance_start_date(
+                "CSC-151", DT.datetime(2026, 1, 10)
+            ) == DT.datetime(2026, 1, 10)
+
 
 @pytest.mark.unit
 class TestNonInteractivePlan:
@@ -346,3 +378,44 @@ class TestCurrentTermFiltering:
             plan = RunPlan.build_interactively(older, action=ACTION_ATTENDANCE)
 
         assert plan.course_urls == list(older)
+
+
+@pytest.mark.unit
+class TestCourseLabelling:
+    def test_a_course_without_dates_is_labelled_by_name_alone(self):
+        """A course whose deadline dialog failed still has to be pickable."""
+        from cqc_cpcc.run_plan import _course_label
+
+        label = _course_label({"name": "CSC-151-N855"}, "https://x/course/1")
+
+        assert label == "CSC-151-N855"
+
+    def test_a_course_with_dates_shows_the_range(self):
+        from cqc_cpcc.run_plan import _course_label
+
+        label = _course_label(
+            {"name": "CSC-151-N855",
+             "start_date": DT.datetime(2026, 8, 17),
+             "end_date": DT.datetime(2026, 12, 11)},
+            "https://x/course/1",
+        )
+
+        assert "CSC-151-N855" in label and "2026" in label
+
+    def test_a_course_with_no_name_falls_back_to_its_url(self):
+        from cqc_cpcc.run_plan import _course_label
+
+        assert _course_label({}, "https://x/course/1") == "https://x/course/1"
+
+
+@pytest.mark.unit
+class TestEmptyCourseList:
+    def test_an_empty_faculty_page_selects_nothing_and_says_so(self, caplog):
+        """Prompting against an empty list would read any answer as invalid."""
+        from cqc_cpcc.run_plan import RunPlan
+
+        with patch("builtins.input", side_effect=AssertionError("must not prompt")), \
+                caplog.at_level("WARNING"):
+            assert RunPlan._prompt_course_selection({}) == []
+
+        assert "No courses found" in caplog.text

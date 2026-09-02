@@ -17,11 +17,12 @@ The utilities package contains helper modules for common operations:
 
 ```
 src/cqc_cpcc/utilities/
-├── selenium_util.py           # Selenium helpers (~570 LOC)
-├── date.py                    # Date/time utilities (~140 LOC)
-├── logger.py                  # Logging configuration (~64 LOC)
+├── selenium_util.py           # Selenium helpers
+├── date.py                    # Date/time utilities
+├── prompts.py                 # Shared console prompt helpers
+├── logger.py                  # Logging configuration
 ├── env_constants.py           # Environment variables
-├── utils.py                   # General utilities (~594 LOC)
+├── utils.py                   # General utilities
 ├── my_pydantic_parser.py      # Custom Pydantic parser (~53 LOC)
 ├── brightspace_helper.py      # BrightSpace-specific helpers
 └── AI/                        # AI/LLM utilities (see ai-llm.md)
@@ -347,6 +348,59 @@ dt3 = get_datetime("1/15/2024")
 ```
 
 **Uses**: `dateparser` library for flexible parsing.
+
+> ⚠️ **`get_datetime` accepts more than you want.** dateparser is deliberately
+> permissive and resolves `"N/A"` to a real date **without raising** — so a
+> `try/except ValueError` around it is not a sufficient guard. Guard scraped or
+> typed input with `looks_like_a_scraped_date()` first.
+
+---
+
+#### `looks_like_a_scraped_date(text: str) -> bool`
+Rejects placeholder text before it reaches `get_datetime`.
+
+Every real date contains a digit; `"N/A"`, `"TBD"`, `"-"` and `""` do not. That one
+check is the whole implementation, and it is load-bearing: a fabricated date decides
+whether a student is recorded as **W** or **S**, which term a course is filed under,
+and which weeks get marked present.
+
+**Usage**:
+```python
+from cqc_cpcc.utilities.date import get_datetime, looks_like_a_scraped_date
+
+if not looks_like_a_scraped_date(raw_cell):
+    logger.warning("%r holds no date. Skipping this row.", raw_cell)
+    return None
+try:
+    parsed = get_datetime(raw_cell)
+except ValueError:
+    logger.warning("%r is not a parseable date.", raw_cell)
+    return None
+```
+
+Both layers are needed: the guard catches placeholders dateparser would accept, and
+the `except` catches digit-bearing values it rejects (`"2026-99-99"`).
+
+`term_for_date()` and `purge_empty_and_invalid_dates()` apply the guard internally,
+so callers of those two do not repeat it.
+
+---
+
+## Console Prompts (prompts.py)
+
+Shared helpers so a mistyped answer re-prompts rather than crashing or, worse, being
+read as a valid selection. Used by `run_plan.py` to gather every question up front.
+
+- `prompt_yes_no(question, default=True)` — accepts `y/yes/true/1` and `n/no/false/0`;
+  an empty answer takes the stated default; anything else re-prompts.
+- `prompt_menu(question, options, default_index=0)` — numbered menu, returns a
+  zero-based index. Non-numeric input and numbers outside the menu re-prompt.
+- `prompt_index_selection(question, labels, default_indexes=None, expand_keyword=None)`
+  — multi-select list accepting `all`, `none`, `1,3,5` and `2-4`. Returns the
+  sentinel `EXPAND` when the caller offered an expand keyword and the user typed it.
+- `parse_index_selection(answer, count)` — the pure parser. Returns `None` for
+  anything unparseable or out of range so the caller can re-prompt, and `[]` only for
+  an explicit "none".
 
 ---
 

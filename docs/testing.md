@@ -171,44 +171,64 @@ def test_something():
     assert result == expected
 ```
 
-## Coverage (Future)
+## Coverage
 
-Coverage tooling is available but not yet configured. To add coverage:
+`pytest-cov` is configured and CI uploads three separate reports — `unit`,
+`integration`, and `e2e` — to Codecov, which combines them. Run it locally with:
 
 ```bash
-# Install coverage
-poetry add --group test pytest-cov
-
-# Run tests with coverage
-poetry run pytest --cov=src/cqc_cpcc --cov-report=html tests/unit/
-
-# View coverage report
-open htmlcov/index.html
+poetry run pytest -m unit --cov=src/cqc_cpcc --cov-report=term-missing
 ```
 
-## Current Test Status
+```bash
+poetry run pytest -m unit --cov=src/cqc_cpcc --cov-report=html && open htmlcov/index.html
+```
 
-**As of Latest Commit:**
-- Total Unit Tests: 168
-- Passing: 166
-- Failing: 2 (baseline - known issues, not blocking)
-- Test Files: 7
+Note that a local `-m unit` run reports **lower** coverage than CI, because CI adds
+the integration and e2e suites on top. Compare like with like before concluding a
+change lost coverage.
 
-**Coverage by Module:**
-- ✅ `env_constants.py` - 26 tests (100% core functions)
-- ✅ `utils.py` - 26 tests (main helper functions)
-- ✅ `logger.py` - 12 tests (100% coverage)
-- ✅ `selenium_util.py` - 30 tests (driver setup, options, helpers)
-- ✅ `date.py` - 74 tests (comprehensive date utilities)
+### What the gates actually are
 
-## Known Issues
+Codecov enforces a **patch** gate on new and modified code, plus per-component
+project and patch statuses. The thresholds, the component definitions, and which
+statuses are informational all live in [`codecov.yml`](../codecov.yml); the
+enforcement mechanics are documented in
+[codecov_enforcement.md](codecov_enforcement.md). Two things are worth knowing
+before you read a red check:
 
-### Baseline Failures
-Two tests fail in the baseline (pre-existing, not introduced by new tests):
-1. `test_is_checkdate_before_date_handles_datetime_objects` - Date comparison edge case
-2. `test_weeks_between_dates_with_rounding[date10-date20-2]` - Rounding calculation
+- **`codecov.yml` is read from `master`** (`strict_yaml_branch: master`). Editing it
+  on a branch does not change that branch's own checks.
+- **Test files are in codecov's `ignore:` list.** A tests-only PR therefore has no
+  coverable lines in its diff, and `codecov/patch` reports "Coverage not affected"
+  and passes. Green there proves nothing about a tests-only change — judge it by the
+  project-status deltas and by what the tests actually assert.
 
-These are documented and tracked but not blocking test development.
+The browser-driven modules (Selenium, MFA/login, BrightSpace fetch and write-back)
+are tracked **informationally**: they are exercised by the integration/e2e suites and
+against the live site, and gating them at 80% would only reward low-value mock churn.
+Pure logic — grading, rubric, parsing, dates, the withdrawal core — stays gated.
+
+## Test Suite Shape
+
+Rather than a count that goes stale on the next commit:
+
+```bash
+poetry run pytest -m unit -q --collect-only | tail -1
+```
+
+Unit tests mock all external I/O — no browser, no network, no OpenAI. Integration
+tests exercise real module boundaries; e2e tests drive the Streamlit UI. See
+[Test Markers](#test-markers) above for how to select each.
+
+### Two things that hide broken tests
+
+- **Duplicate test names silently delete tests.** A second `def test_foo` in the same
+  class replaces the first, and pytest only ever collects the last one. `ruff`
+  catches this as `F811` — do not ignore it in a test file.
+- **`caplog` needs the project logger by name.** The project logger carries its own
+  level, so `caplog.at_level("DEBUG")` alone leaves DEBUG records dropped at the
+  source. Use `caplog.at_level("DEBUG", logger="cpcc_logger")`.
 
 ## Best Practices
 

@@ -15,6 +15,7 @@ from cqc_cpcc.utilities.date import (
     get_datetime,
     is_date_in_range,
     is_same_term,
+    looks_like_a_scraped_date,
     term_for_date,
 )
 from cqc_cpcc.utilities.logger import logger
@@ -76,6 +77,15 @@ def prompt_attendance_start_date(
             custom_date = input(
                 "Enter custom attendance start date [MM-DD-YYYY]: "
             ).strip()
+            # The digit guard runs first for the same reason it does on scraped
+            # cells: dateparser resolves "N/A" (and "a", and "b") to a real date
+            # without raising. Typed at this prompt that would silently pick an
+            # attendance start date nobody chose, and every week from it would be
+            # marked against the wrong range.
+            if not looks_like_a_scraped_date(custom_date):
+                logger.warning("Invalid custom date: %r holds no date.", custom_date)
+                continue
+
             try:
                 custom_datetime = get_datetime(custom_date)
             except ValueError:

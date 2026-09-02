@@ -73,23 +73,85 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 
 ### 2. Core Automation Modules
 
+#### Run Planning (`run_plan.py`)
+**Responsibility**: Answer every console question once, before any browser work
+
+`RunPlan` is a dataclass holding the whole configuration of a run: which courses,
+the attendance start date, whether to process withdrawals, scrape-vs-push mode, the
+tracker URL, and dry-run. Processing code reads the plan instead of calling
+`input()` mid-run, which is what makes an unattended pass possible — and what keeps
+the Streamlit background thread from blocking on a prompt nobody can see.
+
+**Key Functions**:
+- `RunPlan.build_interactively(course_information, action=...)` - the one prompt block
+- `RunPlan.non_interactive(course_information)` - no prompts, for the Streamlit path
+- `RunPlan.build_push_only(csv_paths, ...)` - sync existing CSVs, never scrape
+- `filter_course_information()` - narrow the course list to the plan's selection
+
+Login has to happen before the course list can be read, so the order is: pick the
+action → tracker URL → browser opens, login + MFA → scrape the course list → **all
+remaining prompts** → unattended execution.
+
+**Dependencies**: `utilities/prompts.py`, `utilities/date.py`
+
 #### Attendance Module (`attendance.py`)
 **Responsibility**: Orchestrate the end-to-end attendance tracking workflow
 
 **Process**:
 1. Login to MyColleges → retrieve course list
-2. For each course → open BrightSpace
-3. Scrape activities (assignments, quizzes, discussions)
-4. Filter by date range (default: last 7 days, ending 2 days ago)
-5. Calculate which students were active
-6. Record attendance in MyColleges and tracking sheet
+2. Build a `RunPlan` (all prompts answered here)
+3. For each selected course → open BrightSpace
+4. Scrape activities (assignments, quizzes, discussions)
+5. Filter by date range (default: last 7 days, ending 2 days ago)
+6. Calculate which students were active
+7. Record attendance in MyColleges
+8. If the plan asked for it, run withdrawal processing afterwards
 
 **Key Functions**:
-- `take_attendance(url)` - Main entry point
-- `open_attendance_tracker()` - Opens tracking spreadsheet
-- `update_attendance_tracker()` - Records attendance data
+- `take_attendance(attendance_tracker_url=None, plan=None)` - Main entry point
+- `update_attendance_tracker()` - thin wrapper delegating to `withdrawals.py`
 
-**Dependencies**: `MyColleges`, `BrightSpace_Course`, `selenium_util`
+A failure in one course is isolated: the course tab is closed, the failure recorded,
+and the remaining courses still run. Before that, a single malformed course aborted
+the whole run and discarded every course already processed.
+
+**Dependencies**: `RunPlan`, `MyColleges`, `BrightSpace_Course`, `selenium_util`
+
+#### Withdrawals (`withdrawals.py`, `withdrawal_processing.py`, `attendance_tracker.py`)
+**Responsibility**: Record withdrawn students locally, then sync them online
+
+`PROCESS_WITHDRAWALS` is its own action — it no longer runs only as a side effect of
+taking attendance, and it no longer silently does nothing outside the drop window.
+
+- **`withdrawals.py`** — the pure core, no Selenium: `WithdrawalRecord`,
+  `record_key()`, `classify_withdrawal()`, `merge_records()`, and stdlib-`csv`
+  read/write. Keyed on `(course_and_section, student_id)`, so the same student in
+  two sections is two legitimate rows. Student IDs stay strings — pandas would turn
+  `0123456` into `123456` and corrupt the key. Writes go to a temp file then
+  `os.replace`, after backing up the previous file.
+- **`withdrawal_processing.py`** — orchestration: scrape → store per-term CSV → sync.
+  Also the push-only path, which syncs an already-written CSV without opening a
+  course. The local CSV is written *before* the online sync is attempted, so a
+  tracker failure never costs the scrape.
+- **`attendance_tracker.py`** — the online sync, behind a `TrackerAdapter` interface.
+  `SharePointExcelAdapter` is the only implementation today.
+
+**Safety properties** (all unit-tested):
+- `dry_run=True` by default (`WITHDRAWALS_TRACKER_DRY_RUN`); a real write needs
+  explicit per-run confirmation.
+- A failed or empty read **aborts** rather than appending — appending blind after a
+  bad read is how a tracker gets duplicated.
+- Only columns A–K of *new* rows are written. The Navigator's columns L and M are
+  never touched.
+- Every appended value is sanitised against spreadsheet formula injection: tabs and
+  newlines are stripped (they would shift following values into the wrong column),
+  and a leading `=`, `+`, `-` or `@` is prefixed with an apostrophe.
+- After a write, the rows are confirmed by re-reading. SharePoint's `download.aspx`
+  keeps serving the pre-save workbook for a while, and a run that finished without
+  confirming would leave the *next* run reading a snapshot that lacks its rows —
+  and appending the same students again.
+
+**Dependencies**: `RunPlan`, `openpyxl`, `utilities/utils.login_if_needed`
 
 #### Feedback Module (`project_feedback.py`)
 **Responsibility**: Generate personalized AI feedback on student projects
@@ -239,15 +301,26 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 
 **Key Functions**:
 - `convert_datetime_to_start_of_day()` / `convert_datetime_to_end_of_day()`
-- `is_date_in_range(check_date, start, end)` - Boundary checking
+- `is_date_in_range(start, check_date, end)` - Boundary checking. Note the argument
+  order: the date being tested is the **middle** one.
 - `filter_dates_in_range(dates, start, end)` - Filter list
 - `weeks_between_dates(start, end)` - Duration calculation
 - `get_datetime()` - Parse various date formats using dateparser
+- `looks_like_a_scraped_date(text)` - **Call this before `get_datetime` on anything
+  scraped or typed.** dateparser is deliberately permissive and resolves `"N/A"` to
+  a real date *without raising*, so guarding only `ValueError` is not enough. A
+  fabricated date here decides whether a student is recorded as W or S, which term a
+  course lands in, and which weeks get marked present. Every real date contains a
+  digit; the placeholders do not.
+- `term_for_date(value)` and `purge_empty_and_invalid_dates(values)` apply that guard
+  internally, so callers of those two do not need to repeat it.
 
 **Patterns**:
 - Always use timezone-aware datetimes
 - Handle None values gracefully
 - Support multiple input formats (strings, dates, datetimes)
+- When a `date` and a `datetime` fall on the same calendar day they compare as
+  **equal**, so `is_checkdate_before_date` returns False for both orientations
 
 #### Logger (`logger.py`)
 **Purpose**: Centralized logging infrastructure
@@ -277,29 +350,39 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 ```
 1. User initiates attendance (via UI or CLI)
    ↓
-2. MyColleges.login()
+2. MyColleges.open_faculty_page() → login_if_needed() → MFA
    ↓
-3. MyColleges.get_course_list() → [Course1, Course2, ...]
+3. MyColleges.get_course_info() → {course_url: {name, start_date, end_date}}
+   → a course whose date range will not parse is skipped and named, not fatal
    ↓
-4. For each course:
-   4a. BrightSpace_Course.__init__() → opens course
-   4b. get_attendance_from_assignments()
-       → scrapes assignment data
-       → filters by date range
-       → records {student: [dates]}
-   4c. get_attendance_from_quizzes()
-       → scrapes quiz data
-       → filters by date range
-       → merges into attendance_records
-   4d. (Optional) get_withdrawal_records_from_classlist()
-       → identifies dropped students
+4. RunPlan.build_interactively(...) → EVERY remaining prompt is answered here.
+   From this point the run is unattended.
    ↓
-5. update_attendance_tracker()
-   → opens tracking sheet
-   → records attendance for each student
+5. For each SELECTED course (failures isolated per course):
+   5a. _open_course_context() → new tab, deadline dates, term, EVA date
+   5b. BrightSpace_Course(collect_attendance=..., collect_withdrawals=...)
+       → get_attendance_from_assignments() / _from_quizzes()
+       → filters by date range → {student: [dates]}
+   5c. _mark_attendance_for_course() → records attendance in MyColleges
+   5d. _collect_last_attendance_by_student() → read AFTER marking, so it
+       reflects what this run just recorded
+   5e. _close_current_course_tab() → always, even on failure
    ↓
-6. driver.quit() → cleanup
+6. If the plan asked for withdrawals:
+   withdrawal_processing.process_withdrawals_for_courses()
+   6a. withdrawals.records_from_courses() → WithdrawalRecord list
+   6b. merge into the per-term CSV ($WITHDRAWALS_CSV_DIR/withdrawals_Fall_2026.csv)
+       → existing rows win; duplicates skipped; conflicts logged with a field diff
+   6c. attendance_tracker.sync_records_to_tracker(..., dry_run=True by default)
+       → read existing rows from the workbook (abort if that read fails)
+       → append only what is missing → confirm the append by re-reading
+   ↓
+7. driver.quit() → cleanup
 ```
+
+The local CSV and the online tracker are de-duplicated **independently** — the local
+merge against the local file, the online append against a fresh online read — so a
+row someone entered by hand online is never re-added.
 
 ### AI Feedback Flow
 
