@@ -518,3 +518,102 @@ def test_csc134_versus_csc151_both_use_effective_counts_but_keep_rubric_specific
     assert csc151_result.effective_minor_errors == 1
 
 
+
+
+@pytest.mark.unit
+class TestManualOnlyRubricAggregation:
+    """A manual-only rubric still needs backend aggregation.
+
+    The grading prompt tells the model to set total_points_earned=0 and let the
+    backend recalculate. apply_backend_scoring used to return early when no
+    criterion needed per-criterion computation, so every all-manual rubric shipped
+    a 0 score no matter what the model assigned.
+    """
+
+    @staticmethod
+    def _result(rubric, points_by_criterion, levels_by_criterion=None):
+        levels_by_criterion = levels_by_criterion or {}
+        return RubricAssessmentResult(
+            rubric_id=rubric.rubric_id,
+            rubric_version=rubric.rubric_version,
+            total_points_earned=0,  # What the prompt asks the model to send
+            total_points_possible=rubric.total_points_possible,
+            criteria_results=[
+                CriterionResult(
+                    criterion_id=criterion.criterion_id,
+                    criterion_name=criterion.name,
+                    points_earned=points_by_criterion.get(criterion.criterion_id),
+                    points_possible=criterion.max_points,
+                    feedback="Feedback for %s." % criterion.criterion_id,
+                    selected_level_label=levels_by_criterion.get(criterion.criterion_id),
+                )
+                for criterion in rubric.criteria
+                if criterion.enabled
+            ],
+            overall_feedback="Overall feedback.",
+        )
+
+    def test_totals_are_recalculated_from_ai_assigned_points(self):
+        rubric = get_rubric_by_id("default_100pt_rubric")
+        assert all(c.scoring_mode == "manual" for c in rubric.criteria if c.enabled)
+
+        awarded = {c.criterion_id: c.max_points for c in rubric.criteria if c.enabled}
+        updated = apply_backend_scoring(rubric, self._result(rubric, awarded))
+
+        assert updated.total_points_earned == rubric.total_points_possible
+        assert all(cr.points_earned is not None for cr in updated.criteria_results)
+
+    def test_missing_points_are_recovered_from_the_selected_level(self):
+        """A model that picks a level but omits points has told us enough to score."""
+        rubric = get_rubric_by_id("default_100pt_rubric")
+        criterion = next(c for c in rubric.criteria if c.enabled and c.levels)
+        top_level = max(criterion.levels, key=lambda level: level.score_max)
+
+        updated = apply_backend_scoring(
+            rubric,
+            self._result(rubric, {}, {criterion.criterion_id: top_level.label}),
+        )
+
+        recovered = next(
+            cr
+            for cr in updated.criteria_results
+            if cr.criterion_id == criterion.criterion_id
+        )
+        assert recovered.points_earned == top_level.score_min  # points_strategy="min"
+        assert updated.total_points_earned == top_level.score_min
+
+    def test_missing_points_with_no_level_fall_back_to_zero(self):
+        rubric = get_rubric_by_id("default_100pt_rubric")
+
+        updated = apply_backend_scoring(rubric, self._result(rubric, {}))
+
+        assert updated.total_points_earned == 0
+        assert all(cr.points_earned == 0 for cr in updated.criteria_results)
+
+
+@pytest.mark.unit
+class TestManualPromptGuidance:
+    """The example JSON is the strongest signal the model gets about points_earned."""
+
+    def test_manual_rubric_example_shows_a_number_not_null(self):
+        from cqc_cpcc.rubric_grading import build_rubric_grading_prompt
+
+        prompt = build_rubric_grading_prompt(
+            rubric=get_rubric_by_id("default_100pt_rubric"),
+            assignment_instructions="Write Hello World.",
+            student_submission="print('Hello World')",
+        )
+
+        assert '"points_earned": null' not in prompt
+        assert "scoring_mode='manual' criteria: points_earned MUST be a" in prompt
+
+    def test_level_band_rubric_example_still_shows_null(self):
+        from cqc_cpcc.rubric_grading import build_rubric_grading_prompt
+
+        prompt = build_rubric_grading_prompt(
+            rubric=get_rubric_by_id("csc113_week1_reflection_rubric"),
+            assignment_instructions="Write a reflection.",
+            student_submission="My reflection.",
+        )
+
+        assert '"points_earned": null' in prompt
