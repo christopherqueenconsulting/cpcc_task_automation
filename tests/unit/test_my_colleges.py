@@ -887,3 +887,389 @@ class TestMarkAttendanceForCourse:
 
         select.assert_not_called()
         mark.assert_not_called()
+
+
+# The project logger carries its own level, so caplog has to raise it by name --
+# raising only the root logger leaves DEBUG records dropped at the source.
+PROJECT_LOGGER = "cpcc_logger"
+
+
+def _atag(text, href):
+    element = MagicMock()
+    element.text = text
+    element.get_attribute.return_value = href
+    return element
+
+
+def _span(text):
+    element = MagicMock()
+    element.text = text
+    return element
+
+
+def _my_colleges_for_course_info(links, dates):
+    """A MyColleges whose faculty page yields the given course links and dates."""
+    driver, wait = MagicMock(), MagicMock()
+    my_colleges = MyColleges(driver, wait)
+    my_colleges.open_faculty_page = lambda: None
+
+    results = [links, dates]
+
+    def until(condition, message=None):
+        return results.pop(0) if results else []
+
+    wait.until.side_effect = until
+    return my_colleges
+
+
+@pytest.mark.unit
+class TestGetCourseInfo:
+    """The faculty page is scraped once, and every course has to survive it.
+
+    Two independently-scraped lists are zipped by index here, so a length mismatch
+    or an unparseable cell must skip only the affected course.
+    """
+
+    def test_each_course_is_stored_with_its_parsed_dates(self):
+        my_colleges = _my_colleges_for_course_info(
+            [_atag("CSC-151-N855", "https://x/1"), _atag("CSC-134-N801", "https://x/2")],
+            [_span("08/17/2026 - 12/11/2026"), _span("08/17/2026 - 12/11/2026")],
+        )
+
+        with patch("cqc_cpcc.my_colleges.DT") as fake_dt:
+            fake_dt.date.today.return_value = DT.date(2026, 9, 1)
+            fake_dt.datetime = DT.datetime
+            my_colleges.get_course_info()
+
+        assert sorted(my_colleges.course_information) == ["https://x/1", "https://x/2"]
+        stored = my_colleges.course_information["https://x/1"]
+        assert stored["start_date"] == DT.datetime(2026, 8, 17)
+        assert stored["end_date"] == DT.datetime(2026, 12, 11)
+
+    def test_a_finished_course_is_marked_ended(self, monkeypatch):
+        my_colleges = _my_colleges_for_course_info(
+            [_atag("CSC-151-N855", "https://x/1")],
+            [_span("01/12/2026 - 05/08/2026")],
+        )
+        monkeypatch.setattr(
+            "cqc_cpcc.my_colleges.is_date_in_range", lambda *args: True
+        )
+
+        my_colleges.get_course_info()
+
+        assert my_colleges.course_information["https://x/1"]["name"].endswith("(ended)")
+
+    def test_a_running_course_is_not_marked_ended(self, monkeypatch):
+        my_colleges = _my_colleges_for_course_info(
+            [_atag("CSC-151-N855", "https://x/1")],
+            [_span("08/17/2026 - 12/11/2026")],
+        )
+        monkeypatch.setattr(
+            "cqc_cpcc.my_colleges.is_date_in_range", lambda *args: False
+        )
+
+        my_colleges.get_course_info()
+
+        assert my_colleges.course_information["https://x/1"]["name"] == "CSC-151-N855"
+
+    def test_a_course_with_no_matching_date_cell_is_skipped_not_crashed(self, caplog):
+        """Fewer date spans than links would IndexError if zipped blindly."""
+        my_colleges = _my_colleges_for_course_info(
+            [_atag("CSC-151-N855", "https://x/1"), _atag("CSC-134-N801", "https://x/2")],
+            [_span("08/17/2026 - 12/11/2026")],
+        )
+
+        with caplog.at_level("WARNING"):
+            my_colleges.get_course_info()
+
+        assert list(my_colleges.course_information) == ["https://x/1"]
+        assert "No date range found" in caplog.text
+        assert "CSC-134-N801" in caplog.text
+
+    @pytest.mark.parametrize("bad", ["N/A", "TBD - TBD", "", "just one date"])
+    def test_an_unparseable_range_skips_that_course_and_names_it(self, bad, caplog):
+        my_colleges = _my_colleges_for_course_info(
+            [_atag("CSC-151-N855", "https://x/1")], [_span(bad)]
+        )
+
+        with caplog.at_level("WARNING"):
+            my_colleges.get_course_info()
+
+        assert my_colleges.course_information == {}
+        assert "CSC-151-N855" in caplog.text
+
+    def test_one_bad_course_does_not_stop_the_good_ones(self):
+        my_colleges = _my_colleges_for_course_info(
+            [_atag("BAD", "https://x/bad"), _atag("GOOD", "https://x/good")],
+            [_span("N/A"), _span("08/17/2026 - 12/11/2026")],
+        )
+
+        my_colleges.get_course_info()
+
+        assert list(my_colleges.course_information) == ["https://x/good"]
+
+
+@pytest.mark.unit
+class TestDeadlineDialogDump:
+    """A debug-only aid for when D2L renames the deadline fields.
+
+    It must be silent when debug logging is off, and must never take down a run
+    when the page will not answer.
+    """
+
+    @staticmethod
+    def _my_colleges(script_result=None, script_error=None):
+        driver = MagicMock()
+        if script_error is not None:
+            driver.execute_script.side_effect = script_error
+        else:
+            driver.execute_script.return_value = script_result
+        return MyColleges(driver, MagicMock()), driver
+
+    def test_nothing_is_read_from_the_page_when_debug_is_off(self, caplog):
+        my_colleges, driver = self._my_colleges(["AddEndDateDisplay => 08/24/2026"])
+
+        with caplog.at_level("INFO", logger=PROJECT_LOGGER):  # above DEBUG
+            my_colleges._log_deadline_dialog_candidates()
+
+        driver.execute_script.assert_not_called()
+
+    def test_the_data_bind_names_are_logged_when_debug_is_on(self, caplog):
+        my_colleges, _ = self._my_colleges([
+            "text: AddEndDateDisplay() => 08/24/2026",
+            "text: DropEndDateDisplay() => 11/01/2026",
+        ])
+
+        with caplog.at_level("DEBUG", logger=PROJECT_LOGGER):
+            my_colleges._log_deadline_dialog_candidates()
+
+        assert "AddEndDateDisplay" in caplog.text
+        assert "DropEndDateDisplay" in caplog.text
+
+    def test_a_page_that_will_not_run_the_script_is_survivable(self, caplog):
+        my_colleges, _ = self._my_colleges(script_error=RuntimeError("no such window"))
+
+        with caplog.at_level("DEBUG", logger=PROJECT_LOGGER):
+            my_colleges._log_deadline_dialog_candidates()  # must not raise
+
+        assert "Unable to enumerate" in caplog.text
+
+    def test_a_dialog_with_no_data_bind_elements_logs_only_the_header(self, caplog):
+        my_colleges, _ = self._my_colleges(None)
+
+        with caplog.at_level("DEBUG", logger=PROJECT_LOGGER):
+            my_colleges._log_deadline_dialog_candidates()
+
+        assert "data-bind candidates" in caplog.text
+
+
+@pytest.mark.unit
+class TestCloseCurrentCourseTab:
+    """Leaking a tab per course is how a long run runs out of windows."""
+
+    @staticmethod
+    def _my_colleges(handles, current_tab="course"):
+        driver = MagicMock()
+        driver.window_handles = handles
+        my_colleges = MyColleges(driver, MagicMock())
+        my_colleges.current_tab = current_tab
+        return my_colleges, driver
+
+    def test_the_course_tab_is_closed_and_the_original_restored(self):
+        my_colleges, driver = self._my_colleges(["original", "course"])
+
+        with patch("cqc_cpcc.my_colleges.close_tab") as close:
+            my_colleges._close_current_course_tab("original")
+
+        close.assert_called_once_with(driver)
+        driver.switch_to.window.assert_called_with("original")
+        assert my_colleges.current_tab is None
+
+    def test_an_already_closed_course_tab_is_not_closed_again(self):
+        my_colleges, driver = self._my_colleges(["original"])
+
+        with patch("cqc_cpcc.my_colleges.close_tab") as close:
+            my_colleges._close_current_course_tab("original")
+
+        close.assert_not_called()
+        assert my_colleges.current_tab is None
+
+    def test_a_failure_to_close_still_clears_the_tab_and_switches_back(self):
+        my_colleges, driver = self._my_colleges(["original", "course"])
+
+        with patch("cqc_cpcc.my_colleges.close_tab",
+                   side_effect=RuntimeError("no such window")):
+            my_colleges._close_current_course_tab("original")
+
+        assert my_colleges.current_tab is None
+        driver.switch_to.window.assert_called_with("original")
+
+    def test_a_dead_original_tab_does_not_raise(self):
+        """If the whole window went away there is nothing left to switch to."""
+        my_colleges, driver = self._my_colleges(["original", "course"])
+        driver.switch_to.window.side_effect = [None, RuntimeError("gone")]
+
+        with patch("cqc_cpcc.my_colleges.close_tab"):
+            my_colleges._close_current_course_tab("original")  # must not raise
+
+        assert my_colleges.current_tab is None
+
+
+@pytest.mark.unit
+class TestResolveAttendanceStartDate:
+    """The plan's answer wins; otherwise the roster decides; otherwise the course."""
+
+    COURSE_START = DT.datetime(2026, 8, 17)
+
+    def test_the_plans_date_is_used_verbatim(self):
+        chosen = DT.datetime(2026, 9, 14)
+
+        assert MyColleges._resolve_attendance_start_date(
+            chosen, ["09/01/2026", "09/08/2026"], self.COURSE_START
+        ) == chosen
+
+    def test_without_a_plan_date_the_latest_recorded_attendance_wins(self):
+        resolved = MyColleges._resolve_attendance_start_date(
+            None, ["09/01/2026", "09/08/2026", "08/25/2026"], self.COURSE_START
+        )
+
+        assert resolved == DT.datetime(2026, 9, 8)
+
+    def test_an_empty_roster_falls_back_to_the_course_start(self):
+        """A brand-new course has no recorded attendance at all."""
+        assert MyColleges._resolve_attendance_start_date(
+            None, [], self.COURSE_START
+        ) == self.COURSE_START
+
+    def test_roster_dates_that_are_all_placeholders_fall_back(self):
+        assert MyColleges._resolve_attendance_start_date(
+            None, ["N/A", ""], self.COURSE_START
+        ) == self.COURSE_START
+
+
+@pytest.mark.unit
+class TestNormalizeAttendanceRecordDate:
+    """Record keys arrive as datetimes, dates, or scraped strings."""
+
+    @pytest.mark.parametrize("value, expected", [
+        (DT.datetime(2026, 9, 7, 13, 45), DT.date(2026, 9, 7)),
+        (DT.date(2026, 9, 7), DT.date(2026, 9, 7)),
+        ("09/07/2026", DT.date(2026, 9, 7)),
+    ])
+    def test_every_shape_normalizes_to_a_plain_date(self, value, expected):
+        assert MyColleges._normalize_attendance_record_date(value) == expected
+
+
+@pytest.mark.unit
+class TestDateShapedButImpossibleValues:
+    """The digit guard and the parse failure below it are not the same check.
+
+    A value with digits gets past ``looks_like_a_scraped_date`` and has to be
+    rejected by ``get_datetime`` instead. These keep that second layer alive.
+    """
+
+    def test_a_deadline_span_holding_an_impossible_date_returns_none(self):
+        """The parser's rejection of this value is pinned in test_date.py."""
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        element = MagicMock()
+        element.text = "2026-99-99"
+
+        element_target = "cqc_cpcc.my_colleges.get_element_wait_retry"
+        with patch(element_target, return_value=element), \
+                patch("cqc_cpcc.my_colleges.get_datetime", side_effect=ValueError):
+            assert my_colleges._get_optional_deadline_date("//span", "Deadline") is None
+
+    def test_the_impossible_deadline_value_is_logged_verbatim(self, caplog):
+        """The raw text is the only clue to what the DOM actually held."""
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        element = MagicMock()
+        element.text = "2026-99-99"
+
+        # get_datetime is stubbed here only for speed -- the test above proves the
+        # real parser reaches this branch.
+        element_target = "cqc_cpcc.my_colleges.get_element_wait_retry"
+        with patch(element_target, return_value=element), \
+                patch("cqc_cpcc.my_colleges.get_datetime", side_effect=ValueError), \
+                caplog.at_level("WARNING", logger=PROJECT_LOGGER):
+            my_colleges._get_optional_deadline_date("//span", "Deadline")
+
+        assert "2026-99-99" in caplog.text
+
+    def test_a_course_range_of_impossible_dates_is_skipped(self, caplog):
+        with patch("cqc_cpcc.my_colleges.get_datetime", side_effect=ValueError), \
+                caplog.at_level("WARNING", logger=PROJECT_LOGGER):
+            result = MyColleges._parse_course_date_range("2026-99-99 - 2026-88-88")
+
+        assert result is None
+        assert "unparseable" in caplog.text
+
+
+@pytest.mark.unit
+class TestOpenFacultyPage:
+    """Every run starts here, and login has to happen before the wait for the title."""
+
+    def test_the_faculty_url_is_opened_then_login_then_the_title_wait(self):
+        driver, wait = MagicMock(), MagicMock()
+        my_colleges = MyColleges(driver, wait)
+        order = []
+        driver.get.side_effect = lambda url: order.append(("get", url))
+        wait.until.side_effect = lambda *a, **k: order.append(("wait",))
+
+        with patch("cqc_cpcc.my_colleges.login_if_needed",
+                   side_effect=lambda d: order.append(("login",))):
+            my_colleges.open_faculty_page()
+
+        assert [step[0] for step in order] == ["get", "login", "wait"]
+        assert order[0][1].endswith("/Student/Student/Faculty")
+
+
+@pytest.mark.unit
+class TestRunCoursesScrapesOnlyWhenNeeded:
+    """The course list is scraped once; a plan-building caller already has it."""
+
+    def test_an_empty_course_list_is_populated_before_selecting(self):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        calls = []
+        my_colleges.get_course_info = lambda: calls.append("scraped")
+
+        my_colleges._run_courses(
+            None, collect_attendance=False, mark_attendance=False,
+            collect_withdrawals=True, force_withdrawals=True,
+        )
+
+        assert calls == ["scraped"]
+
+    def test_an_already_populated_course_list_is_not_re_scraped(self):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        my_colleges.course_information = {
+            "https://x/1": {"name": "CSC-151-N855",
+                            "start_date": DT.datetime(2026, 8, 17),
+                            "end_date": DT.datetime(2026, 12, 11)}
+        }
+        my_colleges.get_course_info = lambda: (_ for _ in ()).throw(
+            AssertionError("must not re-scrape the faculty page")
+        )
+
+        from cqc_cpcc.run_plan import RunPlan
+
+        my_colleges._run_courses(
+            RunPlan(course_urls=[]),
+            collect_attendance=False, mark_attendance=False,
+            collect_withdrawals=True, force_withdrawals=True,
+        )
+
+    def test_selecting_no_courses_returns_nothing_and_says_so(self, caplog):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        my_colleges.course_information = {"https://x/1": {"name": "CSC-151-N855"}}
+
+        from cqc_cpcc.run_plan import RunPlan
+
+        with caplog.at_level("WARNING", logger=PROJECT_LOGGER):
+            result = my_colleges._run_courses(
+                RunPlan(course_urls=[]),
+                collect_attendance=False, mark_attendance=False,
+                collect_withdrawals=True, force_withdrawals=True,
+            )
+
+        assert result == []
+        assert "No courses selected" in caplog.text

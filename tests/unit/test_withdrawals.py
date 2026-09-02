@@ -439,3 +439,290 @@ class TestLastActivityJoin:
         }
 
         assert by_id["111"] != by_id["222"]
+
+
+@pytest.mark.unit
+class TestShortColumnAliases:
+    """The tracker's own headers are long; a hand-made CSV usually is not.
+
+    ``CSV_FIELDNAMES`` is the official tracker wording ("Student Lastname",
+    "Status (N/A, S, W)"). A file typed by hand with the obvious short names has
+    to read back rather than producing a row of empty fields.
+    """
+
+    def test_the_official_long_headers_read_back(self):
+        record = WithdrawalRecord.from_csv_row({
+            "Instructor": "Prof Queen",
+            "Student Lastname": "Doe",
+            "Student Firstname": "John",
+            "Student ID": "0123456",
+            "Course and Section": "CSC-151-N855",
+            "Status (N/A, S, W)": "W",
+            "Faculty's Best Reason assessed for Stopped Attending/Withdrawal":
+                REASON_STOPPED_SUBMITTING,
+        })
+
+        assert (record.last_name, record.first_name) == ("Doe", "John")
+        assert record.status == "W"
+        assert record.faculty_reason == REASON_STOPPED_SUBMITTING
+        # A leading zero is an identifier, not a number.
+        assert record.student_id == "0123456"
+
+    def test_the_short_headers_are_accepted_as_aliases(self):
+        record = WithdrawalRecord.from_csv_row({
+            "Last Name": "Doe",
+            "First Name": "John",
+            "Status": "W",
+            "Faculty Reason": REASON_STOPPED_SUBMITTING,
+        })
+
+        assert (record.last_name, record.first_name) == ("Doe", "John")
+        assert record.status == "W"
+        assert record.faculty_reason == REASON_STOPPED_SUBMITTING
+
+    def test_the_official_header_wins_when_a_file_carries_both(self):
+        record = WithdrawalRecord.from_csv_row(
+            {"Student Lastname": "Official", "Last Name": "Alias"}
+        )
+
+        assert record.last_name == "Official"
+
+    def test_an_empty_official_column_falls_through_to_the_alias(self):
+        """An exported file can carry the column but leave the cell blank."""
+        record = WithdrawalRecord.from_csv_row(
+            {"Student Lastname": "", "Last Name": "Alias"}
+        )
+
+        assert record.last_name == "Alias"
+
+    def test_a_row_with_neither_name_yields_an_empty_field(self):
+        assert WithdrawalRecord.from_csv_row({}).last_name == ""
+
+    def test_a_missing_week_column_reads_as_unknown_not_blank(self):
+        assert (WithdrawalRecord.from_csv_row({}).week_of_last_activity
+                == UNKNOWN_ACTIVITY_WEEK)
+
+
+@pytest.mark.unit
+class TestResolveCsvDir:
+    TARGET = "cqc_cpcc.utilities.env_constants.WITHDRAWALS_CSV_DIR"
+
+    def test_the_configured_directory_is_returned(self):
+        from cqc_cpcc.withdrawals import resolve_csv_dir
+
+        with patch(self.TARGET, "/tmp/withdrawals"):
+            assert resolve_csv_dir() == "/tmp/withdrawals"
+
+    @pytest.mark.parametrize("unset", ["", None])
+    def test_an_unset_directory_says_what_to_add_and_where(self, unset):
+        """A KeyError here would be read as a bug; this is a setup instruction."""
+        from cqc_cpcc.withdrawals import resolve_csv_dir
+
+        with patch(self.TARGET, unset), \
+                pytest.raises(ValueError, match="WITHDRAWALS_CSV_DIR") as raised:
+            resolve_csv_dir()
+
+        assert ".env" in str(raised.value)
+
+    def test_csv_path_for_term_falls_back_to_the_configured_directory(self):
+        with patch(self.TARGET, "/tmp/withdrawals"):
+            path = csv_path_for_term("Fall", "2026")
+
+        assert path == os.path.join("/tmp/withdrawals", "withdrawals_Fall_2026.csv")
+
+
+@pytest.mark.unit
+class TestGroupByTerm:
+    def test_courses_are_grouped_by_their_own_term(self):
+        from cqc_cpcc.withdrawals import group_by_term
+
+        records = [
+            make_record(student_id="1", course="CSC-151-N855"),
+            make_record(student_id="2", course="CSC-134-N801"),
+            make_record(student_id="3", course="CSC-151-N855"),
+        ]
+        terms = {"CSC-151-N855": ("Fall", "2026"), "CSC-134-N801": ("Spring", "2027")}
+
+        grouped = group_by_term(records, terms)
+
+        assert sorted(grouped) == [("Fall", "2026"), ("Spring", "2027")]
+        assert [r.student_id for r in grouped[("Fall", "2026")]] == ["1", "3"]
+
+    def test_the_lookup_is_case_and_whitespace_insensitive(self):
+        """Scraped course codes arrive with stray casing and padding."""
+        from cqc_cpcc.withdrawals import group_by_term
+
+        grouped = group_by_term(
+            [make_record(course="  csc-151-n855 ")],
+            {"CSC-151-N855": ("Fall", "2026")},
+        )
+
+        assert list(grouped) == [("Fall", "2026")]
+
+    def test_a_course_with_no_known_term_is_kept_under_an_empty_key(self):
+        """Dropping the record silently would lose a withdrawal."""
+        from cqc_cpcc.withdrawals import group_by_term
+
+        grouped = group_by_term([make_record()], {})
+
+        assert grouped == {("", ""): [make_record()]}
+
+    def test_no_records_groups_to_nothing(self):
+        from cqc_cpcc.withdrawals import group_by_term
+
+        assert group_by_term([], {"CSC-151-N855": ("Fall", "2026")}) == {}
+
+
+@pytest.mark.unit
+class TestRecordsFromCourses:
+    @staticmethod
+    def _course(withdrawals, course="CSC-151-N855"):
+        from unittest.mock import MagicMock
+
+        bs_course = MagicMock()
+        bs_course.get_withdrawal_records.return_value = withdrawals
+        bs_course.get_course_and_section.return_value = course
+        bs_course.get_weeks_in_course.return_value = 16
+        bs_course.course_start_date = DT.datetime(2026, 8, 17)
+        bs_course.last_activity_by_student = {}
+        return bs_course
+
+    @staticmethod
+    def _entry(student_id, course="CSC-151-N855"):
+        return (student_id, "s@example.edu", course, "Full Session", "Online",
+                STATUS_WITHDREW, UNKNOWN_ACTIVITY_WEEK, "reason")
+
+    def test_records_from_every_course_are_returned_together(self):
+        from cqc_cpcc.withdrawals import records_from_courses
+
+        courses = [
+            self._course({"Doe,_John": [self._entry("111")]}),
+            self._course({"Roe,_Jane": [self._entry("222", "CSC-134-N801")]},
+                         course="CSC-134-N801"),
+        ]
+
+        records = records_from_courses(courses, "Prof Queen")
+
+        assert [r.student_id for r in records] == ["111", "222"]
+        assert {r.instructor for r in records} == {"Prof Queen"}
+
+    def test_no_courses_produces_no_records(self):
+        from cqc_cpcc.withdrawals import records_from_courses
+
+        assert records_from_courses([], "Prof Queen") == []
+
+
+@pytest.mark.unit
+class TestApplyLastActivity:
+    """The week column is filled in only where a real date was found.
+
+    This runs after attendance is recorded, which is the whole point: marking a
+    student present updates their Last Attendance Recorded, so the roster read has
+    to happen afterwards.
+    """
+
+    @staticmethod
+    def _apply(records, activity, starts=None, weeks=None):
+        from cqc_cpcc.withdrawals import apply_last_activity
+
+        default_starts = {"CSC-151-N855": DT.datetime(2026, 8, 17)}
+        return apply_last_activity(
+            records,
+            activity,
+            default_starts if starts is None else starts,
+            {"CSC-151-N855": 16} if weeks is None else weeks,
+        )
+
+    def test_a_matched_student_gets_a_real_week(self):
+        record = make_record(student_id="111")
+
+        updated = self._apply(
+            [record], {("CSC-151-N855", "111"): DT.datetime(2026, 9, 7)}
+        )
+
+        assert updated[0].week_of_last_activity == "Week 3 of 16"
+        assert updated[0].last_activity_date == DT.datetime(2026, 9, 7)
+
+    def test_an_unmatched_student_keeps_N_A_rather_than_an_invented_week(self):
+        record = make_record(student_id="111")
+
+        updated = self._apply([record], {("CSC-151-N855", "999"): DT.datetime.now()})
+
+        assert updated[0].week_of_last_activity == UNKNOWN_ACTIVITY_WEEK
+        assert updated[0].last_activity_date is None
+
+    def test_the_same_student_in_two_sections_is_matched_per_section(self):
+        """The key is (course, id): one section may have a date and the other not."""
+        records = [
+            make_record(student_id="111", course="CSC-151-N855"),
+            make_record(student_id="111", course="CSC-134-N801"),
+        ]
+
+        updated = self._apply(
+            records,
+            {("CSC-151-N855", "111"): DT.datetime(2026, 9, 7)},
+            starts={"CSC-151-N855": DT.datetime(2026, 8, 17),
+                    "CSC-134-N801": DT.datetime(2026, 8, 17)},
+            weeks={"CSC-151-N855": 16, "CSC-134-N801": 16},
+        )
+
+        assert updated[0].week_of_last_activity == "Week 3 of 16"
+        assert updated[1].week_of_last_activity == UNKNOWN_ACTIVITY_WEEK
+
+    def test_a_known_date_without_a_known_course_start_stays_N_A(self):
+        """Half the inputs is not enough to compute a week honestly."""
+        record = make_record(student_id="111")
+
+        updated = self._apply(
+            [record], {("CSC-151-N855", "111"): DT.datetime(2026, 9, 7)},
+            starts={}, weeks={},
+        )
+
+        assert updated[0].week_of_last_activity == UNKNOWN_ACTIVITY_WEEK
+        # The date itself is still recorded, even when the week cannot be rendered.
+        assert updated[0].last_activity_date == DT.datetime(2026, 9, 7)
+
+    def test_the_originals_are_not_mutated(self):
+        record = make_record(student_id="111")
+
+        self._apply([record], {("CSC-151-N855", "111"): DT.datetime(2026, 9, 7)})
+
+        assert record.week_of_last_activity == UNKNOWN_ACTIVITY_WEEK
+
+    def test_an_empty_activity_map_returns_the_records_unchanged(self):
+        records = [make_record(student_id="111"), make_record(student_id="222")]
+
+        assert self._apply(records, {}) == records
+
+
+@pytest.mark.unit
+class TestUntrackableAndUnrenderableEdges:
+    """The paths that must degrade to N/A or "don't track" instead of guessing."""
+
+    def test_a_date_type_the_week_maths_cannot_use_reads_as_N_A(self):
+        """A string that slipped past the scraper must not become a fake week."""
+        assert format_activity_week(
+            "not a date", DT.datetime(2026, 8, 17), 16
+        ) == UNKNOWN_ACTIVITY_WEEK
+
+    def test_a_withdrawal_between_the_windows_is_not_tracked(self):
+        """After the course starts but before the drop window opens: no status.
+
+        Returning a status here would put a student on the official tracker on the
+        strength of a date that matches no policy window.
+        """
+        assert classify_withdrawal(
+            withdrawal_date=DT.datetime(2026, 8, 20),
+            course_start_date=DT.datetime(2026, 8, 17),
+            first_drop_day=DT.datetime(2026, 8, 25),
+            final_drop_day=DT.datetime(2026, 11, 1),
+        ) is None
+
+    def test_a_merge_that_adds_nothing_reports_no_changes(self):
+        """has_changes drives whether the file is rewritten at all."""
+        existing = [make_record(student_id="111")]
+
+        result = merge_records(existing, [make_record(student_id="111")])
+
+        assert result.has_changes is False
+        assert merge_records(existing, [make_record(student_id="222")]).has_changes
