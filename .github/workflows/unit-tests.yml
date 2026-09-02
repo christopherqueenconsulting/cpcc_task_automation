@@ -32,13 +32,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           poetry-version: ${{ env.POETRY_VERSION }}
           working-directory: "."
-          cache-key: unit-tests
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          echo "Installing dependencies for unit tests..."
-          poetry install --with test --no-interaction --no-ansi
+          # Determines both the install and the cache scope. Identical to the
+          # integration job's groups, so the two share one cache entry.
+          install-args: "--with test"
 
       - name: Run unit tests
         shell: bash

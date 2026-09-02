@@ -3,6 +3,38 @@
 # take poetry install groups into account.
 # Action code from:
 # https://github.com/actions/setup-python/issues/505#issuecomment-1273013236
+#
+# ---------------------------------------------------------------------------
+# CACHING RULES (please read before editing any `key:` below)
+# ---------------------------------------------------------------------------
+# A GitHub Actions cache entry is readable ONLY from the ref that wrote it,
+# plus the repository default branch. Three consequences drive this file:
+#
+#   1. Saving a cache from a PR ref (`refs/pull/<n>/merge`) writes an entry
+#      that nothing else can ever restore. It is write-only garbage, and it
+#      counts against the repo's 10 GB budget. When the budget is hit GitHub
+#      evicts least-recently-used, and what it evicts is master's entry --
+#      the one entry every branch CAN read. That turns into a ~100% miss rate.
+#      So: every `cache/save` step below is gated on `github.ref` == master.
+#
+#   2. The cache scope must be a deterministic function of the DEPENDENCY
+#      INPUTS only (OS, arch, python version, poetry version, dependency
+#      groups, poetry.lock hash). Never a run id, run number, github.sha, a
+#      timestamp, or a job name. A job name is the subtle one: two jobs that
+#      install identical dependency groups would each write their own ~900 MB
+#      copy of the same virtualenv. The scope slug is therefore DERIVED from
+#      `install-args` rather than accepted as a free-text input.
+#
+#   3. Cache only `${WORKDIR}/.venv`. poetry.toml sets `in-project = true`, so
+#      `.venv` IS the environment; `~/.cache/pypoetry/virtualenvs` is empty and
+#      `~/.cache/pip` + `~/.cache/pypoetry/{cache,artifacts}` are just the same
+#      packages a second time as downloaded wheels. Caching all of them stored
+#      every dependency roughly three times over.
+#
+# `poetry install` always runs, even on an exact cache hit. That is deliberate:
+# it makes the restore-keys ladder below completely safe (a near-miss venv is
+# reconciled against poetry.lock rather than trusted), and it keeps this action
+# a pure speed-up that can never change what actually gets installed.
 name: poetry-install-with-caching
 description: Poetry install with support for caching of dependency groups.
 
@@ -15,8 +47,11 @@ inputs:
     description: Poetry version
     required: true
 
-  cache-key:
-    description: Cache key to use for manual handling of caching
+  install-args:
+    description: >-
+      Arguments passed to `poetry install` (e.g. "--with test").
+      Also determines the dependency-group cache scope, so jobs installing
+      identical groups share a single cache entry.
     required: true
 
   working-directory:
@@ -32,9 +67,11 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
 
-    - uses: actions/cache@v4
+    # Exact-match only, no restore-keys: a poetry binary built for a different
+    # poetry/python version must never be restored in place of the pinned one.
+    - uses: actions/cache/restore@v4
       id: cache-bin-poetry
-      name: Cache Poetry binary - Python ${{ inputs.python-version }}
+      name: Restore Poetry binary - Python ${{ inputs.python-version }}
       env:
         SEGMENT_DOWNLOAD_TIMEOUT_MIN: "1"
       with:
@@ -78,16 +115,67 @@ runs:
       # Install poetry using the python version installed by setup-python step.
       run: pipx install "poetry==$POETRY_VERSION" --python '${{ steps.setup-python.outputs.python-path }}' --verbose
 
-    - name: Restore pip and poetry cached dependencies
-      uses: actions/cache@v4
+    # See rule 1 in the header comment: save from master only.
+    - name: Save Poetry binary
+      if: >-
+        steps.cache-bin-poetry.outputs.cache-hit != 'true' &&
+        github.ref == 'refs/heads/master'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          /opt/pipx/venvs/poetry
+        key: bin-poetry-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-${{ inputs.poetry-version }}
+
+    # See rule 2 in the header comment. Deriving the scope from install-args
+    # means the cache key cannot drift away from what is actually installed,
+    # and jobs installing the same groups converge on one entry:
+    #   "--with test"                    -> with-test
+    #   "--with test,e2e"                -> with-test-e2e
+    #   "--with=test_integration,test"   -> with-test-integration-test
+    - name: Derive dependency-group cache scope
+      id: scope
+      shell: bash
+      env:
+        INSTALL_ARGS: ${{ inputs.install-args }}
+      run: |
+        set -eu
+        slug="$(printf '%s' "$INSTALL_ARGS" \
+          | tr -c '[:alnum:]' '-' \
+          | tr -s '-' \
+          | sed 's/^-//; s/-$//')"
+        echo "slug=${slug:-default}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Poetry virtualenv
+      id: cache-venv
+      uses: actions/cache/restore@v4
       env:
         SEGMENT_DOWNLOAD_TIMEOUT_MIN: "4"
         WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
       with:
-        path: |
-          ~/.cache/pip
-          ~/.cache/pypoetry/virtualenvs
-          ~/.cache/pypoetry/cache
-          ~/.cache/pypoetry/artifacts
-          ${{ env.WORKDIR }}/.venv
-        key: py-deps-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ inputs.cache-key }}-${{ hashFiles(format('{0}/**/poetry.lock', env.WORKDIR)) }}
+        path: ${{ env.WORKDIR }}/.venv
+        key: venv-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-${{ hashFiles(format('{0}/**/poetry.lock', env.WORKDIR)) }}
+        # One rung, dropping only the lockfile hash. Dependabot changes
+        # poetry.lock constantly; without this ladder every such PR is a total
+        # miss and reinstalls from scratch. With it, the previous venv for the
+        # same dependency groups is restored and `poetry install` only has to
+        # reconcile the packages that actually changed.
+        restore-keys: |
+          venv-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
+      run: poetry install ${{ inputs.install-args }} --no-interaction --no-ansi
+
+    # See rule 1 in the header comment: save from master only. This runs after
+    # `poetry install` so the saved `.venv` is complete.
+    - name: Save Poetry virtualenv
+      if: >-
+        steps.cache-venv.outputs.cache-hit != 'true' &&
+        github.ref == 'refs/heads/master'
+      uses: actions/cache/save@v4
+      env:
+        WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
+      with:
+        path: ${{ env.WORKDIR }}/.venv
+        key: venv-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-${{ hashFiles(format('{0}/**/poetry.lock', env.WORKDIR)) }}
