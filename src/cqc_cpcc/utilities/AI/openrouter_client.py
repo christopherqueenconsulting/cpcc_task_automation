@@ -356,6 +356,32 @@ async def get_openrouter_completion(
             if hasattr(choice.message, 'refusal') and choice.message.refusal:
                 raise OpenAITransportError(f"Model refused: {choice.message.refusal}")
 
+            # Guard against silently accepting a TRUNCATED response. If the model hit
+            # the output token cap (finish_reason == "length"), the JSON is incomplete —
+            # a partial grade must FAIL LOUDLY, never be parsed/saved as if complete.
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason == "length":
+                error_msg = (
+                    f"Grading response was TRUNCATED by the output token limit "
+                    f"(finish_reason=length, max_tokens={max_tokens}). The result is "
+                    f"incomplete and was NOT accepted — increase max_tokens or reduce the "
+                    f"submission size, then re-grade."
+                )
+                logger.error(
+                    error_msg + (f" (correlation_id={correlation_id})" if correlation_id else "")
+                )
+                if correlation_id:
+                    record_response(
+                        correlation_id=correlation_id,
+                        response=choice.message.content,
+                        schema_name=schema_model.__name__,
+                        decision_notes=error_msg,
+                    )
+                raise OpenAISchemaValidationError(
+                    error_msg,
+                    validation_errors=["finish_reason=length (truncated output)"],
+                )
+
             # Parse JSON content
             content = choice.message.content
             if not content:

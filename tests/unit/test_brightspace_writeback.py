@@ -74,6 +74,43 @@ def test_build_feedback_html_excludes_criteria_when_flag_false():
     assert html == "<p>Summary.</p>"
 
 
+@pytest.mark.unit
+def test_build_feedback_html_includes_errors_observed_grouped_by_severity():
+    errors = [
+        SimpleNamespace(name="Null <deref>", description="Missing check",
+                        severity="Major", notes="Line 12"),
+        SimpleNamespace(name="Style", description="Naming", severity="minor", notes=""),
+    ]
+    html = wb.build_feedback_html("Summary.", criteria=None, errors=errors)
+    assert "<strong>Errors Observed:</strong>" in html
+    assert "<em>Major Issues:</em>" in html
+    assert "<em>Minor Issues:</em>" in html
+    assert "Null &lt;deref&gt;" in html          # escaped error name
+    assert "Missing check" in html
+    assert "Line 12" in html                       # notes rendered
+
+
+@pytest.mark.unit
+def test_build_feedback_html_no_errors_section_when_absent():
+    html = wb.build_feedback_html("Summary.", criteria=None, errors=[])
+    assert "Errors Observed" not in html
+    assert html == "<p>Summary.</p>"
+
+
+@pytest.mark.unit
+def test_build_write_items_carries_detected_errors_into_feedback():
+    err = SimpleNamespace(name="Bug", description="Broke", severity="major", notes="")
+    result = SimpleNamespace(
+        total_points_earned=8, total_points_possible=10, overall_feedback="Good.",
+        criteria_results=[], overall_band_label=None, detected_errors=[err],
+    )
+    items = wb.build_write_items_from_results(
+        [("123 - Jane Doe - 2026", result)], buffer_pct=0,
+    )
+    assert "Errors Observed" in items[0].feedback_html
+    assert "Bug" in items[0].feedback_html
+
+
 # ---------------------------------------------------------------------------
 # Result -> write-item mapping (applies buffer + parses name)
 # ---------------------------------------------------------------------------
@@ -297,16 +334,19 @@ def test_write_one_student_dry_run_does_not_fill_or_save(mocker):
 @pytest.mark.unit
 def test_write_one_student_real_fills_and_saves_draft(mocker):
     driver = MagicMock()
-    driver.execute_script.return_value = {"score": True, "feedback": True}
-    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
     mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
     save = mocker.patch.object(wb, "_save_draft", return_value=True)
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
     assert o.score_written == 90.0 and o.saved and o.note == "saved as draft"
     assert o.feedback_written is True
-    save.assert_called_once()
+    # Two-phase save: feedback commit, then score commit (fixes the score-drop race).
+    assert save.call_count == 2
 
 
 @pytest.mark.unit
@@ -319,8 +359,8 @@ def test_write_feedback_via_editor_empty_returns_false():
 @pytest.mark.unit
 def test_write_feedback_via_editor_types_into_iframe():
     driver = MagicMock()
-    # schedule -> True, poll -> True, setContent -> True, find iframe -> element
-    driver.execute_script.side_effect = [True, True, True, "IFRAME_EL"]
+    # schedule, poll, setContent, scroll-into-view, find-iframe, focus
+    driver.execute_script.side_effect = [True, True, True, True, "IFRAME_EL", None]
     ok = wb._write_feedback_via_editor(driver, MagicMock(), "<p>fb</p>")
     assert ok is True
     driver.switch_to.frame.assert_called_once_with("IFRAME_EL")
@@ -331,7 +371,8 @@ def test_write_feedback_via_editor_types_into_iframe():
 @pytest.mark.unit
 def test_write_feedback_via_editor_no_iframe_returns_false():
     driver = MagicMock()
-    driver.execute_script.side_effect = [True, True, True, None]  # iframe not found
+    # schedule, poll, setContent, scroll, find-iframe -> None
+    driver.execute_script.side_effect = [True, True, True, True, None]
     assert wb._write_feedback_via_editor(driver, MagicMock(), "<p>fb</p>") is False
     driver.switch_to.frame.assert_not_called()
 
@@ -339,7 +380,8 @@ def test_write_feedback_via_editor_no_iframe_returns_false():
 @pytest.mark.unit
 def test_write_one_student_no_score_field_reports_not_found(mocker):
     driver = MagicMock()
-    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": False, "feedback": False})
+    # Patch the hydration wait directly so the test doesn't sit through the poll timeout.
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": False, "feedback": False})
     save = mocker.patch.object(wb, "_save_draft")
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
@@ -384,8 +426,11 @@ def test_select_rubric_levels_passes_payload_and_dryrun_flag():
 @pytest.mark.unit
 def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
     driver = MagicMock()
-    driver.execute_script.return_value = {"score": True, "feedback": True}
-    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
     rub = mocker.patch.object(wb, "_select_rubric_levels", return_value={
         "selected": [{"criterion": "Program Performance", "level": "Above Average"}], "missing": []})
     mocker.patch.object(wb, "_save_draft", return_value=True)
@@ -420,8 +465,11 @@ def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker)
 @pytest.mark.unit
 def test_write_one_student_filled_but_no_save_button(mocker):
     driver = MagicMock()
-    driver.execute_script.return_value = {"score": True, "feedback": True}
-    mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
     mocker.patch.object(wb, "_save_draft", return_value=False)
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
@@ -430,8 +478,369 @@ def test_write_one_student_filled_but_no_save_button(mocker):
 
 
 @pytest.mark.unit
-def test_gather_assignment_learners_filters_and_handles_error():
+def test_ensure_score_committed_verifies_and_repairs(mocker):
+    """Blurs + verifies the field value; re-fills until it lands, else returns False."""
     driver = MagicMock()
+    mocker.patch("time.sleep")
+    el = MagicMock()
+    driver.execute_script.return_value = el
+    fill = mocker.patch.object(wb, "_fill_score", return_value=True)
+    # Field reads back the wanted value -> committed on first check, no re-fill.
+    el.get_attribute.return_value = "7.5"
+    assert wb._ensure_score_committed(driver, 7.5) is True
+    fill.assert_not_called()
+    # Field never shows the value -> retries exhausted -> False (+ re-fills each round).
+    el.get_attribute.return_value = ""
+    assert wb._ensure_score_committed(driver, 7.5, attempts=2) is False
+    assert fill.call_count == 2
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_dry_run_reports_would_post(mocker):
+    """Quiz dry-run: fields hydrate, Completion Summary feedback editor reachable."""
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    switch = mocker.patch.object(wb, "_switch_quiz_view", return_value=True)
+    mocker.patch.object(wb, "_locate_feedback_editor", return_value=True)
+    save = mocker.patch.object(wb, "_click_commit")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
+
+    assert o.fields_found and o.score_written == 90 and not o.saved
+    assert "would POST" in o.note and "overall feedback" in o.note
+    save.assert_not_called()                 # dry run must never post
+    # switched to completion summary to check feedback, then back to attempt
+    assert switch.call_count == 2
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_dry_run_flags_missing_feedback_editor(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": False})
+    mocker.patch.object(wb, "_switch_quiz_view", return_value=True)
+    mocker.patch.object(wb, "_locate_feedback_editor", return_value=False)
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    # No doc path + default attach mode -> inline branch (checks the feedback editor).
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None,
+                               dry_run=True, feedback_mode="inline")
+    assert o.fields_found and "overall feedback target NOT found" in o.note
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_no_score_field(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": False, "feedback": False})
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
+    assert not o.fields_found and "score field not found" in o.note
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_real_posts_score_and_feedback(mocker):
+    """Real quiz write: fill score, post, switch to Completion Summary, feedback, save."""
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    fill = mocker.patch.object(wb, "_fill_score", return_value=True)
+    confirm = mocker.patch.object(wb, "_confirm_dialog", return_value=True)
+    switch = mocker.patch.object(wb, "_switch_quiz_view", return_value=True)
+    fb = mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    commit = mocker.patch.object(wb, "_click_commit", return_value=True)
+    mocker.patch("time.sleep")  # skip the inter-step sleeps
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
+
+    assert o.score_written == 90
+    assert o.feedback_written is True
+    assert o.saved is True and "posted score" in o.note
+    fill.assert_called_once_with(driver, 90)         # keystroke score fill
+    fb.assert_called_once()
+    switch.assert_called_once_with(driver, "completion summary")
+    assert commit.call_count == 2            # post score, then save feedback
+    assert confirm.called                    # the score-sum warning is confirmed
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_attach_mode_uploads_doc_not_inline(mocker, tmp_path):
+    """Attach mode uploads the .docx (not inline HTML) and marks feedback_attached."""
+    doc = tmp_path / "Jane_Feedback.docx"
+    doc.write_bytes(b"PK\x03\x04docx")
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_confirm_dialog", return_value=True)
+    mocker.patch.object(wb, "_switch_quiz_view", return_value=True)
+    mocker.patch.object(wb, "_click_commit", return_value=True)
+    inline = mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    attach = mocker.patch.object(wb, "_attach_feedback_file", return_value=True)
+    mocker.patch("time.sleep")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None,
+                               dry_run=False, feedback_mode="attach")
+
+    attach.assert_called_once_with(driver, str(doc), mocker.ANY)
+    inline.assert_not_called()
+    assert o.feedback_attached is True and o.feedback_written is False
+    assert o.saved is True and "feedback doc" in o.note
+
+
+@pytest.mark.unit
+def test_write_one_quiz_student_attach_mode_falls_back_to_inline_without_doc(mocker):
+    """Attach mode with no doc path falls back to writing inline feedback."""
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_confirm_dialog", return_value=True)
+    mocker.patch.object(wb, "_switch_quiz_view", return_value=True)
+    mocker.patch.object(wb, "_click_commit", return_value=True)
+    inline = mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    attach = mocker.patch.object(wb, "_attach_feedback_file", return_value=True)
+    mocker.patch("time.sleep")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")  # no doc path
+
+    wb._write_one_quiz_student(driver, MagicMock(), item, o, lambda *_: None,
+                               dry_run=False, feedback_mode="attach")
+
+    attach.assert_not_called()
+    inline.assert_called_once()
+    assert o.feedback_written is True and o.feedback_attached is False
+
+
+@pytest.mark.unit
+def test_write_one_student_attach_mode_uploads_doc(mocker, tmp_path):
+    """Assignment attach mode uploads the .docx instead of typing inline feedback."""
+    doc = tmp_path / "Jane_Feedback.docx"
+    doc.write_bytes(b"PK\x03\x04docx")
+    driver = MagicMock()
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    save = mocker.patch.object(wb, "_save_draft", return_value=True)
+    inline = mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    attach = mocker.patch.object(wb, "_attach_feedback_file", return_value=True)
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None,
+                          dry_run=False, feedback_mode="attach")
+
+    attach.assert_called_once_with(driver, str(doc), mocker.ANY)
+    inline.assert_not_called()
+    assert o.feedback_attached is True and o.saved is True
+    save.assert_called_once()   # attach mode = single save (no editor race)
+
+
+@pytest.mark.unit
+def test_attach_feedback_file_missing_path_returns_false():
+    assert wb._attach_feedback_file(MagicMock(), "/no/such/file.docx") is False
+
+
+@pytest.mark.unit
+def test_attach_feedback_file_happy_path(mocker, tmp_path):
+    """Full flow: Attach -> File Upload -> My Computer -> Upload -> send_keys -> Add."""
+    from selenium.webdriver.common.by import By
+    doc = tmp_path / "Feedback.docx"
+    doc.write_bytes(b"x")
+    input_el = MagicMock()
+    upload_btn = MagicMock()
+    iframe = MagicMock()
+    iframe.get_attribute.return_value = "Add a File"
+    driver = MagicMock()
+    # All the JS steps (clicks, file-listed, attachment-present) succeed.
+    driver.execute_script.return_value = True
+
+    def find_elements(by, value):
+        if by == By.TAG_NAME and value == "iframe":
+            return [iframe]
+        if "d2l-fileinput-addbuttons" in value:
+            return [upload_btn]
+        if "input[type=file]" in value:
+            return [input_el]
+        return []
+    driver.find_elements.side_effect = find_elements
+    mocker.patch("time.sleep")
+
+    assert wb._attach_feedback_file(driver, str(doc)) is True
+    upload_btn.click.assert_called_once()                 # REAL click = trusted gesture
+    input_el.send_keys.assert_called_once_with(str(doc))  # absolute path sent
+    driver.switch_to.default_content.assert_called()      # frame restored
+
+
+@pytest.mark.unit
+def test_build_feedback_docs_zip_uses_id_bearing_folders(tmp_path):
+    """Each doc is placed under its ID-bearing student_key folder; missing paths skipped."""
+    import zipfile
+    a = tmp_path / "a.docx"; a.write_bytes(b"x")
+    b = tmp_path / "b.docx"; b.write_bytes(b"y")
+    out = tmp_path / "fb.zip"
+    z = wb.build_feedback_docs_zip(
+        {
+            "100003-600002 - Ben Sample - Jul 7, 2026": str(a),
+            "99-1 - Jane Doe": str(b),
+            "no-doc": None,                       # skipped (falsy path)
+            "gone": str(tmp_path / "missing.docx"),  # skipped (not on disk)
+        },
+        out_path=str(out),
+    )
+    assert z == str(out)
+    with zipfile.ZipFile(z) as zf:
+        assert sorted(zf.namelist()) == [
+            "100003-600002 - Ben Sample - Jul 7, 2026/a.docx",
+            "99-1 - Jane Doe/b.docx",
+        ]
+
+
+@pytest.mark.unit
+def test_build_feedback_docs_zip_returns_none_when_no_docs(tmp_path):
+    assert wb.build_feedback_docs_zip({}) is None
+    assert wb.build_feedback_docs_zip({"k": None}) is None
+    assert wb.build_feedback_docs_zip({"k": str(tmp_path / "nope.docx")}) is None
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_happy_path(mocker, tmp_path):
+    """Add Feedback Files -> active iframe -> REAL Upload click -> send_keys -> Add."""
+    from selenium.webdriver.common.by import By
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK\x03\x04")
+    input_el = MagicMock()
+    upload_btn = MagicMock()
+    iframe = MagicMock()
+    iframe.get_attribute.return_value = "Add Feedback Files"
+    driver = MagicMock()
+    driver.execute_script.return_value = True   # button click, file-listed, Add all succeed
+
+    def find_elements(by, value):
+        if by == By.TAG_NAME and value == "iframe":
+            return [iframe]
+        if "d2l-fileinput-addbuttons" in value:
+            return [upload_btn]
+        if "input[type=file]" in value:
+            return [input_el]
+        return []
+    driver.find_elements.side_effect = find_elements
+    mocker.patch("time.sleep")
+
+    assert wb.import_feedback_zip(driver, str(z)) is True
+    upload_btn.click.assert_called_once()                # trusted gesture creates the input
+    input_el.send_keys.assert_called_once_with(str(z))   # absolute ZIP path sent
+    driver.switch_to.default_content.assert_called()     # frame restored
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_missing_button_returns_false(mocker, tmp_path):
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK")
+    driver = MagicMock()
+    driver.execute_script.return_value = False   # 'Add Feedback Files' button not found
+    mocker.patch("time.sleep")
+    assert wb.import_feedback_zip(driver, str(z)) is False
+    assert wb.import_feedback_zip(driver, "/no/such/file.zip") is False
+
+
+@pytest.mark.unit
+def test_import_assignment_feedback_docs_marks_outcomes(mocker, tmp_path):
+    """Live import: submitters with a doc are flagged attached+saved; others noted."""
+    doc = tmp_path / "Donovan_Feedback.docx"; doc.write_bytes(b"x")
+    imp = mocker.patch.object(wb, "import_feedback_zip", return_value=True)
+    items = [
+        wb.GradeWriteItem("100003-600002 - Ben Sample", "Ben Sample",
+                          80, 90, 100, "<p>fb</p>", feedback_doc_path=str(doc)),
+        wb.GradeWriteItem("no-sub - Carol", "Carol", 0, 0, 100, "<p>fb</p>"),
+    ]
+    report = wb.GradeWriteReport(route="assignment", dry_run=False)
+    out = wb._import_assignment_feedback_docs(
+        MagicMock(), "url", items, [items[0]], report, lambda *_: None, dry_run=False)
+
+    imp.assert_called_once()
+    by_name = {o.display_name: o for o in out.outcomes}
+    assert by_name["Ben Sample"].feedback_attached is True
+    assert by_name["Ben Sample"].saved is True
+    assert by_name["Carol"].feedback_attached is False
+    assert "no feedback doc" in by_name["Carol"].note
+
+
+@pytest.mark.unit
+def test_import_assignment_feedback_docs_dry_run_does_not_upload(mocker, tmp_path):
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    imp = mocker.patch.object(wb, "import_feedback_zip", return_value=True)
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+    report = wb.GradeWriteReport(route="assignment", dry_run=True)
+    out = wb._import_assignment_feedback_docs(
+        MagicMock(), "url", [item], [item], report, lambda *_: None, dry_run=True)
+    imp.assert_not_called()
+    assert out.outcomes[0].feedback_attached is False
+    assert "dry run" in out.outcomes[0].note
+
+
+@pytest.mark.unit
+def test_push_assignment_grades_attach_mode_uses_bulk_import(mocker, tmp_path):
+    """Attach mode on the assignment route bulk-imports instead of per-student nav."""
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs",
+                               return_value=wb.GradeWriteReport(route="assignment", dry_run=False))
+    gather = mocker.patch.object(wb, "_gather_assignment_learners", return_value=[])
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+    wb._push_assignment_grades(MagicMock(), MagicMock(), "url", [item], lambda *_: None,
+                               None, dry_run=False, feedback_mode="attach")
+    bulk.assert_called_once()
+    gather.assert_not_called()   # no per-student navigation in bulk attach mode
+
+
+@pytest.mark.unit
+def test_confirm_dialog_excludes_destructive_by_default():
+    """SAFETY: the discard/reset-auto-evaluation dialog must be in the exclude list."""
+    driver = MagicMock()
+    driver.execute_script.return_value = True
+    assert wb._confirm_dialog(driver, ("continue anyway",)) is True
+    include_arg, exclude_arg = driver.execute_script.call_args[0][1], driver.execute_script.call_args[0][2]
+    assert "continue anyway" in include_arg
+    # Never confirm the destructive dialog.
+    assert "discard" in exclude_arg and "auto-evaluation" in exclude_arg and "reset to" in exclude_arg
+
+
+@pytest.mark.unit
+def test_fill_score_uses_real_keystrokes():
+    driver = MagicMock()
+    el = MagicMock()
+    driver.execute_script.return_value = el   # _FIND_SCORE_INPUT_JS returns the input
+    assert wb._fill_score(driver, 42) is True
+    assert el.send_keys.called                # typed via real keystrokes, not a JS value set
+    # No input element -> False.
+    driver.execute_script.return_value = None
+    assert wb._fill_score(driver, 42) is False
+
+
+@pytest.mark.unit
+def test_is_quiz_writeback_url():
+    from cqc_streamlit_app.utils import _is_quiz_writeback_url
+    assert _is_quiz_writeback_url(
+        "https://brightspace.cpcc.edu/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?qi=1&ou=2"
+    )
+    assert not _is_quiz_writeback_url(
+        "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/folders_manage.d2l?ou=2"
+    )
+    assert not _is_quiz_writeback_url("")
+
+
+@pytest.mark.unit
+def test_gather_assignment_learners_filters_and_handles_error(mocker):
+    mocker.patch("time.sleep")
+    driver = MagicMock()
+    driver.current_url = "https://bs/folder_submissions_users.d2l?ou=2"  # no re-nav
     driver.execute_script.return_value = [
         {"name": "Jane Doe", "userId": "1"},
         {"name": "", "userId": "2"},       # no name -> dropped
@@ -444,6 +853,34 @@ def test_gather_assignment_learners_filters_and_handles_error():
 
 
 @pytest.mark.unit
+def test_submissions_users_url_derives_per_user_view():
+    # Any dropbox mark URL with ou+db -> the per-user submissions view.
+    out = wb._submissions_users_url(
+        "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/"
+        "folder_submissions_files.d2l?d2l_isfromtab=1&db=600002&ou=200002")
+    assert out == ("https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/"
+                   "folder_submissions_users.d2l?ou=200002&db=600002")
+    # Missing db -> return the URL unchanged (can't safely rebuild it).
+    same = "https://bs/d2l/lms/dropbox/admin/mark/x.d2l?ou=1"
+    assert wb._submissions_users_url(same) == same
+
+
+@pytest.mark.unit
+def test_gather_assignment_learners_navigates_to_users_view(mocker):
+    """When on the per-file view, gather re-navigates to the per-user view first."""
+    mocker.patch("time.sleep")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
+    driver = MagicMock()
+    driver.current_url = "https://bs/folder_submissions_files.d2l?db=1&ou=2"
+    driver.execute_script.return_value = [{"name": "Jane Doe", "userId": "9"}]
+    rows = wb._gather_assignment_learners(
+        driver, "https://bs/d2l/lms/dropbox/admin/mark/folder_submissions_files.d2l?db=1&ou=2")
+    assert [r["userId"] for r in rows] == ["9"]
+    dest = driver.get.call_args[0][0]
+    assert "folder_submissions_users.d2l" in dest and "ou=2" in dest and "db=1" in dest
+
+
+@pytest.mark.unit
 def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
     mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
     driver = MagicMock()
@@ -452,7 +889,9 @@ def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
 
     ok = wb._open_assignment_evaluation(driver, wait, url, {"name": "Jane Doe", "userId": "117059"})
     assert ok is True
-    driver.get.assert_called_once_with(url)
+    # navigated to the per-user view (name links live only there)
+    dest = driver.get.call_args[0][0]
+    assert "folder_submissions_users.d2l" in dest and "ou=2" in dest and "db=1" in dest
     # located the name link by its feedback,<userId> onclick, then clicked it
     xpath = driver.find_element.call_args[0][1]
     assert "feedback,117059" in xpath and "EvaluateDropboxSubmission" in xpath
@@ -468,7 +907,9 @@ def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
 def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
     import cqc_cpcc.utilities.brightspace_fetch as bf
     driver = MagicMock(); wait = MagicMock()
+    driver.current_url = "https://bs/folder_submissions_users.d2l?ou=1"  # already on users view
     driver.execute_script.return_value = {"score": True, "feedback": True}
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax", create=True)
     mocker.patch("cqc_cpcc.utilities.brightspace_submissions.detect_route",
                  return_value="assignment")
     mocker.patch.object(bf, "_open_and_login")
@@ -482,8 +923,27 @@ def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
     items = [wb.GradeWriteItem("k1", "Jane Doe", 80, 90, 100, "<p>fb</p>")]
     report = wb.push_grades_to_brightspace(
         "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/x?ou=1",
-        items, driver=driver, wait=wait, dry_run=True,
+        items, driver=driver, wait=wait, dry_run=True, feedback_mode="inline",
     )
     assert report.route == "assignment" and report.matched_count == 1
     assert report.saved_count == 0
-    save.assert_not_called()
+
+
+@pytest.mark.unit
+def test_push_assignment_grades_attach_no_docs_reports_clearly(mocker):
+    """Attach mode with no feedback docs ON DISK -> clear warning, not an empty failure."""
+    import cqc_cpcc.utilities.brightspace_fetch as bf
+    driver = MagicMock(); wait = MagicMock()
+    mocker.patch("cqc_cpcc.utilities.brightspace_submissions.detect_route", return_value="assignment")
+    mocker.patch.object(bf, "_open_and_login")
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs")
+    gather = mocker.patch.object(wb, "_gather_assignment_learners")
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path="/no/such/file.docx")  # stale/missing path
+    report = wb.push_grades_to_brightspace(
+        "https://bs/d2l/lms/dropbox/admin/mark/x?ou=1&db=2", [item],
+        driver=driver, wait=wait, dry_run=True, feedback_mode="attach")
+    bulk.assert_not_called()    # no real docs -> no bulk import attempted
+    gather.assert_not_called()  # and no per-student navigation
+    assert any("feedback" in w.lower() and "docx" in w.lower() for w in report.warnings)
+    assert report.outcomes and not report.outcomes[0].matched

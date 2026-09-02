@@ -147,8 +147,17 @@ Selenium — nothing exercises a real browser or the real BrightSpace DOM.**
 
 1. ~~**Assignment instructions extraction** — highest priority, known broken.~~
    ✅ **FIXED & verified live 2026-06-29** (editor-first ordering; see §4 above).
-2. **Quiz instructions** = first question — ✅ **selector fixed & verified live 2026-06-29**
-   (`.question-text` on the quiz edit page; see "Quiz route — live DOM" below).
+2. **Quiz instructions** = the (single) question prompt — ✅ **REWRITTEN & verified live
+   2026-07-09.** These are exam quizzes: one written-response question whose prompt IS the
+   instructions. `fetch_quiz_instructions` now opens the first learner **attempt** and reads
+   the prompt from the Consistent Evaluation page — the prompt is a `<d2l-html-block>` tagged
+   `d2l-questions-written-response-question-text` whose rich text lives in its **shadow root**
+   (`d2l-html-block-rendered` div), so a light-DOM `.text` read returns empty. New
+   `_READ_QUIZ_QUESTION_JS` scopes to that block and deep-scans its shadow DOM (returned the
+   full 5,265-char Exam 2 prompt live). The old `.question-text` edit-page XPath is a
+   secondary fallback. **The generic `_collect_instructions_text` fallback was REMOVED from
+   the quiz route** — it grabbed course-home widgets / student text and mislabeled them as
+   instructions; when the prompt can't be read we now return `None` (paste manually).
 3. **Quiz submissions** — ✅ **REWRITTEN & verified live 2026-06-29.** `fetch_quiz_file_uploads`
    now drives the Consistent Evaluation UI (NavInfo onclick attempts; per-learner grouping;
    file URL from `d2l-list-item[key]`; written-response capture). See "Quiz route — live DOM"
@@ -183,9 +192,29 @@ question is `<div class="question-item">` → `<div class="question-text">` (cle
 2,096 chars live) + `<div class="question-content">` (type, e.g. "Written Response").
 `QUIZ_QUESTION_XPATH` updated to match `question-text`.
 
-**Quiz submissions — ✅ REWRITTEN & VERIFIED LIVE 2026-06-29 (`fetch_quiz_file_uploads`).**
-The new `fetch_quiz_file_uploads` drives the Consistent Evaluation UI end-to-end; every
-selector/mechanism below was confirmed against the live read-only quiz (qi=3000001 ou=200003):
+**Quiz submissions — ✅ RE-VERIFIED & TWO BUGS FIXED LIVE 2026-07-09 (`fetch_quiz_file_uploads`).**
+End-to-end run on a real graded quiz (qi=3000002 ou=200004, CSC151 "Programming Exam 2",
+8 learners) produced a correct ZIP of 6 `.java` files (2 learners genuinely submitted
+nothing). Two real bugs — the source of the "stuck building the zip" report — were fixed:
+- **The hang: `_open_and_login` retry storm.** It called `click_element_wait_retry`
+  on `SUBMISSIONS_TAB_XPATH` unconditionally, but that tab exists only on the assignment
+  (dropbox) page — the quiz grid (`quiz_mark_users.d2l`) has none. With `WAIT_DEFAULT_TIMEOUT=30`
+  + `MAX_WAIT_RETRY=3`, the nested `get_/click_element_wait_retry` retries burned **~4 min**
+  before giving up, all under one "Opening Submissions view..." message → looked frozen.
+  Fix: probe with a short `WebDriverWait(5)` and only click when the tab is present
+  (else log + continue). Benefits the quiz-writeback route too.
+- **Empty captures: lazy-load race.** The Consistent Evaluation UI renders the question
+  shell first and fills the answer body (typed text / uploaded-file `<d2l-list-item
+  key="viewFile...">`) ~1-2 s later. `_capture_quiz_attempt` read immediately → missed
+  files. Fix: `_wait_for_quiz_attempt_content` (`_QUIZ_ATTEMPT_READY_JS`) polls until a
+  question + an answer signal (file item, real response text, or the explicit "- No text
+  entered -" empty marker) is present before reading.
+- Also added **per-student progress** (`Collecting attempt i/N: <name>...`) so the loop
+  never looks stuck. NOTE: quiz *instructions* (`fetch_quiz_instructions`) returned empty
+  on this quiz — still to tune; unrelated to submissions.
+
+The original 2026-06-29 write-up (still accurate for the mechanism) — confirmed against the
+live read-only quiz (qi=3000001 ou=200003):
 - **Grid URL** derived from the pasted quiz URL by `derive_quiz_grading_url` →
   `/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=<ou>&qi=<qi>` (also scans a nested
   `returnUrl` for qi/ou). Reaching the grid opened all 16 learner attempts.
@@ -211,7 +240,7 @@ selector/mechanism below was confirmed against the live read-only quiz (qi=30000
   - Plain `<a href>` `fileId`/`viewFile`/`download` links kept as a fallback.
   - Question text: `.d2l-html-block-rendered`.
 
-## Draft grade write-back — Feature #4 (BUILT; field selectors VERIFIED live 2026-06-30)
+## Grade write-back — Feature #4 (assignment=draft VERIFIED 2026-07-01; quiz=POST VERIFIED 2026-07-09/10)
 
 Implemented in **`src/cqc_cpcc/utilities/brightspace_writeback.py`** +
 `add_brightspace_writeback_element` (UI) on the Grade Assignment page (after the
@@ -233,18 +262,92 @@ name matching) is fully unit-tested; the Selenium write is isolated and `dry_run
 - **Overall feedback editor:** `<d2l-htmleditor label="Overall Feedback">` (per-question:
   `<d2l-htmleditor label="Feedback" class="d2l-consistent-eval-quiz-question-feedback">`).
   `FEEDBACK_EDITOR_SELECTORS` leads with `d2l-htmleditor[label='Overall Feedback']`.
-- ⚠️ **Draft vs Publish (the one unverified write step):** an already-published attempt
-  shows primary **"Update"** + **"Retract"** — there is NO "Save Draft" button here. The
-  ASSIGNMENT (dropbox) eval page has the cleaner "Save Draft" vs "Publish" pair. So
-  `_save_draft` matches Save/"Save Draft" and EXCLUDES publish/update/retract; for the
-  quiz route the actual draft-save control is publish-state-dependent and **must be
-  confirmed on an UNPUBLISHED attempt in a safe (non-ended) course before any real save.**
+- ⚠️ **Quiz has NO draft — it POSTS immediately.** An already-published attempt shows
+  primary **"Update"** + **"Retract"** (an unpublished one shows **"Publish"**); there is
+  NO "Save Draft" here. The ASSIGNMENT (dropbox) eval page has the cleaner "Save Draft" vs
+  "Publish" pair. So on the quiz route the score+feedback are published on write — the web
+  app relabels the button **"Write Grades and Feedback to Brightspace"** and shows a warning
+  notice when `_is_quiz_writeback_url(url)` is true; the report says "posted".
 
-**Still UNVERIFIED (needs a safe write target):** the actual field FILL + Save-as-draft
-click (both routes), and the assignment route's per-student evaluate-link discovery
-(`_gather_assignment_learners` / `_open_assignment_evaluation` are best-effort).
-Per the owner's decision this session is **dry-run only** — full write path built + tested,
-real Save to be exercised later on a designated safe target.
+**QUIZ WRITE — FIXED & VERIFIED LIVE 2026-07-09/10.** Real POST on qi=3000002 ou=200004
+("Programming Exam 2"): posted 42/200 + overall feedback to a learner, re-read fresh from the
+server = both persisted, then reset to 0/empty. Key mechanics (all in `brightspace_writeback.py`):
+- **Score = REAL keystrokes** (`_fill_score`): the `d2l-input-number` Lit component ignores the
+  native value setter — must `send_keys` (scrollIntoView → focus → `Keys.END` →
+  `Keys.BACKSPACE*12` to CLEAR, since Ctrl+A+Delete appended → "4242" → type → `Keys.TAB`).
+- **Commit** clicks Update/Publish, then D2L pops **"final score ≠ sum of question points…
+  continue anyway?"** → `_confirm_dialog` clicks **Yes**; it EXCLUDES `_DESTRUCTIVE_DIALOG_TEXTS`
+  ("discard/reset auto-evaluation/resubmitted/in progress") and must NEVER confirm that one.
+- **Overall feedback is on the "Completion Summary" attempt view** (`_switch_quiz_view` flips
+  `<select aria-label="User Attempts">`), then `_write_feedback_via_editor` into
+  `d2l-htmleditor[label='Overall Feedback']`, then Save.
+- **Lazy-load race fixed** by `_wait_for_write_targets` (polls until the score input renders) —
+  this was the dry-run "fields not found" failure.
+
+**DOCKER PROFILE PERSISTENCE — FIXED 2026-07-09.** `get_docker_driver` never set
+`--profile-directory` (ephemeral `Default` → re-MFA every run). Now (non-headless) adds
+`--user-data-dir=/home/seluser/chrome-profile` + `--profile-directory=<INSTRUCTOR_USERID>`;
+KMSI now clicks **"Yes"** (`_accept_stay_signed_in`, persistent cookie). Verified: consecutive
+runs skip MFA.
+
+**FEEDBACK DELIVERY: attach .docx (default) vs inline — added 2026-07-10.**
+`push_grades_to_brightspace(..., feedback_mode="attach"|"inline")` + a web-app radio. Attach
+uploads each student's clean `Feedback.docx` (`GradeWriteItem.feedback_doc_path`, sourced from
+`st.session_state["feedback_doc_paths_by_key"][run_key]`): on the QUIZ route per-attempt to the
+eval page's attachment widget alongside the posted score; on the ASSIGNMENT route as ONE bulk
+"Add Feedback Files" ZIP import (see below). Inline injects `feedback_html` per student. Also
+`build_feedback_html` now renders an **"Errors Observed"** section from
+`result.detected_errors` (matches the .docx).
+
+**FILE ATTACH FLOW — VERIFIED LIVE 2026-07-10 (`_attach_feedback_file`, quiz Completion
+Summary).** Legacy nested-iframe picker; the working mechanics:
+1. JS-click "Attach" opener → 2. **synthetic** pointer-click "File Upload" (Lit menu item —
+   bare `.click()` ignored) → opens `<iframe title="Add a File">` (TWO siblings render; the
+   **LAST is the active/top** dialog) → 3. in the active frame, click
+   `a.d2l-datalist-item-actioncontrol[title='My Computer']` (offscreen `<a>` the framework
+   binds; drive via JS, Selenium `is_displayed()` lies) → Upload pane →
+   4. **REAL Selenium `.click()`** on `div.d2l-fileinput-addbuttons button` — a trusted
+   user-gesture is REQUIRED for the legacy "MFI" uploader to create its `<input type=file>`
+   (a JS/synthetic click is blocked by Chrome's file-picker user-activation rule) →
+   5. the input appears in ~1s; `send_keys(abspath)` (LocalFileDetector uploads to the Docker
+   node) → 6. JS-click "Add" → the file lands under feedback "Attachments", committed on Save.
+   The widget (`d2l-consistent-evaluation-attachments-editor`) is SHARED by the assignment eval
+   page — **assignment route uses the same UI; verify with a real assignment URL**.
+
+**ASSIGNMENT ATTACH = BULK "ADD FEEDBACK FILES" ZIP IMPORT — VERIFIED LIVE 2026-07-10
+(ou=200002 db=600002; imported Ben Sample's Feedback.docx as a draft, then removed it
+cleanly).** The assignment route does NOT reuse the per-attempt `_attach_feedback_file`.
+Instead, ATTACH mode delivers ALL clean feedback `.docx` files in ONE bulk upload via the
+dropbox submissions page's header button **"Add Feedback Files"** — BrightSpace distributes
+each file to the matching submitter as DRAFT feedback, matched PURELY by the **leading
+submission-ID** in its enclosing folder name (the same ID-bearing name the download produced =
+`GradeWriteItem.student_key`). Only SUBMITTERS are matched (non-submitters have no download ID
+and are skipped). This route writes NO scores — scores/rubric use inline mode. Code:
+`build_feedback_docs_zip` (packs `{student_key}/Feedback.docx`), `import_feedback_zip` (JS-click
+"Add Feedback Files" → LAST `iframe[title='Add Feedback Files']` = active dialog → **REAL**
+`.click()` on `div.d2l-fileinput-addbuttons button` → `send_keys(zip)` → JS-click "Add", keep
+"Overwrite Duplicate Files" checked), `_import_assignment_feedback_docs` (wires it into
+`_push_assignment_grades` when `feedback_mode=="attach"`). Cleanup/remove control:
+`d2l-button-icon`/`button` aria-label `"Remove Attachment: <filename>"` inside
+`d2l-consistent-evaluation-attachments-editor`.
+
+**ASSIGNMENT LEARNER DISCOVERY — HARDENED & VERIFIED LIVE 2026-07-10 (ou=200002 db=600002).**
+The flaky "0 learners" was a WRONG-VIEW bug: `_open_and_login`'s "Submissions" tab click
+redirects the pasted `folder_submissions_users.d2l` (per-USER view, whose name links carry
+`feedback,<userId>`) to `folder_submissions_files.d2l` (per-FILE view, whose links are
+`SetReturnPointAndEvaluateFileOrDownload(...)` with no `feedback,<userId>` token) — so the
+scrape found nothing. Fix: `_submissions_users_url(url)` rebuilds the per-user URL from ou+db;
+`_gather_assignment_learners(driver, url)` re-navigates there and polls ~8×1s for render;
+`_open_assignment_evaluation` navigates to the per-user URL; `_push_assignment_grades` forces
+the view + maxes page size, and warns (no crash) on 0 submitters. Verified live: reproduced the
+per-file landing, then gathered all 7 submitters, matched by name, and located each eval page's
+write targets in DRY RUN. The per-user view is SUBMITTERS-only (matches the graded set); the
+`feedback,<userId>` userId == the leading number of the download folder name / `student_key`.
+
+**Still UNVERIFIED (needs a safe write target):** the ASSIGNMENT route's real Save-as-draft
+FILL was verified 2026-07-01 (CSC134 Project 2) — unchanged by the discovery hardening above;
+the 2026-07-10 live check was dry-run (located targets, wrote nothing). The per-attempt
+`_attach_feedback_file` flow is verified on the QUIZ route only.
 
 ---
 

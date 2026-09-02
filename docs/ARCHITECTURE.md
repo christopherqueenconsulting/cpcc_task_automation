@@ -500,6 +500,63 @@ row someone entered by hand online is never re-added.
 - **Rate Limits**: Respect OpenAI rate limits
 - **Error Handling**: Don't expose API keys in error messages
 
+### Writing Grades Back to BrightSpace
+
+Two routes with **different reversibility**, which is the single most important
+thing to know before running a write-back:
+
+| Route | Control | Student sees it |
+|---|---|---|
+| Assignment (dropbox) | **Save Draft** | No — until you publish |
+| Quiz | **Update / Publish** | **Immediately** |
+
+The quiz Consistent Evaluation page has no draft state. There is no "Save Draft"
+button to click, so a quiz write-back **posts the score and feedback to the student
+straight away**. The web app relabels the button to "Write Grades and Feedback to
+Brightspace" and shows a warning when the target URL is a quiz, and the completion
+report says "posted" rather than "saved" — but nothing about the operation is
+undoable from inside this tool. Treat it as a publish, because it is one.
+
+Both routes default to `dry_run=True`: navigate, locate the score input and the
+feedback editor, log what *would* be written, change nothing.
+
+### Reading Student Files
+
+`read_file()` resolves its path and confines it to an allowed root before opening
+anything — see `readable_roots` / `is_within_readable_roots` in
+`utilities/utils.py`. Every path reaching it is user-influenced: Streamlit writes uploads to the system temp directory, ZIP
+extraction writes there under names taken from the archive, and BrightSpace
+downloads are named by the submission. A crafted name containing `../` is the
+classic way to turn "read the student's file" into "read anything the process can
+reach", and whatever is read goes straight into an LLM prompt or a feedback
+document. The path is resolved (following symlinks) **before** the containment
+check, because a check on the unresolved string is trivially defeated by a symlink.
+
+Allowed roots are the system temp directory and the working directory, plus
+anything named in `READABLE_FILE_ROOTS`.
+
+The guard's shape is deliberate and should not be "tidied" into an `any(...)` or a
+helper function. CodeQL's `py/path-injection` analysis treats a path as sanitized only
+when it can see a **normalization** (`os.path.realpath`) and an **allow-list check**
+(`startswith`) dominating the `open()` calls they protect. Written as a `for`/`else`
+whose successful branch performs the assignment, both are visible; hidden inside a
+generator expression or behind a function call, neither is, and all five `open()`
+calls get flagged again.
+
+### Running Student Code
+
+The compile gate (`utilities/compiler_gate.py`) invokes real toolchains on
+student-submitted source, so it is deliberately constrained to **never execute** it:
+
+- **Python** — `compile(code, name, "exec")`, which parses and never runs.
+- **C++** — `g++ -fsyntax-only`: front-end only, no assembly, no link, no run.
+- **Java** — `javac` compiles to `.class` files in a temp directory and never runs them.
+
+Every invocation is time-bounded, uses list arguments (never `shell=True`), and works
+in a `TemporaryDirectory` that is removed afterwards. A missing toolchain or a timeout
+yields "could not verify" rather than "does not compile" — see
+[compiler-gate.md](compiler-gate.md) for why that distinction matters.
+
 ## Performance Characteristics
 
 ### Attendance Tracking

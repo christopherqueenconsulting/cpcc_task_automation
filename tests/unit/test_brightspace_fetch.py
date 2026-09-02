@@ -244,17 +244,104 @@ def test_await_brightspace_after_login_renavigates_to_target(mocker):
 
 
 @pytest.mark.unit
-def test_fetch_quiz_instructions_prefers_first_question(mocker):
+def test_fetch_quiz_instructions_reads_question_from_first_attempt(mocker):
+    """Opens the first learner attempt and reads its question prompt as instructions."""
     driver = MagicMock()
     wait = MagicMock()
     mocker.patch.object(bf, "login_if_needed")
     mocker.patch.object(bf, "wait_for_ajax")
-    q1 = MagicMock(); q1.text = "Question 1: explain recursion."
-    q2 = MagicMock(); q2.text = "Question 2: something else."
-    driver.find_elements.return_value = [q1, q2]
+    mocker.patch.object(bf, "_await_brightspace_after_login")
+    mocker.patch.object(bf, "_gather_quiz_attempts", return_value=[
+        {"userId": "1", "attemptId": "10", "name": "Ann"},
+    ])
+    opened = mocker.patch.object(bf, "_open_quiz_attempt", return_value=True)
+    mocker.patch.object(bf, "_read_quiz_question_text",
+                        return_value="Exam 2: write the program.")
 
-    text = bf.fetch_quiz_instructions(driver, wait, "https://bs/d2l/lms/quizzing/x")
-    assert text == "Question 1: explain recursion."
+    text = bf.fetch_quiz_instructions(
+        driver, wait,
+        "https://bs/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=1&qi=2",
+    )
+    assert text == "Exam 2: write the program."
+    opened.assert_called_once()
+
+
+@pytest.mark.unit
+def test_fetch_quiz_instructions_returns_none_without_generic_scrape(mocker):
+    """No question prompt found => return None; never scrape generic page text.
+
+    Guards against reporting course-home widgets / a student's submission as the
+    instructions (the generic collector must NOT be consulted on the quiz route).
+    """
+    driver = MagicMock()
+    driver.find_elements.return_value = []  # no light-DOM question-text either
+    wait = MagicMock()
+    mocker.patch.object(bf, "login_if_needed")
+    mocker.patch.object(bf, "wait_for_ajax")
+    mocker.patch.object(bf, "_await_brightspace_after_login")
+    mocker.patch.object(bf, "_gather_quiz_attempts", return_value=[])
+    collect = mocker.patch.object(bf, "_collect_instructions_text",
+                                  return_value="COURSE HOME WIDGET TEXT")
+
+    text = bf.fetch_quiz_instructions(
+        driver, wait,
+        "https://bs/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=1&qi=2",
+    )
+    assert text is None
+    collect.assert_not_called()
+
+
+@pytest.mark.unit
+def test_fetch_quiz_instructions_bails_when_navigation_fails(mocker):
+    """A failed navigation must stop, not scrape whatever page is on screen.
+
+    Continuing into _gather_quiz_attempts on the wrong page can raise, or -- worse --
+    label unrelated text as the exam prompt and feed it to the grader as the
+    instructions. Instructions are best-effort, so None is the correct answer here.
+    """
+    driver = MagicMock()
+    driver.get.side_effect = RuntimeError("no such window")
+    wait = MagicMock()
+    gather = mocker.patch.object(bf, "_gather_quiz_attempts")
+    collect = mocker.patch.object(bf, "_collect_instructions_text",
+                                  return_value="WRONG PAGE TEXT")
+
+    text = bf.fetch_quiz_instructions(
+        driver, wait,
+        "https://bs/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=1&qi=2",
+    )
+
+    assert text is None
+    gather.assert_not_called()
+    collect.assert_not_called()
+
+
+@pytest.mark.unit
+def test_fetch_quiz_instructions_bails_when_login_fails(mocker):
+    """Same bail for an MFA/login failure part-way through the navigation."""
+    driver = MagicMock()
+    wait = MagicMock()
+    mocker.patch.object(bf, "wait_for_ajax")
+    mocker.patch.object(bf, "login_if_needed",
+                        side_effect=RuntimeError("MFA not approved"))
+    gather = mocker.patch.object(bf, "_gather_quiz_attempts")
+
+    text = bf.fetch_quiz_instructions(
+        driver, wait,
+        "https://bs/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=1&qi=2",
+    )
+
+    assert text is None
+    gather.assert_not_called()
+
+
+@pytest.mark.unit
+def test_read_quiz_question_text_polls_until_present(mocker):
+    driver = MagicMock()
+    # First poll returns empty (still rendering), second returns the prompt.
+    driver.execute_script.side_effect = ["", "  Exam prompt.  "]
+    mocker.patch.object(bf.time, "sleep")
+    assert bf._read_quiz_question_text(driver, timeout=5) == "Exam prompt."
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +485,77 @@ def test_fetch_quiz_file_uploads_skips_attempt_that_wont_open(mocker, tmp_path):
     captured = mocker.patch.object(bf, "_capture_quiz_attempt")
     bf.fetch_quiz_file_uploads(driver, wait, QUIZ_EDIT_URL, [".java"])
     captured.assert_not_called()  # never capture when the attempt page won't open
+
+
+@pytest.mark.unit
+def test_open_and_login_skips_missing_submissions_tab_without_retry_storm(mocker):
+    """Quiz grid has no Submissions tab: probe once, then continue (no click storm).
+
+    Regression for the quiz-route hang — the old code called click_element_wait_retry
+    unconditionally, which waited out the full timeout on every nested retry
+    (~4 min) when the tab was absent.
+    """
+    from selenium.common import TimeoutException
+
+    driver = MagicMock()
+    driver.window_handles = ["h1"]
+    wait = MagicMock()
+    mocker.patch.object(bf, "wait_for_ajax")
+    mocker.patch.object(bf, "login_if_needed")
+    mocker.patch.object(bf, "_await_brightspace_after_login")
+    # Tab is absent -> the short presence wait times out.
+    fake_wait = MagicMock()
+    fake_wait.until.side_effect = TimeoutException("no tab")
+    mocker.patch.object(bf, "WebDriverWait", return_value=fake_wait)
+    click = mocker.patch.object(bf, "click_element_wait_retry")
+
+    bf._open_and_login(driver, wait, "https://grid", lambda *_: None, None)
+
+    click.assert_not_called()  # never enter the expensive retry path for a missing tab
+
+
+@pytest.mark.unit
+def test_open_and_login_clicks_submissions_tab_when_present(mocker):
+    """Assignment page has a Submissions tab: it is clicked (with a bounded retry)."""
+    driver = MagicMock()
+    driver.window_handles = ["h1"]
+    wait = MagicMock()
+    mocker.patch.object(bf, "wait_for_ajax")
+    mocker.patch.object(bf, "login_if_needed")
+    mocker.patch.object(bf, "_await_brightspace_after_login")
+    fake_wait = MagicMock()
+    fake_wait.until.return_value = MagicMock()  # tab present
+    mocker.patch.object(bf, "WebDriverWait", return_value=fake_wait)
+    click = mocker.patch.object(bf, "click_element_wait_retry")
+
+    bf._open_and_login(driver, wait, "https://assignment", lambda *_: None, None)
+
+    click.assert_called_once()
+    assert click.call_args.kwargs.get("max_try") == 1  # bounded, not the default storm
+
+
+@pytest.mark.unit
+def test_wait_for_quiz_attempt_content_true_when_ready():
+    driver = MagicMock()
+    driver.execute_script.return_value = True
+    assert bf._wait_for_quiz_attempt_content(driver, timeout=1) is True
+
+
+@pytest.mark.unit
+def test_wait_for_quiz_attempt_content_false_on_timeout():
+    driver = MagicMock()
+    driver.execute_script.return_value = False
+    assert bf._wait_for_quiz_attempt_content(driver, timeout=0) is False
+
+
+@pytest.mark.unit
+def test_capture_quiz_attempt_waits_for_content_before_reading(mocker, tmp_path):
+    """Capture must wait for the lazily-rendered answer body before reading it."""
+    ready = mocker.patch.object(bf, "_wait_for_quiz_attempt_content", return_value=True)
+    driver = MagicMock()
+    driver.execute_script.return_value = {"responses": [], "attachments": []}
+    bf._capture_quiz_attempt(driver, str(tmp_path / "Ann"), [".java"], lambda *_: None, "Ann")
+    ready.assert_called_once()
 
 
 @pytest.mark.unit

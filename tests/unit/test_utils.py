@@ -14,10 +14,78 @@ from cqc_cpcc.utilities.utils import (
     ExtendedEnum,
     CodeError,
     ErrorHolder,
+    read_file,
     _get_microsoft_account_tile_xpath,
     _resolve_microsoft_account_path,
     microsoft_login,
 )
+
+
+def _write_tmp(content, suffix, binary=False):
+    mode = "wb" if binary else "w"
+    f = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, mode=mode)
+    f.write(content)
+    f.close()
+    return f.name
+
+
+@pytest.mark.unit
+class TestReadFileMarkdownDecoding:
+    """read_file(convert_to_markdown=True) must decode by type, not assume .docx."""
+
+    def test_html_converts_to_markdown(self):
+        path = _write_tmp(
+            "<h1>Exam</h1><p>Do <strong>this</strong>:</p><ol><li>one</li><li>two</li></ol>",
+            ".html",
+        )
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert "Exam" in out
+        assert "**this**" in out          # bold preserved as markdown
+        assert "1. one" in out and "2. two" in out  # ordered list preserved
+
+    def test_txt_with_convert_does_not_error(self):
+        # A non-Word upload with "Convert To Markdown" on must not blow up on mammoth.
+        path = _write_tmp("Plain line 1\nPlain line 2", ".txt")
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert "Plain line 1" in out and "Plain line 2" in out
+
+    def test_markdown_passthrough(self):
+        path = _write_tmp("# Title\n- a\n- b", ".md")
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert out.strip() == "# Title\n- a\n- b"
+
+    def test_docx_converts_to_markdown(self):
+        import docx
+        d = docx.Document()
+        d.add_heading("Exam 2", level=1)
+        d.add_paragraph("Reads input", style="List Number")
+        path = _write_tmp(b"", ".docx", binary=True)
+        d.save(path)
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert "Exam 2" in out
+        assert "1. Reads input" in out
+
+    def test_legacy_doc_falls_back_to_text_not_mammoth(self):
+        # A real .doc is the old binary format mammoth can't read; convert_to_markdown
+        # must NOT raise — it falls back to reading the file as text.
+        path = _write_tmp(b"plain doc body text", ".doc", binary=True)
+        try:
+            out = read_file(path, True)
+        finally:
+            os.remove(path)
+        assert "plain doc body text" in out
 
 
 @pytest.mark.unit
@@ -1274,3 +1342,148 @@ class TestMicrosoftLoginBranchBehavior:
 
         driver.switch_to.window.assert_called_once_with("window-main")
         assert click_retry.call_count == 1  # only the Sign-in click
+
+
+@pytest.mark.unit
+class TestReadablePathConfinement:
+    """read_file's path is always user-influenced, so it is confined before use.
+
+    Uploads land in the temp directory under names the app did not choose, and ZIP
+    extraction writes there under names taken from the archive. A "../" in one of
+    those names is how "read the student's submission" becomes "read anything the
+    process can reach" -- and whatever is read goes straight into an LLM prompt or a
+    feedback document.
+    """
+
+    @staticmethod
+    def _sandbox(tmp_path, monkeypatch):
+        """Make tmp_path/allowed the ONLY root, so tmp_path/outside really is outside.
+
+        pytest's own tmp_path lives under the real temp directory, so a sibling of it
+        would still be allowed; the roots have to be narrowed for the negative cases
+        to mean anything.
+        """
+        allowed = tmp_path / "allowed"
+        outside = tmp_path / "outside"
+        allowed.mkdir()
+        outside.mkdir()
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(allowed))
+        monkeypatch.setattr(os, "getcwd", lambda: str(allowed))
+        monkeypatch.delenv("READABLE_FILE_ROOTS", raising=False)
+        return allowed, outside
+
+    def test_a_file_in_the_temp_directory_is_allowed(self, tmp_path):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        target = tmp_path / "submission.java"
+        target.write_text("class Main {}")
+
+        assert is_within_readable_roots(os.path.realpath(str(target))) is True
+
+    def test_a_file_in_the_working_directory_is_allowed(self):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        readme = os.path.realpath(os.path.join(os.getcwd(), "README.md"))
+
+        assert is_within_readable_roots(readme) is True
+
+    def test_an_absolute_path_outside_every_root_is_refused(self):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        assert is_within_readable_roots("/etc/passwd") is False
+
+    def test_a_root_itself_is_allowed(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        allowed, _ = self._sandbox(tmp_path, monkeypatch)
+
+        assert is_within_readable_roots(os.path.realpath(str(allowed))) is True
+
+    def test_a_sibling_directory_with_a_shared_prefix_is_not_inside(
+        self, tmp_path, monkeypatch
+    ):
+        """"/tmp/allowed_evil" must not pass as being inside "/tmp/allowed"."""
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        allowed, _ = self._sandbox(tmp_path, monkeypatch)
+        sibling = str(allowed) + "_evil"
+
+        assert is_within_readable_roots(sibling) is False
+
+    def test_an_extra_root_can_be_configured(self, tmp_path, monkeypatch):
+        """The escape hatch for an instructor keeping submissions elsewhere."""
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        _, outside = self._sandbox(tmp_path, monkeypatch)
+        target = os.path.realpath(str(outside / "instructions.txt"))
+
+        assert is_within_readable_roots(target) is False
+
+        monkeypatch.setenv("READABLE_FILE_ROOTS", str(outside))
+        assert is_within_readable_roots(target) is True
+
+    def test_several_configured_roots_are_all_honoured(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        _, outside = self._sandbox(tmp_path, monkeypatch)
+        second = tmp_path / "second"
+        second.mkdir()
+
+        monkeypatch.setenv(
+            "READABLE_FILE_ROOTS", os.pathsep.join([str(outside), str(second)])
+        )
+
+        assert is_within_readable_roots(os.path.realpath(str(second))) is True
+        assert is_within_readable_roots(os.path.realpath(str(outside))) is True
+
+    def test_read_file_refuses_an_out_of_root_path(self):
+        from cqc_cpcc.utilities.utils import read_file
+
+        with pytest.raises(ValueError, match="Refusing to read"):
+            read_file("/etc/passwd")
+
+    def test_read_file_refuses_a_traversal_escape(self, tmp_path):
+        """The classic crafted-filename case: ../../.. out of the temp directory."""
+        from cqc_cpcc.utilities.utils import read_file
+
+        escape = os.path.join(str(tmp_path), "..", "..", "..", "..", "etc", "passwd")
+
+        with pytest.raises(ValueError, match="Refusing to read"):
+            read_file(escape)
+
+    def test_read_file_refuses_a_symlink_pointing_outside(self, tmp_path, monkeypatch):
+        """This is why the path is resolved BEFORE the containment check.
+
+        A check on the unresolved string would see a path inside the temp directory
+        and let the read through to wherever the link actually points.
+        """
+        from cqc_cpcc.utilities.utils import read_file
+
+        allowed, outside = self._sandbox(tmp_path, monkeypatch)
+        target = outside / "secret.txt"
+        target.write_text("secret")
+        link = allowed / "looks_local.txt"
+        try:
+            os.symlink(str(target), str(link))
+        except OSError:  # pragma: no cover - symlinks unavailable on this platform
+            pytest.skip("symlinks not permitted here")
+
+        read_file.cache_clear()
+        with pytest.raises(ValueError, match="Refusing to read"):
+            read_file(str(link))
+
+    def test_read_file_refuses_an_empty_path(self):
+        from cqc_cpcc.utilities.utils import read_file
+
+        with pytest.raises(ValueError, match="No file path"):
+            read_file("")
+
+    def test_a_legitimate_file_still_reads(self, tmp_path):
+        """The barrier must not break the normal case."""
+        from cqc_cpcc.utilities.utils import read_file
+
+        target = tmp_path / "submission.txt"
+        target.write_text("hello")
+
+        read_file.cache_clear()
+        assert read_file(str(target)) == "hello"
