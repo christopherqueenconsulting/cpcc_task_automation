@@ -163,6 +163,10 @@ component_management:
           informational: true  # Don't block PRs, but track trends
         - type: patch
           target: 80%  # New code should be well-tested
+          # INFORMATIONAL: reported on every PR, never blocks. See the note under
+          # "Component patch statuses" at the bottom of this file -- this gate was
+          # measuring docstrings and blank lines, not test coverage.
+          informational: true
     
     # AI/LLM functionality - OpenAI, OpenRouter, prompts
     # Currently at 75.13% - close to target
@@ -190,6 +194,9 @@ component_management:
           threshold: 2%
         - type: patch
           target: 90%  # Higher standard for new critical grading logic
+          # INFORMATIONAL for the same reason as Core Automation above; the 90%
+          # target is kept because it is the right bar to report against.
+          informational: true
     
     # Exam and project grading
     # Currently at 74.76% - good baseline
@@ -273,3 +280,39 @@ component_management:
         - type: patch
           target: 80%
           informational: true  # Reported on PRs, but never blocks
+
+# ---------------------------------------------------------------------------
+# Component patch statuses: why two of them are informational
+# ---------------------------------------------------------------------------
+#
+# "Core Automation" and "Rubric Grading" report their patch coverage but do not
+# block, because the number they produced was not measuring test coverage.
+#
+# Codecov's diff-to-coverage line mapping counts lines that are not executable.
+# Measured against its own per-line API on three separate PRs:
+#
+#   PR #280  my_colleges.py: of 118 reported misses, 90 were not statements
+#            (44 continuation lines, 15 blank lines, 24 docstring lines,
+#            7 comments). Ceiling with every real line covered: 71.1% vs 80%.
+#
+#   PR #267  rubric_grading.py: ALL ELEVEN reported misses were docstring lines,
+#            blank lines, or function-signature parameters. Two were not even
+#            added by that PR. coverage.py measured 100% of the statements it
+#            added. Ceiling: 88.04% vs 90%.
+#
+#   PR #281  brightspace.py: a nine-line diff containing exactly ONE statement,
+#            covered by three tests, reported at 50%.
+#
+# A control rules out the obvious explanation: files written from scratch in
+# those PRs were line-wrapped just as heavily and showed ZERO non-statement
+# misses. The artifact appears where existing files are edited -- which is
+# exactly where refactoring happens, so the gate penalised the changes most
+# worth making.
+#
+# This is the same reasoning already applied to "Browser Automation & MFA"
+# (patch) and "Core Automation" (project): keep reporting a number that is
+# useful as a trend, stop blocking on one that cannot be satisfied. The
+# repository-wide `codecov/patch` gate at 80% is unaffected and still enforces.
+#
+# If codecov's mapping is fixed, or coverage reports stop emitting
+# non-statements, revert this and the targets take effect again unchanged.
