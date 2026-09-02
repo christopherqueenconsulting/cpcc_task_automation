@@ -74,7 +74,8 @@ OPENROUTER_API_KEY = "sk-..."          # OpenRouter API key for AI routing (reco
 INSTRUCTOR_USERID = "your_username"     # MyColleges/BrightSpace username
 INSTRUCTOR_PASS = "your_password"       # MyColleges/BrightSpace password
 FEEDBACK_SIGNATURE = "Professor Name"   # Your signature for feedback documents
-ATTENDANCE_TRACKER_URL = "https://..."  # Google Sheets URL for attendance tracking
+ATTENDANCE_TRACKER_URL = "https://..."  # SharePoint/Excel Online attendance tracker
+WITHDRAWALS_CSV_DIR = "./output/withdrawals"  # local withdrawal CSVs (one per term)
 ```
 
 **Note:** The application now uses OpenRouter.ai for AI routing by default, which provides automatic model selection and access to multiple AI providers. You can still use OpenAI directly if preferred.

@@ -1,115 +1,84 @@
 from collections import defaultdict
 from typing import List
 
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
+from selenium.webdriver.support.wait import WebDriverWait
+
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.my_colleges import MyColleges
-from cqc_cpcc.utilities.selenium_util import *
+from cqc_cpcc.run_plan import ACTION_ATTENDANCE, RunPlan
+from cqc_cpcc.utilities.env_constants import WITHDRAWALS_TRACKER_DRY_RUN
+from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.selenium_util import get_session_driver
 from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last
-from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
+from cqc_cpcc.withdrawal_processing import process_withdrawals_for_courses
 
 
-def take_attendance(attendance_tracker_url: str):
+def take_attendance(attendance_tracker_url: str, plan: RunPlan = None):
+    """Record attendance, then optionally process withdrawals.
+
+    Every question is asked up front, before any course tab opens, so the run is
+    unattended once it starts.
+    """
     driver, wait = get_session_driver()
 
-    mc = MyColleges(driver, wait)
+    try:
+        mc = MyColleges(driver, wait)
 
-    bs_courses = mc.process_attendance()
+        if plan is None:
+            # Courses can only be listed after login, so that happens first; every
+            # remaining question is then asked in one pass.
+            mc.get_course_info()
+            plan = RunPlan.build_interactively(
+                mc.course_information,
+                action=ACTION_ATTENDANCE,
+                tracker_url=attendance_tracker_url,
+                dry_run_default=WITHDRAWALS_TRACKER_DRY_RUN,
+            )
 
-    # Update the Attendance Tracker
-    update_attendance_tracker(driver, wait, bs_courses, attendance_tracker_url)
+        bs_courses = mc.process_attendance(plan)
 
-    logger.info("Finished Attendance")
+        if plan.process_withdrawals:
+            process_withdrawals_for_courses(driver, wait, bs_courses, plan)
+        else:
+            logger.info("Skipping withdrawal processing (not requested).")
 
-    # Prompt the user before closing
-    # are_you_satisfied()
-
-    driver.quit()
+        logger.info("Finished Attendance")
+    finally:
+        driver.quit()
 
 
 def open_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait,
                             attendance_tracker_url: str):
-    # Keep track of the original tab
-    original_tab = driver.current_window_handle
+    """Open the Attendance Tracker in a new tab and complete login."""
+    from cqc_cpcc.attendance_tracker import open_attendance_tracker as _open
 
-    # Switch back to original_tab
-    # driver.switch_to.window(original_tab)
-
-    handles = driver.window_handles
-
-    # Opens a new tab and switches to new tab
-    driver.switch_to.new_window('tab')
-
-    # Wait for the new window or tab
-    wait.until(EC.new_window_is_opened(handles))
-
-    # Keep track of the current tab
-    current_tab = driver.current_window_handle
-
-    # Navigate to attendance tracker
-    driver.get(attendance_tracker_url)
-
-    # TODO: Handle Microsoft Authentication process
+    return _open(driver, wait, attendance_tracker_url)
 
 
 def update_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait,
                               bs_courses: List[BrightSpace_Course],
-                              attendance_tracker_url: str):
-    """ For each class, look at the withdrawal list and update the attendance tracker"""
+                              attendance_tracker_url: str,
+                              dry_run: bool = None):
+    """Store each course's withdrawals locally, then sync them to the tracker.
 
-    # TODO: Uncomment below
-    # open_attendance_tracker(driver, wait, attendance_tracker_url)
-
-    logger.info("Log the following to the attendance tracker")
-    logger.info(
-        "Instructor,Last Name,First Name,Student ID,Student Email,Course and Section,Session Type,Delivery Type,Status,Week of Last Activity,Faculty Reason"
-
+    Kept as the previous entry point so existing callers (the Streamlit screenshot
+    runner) keep working; the work itself now lives in ``withdrawal_processing``.
+    """
+    plan = RunPlan(
+        tracker_url=attendance_tracker_url,
+        process_withdrawals=True,
+        sync_to_tracker=bool(attendance_tracker_url),
+        dry_run=WITHDRAWALS_TRACKER_DRY_RUN if dry_run is None else dry_run,
     )
 
-    # For each bs_courses get the withdrawals and update the tracker
-    for bsc in bs_courses:
-        # Get the withdrawal list
-        withdrawals = bsc.get_withdrawal_records()
-
-        # Update the attendance tracker
-
-        #  self.withdrawal_records[student_name].append((student_id, withdrawal_datetime))
-
-        for student_name in withdrawals:
-            for entry in withdrawals[student_name]:
-                student_id, student_email, course_and_section, session_type, delivery_type, status, latest_activity, faculty_reason = entry
-
-                # TODO: Check by studentId to make sure the student is not already in the attendance tracker for the same course sections
-
-                # logger.info(
-                #    "Adding to Tracker: Student Name: %s | Student ID: %s | Course and Section: %s | Session Type: %s | Delivery Type: %s | Status: %s | Week of Last Activity: %s | Faculty Reason: %s" %
-                #    (student_name, student_id, course_and_section, session_type, delivery_type, status, latest_activity,
-                #     faculty_reason)
-                # )
-
-                # Student's Last Name and First Name is the student_name split by comma and replace underscore blank character
-                student_name = student_name.replace("_", "")
-                student_name_array = student_name.split(",")
-                last_name = student_name_array[0].strip()
-                first_name = student_name_array[1].strip()
-
-                logger.info(
-                    "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s" %
-                    (INSTRUCTOR_NAME, last_name, first_name, student_id, student_email, course_and_section,
-                     session_type, delivery_type, status, latest_activity,
-                     faculty_reason)
-                )
-
-                # TODO: Add info to the tracker
-
-        logger.info("--------  End Logging  --------")
-
-        # TODO: Open in new browser or prompt user to update empty cells from new additions
+    return process_withdrawals_for_courses(driver, wait, bs_courses, plan)
 
 
 def normalize_attendance_records(attendance_records: dict) -> dict:
     # Sort the records first
     attendance_records = dict(sorted(attendance_records.items()))
-    # norm_records = dict(map(lambda kv: (kv[0], get_unique_names(kv[1])), attendance_records.items()))
     norm_records = dict(map(lambda kv: (kv[0], get_unique_names_flip_first_last(kv[1])), attendance_records.items()))
     return norm_records
 
@@ -121,5 +90,4 @@ def get_merged_attendance_dict(d1: dict, d2: dict) -> dict:
         for key, value in d.items():
             merged_dict[key].extend(value)
 
-    # logger.info("Merged attendance dicts: %s" % str(merged_dict))
     return normalize_attendance_records(merged_dict)

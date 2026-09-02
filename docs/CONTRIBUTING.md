@@ -249,7 +249,7 @@ def take_attendance(attendance_tracker_url: str) -> None:
     for activity completion, and records attendance.
     
     Args:
-        attendance_tracker_url: URL to the Google Sheets attendance tracker
+        attendance_tracker_url: URL to the SharePoint/Excel Online attendance tracker
         
     Raises:
         TimeoutException: If page elements don't load within timeout
