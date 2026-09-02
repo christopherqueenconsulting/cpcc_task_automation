@@ -770,3 +770,120 @@ class TestLastAttendanceByStudent:
 
     def test_empty_roster_is_empty(self):
         assert self._instance({})._collect_last_attendance_by_student() == {}
+
+
+@pytest.mark.unit
+class TestMarkAttendanceForCourse:
+    """The attendance-marking loop decides who gets marked present, and when.
+
+    A date the UI will not accept must carry its students forward rather than
+    dropping them, and one unmarkable student must not abort the rest.
+    """
+
+    COURSE_START = DT.datetime(2026, 1, 12)
+    COURSE_END = DT.datetime(2026, 5, 8)
+
+    def _my_colleges(self):
+        with patch("cqc_cpcc.my_colleges.get_driver_wait"):
+            return MyColleges(MagicMock(), MagicMock())
+
+    @staticmethod
+    def _context(**kwargs):
+        from cqc_cpcc.my_colleges import CourseContext
+
+        defaults = dict(
+            course_url="https://course",
+            course_name="CSC-151-N855",
+            course_start_date=TestMarkAttendanceForCourse.COURSE_START,
+            course_end_date=TestMarkAttendanceForCourse.COURSE_END,
+            last_selectable_attendance_date=DT.date(2026, 5, 8),
+            selectable_attendance_dates=[DT.date(2026, 2, 2), DT.date(2026, 2, 3)],
+        )
+        defaults.update(kwargs)
+        return CourseContext(**defaults)
+
+    @staticmethod
+    def _course(attendance_records):
+        course = MagicMock()
+        course.attendance_records = attendance_records
+        return course
+
+    def test_every_student_on_every_date_is_marked_present(self):
+        my_colleges = self._my_colleges()
+        records = {
+            DT.date(2026, 2, 2): ["Ann Adams", "Bob Brown"],
+            DT.date(2026, 2, 3): ["Cid Clark"],
+        }
+
+        with patch.object(my_colleges, "_select_attendance_date", return_value=True), \
+                patch.object(my_colleges, "mark_student_present",
+                             return_value=True) as mark:
+            my_colleges._mark_attendance_for_course(
+                self._context(), self._course(records)
+            )
+
+        assert sorted(call.args[0] for call in mark.call_args_list) == [
+            "Ann Adams", "Bob Brown", "Cid Clark",
+        ]
+
+    def test_dates_are_processed_oldest_first(self):
+        """Attendance is cumulative, so order is part of the contract."""
+        my_colleges = self._my_colleges()
+        records = {
+            DT.date(2026, 2, 3): ["Later"],
+            DT.date(2026, 2, 2): ["Earlier"],
+        }
+
+        with patch.object(my_colleges, "_select_attendance_date", return_value=True), \
+                patch.object(my_colleges, "mark_student_present",
+                             return_value=True) as mark:
+            my_colleges._mark_attendance_for_course(
+                self._context(), self._course(records)
+            )
+
+        assert [call.args[0] for call in mark.call_args_list] == ["Earlier", "Later"]
+
+    def test_a_student_who_cannot_be_marked_does_not_stop_the_others(self):
+        my_colleges = self._my_colleges()
+        records = {DT.date(2026, 2, 2): ["Ann Adams", "Bob Brown"]}
+
+        with patch.object(my_colleges, "_select_attendance_date", return_value=True), \
+                patch.object(
+                    my_colleges, "mark_student_present", side_effect=[False, True]
+                ) as mark:
+            my_colleges._mark_attendance_for_course(
+                self._context(), self._course(records)
+            )
+
+        assert mark.call_count == 2
+
+    def test_an_unselectable_date_carries_its_students_forward(self):
+        """Losing the students would silently under-report attendance."""
+        my_colleges = self._my_colleges()
+        records = {DT.date(2026, 2, 2): ["Ann Adams"]}
+
+        with patch.object(
+                my_colleges, "_select_attendance_date", side_effect=TimeoutException()
+        ), patch.object(my_colleges, "mark_student_present") as mark, \
+                patch.object(
+                    my_colleges, "_carry_students_to_next_consecutive_date",
+                    return_value=False,
+                ) as carry:
+            my_colleges._mark_attendance_for_course(
+                self._context(), self._course(records)
+            )
+
+        mark.assert_not_called()
+        carry.assert_called_once()
+        assert carry.call_args.args[1] == DT.date(2026, 2, 2)
+        assert carry.call_args.args[2] == ["Ann Adams"]
+
+    def test_no_attendance_records_is_a_no_op(self):
+        my_colleges = self._my_colleges()
+
+        with patch.object(my_colleges, "_select_attendance_date") as select, \
+                patch.object(my_colleges, "mark_student_present") as mark:
+            my_colleges._mark_attendance_for_course(self._context(), self._course({}))
+
+        select.assert_not_called()
+        mark.assert_not_called()
