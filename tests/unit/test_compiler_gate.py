@@ -387,3 +387,58 @@ class TestEdgeInputs:
 
         assert "HelloWorld.cpp:3:5" in cleaned
         assert "cgate_cpp_ab12" not in cleaned
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_openrouter_raises_when_the_model_refuses(mocker):
+    """A refusal must surface, not be parsed as if it were a grade.
+
+    Sits beside the truncation guard for the same reason: an incomplete or absent
+    answer that reaches the parser becomes a silently wrong score.
+    """
+    from cqc_cpcc.utilities.AI import openrouter_client as orc
+    from cqc_cpcc.utilities.AI.openai_exceptions import OpenAITransportError
+
+    mocker.patch("asyncio.sleep", return_value=None)
+
+    resp = MagicMock()
+    choice = MagicMock()
+    choice.finish_reason = "stop"
+    choice.message.refusal = "I cannot assist with that."
+    choice.message.content = None
+    resp.choices = [choice]
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=resp)
+    mocker.patch.object(orc, "_get_openrouter_client", return_value=client)
+
+    with pytest.raises(OpenAITransportError) as ei:
+        await orc.get_openrouter_completion(
+            prompt="x", schema_model=_TruncModel, use_auto_route=False,
+            model_name="openai/gpt-5", max_tokens=256,
+        )
+
+    assert "refused" in str(ei.value).lower()
+    assert "I cannot assist with that." in str(ei.value)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_openrouter_raises_when_there_are_no_choices(mocker):
+    """An empty choices list would IndexError one line later."""
+    from cqc_cpcc.utilities.AI import openrouter_client as orc
+    from cqc_cpcc.utilities.AI.openai_exceptions import OpenAITransportError
+
+    mocker.patch("asyncio.sleep", return_value=None)
+
+    resp = MagicMock()
+    resp.choices = []
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=resp)
+    mocker.patch.object(orc, "_get_openrouter_client", return_value=client)
+
+    with pytest.raises(OpenAITransportError, match="No choices"):
+        await orc.get_openrouter_completion(
+            prompt="x", schema_model=_TruncModel, use_auto_route=False,
+            model_name="openai/gpt-5", max_tokens=256,
+        )
