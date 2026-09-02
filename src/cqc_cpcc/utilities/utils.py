@@ -356,15 +356,11 @@ def convert_xlsx_to_markdown(file_path: str) -> str:
 # archive, and BrightSpace downloads are named by the submission. A crafted name
 # containing "../" (or a symlink inside an archive) is the classic way to turn
 # "read the student's file" into "read anything the process can reach" -- and
-# whatever is read here goes straight into an LLM prompt or a feedback document.
-#
-# So the path is resolved (following symlinks) and then required to sit inside one
-# of these roots. Resolving BEFORE the containment check is the whole point: a
-# check on the unresolved string is trivially defeated by a symlink.
+# whatever is read goes straight into an LLM prompt or a feedback document.
 _EXTRA_READABLE_ROOTS_ENV = "READABLE_FILE_ROOTS"
 
 
-def _readable_roots() -> list:
+def readable_roots() -> list:
     """Directories a file passed to :func:`read_file` may live under.
 
     The temp directory covers uploads and extracted archives; the working directory
@@ -379,30 +375,22 @@ def _readable_roots() -> list:
     for root in roots:
         try:
             resolved.append(os.path.realpath(root))
-        except OSError:  # pragma: no cover - unreadable root is simply not allowed
+        except OSError:  # pragma: no cover - an unreadable root is simply not allowed
             continue
     return resolved
 
 
-def resolve_readable_path(file_path: str) -> str:
-    """Return the real path of *file_path*, or raise if it escapes every root.
+def is_within_readable_roots(resolved_path: str) -> bool:
+    """True when an ALREADY-RESOLVED path sits inside an allowed root.
 
-    Raises ValueError rather than returning a sentinel so a rejected path can never
-    be mistaken for an empty file.
+    Takes a resolved path rather than resolving one itself, so a caller cannot
+    accidentally check the pre-symlink string: that check would pass for a link
+    sitting in the temp directory and pointing anywhere at all.
     """
-    if not file_path:
-        raise ValueError("No file path given to read.")
-
-    resolved = os.path.realpath(file_path)
-    for root in _readable_roots():
-        if resolved == root or resolved.startswith(root + os.sep):
-            return resolved
-
-    raise ValueError(
-        "Refusing to read %r: it resolves to %r, which is outside the temp "
-        "directory and the working directory. Set %s if this location is "
-        "intentional." % (file_path, resolved, _EXTRA_READABLE_ROOTS_ENV)
-    )
+    for root in readable_roots():
+        if resolved_path == root or resolved_path.startswith(root + os.sep):
+            return True
+    return False
 
 
 @lru_cache(maxsize=None)
@@ -415,11 +403,28 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     For HTML files: Extracts text content (removes scripts/styles)
     For other files: Returns text content as-is
 
-    The path is resolved and confined to an allowed root first -- see
-    :func:`resolve_readable_path`. Every read below uses that resolved path, not the
+    The path is resolved and confined to an allowed root before anything is opened
+    -- see :func:`readable_roots`. Every read below uses that resolved path, not the
     caller's string, so a symlink cannot redirect the read after the check.
+
+    The check is written out here rather than delegated to a helper because CodeQL's
+    py/path-injection barrier analysis does not follow validation into a callee: the
+    resolve-then-startswith guard has to be visible in the same function as the
+    open() calls it protects.
     """
-    file_path = resolve_readable_path(file_path)
+    if not file_path:
+        raise ValueError("No file path given to read.")
+
+    unresolved = file_path
+    file_path = os.path.realpath(file_path)
+    if not any(file_path == root or file_path.startswith(root + os.sep)
+               for root in readable_roots()):
+        raise ValueError(
+            "Refusing to read %r: it resolves to %r, which is outside the temp "
+            "directory and the working directory. Set %s if this location is "
+            "intentional." % (unresolved, file_path, _EXTRA_READABLE_ROOTS_ENV)
+        )
+
     file_name, file_extension = os.path.splitext(file_path)
     file_extension = file_extension.lower()
 
