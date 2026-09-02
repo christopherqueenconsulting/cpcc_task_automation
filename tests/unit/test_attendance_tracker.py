@@ -416,3 +416,67 @@ class TestKeyboardAppend:
             adapter.append_records(driver, MagicMock(), [make_record()])
 
         driver.switch_to.default_content.assert_called()
+
+
+@pytest.mark.unit
+class TestGridNavigation:
+    """Cell targeting is the safety boundary for every write.
+
+    Rows are addressed explicitly rather than relying on where Excel leaves the
+    cursor, so if either the grid frame or the Name Box cannot be found the
+    adapter must refuse rather than type into whatever happens to be focused.
+    """
+
+    @staticmethod
+    def _driver(found_selectors=()):
+        """A driver whose find_elements only matches the named CSS selectors.
+
+        Elements are cached per selector so a test can inspect the same object the
+        code under test used.
+        """
+        driver = MagicMock()
+        elements = {}
+
+        def find(by, selector):
+            if selector not in found_selectors:
+                return []
+            return [elements.setdefault(selector, MagicMock(name=selector))]
+
+        driver.find_elements.side_effect = find
+        driver.matched = elements
+        return driver
+
+    def test_the_grid_frame_is_entered_from_the_top_document(self):
+        driver = self._driver({"iframe.WACFrame"})
+
+        SharePointExcelAdapter()._enter_grid_frame(driver)
+
+        driver.switch_to.default_content.assert_called_once()
+        driver.switch_to.frame.assert_called_once()
+
+    def test_a_missing_grid_frame_is_an_error_not_a_silent_pass(self):
+        driver = self._driver(set())
+
+        with pytest.raises(TrackerSyncError, match="web-application frame"):
+            SharePointExcelAdapter()._enter_grid_frame(driver)
+
+        driver.switch_to.frame.assert_not_called()
+
+    def test_the_name_box_aria_label_is_matched_as_a_substring(self):
+        """The live label is wrapped in Unicode LTR marks, so exact match fails."""
+        driver = self._driver({"input[aria-label*='Name Box']"})
+
+        with patch("cqc_cpcc.attendance_tracker.time.sleep"):
+            SharePointExcelAdapter()._goto_cell(driver, "A11")
+
+        name_box = driver.matched["input[aria-label*='Name Box']"]
+        name_box.click.assert_called_once()
+        typed = [call.args for call in name_box.send_keys.call_args_list]
+        assert ("A11",) in typed, "the cell address must be typed into the Name Box"
+
+    def test_without_a_name_box_it_refuses_to_type_blind(self):
+        """Typing without a confirmed target could overwrite an existing row."""
+        driver = self._driver(set())
+
+        with pytest.raises(TrackerSyncError, match="Refusing to type blind"):
+            SharePointExcelAdapter()._goto_cell(driver, "A11")

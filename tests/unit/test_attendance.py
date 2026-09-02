@@ -11,11 +11,14 @@ from cqc_cpcc.attendance import (
     get_merged_attendance_dict,
     normalize_attendance_records,
     open_attendance_tracker,
+    take_attendance,
     update_attendance_tracker,
 )
 from cqc_cpcc.withdrawals import read_csv
 
 CSV_DIR_TARGET = "cqc_cpcc.withdrawals.resolve_csv_dir"
+DRIVER_TARGET = "cqc_cpcc.attendance.get_session_driver"
+WITHDRAWALS_TARGET = "cqc_cpcc.attendance.process_withdrawals_for_courses"
 
 
 @pytest.mark.unit
@@ -291,3 +294,88 @@ class TestUpdateAttendanceTracker:
             )
 
         mock_sync.assert_not_called()
+
+
+@pytest.mark.unit
+class TestTakeAttendance:
+    """take_attendance is the command-line entry point.
+
+    It builds the plan before any course tab opens, marks attendance, and then
+    hands off to withdrawals only when the plan asked for it.
+    """
+
+    @staticmethod
+    def _patches(plan_courses=None):
+        """Patch every collaborator take_attendance reaches for."""
+        driver, wait = MagicMock(name="driver"), MagicMock(name="wait")
+        my_colleges = MagicMock(name="MyColleges")
+        my_colleges.return_value.course_information = plan_courses or {"url": {}}
+        return driver, wait, my_colleges
+
+    def test_withdrawals_run_when_the_plan_asks_for_them(self):
+        driver, wait, my_colleges = self._patches()
+        courses = [MagicMock(name="course")]
+        my_colleges.return_value.process_attendance.return_value = courses
+        plan = MagicMock(process_withdrawals=True)
+
+        with patch(DRIVER_TARGET, return_value=(driver, wait)), \
+                patch("cqc_cpcc.attendance.MyColleges", my_colleges), \
+                patch(WITHDRAWALS_TARGET) as mock_process:
+            take_attendance("https://tracker.url", plan=plan)
+
+        my_colleges.return_value.process_attendance.assert_called_once_with(plan)
+        mock_process.assert_called_once_with(driver, wait, courses, plan)
+        driver.quit.assert_called_once()
+
+    def test_withdrawals_are_skipped_when_the_plan_does_not(self):
+        driver, wait, my_colleges = self._patches()
+        plan = MagicMock(process_withdrawals=False)
+
+        with patch(DRIVER_TARGET, return_value=(driver, wait)), \
+                patch("cqc_cpcc.attendance.MyColleges", my_colleges), \
+                patch(WITHDRAWALS_TARGET) as mock_process:
+            take_attendance("https://tracker.url", plan=plan)
+
+        mock_process.assert_not_called()
+        driver.quit.assert_called_once()
+
+    def test_without_a_plan_courses_are_listed_before_anything_is_asked(self):
+        """Courses can only be listed after login, so that ordering is the contract."""
+        driver, wait, my_colleges = self._patches()
+        calls = []
+        my_colleges.return_value.get_course_info.side_effect = (
+            lambda *a, **k: calls.append("get_course_info")
+        )
+        my_colleges.return_value.process_attendance.side_effect = (
+            lambda *a, **k: calls.append("process_attendance") or []
+        )
+
+        built = MagicMock(process_withdrawals=False)
+        with patch(DRIVER_TARGET, return_value=(driver, wait)), \
+                patch("cqc_cpcc.attendance.MyColleges", my_colleges), \
+                patch("cqc_cpcc.attendance.RunPlan") as mock_run_plan, \
+                patch("cqc_cpcc.attendance.process_withdrawals_for_courses"):
+            mock_run_plan.build_interactively.side_effect = (
+                lambda *a, **k: calls.append("build_interactively") or built
+            )
+            take_attendance("https://tracker.url")
+
+        assert calls == ["get_course_info", "build_interactively", "process_attendance"]
+        assert mock_run_plan.build_interactively.call_args.kwargs["tracker_url"] == (
+            "https://tracker.url"
+        )
+
+    def test_the_browser_is_closed_even_when_the_run_fails(self):
+        """A mid-run failure must not leak the WebDriver session."""
+        driver, wait, my_colleges = self._patches()
+        my_colleges.return_value.process_attendance.side_effect = RuntimeError("boom")
+
+        with patch(DRIVER_TARGET, return_value=(driver, wait)), \
+                patch("cqc_cpcc.attendance.MyColleges", my_colleges), \
+                patch("cqc_cpcc.attendance.process_withdrawals_for_courses"), \
+                pytest.raises(RuntimeError, match="boom"):
+            take_attendance(
+                "https://tracker.url", plan=MagicMock(process_withdrawals=True)
+            )
+
+        driver.quit.assert_called_once()

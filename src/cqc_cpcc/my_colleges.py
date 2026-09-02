@@ -48,19 +48,8 @@ from cqc_cpcc.utilities.selenium_util import (
     wait_for_ajax,
     wait_for_element_to_hide,
 )
+from cqc_cpcc.utilities.date import looks_like_a_scraped_date
 from cqc_cpcc.utilities.utils import login_if_needed
-
-
-def _looks_like_a_scraped_date(text: str) -> bool:
-    """Reject placeholder text before it reaches dateparser.
-
-    dateparser is deliberately permissive: it resolves "N/A" to a real date (and
-    "a" and "b" too). That is fine for natural-language input like "yesterday",
-    but a scraped deadline cell holding "N/A" must not silently become a date --
-    these values drive the drop window, and a wrong window mis-classifies
-    withdrawals. Every real date contains a digit; the placeholders do not.
-    """
-    return any(character.isdigit() for character in (text or ""))
 
 
 @dataclass
@@ -171,7 +160,7 @@ class MyColleges:
             logger.warning("Unexpected course date range format: %r", course_dates)
             return None
 
-        if not all(_looks_like_a_scraped_date(part) for part in parts):
+        if not all(looks_like_a_scraped_date(part) for part in parts):
             logger.warning("Course date range holds no dates: %r", course_dates)
             return None
 
@@ -247,7 +236,7 @@ class MyColleges:
             logger.info("%s not found. Using fallback date when needed.", wait_text)
             return None
 
-        if not _looks_like_a_scraped_date(raw_text):
+        if not looks_like_a_scraped_date(raw_text):
             logger.warning(
                 "%s: %r holds no date. Using fallback date when needed.",
                 wait_text,
@@ -854,7 +843,7 @@ class MyColleges:
             return None
 
         normalized_date = date_text.split("(")[0].strip()
-        if not _looks_like_a_scraped_date(normalized_date):
+        if not looks_like_a_scraped_date(normalized_date):
             # Same guard as the deadline dates: dateparser resolves "N/A" to a real
             # date, which here would invent a last-attendance day for a student.
             return None
