@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from cqc_cpcc.utilities.date import convert_datetime_to_end_of_day, convert_date_to_datetime, \
     convert_datetime_to_start_of_day, is_date_in_range, weeks_between_dates, format_year, get_datetime, \
-    filter_dates_in_range
+    filter_dates_in_range, looks_like_a_scraped_date
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry, get_elements_text_as_list_wait_stale, \
@@ -304,6 +304,15 @@ class BrightSpace_Course:
             for student_id, (student_name, student_email, withdrawal_date) in student_withdrawals_dict.items():
                 # Convert withdrawal_date to a datetime object for comparison. One blank
                 # or malformed cell must not take down the whole course's scrape.
+                # The digit guard runs first because dateparser resolves "N/A" to a
+                # real date without raising, and that fabricated date would decide
+                # whether the student is recorded as W or S.
+                if not looks_like_a_scraped_date(withdrawal_date):
+                    logger.warning(
+                        "Withdrawal date %r for %s holds no date. Skipping this row.",
+                        withdrawal_date, student_name)
+                    continue
+
                 try:
                     withdrawal_datetime = get_datetime(withdrawal_date)
                 except ValueError:

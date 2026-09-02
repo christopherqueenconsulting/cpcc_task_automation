@@ -617,3 +617,65 @@ class TestManualPromptGuidance:
         )
 
         assert '"points_earned": null' in prompt
+
+
+@pytest.mark.unit
+class TestPointsFromLevelLabel:
+    """Resolving points from a selected level decides a student's score.
+
+    score_level_band_criterion refuses criteria that are not level_band, so this
+    helper is what recovers a manual criterion the model left unscored. Each
+    points_strategy is a different number on a transcript.
+    """
+
+    @staticmethod
+    def _criterion(strategy):
+        from cqc_cpcc.rubric_models import Criterion, PerformanceLevel
+
+        return Criterion(
+            criterion_id="quality",
+            name="Code Quality",
+            description="Quality of the submission",
+            max_points=25,
+            points_strategy=strategy,
+            levels=[
+                PerformanceLevel(
+                    label="Exemplary", score_min=23, score_max=25, description="Best"
+                ),
+                PerformanceLevel(
+                    label="Proficient", score_min=18, score_max=22, description="Good"
+                ),
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        "strategy, expected",
+        [("min", 18), ("max", 22), ("mid", 20)],
+    )
+    def test_each_strategy_picks_its_end_of_the_band(self, strategy, expected):
+        from cqc_cpcc.rubric_grading import points_from_level_label
+
+        assert points_from_level_label(
+            "Proficient", self._criterion(strategy)
+        ) == expected
+
+    def test_an_unknown_label_resolves_to_nothing(self):
+        """Never invent a score for a level the rubric does not define."""
+        from cqc_cpcc.rubric_grading import points_from_level_label
+
+        assert points_from_level_label("Outstanding", self._criterion("min")) is None
+
+    @pytest.mark.parametrize("label", [None, ""])
+    def test_no_label_resolves_to_nothing(self, label):
+        from cqc_cpcc.rubric_grading import points_from_level_label
+
+        assert points_from_level_label(label, self._criterion("min")) is None
+
+    def test_a_criterion_without_levels_resolves_to_nothing(self):
+        from cqc_cpcc.rubric_grading import points_from_level_label
+        from cqc_cpcc.rubric_models import Criterion
+
+        criterion = Criterion(
+            criterion_id="c", name="C", description="d", max_points=10
+        )
+        assert points_from_level_label("Exemplary", criterion) is None

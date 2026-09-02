@@ -366,3 +366,31 @@ class TestCalculateCensusDate:
         for percent in (1, 10, 25, 50, 100):
             census = calculate_census_date(start, end, percent)
             assert start <= census <= end
+
+
+@pytest.mark.unit
+class TestLooksLikeAScrapedDate:
+    """The guard that keeps dateparser's permissiveness out of scraped cells."""
+
+    @pytest.mark.parametrize(
+        "text", ["N/A", "TBD", "Not Applicable", "-", "", "   ", None, "a", "b"]
+    )
+    def test_placeholders_are_rejected(self, text):
+        from cqc_cpcc.utilities.date import looks_like_a_scraped_date
+
+        assert looks_like_a_scraped_date(text) is False
+
+    @pytest.mark.parametrize(
+        "text", ["1/12/2026", "2026-01-12", "January 12, 2026", "1/12/2026 (Monday)"]
+    )
+    def test_real_dates_are_accepted(self, text):
+        from cqc_cpcc.utilities.date import looks_like_a_scraped_date
+
+        assert looks_like_a_scraped_date(text) is True
+
+    def test_the_placeholder_dateparser_would_have_accepted(self):
+        """This is the exact value that made the guard necessary."""
+        from cqc_cpcc.utilities.date import get_datetime, looks_like_a_scraped_date
+
+        assert get_datetime("N/A") is not None  # dateparser does not raise here
+        assert looks_like_a_scraped_date("N/A") is False

@@ -554,3 +554,16 @@ def _align_datetime_awareness(
 
 def _is_date_only(value: DT.date | DT.datetime) -> bool:
     return isinstance(value, DT.date) and not isinstance(value, DT.datetime)
+
+
+def looks_like_a_scraped_date(text: str) -> bool:
+    """Reject placeholder text before it reaches dateparser.
+
+    dateparser is deliberately permissive: it resolves "N/A" to a real date (and
+    "a" and "b" too). That is fine for natural-language input like "yesterday",
+    but a scraped cell holding "N/A" must not silently become a date -- these
+    values drive drop windows and withdrawal classification, and a fabricated
+    date mis-classifies a student. Every real date contains a digit; the
+    placeholders do not.
+    """
+    return any(character.isdigit() for character in (text or ""))

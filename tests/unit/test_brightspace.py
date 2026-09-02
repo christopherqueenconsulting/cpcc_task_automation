@@ -8,6 +8,7 @@ from selenium.common import TimeoutException
 
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
+from cqc_cpcc.withdrawals import UNKNOWN_ACTIVITY_WEEK
 
 
 @pytest.mark.unit
@@ -103,3 +104,187 @@ class TestBrightSpaceShortWait:
         assert driver.get.call_args_list[0].args == (BRIGHTSPACE_URL,)
         assert driver.get.call_args_list[1].args == ("https://brightspace.example/course",)
 
+
+
+@pytest.mark.unit
+class TestWithdrawalCollectionGate:
+    """The drop window used to gate withdrawal scraping silently.
+
+    A withdrawals-only run must be able to force collection, and the
+    out-of-window case must always say so rather than returning an unexplained
+    empty result.
+    """
+
+    # A drop window that closed well before the course ended, so date_range_end
+    # (the course end date, for an ended course) falls outside it.
+    PAST_FIRST_DROP = DT.date(2026, 1, 12)
+    PAST_FINAL_DROP = DT.date(2026, 1, 26)
+    COURSE_START = DT.datetime(2026, 1, 12)
+    COURSE_END = DT.datetime(2026, 5, 8)
+
+    def _course(self, **kwargs):
+        with patch.object(BrightSpace_Course, "open_course_tab", return_value=False), \
+                patch("cqc_cpcc.brightspace.get_driver_wait"):
+            return BrightSpace_Course(
+                name="CSC-151-N855",
+                term_semester="Spring",
+                term_year="2026",
+                first_drop_day=self.PAST_FIRST_DROP,
+                final_drop_day=self.PAST_FINAL_DROP,
+                course_start_date=self.COURSE_START,
+                course_end_date=self.COURSE_END,
+                driver=MagicMock(),
+                wait=MagicMock(),
+                **kwargs,
+            )
+
+    def test_outside_the_window_it_skips_and_says_why(self):
+        course = self._course()
+
+        with patch.object(course, "get_withdrawal_records_from_classlist") as scrape, \
+                patch("cqc_cpcc.brightspace.logger") as mock_logger:
+            course._collect_withdrawals_if_applicable(force=False)
+
+        scrape.assert_not_called()
+        assert any(
+            "Skipping withdrawals" in str(call.args[0])
+            for call in mock_logger.info.call_args_list
+        ), "the skip must be logged, not silent"
+
+    def test_an_explicit_withdrawals_run_collects_anyway(self):
+        """PROCESS_WITHDRAWALS must return records, not an empty result."""
+        course = self._course()
+
+        with patch.object(course, "get_withdrawal_records_from_classlist") as scrape, \
+                patch("cqc_cpcc.brightspace.logger"):
+            course._collect_withdrawals_if_applicable(force=True)
+
+        scrape.assert_called_once()
+
+    def test_attendance_is_not_collected_when_not_requested(self):
+        """A withdrawals-only run must never mark anyone present."""
+        with patch.object(BrightSpace_Course, "open_course_tab", return_value=True), \
+                patch.object(BrightSpace_Course, "close_course_tab"), \
+                patch.object(BrightSpace_Course, "normalize_attendance_records"), \
+                patch.object(BrightSpace_Course,
+                             "get_attendance_from_assignments") as assignments, \
+                patch.object(BrightSpace_Course,
+                             "get_attendance_from_quizzes") as quizzes, \
+                patch.object(BrightSpace_Course,
+                             "_collect_withdrawals_if_applicable") as withdrawals, \
+                patch("cqc_cpcc.brightspace.get_driver_wait"):
+            BrightSpace_Course(
+                name="CSC-151-N855",
+                term_semester="Spring",
+                term_year="2026",
+                first_drop_day=self.PAST_FIRST_DROP,
+                final_drop_day=self.PAST_FINAL_DROP,
+                course_start_date=self.COURSE_START,
+                course_end_date=self.COURSE_END,
+                driver=MagicMock(),
+                wait=MagicMock(),
+                collect_attendance=False,
+                force_withdrawals=True,
+            )
+
+        assignments.assert_not_called()
+        quizzes.assert_not_called()
+        withdrawals.assert_called_once_with(True)
+
+    def test_last_activity_starts_empty_so_the_week_is_never_invented(self):
+        assert self._course().last_activity_by_student == {}
+
+
+@pytest.mark.unit
+class TestWithdrawalRowParsing:
+    """One malformed cell must not take down a whole course's scrape.
+
+    get_datetime was called unguarded, so a single blank withdrawal date raised
+    ValueError and lost every row for that course.
+    """
+
+    # A drop window that is open on the withdrawal dates used below.
+    FIRST_DROP = DT.date(2026, 1, 12)
+    FINAL_DROP = DT.date(2026, 4, 20)
+    COURSE_START = DT.datetime(2026, 1, 12)
+    COURSE_END = DT.datetime(2026, 5, 8)
+
+    def _course(self):
+        with patch.object(BrightSpace_Course, "open_course_tab", return_value=False), \
+                patch("cqc_cpcc.brightspace.get_driver_wait"):
+            course = BrightSpace_Course(
+                name="CSC-151-N855",
+                term_semester="Spring",
+                term_year="2026",
+                first_drop_day=self.FIRST_DROP,
+                final_drop_day=self.FINAL_DROP,
+                course_start_date=self.COURSE_START,
+                course_end_date=self.COURSE_END,
+                driver=MagicMock(),
+                wait=MagicMock(),
+            )
+        course.course_main_tab = "tab"
+        return course
+
+    @staticmethod
+    def _scrape(names, ids, emails, dates):
+        """Feed the four column scrapes in the order the code requests them."""
+        return [names, ids, emails, dates]
+
+    def _run(self, course, names, ids, emails, dates):
+        with patch("cqc_cpcc.brightspace.click_element_wait_retry"), \
+                patch.object(course, "click_max_results_select", return_value=True), \
+                patch(
+                    "cqc_cpcc.brightspace.get_elements_text_as_list_wait_stale",
+                    side_effect=self._scrape(names, ids, emails, dates),
+                ):
+            course.get_withdrawal_records_from_classlist()
+        return course.withdrawal_records
+
+    def test_an_unparseable_date_skips_only_that_student(self):
+        course = self._course()
+
+        records = self._run(
+            course,
+            names=["Good Student", "Bad Row"],
+            ids=["1111111", "2222222"],
+            emails=["good@cpcc.edu", "bad@cpcc.edu"],
+            dates=["2/2/2026", ""],
+        )
+
+        assert "Good_Student" in records, "a valid row must survive a bad neighbour"
+        assert "Bad_Row" not in records
+
+    @pytest.mark.parametrize("placeholder", ["N/A", "TBD", "-", "", "   "])
+    def test_a_placeholder_date_never_becomes_a_withdrawal(self, placeholder):
+        """dateparser resolves "N/A" to a real date without raising.
+
+        Only guarding ValueError let that fabricated date decide whether the
+        student was recorded as W or S.
+        """
+        course = self._course()
+
+        records = self._run(
+            course,
+            names=["Placeholder Student"],
+            ids=["3333333"],
+            emails=["p@cpcc.edu"],
+            dates=[placeholder],
+        )
+
+        assert records == {}
+
+    def test_the_week_of_last_activity_is_unknown_not_today(self):
+        """It used to be hard-coded to today, which reported a fabricated week."""
+        course = self._course()
+
+        records = self._run(
+            course,
+            names=["Good Student"],
+            ids=["1111111"],
+            emails=["good@cpcc.edu"],
+            dates=["2/2/2026"],
+        )
+
+        entry = records["Good_Student"][0]
+        assert entry[6] == UNKNOWN_ACTIVITY_WEEK
