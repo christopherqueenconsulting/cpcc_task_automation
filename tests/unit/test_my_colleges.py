@@ -449,3 +449,324 @@ class TestSelectableAttendanceDate:
             "Checking for Date Picker Input",
             max_try=1,
         )
+
+
+@pytest.mark.unit
+class TestDeadlineDateParsingIsSafe:
+    """Regression tests for the reported crash.
+
+    ``_get_optional_deadline_date`` used to catch only Selenium exceptions, so an
+    element holding non-date text raised ValueError out of get_datetime and took
+    down the whole run mid-way through the course loop.
+    """
+
+    @staticmethod
+    def _instance_returning(text):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        element = MagicMock()
+        element.text = text
+        return my_colleges, element
+
+    @pytest.mark.parametrize(
+        "text", ["", "   ", "N/A", "TBD", "Not Applicable", "-", "None"]
+    )
+    def test_unparseable_deadline_text_returns_none(self, text):
+        my_colleges, element = self._instance_returning(text)
+
+        with patch("cqc_cpcc.my_colleges.get_element_wait_retry", return_value=element):
+            assert my_colleges._get_optional_deadline_date("//span", "Deadline") is None
+
+    def test_unparseable_text_is_logged_with_the_raw_value(self):
+        my_colleges, element = self._instance_returning("N/A")
+
+        element_target = "cqc_cpcc.my_colleges.get_element_wait_retry"
+        with patch(element_target, return_value=element), \
+                patch("cqc_cpcc.my_colleges.logger") as mock_logger:
+            my_colleges._get_optional_deadline_date("//span", "Deadline")
+
+        # The raw value must reach the log; it is the only clue to what the DOM held.
+        assert any("N/A" in str(c) for c in mock_logger.warning.call_args_list)
+
+    def test_a_valid_date_still_parses(self):
+        my_colleges, element = self._instance_returning("01/24/2026")
+
+        with patch("cqc_cpcc.my_colleges.get_element_wait_retry", return_value=element):
+            result = my_colleges._get_optional_deadline_date("//span", "Deadline")
+
+        assert result == DT.datetime(2026, 1, 24)
+
+    def test_missing_element_returns_none(self):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+
+        with patch("cqc_cpcc.my_colleges.get_element_wait_retry", return_value=None):
+            assert my_colleges._get_optional_deadline_date("//span", "Deadline") is None
+
+    @pytest.mark.parametrize("error", [NoSuchElementException(), TimeoutException()])
+    def test_selenium_errors_still_return_none(self, error):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+
+        with patch("cqc_cpcc.my_colleges.get_element_wait_retry", side_effect=error):
+            assert my_colleges._get_optional_deadline_date("//span", "Deadline") is None
+
+
+@pytest.mark.unit
+class TestCourseDateRangeParsing:
+    """A malformed course date range skips that course instead of aborting."""
+
+    @pytest.mark.parametrize(
+        "raw", ["", "no separator", "01/12/2026", "a - b", "1 - 2 - 3", None]
+    )
+    def test_bad_ranges_return_none(self, raw):
+        assert MyColleges._parse_course_date_range(raw) is None
+
+    def test_good_range_parses_both_ends(self):
+        assert MyColleges._parse_course_date_range("01/12/2026 - 05/08/2026") == (
+            DT.datetime(2026, 1, 12),
+            DT.datetime(2026, 5, 8),
+        )
+
+
+@pytest.mark.unit
+class TestCourseFailureIsolation:
+    """One bad course must not discard the courses already processed."""
+
+    @staticmethod
+    def _plan(course_urls):
+        from cqc_cpcc.run_plan import RunPlan
+
+        return RunPlan(course_urls=list(course_urls))
+
+    def _my_colleges(self):
+        driver = MagicMock()
+        driver.current_window_handle = "original"
+        driver.window_handles = ["original", "course"]
+        my_colleges = MyColleges(driver, MagicMock())
+        my_colleges.course_information = {
+            "url-a": {"name": "Course A", "start_date": DT.datetime(2026, 1, 12),
+                      "end_date": DT.datetime(2026, 5, 8)},
+            "url-b": {"name": "Course B", "start_date": DT.datetime(2026, 1, 12),
+                      "end_date": DT.datetime(2026, 5, 8)},
+            "url-c": {"name": "Course C", "start_date": DT.datetime(2026, 1, 12),
+                      "end_date": DT.datetime(2026, 5, 8)},
+        }
+        return my_colleges
+
+    def test_a_failing_course_is_skipped_and_the_rest_still_run(self):
+        my_colleges = self._my_colleges()
+        processed = []
+
+        def fake_process(course_url, course_info, plan, **kwargs):
+            processed.append(course_url)
+            if course_url == "url-b":
+                raise ValueError("invalid datetime as string")
+            return MagicMock()
+
+        with patch.object(
+                my_colleges, "_process_single_course", side_effect=fake_process
+        ):
+            courses = my_colleges._run_courses(
+                self._plan(["url-a", "url-b", "url-c"]),
+                collect_attendance=True, mark_attendance=True,
+                collect_withdrawals=True, force_withdrawals=False,
+            )
+
+        assert processed == ["url-a", "url-b", "url-c"]
+        assert len(courses) == 2
+
+    def test_the_course_tab_is_closed_even_when_the_course_raises(self):
+        my_colleges = self._my_colleges()
+
+        with patch.object(my_colleges, "_process_single_course",
+                          side_effect=RuntimeError("boom")), \
+                patch("cqc_cpcc.my_colleges.close_tab") as mock_close:
+            my_colleges.current_tab = "course"
+            my_colleges._run_courses(
+                self._plan(["url-a"]),
+                collect_attendance=True, mark_attendance=True,
+                collect_withdrawals=True, force_withdrawals=False,
+            )
+
+        mock_close.assert_called()
+
+    def test_failures_are_reported_in_a_summary(self):
+        my_colleges = self._my_colleges()
+
+        with patch.object(my_colleges, "_process_single_course",
+                          side_effect=RuntimeError("boom")), \
+                patch("cqc_cpcc.my_colleges.logger") as mock_logger:
+            my_colleges._run_courses(
+                self._plan(["url-a", "url-b"]),
+                collect_attendance=True, mark_attendance=True,
+                collect_withdrawals=True, force_withdrawals=False,
+            )
+
+        errors = " ".join(str(c) for c in mock_logger.error.call_args_list)
+        assert "course(s) failed" in errors
+        assert "Course A" in errors and "Course B" in errors
+        assert mock_logger.error.call_args_list[0].args[1] == 2
+
+    def test_no_selected_courses_does_no_work(self):
+        my_colleges = self._my_colleges()
+
+        with patch.object(my_colleges, "_process_single_course") as mock_process:
+            assert my_colleges._run_courses(
+                self._plan([]),
+                collect_attendance=True, mark_attendance=True,
+                collect_withdrawals=True, force_withdrawals=False,
+            ) == []
+
+        mock_process.assert_not_called()
+
+    def test_withdrawals_entry_point_does_not_mark_attendance(self):
+        my_colleges = self._my_colleges()
+
+        with patch.object(my_colleges, "_run_courses", return_value=[]) as mock_run:
+            my_colleges.process_withdrawals(self._plan(["url-a"]))
+
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["collect_attendance"] is False
+        assert kwargs["mark_attendance"] is False
+        assert kwargs["force_withdrawals"] is True
+
+
+@pytest.mark.unit
+class TestEvaDateResolution:
+    """The census date is the course's "last day to drop without a grade".
+
+    Verified live 2026-09-01: the MyColleges deadline dialog has no census-named
+    field, and DropGradesRequiredDateDisplay tracks the 10%-of-term rule to within
+    one day across 28-, 57- and 120-day terms.
+    """
+
+    COURSE_START = DT.datetime(2026, 8, 17)
+    COURSE_END = DT.datetime(2026, 12, 15)
+    DROP_NO_GRADE = DT.datetime(2026, 8, 28)   # real value from CSC-134-N801
+
+    def _resolve(self, drop_no_grade, start=None, end=None):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        return my_colleges._resolve_eva_date(
+            drop_no_grade, start or self.COURSE_START, end or self.COURSE_END
+        )
+
+    def test_uses_the_drop_without_grade_date_when_present(self):
+        assert self._resolve(self.DROP_NO_GRADE) == DT.date(2026, 8, 28)
+
+    def test_falls_back_to_the_calculation_when_the_span_is_blank(self):
+        # Ended courses commonly render that span empty.
+        assert self._resolve(None) == DT.date(2026, 8, 29)
+
+    def test_scraped_value_wins_even_when_it_differs_from_the_calculation(self):
+        unusual = DT.datetime(2026, 9, 30)
+
+        assert self._resolve(unusual) == DT.date(2026, 9, 30)
+
+    def test_large_disagreement_is_warned_about_but_still_honoured(self):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+
+        with patch("cqc_cpcc.my_colleges.logger") as mock_logger:
+            result = my_colleges._resolve_eva_date(
+                DT.datetime(2026, 11, 1), self.COURSE_START, self.COURSE_END
+            )
+
+        assert result == DT.date(2026, 11, 1)
+        assert mock_logger.warning.called
+
+    def test_close_agreement_does_not_warn(self):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+
+        with patch("cqc_cpcc.my_colleges.logger") as mock_logger:
+            my_colleges._resolve_eva_date(
+                self.DROP_NO_GRADE, self.COURSE_START, self.COURSE_END
+            )
+
+        assert not mock_logger.warning.called
+
+    def test_unusable_dates_yield_none_rather_than_a_wrong_date(self):
+        # End before start: no census date can be derived and none is invented.
+        assert self._resolve(None, start=self.COURSE_END, end=self.COURSE_START) is None
+
+    def test_real_term_lengths_all_land_within_a_day_of_the_rule(self):
+        """Regression guard on the live-verified relationship."""
+        from cqc_cpcc.utilities.date import calculate_census_date
+
+        observed = [
+            (DT.date(2026, 8, 17), DT.date(2026, 12, 15), DT.date(2026, 8, 28)),
+            (DT.date(2026, 10, 19), DT.date(2026, 12, 15), DT.date(2026, 10, 26)),
+            (DT.date(2026, 12, 7), DT.date(2027, 1, 4), DT.date(2026, 12, 9)),
+        ]
+
+        for start, end, actual_census in observed:
+            drift = (calculate_census_date(start, end, 10.0) - actual_census).days
+            assert abs(drift) <= 1
+
+
+@pytest.mark.unit
+class TestTermParsing:
+    """A term that is not "<Semester> <Year>" warns instead of raising."""
+
+    def _read_term(self, term_text):
+        my_colleges = MyColleges(MagicMock(), MagicMock())
+        element = MagicMock()
+        element.text = term_text
+        element.get_attribute.return_value = term_text
+
+        with patch("cqc_cpcc.my_colleges.get_element_wait_retry", return_value=element):
+            return my_colleges._read_term("Course A")
+
+    def test_normal_term(self):
+        assert self._read_term("Fall 2026") == ("Fall", "2026")
+
+    def test_single_token_term_does_not_raise(self):
+        assert self._read_term("Fall") == ("Fall", "")
+
+    def test_empty_term_does_not_raise(self):
+        assert self._read_term("") == ("", "")
+
+    def test_extra_tokens_take_the_first_two(self):
+        assert self._read_term("Fall 2026 Session B") == ("Fall", "2026")
+
+
+@pytest.mark.unit
+class TestLastAttendanceByStudent:
+    """Row-wise scrape of the attendance roster (Phase 7)."""
+
+    @staticmethod
+    def _instance(script_result):
+        driver = MagicMock()
+        driver.execute_script.return_value = script_result
+        return MyColleges(driver, MagicMock())
+
+    def test_parses_real_roster_shape(self):
+        # Values taken from the live roster on 2026-09-01.
+        my_colleges = self._instance({"4437999": "6/24/2026", "4262265": "7/15/2026"})
+
+        result = my_colleges._collect_last_attendance_by_student()
+
+        assert result == {
+            "4437999": DT.date(2026, 6, 24),
+            "4262265": DT.date(2026, 7, 15),
+        }
+
+    def test_tolerates_the_weekday_suffix(self):
+        my_colleges = self._instance({"4437999": "6/24/2026 (Wednesday)"})
+
+        assert my_colleges._collect_last_attendance_by_student() == {
+            "4437999": DT.date(2026, 6, 24)
+        }
+
+    def test_unparseable_values_are_dropped_not_guessed(self):
+        my_colleges = self._instance({"1": "", "2": "N/A", "3": "7/15/2026"})
+
+        assert my_colleges._collect_last_attendance_by_student() == {
+            "3": DT.date(2026, 7, 15)
+        }
+
+    def test_a_script_failure_yields_an_empty_map_not_an_exception(self):
+        driver = MagicMock()
+        driver.execute_script.side_effect = RuntimeError("no such element")
+
+        my_colleges = MyColleges(driver, MagicMock())
+        assert my_colleges._collect_last_attendance_by_student() == {}
+
+    def test_empty_roster_is_empty(self):
+        assert self._instance({})._collect_last_attendance_by_student() == {}
