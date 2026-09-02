@@ -1171,6 +1171,36 @@ async def _get_structured_completion_impl(
             # Check finish_reason for truncation
             finish_reason = getattr(response.choices[0], 'finish_reason', None) if response.choices else None
 
+            # Guard: a NON-EMPTY but truncated response (finish_reason=length) must NOT be
+            # validated as if complete — a partial grade would silently drop feedback/errors.
+            # Fail loudly instead (the empty-output truncation case is handled just below).
+            if json_output and finish_reason == "length":
+                decision_notes = (
+                    f"output truncated (finish_reason=length, max_tokens={max_tokens}); "
+                    f"partial content NOT accepted"
+                )
+                logger.error(
+                    f"Response TRUNCATED with partial content on attempt {attempt + 1} "
+                    f"(model={model_name}){f', correlation_id={correlation_id}' if correlation_id else ''}"
+                )
+                if correlation_id:
+                    record_response(
+                        correlation_id=correlation_id,
+                        response=response,
+                        schema_name=schema_model.__name__,
+                        decision_notes=decision_notes,
+                        output_text=json_output,
+                        output_parsed=None,
+                    )
+                raise OpenAISchemaValidationError(
+                    "LLM response truncated by output token limit (finish_reason=length); "
+                    "partial content not accepted. Increase max_tokens or reduce input, then re-grade.",
+                    schema_name=schema_model.__name__,
+                    correlation_id=correlation_id,
+                    decision_notes=decision_notes,
+                    attempt_count=attempt + 1,
+                )
+
             if not json_output:
                 # Handle empty response or truncation
                 if finish_reason == "length":

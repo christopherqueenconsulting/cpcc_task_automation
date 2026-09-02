@@ -360,6 +360,8 @@ async def grade_with_rubric(
         model_name: str = DEFAULT_GRADING_MODEL,
         temperature: float = DEFAULT_TEMPERATURE,
         callback: Optional[BaseCallbackHandler] = None,
+        source_files: Optional[dict] = None,
+        gate_report: Optional[dict] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -509,6 +511,20 @@ async def grade_with_rubric(
                 effective_minor_errors=result.effective_minor_errors,
             )
 
+        # Compile gate: verify the LLM's "Does Not Compile" call against the REAL
+        # local toolchain and correct detected_errors BEFORE scoring, so the score/band
+        # reflect the truth (a false "Does Not Compile" otherwise floors the grade).
+        if source_files:
+            result, gate_info = apply_compile_gate(result, source_files, error_definitions)
+            if gate_report is not None:
+                gate_report.update(gate_info)
+            if gate_info.get("action") in ("removed", "added"):
+                logger.warning(
+                    "Compile gate %s 'Does Not Compile' (language=%s, compiles=%s, tool=%s)",
+                    gate_info["action"], gate_info.get("language"),
+                    gate_info.get("compiles"), gate_info.get("tool"),
+                )
+
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
 
@@ -542,6 +558,130 @@ async def grade_with_rubric(
     except Exception as e:
         logger.error(f"Rubric grading failed: {e}")
         raise ValueError(f"Failed to grade with rubric: {e}")
+
+
+def _find_compile_error_def(error_definitions):
+    """Return the (enabled) 'Does Not Compile' ErrorDefinition for this rubric, or None."""
+    from cqc_cpcc.utilities.compiler_gate import is_compile_error
+    if not error_definitions:
+        return None
+    candidates = [d for d in error_definitions
+                  if is_compile_error(getattr(d, "error_id", ""), getattr(d, "name", ""))]
+    # Prefer an enabled definition if any.
+    for d in candidates:
+        if getattr(d, "enabled", True):
+            return d
+    return candidates[0] if candidates else None
+
+
+def _read_source_files(source_files: dict):
+    """Normalize ``{filename: path_or_code}`` into ``[(filename, code), ...]``.
+
+    Each value may be a path on disk (``StudentSubmission.files`` maps name -> temp path)
+    or the raw source text; paths that exist are read, everything else is used verbatim.
+    """
+    import os
+    out = []
+    for name, ref in (source_files or {}).items():
+        code = ref
+        try:
+            if isinstance(ref, str) and os.path.exists(ref):
+                with open(ref, "r", encoding="utf-8", errors="replace") as f:
+                    code = f.read()
+        except Exception as e:  # noqa: BLE001
+            logger.info("Compile gate: could not read %s: %s", name, e)
+            continue
+        if isinstance(code, str) and code.strip():
+            out.append((name, code))
+    return out
+
+
+def apply_compile_gate(
+        result: RubricAssessmentResult,
+        source_files: Optional[dict],
+        error_definitions: Optional[list] = None,
+) -> tuple[RubricAssessmentResult, dict]:
+    """Backstop the LLM's "Does Not Compile" determination with a REAL compile check.
+
+    The LLM's compile judgment is unreliable (gpt-5-mini flagged valid C++ as
+    non-compiling, flooring the grade). This compiles the student's actual source with
+    the local toolchain (:mod:`cqc_cpcc.utilities.compiler_gate`) and reconciles the
+    ``detected_errors`` list on hard evidence:
+
+    * **Compiles** → REMOVE any LLM-added "Does Not Compile" error (false positive).
+    * **Does NOT compile** → ensure a "Does Not Compile" error is present, ADDING one
+      (from the rubric's compile ``ErrorDefinition``, annotated with the real compiler
+      diagnostics) if the LLM missed it.
+    * **Unsupported language (SAS/unknown) or missing toolchain** → leave the LLM
+      judgment untouched.
+
+    When the error list changes, the cached ``error_counts_by_*`` are reset to ``None``
+    so :func:`apply_backend_scoring` recomputes the score/band from the corrected errors.
+    Must run BEFORE ``apply_backend_scoring``. Returns ``(result, info)``.
+    """
+    from cqc_cpcc.utilities.compiler_gate import check_submission, is_compile_error
+
+    info = {"ran": False, "action": "none", "language": None, "compiles": None,
+            "tool": "", "reason": ""}
+    files = _read_source_files(source_files)
+    if not files:
+        info["reason"] = "no readable source files"
+        return result, info
+
+    cr = check_submission(files)
+    info.update(ran=True, language=cr.language, compiles=cr.compiles, tool=cr.tool)
+    if not cr.is_definitive:
+        info["action"] = "skipped"
+        info["reason"] = cr.skipped_reason or "not verifiable"
+        logger.info("Compile gate skipped (%s): %s", cr.language, info["reason"])
+        return result, info
+
+    errors = list(result.detected_errors or [])
+    existing = [e for e in errors if is_compile_error(getattr(e, "code", ""), getattr(e, "name", ""))]
+    changed = False
+
+    if cr.compiles:
+        if existing:
+            errors = [e for e in errors if e not in existing]
+            info["action"] = "removed"
+            changed = True
+            logger.info("Compile gate: code COMPILES — removed %d false 'Does Not Compile' "
+                        "error(s) [%s]", len(existing), cr.tool)
+        else:
+            info["action"] = "confirmed_compiles"
+    else:
+        if existing:
+            info["action"] = "confirmed_no_compile"
+        else:
+            cdef = _find_compile_error_def(error_definitions)
+            if cdef is not None:
+                diag = (cr.errors or "").strip()
+                if len(diag) > 1500:
+                    diag = diag[:1500] + " …(truncated)"
+                errors.append(DetectedError(
+                    code=getattr(cdef, "error_id", "DOES_NOT_COMPILE"),
+                    name=getattr(cdef, "name", "Does Not Compile"),
+                    severity=getattr(cdef, "severity_category", "major"),
+                    description=getattr(cdef, "description", "The program does not compile"),
+                    occurrences=1,
+                    notes=f"Verified by {cr.tool}: the submission does not compile.\n{diag}",
+                ))
+                info["action"] = "added"
+                changed = True
+                logger.info("Compile gate: code does NOT compile — added 'Does Not Compile' "
+                            "error the model missed [%s]", cr.tool)
+            else:
+                info["action"] = "no_compile_definition"
+                logger.info("Compile gate: code does NOT compile but rubric has no "
+                            "'Does Not Compile' error definition; leaving errors unchanged")
+
+    if changed:
+        result = result.model_copy(update={
+            "detected_errors": errors,
+            "error_counts_by_severity": None,  # force recompute from corrected errors
+            "error_counts_by_id": None,
+        })
+    return result, info
 
 
 def points_from_level_label(

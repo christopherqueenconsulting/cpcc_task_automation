@@ -347,6 +347,52 @@ def convert_xlsx_to_markdown(file_path: str) -> str:
         return f"Error converting Excel file to markdown: {str(e)}"
 
 
+# ---------------------------------------------------------------------------
+# Path confinement for file reads
+# ---------------------------------------------------------------------------
+
+# Every path read_file is given is user-influenced: Streamlit writes uploads to the
+# system temp directory, ZIP extraction writes there under names taken from the
+# archive, and BrightSpace downloads are named by the submission. A crafted name
+# containing "../" (or a symlink inside an archive) is the classic way to turn
+# "read the student's file" into "read anything the process can reach" -- and
+# whatever is read goes straight into an LLM prompt or a feedback document.
+_EXTRA_READABLE_ROOTS_ENV = "READABLE_FILE_ROOTS"
+
+
+def readable_roots() -> list:
+    """Directories a file passed to :func:`read_file` may live under.
+
+    The temp directory covers uploads and extracted archives; the working directory
+    covers repo files such as README.md. Anything else needs to be named explicitly
+    in ``READABLE_FILE_ROOTS`` (os.pathsep-separated), which is the escape hatch for
+    an instructor keeping submissions somewhere else.
+    """
+    roots = [tempfile.gettempdir(), os.getcwd()]
+    configured = os.getenv(_EXTRA_READABLE_ROOTS_ENV, "")
+    roots.extend(part for part in configured.split(os.pathsep) if part.strip())
+    resolved = []
+    for root in roots:
+        try:
+            resolved.append(os.path.realpath(root))
+        except OSError:  # pragma: no cover - an unreadable root is simply not allowed
+            continue
+    return resolved
+
+
+def is_within_readable_roots(resolved_path: str) -> bool:
+    """True when an ALREADY-RESOLVED path sits inside an allowed root.
+
+    Takes a resolved path rather than resolving one itself, so a caller cannot
+    accidentally check the pre-symlink string: that check would pass for a link
+    sitting in the temp directory and pointing anywhere at all.
+    """
+    for root in readable_roots():
+        if resolved_path == root or resolved_path.startswith(root + os.sep):
+            return True
+    return False
+
+
 @lru_cache(maxsize=None)
 def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     """ Return the file contents in string format.
@@ -356,7 +402,35 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     For video files (.mp4, .avi, .mov, .webm): Returns metadata and grading instructions
     For HTML files: Extracts text content (removes scripts/styles)
     For other files: Returns text content as-is
+
+    The path is resolved and confined to an allowed root before anything is opened
+    -- see :func:`readable_roots`. Every read below uses that resolved path, not the
+    caller's string, so a symlink cannot redirect the read after the check.
+
+    The guard is written out here, as a normalize-then-``startswith`` check whose
+    successful branch is what assigns ``file_path``, rather than being delegated to a
+    helper or hidden inside ``any(...)``. That shape is deliberate: CodeQL's
+    py/path-injection barrier analysis only treats a path as sanitized when it can
+    see the normalization and the allow-list check dominating the ``open()`` calls
+    they protect.
     """
+    if not file_path:
+        raise ValueError("No file path given to read.")
+
+    unresolved = file_path
+    resolved = os.path.realpath(file_path)
+
+    for allowed_root in readable_roots():
+        if resolved == allowed_root or resolved.startswith(allowed_root + os.sep):
+            file_path = resolved
+            break
+    else:
+        raise ValueError(
+            "Refusing to read %r: it resolves to %r, which is outside the temp "
+            "directory and the working directory. Set %s if this location is "
+            "intentional." % (unresolved, resolved, _EXTRA_READABLE_ROOTS_ENV)
+        )
+
     file_name, file_extension = os.path.splitext(file_path)
     file_extension = file_extension.lower()
 
@@ -365,11 +439,34 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
         from cqc_cpcc.utilities.pdf_utils import extract_text_from_pdf
         contents = extract_text_from_pdf(file_path)
     elif convert_to_markdown:
-        with open(file_path, mode='rb') as f:
-            # results = mammoth.convert_to_markdown(f)
-            results = mammoth.convert_to_html(f)
-            contents = convert_content_to_markdown(results.value)
-        # contents = results.value
+        # Convert-to-markdown must be extension-aware: mammoth reads ONLY .docx
+        # (a zip). Running it on .html/.txt raises, so dispatch by type here and
+        # fall back to reading as text for anything that isn't a Word doc / HTML.
+        if file_extension in ['.html', '.htm']:
+            # Already HTML — go straight to markdown (no mammoth).
+            with open(file_path, mode='r', encoding='utf-8', errors='replace') as f:
+                contents = convert_content_to_markdown(f.read())
+        elif file_extension in ['.md', '.markdown']:
+            # Already markdown — pass through unchanged.
+            with open(file_path, mode='r', encoding='utf-8', errors='replace') as f:
+                contents = f.read()
+        elif file_extension == '.docx':
+            # Word doc → HTML (mammoth) → markdown. NOTE: mammoth reads ONLY .docx
+            # (a zip); the legacy binary .doc format is NOT supported, so it falls
+            # through to the try/except-with-text-fallback below instead of raising.
+            with open(file_path, mode='rb') as f:
+                results = mammoth.convert_to_html(f)
+                contents = convert_content_to_markdown(results.value)
+        else:
+            # Unknown type (e.g. .txt, .doc): try mammoth, else read as plain text so a
+            # non-.docx upload with "Convert To Markdown" checked never errors out.
+            try:
+                with open(file_path, mode='rb') as f:
+                    results = mammoth.convert_to_html(f)
+                    contents = convert_content_to_markdown(results.value)
+            except Exception:  # noqa: BLE001 - not a Word doc; fall back to text
+                with open(file_path, mode='r', encoding='utf-8', errors='replace') as f:
+                    contents = f.read()
     # If file is HTML, extract text content
     elif file_extension in ['.html', '.htm']:
         with open(file_path, mode='r', encoding='utf-8') as f:
@@ -710,27 +807,37 @@ def _wait_for_mfa_approval(
 KMSI_PROMPT_TIMEOUT_SECONDS = 3
 
 
-def _dismiss_stay_signed_in(driver: WebDriver, wait_short, wait_long) -> None:
-    """Click "No" on the "Stay signed in?" page if it appears, else skip fast.
+def _accept_stay_signed_in(driver: WebDriver, wait_short, wait_long) -> None:
+    """Click "Yes" on the "Stay signed in?" (KMSI) page if it appears, else skip fast.
 
-    The prompt is optional (some tenants skip it / we may already be redirected
-    back to the app after MFA), so this probes briefly with a direct presence
-    check rather than a long element wait that would hang when it never shows.
+    Clicking **Yes** makes Microsoft issue a PERSISTENT auth cookie that survives a
+    browser restart, so the automation's Chrome profile stays logged in across runs
+    (login once, reuse for many assignments). Clicking "No" would issue a session-only
+    cookie that is cleared on browser close — forcing MFA on every run.
+
+    The prompt is optional (some tenants skip it / we may already be redirected back to
+    the app after MFA), so probe briefly with a direct presence check rather than a long
+    element wait that would hang when it never shows.
     """
-    kmsi_no_xpath = "//input[contains(@class, 'button-secondary') and contains(@value,'No')]"
+    # "Yes" is the primary submit (id=idSIButton9); match by id or value for robustness.
+    kmsi_yes_xpath = (
+        "//input[@id='idSIButton9'] | "
+        "//input[@type='submit' and contains(@value,'Yes')] | "
+        "//input[contains(@class, 'button_primary') and contains(@value,'Yes')]"
+    )
     deadline = time.time() + KMSI_PROMPT_TIMEOUT_SECONDS
     while time.time() < deadline:
-        if driver.find_elements(By.XPATH, kmsi_no_xpath):
+        if driver.find_elements(By.XPATH, kmsi_yes_xpath):
             try:
-                no_btn = click_element_wait_retry(
-                    driver, wait_short, kmsi_no_xpath,
-                    "Clicking 'No' to Stay Signed in", max_try=0)
+                yes_btn = click_element_wait_retry(
+                    driver, wait_short, kmsi_yes_xpath,
+                    "Clicking 'Yes' to Stay Signed in (persist login)", max_try=0)
                 wait_long.until(
-                    EC.invisibility_of_element(no_btn),
+                    EC.invisibility_of_element(yes_btn),
                     'Waiting for login to be successful')
             except (TimeoutException, StaleElementReferenceException,
                     ElementNotInteractableException, NoSuchElementException):
-                logger.info("'Stay signed in?' prompt vanished before dismissal.")
+                logger.info("'Stay signed in?' prompt vanished before acceptance.")
             return
         time.sleep(0.5)
     logger.info("No 'Stay signed in?' prompt — login already completed.")
@@ -963,9 +1070,9 @@ def microsoft_login(driver: WebDriver, mfa_handler=None):
             context="microsoft", message=mfa_message,
         )
 
-    # Dismiss "Stay signed in?" (KMSI) if it appears. Some tenants skip it — after
-    # MFA approval we may already be redirected back to the app.
-    _dismiss_stay_signed_in(driver, wait_short, wait_long)
+    # Accept "Stay signed in?" (KMSI) if it appears so the login persists across runs.
+    # Some tenants skip it — after MFA approval we may already be redirected to the app.
+    _accept_stay_signed_in(driver, wait_short, wait_long)
 
     # Login completed — let the MFA handler close any prompt it was showing.
     _resolve_mfa(mfa_handler)

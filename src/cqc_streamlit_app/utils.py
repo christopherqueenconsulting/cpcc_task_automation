@@ -1179,7 +1179,14 @@ def _fetch_openrouter_models_cached() -> list:
         return []
 
 
-def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool = True) -> Dict[str, Any]:
+RECOMMENDED_GRADING_MODEL = "openai/gpt-5"
+
+
+def define_openrouter_model(
+        unique_key: str | int,
+        default_use_auto_route: bool = False,
+        default_model: str = RECOMMENDED_GRADING_MODEL,
+) -> Dict[str, Any]:
     """
     Presents OpenRouter model configuration with auto-routing option.
     Returns JSON-serializable dict:
@@ -1188,23 +1195,42 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
         "model": str,  # "openrouter/auto" or specific model ID
         "use_openrouter": True,
       }
-    
+
+    Defaults to the specific model ``openai/gpt-5`` (NOT the Auto Router). Grading is
+    correctness-critical: the Auto Router can silently pick a cheaper/weaker model
+    (e.g. gpt-5-mini), which has produced wrong determinations such as flagging valid
+    code as "Does Not Compile". gpt-5 is the recommended default for grading accuracy;
+    the compiler gate independently backstops the compile call regardless of model.
+
     Args:
         unique_key: Unique key for widget state management
-        default_use_auto_route: Default state of auto-routing checkbox
-    
+        default_use_auto_route: Default state of the auto-routing checkbox (default False)
+        default_model: Model pre-selected when auto-routing is off (default openai/gpt-5)
+
     Returns:
         Configuration dictionary for OpenRouter
     """
     uk = str(unique_key)
 
-    # Checkbox for auto-routing (default: True)
+    # Checkbox for auto-routing (default: OFF — grading prefers a known strong model).
     use_auto_route = st.checkbox(
-        label="Use Auto Router (Recommended)",
+        label="Use Auto Router",
         value=default_use_auto_route,
         key=f"openrouter_auto_{uk}",
-        help="Let OpenRouter automatically select the best model for your request"
+        help="Let OpenRouter pick a model automatically. NOT recommended for grading — "
+             "it may choose a cheaper/weaker model. Leave OFF to grade with "
+             f"{default_model}."
     )
+    if use_auto_route:
+        st.warning(
+            "⚠️ Auto Router may select a weaker/cheaper model. For grading accuracy, "
+            f"prefer **{default_model}** (uncheck Auto Router)."
+        )
+    else:
+        st.caption(
+            f"✅ Recommended for grading: **{default_model}**. A local compiler gate also "
+            "verifies every 'Does Not Compile' determination independent of the model."
+        )
 
     selected_model = "openrouter/auto"
 
@@ -1232,18 +1258,23 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
                     ]
                     st.info("Using default allowed models: GPT-5 family")
 
-                # Create model options from allowed list
+                # Create model options from allowed list; guarantee the recommended
+                # default is present and pre-selected.
+                if default_model not in allowed_model_ids:
+                    allowed_model_ids.append(default_model)
                 model_options = allowed_model_ids
                 model_id_map = {model_id: model_id for model_id in allowed_model_ids}
 
                 # Sort alphabetically
                 model_options.sort()
 
+                default_idx = model_options.index(default_model) if default_model in model_options else 0
                 selected_display = st.selectbox(
                     label="Select OpenRouter Model",
                     key=f"openrouter_model_{uk}",
                     options=model_options,
-                    help="Choose a specific model from the allowed models list"
+                    index=default_idx,
+                    help=f"Choose a specific model. Default (recommended for grading): {default_model}"
                 )
 
                 selected_model = model_id_map.get(selected_display, allowed_model_ids[0])
@@ -1263,11 +1294,19 @@ def define_openrouter_model(unique_key: str | int, default_use_auto_route: bool 
                 # Sort alphabetically
                 model_options.sort()
 
+                # Pre-select the recommended default model if it's in the fetched list.
+                default_idx = 0
+                for i, disp in enumerate(model_options):
+                    if model_id_map.get(disp) == default_model:
+                        default_idx = i
+                        break
+
                 selected_display = st.selectbox(
                     label="Select OpenRouter Model",
                     key=f"openrouter_model_{uk}",
                     options=model_options,
-                    help="Choose a specific model from OpenRouter's available models"
+                    index=default_idx,
+                    help=f"Choose a specific model. Recommended for grading: {default_model}"
                 )
 
                 selected_model = model_id_map.get(selected_display, "openrouter/auto")
@@ -1563,12 +1602,14 @@ class _BrightSpaceWritebackJob:
     True) navigates and locates the write targets but never fills or saves.
     """
 
-    def __init__(self, url: str, items: list, bridge, dry_run: bool = True):
+    def __init__(self, url: str, items: list, bridge, dry_run: bool = True,
+                 feedback_mode: str = "attach"):
         import threading
         self.url = url
         self.items = items
         self.bridge = bridge
         self.dry_run = dry_run
+        self.feedback_mode = feedback_mode
         self.report = None  # GradeWriteReport
         self.error: Optional[str] = None
         self.done = threading.Event()
@@ -1593,6 +1634,7 @@ class _BrightSpaceWritebackJob:
             self.report = push_grades_to_brightspace(
                 self.url, self.items, progress=self._record,
                 mfa_handler=self.bridge, dry_run=self.dry_run,
+                feedback_mode=self.feedback_mode,
             )
         except Exception as e:  # noqa: BLE001 - surfaced to the UI
             self.error = str(e)
@@ -1772,9 +1814,19 @@ def add_brightspace_source_element(
 def _render_writeback_report(report) -> None:
     """Render a GradeWriteReport: per-student outcomes + unmatched lists."""
     saved = report.saved_count
-    mode = "DRY RUN — nothing was saved" if report.dry_run else f"saved {saved} draft(s)"
+    is_quiz = getattr(report, "route", "") == "quiz"
+    saved_word = "posted" if is_quiz else "saved"
+    saved_unit = "grade(s)" if is_quiz else "draft(s)"
+    mode = "DRY RUN — nothing was saved" if report.dry_run else f"{saved_word} {saved} {saved_unit}"
     st.success(f"Write-back ({report.route}) complete — matched "
                f"{report.matched_count}/{len(report.outcomes)} shown · {mode}.")
+    if is_quiz and not report.dry_run and saved:
+        # Only claim feedback was posted if it actually was — o.saved can be true with
+        # just the score posted (feedback write/attach may have failed for a student).
+        posted_fb = any(o.feedback_written or o.feedback_attached for o in report.outcomes)
+        what = "grades and feedback" if posted_fb else "grades"
+        st.warning(f"⚠️ Quiz {what} were **posted (published)** to students. "
+                   "Review them in BrightSpace.")
 
     if report.outcomes:
         rows = [{
@@ -1785,8 +1837,12 @@ def _render_writeback_report(report) -> None:
                 f"{o.rubric_selected}"
                 + (f" (⚠️ {len(o.rubric_missing)} unmatched)" if o.rubric_missing else "")
             ),
-            "Feedback": ("—" if report.dry_run else ("✅" if o.feedback_written else "❌")),
-            "Saved draft": "✅" if o.saved else ("—" if report.dry_run else "❌"),
+            "Feedback": (
+                "—" if report.dry_run
+                else ("📎" if o.feedback_attached
+                      else ("✅" if o.feedback_written else "❌"))
+            ),
+            ("Posted" if is_quiz else "Saved draft"): "✅" if o.saved else ("—" if report.dry_run else "❌"),
             "Note": o.note,
         } for o in report.outcomes]
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
@@ -1801,10 +1857,22 @@ def _render_writeback_report(report) -> None:
         st.caption(f"• {w}")
 
 
+def _is_quiz_writeback_url(url: str) -> bool:
+    """True when ``url`` is a BrightSpace quiz URL (best-effort, never raises)."""
+    if not url:
+        return False
+    try:
+        from cqc_cpcc.utilities.brightspace_submissions import detect_route, ROUTE_QUIZ
+        return detect_route(url) == ROUTE_QUIZ
+    except Exception:  # noqa: BLE001 - unknown/partial URL: treat as non-quiz
+        return False
+
+
 def add_brightspace_writeback_element(
         results: list,
         key_prefix: str = "wb_",
         default_url: str = "",
+        feedback_docs: Optional[dict] = None,
 ) -> None:
     """Render the "Write grades back to BrightSpace (draft)" panel.
 
@@ -1817,6 +1885,9 @@ def add_brightspace_writeback_element(
             ``st.session_state.grading_results_by_key[run_key]``.
         key_prefix: Session-state key prefix (unique per grading run).
         default_url: Pre-fill the BrightSpace URL (e.g. the fetched source URL).
+        feedback_docs: Optional ``{student_id: path-to-Feedback.docx}`` map. When the
+            "Attach feedback document" delivery option is chosen, each student's clean
+            ``.docx`` is uploaded to their evaluation page instead of inline HTML.
     """
     import time
     from cqc_cpcc.utilities.brightspace_writeback import (
@@ -1829,12 +1900,32 @@ def add_brightspace_writeback_element(
     job_key = key_prefix + "job"
     report_key = key_prefix + "report"
 
-    st.markdown("#### 📤 Write grades back to BrightSpace (draft)")
-    st.caption(
-        "Pushes each student's score + feedback onto their BrightSpace evaluation "
-        "page and **saves as a draft** (never published) so you can review, then "
-        "publish later. Start with a dry run to confirm matches and field targets."
-    )
+    # Route-aware copy: quizzes have NO draft — entered scores/feedback are POSTED
+    # (published) immediately. Detect from the URL (already in session state if the
+    # instructor typed/pre-filled it) so the header, notice, and button reflect that.
+    current_url = st.session_state.get(key_prefix + "url", default_url) or ""
+    is_quiz = _is_quiz_writeback_url(current_url)
+
+    if is_quiz:
+        st.markdown("#### 📤 Write grades & feedback to BrightSpace (quiz)")
+        st.caption(
+            "Pushes each student's score + feedback onto their quiz attempt. Start with "
+            "a dry run to confirm matches and field targets."
+        )
+        st.warning(
+            "⚠️ **Quizzes have no draft.** For quizzes, the score is entered on the "
+            "attempt and the overall feedback on the **Completion Summary**, and both are "
+            "**POSTED (published) to students immediately** — there is no draft to review "
+            "later. **Review the dry run carefully first**, and verify the posted grades "
+            "in BrightSpace afterward."
+        )
+    else:
+        st.markdown("#### 📤 Write grades back to BrightSpace (draft)")
+        st.caption(
+            "Pushes each student's score + feedback onto their BrightSpace evaluation "
+            "page and **saves as a draft** (never published) so you can review, then "
+            "publish later. Start with a dry run to confirm matches and field targets."
+        )
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1857,6 +1948,33 @@ def add_brightspace_writeback_element(
         placeholder="https://brightspace.cpcc.edu/d2l/lms/...",
     )
 
+    # Feedback delivery: attach the clean CPCC-branded .docx (default) or type the
+    # feedback text directly into the evaluation editor. Attach needs the generated docs.
+    have_docs = bool(feedback_docs)
+    delivery_options = ["📎 Attach feedback document (.docx)", "📝 Add feedback directly"]
+    delivery = st.radio(
+        "Feedback delivery",
+        options=delivery_options,
+        index=0 if have_docs else 1,
+        key=key_prefix + "delivery",
+        help="Attach uploads each student's generated Feedback.docx to their evaluation "
+             "page. Add feedback directly types the composed feedback (summary, criteria, "
+             "and Errors Observed) into the feedback editor instead.",
+        horizontal=True,
+    )
+    feedback_mode = "attach" if delivery == delivery_options[0] else "inline"
+    if feedback_mode == "attach" and not have_docs:
+        st.info("ℹ️ Generate the feedback documents above first to attach them; "
+                "otherwise feedback is added directly.")
+    # Assignment route: attach mode delivers docs via BrightSpace's bulk "Add Feedback
+    # Files" ZIP import (matched to submitters by submission-ID) and does NOT write
+    # scores — run "Add feedback directly" for scores/rubric.
+    if feedback_mode == "attach" and have_docs and url and not _is_quiz_writeback_url(url):
+        st.caption(
+            "📦 On an assignment, attaching bulk-imports all Feedback.docx files as "
+            "drafts in one step (only students who submitted are matched). Scores/rubric "
+            "are written separately — choose “Add feedback directly” for those.")
+
     job = st.session_state.get(job_key)
 
     def _launch(dry_run: bool):
@@ -1864,12 +1982,31 @@ def add_brightspace_writeback_element(
         items = build_write_items_from_results(
             results, buffer_pct=buffer_pct, include_criteria_feedback=include_criteria,
         )
+        # Attach each student's generated .docx (matched by the grader's student_id key)
+        # so attach mode can upload it; harmless when the map is empty (falls back inline).
+        if feedback_docs:
+            for it in items:
+                doc_path = feedback_docs.get(it.student_key)
+                if doc_path:
+                    it.feedback_doc_path = doc_path
         bridge = MfaBridge()
-        new_job = _BrightSpaceWritebackJob(url, items, bridge, dry_run=dry_run)
+        new_job = _BrightSpaceWritebackJob(
+            url, items, bridge, dry_run=dry_run, feedback_mode=feedback_mode)
         new_job.start()
         st.session_state[job_key] = new_job
         st.session_state.pop(report_key, None)
         st.rerun()
+
+    # Re-evaluate the route from the URL the user actually entered above.
+    is_quiz = _is_quiz_writeback_url(url)
+    real_button_label = (
+        "✍️ Write Grades and Feedback to Brightspace" if is_quiz
+        else "✍️ Write drafts to BrightSpace"
+    )
+    confirm_label = (
+        "I reviewed the dry run — POST grades & feedback to the quiz" if is_quiz
+        else "I reviewed the dry run — write drafts for real"
+    )
 
     c1, c2 = st.columns(2)
     with c1:
@@ -1877,9 +2014,8 @@ def add_brightspace_writeback_element(
                      disabled=not url, use_container_width=True):
             _launch(dry_run=True)
     with c2:
-        confirm = st.checkbox("I reviewed the dry run — write drafts for real",
-                              key=key_prefix + "confirm")
-        if st.button("✍️ Write drafts to BrightSpace", key=key_prefix + "real",
+        confirm = st.checkbox(confirm_label, key=key_prefix + "confirm")
+        if st.button(real_button_label, key=key_prefix + "real",
                      disabled=not (url and confirm), use_container_width=True):
             _launch(dry_run=False)
 
@@ -2272,6 +2408,34 @@ def export_grading_summary_to_excel(
         summary_df.to_csv(csv_file.name, index=False)
 
     return excel_file.name, csv_file.name
+
+
+def add_file_to_zip(zip_file_path: str, source_file_path: str, arcname: str) -> str:
+    """Add a single file to an existing zip, returning the (new) zip path.
+
+    Rewrites the archive (zip entries can't be appended in place reliably here) by
+    copying all existing entries into a fresh zip and writing ``source_file_path``
+    under ``arcname``. The original zip is removed. If the source file is missing the
+    original zip path is returned unchanged.
+    """
+    if not source_file_path or not os.path.exists(source_file_path):
+        return zip_file_path
+
+    new_zip_file = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    new_zip_file.close()
+
+    with zipfile.ZipFile(zip_file_path, 'r') as original_zip:
+        with zipfile.ZipFile(new_zip_file.name, 'w') as new_zip:
+            for item in original_zip.infolist():
+                new_zip.writestr(item, original_zip.read(item.filename))
+            new_zip.write(source_file_path, arcname=arcname)
+
+    try:
+        os.unlink(zip_file_path)
+    except Exception:
+        pass
+
+    return new_zip_file.name
 
 
 def add_grading_summary_to_zip(

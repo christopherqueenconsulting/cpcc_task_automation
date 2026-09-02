@@ -54,6 +54,7 @@ from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import (
     add_brightspace_source_element,
     add_brightspace_writeback_element,
+    add_file_to_zip,
     add_flexible_upload_element,
     add_upload_file_element,
     add_grading_summary_to_zip,
@@ -961,7 +962,7 @@ async def get_grade_exam_content():
 
     # Model Configuration - Use OpenRouter
     st.header("Model Configuration")
-    model_cfg = define_openrouter_model("grade_exam_assigment", default_use_auto_route=True)
+    model_cfg = define_openrouter_model("grade_exam_assigment", default_use_auto_route=False)
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
     selected_model = model_cfg.get("model", "openrouter/auto")
@@ -1194,6 +1195,82 @@ async def add_grading_status_extender(ctx: ScriptRunContext, base_student_filena
         return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
 
 
+def _render_compile_gate_badge(gate_report: dict, model_name: str, student_id: str) -> None:
+    """Show a compile-gate tracking badge in the Streamlit report (display ONLY).
+
+    NEVER writes to feedback docs, grades, exports, or anything student-facing — it only
+    surfaces, for the instructor, whether the real local compiler agreed with the model's
+    "Does Not Compile" call, and tallies it per model across the session so they can see
+    how often different models get it wrong.
+    """
+    if not gate_report or not gate_report.get("ran"):
+        return
+    action = gate_report.get("action", "none")
+    lang = gate_report.get("language", "?")
+    tool = gate_report.get("tool", "")
+    compiles = gate_report.get("compiles")
+
+    badges = {
+        "removed": ("🛠️ Compile gate CORRECTED the model",
+                    f"code **compiles** ({tool}) — removed the model's false “Does Not Compile” for **{student_id}**",
+                    "warning"),
+        "added": ("🛠️ Compile gate CORRECTED the model",
+                  f"code **does not compile** ({tool}) — added “Does Not Compile” the model missed for **{student_id}**",
+                  "warning"),
+        "confirmed_compiles": ("✅ Compile gate: agrees", f"verified compiles ({tool}, {lang})", "caption"),
+        "confirmed_no_compile": ("✅ Compile gate: agrees", f"verified does not compile ({tool}, {lang})", "caption"),
+        "no_compile_definition": ("ℹ️ Compile gate", f"does not compile but rubric has no compile error ({lang})", "caption"),
+        "skipped": ("⏭️ Compile gate skipped", gate_report.get("reason", f"{lang} not verifiable"), "caption"),
+    }
+    title, detail, kind = badges.get(action, ("ℹ️ Compile gate", action, "caption"))
+    if kind == "warning":
+        st.warning(f"{title} — {detail}")
+    else:
+        st.caption(f"{title} — {detail}")
+
+    # Per-model session tally (display-only tracking).
+    stats = st.session_state.setdefault("compile_gate_stats", {})
+    m = stats.setdefault(model_name or "unknown",
+                         {"corrected": 0, "removed": 0, "added": 0, "agreed": 0,
+                          "skipped": 0, "checked": 0})
+    m["checked"] += 1
+    if action == "removed":
+        m["removed"] += 1; m["corrected"] += 1
+    elif action == "added":
+        m["added"] += 1; m["corrected"] += 1
+    elif action in ("confirmed_compiles", "confirmed_no_compile"):
+        m["agreed"] += 1
+    elif action == "skipped":
+        m["skipped"] += 1
+
+
+def render_compile_gate_summary() -> None:
+    """Render the session-wide compile-gate tally (per model) in the Streamlit report."""
+    stats = st.session_state.get("compile_gate_stats") or {}
+    if not stats:
+        return
+    with st.expander("🛠️ Compile-gate tracking (this session)", expanded=False):
+        st.caption(
+            "How often the real local compiler overrode each model's “Does Not Compile” "
+            "call. Tracking only — never affects grades or student feedback."
+        )
+        rows = []
+        for model, m in stats.items():
+            verified = m["checked"] - m["skipped"]
+            rate = f"{(m['corrected'] / verified * 100):.0f}%" if verified else "—"
+            rows.append({
+                "Model": model,
+                "Checked": m["checked"],
+                "Corrected": m["corrected"],
+                "  ↳ removed false DNC": m["removed"],
+                "  ↳ added missed DNC": m["added"],
+                "Agreed": m["agreed"],
+                "Skipped (unsupported)": m["skipped"],
+                "Correction rate": rate,
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
 async def grade_single_rubric_student(
         ctx: ScriptRunContext,
         student_id: str,
@@ -1267,6 +1344,7 @@ async def grade_single_rubric_student(
                 grading_correlation_id = create_correlation_id()
                 logger.info(f"Starting grading for {student_id} with correlation_id={grading_correlation_id}")
 
+            gate_report: dict = {}
             result = await grade_with_rubric(
                 rubric=effective_rubric,
                 assignment_instructions=assignment_instructions,
@@ -1275,9 +1353,19 @@ async def grade_single_rubric_student(
                 error_definitions=error_definitions,
                 model_name=model_name,
                 temperature=temperature,
+                # Real-compiler gate: verify "Does Not Compile" against the actual
+                # toolchain using the student's real source files (name -> temp path).
+                source_files=student_submission.files,
+                gate_report=gate_report,
             )
 
             status.update(label=f"{status_label} | Processing results...")
+
+            # Compile-gate tracking badge (Streamlit report ONLY — never enters the
+            # feedback docx, grades, or anything student-facing). Lets the instructor see
+            # how often the real compiler overrode the model's "Does Not Compile" call,
+            # per model, as they try different models.
+            _render_compile_gate_badge(gate_report, model_name, student_id)
 
             # Log grading summary for debugging
             logger.info(
@@ -1558,6 +1646,9 @@ async def process_rubric_grading_batch(
                     "Effective rubric has zero total_points_possible; skipping average percentage calculation.")
                 st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
 
+        # Compile-gate tracking tally (Streamlit report only; per model, this session).
+        render_compile_gate_summary()
+
         # Generate Word docs and ZIP download
         st.markdown("---")
         _generate_feedback_docs_and_zip(
@@ -1576,6 +1667,7 @@ async def process_rubric_grading_batch(
             results=all_results,
             key_prefix=f"rubric_exam_wb_{run_key}_",
             default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
+            feedback_docs=st.session_state.get("feedback_doc_paths_by_key", {}).get(run_key),
         )
 
     if failure_count > 0:
@@ -1865,6 +1957,14 @@ async def process_error_only_grading_batch(
                 zip_file_path = st.session_state.error_only_feedback_zip_by_key[run_key]
             else:
                 zip_file_path = create_zip_file(doc_files)
+                # Include the auto-gathered BrightSpace submissions ZIP (if any).
+                submissions_zip_path, submissions_zip_name = _get_brightspace_submissions_zip()
+                if submissions_zip_path:
+                    zip_file_path = add_file_to_zip(
+                        zip_file_path,
+                        submissions_zip_path,
+                        arcname=f"Student_Submissions/{submissions_zip_name}",
+                    )
                 st.session_state.error_only_feedback_zip_by_key[run_key] = zip_file_path
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -2049,32 +2149,46 @@ async def get_rubric_based_exam_grading():
     # Step 4: Assignment Instructions
     st.header("Assignment Instructions")
     assignment_instructions_content = None
+
+    # When BrightSpace instructions were fetched, pre-fill an editable text area —
+    # but the instructor can still override them with an uploaded file below.
     if bs_instructions:
-        # Auto-filled from the BrightSpace fetch above (editable).
-        st.success("📝 Using instructions captured from BrightSpace (edit if needed).")
+        st.success(
+            "📝 Using instructions captured from BrightSpace (edit if needed, or "
+            "override with a file below)."
+        )
         assignment_instructions_content = st.text_area(
             "Assignment instructions (from BrightSpace)",
             value=bs_instructions,
             key="rubric_exam_bs_instructions_area",
             height=200,
         )
-    else:
-        _orig_file_name, instructions_file_path = add_flexible_upload_element(
-            "Upload Exam Instructions",
-            ["txt", "docx", "pdf"],
-            key_prefix="rubric_exam_",
-            allow_url=True
-        )
-        convert_instructions_to_markdown = st.checkbox(
-            "Convert To Markdown",
-            True,
-            key="convert_rubric_exam_instruction_to_markdown"
-        )
 
-        if instructions_file_path:
-            assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-            if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
-                st.markdown(assignment_instructions_content, unsafe_allow_html=True)
+    # File override — always available. .docx/.html are decoded to markdown (what the
+    # LLM is given); .md/.txt pass through. A file here takes precedence over the
+    # BrightSpace text above.
+    override_label = (
+        "Override instructions with a file (optional)"
+        if bs_instructions else "Upload Exam Instructions"
+    )
+    _orig_file_name, instructions_file_path = add_flexible_upload_element(
+        override_label,
+        ["txt", "md", "docx", "html", "htm", "pdf"],
+        key_prefix="rubric_exam_",
+        allow_url=True,
+    )
+    convert_instructions_to_markdown = st.checkbox(
+        "Convert To Markdown",
+        True,
+        key="convert_rubric_exam_instruction_to_markdown",
+    )
+
+    if instructions_file_path:
+        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
+        if bs_instructions:
+            st.info("Using the uploaded instructions file (overrides the BrightSpace text above).")
+        if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
+            st.markdown(assignment_instructions_content, unsafe_allow_html=True)
 
     # Step 5: Solution File (Optional)
     st.header("Solution File (Optional)")
@@ -2117,7 +2231,7 @@ async def get_rubric_based_exam_grading():
 
     # Step 7: Model Configuration
     st.header("Model Configuration")
-    model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=True)
+    model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=False)
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
     selected_model = model_cfg.get("model", "openrouter/auto")
@@ -2621,7 +2735,27 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         results=all_results,
         key_prefix=f"rubric_exam_wb_{run_key}_",
         default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
+        feedback_docs=st.session_state.get("feedback_doc_paths_by_key", {}).get(run_key),
     )
+
+
+def _get_brightspace_submissions_zip() -> tuple[Optional[str], Optional[str]]:
+    """Return (path, filename) of the auto-gathered BrightSpace submissions ZIP.
+
+    Only returns a path when submissions were fetched from BrightSpace and the
+    confirmed source dict still points at a real ``.zip`` on disk; otherwise
+    ``(None, None)`` so manually-uploaded submissions are never bundled.
+    """
+    confirmed = st.session_state.get("rubric_exam_bs_source_confirmed")
+    if not isinstance(confirmed, dict):
+        return None, None
+    path = confirmed.get("path")
+    if not path or not os.path.exists(path) or not str(path).lower().endswith(".zip"):
+        return None, None
+    name = confirmed.get("name") or "brightspace_submissions.zip"
+    if not name.lower().endswith(".zip"):
+        name += ".zip"
+    return path, name
 
 
 def _generate_feedback_docs_and_zip(
@@ -2747,6 +2881,10 @@ def _generate_feedback_docs_and_zip(
             if not assignment_name:
                 assignment_name = "Assignment"
 
+            # Per-student doc paths, so the BrightSpace write-back can attach each
+            # student's clean .docx (keyed by the grader's student_id).
+            doc_paths_by_student: dict[str, str] = {}
+
             for student_id, result in all_results:
                 # Generate sanitized filename
                 # Try to parse student_id as "LastName_FirstName" or use as-is
@@ -2768,6 +2906,11 @@ def _generate_feedback_docs_and_zip(
                 temp_doc.close()
 
                 doc_files.append((doc_filename, temp_doc.name))
+                doc_paths_by_student[student_id] = temp_doc.name
+
+            # Cache the per-student doc paths for the write-back attach option.
+            st.session_state.setdefault("feedback_doc_paths_by_key", {})[run_key] = \
+                doc_paths_by_student
 
             # Create ZIP file
             st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
@@ -2781,6 +2924,18 @@ def _generate_feedback_docs_and_zip(
                     zip_file_path,
                     summary_df,
                     include_csv=True
+                )
+
+            # If the submissions were auto-gathered from BrightSpace, include that
+            # (user-confirmed) student-submissions ZIP so the instructor keeps a copy
+            # of exactly what was graded alongside the generated feedback.
+            submissions_zip_path, submissions_zip_name = _get_brightspace_submissions_zip()
+            if submissions_zip_path:
+                st.info("🗂️ Including the fetched student submissions ZIP...")
+                zip_file_path = add_file_to_zip(
+                    zip_file_path,
+                    submissions_zip_path,
+                    arcname=f"Student_Submissions/{submissions_zip_name}",
                 )
 
             # Cache the ZIP file path in session state

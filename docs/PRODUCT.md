@@ -222,6 +222,36 @@ Generates personalized, detailed feedback on student programming projects using 
 - **Scalability**: Handle 100 students as easily as 10
 - **Learning**: Students get feedback faster (can improve sooner)
 
+### A Real Compiler Checks "Does Not Compile"
+
+The AI's judgment about whether code compiles is not trusted. Before a score is
+calculated, the submission is compiled with the actual local toolchain — `g++` for
+C++, `javac` for Java, Python's own parser for Python — and the AI's verdict is
+corrected against that.
+
+This exists because the model got it wrong in the direction that hurts most: valid
+C++ was flagged as non-compiling, and since "Does Not Compile" is a major error, that
+one false call floored the whole grade.
+
+If the toolchain is unavailable, the result is "could not verify" and the AI's
+judgment stands — never "does not compile". Student code is compiled, never run.
+See [compiler-gate.md](compiler-gate.md).
+
+### Writing Grades Back — Know Which Route You Are On
+
+The app can write scores and feedback back to BrightSpace, and the two routes are
+**not** equally reversible:
+
+- **Assignment (dropbox)**: saves a **draft**. Nothing reaches the student until you
+  publish it yourself.
+- **Quiz**: there is no draft state on the quiz evaluation page. The score and
+  feedback are **posted to the student immediately**.
+
+The app relabels the button and shows a warning when the target is a quiz, and the
+report says "posted" rather than "saved" — but nothing about it is undoable from
+here. Both routes default to a dry run: it navigates, finds the fields, and logs what
+it *would* write without writing anything.
+
 ### Configuration Required
 
 - **OpenAI API Key**: For GPT-4 access (paid service)

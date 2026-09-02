@@ -117,6 +117,40 @@ driver = webdriver.Remote(
 
 ---
 
+### 9. **Login Persistence Across Runs** ✅
+**Issue**: Docker Chrome re-prompted for Microsoft MFA on *every* run, which turns a
+five-minute batch job into one that cannot be left alone.
+
+**Fix**: two changes that only work together.
+
+1. `get_docker_driver` points Chrome at the volume-mounted profile when running
+   non-headless:
+   ```python
+   options.add_argument("--user-data-dir=/home/seluser/chrome-profile")
+   options.add_argument(f"--profile-directory={INSTRUCTOR_USERID}")
+   ```
+   It previously used an ephemeral `Default` sub-profile, which was discarded with
+   the container and so retained nothing.
+
+2. `_accept_stay_signed_in` clicks **Yes** on Microsoft's "Stay signed in?" prompt.
+   The old `_dismiss_stay_signed_in` clicked No, so Microsoft issued a *session*
+   cookie — which a persistent profile cannot preserve, because it is gone when the
+   browser closes.
+
+**Why both**: a persistent profile with a session-only cookie still re-prompts, and a
+persistent cookie in a throwaway profile is discarded. Either change alone looks like
+it did nothing.
+
+**Caveat — one writer at a time.** Chrome locks a `user-data-dir`. Do not run the
+app and the Selenium MCP browser against this profile simultaneously. To force a
+fresh login, clear the profile:
+
+```bash
+poetry run python -c "from cqc_cpcc.utilities.selenium_util import clear_persisted_browser_profile as c; print(c())"
+```
+
+---
+
 ## Docker Compose Best Practices
 
 Your `docker-compose.yml` has good settings:
