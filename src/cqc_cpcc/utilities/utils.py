@@ -407,22 +407,28 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
     -- see :func:`readable_roots`. Every read below uses that resolved path, not the
     caller's string, so a symlink cannot redirect the read after the check.
 
-    The check is written out here rather than delegated to a helper because CodeQL's
-    py/path-injection barrier analysis does not follow validation into a callee: the
-    resolve-then-startswith guard has to be visible in the same function as the
-    open() calls it protects.
+    The guard is written out here, as a normalize-then-``startswith`` check whose
+    successful branch is what assigns ``file_path``, rather than being delegated to a
+    helper or hidden inside ``any(...)``. That shape is deliberate: CodeQL's
+    py/path-injection barrier analysis only treats a path as sanitized when it can
+    see the normalization and the allow-list check dominating the ``open()`` calls
+    they protect.
     """
     if not file_path:
         raise ValueError("No file path given to read.")
 
     unresolved = file_path
-    file_path = os.path.realpath(file_path)
-    if not any(file_path == root or file_path.startswith(root + os.sep)
-               for root in readable_roots()):
+    resolved = os.path.realpath(file_path)
+
+    for allowed_root in readable_roots():
+        if resolved == allowed_root or resolved.startswith(allowed_root + os.sep):
+            file_path = resolved
+            break
+    else:
         raise ValueError(
             "Refusing to read %r: it resolves to %r, which is outside the temp "
             "directory and the working directory. Set %s if this location is "
-            "intentional." % (unresolved, file_path, _EXTRA_READABLE_ROOTS_ENV)
+            "intentional." % (unresolved, resolved, _EXTRA_READABLE_ROOTS_ENV)
         )
 
     file_name, file_extension = os.path.splitext(file_path)

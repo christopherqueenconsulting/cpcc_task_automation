@@ -452,10 +452,13 @@ check, because a check on the unresolved string is trivially defeated by a symli
 Allowed roots are the system temp directory and the working directory, plus
 anything named in `READABLE_FILE_ROOTS`.
 
-The resolve-then-`startswith` guard is written out inside `read_file` rather than
-delegated to a helper. That is deliberate: CodeQL's `py/path-injection` barrier
-analysis does not follow validation into a callee, so the guard has to be visible in
-the same function as the `open()` calls it protects.
+The guard's shape is deliberate and should not be "tidied" into an `any(...)` or a
+helper function. CodeQL's `py/path-injection` analysis treats a path as sanitized only
+when it can see a **normalization** (`os.path.realpath`) and an **allow-list check**
+(`startswith`) dominating the `open()` calls they protect. Written as a `for`/`else`
+whose successful branch performs the assignment, both are visible; hidden inside a
+generator expression or behind a function call, neither is, and all five `open()`
+calls get flagged again.
 
 ### Running Student Code
 
