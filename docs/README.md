@@ -23,7 +23,6 @@ This documentation provides in-depth information about the architecture, compone
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, design decisions, and data flows |
 | [PRODUCT.md](PRODUCT.md) | Product features, user personas, and roadmap |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development guidelines and contribution process |
-| [TESTING.md](TESTING.md) | Testing guide and best practices |
 
 ### Module Documentation
 
@@ -61,7 +60,7 @@ cpcc_task_automation/
 │   ├── ARCHITECTURE.md       # System architecture
 │   ├── PRODUCT.md            # Product documentation
 │   ├── CONTRIBUTING.md       # Development guidelines
-│   ├── TESTING.md            # Testing documentation
+│   ├── testing.md            # Testing documentation
 │   ├── src-cqc-cpcc.md       # Core automation package docs
 │   ├── src-cqc-streamlit-app.md # UI package docs
 │   ├── utilities.md          # Utility modules docs

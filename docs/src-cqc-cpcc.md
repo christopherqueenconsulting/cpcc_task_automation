@@ -65,25 +65,31 @@ poetry run python src/cqc_cpcc/main.py
 
 **Key Functions**:
 
-#### `take_attendance(attendance_tracker_url: str)`
+#### `take_attendance(attendance_tracker_url: str = None, plan: RunPlan = None)`
 Main entry point for attendance automation.
 
 **Process**:
 1. Creates Selenium driver
-2. Logs into MyColleges
-3. Retrieves course list
-4. For each course:
-   - Opens BrightSpace course page
-   - Scrapes assignments, quizzes, discussions
-   - Filters by date range
-   - Records attendance
-5. Opens attendance tracker and records data
-6. Cleans up resources
+2. Logs into MyColleges (MFA approval happens here)
+3. Retrieves the course list
+4. Builds a `RunPlan` — **every remaining prompt is answered at this point**; the
+   run is unattended from here on
+5. For each *selected* course, isolated so one failure cannot end the run:
+   - Opens the BrightSpace course page
+   - Scrapes assignments and quizzes, filters by date range
+   - Records attendance in MyColleges
+   - Closes the course tab, even on failure
+6. If `plan.process_withdrawals`, runs withdrawal processing afterwards
+7. Cleans up resources
 
 **Parameters**:
-- `attendance_tracker_url` - URL to the SharePoint/Excel Online attendance tracker
+- `attendance_tracker_url` - URL to the SharePoint/Excel Online attendance tracker.
+  Falls back to `ATTENDANCE_TRACKER_URL` from the environment.
+- `plan` - a pre-built `RunPlan`. Supplying one skips every prompt, which is how the
+  Streamlit page runs this in a background thread without blocking on `input()`.
 
 **Dependencies**:
+- `RunPlan` (from run_plan.py)
 - `MyColleges` class (from my_colleges.py)
 - `BrightSpace_Course` class (from brightspace.py)
 - `selenium_util` for driver management
@@ -92,6 +98,104 @@ Main entry point for attendance automation.
 - Default date range: last 7 days, ending 2 days ago
 - Duration: 5-10 minutes per course
 - Handles driver lifecycle (creation and cleanup)
+- A course that raises mid-loop is recorded in a failure summary; the courses
+  already processed keep their work
+
+---
+
+### run_plan.py - Up-front Run Configuration
+
+**Purpose**: Answer every console question once, before any browser work begins.
+
+Prompts used to be interleaved with browser work, so you could not walk away from a
+run. `RunPlan` gathers all of them into a single pre-flight block. It also fixes a
+latent hang: the Streamlit page runs the attendance workflow in a background thread,
+where an `input()` call blocks forever on a prompt nobody can see.
+
+**Key Fields**: `course_urls`, `attendance_start_date`, `process_withdrawals`,
+`withdrawals_mode` (`scrape` | `push_only`), `tracker_url`, `sync_to_tracker`,
+`dry_run`, `csv_paths`.
+
+**Key Functions**:
+- `build_interactively(course_information, action=...)` - the one prompt block
+- `non_interactive(course_information)` - all courses, no prompts (Streamlit path)
+- `build_push_only(csv_paths, ...)` - sync existing CSVs without scraping
+- `prompt_withdrawals_mode()` - asked before the browser starts, because a push-only
+  run may not need one at all
+- `filter_course_information(course_information)` - narrow to the selection
+
+**Course selection** shows a numbered list of the current term's courses with their
+date ranges, defaulting to the active ones, and accepts `all`, `none`, `1,3,5` or
+`2-4`. A keyword reveals every term. The previous behaviour silently dropped courses
+outside a ±1-week window with no log line.
+
+---
+
+### withdrawals.py - The Pure Withdrawal Core
+
+**Purpose**: Records, keys, classification, merging, and CSV I/O — no Selenium, so
+all of it is unit-testable.
+
+**Key Types**: `WithdrawalRecord` (a dataclass matching the tracker's column order),
+`MergeResult`.
+
+**Key Functions**:
+- `record_key(record)` → `(COURSE_AND_SECTION, student_id)`. The same student in two
+  sections is two legitimate rows; twice in one section is a duplicate. Leading zeros
+  on a student ID are **never** normalised away.
+- `classify_withdrawal(withdrawal_date, course_start, first_drop, final_drop, eva_date)`
+  → `(status, faculty_reason)` or `None` when the withdrawal should not be tracked.
+- `merge_records(existing, new)` → existing rows win; conflicts are reported with a
+  field-level diff rather than being overwritten.
+- `split_student_name(name)`, `format_activity_week(...)` — the week renders as `N/A`
+  when the real date is unknown, never as an invented week.
+- `read_csv` / `write_csv` — stdlib `csv`, not pandas: `read_csv` without `dtype=str`
+  turns `0123456` into `123456` and corrupts the key. Writes go to a temp file then
+  `os.replace`, after backing up the previous file.
+
+---
+
+### withdrawal_processing.py - Withdrawal Orchestration
+
+**Purpose**: The `PROCESS_WITHDRAWALS` action, and the withdrawal step that
+`take_attendance` runs at the end.
+
+**Key Functions**:
+- `run_process_withdrawals(attendance_tracker_url=None, plan=None)` - standalone entry
+- `process_withdrawals_for_courses(driver, wait, bs_courses, plan)` - store, then sync
+- `store_withdrawals_for_courses(...)` - one CSV per term, merged and de-duplicated
+- `find_withdrawal_csvs()` / `load_records_from_csvs(paths)` - the push-only inputs
+
+The local CSV is written **before** the online sync is attempted, and a
+`TrackerSyncError` is caught and logged rather than ending the run — the risky step
+must not cost you the scrape.
+
+---
+
+### attendance_tracker.py - Online Tracker Sync
+
+**Purpose**: Append missing withdrawal rows to the SharePoint/Excel Online tracker.
+
+`TrackerAdapter` is the interface; `SharePointExcelAdapter` the only implementation.
+
+**Reads do not scrape the page.** Excel Online renders its grid to `<canvas>` and
+exposes no ARIA rows or gridcells at all, so a DOM-scraping read is impossible, not
+merely fragile. The workbook is downloaded through `download.aspx` using a `fetch`
+issued from inside the page (so the browser's own session cookies apply) and parsed
+with openpyxl.
+
+**Key Functions**:
+- `sync_records_to_tracker(driver, wait, tracker_url, records, dry_run=True)`
+- `build_adapter(tracker_url)` - picks an adapter by host
+- `records_needing_sync(records, existing_keys)` - the pure diff
+
+**Safety properties**:
+- `dry_run=True` by default; a real write needs explicit per-run confirmation
+- A failed or zero-row read **aborts** instead of appending
+- Only columns A–K of new rows are written; Navigator columns L and M never are
+- Values are sanitised against spreadsheet formula injection
+- The append is confirmed by re-reading, because `download.aspx` keeps serving the
+  pre-save workbook after a save
 
 ---
 
