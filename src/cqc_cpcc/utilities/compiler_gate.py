@@ -218,7 +218,9 @@ def _check_python_group(files: list) -> CompileResult:
             compile(code, base, "exec")
         except SyntaxError as e:
             errs.append(f"[{base}] {e.__class__.__name__}: {e.msg} (line {e.lineno})")
-        except ValueError as e:  # e.g. source with null bytes
+        except ValueError as e:
+            # Python 3.12 reports null bytes as SyntaxError above; older versions
+            # raise ValueError here. Either way it is a finding, not a crash.
             errs.append(f"[{base}] ValueError: {e}")
     return CompileResult("python", supported=True, compiles=not errs,
                          errors="\n".join(errs), tool="python compile()", files_checked=checked)

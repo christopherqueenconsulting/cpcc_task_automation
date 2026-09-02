@@ -33,6 +33,7 @@ This documentation provides in-depth information about the architecture, compone
 | [src-cqc-streamlit-app.md](src-cqc-streamlit-app.md) | Streamlit web UI and multi-page application |
 | [utilities.md](utilities.md) | Shared utility modules (Selenium, date handling, logging) |
 | [ai-llm.md](ai-llm.md) | AI/LLM integration (LangChain, OpenAI, prompts, chains) |
+| [compiler-gate.md](compiler-gate.md) | The real-compiler backstop for "Does Not Compile" |
 | [testing.md](testing.md) | Testing strategy, test structure, and how to run tests |
 
 ### Historical Documentation

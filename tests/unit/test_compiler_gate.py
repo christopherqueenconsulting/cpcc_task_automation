@@ -249,3 +249,141 @@ async def test_openai_client_raises_on_nonempty_truncated_output(mocker):
             max_tokens=16, max_retries=0,
         )
     assert "truncat" in str(ei.value).lower()
+
+
+# --------------------------------------------------------------------------- #
+# Degrading safely: a missing toolchain must never look like a verdict
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.unit
+class TestMissingToolchainIsNotAVerdict:
+    """"We could not check" and "it does not compile" must never be confused.
+
+    The gate overrides the model's judgment, so an absent compiler has to yield
+    ``supported=False`` (keep the model's call) rather than ``compiles=False``,
+    which would floor a working student's grade on a CI box without g++.
+    """
+
+    def test_no_cpp_compiler_on_path_skips_rather_than_failing(self, mocker):
+        mocker.patch.object(cg.shutil, "which", return_value=None)
+
+        result = cg.check_code("int main(){}", "main.cpp")
+
+        assert result.supported is False
+        assert result.compiles is None
+        assert "compiler" in result.skipped_reason
+
+    def test_no_javac_on_path_skips_rather_than_failing(self, mocker):
+        mocker.patch.object(cg.shutil, "which", return_value=None)
+
+        result = cg.check_code("class Main {}", "Main.java")
+
+        assert result.supported is False
+        assert result.compiles is None
+        assert "javac" in result.skipped_reason
+
+    def test_a_cpp_compile_that_times_out_is_not_a_failure(self, mocker):
+        import subprocess
+
+        mocker.patch.object(cg.shutil, "which", return_value="/usr/bin/g++")
+        timeout = subprocess.TimeoutExpired("g++", 20)
+        mocker.patch.object(cg, "_run", side_effect=timeout)
+
+        result = cg.check_code("int main(){}", "main.cpp")
+
+        assert result.compiles is None
+        assert "timed out" in result.skipped_reason
+
+    def test_a_java_compile_that_times_out_is_not_a_failure(self, mocker):
+        import subprocess
+
+        mocker.patch.object(cg.shutil, "which", return_value="/usr/bin/javac")
+        timeout = subprocess.TimeoutExpired("javac", 20)
+        mocker.patch.object(cg, "_run", side_effect=timeout)
+
+        result = cg.check_code("class Main {}", "Main.java")
+
+        assert result.compiles is None
+        assert "timed out" in result.skipped_reason
+
+    def test_one_unverifiable_language_makes_the_whole_submission_unverifiable(
+        self, mocker
+    ):
+        """A mixed submission cannot be half-judged; the answer is "we do not know"."""
+        mocker.patch.object(cg.shutil, "which", return_value=None)  # no javac
+
+        result = cg.check_submission(
+            [("Main.java", "class Main {}"), ("helper.py", "x = 1\n")]
+        )
+
+        assert result.supported is False
+        assert result.compiles is None
+
+
+@pytest.mark.unit
+class TestEdgeInputs:
+    def test_an_empty_submission_is_skipped_not_called_broken(self):
+        assert cg.check_code("", "main.cpp").supported is False
+        assert cg.check_code("   \n  ", "main.cpp").supported is False
+
+    def test_a_header_only_cpp_submission_still_gets_syntax_checked(self, mocker):
+        """No .cpp anywhere: the headers themselves are what gets checked."""
+        mocker.patch.object(cg.shutil, "which", return_value="/usr/bin/g++")
+        run = mocker.patch.object(
+            cg, "_run", return_value=MagicMock(returncode=0, stderr="", stdout="")
+        )
+
+        result = cg.check_submission([("shape.h", "struct Shape { int n; };")])
+
+        assert result.compiles is True
+        assert "shape.h" in " ".join(run.call_args.args[0])
+
+    def test_source_with_null_bytes_is_reported_not_raised(self):
+        """A binary file renamed .py must be a finding, not a crash.
+
+        On Python 3.12 this surfaces as SyntaxError; the ValueError handler beside
+        it covers versions that raise that instead (see the test below).
+        """
+        result = cg.check_code("x = 1\x00\n", "solution.py")
+
+        assert result.compiles is False
+        assert "null bytes" in result.errors
+
+    def test_a_compile_raising_ValueError_is_recorded_and_the_run_continues(
+        self, mocker
+    ):
+        """Some Python versions raise ValueError here instead of SyntaxError."""
+        real_compile = compile
+
+        def fake_compile(code, name, mode):
+            if "boom" in code:
+                raise ValueError("embedded null byte")
+            return real_compile(code, name, mode)
+
+        mocker.patch("builtins.compile", side_effect=fake_compile)
+
+        result = cg.check_submission(
+            [("bad.py", "boom = 1\n"), ("good.py", "x = 1\n")]
+        )
+
+        assert result.compiles is False
+        assert "ValueError" in result.errors
+        # The second file was still checked -- one bad file does not end the run.
+        assert "good.py" in result.files_checked
+
+    def test_a_submission_with_no_compilable_source_is_skipped(self):
+        result = cg.check_submission([("notes.txt", "some prose"), ("data.csv", "a,b")])
+
+        assert result.supported is False
+
+    def test_an_empty_diagnostic_cleans_to_an_empty_string(self):
+        assert cg._clean_diag("", "/tmp/x/main.cpp", "main.cpp") == ""
+
+    def test_the_temp_path_is_replaced_by_the_students_filename(self):
+        """The instructor should never see /tmp/cgate_cpp_ab12/ in a report."""
+        raw = "/tmp/cgate_cpp_ab12/main.cpp:3:5: error: expected ';'"
+
+        cleaned = cg._clean_diag(raw, "/tmp/cgate_cpp_ab12/main.cpp", "HelloWorld.cpp")
+
+        assert "HelloWorld.cpp:3:5" in cleaned
+        assert "cgate_cpp_ab12" not in cleaned
