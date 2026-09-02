@@ -442,3 +442,76 @@ async def test_openrouter_raises_when_there_are_no_choices(mocker):
             prompt="x", schema_model=_TruncModel, use_auto_route=False,
             model_name="openai/gpt-5", max_tokens=256,
         )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_openrouter_truncation_is_recorded_against_the_correlation_id(mocker):
+    """A truncated grade must leave a debug record, not just an exception.
+
+    The correlation id is how a specific bad grade gets traced back afterwards.
+    Raising without recording loses the actual (partial) model output, which is the
+    only evidence of what went wrong.
+    """
+    from cqc_cpcc.utilities.AI import openrouter_client as orc
+    from cqc_cpcc.utilities.AI.openai_exceptions import OpenAISchemaValidationError
+
+    mocker.patch("asyncio.sleep", return_value=None)
+    recorded = mocker.patch.object(orc, "record_response")
+    # The correlation id is minted internally, and only when debug mode is on.
+    mocker.patch.object(orc, "should_debug", return_value=True)
+    mocker.patch.object(orc, "create_correlation_id", return_value="corr-abc-123")
+    mocker.patch.object(orc, "record_request", return_value=None)
+
+    resp = MagicMock()
+    choice = MagicMock()
+    choice.finish_reason = "length"
+    choice.message.refusal = None
+    choice.message.content = '{"message": "partial and cut o'
+    resp.choices = [choice]
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=resp)
+    mocker.patch.object(orc, "_get_openrouter_client", return_value=client)
+
+    with pytest.raises(OpenAISchemaValidationError):
+        await orc.get_openrouter_completion(
+            prompt="x", schema_model=_TruncModel, use_auto_route=False,
+            model_name="openai/gpt-5", max_tokens=16,
+        )
+
+    recorded.assert_called_once()
+    kwargs = recorded.call_args.kwargs
+    assert kwargs["correlation_id"] == "corr-abc-123"
+    # The partial output is the evidence; it has to be what gets stored.
+    assert kwargs["response"] == '{"message": "partial and cut o'
+    assert "truncat" in kwargs["decision_notes"].lower()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_openrouter_truncation_without_a_correlation_id_still_raises(mocker):
+    """No correlation id means no record to write -- but the failure still fires."""
+    from cqc_cpcc.utilities.AI import openrouter_client as orc
+    from cqc_cpcc.utilities.AI.openai_exceptions import OpenAISchemaValidationError
+
+    mocker.patch("asyncio.sleep", return_value=None)
+    recorded = mocker.patch.object(orc, "record_response")
+    mocker.patch.object(orc, "should_debug", return_value=False)
+
+    resp = MagicMock()
+    choice = MagicMock()
+    choice.finish_reason = "length"
+    choice.message.refusal = None
+    choice.message.content = '{"message": "cut o'
+    resp.choices = [choice]
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(return_value=resp)
+    mocker.patch.object(orc, "_get_openrouter_client", return_value=client)
+
+    with pytest.raises(OpenAISchemaValidationError):
+        await orc.get_openrouter_completion(
+            prompt="x", schema_model=_TruncModel, use_auto_route=False,
+            model_name="openai/gpt-5", max_tokens=16,
+        )
+
+    recorded.assert_not_called()
