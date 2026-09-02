@@ -395,3 +395,116 @@ class TestErrorSurfacing:
         
         # The correlation_id should be accessible in the error
         assert error.correlation_id == correlation_id
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestCompileGateWiring:
+    """The gate only runs when the caller hands over the student's actual source.
+
+    It must run BEFORE aggregation, because it corrects ``detected_errors`` and the
+    score is computed from those. And it must stay entirely out of the way when
+    there is no source to compile — a reflection or a written response is graded by
+    the model alone.
+    """
+
+    async def test_no_source_files_means_the_gate_never_runs(self, base_rubric, mocker):
+        gate = mocker.patch("cqc_cpcc.rubric_grading.apply_compile_gate")
+        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+                     new=AsyncMock(return_value=create_valid_assessment_result()))
+
+        await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+        )
+
+        gate.assert_not_called()
+
+    async def test_source_files_are_handed_to_the_gate(self, base_rubric, mocker):
+        graded = create_valid_assessment_result()
+        gate = mocker.patch("cqc_cpcc.rubric_grading.apply_compile_gate",
+                            return_value=(graded, {"ran": True, "action": "none"}))
+        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+                     new=AsyncMock(return_value=graded))
+        files = {"HelloWorld.java": STUDENT_SUBMISSION}
+
+        await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            source_files=files,
+        )
+
+        gate.assert_called_once()
+        assert gate.call_args.args[1] == files
+
+    async def test_the_gate_runs_before_scoring_not_after(self, base_rubric, mocker):
+        """Reversed, the score would be computed from the uncorrected error list."""
+        graded = create_valid_assessment_result()
+        order = []
+        mocker.patch("cqc_cpcc.rubric_grading.apply_compile_gate",
+                     side_effect=lambda r, f, e=None: (
+                         order.append("gate") or (r, {"ran": True, "action": "none"})))
+        mocker.patch("cqc_cpcc.rubric_grading.apply_backend_scoring",
+                     side_effect=lambda rub, r: order.append("score") or r)
+        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+                     new=AsyncMock(return_value=graded))
+
+        await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            source_files={"HelloWorld.java": STUDENT_SUBMISSION},
+        )
+
+        assert order == ["gate", "score"]
+
+    async def test_the_caller_can_collect_what_the_gate_did(self, base_rubric, mocker):
+        """The Streamlit page reports the gate's verdict to the instructor."""
+        graded = create_valid_assessment_result()
+        mocker.patch(
+            "cqc_cpcc.rubric_grading.apply_compile_gate",
+            return_value=(graded, {"ran": True, "action": "removed",
+                                   "language": "java", "compiles": True,
+                                   "tool": "javac"}),
+        )
+        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+                     new=AsyncMock(return_value=graded))
+        report = {}
+
+        await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            source_files={"HelloWorld.java": STUDENT_SUBMISSION},
+            gate_report=report,
+        )
+
+        assert report["action"] == "removed"
+        assert report["tool"] == "javac"
+
+    async def test_a_gate_correction_is_logged_loudly(
+        self, base_rubric, mocker, caplog
+    ):
+        """Overriding the model's compile judgment is not something to do silently."""
+        graded = create_valid_assessment_result()
+        mocker.patch(
+            "cqc_cpcc.rubric_grading.apply_compile_gate",
+            return_value=(graded, {"ran": True, "action": "added",
+                                   "language": "cpp", "compiles": False,
+                                   "tool": "g++"}),
+        )
+        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+                     new=AsyncMock(return_value=graded))
+
+        with caplog.at_level("WARNING", logger="cpcc_logger"):
+            await grade_with_rubric(
+                rubric=base_rubric,
+                assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+                student_submission=STUDENT_SUBMISSION,
+                source_files={"main.cpp": "int main(){}"},
+            )
+
+        assert "Compile gate added" in caplog.text
+        assert "g++" in caplog.text

@@ -545,7 +545,9 @@ class TestManualOnlyRubricAggregation:
                     points_earned=points_by_criterion.get(criterion.criterion_id),
                     points_possible=criterion.max_points,
                     feedback="Feedback for %s." % criterion.criterion_id,
-                    selected_level_label=levels_by_criterion.get(criterion.criterion_id),
+                    selected_level_label=levels_by_criterion.get(
+                        criterion.criterion_id
+                    ),
                 )
                 for criterion in rubric.criteria
                 if criterion.enabled
@@ -679,3 +681,299 @@ class TestPointsFromLevelLabel:
             criterion_id="c", name="C", description="d", max_points=10
         )
         assert points_from_level_label("Exemplary", criterion) is None
+
+
+@pytest.mark.unit
+class TestCompileGateAndManualScoringTogether:
+    """The compile gate runs immediately before aggregation, so they interact.
+
+    These landed on separate branches: the gate corrects ``detected_errors`` before
+    scoring, and the manual-mode branch recovers points from a selected level. A
+    merge that kept both hunks textually could still ship the wrong score, so this
+    pins the combination rather than each half alone.
+    """
+
+    @staticmethod
+    def _manual_result(rubric, levels_by_criterion, detected_errors=None):
+        return RubricAssessmentResult(
+            rubric_id=rubric.rubric_id,
+            rubric_version=rubric.rubric_version,
+            total_points_earned=0,  # what the prompt asks the model to send
+            total_points_possible=rubric.total_points_possible,
+            criteria_results=[
+                CriterionResult(
+                    criterion_id=criterion.criterion_id,
+                    criterion_name=criterion.name,
+                    points_earned=None,  # the model omitted them
+                    points_possible=criterion.max_points,
+                    feedback="Feedback for %s." % criterion.criterion_id,
+                    selected_level_label=levels_by_criterion.get(
+                        criterion.criterion_id),
+                )
+                for criterion in rubric.criteria
+                if criterion.enabled
+            ],
+            overall_feedback="Overall feedback.",
+            detected_errors=detected_errors or [],
+        )
+
+    @staticmethod
+    def _top_levels(rubric):
+        return {
+            criterion.criterion_id: criterion.levels[0].label
+            for criterion in rubric.criteria
+            if criterion.enabled and criterion.levels
+        }
+
+    def test_a_gate_run_does_not_cost_an_all_manual_rubric_its_score(self):
+        """The gate mutates errors; manual criteria still score from their levels."""
+        from cqc_cpcc.rubric_grading import apply_compile_gate
+
+        rubric = get_rubric_by_id("default_100pt_rubric")
+        assert all(c.scoring_mode == "manual" for c in rubric.criteria if c.enabled)
+
+        result = self._manual_result(rubric, self._top_levels(rubric))
+        gated, info = apply_compile_gate(
+            result, {"Main.java": "public class Main { void x() { } }"}
+        )
+        scored = apply_backend_scoring(rubric, gated)
+
+        assert scored.total_points_earned > 0, (
+            "an all-manual rubric must not score 0 just because the gate ran"
+        )
+        assert all(cr.points_earned is not None for cr in scored.criteria_results)
+
+    def test_the_gate_is_a_no_op_when_there_are_no_source_files(self):
+        """Grading a non-code submission must not disturb the result at all."""
+        from cqc_cpcc.rubric_grading import apply_compile_gate
+
+        rubric = get_rubric_by_id("default_100pt_rubric")
+        result = self._manual_result(rubric, self._top_levels(rubric))
+
+        gated, info = apply_compile_gate(result, None)
+
+        assert info["ran"] is False
+        assert gated is result
+
+    def test_an_unsupported_language_leaves_the_llm_judgment_alone(self):
+        from cqc_cpcc.rubric_grading import apply_compile_gate
+
+        rubric = get_rubric_by_id("default_100pt_rubric")
+        result = self._manual_result(rubric, self._top_levels(rubric))
+
+        gated, info = apply_compile_gate(result, {"analysis.sas": "proc print; run;"})
+
+        assert info["action"] in ("skipped", "none")
+        assert gated.detected_errors == result.detected_errors
+
+    def test_scoring_still_recovers_points_after_the_gate_clears_an_error(self):
+        """The gate removing a false "Does Not Compile" must not zero the criteria."""
+        from cqc_cpcc.rubric_grading import apply_compile_gate
+
+        rubric = get_rubric_by_id("default_100pt_rubric")
+        result = self._manual_result(rubric, self._top_levels(rubric))
+
+        # Valid Python: the gate has a definitive verdict without a toolchain.
+        gated, info = apply_compile_gate(result, {"solution.py": "x = 1\n"})
+        scored = apply_backend_scoring(rubric, gated)
+
+        assert info["compiles"] is True
+        assert scored.total_points_earned > 0
+
+
+@pytest.mark.unit
+class TestCompileGateHelpers:
+    """The two helpers that decide what the gate can act on."""
+
+    @staticmethod
+    def _error_def(error_id, name, enabled=True):
+        from cqc_cpcc.error_definitions_models import ErrorDefinition
+
+        return ErrorDefinition(
+            error_id=error_id, name=name,
+            description="The program does not compile" if "COMPILE" in error_id
+            else "Something else",
+            severity_category="major", enabled=enabled,
+        )
+
+    def test_no_definitions_means_no_compile_definition(self):
+        from cqc_cpcc.rubric_grading import _find_compile_error_def
+
+        assert _find_compile_error_def(None) is None
+        assert _find_compile_error_def([]) is None
+
+    def test_a_rubric_without_a_compile_error_yields_none(self):
+        from cqc_cpcc.rubric_grading import _find_compile_error_def
+
+        others = [self._error_def("STYLE_ERROR", "Poor Style")]
+
+        assert _find_compile_error_def(others) is None
+
+    def test_an_enabled_definition_is_preferred_over_a_disabled_one(self):
+        from cqc_cpcc.rubric_grading import _find_compile_error_def
+
+        definitions = [
+            self._error_def("OLD_DOES_NOT_COMPILE", "Does Not Compile", enabled=False),
+            self._error_def("CSC151_DOES_NOT_COMPILE", "Does Not Compile"),
+        ]
+
+        assert _find_compile_error_def(definitions).error_id == \
+            "CSC151_DOES_NOT_COMPILE"
+
+    def test_a_disabled_definition_is_still_returned_when_it_is_the_only_one(self):
+        """Better to annotate a disabled definition than to invent an error id."""
+        from cqc_cpcc.rubric_grading import _find_compile_error_def
+
+        only = [self._error_def("DOES_NOT_COMPILE", "Does Not Compile", enabled=False)]
+
+        assert _find_compile_error_def(only).error_id == "DOES_NOT_COMPILE"
+
+    def test_raw_source_text_is_used_as_is(self):
+        from cqc_cpcc.rubric_grading import _read_source_files
+
+        assert _read_source_files({"Main.java": "class Main {}"}) == [
+            ("Main.java", "class Main {}")
+        ]
+
+    def test_a_path_on_disk_is_read(self, tmp_path):
+        """StudentSubmission.files maps a name to a temp path, not to source text."""
+        from cqc_cpcc.rubric_grading import _read_source_files
+
+        path = tmp_path / "Main.java"
+        path.write_text("class Main { }")
+
+        assert _read_source_files({"Main.java": str(path)}) == [
+            ("Main.java", "class Main { }")
+        ]
+
+    def test_an_unreadable_path_is_skipped_not_fatal(self, tmp_path, mocker):
+        """One unreadable file must not cost the gate the rest of the submission."""
+        from cqc_cpcc.rubric_grading import _read_source_files
+
+        bad = tmp_path / "Broken.java"
+        bad.write_text("class Broken {}")
+        mocker.patch("builtins.open", side_effect=PermissionError("denied"))
+
+        assert _read_source_files({"Broken.java": str(bad)}) == []
+
+    def test_empty_and_whitespace_only_entries_are_dropped(self):
+        from cqc_cpcc.rubric_grading import _read_source_files
+
+        assert _read_source_files(
+            {"Empty.java": "", "Blank.java": "   \n ", "Real.java": "class R {}"}
+        ) == [("Real.java", "class R {}")]
+
+    def test_a_non_string_value_is_ignored(self):
+        from cqc_cpcc.rubric_grading import _read_source_files
+
+        assert _read_source_files({"Weird.java": None, "Real.java": "class R {}"}) == [
+            ("Real.java", "class R {}")
+        ]
+
+    def test_no_source_files_at_all_reads_as_nothing(self):
+        from cqc_cpcc.rubric_grading import _read_source_files
+
+        assert _read_source_files(None) == []
+        assert _read_source_files({}) == []
+
+
+@pytest.mark.unit
+class TestCompileGateAddsAMissingCompileError:
+    """When the code really does not compile, the gate supplies the error."""
+
+    @staticmethod
+    def _result():
+        rubric = get_rubric_by_id("default_100pt_rubric")
+        criterion = next(c for c in rubric.criteria if c.enabled)
+        return RubricAssessmentResult(
+            rubric_id=rubric.rubric_id,
+            rubric_version=rubric.rubric_version,
+            total_points_earned=0,
+            total_points_possible=rubric.total_points_possible,
+            criteria_results=[
+                CriterionResult(
+                    criterion_id=criterion.criterion_id,
+                    criterion_name=criterion.name,
+                    points_earned=criterion.max_points,
+                    points_possible=criterion.max_points,
+                    feedback="ok",
+                )
+            ],
+            overall_feedback="ok",
+            detected_errors=[],
+        )
+
+    @staticmethod
+    def _compile_definition():
+        from cqc_cpcc.error_definitions_models import ErrorDefinition
+
+        return ErrorDefinition(
+            error_id="CSC151_DOES_NOT_COMPILE", name="Does Not Compile",
+            description="The program does not compile",
+            severity_category="major", enabled=True,
+        )
+
+    def test_broken_python_gets_the_rubrics_compile_error_added(self):
+        from cqc_cpcc.rubric_grading import apply_compile_gate
+
+        gated, info = apply_compile_gate(
+            self._result(), {"solution.py": "def broken(:\n"},
+            [self._compile_definition()],
+        )
+
+        assert info["compiles"] is False
+        assert info["action"] == "added"
+        assert [e.code for e in gated.detected_errors] == ["CSC151_DOES_NOT_COMPILE"]
+
+    def test_the_real_compiler_diagnostics_are_attached(self):
+        """Without them the instructor cannot see why the gate disagreed."""
+        from cqc_cpcc.rubric_grading import apply_compile_gate
+
+        gated, _ = apply_compile_gate(
+            self._result(), {"solution.py": "def broken(:\n"},
+            [self._compile_definition()],
+        )
+
+        notes = gated.detected_errors[0].notes or ""
+        assert "SyntaxError" in notes
+        assert "does not compile" in notes
+
+    def test_a_very_long_diagnostic_is_truncated(self, mocker):
+        """g++ can emit thousands of lines; the report has to stay readable.
+
+        Python's compile() stops at the first SyntaxError, so a real long diagnostic
+        cannot be produced here -- the compiler result is stubbed to exercise the
+        truncation itself.
+        """
+        from cqc_cpcc.rubric_grading import apply_compile_gate
+        from cqc_cpcc.utilities.compiler_gate import CompileResult
+
+        mocker.patch(
+            "cqc_cpcc.utilities.compiler_gate.check_submission",
+            return_value=CompileResult(
+                "cpp", supported=True, compiles=False,
+                errors="error: expected ';' before '}' token\n" * 400,
+                tool="g++", files_checked=["main.cpp"],
+            ),
+        )
+
+        gated, info = apply_compile_gate(
+            self._result(), {"main.cpp": "int main() { }"},
+            [self._compile_definition()],
+        )
+
+        assert info["compiles"] is False
+        notes = gated.detected_errors[0].notes or ""
+        assert "truncated" in notes
+        assert len(notes) < 2000
+
+    def test_a_failure_with_no_compile_definition_leaves_errors_alone(self):
+        """Inventing an error id the rubric does not define would corrupt scoring."""
+        from cqc_cpcc.rubric_grading import apply_compile_gate
+
+        gated, info = apply_compile_gate(
+            self._result(), {"solution.py": "def broken(:\n"}, []
+        )
+
+        assert info["action"] == "no_compile_definition"
+        assert gated.detected_errors == []

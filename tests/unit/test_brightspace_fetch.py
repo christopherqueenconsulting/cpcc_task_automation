@@ -292,6 +292,50 @@ def test_fetch_quiz_instructions_returns_none_without_generic_scrape(mocker):
 
 
 @pytest.mark.unit
+def test_fetch_quiz_instructions_bails_when_navigation_fails(mocker):
+    """A failed navigation must stop, not scrape whatever page is on screen.
+
+    Continuing into _gather_quiz_attempts on the wrong page can raise, or -- worse --
+    label unrelated text as the exam prompt and feed it to the grader as the
+    instructions. Instructions are best-effort, so None is the correct answer here.
+    """
+    driver = MagicMock()
+    driver.get.side_effect = RuntimeError("no such window")
+    wait = MagicMock()
+    gather = mocker.patch.object(bf, "_gather_quiz_attempts")
+    collect = mocker.patch.object(bf, "_collect_instructions_text",
+                                  return_value="WRONG PAGE TEXT")
+
+    text = bf.fetch_quiz_instructions(
+        driver, wait,
+        "https://bs/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=1&qi=2",
+    )
+
+    assert text is None
+    gather.assert_not_called()
+    collect.assert_not_called()
+
+
+@pytest.mark.unit
+def test_fetch_quiz_instructions_bails_when_login_fails(mocker):
+    """Same bail for an MFA/login failure part-way through the navigation."""
+    driver = MagicMock()
+    wait = MagicMock()
+    mocker.patch.object(bf, "wait_for_ajax")
+    mocker.patch.object(bf, "login_if_needed",
+                        side_effect=RuntimeError("MFA not approved"))
+    gather = mocker.patch.object(bf, "_gather_quiz_attempts")
+
+    text = bf.fetch_quiz_instructions(
+        driver, wait,
+        "https://bs/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=1&qi=2",
+    )
+
+    assert text is None
+    gather.assert_not_called()
+
+
+@pytest.mark.unit
 def test_read_quiz_question_text_polls_until_present(mocker):
     driver = MagicMock()
     # First poll returns empty (still rendering), second returns the prompt.
