@@ -65,7 +65,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1"
-setuptools = "^82"
+setuptools = ">=82,<84"
 grandalf = "^0"
 
 
