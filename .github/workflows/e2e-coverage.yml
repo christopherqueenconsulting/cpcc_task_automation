@@ -32,13 +32,8 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           poetry-version: ${{ env.POETRY_VERSION }}
           working-directory: "."
-          cache-key: e2e-tests
-
-      - name: Install dependencies including Playwright
-        shell: bash
-        run: |
-          echo "Installing dependencies for e2e tests..."
-          poetry install --with test,e2e --no-interaction --no-ansi
+          # Extra e2e group, so this job gets its own cache scope.
+          install-args: "--with test,e2e"
 
       - name: Install Playwright browsers
         shell: bash

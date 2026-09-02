@@ -26,14 +26,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           poetry-version: ${{ env.POETRY_VERSION }}
           working-directory: ${{ inputs.working-directory }}
-          cache-key: release
-
-      - name: Install dependencies
-        working-directory: ${{ inputs.working-directory }}
-        shell: bash
-        run: |
-          echo "Running cron action, installing dependencies with poetry..."
-          poetry install --with=test_integration,test --no-interaction --no-ansi
+          install-args: "--with=test_integration,test"
 
       # Need to fetch reqs if needed from external libraries
       - name: Install deps outside pyproject
