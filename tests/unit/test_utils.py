@@ -1355,36 +1355,6 @@ class TestReadablePathConfinement:
     feedback document.
     """
 
-    def test_a_file_in_the_temp_directory_is_allowed(self, tmp_path):
-        from cqc_cpcc.utilities.utils import resolve_readable_path
-
-        target = tmp_path / "submission.java"
-        target.write_text("class Main {}")
-
-        assert resolve_readable_path(str(target)) == os.path.realpath(str(target))
-
-    def test_a_file_in_the_working_directory_is_allowed(self):
-        from cqc_cpcc.utilities.utils import resolve_readable_path
-
-        assert resolve_readable_path(
-            os.path.join(os.getcwd(), "README.md")
-        ) == os.path.realpath(os.path.join(os.getcwd(), "README.md"))
-
-    def test_an_absolute_path_outside_every_root_is_refused(self):
-        from cqc_cpcc.utilities.utils import resolve_readable_path
-
-        with pytest.raises(ValueError, match="Refusing to read"):
-            resolve_readable_path("/etc/passwd")
-
-    def test_a_traversal_escape_is_refused(self, tmp_path):
-        """The classic crafted-filename case: ../../.. out of the temp directory."""
-        from cqc_cpcc.utilities.utils import resolve_readable_path
-
-        escape = os.path.join(str(tmp_path), "..", "..", "..", "..", "etc", "passwd")
-
-        with pytest.raises(ValueError, match="Refusing to read"):
-            resolve_readable_path(escape)
-
     @staticmethod
     def _sandbox(tmp_path, monkeypatch):
         """Make tmp_path/allowed the ONLY root, so tmp_path/outside really is outside.
@@ -1402,13 +1372,92 @@ class TestReadablePathConfinement:
         monkeypatch.delenv("READABLE_FILE_ROOTS", raising=False)
         return allowed, outside
 
-    def test_a_symlink_pointing_outside_is_refused(self, tmp_path, monkeypatch):
+    def test_a_file_in_the_temp_directory_is_allowed(self, tmp_path):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        target = tmp_path / "submission.java"
+        target.write_text("class Main {}")
+
+        assert is_within_readable_roots(os.path.realpath(str(target))) is True
+
+    def test_a_file_in_the_working_directory_is_allowed(self):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        readme = os.path.realpath(os.path.join(os.getcwd(), "README.md"))
+
+        assert is_within_readable_roots(readme) is True
+
+    def test_an_absolute_path_outside_every_root_is_refused(self):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        assert is_within_readable_roots("/etc/passwd") is False
+
+    def test_a_root_itself_is_allowed(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        allowed, _ = self._sandbox(tmp_path, monkeypatch)
+
+        assert is_within_readable_roots(os.path.realpath(str(allowed))) is True
+
+    def test_a_sibling_directory_with_a_shared_prefix_is_not_inside(
+        self, tmp_path, monkeypatch
+    ):
+        """"/tmp/allowed_evil" must not pass as being inside "/tmp/allowed"."""
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        allowed, _ = self._sandbox(tmp_path, monkeypatch)
+        sibling = str(allowed) + "_evil"
+
+        assert is_within_readable_roots(sibling) is False
+
+    def test_an_extra_root_can_be_configured(self, tmp_path, monkeypatch):
+        """The escape hatch for an instructor keeping submissions elsewhere."""
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        _, outside = self._sandbox(tmp_path, monkeypatch)
+        target = os.path.realpath(str(outside / "instructions.txt"))
+
+        assert is_within_readable_roots(target) is False
+
+        monkeypatch.setenv("READABLE_FILE_ROOTS", str(outside))
+        assert is_within_readable_roots(target) is True
+
+    def test_several_configured_roots_are_all_honoured(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.utils import is_within_readable_roots
+
+        _, outside = self._sandbox(tmp_path, monkeypatch)
+        second = tmp_path / "second"
+        second.mkdir()
+
+        monkeypatch.setenv(
+            "READABLE_FILE_ROOTS", os.pathsep.join([str(outside), str(second)])
+        )
+
+        assert is_within_readable_roots(os.path.realpath(str(second))) is True
+        assert is_within_readable_roots(os.path.realpath(str(outside))) is True
+
+    def test_read_file_refuses_an_out_of_root_path(self):
+        from cqc_cpcc.utilities.utils import read_file
+
+        with pytest.raises(ValueError, match="Refusing to read"):
+            read_file("/etc/passwd")
+
+    def test_read_file_refuses_a_traversal_escape(self, tmp_path):
+        """The classic crafted-filename case: ../../.. out of the temp directory."""
+        from cqc_cpcc.utilities.utils import read_file
+
+        escape = os.path.join(str(tmp_path), "..", "..", "..", "..", "etc", "passwd")
+
+        with pytest.raises(ValueError, match="Refusing to read"):
+            read_file(escape)
+
+    def test_read_file_refuses_a_symlink_pointing_outside(self, tmp_path, monkeypatch):
         """This is why the path is resolved BEFORE the containment check.
 
         A check on the unresolved string would see a path inside the temp directory
         and let the read through to wherever the link actually points.
         """
-        from cqc_cpcc.utilities.utils import resolve_readable_path
+        from cqc_cpcc.utilities.utils import read_file
 
         allowed, outside = self._sandbox(tmp_path, monkeypatch)
         target = outside / "secret.txt"
@@ -1419,47 +1468,22 @@ class TestReadablePathConfinement:
         except OSError:  # pragma: no cover - symlinks unavailable on this platform
             pytest.skip("symlinks not permitted here")
 
-        # The unresolved string sits inside the allowed root; the target does not.
+        read_file.cache_clear()
         with pytest.raises(ValueError, match="Refusing to read"):
-            resolve_readable_path(str(link))
+            read_file(str(link))
 
-    def test_an_empty_path_is_refused_rather_than_read_as_nothing(self):
-        from cqc_cpcc.utilities.utils import resolve_readable_path
-
-        with pytest.raises(ValueError, match="No file path"):
-            resolve_readable_path("")
-
-    def test_an_extra_root_can_be_configured(self, tmp_path, monkeypatch):
-        """The escape hatch for an instructor keeping submissions elsewhere."""
-        from cqc_cpcc.utilities.utils import resolve_readable_path
-
-        allowed, outside = self._sandbox(tmp_path, monkeypatch)
-        target = outside / "instructions.txt"
-        target.write_text("do the thing")
-
-        with pytest.raises(ValueError):
-            resolve_readable_path(str(target))
-
-        monkeypatch.setenv("READABLE_FILE_ROOTS", str(outside))
-        assert resolve_readable_path(str(target)) == os.path.realpath(str(target))
-
-    def test_several_configured_roots_are_all_honoured(self, tmp_path, monkeypatch):
-        from cqc_cpcc.utilities.utils import resolve_readable_path
-
-        allowed, outside = self._sandbox(tmp_path, monkeypatch)
-        second = tmp_path / "second"
-        second.mkdir()
-        target = second / "notes.txt"
-        target.write_text("x")
-
-        monkeypatch.setenv(
-            "READABLE_FILE_ROOTS", os.pathsep.join([str(outside), str(second)])
-        )
-
-        assert resolve_readable_path(str(target)) == os.path.realpath(str(target))
-
-    def test_read_file_itself_refuses_an_out_of_root_path(self):
+    def test_read_file_refuses_an_empty_path(self):
         from cqc_cpcc.utilities.utils import read_file
 
-        with pytest.raises(ValueError, match="Refusing to read"):
-            read_file("/etc/passwd")
+        with pytest.raises(ValueError, match="No file path"):
+            read_file("")
+
+    def test_a_legitimate_file_still_reads(self, tmp_path):
+        """The barrier must not break the normal case."""
+        from cqc_cpcc.utilities.utils import read_file
+
+        target = tmp_path / "submission.txt"
+        target.write_text("hello")
+
+        read_file.cache_clear()
+        assert read_file(str(target)) == "hello"

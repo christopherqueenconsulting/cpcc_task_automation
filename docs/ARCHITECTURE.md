@@ -440,8 +440,8 @@ feedback editor, log what *would* be written, change nothing.
 ### Reading Student Files
 
 `read_file()` resolves its path and confines it to an allowed root before opening
-anything — see `resolve_readable_path` in `utilities/utils.py`. Every path reaching
-it is user-influenced: Streamlit writes uploads to the system temp directory, ZIP
+anything — see `readable_roots` / `is_within_readable_roots` in
+`utilities/utils.py`. Every path reaching it is user-influenced: Streamlit writes uploads to the system temp directory, ZIP
 extraction writes there under names taken from the archive, and BrightSpace
 downloads are named by the submission. A crafted name containing `../` is the
 classic way to turn "read the student's file" into "read anything the process can
@@ -451,6 +451,11 @@ check, because a check on the unresolved string is trivially defeated by a symli
 
 Allowed roots are the system temp directory and the working directory, plus
 anything named in `READABLE_FILE_ROOTS`.
+
+The resolve-then-`startswith` guard is written out inside `read_file` rather than
+delegated to a helper. That is deliberate: CodeQL's `py/path-injection` barrier
+analysis does not follow validation into a callee, so the guard has to be visible in
+the same function as the `open()` calls it protects.
 
 ### Running Student Code
 
