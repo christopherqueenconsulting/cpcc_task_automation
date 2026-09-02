@@ -46,44 +46,57 @@ class TestIsCheckdateBeforeDate:
         before_date = DT.date(2023, 1, 2)
         assert is_checkdate_before_date(check_date, before_date) == True
 
+    # NOTE: the four tests below previously shared two names with the ones above,
+    # so Python replaced each definition and pytest only ever collected the last
+    # of each pair -- the mixed date/datetime cases never ran. Names are now
+    # unique and say which type combination each one covers.
+
     @pytest.mark.unit
-    # check_date is a datetime object and before_date is a date object, and check_date is before before_date
-    def test_checkdate_before_beforedate_datetime(self):
+    # datetime check_date, date before_date, check_date is the earlier day
+    def test_checkdate_datetime_before_beforedate_date(self):
         check_date = DT.datetime(2023, 1, 1, 12, 0, 0)
+        before_date = DT.date(2023, 1, 2)
+        assert is_checkdate_before_date(check_date, before_date) == True
+
+    @pytest.mark.unit
+    # date check_date, datetime before_date, check_date is the earlier day
+    def test_checkdate_date_before_beforedate_datetime(self):
+        check_date = DT.date(2023, 1, 1)
         before_date = DT.datetime(2023, 1, 2, 12, 0, 0)
         assert is_checkdate_before_date(check_date, before_date) == True
 
     @pytest.mark.unit
-    # check_date is a date object and before_date is a datetime object, and check_date is before before_date
-    def test_checkdate_before_beforedate_datetime(self):
+    # datetime check_date, date before_date, same calendar day
+    def test_checkdate_datetime_same_day_as_beforedate_date(self):
+        """Same calendar day is not "before", in either type orientation.
+
+        This test never ran before (its name was shadowed) and asserted True,
+        which contradicts the documented contract: "if they fall on the same
+        calendar day, they are considered equal (returns False)". The pair below
+        pins the symmetry, which matters because is_checkdate_before_date decides
+        whether a withdrawal dated on the course start day is tracked at all.
+        """
         check_date = DT.datetime(2023, 1, 1, 12, 0, 0)
-        before_date = DT.datetime(2023, 1, 2, 12, 0, 0)
-        assert is_checkdate_before_date(check_date, before_date) == True
+        before_date = DT.date(2023, 1, 1)
+        assert is_checkdate_before_date(check_date, before_date) == False
 
     @pytest.mark.unit
-    # check_date is a datetime object and before_date is a date object, and check_date is the same as before_date
-    def test_checkdate_same_as_beforedate(self):
-        check_date = DT.datetime(2023, 1, 1, 12, 0, 0)
-        before_date = DT.datetime(2023, 1, 1)
-        assert is_checkdate_before_date(check_date, before_date) == True
-
-    @pytest.mark.unit
-    # check_date is a date object and before_date is a datetime object, and check_date is the same as before_date
-    def test_checkdate_same_as_beforedate(self):
+    # date check_date, datetime before_date, same calendar day
+    def test_checkdate_date_same_day_as_beforedate_datetime(self):
         check_date = DT.datetime(2023, 1, 1, 12, 0, 0).date()
         before_date = DT.datetime(2023, 1, 1, 12, 0, 0)
         assert is_checkdate_before_date(check_date, before_date) == False
 
     @pytest.mark.unit
-    # check_date is after before_date
-    def test_checkdate_after_beforedate_datetime(self):
+    # both datetimes, check_date is after before_date
+    def test_checkdate_datetime_after_beforedate_datetime(self):
         check_date = DT.datetime(2023, 1, 2, 12, 0, 0)
         before_date = DT.datetime(2023, 1, 1, 12, 0, 0)
         assert is_checkdate_before_date(check_date, before_date) == False
 
     @pytest.mark.unit
-    # check_date is a date object and before_date is a datetime object, and check_date is after before_date
-    def test_checkdate_after_beforedate_datetime(self):
+    # date check_date, datetime before_date, check_date is the later day
+    def test_checkdate_date_after_beforedate_datetime(self):
         check_date = DT.date(2023, 1, 2)
         before_date = DT.datetime(2023, 1, 1, 12, 0, 0)
         assert is_checkdate_before_date(check_date, before_date) == False
@@ -394,3 +407,134 @@ class TestLooksLikeAScrapedDate:
 
         assert get_datetime("N/A") is not None  # dateparser does not raise here
         assert looks_like_a_scraped_date("N/A") is False
+
+
+@pytest.mark.unit
+class TestPurgeRejectsPlaceholders:
+    """The purge is the last line before a placeholder becomes "the latest date".
+
+    ``get_latest_date`` feeds the attendance start date. Before the digit guard,
+    a roster whose Last Attendance cells all read "N/A" purged to ``["N/A"]``,
+    sorted to ``"N/A"``, and parsed into today -- so attendance was marked from a
+    date nobody had recorded.
+    """
+
+    def test_the_one_placeholder_dateparser_accepts_is_purged(self):
+        """"N/A" is the dangerous case: the try/except below never fires for it."""
+        from cqc_cpcc.utilities.date import (
+            get_datetime,
+            purge_empty_and_invalid_dates,
+        )
+
+        assert get_datetime("N/A") is not None  # no ValueError to catch
+        assert purge_empty_and_invalid_dates(["N/A"]) == []
+
+    @pytest.mark.parametrize("placeholder", ["TBD", "-", "Not Applicable", "", "  "])
+    def test_the_other_placeholders_are_purged_too(self, placeholder):
+        from cqc_cpcc.utilities.date import purge_empty_and_invalid_dates
+
+        assert purge_empty_and_invalid_dates([placeholder]) == []
+
+    def test_a_digit_bearing_non_date_is_still_purged_by_the_parser(self):
+        """The digit guard did not make the ValueError below it dead code."""
+        from cqc_cpcc.utilities.date import purge_empty_and_invalid_dates
+
+        assert purge_empty_and_invalid_dates(["2026-99-99"]) == []
+
+    def test_real_dates_survive_alongside_placeholders(self):
+        from cqc_cpcc.utilities.date import purge_empty_and_invalid_dates
+
+        assert purge_empty_and_invalid_dates(
+            ["N/A", "09/07/2026", "", "TBD", "09/01/2026"]
+        ) == ["09/07/2026", "09/01/2026"]
+
+    def test_a_roster_of_placeholders_yields_no_latest_date(self):
+        from cqc_cpcc.utilities.date import get_latest_date
+
+        assert get_latest_date(["N/A", "", "TBD"]) == ""
+
+    def test_the_latest_real_date_still_wins(self):
+        from cqc_cpcc.utilities.date import get_latest_date
+
+        assert get_latest_date(
+            ["09/01/2026", "N/A", "09/08/2026", "08/25/2026"]
+        ) == "09/08/2026"
+
+    def test_the_earliest_real_date_still_wins(self):
+        from cqc_cpcc.utilities.date import get_earliest_date
+
+        assert get_earliest_date(
+            ["09/01/2026", "N/A", "09/08/2026", "08/25/2026"]
+        ) == "08/25/2026"
+
+
+@pytest.mark.unit
+class TestTermForDateEdges:
+    """Course filtering runs before any course page opens, so this is guessy input."""
+
+    @pytest.mark.parametrize("value", ["N/A", "", "not a date", None, object()])
+    def test_an_unusable_value_yields_no_term_rather_than_raising(self, value):
+        from cqc_cpcc.utilities.date import term_for_date
+
+        assert term_for_date(value) is None
+
+    def test_every_calendar_month_maps_to_a_semester(self):
+        """No month may fall through -- a course in one would vanish from the picker."""
+        from cqc_cpcc.utilities.date import term_for_date
+
+        assert all(term_for_date(DT.date(2026, month, 15)) for month in range(1, 13))
+
+    def test_a_real_date_resolves_to_a_semester_and_year(self):
+        from cqc_cpcc.utilities.date import _TERM_BY_START_MONTH, term_for_date
+
+        month = sorted(_TERM_BY_START_MONTH)[0]
+
+        assert term_for_date(DT.date(2026, month, 15)) == (
+            _TERM_BY_START_MONTH[month], "2026"
+        )
+
+
+@pytest.mark.unit
+class TestTimezoneNormalisation:
+    """dateparser returns aware datetimes; the rest of the code builds naive ones.
+
+    Comparing the two raises, so every comparison helper normalises first.
+    """
+
+    def test_a_naive_datetime_is_reported_as_not_aware(self):
+        from cqc_cpcc.utilities.date import _is_timezone_aware
+
+        assert _is_timezone_aware(DT.datetime(2026, 9, 7)) is False
+
+    def test_none_is_reported_as_not_aware(self):
+        from cqc_cpcc.utilities.date import _is_timezone_aware
+
+        assert _is_timezone_aware(None) is False
+
+    def test_an_aware_datetime_is_reported_as_aware(self):
+        from cqc_cpcc.utilities.date import _is_timezone_aware
+
+        aware = DT.datetime(2026, 9, 7, tzinfo=DT.timezone.utc)
+
+        assert _is_timezone_aware(aware) is True
+
+    def test_stripping_a_naive_datetime_leaves_it_unchanged(self):
+        from cqc_cpcc.utilities.date import _strip_timezone
+
+        naive = DT.datetime(2026, 9, 7, 13, 45)
+
+        assert _strip_timezone(naive) == naive
+
+    def test_stripping_an_aware_datetime_shifts_it_to_utc_then_drops_the_zone(self):
+        from cqc_cpcc.utilities.date import _strip_timezone
+
+        aware = DT.datetime(
+            2026, 9, 7, 13, 45, tzinfo=DT.timezone(DT.timedelta(hours=-4))
+        )
+
+        assert _strip_timezone(aware) == DT.datetime(2026, 9, 7, 17, 45)
+
+    def test_none_normalises_to_none(self):
+        from cqc_cpcc.utilities.date import _ensure_naive_datetime
+
+        assert _ensure_naive_datetime(None) is None

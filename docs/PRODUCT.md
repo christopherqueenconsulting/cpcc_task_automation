@@ -23,11 +23,12 @@ These tasks:
 
 ## Solution
 
-CPCC Task Automation addresses these problems through three core features:
+CPCC Task Automation addresses these problems through four core features:
 
 ### 1. Automated Attendance Tracking
-### 2. AI-Powered Project Feedback
-### 3. Intelligent Exam Grading
+### 2. Withdrawal Processing
+### 3. AI-Powered Project Feedback
+### 4. Intelligent Exam Grading
 
 ---
 
@@ -44,9 +45,15 @@ Automatically calculates student attendance by analyzing activity completion in 
    - Opens BrightSpace course page
    - Scrapes assignments, quizzes, and discussions
    - Identifies students who completed activities in the date range
-3. **Recording**: Records attendance in:
-   - MyColleges official attendance system
-   - SharePoint/Excel Online tracking workbook (configurable URL)
+3. **Recording**: Records attendance in the MyColleges official attendance system
+
+Every question the run needs — which courses, which start date, whether to process
+withdrawals afterwards — is asked **once, up front**, right after login. From that
+point the run is unattended; you can walk away.
+
+A course that fails part-way through no longer ends the run. It is logged, its tab is
+closed, and the remaining courses still process — the courses already finished keep
+their work.
 
 ### Who Should Use This
 
@@ -125,7 +132,58 @@ Activities completed outside the configured date range are **not counted**.
 
 ---
 
-## Feature 2: AI-Powered Project Feedback
+## Feature 2: Withdrawal Processing
+
+### What It Does
+
+Finds students who have withdrawn or stopped submitting work, records them in a local
+per-term CSV, and syncs that CSV to the shared online Attendance Tracker.
+
+### How It Works
+
+1. **Scrape**: Reads each course's BrightSpace withdrawals list
+2. **Classify**: Each withdrawal becomes a status and a faculty reason, based on when
+   it falls relative to the course start, the census/EVA date, and the final drop day
+3. **Store locally**: Merged into `withdrawals_<Term>_<Year>.csv` in
+   `WITHDRAWALS_CSV_DIR`, keyed on (course and section + student ID)
+4. **Sync online**: Appends only the rows the tracker does not already have
+
+### Running It
+
+It runs at the end of a "Take Attendance" run if you say yes to that question up
+front, or on its own as **Process Withdrawals** (option 4 on the CLI menu). The
+standalone action offers two modes: a full re-scrape, or **push-only**, which syncs an
+already-written CSV without opening a single course page.
+
+### Safety
+
+This feature writes to a shared workbook that other people also edit, so it is
+deliberately cautious:
+
+- **Dry run by default.** `WITHDRAWALS_TRACKER_DRY_RUN=true` is the shipped default;
+  it logs exactly which rows it *would* append and writes nothing. A real write takes
+  an explicit confirmation each run.
+- **A failed read aborts the write.** Appending after a bad read is how a tracker gets
+  duplicated, so an unreadable or empty sheet stops the push instead of appending
+  blind.
+- **Your columns only.** Only columns A–K of *new* rows are written. The Navigator's
+  columns L and M are never touched.
+- **Re-running is safe.** The local file and the online tracker are de-duplicated
+  independently, so a row someone typed in by hand online is never re-added, and a
+  second run of the same course adds nothing.
+- **Unknown means unknown.** When a student's real last-activity date cannot be
+  determined, the "Week of Last Activity" column reads `N/A` rather than a guessed
+  week.
+
+### Where the Data Lives
+
+The local CSVs contain student names, IDs, and email addresses. They are written
+outside version control (`WITHDRAWALS_CSV_DIR`, git-ignored) and never uploaded
+anywhere except the tracker you configure.
+
+---
+
+## Feature 3: AI-Powered Project Feedback
 
 ### What It Does
 
@@ -285,7 +343,7 @@ OpenAI API usage is **metered** (pay per token). Typical costs:
 
 ---
 
-## Feature 3: Intelligent Exam Grading
+## Feature 4: Intelligent Exam Grading
 
 ### What It Does
 

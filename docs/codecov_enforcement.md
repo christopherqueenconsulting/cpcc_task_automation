@@ -35,6 +35,42 @@ The `codecov/project` status check:
 - Always passes (won't block PRs)
 - Useful for tracking progress toward 80% repo-wide goal
 
+
+### Component Patch Coverage — two are informational
+
+Every component reports a patch status. Two of them — **Core Automation** and
+**Rubric Grading** — are `informational: true`: they appear on the PR and are worth
+watching as a trend, but they do not block.
+
+That is not a lowered bar. The number those two produced was not measuring test
+coverage. Codecov's diff-to-coverage line mapping counts lines that are not
+executable, and it does so specifically where existing files are edited. Measured
+against codecov's own per-line API:
+
+- **PR #267**, `rubric_grading.py`: **all eleven** reported misses were docstring
+  lines, blank lines, or function-signature parameters. Two were not even added by
+  that PR. `coverage.py` measured 100% of the statements it added. Ceiling: 88.04%
+  against a 90% target.
+- **PR #281**, `brightspace.py`: a nine-line diff containing **exactly one**
+  statement, covered by three tests, reported at **50%**.
+- **PR #280**, `my_colleges.py`: of 118 reported misses, 90 were not statements —
+  44 continuation lines, 15 blank lines, 24 docstring lines, 7 comments. Covering
+  every real line gave 71.1% against an 80% target.
+
+A control rules out the obvious explanation: files written from scratch in those PRs
+were line-wrapped just as heavily and showed **zero** non-statement misses.
+
+The consequence, left alone, is that the gate penalises refactoring — the change most
+worth making — and teaches everyone to ignore red coverage checks.
+
+**The repository-wide `codecov/patch` gate at 80% is unaffected and still enforces.**
+So does every other component's patch status.
+
+If codecov's mapping is fixed, or coverage reports stop emitting non-statements,
+revert the two `informational: true` lines and the 80%/90% targets take effect again
+unchanged.
+
+
 ## Required GitHub Settings
 
 To enforce the coverage requirements, you must configure branch protection rules in GitHub.
@@ -91,11 +127,19 @@ Require status checks to pass before merging
 
 These are the exact names that will appear in GitHub after running CI:
 
-| Check Name | Purpose | Required? |
-|------------|---------|-----------|
-| `codecov/patch` | Patch coverage ≥80% | ✅ YES |
-| `codecov/project` | Project coverage trend | ❌ NO (informational) |
+| Check Name | Purpose | Blocks? |
+|------------|---------|---------|
+| `codecov/patch` | Patch coverage ≥80% across all gated paths | ✅ YES |
+| `codecov/project` | Project coverage trend | ❌ informational |
+| `codecov/patch/<Component>` | Per-component patch coverage | ✅ except the three below |
+| `codecov/patch/Core Automation` | Reported only | ❌ informational — see above |
+| `codecov/patch/Rubric Grading` | Reported only | ❌ informational — see above |
+| `codecov/patch/Browser Automation & MFA` | Reported only | ❌ informational (browser-driven) |
+| `codecov/project/<Component>` | Per-component trend | ✅ except Core Automation / Streamlit UI |
 | `unit-tests` | CI workflow success | ⚠️ Recommended |
+
+> **Note:** "blocks" here means codecov marks the check failed. Whether a failed check
+> actually prevents merging is a separate branch-protection setting — see below.
 
 ## Handling Coverage Failures
 
