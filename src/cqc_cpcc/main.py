@@ -3,6 +3,7 @@ from enum import Enum
 
 import cqc_cpcc.attendance as AT
 import cqc_cpcc.project_feedback as PF
+import cqc_cpcc.withdrawal_processing as WP
 from cqc_cpcc.utilities.logger import logger
 
 
@@ -10,6 +11,7 @@ class Instructor_Actions(Enum):
     TAKE_ATTENDANCE = 1
     GIVE_FEEDBACK = 2
     GRADE_EXAM = 3
+    PROCESS_WITHDRAWALS = 4
 
 
 def prompt_action():
@@ -21,15 +23,17 @@ def prompt_action():
         logger.info(f"{member.value}: {member.name}")
 
     default = Instructor_Actions.TAKE_ATTENDANCE.value
-    user_input = int(input('Enter your selection [' + str(default) + ']: ').strip() or default)
 
     try:
+        selection = input('Enter your selection [' + str(default) + ']: ').strip()
+        user_input = int(selection or default)
         ia = Instructor_Actions(user_input)
-        logger.info(f"You selected {ia.name}")
-        return ia
     except ValueError:
         logger.warning("Invalid selection.")
         return prompt_action()
+
+    logger.info(f"You selected {ia.name}")
+    return ia
 
 
 def prompt_attendance_tracker_url():
@@ -51,6 +55,9 @@ def take_action():
         case Instructor_Actions.GRADE_EXAM:
             # TODO: Complete Exam Grading implementation
             logger.warning("GRADE_EXAM action selected but not implemented yet.")
+        case Instructor_Actions.PROCESS_WITHDRAWALS:
+            attendance_tracker_url = prompt_attendance_tracker_url()
+            WP.run_process_withdrawals(attendance_tracker_url)
 
 
 # Press the green button in the gutter to run the script.

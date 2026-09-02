@@ -5,6 +5,7 @@ import dateparser
 import pytest
 
 from cqc_cpcc.utilities.date import (
+    calculate_census_date,
     is_checkdate_before_date,
     is_checkdate_after_date,
     is_date_in_range,
@@ -313,3 +314,83 @@ class TestWeeksBetweenDates:
     def test_weeks_between_dates_string_inputs(self):
         assert weeks_between_dates("2023-01-01", "2023-01-15") == 2
 
+
+
+@pytest.mark.unit
+class TestCalculateCensusDate:
+    """EVA / census date calculated as a percentage of the instructional period."""
+
+    def test_standard_sixteen_week_term_at_ten_percent(self):
+        # 116 days * 10% = 11.6 -> 12 days after the start.
+        assert calculate_census_date(
+            DT.date(2026, 1, 12), DT.date(2026, 5, 8), 10.0
+        ) == DT.date(2026, 1, 24)
+
+    def test_percentage_is_configurable(self):
+        start, end = DT.date(2026, 1, 12), DT.date(2026, 5, 8)
+
+        assert calculate_census_date(start, end, 25.0) == DT.date(2026, 2, 10)
+        assert calculate_census_date(start, end, 50.0) == DT.date(2026, 3, 11)
+
+    def test_single_day_term_does_not_divide_by_zero(self):
+        assert calculate_census_date(
+            DT.date(2026, 1, 12), DT.date(2026, 1, 12), 10.0
+        ) == DT.date(2026, 1, 12)
+
+    def test_end_before_start_returns_none(self):
+        assert calculate_census_date(
+            DT.date(2026, 5, 8), DT.date(2026, 1, 12), 10.0
+        ) is None
+
+    def test_zero_or_negative_percent_returns_the_start_date(self):
+        start, end = DT.date(2026, 1, 12), DT.date(2026, 5, 8)
+
+        assert calculate_census_date(start, end, 0) == start
+        assert calculate_census_date(start, end, -5) == start
+
+    def test_unparseable_input_returns_none(self):
+        assert calculate_census_date("not a date", DT.date(2026, 5, 8), 10.0) is None
+        assert calculate_census_date(None, DT.date(2026, 5, 8), 10.0) is None
+
+    def test_accepts_strings_and_datetimes(self):
+        expected = DT.date(2026, 1, 24)
+
+        assert calculate_census_date("01-12-2026", "05-08-2026", 10.0) == expected
+        assert calculate_census_date(
+            DT.datetime(2026, 1, 12), DT.datetime(2026, 5, 8), 10.0
+        ) == expected
+
+    def test_census_date_always_falls_within_the_course(self):
+        start, end = DT.date(2026, 1, 12), DT.date(2026, 5, 8)
+
+        for percent in (1, 10, 25, 50, 100):
+            census = calculate_census_date(start, end, percent)
+            assert start <= census <= end
+
+
+@pytest.mark.unit
+class TestLooksLikeAScrapedDate:
+    """The guard that keeps dateparser's permissiveness out of scraped cells."""
+
+    @pytest.mark.parametrize(
+        "text", ["N/A", "TBD", "Not Applicable", "-", "", "   ", None, "a", "b"]
+    )
+    def test_placeholders_are_rejected(self, text):
+        from cqc_cpcc.utilities.date import looks_like_a_scraped_date
+
+        assert looks_like_a_scraped_date(text) is False
+
+    @pytest.mark.parametrize(
+        "text", ["1/12/2026", "2026-01-12", "January 12, 2026", "1/12/2026 (Monday)"]
+    )
+    def test_real_dates_are_accepted(self, text):
+        from cqc_cpcc.utilities.date import looks_like_a_scraped_date
+
+        assert looks_like_a_scraped_date(text) is True
+
+    def test_the_placeholder_dateparser_would_have_accepted(self):
+        """This is the exact value that made the guard necessary."""
+        from cqc_cpcc.utilities.date import get_datetime, looks_like_a_scraped_date
+
+        assert get_datetime("N/A") is not None  # dateparser does not raise here
+        assert looks_like_a_scraped_date("N/A") is False

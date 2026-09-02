@@ -298,10 +298,9 @@ class TestOpenRouterCSC113Week4Reflection:
         # Create CSC-113 Week 4 Reflection rubric
         rubric = Rubric(
             rubric_id="CSC-113-Week-4-Reflection",
-            rubric_version=1,
-            rubric_name="Week 4 Reflection Rubric",
-            rubric_description="Rubric for CSC-113 Week 4 AI prompt engineering reflection",
-            total_points=100,
+            rubric_version="1.0",
+            title="Week 4 Reflection Rubric",
+            description="Rubric for CSC-113 Week 4 AI prompt engineering reflection",
             criteria=[
                 Criterion(
                     criterion_id="documentation_of_experiment",
@@ -310,7 +309,7 @@ class TestOpenRouterCSC113Week4Reflection:
                     max_points=20,
                     scoring_mode="level_band",
                     enabled=True,
-                    performance_levels=[
+                    levels=[
                         PerformanceLevel(
                             label="Exemplary",
                             score_min=18,
@@ -344,7 +343,7 @@ class TestOpenRouterCSC113Week4Reflection:
                     max_points=30,
                     scoring_mode="level_band",
                     enabled=True,
-                    performance_levels=[
+                    levels=[
                         PerformanceLevel(
                             label="Exemplary",
                             score_min=27,
@@ -366,7 +365,7 @@ class TestOpenRouterCSC113Week4Reflection:
                     max_points=25,
                     scoring_mode="level_band",
                     enabled=True,
-                    performance_levels=[
+                    levels=[
                         PerformanceLevel(
                             label="Exemplary",
                             score_min=23,
@@ -388,7 +387,7 @@ class TestOpenRouterCSC113Week4Reflection:
                     max_points=20,
                     scoring_mode="level_band",
                     enabled=True,
-                    performance_levels=[
+                    levels=[
                         PerformanceLevel(
                             label="Exemplary",
                             score_min=18,
@@ -410,7 +409,7 @@ class TestOpenRouterCSC113Week4Reflection:
                     max_points=5,
                     scoring_mode="level_band",
                     enabled=True,
-                    performance_levels=[
+                    levels=[
                         PerformanceLevel(
                             label="Exemplary",
                             score_min=4,
@@ -426,30 +425,26 @@ class TestOpenRouterCSC113Week4Reflection:
                     ],
                 ),
             ],
-            overall_performance_bands=[
+            overall_bands=[
                 OverallBand(
                     label="Exemplary",
                     score_min=90,
                     score_max=100,
-                    description="Outstanding work demonstrating mastery",
                 ),
                 OverallBand(
                     label="Proficient",
                     score_min=75,
                     score_max=89,
-                    description="Good work meeting expectations",
                 ),
                 OverallBand(
                     label="Developing",
                     score_min=60,
                     score_max=74,
-                    description="Acceptable work with room for improvement",
                 ),
                 OverallBand(
                     label="Beginning",
                     score_min=0,
                     score_max=59,
-                    description="Work needs significant improvement",
                 ),
             ],
         )
@@ -510,7 +505,7 @@ class TestOpenRouterCSC113Week4Reflection:
         # Verify result structure
         assert isinstance(result, RubricAssessmentResult)
         assert result.rubric_id == "CSC-113-Week-4-Reflection"
-        assert result.rubric_version == 1
+        assert result.rubric_version == "1.0"
         assert result.total_points_possible == 100
         
         # Verify all criteria were evaluated

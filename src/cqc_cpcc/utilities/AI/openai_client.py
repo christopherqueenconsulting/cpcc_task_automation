@@ -47,6 +47,7 @@ import os
 import random
 from typing import Type, TypeVar
 
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.AI.openai_debug import (
     create_correlation_id,
     record_request,
@@ -329,14 +330,33 @@ def _normalize_fallback_json(data: dict, schema_model: Type[BaseModel]) -> dict:
         # Always apply fallbacks after try/except to ensure all required fields are present.
         # Covers both: (a) JSON-Schema-style dicts where props extraction yields None,
         # and (b) any unexpected exception in the try block above.
+        backfilled_fields = []
         if not c.get("criterion_id"):
             c["criterion_id"] = c.get("id") or c.get("name") or "unknown_criterion"
+            backfilled_fields.append("criterion_id")
         if not c.get("criterion_name"):
             c["criterion_name"] = c.get("title") or c.get("criterion_id") or "Unknown Criterion"
+            backfilled_fields.append("criterion_name")
         if c.get("points_possible") is None:
             c["points_possible"] = 0
+            backfilled_fields.append("points_possible")
         if not c.get("feedback"):
             c["feedback"] = "Unable to assess this criterion (model returned schema definition instead of data)"
+            backfilled_fields.append("feedback")
+
+        if backfilled_fields:
+            # Nothing is raised here: the call "succeeded" and these invented values
+            # flow into a student's grade. Without this event the failure is invisible.
+            logger.warning(
+                "Criterion required placeholder backfill for %s (schema=%s).",
+                ", ".join(backfilled_fields), schema_model.__name__,
+            )
+            telemetry.capture_degradation(
+                telemetry.PLACEHOLDER_BACKFILL,
+                span_name=schema_model.__name__,
+                details={"fields": ",".join(backfilled_fields), "target": "criterion"},
+            )
+
         return c
 
     def _normalize_error_dict(e: dict) -> dict:
@@ -863,6 +883,57 @@ async def get_structured_completion(
         allow_repair: bool = False,
         retry_empty_response: bool = True,
 ) -> T:
+    """Instrumented entry point for :func:`_get_structured_completion_impl`.
+
+    Wrapping rather than editing each ``raise`` site keeps the failure reporting in
+    one place, and guarantees the trace id is cleared even when the call raises.
+    See ``posthog_telemetry`` for what is and is not sent (never prompt content by
+    default -- this pipeline handles student work).
+    """
+    span_name = schema_model.__name__ if schema_model else "structured_completion"
+    timer = telemetry.GenerationTimer()
+
+    try:
+        return await _get_structured_completion_impl(
+            prompt=prompt,
+            model_name=model_name,
+            schema_model=schema_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            allow_repair=allow_repair,
+            retry_empty_response=retry_empty_response,
+        )
+    except Exception as call_error:
+        telemetry.capture_generation(
+            trace_id=(
+                getattr(call_error, "correlation_id", None)
+                or telemetry.current_trace_id()
+            ),
+            model=model_name,
+            span_name=span_name,
+            latency_seconds=timer.elapsed(),
+            is_error=True,
+            error="%s: %s" % (type(call_error).__name__, str(call_error)[:500]),
+            attempt=getattr(call_error, "attempt_count", None),
+        )
+        raise
+    finally:
+        telemetry.set_trace_id(None)
+
+
+async def _get_structured_completion_impl(
+        prompt: str,
+        model_name: str = DEFAULT_MODEL,
+        schema_model: Type[T] = None,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
+        allow_repair: bool = False,
+        retry_empty_response: bool = True,
+) -> T:
     """Get a structured completion from OpenAI with strict schema validation.
     
     This function makes an async call to OpenAI's chat completion API with
@@ -954,7 +1025,14 @@ async def get_structured_completion(
         return _get_test_mode_response(schema_model)
 
     # Create correlation ID for debug tracking
-    correlation_id = create_correlation_id() if should_debug() else None
+    # The correlation id doubles as the PostHog trace id, so it is needed whenever
+    # either local debug capture or LLM analytics is active.
+    correlation_id = (
+        create_correlation_id() if (should_debug() or telemetry.is_enabled()) else None
+    )
+    telemetry_span = schema_model.__name__ if schema_model else "structured_completion"
+    telemetry_timer = telemetry.GenerationTimer()
+    telemetry.set_trace_id(correlation_id)
 
     # Get client instance
     client = await get_client()
@@ -1131,8 +1209,22 @@ async def get_structured_completion(
                         f"Response truncated due to length limit on attempt {attempt + 1}"
                         f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
                     )
+                    telemetry.capture_degradation(
+                        telemetry.RESPONSE_TRUNCATED,
+                        span_name=telemetry_span,
+                        model=model_name,
+                        trace_id=correlation_id,
+                        details={"attempt": attempt + 1},
+                    )
                 else:
                     decision_notes = "no content in response.choices[0].message.content"
+                    telemetry.capture_degradation(
+                        telemetry.EMPTY_RESPONSE,
+                        span_name=telemetry_span,
+                        model=model_name,
+                        trace_id=correlation_id,
+                        details={"attempt": attempt + 1},
+                    )
 
                 if correlation_id:
                     record_response(
@@ -1152,6 +1244,13 @@ async def get_structured_completion(
                         f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
                     )
                     is_smart_retry = True  # Enable fallback for next attempt
+                    telemetry.capture_degradation(
+                        telemetry.SMART_RETRY_FALLBACK,
+                        span_name=telemetry_span,
+                        model=model_name,
+                        trace_id=correlation_id,
+                        details={"attempt": attempt + 1, "reason": decision_notes},
+                    )
                     delay = _calculate_jittered_delay(retry_delay)
                     logger.debug(f"Retrying in {delay:.2f} seconds...")
                     await asyncio.sleep(delay)
@@ -1201,6 +1300,22 @@ async def get_structured_completion(
                     f"{response.usage.total_tokens if response.usage else 'unknown'}"
                     f"{f', correlation_id={correlation_id}' if correlation_id else ''})"
                 )
+                telemetry.capture_generation(
+                    trace_id=correlation_id,
+                    model=model_name,
+                    span_name=telemetry_span,
+                    latency_seconds=telemetry_timer.elapsed(),
+                    input_tokens=(
+                        response.usage.prompt_tokens if response.usage else None
+                    ),
+                    output_tokens=(
+                        response.usage.completion_tokens if response.usage else None
+                    ),
+                    attempt=attempt + 1,
+                    used_fallback=is_smart_retry,
+                    prompt=prompt,
+                    completion=json_output,
+                )
                 return validated_model
 
             except ValidationError as e:
@@ -1213,6 +1328,20 @@ async def get_structured_completion(
                     f"Schema validation failed for {schema_model.__name__}: "
                     f"{len(error_details)} errors"
                     f"{f' (correlation_id={correlation_id})' if correlation_id else ''}"
+                )
+                telemetry.capture_degradation(
+                    telemetry.SCHEMA_VALIDATION_FAILED,
+                    span_name=telemetry_span,
+                    model=model_name,
+                    trace_id=correlation_id,
+                    details={
+                        "attempt": attempt + 1,
+                        "error_count": len(error_details),
+                        "fields": ",".join(
+                            ".".join(str(part) for part in err.get("loc", ()))
+                            for err in error_details[:5]
+                        ),
+                    },
                 )
 
                 # Log first few errors for debugging
