@@ -7,13 +7,14 @@ from collections import defaultdict
 
 from cqc_cpcc.utilities.date import convert_datetime_to_end_of_day, convert_date_to_datetime, \
     convert_datetime_to_start_of_day, is_date_in_range, weeks_between_dates, format_year, get_datetime, \
-    is_checkdate_before_date, is_checkdate_after_date, filter_dates_in_range
+    filter_dates_in_range, looks_like_a_scraped_date
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry, get_elements_text_as_list_wait_stale, \
     get_elements_href_as_list_wait_stale, wait_for_ajax, get_driver_wait
 from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, login_if_needed, \
     LINE_DASH_COUNT
+from cqc_cpcc.withdrawals import UNKNOWN_ACTIVITY_WEEK, classify_withdrawal
 from selenium.common import TimeoutException, NoSuchElementException, ElementNotInteractableException, \
     StaleElementReferenceException
 from selenium.webdriver import Keys
@@ -34,6 +35,7 @@ class BrightSpace_Course:
     short_wait: WebDriverWait
     attendance_records: dict
     withdrawal_records: dict
+    last_activity_by_student: dict
     first_drop_day: DT.date
     final_drop_day: DT.date
     date_range_start: DT.date
@@ -44,9 +46,14 @@ class BrightSpace_Course:
     def __init__(self, name: str, term_semester: str, term_year: str, first_drop_day: DT.date, final_drop_day: DT.date,
                  course_start_date: DT.datetime, course_end_date: DT.datetime,
                  driver: WebDriver, wait: WebDriverWait,
-                 date_range_start: DT.date = None
+                 date_range_start: DT.date = None,
+                 collect_attendance: bool = True,
+                 collect_withdrawals: bool = True,
+                 force_withdrawals: bool = False,
+                 eva_date: DT.date = None,
                  ):
         self.name = name
+        self.eva_date = eva_date
         self.term_semester = term_semester
         self.term_year = term_year
         self.first_drop_day = convert_datetime_to_end_of_day(convert_date_to_datetime(first_drop_day))
@@ -73,17 +80,22 @@ class BrightSpace_Course:
                                      )  # Start from the passed in date non-inclusive
         self.attendance_records = {}
         self.withdrawal_records = {}
+        # student id -> last attendance date, filled in by MyColleges after
+        # attendance is recorded. Empty means the week is reported as N/A.
+        self.last_activity_by_student = {}
         if self.open_course_tab():
 
-            # TODO: MUST uncomment below
-            self.get_attendance_from_assignments()
-            self.get_attendance_from_quizzes()
-            # TODO: MUST uncomment above
+            if collect_attendance:
+                self.get_attendance_from_assignments()
+                self.get_attendance_from_quizzes()
 
-            # TODO: Fix the attendance from discussions (Something going on with iframes)
-            # self.get_attendance_from_discussions()
-            if is_date_in_range(self.first_drop_day, self.date_range_end, self.final_drop_day):
-                self.get_withdrawal_records_from_classlist()
+                # TODO: Fix the attendance from discussions
+                #  (Something going on with iframes)
+                # self.get_attendance_from_discussions()
+
+            if collect_withdrawals:
+                self._collect_withdrawals_if_applicable(force_withdrawals)
+
             self.close_course_tab()
             self.normalize_attendance_records()
             logger.info("Attendance Records (ALL):\n%s" % self.attendance_records)
@@ -205,6 +217,40 @@ class BrightSpace_Course:
 
         return course_in_brightspace
 
+    def _collect_withdrawals_if_applicable(self, force: bool = False):
+        """Scrape withdrawals, honouring the drop window unless explicitly forced.
+
+        The drop window used to gate this silently. An explicit withdrawals run
+        passes ``force=True`` so the user gets records instead of an unexplained
+        empty result, and the out-of-window case is always logged either way.
+        """
+        in_drop_window = is_date_in_range(
+            self.first_drop_day, self.date_range_end, self.final_drop_day
+        )
+
+        if not in_drop_window and not force:
+            logger.info(
+                "Course: %s | Skipping withdrawals: %s is outside the drop "
+                "window (%s - %s).",
+                self.name,
+                self.date_range_end,
+                self.first_drop_day.date(),
+                self.final_drop_day.date(),
+            )
+            return
+
+        if not in_drop_window:
+            logger.info(
+                "Course: %s | %s is outside the drop window (%s - %s), "
+                "but this is an explicit withdrawals run. Collecting anyway.",
+                self.name,
+                self.date_range_end,
+                self.first_drop_day.date(),
+                self.final_drop_day.date(),
+            )
+
+        self.get_withdrawal_records_from_classlist()
+
     def get_withdrawal_records_from_classlist(self):
         # TODO: Write code to get the withdrawal records from BrightSpace
 
@@ -252,62 +298,54 @@ class BrightSpace_Course:
 
             student_withdrawals_dict = dict(zip(student_ids, zip(student_names, student_emails, withdrawal_dates)))
 
-            filtered_withdrawals = {}
-
             logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
             # are_you_satisfied()
 
             for student_id, (student_name, student_email, withdrawal_date) in student_withdrawals_dict.items():
-                # Convert withdrawal_date to a datetime object for comparison
-                withdrawal_datetime = get_datetime(withdrawal_date)
-
-                # Use today's date for last activity
-                today = get_datetime(DT.date.today().strftime("%m-%d-%Y"))
-
-                # Faculty Reason
-                faculty_reason = ""
-
-                # Status of withdrawal
-                status = "N/A"
-
-                # Check if the withdrawal date is before the first course day
-                if is_checkdate_before_date(withdrawal_datetime, self.course_start_date):
-                    # Skip these students. They don't go on the tracker
+                # Convert withdrawal_date to a datetime object for comparison. One blank
+                # or malformed cell must not take down the whole course's scrape.
+                # The digit guard runs first because dateparser resolves "N/A" to a
+                # real date without raising, and that fabricated date would decide
+                # whether the student is recorded as W or S.
+                if not looks_like_a_scraped_date(withdrawal_date):
+                    logger.warning(
+                        "Withdrawal date %r for %s holds no date. Skipping this row.",
+                        withdrawal_date, student_name)
                     continue
-                # TODO: Check if the withdrawal date is after the EVA date and add note specific for that
 
-                # Check if the withdrawal date between the first drop day and last drop date
-                elif is_date_in_range(self.first_drop_day, withdrawal_datetime, self.final_drop_day):
-                    # TODO: Find the week of last activity (Go to user, click view grades, then view event, find last event with user id)
-                    date_of_last_activity = today
+                try:
+                    withdrawal_datetime = get_datetime(withdrawal_date)
+                except ValueError:
+                    logger.warning(
+                        "Withdrawal date %r for %s is not a parseable date. "
+                        "Skipping this row.",
+                        withdrawal_date, student_name)
+                    continue
 
-                    # TODO: If no Activity set to N/A
-                    # latest_activity = "N/A"
+                classification = classify_withdrawal(
+                    withdrawal_datetime,
+                    self.course_start_date,
+                    self.first_drop_day,
+                    self.final_drop_day,
+                    self.eva_date,
+                )
 
-                    # Get the week of the last activity
-                    last_activity_week = weeks_between_dates(self.course_start_date,
-                                                             date_of_last_activity)  # TODO: Use date of last activity
-                    latest_activity = "Week %s of %s" % (last_activity_week, self.get_weeks_in_course())
-                    faculty_reason = "Student withdrew without contacting the instructor"
-                    status = "W"
-                # Check if the withdrawal date is after the final drop day
-                elif is_checkdate_after_date(withdrawal_datetime, self.final_drop_day):
-                    # TODO: Find the week of last activity
-                    date_of_last_activity = today
-
-                    # Get the week of the last activity
-                    last_activity_week = weeks_between_dates(self.course_start_date,
-                                                             date_of_last_activity)  # TODO: Use date of last activity
-                    latest_activity = "Week %s of %s" % (last_activity_week, self.get_weeks_in_course())
-                    faculty_reason = "Student stopped submitting work"  # TODO: Check if this makes sense
-                    status = "S"  # TODO: Check if this makes sense
-                # Display error if any other condition for debugging later
-                else:
+                if classification is None:
                     logger.debug(
-                        "Error processing withdrawal for %s | Withdrawal Date: %s | Course Start Day: %s | First Drop Day: %s | Final Drop Day: %s | Course End Date: %s" % (
+                        "Not tracking withdrawal for %s | Withdrawal Date: %s | "
+                        "Course Start Day: %s | First Drop Day: %s | "
+                        "Final Drop Day: %s | Course End Date: %s" % (
                             student_name, withdrawal_datetime, self.course_start_date, self.first_drop_day,
                             self.final_drop_day, self.course_end_date))
                     continue
+
+                status, faculty_reason = classification
+
+                # The real last-activity date lives on the MyColleges attendance
+                # roster and is resolved after attendance is recorded. Until then
+                # this is explicitly unknown rather than an invented week based
+                # on today's date.
+                latest_activity = UNKNOWN_ACTIVITY_WEEK
 
                 # Convert spaces to underscore in the student name
                 student_name = student_name.replace(" ", "_")

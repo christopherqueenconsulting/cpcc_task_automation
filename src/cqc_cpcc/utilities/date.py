@@ -1,4 +1,5 @@
 import datetime as DT
+import math
 from typing import Optional
 
 import dateparser
@@ -442,6 +443,74 @@ def convert_date_to_datetime(date: DT.date) -> DT.datetime:
     return DT.datetime.combine(date, DT.datetime.min.time())
 
 
+# CPCC term boundaries by start month. Verified against real course data:
+# 8/17 and 10/19 starts are Fall; 5/20 is Summer; 1/12 is Spring.
+_TERM_BY_START_MONTH = {
+    1: "Spring", 2: "Spring", 3: "Spring", 4: "Spring",
+    5: "Summer", 6: "Summer", 7: "Summer",
+    8: "Fall", 9: "Fall", 10: "Fall", 11: "Fall", 12: "Fall",
+}
+
+
+def term_for_date(value: DT.date | DT.datetime | str) -> tuple[str, str] | None:
+    """Return the ``(semester, year)`` a date belongs to, or None if unparseable.
+
+    Derived from the month rather than scraped, because the faculty course list has
+    to be filtered before any course page is opened. Late-starting mini-sessions
+    fall into the term their start month implies, which is what an instructor means
+    by "this term".
+    """
+    try:
+        as_date = _coerce_to_date(value)
+    except (TypeError, ValueError):
+        return None
+
+    semester = _TERM_BY_START_MONTH.get(as_date.month)
+    if semester is None:
+        return None
+
+    return semester, str(as_date.year)
+
+
+def is_same_term(value: DT.date | DT.datetime | str,
+                 other: DT.date | DT.datetime | str) -> bool:
+    """True when two dates fall in the same CPCC term."""
+    first, second = term_for_date(value), term_for_date(other)
+    return first is not None and first == second
+
+
+def calculate_census_date(
+        course_start_date: DT.date | DT.datetime | str,
+        course_end_date: DT.date | DT.datetime | str,
+        percent: float = 10.0,
+) -> DT.date | None:
+    """Calculate the EVA / census date as a percentage into the course.
+
+    North Carolina community colleges set the census point a fixed percentage of
+    the way through the instructional period. This is the fallback used when the
+    date cannot be read directly from the MyColleges deadline dates dialog.
+
+    Returns ``None`` when the inputs are unusable (unparseable, or an end date
+    before the start date), so callers can fall back rather than trust a
+    nonsensical date.
+    """
+    try:
+        start = _coerce_to_date(course_start_date)
+        end = _coerce_to_date(course_end_date)
+    except (TypeError, ValueError):
+        return None
+
+    if end < start:
+        return None
+
+    if percent <= 0:
+        return start
+
+    total_days = (end - start).days
+    offset_days = math.ceil(total_days * (percent / 100.0))
+    return start + DT.timedelta(days=offset_days)
+
+
 def _is_timezone_aware(value: DT.datetime | None) -> bool:
     if value is None:
         return False
@@ -485,3 +554,16 @@ def _align_datetime_awareness(
 
 def _is_date_only(value: DT.date | DT.datetime) -> bool:
     return isinstance(value, DT.date) and not isinstance(value, DT.datetime)
+
+
+def looks_like_a_scraped_date(text: str) -> bool:
+    """Reject placeholder text before it reaches dateparser.
+
+    dateparser is deliberately permissive: it resolves "N/A" to a real date (and
+    "a" and "b" too). That is fine for natural-language input like "yesterday",
+    but a scraped cell holding "N/A" must not silently become a date -- these
+    values drive drop windows and withdrawal classification, and a fabricated
+    date mis-classifies a student. Every real date contains a digit; the
+    placeholders do not.
+    """
+    return any(character.isdigit() for character in (text or ""))

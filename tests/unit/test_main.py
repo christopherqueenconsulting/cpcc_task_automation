@@ -96,7 +96,8 @@ class TestTakeAction:
     
     @patch('cqc_cpcc.main.prompt_attendance_tracker_url', return_value='https://tracker.url')
     @patch('cqc_cpcc.main.AT.take_attendance')
-    @patch('cqc_cpcc.main.prompt_action', return_value=Instructor_Actions.TAKE_ATTENDANCE)
+    @patch('cqc_cpcc.main.prompt_action',
+           return_value=Instructor_Actions.TAKE_ATTENDANCE)
     def test_take_action_calls_take_attendance(self, mock_prompt, mock_take_attendance, mock_url_prompt):
         """TAKE_ATTENDANCE action calls take_attendance with URL."""
         take_action()
@@ -116,3 +117,53 @@ class TestTakeAction:
         """GRADE_EXAM action logs not implemented message."""
         take_action()
         mock_logger_warning.assert_called_once_with("GRADE_EXAM action selected but not implemented yet.")
+
+
+@pytest.mark.unit
+class TestProcessWithdrawalsAction:
+    """PROCESS_WITHDRAWALS is its own top-level action."""
+
+    def test_enum_member_exists_without_disturbing_the_others(self):
+        assert Instructor_Actions.PROCESS_WITHDRAWALS.value == 4
+        assert Instructor_Actions.TAKE_ATTENDANCE.value == 1
+        assert Instructor_Actions.GIVE_FEEDBACK.value == 2
+        assert Instructor_Actions.GRADE_EXAM.value == 3
+
+    @patch('builtins.input', return_value='4')
+    def test_prompt_action_selects_it(self, _mock_input):
+        assert prompt_action() == Instructor_Actions.PROCESS_WITHDRAWALS
+
+    @patch('cqc_cpcc.main.WP.run_process_withdrawals')
+    @patch('cqc_cpcc.main.prompt_attendance_tracker_url', return_value='https://x.sharepoint.com')
+    @patch('cqc_cpcc.main.prompt_action',
+           return_value=Instructor_Actions.PROCESS_WITHDRAWALS)
+    def test_take_action_routes_to_the_withdrawals_process(
+            self, _mock_action, _mock_url, mock_run):
+        take_action()
+
+        mock_run.assert_called_once_with('https://x.sharepoint.com')
+
+    @patch('cqc_cpcc.main.AT.take_attendance')
+    @patch('cqc_cpcc.main.WP.run_process_withdrawals')
+    @patch('cqc_cpcc.main.prompt_attendance_tracker_url', return_value='https://x')
+    @patch('cqc_cpcc.main.prompt_action',
+           return_value=Instructor_Actions.TAKE_ATTENDANCE)
+    def test_take_attendance_does_not_invoke_the_standalone_process(
+            self, _mock_action, _mock_url, mock_withdrawals, mock_attendance):
+        take_action()
+
+        mock_attendance.assert_called_once()
+        mock_withdrawals.assert_not_called()
+
+
+@pytest.mark.unit
+class TestPromptActionRecovery:
+    """Non-numeric input used to raise ValueError out of take_action."""
+
+    @patch('builtins.input', side_effect=['abc', '1'])
+    def test_non_numeric_input_reprompts(self, _mock_input):
+        assert prompt_action() == Instructor_Actions.TAKE_ATTENDANCE
+
+    @patch('builtins.input', side_effect=['99', '2'])
+    def test_out_of_range_input_reprompts(self, _mock_input):
+        assert prompt_action() == Instructor_Actions.GIVE_FEEDBACK
