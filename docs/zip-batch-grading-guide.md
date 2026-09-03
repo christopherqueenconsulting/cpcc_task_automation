@@ -67,10 +67,10 @@ submission.zip/
 ```
 submission.zip/
   └── Programming Exam 1/              ← Wrapper folder
-      ├── 39786-640693 - Aiden Rodriguez - Oct 10, 2025 1022 AM/
+      ├── <id>-<id> - Student A - Oct 10, 2025 1022 AM/
       │   ├── Main.java
       │   └── Helper.java
-      └── 39787-640694 - Jane Smith - Oct 11, 2025 1130 AM/
+      └── <id>-<id> - Student B - Oct 11, 2025 1130 AM/
           └── script.py
 ```
 
