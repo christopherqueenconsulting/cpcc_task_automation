@@ -451,7 +451,7 @@ class TestOpenRouterCSC113Week4Reflection:
         
         # Sample student submission
         student_submission = """
-        Greylon Anthony
+        Eve Specimen
         Christopher Queen
         CSC113-N850
         8 February 2026

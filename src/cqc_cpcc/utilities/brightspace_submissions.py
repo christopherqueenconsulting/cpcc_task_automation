@@ -144,7 +144,7 @@ def parse_attempt_date_from_folder(directory_name: str) -> Optional[DT.datetime]
     """Best-effort parse of the attempt date from a BrightSpace folder name.
 
     BrightSpace "Download All" folders look like
-    ``"39786-640693 - Aiden Rodriguez - Oct 10, 2025 234 PM"``. The date is the
+    ``"10001-500001 - Ada Example - Oct 10, 2025 234 PM"``. The date is the
     delimiter segment at index 2+. Returns ``None`` when no date is present
     (e.g. simple ``"Student Name/"`` folders), so callers can treat undated
     folders conservatively.

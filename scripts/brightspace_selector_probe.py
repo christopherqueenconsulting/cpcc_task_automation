@@ -14,7 +14,7 @@ Recommended (headful so you can drive the browser yourself):
     HEADLESS_BROWSER=false \
     BROWSER_TYPE=DOCKER_CHROME DOCKER_TYPE=LOCAL \
     poetry run python scripts/brightspace_selector_probe.py --url \
-        "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/folders_manage.d2l?ou=338334"
+        "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/folders_manage.d2l?ou=200001"
 
 Flow:
   1. It logs in (MFA handled on the terminal), then PAUSES.

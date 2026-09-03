@@ -175,8 +175,8 @@ def parse_student_folder_name(directory_name: str) -> str:
     (``Anne - Marie``) survive intact, instead of naively taking index ``[1]``.
 
     Examples:
-        "104470-789761 - Kurtis Karshner - Jun 24, 2026 11:21 PM" -> "Kurtis Karshner"
-        "39786 - Anne - Marie Smith - Oct 10, 2025 1022 AM"       -> "Anne - Marie Smith"
+        "100004-600001 - Dee Placeholder - Jun 24, 2026 11:21 PM" -> "Dee Placeholder"
+        "10001 - Anne - Marie Smith - Oct 10, 2025 1022 AM"       -> "Anne - Marie Smith"
         "Assignment1 - John Doe"                                  -> "John Doe"
         "Student1/subfolder"                                      -> "Student1"
     """

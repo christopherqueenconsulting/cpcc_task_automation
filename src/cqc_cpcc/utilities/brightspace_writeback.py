@@ -705,7 +705,7 @@ def _submissions_users_url(url: str) -> str:
     clicks the "Submissions" tab, which redirects to the per-FILE view
     (``folder_submissions_files.d2l``) whose file links carry no ``feedback,<userId>``
     token — so we must navigate back to the users view before scraping. VERIFIED LIVE
-    2026-07-10 (ou=338873 db=789783): the users view exposes all submitter name links;
+    2026-07-10 (ou=200002 db=600002): the users view exposes all submitter name links;
     the files view does not.
     """
     import urllib.parse
@@ -1608,10 +1608,10 @@ def _attach_feedback_file(driver, path: str, progress=_noop) -> bool:
 # ---------------------------------------------------------------------------
 # The dropbox submissions page has a header button, "Add Feedback Files", that
 # accepts a single ZIP and distributes each contained file to the matching
-# submitter as DRAFT feedback. VERIFIED LIVE 2026-07-10 (folder ou=338873 db=789783):
+# submitter as DRAFT feedback. VERIFIED LIVE 2026-07-10 (folder ou=200002 db=600002):
 # BrightSpace matches a feedback file to a student PURELY by the leading numeric
 # submission-ID in its enclosing folder name — the SAME ID-bearing folder name the
-# submissions download produced (e.g. "108090-789783 - Donovan Brace - Jul 7, 2026").
+# submissions download produced (e.g. "100003-600002 - Ben Sample - Jul 7, 2026").
 # So this route delivers all clean feedback .docx files in ONE upload, no per-student
 # navigation. It only works for SUBMITTERS (a non-submitter has no download ID and is
 # silently skipped by BrightSpace). Scores/rubric are written separately (inline mode).

@@ -148,7 +148,7 @@ QUIZ_WRITTEN_RESPONSE_XPATH = (
 
 # The quiz submissions/attempts grid does NOT live at the quiz edit/build URL the
 # instructor pastes — it lives at quiz_mark_users.d2l, derived from ou (org unit) and
-# qi (quiz id). VERIFIED LIVE (2026-06-29, CSC151 quiz qi=1015474 ou=304048).
+# qi (quiz id). VERIFIED LIVE (2026-06-29, CSC151 quiz qi=3000001 ou=200003).
 QUIZ_MARK_USERS_PATH = "/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l"
 
 # --- Instructions scraping (verify live via the walkthrough script) -----------
@@ -1341,7 +1341,7 @@ def fetch_assignment_instructions(
 # plain XPath ``.text`` read returns nothing. We scope to the question-text block and
 # deep-scan into it (crossing shadow roots) for the rendered body. We deliberately do
 # NOT read ``...-question-response`` (that is the student's ANSWER, not the prompt).
-# VERIFIED LIVE 2026-07-09 (qi=1089471): returns the full 5,265-char Exam 2 prompt.
+# VERIFIED LIVE 2026-07-09 (qi=3000002): returns the full 5,265-char Exam 2 prompt.
 _READ_QUIZ_QUESTION_JS = r"""
 function* deep(root) {
   const stack = [root.documentElement || root];

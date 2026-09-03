@@ -75,8 +75,8 @@ def test_detect_route_rejects_unknown():
 @pytest.mark.integration
 def test_parse_student_id_brightspace_format():
     assert parse_student_id_from_folder(
-        "39786-640693 - Aiden Rodriguez - Oct 10, 2025 234 PM"
-    ) == "Aiden Rodriguez"
+        "10001-500001 - Ada Example - Oct 10, 2025 234 PM"
+    ) == "Ada Example"
 
 
 @pytest.mark.integration
@@ -87,15 +87,15 @@ def test_parse_student_id_simple_format():
 @pytest.mark.integration
 @pytest.mark.parametrize("folder,expected", [
     # Multi-word name.
-    ("104470-789761 - Mary Jane Watson - Jun 24, 2026 11:21 PM", "Mary Jane Watson"),
+    ("100004-600001 - Mary Jane Watson - Jun 24, 2026 11:21 PM", "Mary Jane Watson"),
     # Hyphenated name (no spaces around hyphen) — must stay intact.
-    ("128614-789761 - Anne-Marie O'Brien - Jun 24, 2026 9:56 AM", "Anne-Marie O'Brien"),
+    ("100006-600001 - Anne-Marie O'Brien - Jun 24, 2026 9:56 AM", "Anne-Marie O'Brien"),
     # Name with a spaced dash — must NOT be truncated to the first part.
-    ("39786-640693 - Anne - Marie Smith - Oct 10, 2025 1022 AM", "Anne - Marie Smith"),
+    ("10001-500001 - Anne - Marie Smith - Oct 10, 2025 1022 AM", "Anne - Marie Smith"),
     # Simple "Assignment - Name" (no id, no timestamp).
     ("Assignment1 - John Doe", "John Doe"),
     # Timestamp without colon.
-    ("69293-789761 - Dimetrius Wingo - Jun 24, 2026 1:22 PM", "Dimetrius Wingo"),
+    ("10005-600001 - Cal Fixture - Jun 24, 2026 1:22 PM", "Cal Fixture"),
     # Nested path uses the top folder only.
     ("Student1/subfolder", "Student1"),
 ])
@@ -121,7 +121,7 @@ def test_prune_does_not_merge_distinct_dashed_names(tmp_path):
 @pytest.mark.integration
 def test_parse_attempt_date_colonless_time():
     dt = parse_attempt_date_from_folder(
-        "39786-640693 - Aiden Rodriguez - Oct 10, 2025 234 PM"
+        "10001-500001 - Ada Example - Oct 10, 2025 234 PM"
     )
     assert dt is not None
     assert (dt.year, dt.month, dt.day) == (2025, 10, 10)

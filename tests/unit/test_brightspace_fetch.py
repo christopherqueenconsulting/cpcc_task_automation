@@ -13,14 +13,14 @@ import pytest
 import cqc_cpcc.utilities.brightspace_fetch as bf
 
 POPUP_URL = (
-    "https://brightspace.cpcc.edu/d2l/common/popup/popup.d2l?ou=338334"
-    "&queryString=ou%3D338334%26db%3D789761%26dwt%3D3%26addp%3D2%26fn%3DGetListFiles"
+    "https://brightspace.cpcc.edu/d2l/common/popup/popup.d2l?ou=200001"
+    "&queryString=ou%3D200001%26db%3D600001%26dwt%3D3%26addp%3D2%26fn%3DGetListFiles"
     "&footerMsg=&buttonOffset=0&popBodySrc=%2Fd2l%2Flms%2Fdropbox%2Fdownload_files.d2l"
     "&width=750&height=350"
 )
 EXPECTED_BODY_URL = (
     "https://brightspace.cpcc.edu/d2l/lms/dropbox/download_files.d2l"
-    "?ou=338334&db=789761&dwt=3&addp=2&fn=GetListFiles"
+    "?ou=200001&db=600001&dwt=3&addp=2&fn=GetListFiles"
 )
 
 
@@ -28,7 +28,7 @@ EXPECTED_BODY_URL = (
 def test_zip_link_regex_matches_viewfile_href():
     html = (
         '<span id="z_b"><a href="/d2l/common/viewFile.d2lfile/Temp/178/'
-        'Project%201%20Download%20Jun%2025,%202026%20149%20PM.zip?ou=338334&amp;fid=ABC"'
+        'Project%201%20Download%20Jun%2025,%202026%20149%20PM.zip?ou=200001&amp;fid=ABC"'
         ' title="Open">x</a></span>'
     )
     match = bf._ZIP_LINK_RE.search(html)
@@ -350,9 +350,9 @@ def test_read_quiz_question_text_polls_until_present(mocker):
 
 QUIZ_EDIT_URL = (
     "https://brightspace.cpcc.edu/d2l/le/activities/edit/"
-    "TmpZd05sODFNVEF3TUY4eE1ERTFORGMwLjMwNDA0OA?cft=quiz&ou=304048"
-    "&returnUrl=%2Fd2l%2Flms%2Fquizzing%2Fadmin%2Fquizzes_manage.d2l%3Fou%3D304048"
-    "&qi=1015474"
+    "TVRBd01GOHhNREF3TUY4ek1EQXdNREF4LjIwMDAwMw?cft=quiz&ou=200003"
+    "&returnUrl=%2Fd2l%2Flms%2Fquizzing%2Fadmin%2Fquizzes_manage.d2l%3Fou%3D200003"
+    "&qi=3000001"
 )
 
 
@@ -361,7 +361,7 @@ def test_derive_quiz_grading_url_from_query():
     out = bf.derive_quiz_grading_url(QUIZ_EDIT_URL)
     assert out == (
         "https://brightspace.cpcc.edu/d2l/lms/quizzing/admin/mark/"
-        "quiz_mark_users.d2l?ou=304048&qi=1015474"
+        "quiz_mark_users.d2l?ou=200003&qi=3000001"
     )
 
 
@@ -371,10 +371,10 @@ def test_derive_quiz_grading_url_finds_qi_in_return_url():
     url = (
         "https://brightspace.cpcc.edu/d2l/le/activities/edit/X?cft=quiz"
         "&returnUrl=%2Fd2l%2Flms%2Fquizzing%2Fadmin%2Fmark%2Fquiz_mark_users.d2l"
-        "%3Fou%3D304048%26qi%3D1015474"
+        "%3Fou%3D200003%26qi%3D3000001"
     )
     out = bf.derive_quiz_grading_url(url)
-    assert out.endswith("quiz_mark_users.d2l?ou=304048&qi=1015474")
+    assert out.endswith("quiz_mark_users.d2l?ou=200003&qi=3000001")
 
 
 @pytest.mark.unit

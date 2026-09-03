@@ -126,15 +126,15 @@ def _result(earned, possible, feedback="ok", band="Proficient", criteria=None):
 @pytest.mark.unit
 def test_build_write_items_applies_buffer_and_parses_name():
     results = [
-        ("39786-640693 - Aiden Rodriguez - Oct 10, 2025 234 PM", _result(80, 100)),
+        ("10001-500001 - Ada Example - Oct 10, 2025 234 PM", _result(80, 100)),
     ]
     items = wb.build_write_items_from_results(
         results, buffer_pct=10, include_criteria_feedback=False,
-        name_parser=lambda s: "Aiden Rodriguez",
+        name_parser=lambda s: "Ada Example",
     )
     assert len(items) == 1
     it = items[0]
-    assert it.display_name == "Aiden Rodriguez"
+    assert it.display_name == "Ada Example"
     assert it.raw_score == 80.0
     assert it.score == 90.0           # buffered
     assert it.max_points == 100.0
@@ -145,7 +145,7 @@ def test_build_write_items_applies_buffer_and_parses_name():
 @pytest.mark.unit
 def test_build_write_items_uses_default_name_parser():
     # Real parser turns "Id - Name - Date" into the clean name.
-    results = [("39786-640693 - Jane Doe - Oct 1, 2025 100 PM", _result(50, 100))]
+    results = [("10001-500001 - Jane Doe - Oct 1, 2025 100 PM", _result(50, 100))]
     items = wb.build_write_items_from_results(results, buffer_pct=0)
     assert items[0].display_name == "Jane Doe"
     assert items[0].score == 50.0
@@ -687,7 +687,7 @@ def test_build_feedback_docs_zip_uses_id_bearing_folders(tmp_path):
     out = tmp_path / "fb.zip"
     z = wb.build_feedback_docs_zip(
         {
-            "108090-789783 - Donovan Brace - Jul 7, 2026": str(a),
+            "100003-600002 - Ben Sample - Jul 7, 2026": str(a),
             "99-1 - Jane Doe": str(b),
             "no-doc": None,                       # skipped (falsy path)
             "gone": str(tmp_path / "missing.docx"),  # skipped (not on disk)
@@ -697,7 +697,7 @@ def test_build_feedback_docs_zip_uses_id_bearing_folders(tmp_path):
     assert z == str(out)
     with zipfile.ZipFile(z) as zf:
         assert sorted(zf.namelist()) == [
-            "108090-789783 - Donovan Brace - Jul 7, 2026/a.docx",
+            "100003-600002 - Ben Sample - Jul 7, 2026/a.docx",
             "99-1 - Jane Doe/b.docx",
         ]
 
@@ -754,7 +754,7 @@ def test_import_assignment_feedback_docs_marks_outcomes(mocker, tmp_path):
     doc = tmp_path / "Donovan_Feedback.docx"; doc.write_bytes(b"x")
     imp = mocker.patch.object(wb, "import_feedback_zip", return_value=True)
     items = [
-        wb.GradeWriteItem("108090-789783 - Donovan Brace", "Donovan Brace",
+        wb.GradeWriteItem("100003-600002 - Ben Sample", "Ben Sample",
                           80, 90, 100, "<p>fb</p>", feedback_doc_path=str(doc)),
         wb.GradeWriteItem("no-sub - Carol", "Carol", 0, 0, 100, "<p>fb</p>"),
     ]
@@ -764,8 +764,8 @@ def test_import_assignment_feedback_docs_marks_outcomes(mocker, tmp_path):
 
     imp.assert_called_once()
     by_name = {o.display_name: o for o in out.outcomes}
-    assert by_name["Donovan Brace"].feedback_attached is True
-    assert by_name["Donovan Brace"].saved is True
+    assert by_name["Ben Sample"].feedback_attached is True
+    assert by_name["Ben Sample"].saved is True
     assert by_name["Carol"].feedback_attached is False
     assert "no feedback doc" in by_name["Carol"].note
 
@@ -857,9 +857,9 @@ def test_submissions_users_url_derives_per_user_view():
     # Any dropbox mark URL with ou+db -> the per-user submissions view.
     out = wb._submissions_users_url(
         "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/"
-        "folder_submissions_files.d2l?d2l_isfromtab=1&db=789783&ou=338873")
+        "folder_submissions_files.d2l?d2l_isfromtab=1&db=600002&ou=200002")
     assert out == ("https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/mark/"
-                   "folder_submissions_users.d2l?ou=338873&db=789783")
+                   "folder_submissions_users.d2l?ou=200002&db=600002")
     # Missing db -> return the URL unchanged (can't safely rebuild it).
     same = "https://bs/d2l/lms/dropbox/admin/mark/x.d2l?ou=1"
     assert wb._submissions_users_url(same) == same

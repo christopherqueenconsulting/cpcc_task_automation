@@ -21,11 +21,11 @@ class TestBrightSpaceZIPFormat:
         with zipfile.ZipFile(zip_path, 'w') as zf:
             # BrightSpace format: "ID - Student Name - Timestamp"
             zf.writestr(
-                "Programming Exam 1/39786-640693 - Aiden Rodriguez - Oct 10, 2025 1022 AM/Main.java",
+                "Programming Exam 1/10001-500001 - Ada Example - Oct 10, 2025 1022 AM/Main.java",
                 "public class Main { public static void main(String[] args) {} }"
             )
             zf.writestr(
-                "Programming Exam 1/39787-640694 - Jane Smith - Oct 11, 2025 1130 AM/script.py",
+                "Programming Exam 1/10002-500002 - Jane Smith - Oct 11, 2025 1130 AM/script.py",
                 "print('hello world')"
             )
             # Add some noise files
@@ -73,11 +73,11 @@ class TestBrightSpaceZIPFormat:
         
         # Should extract 2 students, using middle part as name
         assert len(students) == 2
-        assert "Aiden Rodriguez" in students
+        assert "Ada Example" in students
         assert "Jane Smith" in students
         
         # Verify files extracted correctly
-        assert "Main.java" in students["Aiden Rodriguez"].files
+        assert "Main.java" in students["Ada Example"].files
         assert "script.py" in students["Jane Smith"].files
     
     def test_extract_brightspace_no_wrapper(self, brightspace_zip_no_wrapper):
