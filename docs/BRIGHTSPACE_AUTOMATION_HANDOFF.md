@@ -193,7 +193,7 @@ question is `<div class="question-item">` → `<div class="question-text">` (cle
 `QUIZ_QUESTION_XPATH` updated to match `question-text`.
 
 **Quiz submissions — ✅ RE-VERIFIED & TWO BUGS FIXED LIVE 2026-07-09 (`fetch_quiz_file_uploads`).**
-End-to-end run on a real graded quiz (qi=3000002 ou=200004, CSC151 "Programming Exam 2",
+End-to-end run on a real graded quiz (qi=<id> ou=<id>, CSC151 "Programming Exam 2",
 8 learners) produced a correct ZIP of 6 `.java` files (2 learners genuinely submitted
 nothing). Two real bugs — the source of the "stuck building the zip" report — were fixed:
 - **The hang: `_open_and_login` retry storm.** It called `click_element_wait_retry`
@@ -214,7 +214,7 @@ nothing). Two real bugs — the source of the "stuck building the zip" report �
   on this quiz — still to tune; unrelated to submissions.
 
 The original 2026-06-29 write-up (still accurate for the mechanism) — confirmed against the
-live read-only quiz (qi=3000001 ou=200003):
+live read-only quiz (qi=<id> ou=<id>):
 - **Grid URL** derived from the pasted quiz URL by `derive_quiz_grading_url` →
   `/d2l/lms/quizzing/admin/mark/quiz_mark_users.d2l?ou=<ou>&qi=<qi>` (also scans a nested
   `returnUrl` for qi/ou). Reaching the grid opened all 16 learner attempts.
@@ -269,7 +269,7 @@ name matching) is fully unit-tested; the Selenium write is isolated and `dry_run
   app relabels the button **"Write Grades and Feedback to Brightspace"** and shows a warning
   notice when `_is_quiz_writeback_url(url)` is true; the report says "posted".
 
-**QUIZ WRITE — FIXED & VERIFIED LIVE 2026-07-09/10.** Real POST on qi=3000002 ou=200004
+**QUIZ WRITE — FIXED & VERIFIED LIVE 2026-07-09/10.** Real POST on qi=<id> ou=<id>
 ("Programming Exam 2"): posted 42/200 + overall feedback to a learner, re-read fresh from the
 server = both persisted, then reset to 0/empty. Key mechanics (all in `brightspace_writeback.py`):
 - **Score = REAL keystrokes** (`_fill_score`): the `d2l-input-number` Lit component ignores the
@@ -315,7 +315,7 @@ Summary).** Legacy nested-iframe picker; the working mechanics:
    page — **assignment route uses the same UI; verify with a real assignment URL**.
 
 **ASSIGNMENT ATTACH = BULK "ADD FEEDBACK FILES" ZIP IMPORT — VERIFIED LIVE 2026-07-10
-(ou=200002 db=600002; imported Ben Sample's Feedback.docx as a draft, then removed it
+(ou=<id> db=<id>; imported Student B's Feedback.docx as a draft, then removed it
 cleanly).** The assignment route does NOT reuse the per-attempt `_attach_feedback_file`.
 Instead, ATTACH mode delivers ALL clean feedback `.docx` files in ONE bulk upload via the
 dropbox submissions page's header button **"Add Feedback Files"** — BrightSpace distributes
@@ -331,7 +331,7 @@ and are skipped). This route writes NO scores — scores/rubric use inline mode.
 `d2l-button-icon`/`button` aria-label `"Remove Attachment: <filename>"` inside
 `d2l-consistent-evaluation-attachments-editor`.
 
-**ASSIGNMENT LEARNER DISCOVERY — HARDENED & VERIFIED LIVE 2026-07-10 (ou=200002 db=600002).**
+**ASSIGNMENT LEARNER DISCOVERY — HARDENED & VERIFIED LIVE 2026-07-10 (ou=<id> db=<id>).**
 The flaky "0 learners" was a WRONG-VIEW bug: `_open_and_login`'s "Submissions" tab click
 redirects the pasted `folder_submissions_users.d2l` (per-USER view, whose name links carry
 `feedback,<userId>`) to `folder_submissions_files.d2l` (per-FILE view, whose links are
@@ -367,7 +367,7 @@ All live in `src/cqc_cpcc/utilities/brightspace_fetch.py`.
 # Live selector REPL (attaches to the project's real Selenium session)
 HEADLESS_BROWSER=false BROWSER_TYPE=DOCKER_CHROME DOCKER_TYPE=LOCAL \
   poetry run python scripts/brightspace_selector_probe.py \
-  --url "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/folders_manage.d2l?ou=200001"
+  --url "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/folders_manage.d2l?ou=<id>"
 
 # Offline paste-source search (descends declarative shadow DOM; no iframe bodies)
 poetry run python scripts/brightspace_selector_probe.py --paste-file page.html   # or: --paste-file -
