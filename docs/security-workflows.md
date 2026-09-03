@@ -50,6 +50,12 @@ This repository uses automated security scanning workflows to detect vulnerabili
 - Requires: `GITGUARDIAN_API_KEY` secret (see setup below)
 - Fetch depth: Full history
 
+### 3. Student PII Guard
+
+**Workflow File**: `.github/workflows/pii-guard.yml` (script: `scripts/pii_guard.py`)
+
+**Purpose**: Fails any push or pull request whose tracked text files contain student PII or BrightSpace identifiers, the leak class that PRs #285 and #286 had to redact. The script scans every git-tracked text file (binaries, lockfiles and the denylist itself are skipped) for four pattern classes: (a) BrightSpace submission-folder names of the form `<userid>-<subid> - First Last`, (b) `ou=`, `qi=`, `db=`, `ouId=` and `orgUnitId=` query ids with four or more digits, (c) student e-mail addresses (disabled until a student-specific domain is configured in `STUDENT_EMAIL_DOMAIN`), and (d) a denylist of SHA-256 hashes of lowercased known-leaked tokens in `scripts/pii_denylist.sha256`; every capitalised `First Last` bigram, every run of five or more digits, and every long opaque token in the tree is hashed and compared, so the plaintext never lives in the repository and is never printed when it matches. The synthetic placeholders used on purpose in fixtures and docs (`Ada Example`, `Ben Sample`, `Cal Fixture`, `Dee Placeholder`, `Eve Specimen`, `John Doe`, `Jane Doe`, `Jane Smith`, `Mary Jane Watson`, `Anne-Marie O'Brien`, `Pat Kim`, `Student A`, `Student B`) and the synthetic id ranges they use are allowlisted in the script. A line that must contain a deliberately bad fixture (for example the guard's own tests) can carry an inline `pii-guard:allow` marker, which exempts it from the structural classes only, never from the hashed denylist. Run it locally with `python scripts/pii_guard.py` before committing anything that came out of a real BrightSpace session; add a newly-discovered token to the denylist with `python scripts/pii_guard.py --hash 'TOKEN' >> scripts/pii_denylist.sha256` (never commit the token itself). Unit tests live in `tests/unit/test_pii_guard.py`.
+
 ## Dependabot Integration
 
 Both security workflows are configured to **skip execution** when a PR is initiated by Dependabot. This design decision is intentional and provides several benefits:
