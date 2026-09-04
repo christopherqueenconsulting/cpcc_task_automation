@@ -1,0 +1,24 @@
+name: PII Guard
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  pii-guard:
+    name: Student PII guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Scan tracked files for student PII and BrightSpace ids
+        run: python scripts/pii_guard.py
