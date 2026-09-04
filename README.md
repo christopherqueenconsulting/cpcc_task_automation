@@ -1,6 +1,6 @@
 # CPCC Task Automation
 
-> Automation for the recurring admin work of teaching programming courses at CPCC: attendance, project feedback, assignment and exam grading, and withdrawals, with a human review step before anything is written back.
+> Automation for the recurring admin work of teaching programming courses at CPCC: attendance, project feedback, assignment and exam grading, and withdrawals, BrightSpace grade write-back is draft-only and the withdrawals tracker sync is dry-run by default; attendance is written directly to MyColleges.
 
 ## Overview
 
@@ -12,12 +12,12 @@ It is a personal tool, built and used against my own courses. I have not measure
 
 ### Core Features
 
-- **Attendance Tracking**: Scrapes BrightSpace activities (assignments, quizzes, discussions) and records attendance in MyColleges and a tracking spreadsheet
+- **Attendance Tracking**: Scrapes BrightSpace assignments and quizzes (discussion scraping is present but disabled, `brightspace.py:92-94`) and records attendance in MyColleges
 - **Project Feedback**: LLM-generated feedback on student submissions, exported as Word documents
-- **Assignment / Exam Grading**: Grades submissions against rubrics and error definitions; a local compiler gate (`g++`/`clang++`, `javac`, Python `compile()`) checks every "Does Not Compile" determination instead of trusting the model
-- **BrightSpace Fetch and Draft Write-back**: Collects submissions from a BrightSpace assignment or quiz URL, and can push scores and feedback back to BrightSpace as drafts only (it never clicks Publish)
-- **Withdrawals**: Scrapes withdrawal data from MyColleges into local CSVs and syncs them to the tracker (dry-run by default); CLI only
-- **Student Lookup**: Finds a student by email or ID across the courses listed in MyColleges
+- **Assignment / Exam Grading**: Grades submissions against rubrics and error definitions; a local compiler gate (`g++`/`clang++`, `javac`, Python `compile()`) checks the "Does Not Compile" determination on the rubric grading path (`rubric_grading.py` `apply_compile_gate`); the error-definitions-only and Flowgorithm paths do not run it
+- **BrightSpace Fetch and Draft Write-back**: Collects submissions from a BrightSpace assignment or quiz URL, and is built to push scores and feedback back to BrightSpace as drafts only (it never clicks Publish); the live fill-and-save flow is marked unverified in `brightspace_writeback.py` and defaults to dry-run
+- **Withdrawals**: Scrapes withdrawal data from MyColleges into local CSVs and syncs them to the tracker (dry-run by default); runs from the CLI `PROCESS_WITHDRAWALS` action or as the final step of the Streamlit Take Attendance page (`attendance_screenshot.py:47-57`)
+- **Student Lookup**: Finds a student by email, name, or student ID across the courses listed in MyColleges
 
 ## Quick Start
 
@@ -66,21 +66,21 @@ Follow the interactive prompts to select an action: `TAKE_ATTENDANCE`, `GIVE_FEE
 
 ## Configuration
 
-### Required Settings
+### Settings
 
-Configure these settings in `.streamlit/secrets.toml` (for local development) or environment variables (for deployment). `.env.example` lists every variable the code reads.
+Configure these settings in `.streamlit/secrets.toml` (for local development) or environment variables (for deployment). `.env.example` lists the main variables; see `src/cqc_cpcc/utilities/env_constants.py` for the full set. The web app requires only `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `INSTRUCTOR_USERID`, and `INSTRUCTOR_PASS` (`pages/6_Settings.py:48`). Note that `.env.example` still lists the legacy `CQC_OPENAI_DEBUG*` names; the code reads `CQC_AI_DEBUG`, `CQC_AI_DEBUG_REDACT`, and `CQC_AI_DEBUG_SAVE_DIR`.
 
 ```toml
 OPENAI_API_KEY = "sk-..."              # OpenAI API key (legacy path)
 OPENROUTER_API_KEY = "sk-..."          # OpenRouter API key (recommended)
 INSTRUCTOR_USERID = "your_username"     # MyColleges/BrightSpace username
 INSTRUCTOR_PASS = "your_password"       # MyColleges/BrightSpace password
-FEEDBACK_SIGNATURE = "Professor Name"   # Your signature for feedback documents
-ATTENDANCE_TRACKER_URL = "https://..."  # SharePoint/Excel Online attendance tracker
-WITHDRAWALS_CSV_DIR = "./output/withdrawals"  # local withdrawal CSVs (one per term); no default on purpose
+FEEDBACK_SIGNATURE = "Professor Name"   # signature for feedback documents; default "Your Instructor"
+ATTENDANCE_TRACKER_URL = "https://..."  # optional; needed for the tracker sync (SharePoint/Excel Online)
+WITHDRAWALS_CSV_DIR = "./output/withdrawals"  # required only for withdrawals; local CSVs (one per term); no default on purpose
 ```
 
-**Note:** The web app calls models through OpenRouter. The OpenRouter Auto Router is available but off by default; the grading pages default to a specific model (`openai/gpt-5`) because auto-routing has picked weaker models for correctness-critical grading. The OpenAI client path defaults to `gpt-5-mini`.
+**Note:** The Grade Assignment page calls models through OpenRouter (Auto Router off by default; default model `openai/gpt-5`) because auto-routing has picked weaker models for correctness-critical grading. The Give Feedback page and the Flowgorithm grader call OpenAI directly (default `gpt-5`). The OpenAI client path defaults to `gpt-5-mini`.
 
 ### Optional Settings
 
@@ -108,13 +108,13 @@ DOCKER_TYPE = ""                        # LOCAL | REMOTE (unset = prompt)
 ### Key Libraries
 - **Data Processing**: pandas, BeautifulSoup4, python-docx, mammoth, pypdf, pymupdf
 - **Date/Time**: dateparser, datetime
-- **Environment**: os-env for configuration
+- **Environment**: `os.environ` via `env_constants.py`; `os-env` is declared in `pyproject.toml` but unused
 - **Display**: pyvirtualdisplay (for headless browser automation)
 - **Declared but unused in `src/`**: ChromaDB is in `pyproject.toml` but nothing imports it yet
 
 ## Project Structure
 
-Abbreviated; see `docs/src-cqc-cpcc.md` and `docs/src-cqc-streamlit-app.md` for the full module list.
+Abbreviated; see `docs/src-cqc-cpcc.md` and `docs/src-cqc-streamlit-app.md` for older per-module notes (they predate the compiler gate, BrightSpace fetch/write-back, rubric grading, scoring engine and OpenRouter client).
 
 ```
 cpcc_task_automation/
@@ -179,13 +179,14 @@ poetry run pytest --durations=5
 
 ### 1. Take Attendance
 
-Calculates student attendance by analyzing activity completion in BrightSpace and records results in MyColleges and a tracking spreadsheet.
+Calculates student attendance by analyzing activity completion in BrightSpace and records results in MyColleges.
 
 **How it works:**
 1. Logs into MyColleges to retrieve course list
-2. For each course, scrapes BrightSpace activities (assignments, quizzes, discussions)
+2. For each course, scrapes BrightSpace assignments and quizzes
 3. Identifies students who completed activities in the configured date range
-4. Records attendance in MyColleges and tracking spreadsheet
+4. Records attendance in MyColleges
+5. Optionally processes withdrawals and syncs them to the tracker workbook (dry-run by default)
 
 ### 2. Give Feedback
 
@@ -206,7 +207,7 @@ Grades programming submissions against rubrics and error definitions.
 1. Analyzes assignment instructions and (optionally) solution code
 2. Loads or generates error definitions (major/minor) for the assignment
 3. Evaluates each student submission against the rubric
-4. Runs the compiler gate on the code so "Does Not Compile" is decided by a real compiler, not the model
+4. On the rubric path, runs the compiler gate so "Does Not Compile" is decided by a real compiler
 5. Calculates scores with the deterministic scoring engine and generates feedback
 6. Optionally writes score and feedback back to BrightSpace as a draft
 
@@ -233,9 +234,9 @@ For detailed technical documentation, see:
 - Records official attendance per course section
 
 ### AI Features
-- OpenAI client default model is `gpt-5-mini`; the Streamlit grading pages default to `openai/gpt-5` via OpenRouter
+- OpenAI client default model is `gpt-5-mini`; the Streamlit Grade Assignment page defaults to `openai/gpt-5` via OpenRouter; Give Feedback defaults to `gpt-5` via the OpenAI client
 - API usage is metered (pay per token); I have not tracked per-student cost
-- Retry logic for malformed responses: up to 3 retries with a fallback plain-JSON prompt (`DEFAULT_MAX_RETRIES` in `openai_client.py`)
+- Retry logic for malformed responses: up to 3 retries in the OpenAI client and 3 total attempts in the OpenRouter client, both with a fallback plain-JSON prompt (`DEFAULT_MAX_RETRIES` in `openai_client.py` and `openrouter_client.py`)
 
 ### Security
 - Credentials are read from environment variables or `.streamlit/secrets.toml`, not from code
@@ -289,7 +290,7 @@ Workflows in `.github/workflows/`:
 - **codeql.yml**, **gitguardian-scan.yml**, **pii-guard.yml**: Code scanning, secret scanning, and student-PII guard
 - **dependabot-auto-merge.yml**, **dependabot-ci-autofix.yml**: Dependabot housekeeping
 - **Cron_Action.yml**: Manual dispatch only (the schedule is commented out); `cron.py` currently prints a placeholder and does not take attendance
-- **Selenium_Action.yml**: Stale; it references `main_selenium.py`, which no longer exists in the repo
+- **Selenium_Action.yml**: Stale; it references `main_selenium.py`, which does not exist in the repo
 
 ## Docker Support
 
@@ -306,7 +307,7 @@ This starts only a `selenium/standalone-chrome` container (host ports 14444 and 
 
 ## License
 
-Released under [CC0 1.0 Universal](LICENSE). Source files carry a Christopher Queen Consulting LLC header.
+Released under [CC0 1.0 Universal](LICENSE). Most source files carry a Christopher Queen Consulting LLC header.
 
 ## Acknowledgments
 

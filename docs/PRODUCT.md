@@ -4,7 +4,7 @@
 
 ## Overview
 
-**CPCC Task Automation** is an intelligent automation platform that helps college instructors save hours each week by automating repetitive administrative tasks. Using web scraping and artificial intelligence, the system handles attendance tracking, feedback generation, and exam grading—tasks that traditionally require significant manual effort.
+**CPCC Task Automation** is an intelligent automation platform that automates repetitive administrative tasks. Using web scraping and artificial intelligence, the system handles attendance tracking, feedback generation, and exam grading—tasks that traditionally require significant manual effort.
 
 **Target Users**: College instructors at Central Piedmont Community College (CPCC), particularly those teaching programming courses.
 
@@ -88,7 +88,7 @@ their work.
 
 **Via Command Line**:
 ```bash
-poetry run python src/cqc_cpcc/main.py
+poetry run python -m cqc_cpcc.main
 # Select option 1: Take Attendance
 # Enter attendance tracker URL when prompted
 ```
@@ -189,7 +189,7 @@ anywhere except the tracker you configure.
 
 ### What It Does
 
-Generates personalized, detailed feedback on student programming projects using AI (OpenAI GPT-4). The system analyzes student code, identifies issues, and provides constructive comments in a Word document.
+Generates personalized, detailed feedback on student programming projects with an LLM (OpenAI or OpenRouter; default `gpt-5`). The system analyzes student code, identifies issues, and provides constructive comments in a Word document.
 
 ### How It Works
 
@@ -256,7 +256,7 @@ it *would* write without writing anything.
 
 ### Configuration Required
 
-- **OpenAI API Key**: For GPT-4 access (paid service)
+- **OpenAI API Key**: For model access (OpenAI or OpenRouter) (paid service)
 - **Feedback Signature**: Your name/title for documents
 - **Rubric/Error Definitions**: Optional (improves feedback quality)
 
@@ -273,7 +273,7 @@ it *would* write without writing anything.
 
 **Via Command Line**:
 ```bash
-poetry run python src/cqc_cpcc/main.py
+poetry run python -m cqc_cpcc.main
 # Select option 2: Give Feedback
 # Follow interactive prompts
 ```
@@ -383,7 +383,7 @@ Automates programming exam grading by using AI to identify errors in student cod
 
 ### Configuration Required
 
-- **OpenAI API Key**: For GPT-4 access
+- **OpenAI API Key**: For model access (OpenAI or OpenRouter)
 - **Exam Materials**: Instructions, solution, rubric
 - **Error Definitions**: Can be generated or provided
 
@@ -540,13 +540,13 @@ Point Deduction: 10
 
 **Software**:
 - Python 3.12+
-- Poetry 1.7.1+
+- Poetry (CI pins 1.7.1)
 - Chrome browser (for Selenium)
 - Git
 
 **Development Setup**:
 ```bash
-git clone https://github.com/gitchrisqueen/cpcc_task_automation
+git clone https://github.com/christopherqueenconsulting/cpcc_task_automation
 cd cpcc_task_automation
 poetry install
 poetry run streamlit run src/cqc_streamlit_app/Home.py
@@ -618,7 +618,7 @@ Not measured. Neither instructor time saved nor API spend has been tracked, so n
 
 ### Getting Help
 
-**Issues**: [GitHub Issues](https://github.com/gitchrisqueen/cpcc_task_automation/issues)
+**Issues**: [GitHub Issues](https://github.com/christopherqueenconsulting/cpcc_task_automation/issues)
 
 **Email**: christopher.queen@gmail.com
 
@@ -692,7 +692,7 @@ A: Not yet. Currently BrightSpace-specific. Other LMS support on roadmap.
 
 Ready to reclaim your time? Get started:
 
-1. **Clone the repo**: `git clone https://github.com/gitchrisqueen/cpcc_task_automation`
+1. **Clone the repo**: `git clone https://github.com/christopherqueenconsulting/cpcc_task_automation`
 2. **Install dependencies**: `poetry install`
 3. **Run the app**: `./run.sh`
 4. **Configure settings**: Add credentials in Settings page

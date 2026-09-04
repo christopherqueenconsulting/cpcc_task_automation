@@ -44,7 +44,7 @@ Report unacceptable behavior to: christopher.queen@gmail.com
 
 Before contributing, ensure you have:
 - **Python 3.12+** installed
-- **Poetry 1.7.1+** for dependency management
+- **Poetry** (CI pins 1.7.1) for dependency management
 - **Git** for version control
 - **Chrome browser** (for Selenium testing)
 - Basic knowledge of Python, web scraping, or AI (depending on contribution area)
@@ -69,7 +69,7 @@ git clone https://github.com/YOUR_USERNAME/cpcc_task_automation.git
 cd cpcc_task_automation
 
 # Add upstream remote
-git remote add upstream https://github.com/gitchrisqueen/cpcc_task_automation.git
+git remote add upstream https://github.com/christopherqueenconsulting/cpcc_task_automation.git
 ```
 
 ### 2. Install Dependencies
@@ -572,7 +572,7 @@ For questions about usage or development:
 ### Resources
 
 - **Documentation**: Start with `README.md` and `ARCHITECTURE.md`
-- **Issues**: Search [GitHub Issues](https://github.com/gitchrisqueen/cpcc_task_automation/issues)
+- **Issues**: Search [GitHub Issues](https://github.com/christopherqueenconsulting/cpcc_task_automation/issues)
 - **Code**: Review existing code for patterns
 - **Copilot**: Use `.github/copilot-instructions.md` for AI assistance
 

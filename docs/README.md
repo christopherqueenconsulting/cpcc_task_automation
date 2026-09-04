@@ -148,7 +148,7 @@ Documentation improvements are always welcome! See [CONTRIBUTING.md](CONTRIBUTIN
 
 ## Questions?
 
-- **GitHub Issues**: [Report issues or ask questions](https://github.com/gitchrisqueen/cpcc_task_automation/issues)
+- **GitHub Issues**: [Report issues or ask questions](https://github.com/christopherqueenconsulting/cpcc_task_automation/issues)
 - **Email**: christopher.queen@gmail.com
 
 ---
