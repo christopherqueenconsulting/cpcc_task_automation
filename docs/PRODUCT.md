@@ -1,12 +1,14 @@
 # Product Documentation
 
+> Note: the time estimates in this document (hours per week, minutes per student, and similar) are planning estimates written when the project started, not measurements. Nothing here has been benchmarked.
+
 ## Overview
 
 **CPCC Task Automation** is an intelligent automation platform that helps college instructors save hours each week by automating repetitive administrative tasks. Using web scraping and artificial intelligence, the system handles attendance tracking, feedback generation, and exam grading—tasks that traditionally require significant manual effort.
 
 **Target Users**: College instructors at Central Piedmont Community College (CPCC), particularly those teaching programming courses.
 
-**Value Proposition**: Transform 5-10 hours of weekly administrative work into 15 minutes of automated processing.
+**Value Proposition**: Replace the manual attendance, feedback, and grading loop with a reviewed, automated run. Time savings have not been measured formally, so no figure is quoted here.
 
 ## Problem Statement
 
@@ -296,18 +298,12 @@ The system categorizes feedback into types:
 
 ### AI Model Selection
 
-- **Primary Model**: GPT-4o (high quality, more expensive)
-- **Retry Model**: GPT-4o-mini (fallback if primary fails)
-- **Retry Logic**: Up to 3 retries on parsing failures
+- **Default Model**: `gpt-5-mini` in the OpenAI client (`DEFAULT_MODEL` in `openai_client.py`); the Streamlit grading pages default to `openai/gpt-5` via OpenRouter
+- **Retry Logic**: Up to 3 retries on the same model with a fallback plain-JSON prompt (`DEFAULT_MAX_RETRIES`)
 
 ### Cost Considerations
 
-OpenAI API usage is **metered** (pay per token). Typical costs:
-- **Per student**: $0.05 - $0.15 (depends on code length)
-- **Per class (30 students)**: $1.50 - $4.50
-- **Per semester (6 assignments, 30 students)**: $9 - $27
-
-**Time savings value**: If feedback saves 5 min/student × 30 students = 2.5 hours = **worth $50-100** of instructor time.
+OpenAI/OpenRouter API usage is **metered** (pay per token). Cost depends on the model selected and submission length; per-student cost has not been tracked, so no figures are quoted here.
 
 ### Limitations
 
@@ -571,22 +567,11 @@ poetry run streamlit run src/cqc_streamlit_app/Home.py
 - Streamlit: Free (open source)
 
 **API Costs**:
-- OpenAI API: **Metered usage** (pay per token)
-  - Feedback generation: $0.05-$0.15/student
-  - Exam grading: $0.10-$0.25/student
-  - Typical monthly cost: $10-$50 (depends on usage)
+- OpenAI/OpenRouter API: **Metered usage** (pay per token); not tracked per student
 
 ### Cost-Benefit Analysis
 
-**Instructor Time Value**: $30-50/hour (typical adjunct rate)
-
-**Monthly Time Savings**: 40-60 hours (10-15 hours/week × 4 weeks)
-
-**Monthly Value**: $1,200 - $3,000
-
-**Monthly OpenAI Cost**: $10-$50
-
-**ROI**: **24x to 300x** return on API investment
+Not measured. Neither instructor time saved nor API spend has been tracked, so no ROI figure is claimed.
 
 ---
 
@@ -700,19 +685,6 @@ A: Not currently. Each instructor needs their own setup (coming: multi-user supp
 
 **Q: Does this work with Canvas or Moodle?**
 A: Not yet. Currently BrightSpace-specific. Other LMS support on roadmap.
-
----
-
-## Success Stories
-
-> "CPCC Task Automation saved me 12 hours a week. I can actually have a life outside teaching now!"  
-> — Adjunct Instructor, Computer Science
-
-> "My students get feedback within 24 hours instead of 2 weeks. They love it, and so do I."  
-> — Full-Time Faculty, Information Technology
-
-> "Attendance tracking used to be my least favorite task. Now it's one click. Amazing."  
-> — Department Chair, Programming Courses
 
 ---
 

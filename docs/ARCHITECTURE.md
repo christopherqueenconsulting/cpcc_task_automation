@@ -35,7 +35,7 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 │  │ BrightSpace      │  │  │  │ LangChain Chains │  │
 │  │ Scraper          │  │  │  │                  │  │
 │  ├──────────────────┤  │  │  ├──────────────────┤  │
-│  │ MyColleges       │  │  │  │ OpenAI GPT-4     │  │
+│  │ MyColleges       │  │  │  │ OpenRouter/OpenAI│  │
 │  │ Scraper          │  │  │  │                  │  │
 │  └──────────────────┘  │  │  └──────────────────┘  │
 │  (Selenium WebDriver)  │  │  (API Integration)     │
