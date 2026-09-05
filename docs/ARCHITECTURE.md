@@ -35,7 +35,7 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 │  │ BrightSpace      │  │  │  │ LangChain Chains │  │
 │  │ Scraper          │  │  │  │                  │  │
 │  ├──────────────────┤  │  │  ├──────────────────┤  │
-│  │ MyColleges       │  │  │  │ OpenAI GPT-4     │  │
+│  │ MyColleges       │  │  │  │ OpenRouter/OpenAI│  │
 │  │ Scraper          │  │  │  │                  │  │
 │  └──────────────────┘  │  │  └──────────────────┘  │
 │  (Selenium WebDriver)  │  │  (API Integration)     │
@@ -632,7 +632,7 @@ yields "could not verify" rather than "does not compile" — see
 | Web Scraping | Selenium | Playwright, Scrapy | Mature, well-documented |
 | UI Framework | Streamlit | Flask, Django, Gradio | Rapid development, no frontend code |
 | AI Framework | LangChain | Direct OpenAI, Haystack | Abstraction, prompt management |
-| LLM | OpenAI GPT-4 | Claude, Gemini, Llama | Quality, structured output support |
+| LLM | OpenAI / OpenRouter (gpt-5 family) | Claude, Gemini, Llama | Quality, structured output support |
 | Testing | pytest | unittest, nose | Feature-rich, plugins |
 | Dependency Mgmt | Poetry | pip, pipenv, conda | Lock files, modern |
 
