@@ -640,7 +640,7 @@ Not measured. Neither instructor time saved nor API spend has been tracked, so n
 - Feedback documents
 
 **What data is stored**:
-- Logs (rotated, no PII)
+- Logs (rotated, kept local; run logs record student identifiers at INFO level, so treat the log directory as student data and never ship it)
 - Configuration (no passwords in logs)
 
 **What data is transmitted**:
