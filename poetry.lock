@@ -6653,14 +6653,14 @@ files = [
 
 [[package]]
 name = "selenium"
-version = "4.46.0"
+version = "4.48.0"
 description = "Official Python bindings for Selenium WebDriver"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "selenium-4.46.0-py3-none-any.whl", hash = "sha256:f03e864770a21ab32009961c9d015cb2c6275eba45c926c272e02d90af423aad"},
-    {file = "selenium-4.46.0.tar.gz", hash = "sha256:54f7e1a4df5f7508ac8c38ce2ea584db1b27083dd79962b22524219219df5cbe"},
+    {file = "selenium-4.48.0-py3-none-any.whl", hash = "sha256:b2a1d77019db92513e59aa2376710fe3d42b65a4d493dccd0c799c1a0d574d93"},
+    {file = "selenium-4.48.0.tar.gz", hash = "sha256:045c1ec054c94e3be6c10febc509aa513b4c05e9146d1a9cf3de5375ec6ca2a1"},
 ]
 
 [package.dependencies]
