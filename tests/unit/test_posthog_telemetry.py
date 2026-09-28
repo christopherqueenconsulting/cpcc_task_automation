@@ -404,7 +404,7 @@ class TestStatusAndConfigure:
             enabled, reason = telemetry.configure("phc_new", "https://eu.i.posthog.com")
 
         assert enabled is True
-        assert "eu.i.posthog.com" in reason
+        assert reason == "enabled (host: https://eu.i.posthog.com)"
         kwargs = posthog_module.Posthog.call_args.kwargs
         assert kwargs["project_api_key"] == "phc_new"
         assert kwargs["host"] == "https://eu.i.posthog.com"
