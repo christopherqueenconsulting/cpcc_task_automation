@@ -2,6 +2,7 @@
 import os
 
 import streamlit as st
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css
 
@@ -66,6 +67,60 @@ def main():
                     "ATTENDANCE_TRACKER_URL"] = attendance_tracker_url.strip()
 
             st.success("Settings Saved")
+
+    analytics_settings_section()
+
+
+_CUSTOM_HOST = "Custom (self-hosted)"
+
+
+def analytics_settings_section():
+    """PostHog credentials, for when they are not in ``.env``. Optional."""
+    st.divider()
+    st.subheader("Usage Analytics (PostHog)")
+    st.write(
+        "Optional. Sends run counts, durations, token usage and scrubbed errors to your "
+        "PostHog project. Student names, IDs, e-mails, submissions and grades are never "
+        "sent. Leave the key blank to turn analytics off."
+    )
+
+    enabled, reason = telemetry.status()
+    (st.success if enabled else st.info)("Analytics status: %s" % reason)
+
+    posthog_api_key = st.text_input(
+        "PostHog Project API Key",
+        value=st.session_state.posthog_api_key or "",
+        type="password",
+        help="Project settings > Project API key (starts with phc_). Same as POSTHOG_API_KEY in .env.",
+    )
+
+    current_host = st.session_state.posthog_host or telemetry.DEFAULT_HOST
+    region_labels = list(telemetry.KNOWN_HOSTS) + [_CUSTOM_HOST]
+    known_by_url = {url: label for label, url in telemetry.KNOWN_HOSTS.items()}
+    region = st.selectbox(
+        "PostHog Region",
+        region_labels,
+        index=region_labels.index(known_by_url.get(current_host, _CUSTOM_HOST)),
+        help="Must match the region your PostHog project was created in.",
+    )
+    if region == _CUSTOM_HOST:
+        posthog_host = st.text_input(
+            "PostHog Host URL",
+            value="" if current_host in known_by_url else current_host,
+            placeholder="https://posthog.example.edu",
+        )
+    else:
+        posthog_host = telemetry.KNOWN_HOSTS[region]
+
+    if st.button("Save Analytics Settings"):
+        host = (posthog_host or "").strip()
+        if host and not host.startswith("https://"):
+            st.error("The PostHog host must be an https:// URL.")
+            return
+        st.session_state.posthog_api_key = (posthog_api_key or "").strip() or None
+        st.session_state.posthog_host = host or None
+        enabled, reason = telemetry.configure(st.session_state.posthog_api_key, host or None)
+        (st.success if enabled else st.warning)("Analytics status: %s" % reason)
 
 
 if __name__ == '__main__':

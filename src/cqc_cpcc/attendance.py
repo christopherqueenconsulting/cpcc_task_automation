@@ -5,6 +5,7 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
 from selenium.webdriver.support.wait import WebDriverWait
 
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.my_colleges import MyColleges
 from cqc_cpcc.run_plan import ACTION_ATTENDANCE, RunPlan
@@ -15,6 +16,7 @@ from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last
 from cqc_cpcc.withdrawal_processing import process_withdrawals_for_courses
 
 
+@telemetry.tracked_run("attendance")
 def take_attendance(attendance_tracker_url: str, plan: RunPlan = None):
     """Record attendance, then optionally process withdrawals.
 
@@ -37,6 +39,8 @@ def take_attendance(attendance_tracker_url: str, plan: RunPlan = None):
                 dry_run_default=WITHDRAWALS_TRACKER_DRY_RUN,
             )
 
+        telemetry.update_run(courses=len(plan.course_urls), dry_run=plan.dry_run,
+                             process_withdrawals=plan.process_withdrawals)
         bs_courses = mc.process_attendance(plan)
 
         if plan.process_withdrawals:

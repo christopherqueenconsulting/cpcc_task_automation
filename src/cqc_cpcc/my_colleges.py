@@ -37,6 +37,7 @@ from cqc_cpcc.utilities.env_constants import (
     MYCOLLEGE_URL,
 )
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
     click_given_element_wait_retry,
@@ -625,8 +626,8 @@ class MyColleges:
             formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
 
             logger.info(
-                "Attendance Date: %s | Name(s): %s "
-                % (formatted_date, " | ".join(students))
+                "Attendance Date: %s | Student(s): %s "
+                % (formatted_date, " | ".join(alias(name) for name in students))
             )
 
             try:
@@ -637,14 +638,14 @@ class MyColleges:
                 # Update the attendance for each student
                 logger.info("Updating Attendance for Date: %s" % formatted_date)
                 for student_name in students:
-                    logger.info("Present: %s" % student_name)
+                    logger.info("Present: %s" % alias(student_name))
 
                     # Set the present for OCLS and OLAB
                     success = self.mark_student_present(student_name)
                     if success:
-                        logger.info("Marked Present: %s" % student_name)
+                        logger.info("Marked Present: %s" % alias(student_name))
                     else:
-                        logger.info("Could Not Mark Present: %s" % student_name)
+                        logger.info("Could Not Mark Present: %s" % alias(student_name))
 
             except (NoSuchElementException, TimeoutException):
                 self._carry_students_to_next_consecutive_date(
@@ -928,7 +929,7 @@ class MyColleges:
                 logger.info(
                     "Present (not recorded for %s): %s",
                     current_date.strftime("%-m/%-d/%Y (%A)"),
-                    " | ".join(sorted(students)),
+                    " | ".join(sorted(alias(name) for name in students)),
                 )
                 return False
 
@@ -942,7 +943,7 @@ class MyColleges:
                 logger.info(
                     "Present (not recorded for %s): %s",
                     current_date.strftime("%-m/%-d/%Y (%A)"),
-                    " | ".join(sorted(students)),
+                    " | ".join(sorted(alias(name) for name in students)),
                 )
                 return False
 
@@ -955,7 +956,7 @@ class MyColleges:
         logger.info(
             "Present (not recorded for %s): %s",
             current_date.strftime("%-m/%-d/%Y (%A)"),
-            " | ".join(sorted(students)),
+            " | ".join(sorted(alias(name) for name in students)),
         )
         return True
 
@@ -973,10 +974,10 @@ class MyColleges:
             select_elements = self.driver.find_elements(By.XPATH, xpath_select)
 
             if not select_elements:
-                logger.error("No attendance select elements found for: %s" % full_name)
+                logger.error("No attendance select elements found for: %s" % alias(full_name))
                 return False
 
-            logger.info("Found %d attendance select element(s) for: %s" % (len(select_elements), full_name))
+            logger.info("Found %d attendance select element(s) for: %s" % (len(select_elements), alias(full_name)))
 
             # Iterate over each select element
             for idx, select_element in enumerate(select_elements):
@@ -1020,12 +1021,12 @@ class MyColleges:
                 if select_elements_final:
                     select_elements_final[-1].send_keys(Keys.TAB)
             except Exception:
-                logger.debug("Unable to tab away from attendance select for %s", full_name)
+                logger.debug("Unable to tab away from attendance select for %s", alias(full_name))
 
             try:
                 self.driver.execute_script("if (document.activeElement) { document.activeElement.blur(); }")
             except Exception:
-                logger.debug("Unable to blur active element after attendance update for %s", full_name)
+                logger.debug("Unable to blur active element after attendance update for %s", alias(full_name))
 
             success = True
 

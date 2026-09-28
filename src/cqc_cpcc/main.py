@@ -62,4 +62,7 @@ def take_action():
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
+    from cqc_cpcc.utilities.temp_files import configure_app_tempdir
+
+    configure_app_tempdir()
     take_action()

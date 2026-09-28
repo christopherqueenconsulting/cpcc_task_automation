@@ -887,8 +887,8 @@ async def get_structured_completion(
 
     Wrapping rather than editing each ``raise`` site keeps the failure reporting in
     one place, and guarantees the trace id is cleared even when the call raises.
-    See ``posthog_telemetry`` for what is and is not sent (never prompt content by
-    default -- this pipeline handles student work).
+    See ``posthog_telemetry`` for what is and is not sent (never prompt or
+    completion content -- this pipeline handles student work).
     """
     span_name = schema_model.__name__ if schema_model else "structured_completion"
     timer = telemetry.GenerationTimer()
@@ -1313,8 +1313,6 @@ async def _get_structured_completion_impl(
                     ),
                     attempt=attempt + 1,
                     used_fallback=is_smart_retry,
-                    prompt=prompt,
-                    completion=json_output,
                 )
                 return validated_model
 

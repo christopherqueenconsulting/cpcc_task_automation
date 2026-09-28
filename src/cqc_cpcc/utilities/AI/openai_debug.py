@@ -26,12 +26,15 @@ Usage:
 
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from cqc_cpcc.utilities.pii_redaction import scrub as scrub_student_pii
+from cqc_cpcc.utilities.pii_redaction import scrub_obj as scrub_student_pii_obj
 from cqc_cpcc.utilities.env_constants import (
     CQC_OPENAI_DEBUG,
     CQC_OPENAI_DEBUG_REDACT,
@@ -100,7 +103,8 @@ def _redact_sensitive_data(data: Any) -> Any:
         text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '***SSN***', text)
         # Redact phone numbers (various formats)
         text = re.sub(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', '***PHONE***', text)
-        return text
+        # Student names, ids, BrightSpace ids/URLs and submission folder names
+        return scrub_student_pii(text)
 
     else:
         return data
@@ -127,9 +131,14 @@ def _save_to_file(correlation_id: str, data_type: str, data: dict) -> None:
         filename = f"{timestamp}_{correlation_id}_{data_type}.json"
         filepath = save_dir / filename
 
-        # Write JSON file
+        # Write JSON file. Student identifiers are always scrubbed from files on
+        # disk, whatever CQC_AI_DEBUG_REDACT says (that flag governs secrets only).
         with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, default=str)
+            json.dump(scrub_student_pii_obj(data), f, indent=2, default=str)
+        try:
+            os.chmod(filepath, 0o600)
+        except OSError:
+            pass
 
         debug_logger.debug(f"Saved {data_type} data to {filepath}")
 
