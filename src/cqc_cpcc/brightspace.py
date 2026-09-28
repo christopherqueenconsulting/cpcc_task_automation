@@ -10,6 +10,7 @@ from cqc_cpcc.utilities.date import convert_datetime_to_end_of_day, convert_date
     filter_dates_in_range, looks_like_a_scraped_date
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import alias, register_student, register_students
 from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry, get_elements_text_as_list_wait_stale, \
     get_elements_href_as_list_wait_stale, wait_for_ajax, get_driver_wait
 from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, login_if_needed, \
@@ -280,6 +281,7 @@ class BrightSpace_Course:
                                                                  table_prefix_xpath + "//th[@class='d_gn d_ich']",
                                                                  "Waiting for Student Names",
                                                                  refresh_on_stale=True)
+            register_students(student_names)
 
             student_ids = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                table_prefix_xpath + "//td[4]//label[1]",
@@ -297,8 +299,10 @@ class BrightSpace_Course:
                                                                     refresh_on_stale=True)
 
             student_withdrawals_dict = dict(zip(student_ids, zip(student_names, student_emails, withdrawal_dates)))
+            for student_id, (student_name, student_email, _) in student_withdrawals_dict.items():
+                register_student(student_name, student_id=student_id, email=student_email)
 
-            logger.debug("Student Withdrawals (Before Filtering): %s", student_withdrawals_dict)
+            logger.debug("Student Withdrawals (Before Filtering): %d row(s)", len(student_withdrawals_dict))
             # are_you_satisfied()
 
             for student_id, (student_name, student_email, withdrawal_date) in student_withdrawals_dict.items():
@@ -365,8 +369,9 @@ class BrightSpace_Course:
             student_names = [key.replace("_", " ") for key in self.withdrawal_records.keys()]
 
             date_format = "%m/%d/%Y"
-            logger.info("Withdrawal Records (Between %s - %s):\n%s" % (
-                self.course_start_date.strftime(date_format), self.final_drop_day.strftime(date_format), student_names))
+            logger.info("Withdrawal Records (Between %s - %s): %s" % (
+                self.course_start_date.strftime(date_format), self.final_drop_day.strftime(date_format),
+                ", ".join(alias(name) for name in student_names) or "none"))
 
         else:
             # This branch is a UI failure, not an empty table: the results-per-page
@@ -533,6 +538,7 @@ class BrightSpace_Course:
                                                                              table_prefix_xpath + "//td[3]",
                                                                              "Waiting for Student Names",
                                                                              refresh_on_stale=True)
+                        register_students(student_names)
 
                         completed_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                                table_prefix_xpath + "//td[2]//label[1]",
@@ -802,6 +808,7 @@ class BrightSpace_Course:
                                                                              table_prefix_xpath + "//td[2]",
                                                                              "Waiting for Student Names",
                                                                              refresh_on_stale=True)
+                        register_students(student_names)
 
                         completed_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                                table_prefix_xpath + "//td[3]",
@@ -948,8 +955,9 @@ class BrightSpace_Course:
                                                                              table_prefix_xpath + "//td[last()]",
                                                                              "Waiting for Student Names",
                                                                              refresh_on_stale=True)
+                        register_students(student_names)
 
-                        logger.info("Student Names: %s" % "\n".join(student_names))
+                        logger.info("Student Names: %d found", len(student_names))
 
                         post_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
                                                                           table_prefix_xpath + "//td[last()-1]/label",

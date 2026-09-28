@@ -4,6 +4,7 @@ import os
 
 import streamlit as st
 from cqc_cpcc.utilities import env_constants as ec
+from cqc_cpcc.utilities.temp_files import configure_app_tempdir
 
 
 def get_env_config():
@@ -20,6 +21,9 @@ def get_env_config():
 
 # Initialize session state variables
 def init_session_state():
+    # Submission ZIPs, screenshots and feedback docs go to a private, self-purging dir.
+    configure_app_tempdir()
+
     config = get_env_config()
 
     if 'openrouter_api_key' not in st.session_state:

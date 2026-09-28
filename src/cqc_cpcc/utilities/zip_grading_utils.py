@@ -25,6 +25,7 @@ from typing import Optional
 
 from cqc_cpcc.utilities.language_utils import get_language_from_file_path
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import alias, register_student
 from cqc_cpcc.utilities.utils import read_file, wrap_code_in_markdown_backticks
 
 # Token estimation constants
@@ -180,6 +181,13 @@ def parse_student_folder_name(directory_name: str) -> str:
         "Assignment1 - John Doe"                                  -> "John Doe"
         "Student1/subfolder"                                      -> "Student1"
     """
+    name = _parse_student_folder_name(directory_name)
+    # Every student-name source registers with the log redactor (see pii_redaction).
+    register_student(name)
+    return name
+
+
+def _parse_student_folder_name(directory_name: str) -> str:
     path = directory_name.replace('\\', '/')
     if _FOLDER_NAME_DELIMITER not in path:
         # No delimiter: the student's own folder is the first path segment
@@ -440,7 +448,7 @@ def extract_student_submissions_from_zip(
                     total_tokens += file_tokens
 
                 except Exception as e:
-                    logger.error(f"Error reading {file_name} for student {student_id}: {e}")
+                    logger.error(f"Error reading {file_name} for student {alias(student_id)}: {e}")
                     # Clean up temp file
                     os.unlink(temp_file_path)
                     continue
@@ -454,7 +462,7 @@ def extract_student_submissions_from_zip(
                     f"~{submission.estimated_tokens} tokens"
                 )
             else:
-                logger.warning(f"No valid files found for student: {student_id}")
+                logger.warning(f"No valid files found for student: {alias(student_id)}")
 
     if not students_data:
         # Provide helpful error message

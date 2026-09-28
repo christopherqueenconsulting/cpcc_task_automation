@@ -26,6 +26,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.selenium_util import close_tab
 from cqc_cpcc.utilities.utils import login_if_needed
 from cqc_cpcc.withdrawals import CSV_FIELDNAMES, WithdrawalRecord, record_key
@@ -497,6 +498,11 @@ def sync_records_to_tracker(
             driver.switch_to.window(original_tab)
 
 
+_IDENTIFYING_COLUMNS = (
+    "Student Lastname", "Student Firstname", "Student ID", "Student Email",
+)
+
+
 def _log_pending_rows(records: list) -> None:
     """Log the rows destined for the tracker, in tracker column order."""
     if not records:
@@ -505,10 +511,15 @@ def _log_pending_rows(records: list) -> None:
         )
         return
 
-    logger.info("Rows for the Attendance Tracker:")
+    # The identifying columns are logged as the student's alias: the full rows are
+    # in the local CSV and on the tracker, and do not belong in a log file too.
+    logger.info("Rows for the Attendance Tracker (student columns shown as aliases):")
     logger.info(",".join(CSV_FIELDNAMES))
     for record in records:
         row = record.to_csv_row()
+        student_alias = alias(record.student_id or f"{record.first_name} {record.last_name}")
+        for column in _IDENTIFYING_COLUMNS:
+            row[column] = student_alias
         logger.info(",".join(str(row[column]) for column in CSV_FIELDNAMES))
 
 

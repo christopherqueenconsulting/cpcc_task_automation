@@ -37,6 +37,7 @@ from cqc_cpcc.utilities.AI.llm_deprecated.chains import (
     generate_assignment_feedback_grade,
 )
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.utils import (
     dict_to_markdown_table,
     extract_and_read_zip,
@@ -1342,7 +1343,7 @@ async def grade_single_rubric_student(
             )
             if should_debug():
                 grading_correlation_id = create_correlation_id()
-                logger.info(f"Starting grading for {student_id} with correlation_id={grading_correlation_id}")
+                logger.info(f"Starting grading for {alias(student_id)} with correlation_id={grading_correlation_id}")
 
             gate_report: dict = {}
             result = await grade_with_rubric(
@@ -1385,7 +1386,7 @@ async def grade_single_rubric_student(
             return (student_id, result)
 
         except Exception as e:
-            logger.error(f"Error grading student {student_id}: {e}", exc_info=True)
+            logger.error(f"Error grading student {alias(student_id)}: {e}", exc_info=True)
 
             # Try to extract correlation_id from exception if available
             if not grading_correlation_id:
@@ -2625,7 +2626,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             else:
                 percentage = "N/A"
         except (AttributeError, TypeError, ZeroDivisionError) as e:
-            logger.warning(f"Error calculating percentage for {student_id}: {e}")
+            logger.warning(f"Error calculating percentage for {alias(student_id)}: {e}")
             percentage = "N/A"
 
         summary_data.append({

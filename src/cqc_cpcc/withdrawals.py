@@ -26,6 +26,7 @@ from cqc_cpcc.utilities.date import (
     weeks_between_dates,
 )
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import alias, register_student
 
 # Column order, taken verbatim from the live "Instructor Inputs" sheet of the
 # Fall 2026 Attendance Tracker (read 2026-09-01). These are the tracker's own
@@ -92,6 +93,14 @@ class WithdrawalRecord:
     # Source for ``week_of_last_activity``. Not persisted to CSV; populated only
     # when a run actually resolved a real date.
     last_activity_date: DT.date | None = None
+
+    def __post_init__(self):
+        # Teach the log redactor this student before anything about them is logged.
+        register_student(
+            " ".join(part for part in (self.first_name, self.last_name) if part) or None,
+            student_id=self.student_id or None,
+            email=self.student_email or None,
+        )
 
     def to_csv_row(self) -> dict:
         return {
@@ -273,9 +282,8 @@ def merge_records(
 
         if not key[1]:
             logger.warning(
-                "Withdrawal for %s, %s in %s has no student ID. Skipping.",
-                incoming.last_name,
-                incoming.first_name,
+                "Withdrawal for %s in %s has no student ID. Skipping.",
+                alias(f"{incoming.first_name} {incoming.last_name}"),
                 incoming.course_and_section,
             )
             continue
@@ -288,7 +296,7 @@ def merge_records(
                 result.conflicts.append((already_recorded, incoming, differences))
                 logger.warning(
                     "Existing row kept for %s in %s. Differences ignored: %s",
-                    key[1],
+                    alias(key[1]),
                     already_recorded.course_and_section,
                     "; ".join(
                         "%s: %r -> %r" % (column, old, new)
@@ -445,7 +453,7 @@ def records_from_course(bs_course, instructor_name: str) -> list[WithdrawalRecor
             "No attendance-roster row matched %s withdrawn student(s) in %s: %s. "
             "Their Week of Last Activity stays %s.",
             len(unmatched), bs_course.get_course_and_section(),
-            ", ".join(unmatched), UNKNOWN_ACTIVITY_WEEK,
+            ", ".join(alias(student_id) for student_id in unmatched), UNKNOWN_ACTIVITY_WEEK,
         )
 
     return records

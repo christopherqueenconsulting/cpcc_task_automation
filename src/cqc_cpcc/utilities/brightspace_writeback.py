@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import register_student
 
 ProgressCallback = Callable[[str], None]
 
@@ -750,6 +751,8 @@ def _gather_assignment_learners(driver, url: str = "") -> list[dict]:
             rows = []
         rows = [r for r in rows if isinstance(r, dict) and r.get("name") and r.get("userId")]
         if rows:
+            for row in rows:
+                register_student(row.get("name"), student_id=row.get("userId"))
             break
         _t.sleep(1.0)
     return rows

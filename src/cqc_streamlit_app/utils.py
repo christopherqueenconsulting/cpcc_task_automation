@@ -2220,7 +2220,8 @@ def process_file(file_path, allowed_file_extensions):
 
             for folder_path, files in folder_contents.items():
                 concatenated_contents = b''.join(files)
-                logger.debug("Contents of folder '%s': %s", folder_path, concatenated_contents.decode())
+                # Sizes only: the contents are student submissions.
+                logger.debug("Folder %s: %d file(s), %d bytes", folder_path, len(files), len(concatenated_contents))
 
     # If it's a single file
     else:
