@@ -399,3 +399,30 @@ class TestFeedbackGiverInit:
         
         assert giver.temperature == 0.5
         assert giver.model_name == "gpt-4o"
+
+
+@pytest.mark.unit
+class TestGiveProjectFeedbackRun:
+    """give_project_feedback reports one aggregate analytics run."""
+
+    def test_processes_every_course_and_records_the_course_count(self, monkeypatch):
+        from unittest.mock import MagicMock, patch
+
+        import cqc_cpcc.project_feedback as pf
+        from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
+
+        client = MagicMock()
+        monkeypatch.setattr(telemetry, "_get_client", lambda: client)
+        driver, wait = MagicMock(), MagicMock()
+        urls = ["https://bs.example.edu/d2l/home/1", "https://bs.example.edu/d2l/home/2"]
+
+        with patch.object(pf, "get_session_driver", return_value=(driver, wait)), \
+                patch.object(pf, "get_course_urls", return_value=urls), \
+                patch.object(pf, "process_submissions_from_course_url") as process:
+            pf.give_project_feedback()
+
+        assert [c.args[2] for c in process.call_args_list] == urls
+        properties = client.capture.call_args.kwargs["properties"]
+        assert properties["cqc_feature"] == "project_feedback"
+        assert properties["cqc_courses"] == 2
+        assert properties["cqc_status"] == "succeeded"
