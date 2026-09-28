@@ -491,9 +491,12 @@ row someone entered by hand online is never re-added.
 - **Exposure**: Secrets not committed to git (`.gitignore`)
 
 ### Data Privacy
-- **Student Data**: PII handled carefully (names, grades, submissions)
-- **Retention**: Logs rotated, no long-term storage of student data
+- **Student Data**: names, IDs, e-mails, submissions and grades are FERPA education records
+- **Logs**: every handler carries the `pii_redaction` filter (names become HMAC aliases; ids, e-mails, BrightSpace ids and URL queries are removed); 14-day retention
+- **Temp files**: routed to a private, self-purging `<tmp>/cqc_cpcc/` by `temp_files.configure_app_tempdir()`
+- **Analytics**: optional PostHog events carry only aggregates and scrubbed error types (`posthog_telemetry`)
 - **Access**: Only instructor credentials used (no shared accounts)
+- **Details**: [PRIVACY_AND_TELEMETRY.md](PRIVACY_AND_TELEMETRY.md)
 
 ### API Security
 - **API Keys**: OpenAI keys stored securely

@@ -32,7 +32,9 @@ runtime via :func:`configure`.
 """
 
 import atexit
+import functools
 import hashlib
+import inspect
 import os
 import threading
 import time
@@ -425,6 +427,114 @@ def capture_exception(
     except Exception as capture_error:
         logger.debug("PostHog exception capture failed (ignored): %s",
                      type(capture_error).__name__)
+
+
+# --------------------------------------------------------------------------- runs
+
+# Properties of the feature run in flight, so code deep inside it can add counts.
+_current_run: ContextVar[dict | None] = ContextVar("posthog_current_run", default=None)
+
+
+def _prefixed(properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        (key if key.startswith("cqc_") else "cqc_%s" % key): value
+        for key, value in properties.items()
+        if isinstance(value, (bool, int, float, str)) or value is None
+    }
+
+
+def update_run(**properties: Any) -> None:
+    """Add counts/flags to the run in flight (``students=12`` -> ``cqc_students``).
+
+    Only aggregate, non-identifying values belong here: counts, durations, modes.
+    Never a name, id, e-mail, URL or per-student score.
+    """
+    run = _current_run.get()
+    if run is not None:
+        run.update(_prefixed(properties))
+
+
+def _finish_run(feature: str, run: dict, started: float, error: BaseException | None) -> None:
+    properties = dict(run)
+    if error is None:
+        status_value = "succeeded"
+    elif isinstance(error, Exception):
+        status_value = "failed"
+    else:
+        # KeyboardInterrupt, SystemExit, Streamlit's stop/rerun control flow.
+        status_value = "interrupted"
+    properties.update({
+        "cqc_feature": feature,
+        "cqc_status": status_value,
+        "cqc_duration_seconds": round(time.monotonic() - started, 3),
+    })
+    if error is not None:
+        properties["cqc_error_type"] = type(error).__name__
+    if status_value == "failed":
+        capture_exception(error, feature=feature)
+    capture_event("cqc_run_completed", properties)
+
+
+def tracked_run(
+        feature: str,
+        result_properties=None,
+        **static_properties: Any,
+):
+    """Decorate a feature entry point to emit one ``cqc_run_completed`` event.
+
+    The event carries the feature, succeeded/failed, duration, ``static_properties``,
+    anything added with :func:`update_run`, and ``result_properties(return_value)``
+    (a callable returning a dict of counts). A failure also sends a scrubbed
+    ``$exception``. Works on sync and async functions; the function's own behaviour
+    and exceptions are unchanged, and telemetry errors are swallowed.
+    """
+
+    def decorator(function):
+        def _start():
+            run = _prefixed(static_properties)
+            return run, _current_run.set(run), time.monotonic()
+
+        def _end(run, token, started, result=None, error=None):
+            try:
+                if error is None and result_properties is not None:
+                    run.update(_prefixed(result_properties(result) or {}))
+                _finish_run(feature, run, started, error)
+            except Exception as telemetry_error:
+                logger.debug("Run telemetry failed (ignored): %s", type(telemetry_error).__name__)
+            finally:
+                try:
+                    _current_run.reset(token)
+                except Exception:
+                    _current_run.set(None)
+
+        if inspect.iscoroutinefunction(function):
+            @functools.wraps(function)
+            async def async_wrapper(*args, **kwargs):
+                run, token, started = _start()
+                try:
+                    result = await function(*args, **kwargs)
+                except BaseException as error:
+                    _end(run, token, started, error=error)
+                    raise
+                _end(run, token, started, result=result)
+                return result
+
+            return async_wrapper
+
+        @functools.wraps(function)
+        def sync_wrapper(*args, **kwargs):
+            run, token, started = _start()
+            try:
+                result = function(*args, **kwargs)
+            except BaseException as error:
+                _end(run, token, started, error=error)
+                raise
+            _end(run, token, started, result=result)
+            return result
+
+        return sync_wrapper
+
+    return decorator
 
 
 class GenerationTimer:

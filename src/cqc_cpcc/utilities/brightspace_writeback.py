@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import register_student
 
@@ -479,6 +480,20 @@ def _locate_write_targets(driver) -> dict:
     return {"score": False, "feedback": False}
 
 
+def _writeback_run_properties(report) -> dict:
+    """Aggregate, non-identifying facts about a write-back for analytics."""
+    return {
+        "route": report.route,
+        "dry_run": report.dry_run,
+        "students": len(report.outcomes),
+        "matched": report.matched_count,
+        "saved": report.saved_count,
+        "unmatched_students": len(report.unmatched_students),
+        "warnings": len(report.warnings),
+    }
+
+
+@telemetry.tracked_run("brightspace_writeback", result_properties=_writeback_run_properties)
 def push_grades_to_brightspace(
         url: str,
         items: list[GradeWriteItem],
@@ -516,6 +531,7 @@ def push_grades_to_brightspace(
     from cqc_cpcc.utilities.brightspace_submissions import detect_route, ROUTE_QUIZ
 
     route = detect_route(url)
+    telemetry.update_run(feedback_mode=feedback_mode, items=len(items))
     progress(f"Write-back route: {route}{' (dry run)' if dry_run else ''}")
 
     own_driver = False

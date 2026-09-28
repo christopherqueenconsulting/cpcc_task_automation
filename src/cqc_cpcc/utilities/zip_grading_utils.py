@@ -25,7 +25,7 @@ from typing import Optional
 
 from cqc_cpcc.utilities.language_utils import get_language_from_file_path
 from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.pii_redaction import alias, register_student
+from cqc_cpcc.utilities.pii_redaction import alias, register_student, scrub
 from cqc_cpcc.utilities.utils import read_file, wrap_code_in_markdown_backticks
 
 # Token estimation constants
@@ -518,7 +518,7 @@ def build_submission_text_with_token_limit(
 
     if is_truncated:
         omitted_list = omitted_files or []
-        omitted_text = "\n".join(f"- {name}" for name in omitted_list)
+        omitted_text = "\n".join(f"- {scrub(name)}" for name in omitted_list)
         notice = (
             "NOTE: Some files were omitted due to size limits.\n"
             f"{omitted_text}\n"
@@ -541,8 +541,9 @@ def build_submission_text_with_token_limit(
                     f"Preprocessing will be used automatically."
                 )
 
-            # Add file name details for AI (no budget check)
-            file_section = f"### Submission File Name: {filename}\n"
+            # Add file name details for AI (no budget check). The name is scrubbed:
+            # students often put their own name in it, and the model does not need it.
+            file_section = f"### Submission File Name: {scrub(filename)}\n"
             solution_language = get_language_from_file_path(filepath)
             if solution_language:
                 # Add the content inside a codeblock

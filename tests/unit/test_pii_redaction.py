@@ -215,3 +215,24 @@ class TestSourcesRegisterStudents:
 
         assert parse_student_folder_name("Assignment1 - Ada Example") == FAKE_NAME
         assert FAKE_NAME not in pii.scrub("Grading Ada Example")
+
+
+@pytest.mark.unit
+class TestPromptFilenames:
+    def test_registered_name_is_removed_from_filename_variants(self):
+        pii.register_student(FAKE_NAME)
+        for filename in ("AdaExample_Project1.java", "Ada_Example.java", "ada-example.py"):
+            assert "ada" not in pii.scrub(filename).lower(), filename
+
+    def test_prompt_file_name_line_is_scrubbed(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities import zip_grading_utils
+
+        pii.register_student(FAKE_NAME)
+        source = tmp_path / "Ada_Example_Main.java"
+        source.write_text("class Main {}")
+        monkeypatch.setenv("READABLE_FILE_ROOTS", str(tmp_path))
+        text = zip_grading_utils.build_submission_text_with_token_limit(
+            {"Ada_Example_Main.java": str(source)}
+        )
+        assert "Ada" not in text
+        assert "class Main {}" in text

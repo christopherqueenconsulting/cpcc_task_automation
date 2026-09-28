@@ -2,6 +2,7 @@
 """The Settings page can supply PostHog credentials when .env does not."""
 
 from pathlib import Path
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +22,9 @@ def clean_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     telemetry._reset_for_tests()
     yield
+    # configure() writes os.environ directly, outside monkeypatch's bookkeeping.
+    for name in ("POSTHOG_API_KEY", "POSTHOG_HOST"):
+        os.environ.pop(name, None)
     telemetry._reset_for_tests()
 
 

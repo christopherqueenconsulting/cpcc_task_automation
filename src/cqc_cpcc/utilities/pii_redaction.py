@@ -115,8 +115,8 @@ def _normalise(value: str) -> str:
 
 
 def _compact(value: str) -> str:
-    """Registry key: lowercase with all whitespace removed ("Doe,Jane" == "Doe, Jane")."""
-    return re.sub(r"\s+", "", str(value)).lower()
+    """Registry key: lowercase, separators removed ("Doe,Jane" == "Doe, Jane" == "Doe_Jane")."""
+    return re.sub(r"[\s_.\-]+", "", str(value)).lower()
 
 
 def alias(value: Any) -> str:
@@ -188,8 +188,9 @@ def register_student(
                 key = _compact(variant)
                 if key not in _known_names:
                     _known_names[key] = student_alias
+                    # Tolerate the separators filenames use: "AdaExample", "Ada_Example".
                     _known_patterns.append(
-                        r"\s*".join(re.escape(part) for part in variant.split())
+                        r"[\s_.\-]*".join(re.escape(part) for part in variant.split())
                     )
                     changed = True
             if changed:

@@ -8,6 +8,7 @@ which stays free of Selenium so it can be tested without a browser.
 import glob
 import os
 
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.attendance_tracker import TrackerSyncError, sync_records_to_tracker
 from cqc_cpcc.my_colleges import MyColleges
 from cqc_cpcc.run_plan import ACTION_WITHDRAWALS, MODE_PUSH_ONLY, RunPlan
@@ -132,6 +133,7 @@ def process_withdrawals_for_courses(
     return results
 
 
+@telemetry.tracked_run("withdrawals")
 def run_process_withdrawals(attendance_tracker_url: str = None, plan: RunPlan = None):
     """Standalone PROCESS_WITHDRAWALS entry point."""
     tracker_url = attendance_tracker_url or ATTENDANCE_TRACKER_URL
@@ -148,6 +150,7 @@ def run_process_withdrawals(attendance_tracker_url: str = None, plan: RunPlan = 
             )
 
     if plan is not None and plan.is_push_only:
+        telemetry.update_run(mode="push_only", dry_run=plan.dry_run, csv_files=len(plan.csv_paths))
         return _run_push_only(plan)
 
     driver, wait = get_session_driver()
@@ -163,6 +166,8 @@ def run_process_withdrawals(attendance_tracker_url: str = None, plan: RunPlan = 
                 dry_run_default=WITHDRAWALS_TRACKER_DRY_RUN,
             )
 
+        telemetry.update_run(mode="scrape", dry_run=plan.dry_run, courses=len(plan.course_urls),
+                             sync_to_tracker=plan.sync_to_tracker)
         bs_courses = my_colleges.process_withdrawals(plan)
         results = process_withdrawals_for_courses(driver, wait, bs_courses, plan)
 

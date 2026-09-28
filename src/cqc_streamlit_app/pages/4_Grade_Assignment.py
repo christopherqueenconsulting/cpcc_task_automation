@@ -38,6 +38,7 @@ from cqc_cpcc.utilities.AI.llm_deprecated.chains import (
 )
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.utils import (
     dict_to_markdown_table,
     extract_and_read_zip,
@@ -1472,6 +1473,7 @@ async def grade_single_rubric_student(
             return (student_id, None)  # None signals failure
 
 
+@telemetry.tracked_run("rubric_grading")
 async def process_rubric_grading_batch(
         submission_file_paths: list[tuple[str, str]],
         effective_rubric: Rubric,
@@ -1596,6 +1598,8 @@ async def process_rubric_grading_batch(
     # Display summary
     success_count = len(all_results)
     failure_count = len(failed_student_ids)
+    telemetry.update_run(students=success_count + failure_count, succeeded=success_count,
+                         failed=failure_count, model=model_name)
 
     if success_count > 0:
         st.success(f"✅ Successfully graded {success_count}/{total_students} submission(s)")
@@ -1797,6 +1801,7 @@ async def grade_single_error_only_student(
             raise
 
 
+@telemetry.tracked_run("error_only_grading")
 async def process_error_only_grading_batch(
         submission_file_paths: list[tuple[str, str]],
         assignment_instructions: str,
@@ -1890,6 +1895,8 @@ async def process_error_only_grading_batch(
 
     success_count = len(all_results)
     failure_count = total_students - success_count
+    telemetry.update_run(students=total_students, succeeded=success_count,
+                         failed=failure_count, model=model_name, openrouter=use_openrouter)
 
     if success_count > 0:
         st.success(f"✅ Successfully graded {success_count}/{total_students} submission(s)")

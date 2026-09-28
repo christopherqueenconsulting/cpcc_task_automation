@@ -243,6 +243,7 @@ For detailed technical documentation, see:
 - The AI debug log redacts sensitive values by default (`CQC_AI_DEBUG_REDACT=true`)
 - Withdrawals write student data to local CSVs under `WITHDRAWALS_CSV_DIR`; that directory has no default so it is never written somewhere unexpected
 - A `PII Guard` CI workflow (`scripts/pii_guard.py`) fails the build if tracked files contain student names or BrightSpace ids
+- Runtime log redaction, retention limits and the optional PostHog analytics are described in [docs/PRIVACY_AND_TELEMETRY.md](docs/PRIVACY_AND_TELEMETRY.md) (`poetry install -E telemetry` to enable analytics)
 
 ## Testing
 
