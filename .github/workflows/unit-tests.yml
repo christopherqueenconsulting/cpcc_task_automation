@@ -56,6 +56,10 @@ jobs:
           
           # Coverage file(s) to upload
           files: ./coverage.xml
+          # Upload only this job's report. Without this the uploader also picks up
+          # any other coverage*.xml in the checkout (stale ones were once committed)
+          # and Codecov merges their old line numbers into the new report.
+          disable_search: true
           
           # Flags to categorize this upload
           flags: unit
