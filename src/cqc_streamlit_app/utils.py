@@ -850,6 +850,28 @@ mime_types_str = """
 """
 
 
+# Settings inputs are keyed with this prefix so the CSS below can mask them.
+_SECRET_KEY_PREFIX = "cqc_secret_"
+_SECRET_INPUT_CSS = (
+    "<style>[class*='st-key-%s'] input {"
+    "-webkit-text-security: disc; text-security: disc; }</style>" % _SECRET_KEY_PREFIX
+)
+
+
+def secret_text_input(label: str, value: str = "", *, key: str, help: str | None = None) -> str:
+    """A masked text field that browsers do not treat as a login password.
+
+    ``type="password"`` makes Streamlit set ``autocomplete="new-password"``, so
+    Safari (iPad/iPhone/Mac) sees a sign-up form and offers to save or fill a
+    password every time a field loses focus, which Streamlit does on every Tab.
+    This field is a plain text input with autocomplete off, shown as dots via
+    ``-webkit-text-security`` (Safari, Chrome, Edge and current Firefox).
+    """
+    st.markdown(_SECRET_INPUT_CSS, unsafe_allow_html=True)
+    return st.text_input(label, value=value, key=_SECRET_KEY_PREFIX + key, help=help,
+                         autocomplete="off")
+
+
 @st.cache_data
 def get_cpcc_css():
     # Embed custom fonts using HTML and CSS
