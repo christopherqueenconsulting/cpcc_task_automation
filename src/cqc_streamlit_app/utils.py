@@ -1677,7 +1677,7 @@ def render_mfa_prompt(bridge) -> None:
                 st.image(
                     challenge.screenshot_png,
                     caption="Live browser view",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 
@@ -1847,7 +1847,7 @@ def _render_writeback_report(report) -> None:
             ("Posted" if is_quiz else "Saved draft"): "✅" if o.saved else ("—" if report.dry_run else "❌"),
             "Note": o.note,
         } for o in report.outcomes]
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
     if report.unmatched_students:
         st.warning("⚠️ Graded students with NO matching BrightSpace learner (skipped): "
@@ -2013,12 +2013,12 @@ def add_brightspace_writeback_element(
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Preview write (dry run)", key=key_prefix + "dry",
-                     disabled=not url, use_container_width=True):
+                     disabled=not url, width="stretch"):
             _launch(dry_run=True)
     with c2:
         confirm = st.checkbox(confirm_label, key=key_prefix + "confirm")
         if st.button(real_button_label, key=key_prefix + "real",
-                     disabled=not (url and confirm), use_container_width=True):
+                     disabled=not (url and confirm), width="stretch"):
             _launch(dry_run=False)
 
     # Job in progress: status + MFA prompt, then poll.
@@ -2078,7 +2078,7 @@ def _render_zip_keep_table(zip_path: str, key_prefix: str) -> Optional[set]:
             "_arc": None,  # hidden
         },
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     kept = edited[edited["keep"]]

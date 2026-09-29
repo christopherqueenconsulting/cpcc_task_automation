@@ -1270,7 +1270,7 @@ def render_compile_gate_summary() -> None:
                 "Skipped (unsupported)": m["skipped"],
                 "Correction rate": rate,
             })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
 
 
 async def grade_single_rubric_student(

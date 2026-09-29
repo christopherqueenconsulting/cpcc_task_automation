@@ -121,7 +121,16 @@ class AttendanceJob:
 
         from cqc_cpcc.my_colleges import MyColleges
         from cqc_cpcc.screenshot_listener import ScreenshotListener
-        from cqc_cpcc.utilities.selenium_util import get_session_driver
+        from cqc_cpcc.utilities.selenium_util import (
+            get_session_driver,
+            unattended_browser_problem,
+        )
+
+        # This thread has no console: a browser-choice prompt would hang the run
+        # (and the page would poll forever), so fail with the setting to add.
+        problem = unattended_browser_problem()
+        if problem:
+            raise RuntimeError(problem + " Add it to .env (or the app's secrets).")
 
         raw_driver, wait = get_session_driver()
         driver = EventFiringWebDriver(raw_driver, ScreenshotListener(self._store_screenshot))
