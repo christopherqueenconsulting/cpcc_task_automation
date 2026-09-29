@@ -416,3 +416,53 @@ def test_build_student_feedback_limits_strengths_and_improvements():
     # Should limit counts
     assert len(strengths) <= 4, "Strengths should be limited to 4"
     assert len(improvements) <= 6, "Improvements should be limited to 6"
+
+
+@pytest.mark.unit
+def test_summary_is_truncated_to_150_characters():
+    from cqc_cpcc.student_feedback_builder import _summarize_feedback
+
+    summary = _summarize_feedback("x" * 200 + ". Second sentence.")
+    assert len(summary) == 150 and summary.endswith("...")
+
+
+@pytest.mark.unit
+def test_error_notes_that_are_only_score_talk_are_dropped():
+    from types import SimpleNamespace
+
+    from cqc_cpcc.student_feedback_builder import _format_error_for_student
+
+    error = SimpleNamespace(name="Missing header", description="No header comment.",
+                            notes="Lost 5 points")
+    assert _format_error_for_student(error) == "  - **Missing header**: No header comment."
+
+
+@pytest.mark.unit
+def test_overall_feedback_that_is_only_score_talk_is_omitted():
+    from cqc_cpcc.student_feedback_builder import build_student_feedback
+
+    result = RubricAssessmentResult(
+        rubric_id="r", rubric_version="1.0", total_points_earned=80,
+        total_points_possible=100, overall_feedback="Score: 80/100",
+        criteria_results=[CriterionResult(
+            criterion_id="c1", criterion_name="Logic", points_earned=80,
+            points_possible=100, feedback="Solid.", selected_level_label="Proficient")],
+        detected_errors=[],
+    )
+    text = build_student_feedback(result)
+    assert "80/100" not in text and "Score" not in text
+
+
+@pytest.mark.unit
+def test_no_overall_feedback_still_builds_the_rest():
+    from cqc_cpcc.student_feedback_builder import build_student_feedback
+
+    result = RubricAssessmentResult(
+        rubric_id="r", rubric_version="1.0", total_points_earned=90,
+        total_points_possible=100, overall_feedback="",
+        criteria_results=[CriterionResult(
+            criterion_id="c1", criterion_name="Logic", points_earned=90,
+            points_possible=100, feedback="Clear and correct.", selected_level_label="Exemplary")],
+        detected_errors=[],
+    )
+    assert "Here is feedback on your submission:" in build_student_feedback(result)

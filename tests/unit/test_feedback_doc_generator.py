@@ -632,3 +632,43 @@ def test_generate_student_feedback_doc_cpcc_branding():
         if title_run.font.color.rgb is not None:
             # Verify color was set (actual value is implementation-dependent)
             assert title_run.font.color.rgb is not None
+
+
+def _plain_result():
+    return RubricAssessmentResult(
+        rubric_id="r", rubric_version="1.0", total_points_earned=50,
+        total_points_possible=100, overall_feedback="Some work to do.",
+        criteria_results=[CriterionResult(
+            criterion_id="c1", criterion_name="Logic", points_earned=50,
+            points_possible=100, feedback="Needs work.", selected_level_label="Developing")],
+        detected_errors=[],
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("severity, label, absent", [
+    ("major", "Major Issues:", "Minor Issues:"),
+    ("minor", "Minor Issues:", "Major Issues:"),
+])
+def test_doc_lists_only_the_error_severity_present(monkeypatch, severity, label, absent):
+    import cqc_cpcc.feedback_doc_generator as gen
+
+    monkeypatch.setattr(gen, "_parse_feedback_sections", lambda text: {
+        "summary": "Summary.", "strengths": [], "improvements": [],
+        "errors": [{"name": "Off by one", "description": "Loop bound.",
+                    "severity": severity, "notes": ""}],
+    })
+    doc = Document(BytesIO(generate_student_feedback_doc(
+        student_name="S", course_id="CSC151", assignment_name="A",
+        feedback_result=_plain_result())))
+    text = [p.text for p in doc.paragraphs]
+    assert label in text and absent not in text
+    assert "Off by one" in text and "Loop bound." in text
+
+
+@pytest.mark.unit
+def test_parse_feedback_sections_skips_malformed_error_bullets():
+    sections = _parse_feedback_sections(
+        "**Errors Observed:**\n*Minor Issues:*\n- **No colon here**\n- **Typo**: Misspelled name\n"
+    )
+    assert [e["name"] for e in sections["errors"]] == ["Typo"]
