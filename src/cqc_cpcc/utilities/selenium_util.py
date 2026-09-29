@@ -347,6 +347,10 @@ class MfaBridge:
     def on_challenge(self, challenge: MfaChallenge) -> None:
         with self._lock:
             self._challenge = challenge
+            # A run can sign in more than once (MyColleges, then BrightSpace, then
+            # the tracker); a new challenge means the earlier approval no longer
+            # applies.
+            self._resolved.clear()
 
     def on_resolved(self) -> None:
         self._resolved.set()
@@ -363,6 +367,12 @@ class MfaBridge:
     @property
     def resolved(self) -> bool:
         return self._resolved.is_set()
+
+    @property
+    def pending_challenge(self) -> MfaChallenge | None:
+        """The challenge still waiting for approval, or ``None`` once approved."""
+        with self._lock:
+            return None if self._resolved.is_set() else self._challenge
 
     @property
     def cancelled(self) -> bool:

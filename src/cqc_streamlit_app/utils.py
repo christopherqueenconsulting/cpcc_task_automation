@@ -1643,13 +1643,15 @@ class _BrightSpaceWritebackJob:
             self.done.set()
 
 
-def _render_mfa_prompt(bridge) -> None:
+def render_mfa_prompt(bridge) -> None:
     """Show the MFA number-matching prompt prominently (number + screenshot).
 
     Rendered inline rather than as a modal dialog because the running-job view
     auto-refreshes via a poll/rerun loop, which does not compose with a modal.
     """
-    challenge = bridge.challenge
+    # Only while approval is pending: a run can sign in several times, and an
+    # approved challenge must not linger on the page.
+    challenge = bridge.pending_challenge
     if challenge is None:
         return
     with st.container(border=True):
@@ -1761,7 +1763,7 @@ def add_brightspace_submission_element(
     if job is not None and not job.done.is_set():
         status_msg = job.latest_progress() or "Starting..."
         st.info(f"⏳ {status_msg}")
-        _render_mfa_prompt(job.bridge)
+        render_mfa_prompt(job.bridge)
         if st.button("✖ Cancel", key=key_prefix + "cancel"):
             job.bridge.cancel()
             st.session_state.pop(job_key, None)
@@ -2022,7 +2024,7 @@ def add_brightspace_writeback_element(
     # Job in progress: status + MFA prompt, then poll.
     if job is not None and not job.done.is_set():
         st.info(f"⏳ {job.latest_progress() or 'Starting...'}")
-        _render_mfa_prompt(job.bridge)
+        render_mfa_prompt(job.bridge)
         if st.button("✖ Cancel", key=key_prefix + "cancel"):
             job.bridge.cancel()
             st.session_state.pop(job_key, None)

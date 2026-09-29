@@ -419,3 +419,81 @@ class TestEmptyCourseList:
             assert RunPlan._prompt_course_selection({}) == []
 
         assert "No courses found" in caplog.text
+
+
+@pytest.mark.unit
+class TestFormSelections:
+    """The web form asks the console's questions; the answers build the same plan."""
+
+    @freeze_time("2026-09-15")
+    def test_course_choices_offer_this_term_with_active_preselected(self):
+        from cqc_cpcc.run_plan import course_choices
+
+        choices = course_choices(COURSES)
+        assert choices.urls == ["url-future"]
+        assert choices.default_urls == ["url-future"]
+        assert choices.hidden_count == 2
+        assert "08/17/2026" in choices.labels[0]
+
+        everything = course_choices(COURSES, include_all_terms=True)
+        assert everything.urls == list(COURSES)
+        assert everything.hidden_count == 0
+        assert everything.default_urls == ["url-future"]
+
+    def test_start_date_choices(self):
+        from cqc_cpcc.run_plan import (
+            START_COURSE_START,
+            START_CUSTOM,
+            START_LAST_ATTENDANCE,
+            resolve_attendance_start_date,
+        )
+
+        urls = ["url-active", "url-ended"]
+        assert resolve_attendance_start_date(START_LAST_ATTENDANCE, COURSES, urls) is None
+        assert resolve_attendance_start_date(START_COURSE_START, COURSES, urls) == DT.datetime(2025, 8, 18)
+        assert resolve_attendance_start_date(
+            START_CUSTOM, COURSES, urls, DT.date(2026, 2, 2)) == DT.datetime(2026, 2, 2)
+        with pytest.raises(ValueError):
+            resolve_attendance_start_date(START_CUSTOM, COURSES, urls)
+        with pytest.raises(ValueError):
+            resolve_attendance_start_date("bogus", COURSES, urls)
+
+    def test_from_selections_matches_the_console_answers(self):
+        from cqc_cpcc.run_plan import START_CUSTOM
+
+        plan = RunPlan.from_selections(
+            COURSES,
+            course_urls=["url-active"],
+            start_date_choice=START_CUSTOM,
+            custom_start_date=DT.date(2026, 3, 1),
+            process_withdrawals=True,
+            sync_to_tracker=True,
+            write_to_tracker=True,
+            tracker_url="https://tracker",
+        )
+        assert plan.course_urls == ["url-active"]
+        assert plan.attendance_start_date == DT.datetime(2026, 3, 1)
+        assert plan.process_withdrawals and plan.sync_to_tracker
+        assert plan.dry_run is False
+        assert plan.withdrawals_mode == MODE_SCRAPE
+
+    @pytest.mark.parametrize(
+        "process, sync, write, url",
+        [
+            (False, True, True, "https://tracker"),  # no withdrawals, nothing to sync
+            (True, False, True, "https://tracker"),  # not syncing
+            (True, True, False, "https://tracker"),  # syncing, but as a dry run
+            (True, True, True, None),                # no tracker configured
+        ],
+    )
+    def test_anything_short_of_a_real_sync_is_a_dry_run(self, process, sync, write, url):
+        plan = RunPlan.from_selections(
+            COURSES, course_urls=["url-active"], process_withdrawals=process,
+            sync_to_tracker=sync, write_to_tracker=write, tracker_url=url,
+        )
+        assert plan.dry_run is True
+        assert plan.sync_to_tracker is (process and sync and bool(url) and True)
+
+    def test_unknown_course_is_rejected(self):
+        with pytest.raises(ValueError):
+            RunPlan.from_selections(COURSES, course_urls=["nope"])
