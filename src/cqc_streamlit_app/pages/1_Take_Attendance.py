@@ -32,7 +32,7 @@ from cqc_cpcc.run_plan import (
     course_choices,
 )
 from cqc_cpcc.utilities.env_constants import WITHDRAWALS_TRACKER_DRY_RUN
-from cqc_cpcc.utilities.logger import LOGGING_FILENAME
+from cqc_cpcc.utilities.logger import LOGGING_FILENAME, logger
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.streamlit_logger import streamlit_handler
 from cqc_streamlit_app.utils import get_cpcc_css, on_download_click, render_mfa_prompt
@@ -148,11 +148,34 @@ def plan_form(job: AttendanceJob) -> None:
         st.rerun()
 
 
-def browser_view(job: AttendanceJob) -> None:
-    screenshot = job.latest_screenshot()
+def _placeholder_image() -> str | None:
+    """A stock landscape shown until the first screenshot arrives (one per session)."""
+    if "attendance_placeholder_image" not in st.session_state:
+        url = None
+        try:
+            from cqc_streamlit_app.pexels_helper import get_photo
+
+            url = get_photo("landscape").original
+        except Exception as error:  # noqa: BLE001 - the placeholder is decoration
+            logger.debug("No placeholder image: %s", type(error).__name__)
+        st.session_state["attendance_placeholder_image"] = url
+    return st.session_state["attendance_placeholder_image"]
+
+
+@st.fragment(run_every=1)
+def screenshot_section() -> None:
+    """The placeholder, replaced by each browser screenshot as the run moves along."""
+    st.subheader("Attendance Screenshot")
+    job: AttendanceJob | None = st.session_state.get(JOB_KEY)
+    screenshot = job.latest_screenshot() if job is not None else None
     if screenshot:
-        with st.expander("Browser view", expanded=False):
-            st.image(base64.b64decode(screenshot), use_container_width=True)
+        st.image(base64.b64decode(screenshot), use_container_width=True)
+        return
+    placeholder = _placeholder_image()
+    if placeholder:
+        st.image(placeholder, use_container_width=True)
+    else:
+        st.caption("Screenshots of the browser appear here once the run starts.")
 
 
 def job_section(job: AttendanceJob) -> None:
@@ -177,7 +200,6 @@ def job_section(job: AttendanceJob) -> None:
             st.error("❌ Attendance failed: %s" % job.error)
         elif phase == PHASE_CANCELLED:
             st.warning("Attendance was cancelled.")
-        browser_view(job)
         if st.button("Start a new run", key="attendance_reset"):
             st.session_state.pop(JOB_KEY, None)
             st.rerun()
@@ -185,7 +207,6 @@ def job_section(job: AttendanceJob) -> None:
 
     st.info("⏳ %s" % (job.latest_progress() or "Starting..."))
     render_mfa_prompt(job.bridge)
-    browser_view(job)
     # Cancel is offered until attendance marking starts; after that the run finishes
     # so no course is left half-recorded.
     if phase == PHASE_STARTING and st.button("✖ Cancel", key="attendance_cancel"):
@@ -239,6 +260,7 @@ def main():
     else:
         job_section(job)
 
+    screenshot_section()
     logging_section()
     if os.path.exists(LOGGING_FILENAME):
         on_download_click(st.empty(), LOGGING_FILENAME, "Download Log",

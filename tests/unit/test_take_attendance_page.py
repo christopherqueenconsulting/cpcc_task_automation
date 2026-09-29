@@ -106,3 +106,47 @@ class TestTakeAttendancePage:
         assert not app.exception, app.exception
         assert any("47" in block.value for block in app.markdown)
         assert any("Two-factor approval needed" in h.value for h in app.subheader)
+
+
+@pytest.mark.unit
+class TestScreenshotSection:
+    """A stock photo holds the spot until browser screenshots replace it."""
+
+    def test_placeholder_until_the_first_screenshot(self, monkeypatch):
+        from cqc_streamlit_app import pexels_helper
+
+        photo = type("Photo", (), {"original": "https://images.example/landscape.jpg"})()
+        monkeypatch.setattr(pexels_helper, "get_photo", lambda query: photo)
+        app = _app()
+        app.run()
+        assert not app.exception, app.exception
+        assert "Attendance Screenshot" in [h.value for h in app.subheader]
+        assert app.get("image")[0].proto.imgs[0].url == photo.original
+
+    def test_screenshot_replaces_the_placeholder(self, monkeypatch):
+        import base64
+
+        from cqc_streamlit_app import pexels_helper
+
+        monkeypatch.setattr(pexels_helper, "get_photo",
+                            lambda query: pytest.fail("placeholder not needed"))
+        job = FakeJob(PHASE_AWAITING_PLAN)
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )
+        job._store_screenshot(base64.b64encode(png).decode())
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        url = app.get("image")[0].proto.imgs[0].url
+        assert "landscape" not in url
+
+    def test_no_pexels_key_shows_a_caption_instead(self, monkeypatch):
+        from cqc_streamlit_app import pexels_helper
+
+        monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+        monkeypatch.setattr(pexels_helper, "_api", None)
+        app = _app()
+        app.run()
+        assert not app.exception, app.exception
+        assert any("Screenshots of the browser appear here" in c.value for c in app.caption)
