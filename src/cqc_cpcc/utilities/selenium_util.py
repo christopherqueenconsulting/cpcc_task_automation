@@ -494,6 +494,30 @@ def close_tab(driver: WebDriver, handles: list[str] = None, max_retry=3):
                 pass
 
 
+def unattended_browser_problem() -> str | None:
+    """Why ``get_browser_driver`` would stop at a console prompt, or ``None``.
+
+    A web-app run happens on a background thread with no console, so a prompt
+    there hangs the run forever. Callers without a console check this first and
+    report the missing setting instead.
+    """
+    if IS_GITHUB_ACTION or HEADLESS_BROWSER or USE_VIRTUAL_DISPLAY:
+        return None
+    browser_type = _enum_from_env(BrowserType, BROWSER_TYPE)
+    if browser_type is None:
+        return ("BROWSER_TYPE is not set (DOCKER_CHROME, LOCAL_CHROME or BROWSERLESS), "
+                "so the browser choice would be asked on the console.")
+    if browser_type == BrowserType.DOCKER_CHROME:
+        docker_type = _enum_from_env(DockerType, DOCKER_TYPE)
+        if docker_type is None:
+            return ("DOCKER_TYPE is not set (LOCAL or REMOTE), so the Docker choice "
+                    "would be asked on the console.")
+        if docker_type == DockerType.REMOTE:
+            return ("DOCKER_TYPE=REMOTE asks for the remote host on the console; use "
+                    "DOCKER_TYPE=LOCAL, LOCAL_CHROME or BROWSERLESS for the web app.")
+    return None
+
+
 def get_browser_driver():
     # Always reset marker first so non-Docker runs are unaffected.
     set_docker_usage_flag(False)

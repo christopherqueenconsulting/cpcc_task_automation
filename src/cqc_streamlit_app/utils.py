@@ -850,6 +850,28 @@ mime_types_str = """
 """
 
 
+# Settings inputs are keyed with this prefix so the CSS below can mask them.
+_SECRET_KEY_PREFIX = "cqc_secret_"
+_SECRET_INPUT_CSS = (
+    "<style>[class*='st-key-%s'] input {"
+    "-webkit-text-security: disc; text-security: disc; }</style>" % _SECRET_KEY_PREFIX
+)
+
+
+def secret_text_input(label: str, value: str = "", *, key: str, help: str | None = None) -> str:
+    """A masked text field that browsers do not treat as a login password.
+
+    ``type="password"`` makes Streamlit set ``autocomplete="new-password"``, so
+    Safari (iPad/iPhone/Mac) sees a sign-up form and offers to save or fill a
+    password every time a field loses focus, which Streamlit does on every Tab.
+    This field is a plain text input with autocomplete off, shown as dots via
+    ``-webkit-text-security`` (Safari, Chrome, Edge and current Firefox).
+    """
+    st.markdown(_SECRET_INPUT_CSS, unsafe_allow_html=True)
+    return st.text_input(label, value=value, key=_SECRET_KEY_PREFIX + key, help=help,
+                         autocomplete="off")
+
+
 @st.cache_data
 def get_cpcc_css():
     # Embed custom fonts using HTML and CSS
@@ -1677,7 +1699,7 @@ def render_mfa_prompt(bridge) -> None:
                 st.image(
                     challenge.screenshot_png,
                     caption="Live browser view",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 
@@ -1847,7 +1869,7 @@ def _render_writeback_report(report) -> None:
             ("Posted" if is_quiz else "Saved draft"): "✅" if o.saved else ("—" if report.dry_run else "❌"),
             "Note": o.note,
         } for o in report.outcomes]
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
     if report.unmatched_students:
         st.warning("⚠️ Graded students with NO matching BrightSpace learner (skipped): "
@@ -2013,12 +2035,12 @@ def add_brightspace_writeback_element(
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Preview write (dry run)", key=key_prefix + "dry",
-                     disabled=not url, use_container_width=True):
+                     disabled=not url, width="stretch"):
             _launch(dry_run=True)
     with c2:
         confirm = st.checkbox(confirm_label, key=key_prefix + "confirm")
         if st.button(real_button_label, key=key_prefix + "real",
-                     disabled=not (url and confirm), use_container_width=True):
+                     disabled=not (url and confirm), width="stretch"):
             _launch(dry_run=False)
 
     # Job in progress: status + MFA prompt, then poll.
@@ -2078,7 +2100,7 @@ def _render_zip_keep_table(zip_path: str, key_prefix: str) -> Optional[set]:
             "_arc": None,  # hidden
         },
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     kept = edited[edited["keep"]]

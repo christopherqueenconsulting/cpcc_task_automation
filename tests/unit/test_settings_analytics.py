@@ -72,3 +72,15 @@ class TestAnalyticsSettings:
         next(button for button in app.button if button.label == "Save Analytics Settings").click()
         app.run()
         assert any("https://" in block.value for block in app.error)
+
+
+@pytest.mark.unit
+def test_settings_page_has_no_password_fields_for_safari_to_hijack():
+    """Password-type fields make Safari offer to save/fill a password on every Tab."""
+    app = _run_page()
+    for widget in app.text_input:
+        assert widget.proto.type == widget.proto.DEFAULT, widget.label
+        assert widget.proto.autocomplete == "off", widget.label
+    secret_keys = {w.key for w in app.text_input if w.key and w.key.startswith("cqc_secret_")}
+    assert secret_keys == {"cqc_secret_openrouter_api_key", "cqc_secret_openai_api_key",
+                           "cqc_secret_instructor_password", "cqc_secret_posthog_api_key"}

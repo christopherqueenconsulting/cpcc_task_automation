@@ -4,7 +4,7 @@ import os
 import streamlit as st
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css
+from cqc_streamlit_app.utils import get_cpcc_css, secret_text_input
 
 # Initialize session state variables
 init_session_state()
@@ -26,24 +26,30 @@ def main():
         'The information entered on this page is not stored online. It is only available in the browser for the other pages to use and run properly')
 
     # Get API keys
-    openrouter_api_key = st.text_input("Openrouter API Key", value=st.session_state.openrouter_api_key or "",
-                                       type="password")
+    # No type="password" fields on this page: Safari treats them as a login form
+    # and offers to save/fill a password on every Tab (see secret_text_input).
+    openrouter_api_key = secret_text_input("Openrouter API Key", st.session_state.openrouter_api_key or "",
+                                           key="openrouter_api_key")
     st.caption("*Required for all apps")
 
-    openai_api_key = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key or "", type="password")
+    openai_api_key = secret_text_input("OpenAI API Key", st.session_state.openai_api_key or "",
+                                       key="openai_api_key")
     st.caption("*Required for all apps; get it [here](https://platform.openai.com/account/api-keys).*")
 
     # Get CPCC variables
-    instructor_user_id = st.text_input("Instructor User ID", value=st.session_state.instructor_user_id or "")
+    instructor_user_id = st.text_input("Instructor User ID", value=st.session_state.instructor_user_id or "",
+                                       autocomplete="off")
     st.caption("*Required for all apps")
-    instructor_password = st.text_input("Instructor Password", value=st.session_state.instructor_password or "",
-                                        type="password")
+    instructor_password = secret_text_input("Instructor Password", st.session_state.instructor_password or "",
+                                            key="instructor_password")
     st.caption("*Required for all apps")
 
-    instructor_signature = st.text_input("Instructor Signature", value=st.session_state.instructor_signature or "")
+    instructor_signature = st.text_input("Instructor Signature", value=st.session_state.instructor_signature or "",
+                                         autocomplete="off")
     st.caption("Used at end of feedback.")
 
-    attendance_tracker_url = st.text_input("Advanced Tracker URL", value=st.session_state.attendance_tracker_url or "")
+    attendance_tracker_url = st.text_input("Advanced Tracker URL", value=st.session_state.attendance_tracker_url or "",
+                                           autocomplete="off")
     st.caption("URL to the Attendance Tracker (`ATTENDANCE_TRACKER_URL`).")
 
     required_vars = [openai_api_key, openrouter_api_key, instructor_user_id, instructor_password]
@@ -87,10 +93,10 @@ def analytics_settings_section():
     enabled, reason = telemetry.status()
     (st.success if enabled else st.info)("Analytics status: %s" % reason)
 
-    posthog_api_key = st.text_input(
+    posthog_api_key = secret_text_input(
         "PostHog Project API Key",
-        value=st.session_state.posthog_api_key or "",
-        type="password",
+        st.session_state.posthog_api_key or "",
+        key="posthog_api_key",
         help="Project settings > Project API key (starts with phc_). Same as POSTHOG_API_KEY in .env.",
     )
 
@@ -108,6 +114,7 @@ def analytics_settings_section():
             "PostHog Host URL",
             value="" if current_host in known_by_url else current_host,
             placeholder="https://posthog.example.edu",
+            autocomplete="off",
         )
     else:
         posthog_host = telemetry.KNOWN_HOSTS[region]

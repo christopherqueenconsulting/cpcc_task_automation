@@ -169,11 +169,11 @@ def screenshot_section() -> None:
     job: AttendanceJob | None = st.session_state.get(JOB_KEY)
     screenshot = job.latest_screenshot() if job is not None else None
     if screenshot:
-        st.image(base64.b64decode(screenshot), use_container_width=True)
+        st.image(base64.b64decode(screenshot), width="stretch")
         return
     placeholder = _placeholder_image()
     if placeholder:
-        st.image(placeholder, use_container_width=True)
+        st.image(placeholder, width="stretch")
     else:
         st.caption("Screenshots of the browser appear here once the run starts.")
 

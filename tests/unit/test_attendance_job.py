@@ -122,3 +122,71 @@ class TestAttendanceJob:
         job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
         job._store_screenshot("abc")
         assert job.latest_screenshot() == "abc"
+
+
+@pytest.mark.unit
+def test_missing_browser_setting_fails_fast_instead_of_prompting(monkeypatch):
+    from cqc_cpcc.utilities import selenium_util
+
+    monkeypatch.setattr(selenium_util, "unattended_browser_problem",
+                        lambda: "BROWSER_TYPE is not set")
+    monkeypatch.setattr(selenium_util, "get_session_driver",
+                        lambda: pytest.fail("must not open a browser"))
+    job = AttendanceJob(tracker_url=None)
+    job.start()
+    assert job.done.wait(5)
+    assert job.phase == PHASE_FAILED
+    assert "BROWSER_TYPE is not set" in job.error
+
+
+@pytest.mark.unit
+class TestUnattendedBrowserProblem:
+    @pytest.fixture(autouse=True)
+    def plain_env(self, monkeypatch):
+        from cqc_cpcc.utilities import selenium_util as su
+
+        for name in ("IS_GITHUB_ACTION", "HEADLESS_BROWSER", "USE_VIRTUAL_DISPLAY"):
+            monkeypatch.setattr(su, name, False)
+        self.su = su
+
+    @pytest.mark.parametrize(
+        "browser, docker, expect",
+        [
+            (None, None, "BROWSER_TYPE"),
+            ("DOCKER_CHROME", None, "DOCKER_TYPE is not set"),
+            ("DOCKER_CHROME", "REMOTE", "DOCKER_TYPE=REMOTE"),
+            ("DOCKER_CHROME", "LOCAL", None),
+            ("LOCAL_CHROME", None, None),
+            ("BROWSERLESS", None, None),
+        ],
+    )
+    def test_settings(self, monkeypatch, browser, docker, expect):
+        monkeypatch.setattr(self.su, "BROWSER_TYPE", browser)
+        monkeypatch.setattr(self.su, "DOCKER_TYPE", docker)
+        problem = self.su.unattended_browser_problem()
+        if expect is None:
+            assert problem is None
+        else:
+            assert expect in problem
+
+    def test_headless_never_prompts(self, monkeypatch):
+        monkeypatch.setattr(self.su, "BROWSER_TYPE", None)
+        monkeypatch.setattr(self.su, "HEADLESS_BROWSER", True)
+        assert self.su.unattended_browser_problem() is None
+
+
+@pytest.mark.unit
+def test_open_browser_wraps_the_driver_for_screenshots(monkeypatch):
+    from cqc_cpcc.utilities import selenium_util
+
+    raw_driver, wait = MagicMock(), MagicMock()
+    monkeypatch.setattr(selenium_util, "unattended_browser_problem", lambda: None)
+    monkeypatch.setattr(selenium_util, "get_session_driver", lambda: (raw_driver, wait))
+    with patch("selenium.webdriver.support.event_firing_webdriver.EventFiringWebDriver") as efd, \
+            patch("cqc_cpcc.my_colleges.MyColleges") as mc:
+        driver, got_wait, got_mc = AttendanceJob(tracker_url=None)._open_browser()
+    assert got_wait is wait
+    assert driver is efd.return_value
+    assert efd.call_args.args[0] is raw_driver
+    mc.assert_called_once_with(efd.return_value, wait)
+    assert got_mc is mc.return_value
