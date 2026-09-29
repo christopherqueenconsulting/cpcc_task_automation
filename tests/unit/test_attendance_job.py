@@ -122,6 +122,92 @@ class TestAttendanceJob:
         job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
         job._store_screenshot("abc")
         assert job.latest_screenshot() == "abc"
+        assert job.tab_screenshots() == []
+
+
+def _tab_driver(handle, title, handles, shot="png"):
+    driver = MagicMock()
+    driver.current_window_handle = handle
+    driver.title = title
+    driver.window_handles = handles
+    driver.get_screenshot_as_base64.return_value = shot
+    return driver
+
+
+@pytest.mark.unit
+class TestTabScreenshots:
+    def test_each_tab_keeps_its_latest_screenshot_in_open_order(self):
+        job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+        job._capture(_tab_driver("faculty", "Faculty", ["faculty"], "f1"))
+        job._capture(_tab_driver("course", "Course", ["faculty", "course"], "c1"))
+        job._capture(_tab_driver("faculty", "Faculty", ["faculty", "course"], "f2"))
+
+        tabs = job.tab_screenshots()
+        assert [(t.handle, t.screenshot_b64, t.active) for t in tabs] == [
+            ("faculty", "f2", True), ("course", "c1", False)]
+        assert job.latest_screenshot() == "f2"
+
+    def test_closed_tabs_are_dropped(self):
+        job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+        job._capture(_tab_driver("faculty", "Faculty", ["faculty"]))
+        job._capture(_tab_driver("course", "Course", ["faculty", "course"]))
+        job._forget_closed_tabs(_tab_driver("faculty", "Faculty", ["faculty"]))
+        assert [t.handle for t in job.tab_screenshots()] == ["faculty"]
+        assert not any(t.active for t in job.tab_screenshots())
+
+    def test_given_screenshot_is_used_without_taking_another(self):
+        job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+        driver = _tab_driver("faculty", "Faculty", ["faculty"])
+        job._capture(driver, "given")
+        driver.get_screenshot_as_base64.assert_not_called()
+        assert job.latest_screenshot() == "given"
+
+    def test_screenshot_failure_is_ignored(self):
+        job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+        driver = _tab_driver("faculty", "Faculty", ["faculty"])
+        driver.get_screenshot_as_base64.side_effect = RuntimeError("tab crashed")
+        job._capture(driver)
+        assert job.latest_screenshot() is None
+
+    def test_unreadable_tab_still_keeps_the_screenshot(self):
+        job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+        driver = MagicMock()
+        driver.get_screenshot_as_base64.return_value = "shot"
+        type(driver).current_window_handle = property(
+            lambda self: (_ for _ in ()).throw(RuntimeError("no window")))
+        job._capture(driver)
+        assert job.latest_screenshot() == "shot"
+        assert job.tab_screenshots() == []
+
+    def test_forget_closed_tabs_tolerates_a_dead_browser(self):
+        job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+        driver = MagicMock()
+        type(driver).window_handles = property(
+            lambda self: (_ for _ in ()).throw(RuntimeError("gone")))
+        job._forget_closed_tabs(driver)
+
+    def test_wait_retry_screenshots_and_says_what_it_waits_for(self):
+        job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+        job.on_wait_retry(_tab_driver("course", "Course", ["course"], "stuck"),
+                          "Waiting for Deadline Dates")
+        assert job.latest_progress() == "Still waiting for deadline dates. Retrying..."
+        assert job.latest_screenshot() == "stuck"
+        job.on_progress("Course 1 of 2: CSC-134")
+        assert job.latest_progress() == "Course 1 of 2: CSC-134"
+
+    def test_run_sets_the_browser_observer(self, browser):
+        from cqc_cpcc.utilities.selenium_util import current_browser_observer
+
+        _driver, _wait, mc, seen = browser
+        mc.get_course_info.side_effect = lambda: seen.setdefault(
+            "observer", current_browser_observer())
+        job = AttendanceJob(tracker_url=None)
+        job.start()
+        _wait_for(job, PHASE_AWAITING_PLAN)
+        job.cancel()
+        assert job.done.wait(5)
+        assert seen["observer"] is job
+        assert current_browser_observer() is None
 
 
 @pytest.mark.unit
@@ -182,11 +268,24 @@ def test_open_browser_wraps_the_driver_for_screenshots(monkeypatch):
     raw_driver, wait = MagicMock(), MagicMock()
     monkeypatch.setattr(selenium_util, "unattended_browser_problem", lambda: None)
     monkeypatch.setattr(selenium_util, "get_session_driver", lambda: (raw_driver, wait))
+    job = AttendanceJob(tracker_url=None)
     with patch("selenium.webdriver.support.event_firing_webdriver.EventFiringWebDriver") as efd, \
             patch("cqc_cpcc.my_colleges.MyColleges") as mc:
-        driver, got_wait, got_mc = AttendanceJob(tracker_url=None)._open_browser()
+        driver, got_wait, got_mc = job._open_browser()
     assert got_wait is wait
     assert driver is efd.return_value
     assert efd.call_args.args[0] is raw_driver
     mc.assert_called_once_with(efd.return_value, wait)
     assert got_mc is mc.return_value
+
+    # The listener files each event screenshot under the tab it came from.
+    listener = efd.call_args.args[1]
+    raw_driver.current_window_handle = "tab-1"
+    raw_driver.title = "Faculty"
+    raw_driver.window_handles = ["tab-1"]
+    listener.screenshot_holder("shot")
+    assert [(t.handle, t.title, t.screenshot_b64) for t in job.tab_screenshots()] == [
+        ("tab-1", "Faculty", "shot")]
+    raw_driver.window_handles = []
+    listener.after_close(raw_driver)
+    assert job.tab_screenshots() == []

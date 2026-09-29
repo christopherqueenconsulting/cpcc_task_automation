@@ -16,6 +16,7 @@ screenshot nobody on the web can see.
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 
 from cqc_cpcc.run_plan import RunPlan
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
@@ -29,6 +30,16 @@ PHASE_FAILED = "failed"
 PHASE_CANCELLED = "cancelled"
 
 FINISHED_PHASES = (PHASE_SUCCEEDED, PHASE_FAILED, PHASE_CANCELLED)
+
+
+@dataclass(frozen=True)
+class TabScreenshot:
+    """The latest screenshot of one open browser tab."""
+
+    handle: str
+    title: str
+    screenshot_b64: str
+    active: bool = False
 
 
 class AttendanceJobCancelled(BaseException):
@@ -55,6 +66,9 @@ class AttendanceJob:
         self._phase = PHASE_STARTING
         self._progress: list[str] = []
         self._screenshot_b64: str | None = None
+        # handle -> (title, screenshot); insertion order is the order tabs opened.
+        self._tabs: dict[str, tuple[str, str]] = {}
+        self._active_handle: str | None = None
         self._lock = threading.Lock()
         self._plan_ready = threading.Event()
         self._cancelled = threading.Event()
@@ -97,6 +111,14 @@ class AttendanceJob:
         with self._lock:
             return self._screenshot_b64
 
+    def tab_screenshots(self) -> list[TabScreenshot]:
+        """The last screenshot of each open browser tab, in the order they opened."""
+        with self._lock:
+            return [
+                TabScreenshot(handle, title, shot, active=handle == self._active_handle)
+                for handle, (title, shot) in self._tabs.items()
+            ]
+
     # -- worker side ------------------------------------------------------------
 
     def _set_phase(self, phase: str, message: str | None = None) -> None:
@@ -109,9 +131,63 @@ class AttendanceJob:
         with self._lock:
             self._progress.append(message)
 
-    def _store_screenshot(self, screenshot_b64: str) -> None:
+    def _store_screenshot(self, screenshot_b64: str, handle: str | None = None,
+                          title: str = "", open_handles=None) -> None:
+        """Keep the newest screenshot, and the newest one per tab when the tab is known.
+
+        ``open_handles`` (the driver's current tabs) drops tabs that have closed.
+        """
         with self._lock:
             self._screenshot_b64 = screenshot_b64
+            if handle is None:
+                return
+            self._tabs[handle] = (title, screenshot_b64)
+            self._active_handle = handle
+            if open_handles is not None:
+                self._prune_tabs(open_handles)
+
+    def _prune_tabs(self, open_handles) -> None:
+        open_handles = set(open_handles)
+        for closed in [handle for handle in self._tabs if handle not in open_handles]:
+            del self._tabs[closed]
+        if self._active_handle not in self._tabs:
+            self._active_handle = None
+
+    def _forget_closed_tabs(self, driver) -> None:
+        try:
+            open_handles = driver.window_handles
+        except Exception:  # noqa: BLE001 - the browser may be gone
+            return
+        with self._lock:
+            self._prune_tabs(open_handles)
+
+    def _capture(self, driver, screenshot_b64: str | None = None) -> None:
+        """Screenshot the current tab (unless given one) and file it under that tab."""
+        try:
+            if screenshot_b64 is None:
+                screenshot_b64 = driver.get_screenshot_as_base64()
+            if not screenshot_b64:
+                return
+        except Exception:  # noqa: BLE001 - screenshots are best-effort
+            logger.debug("Screenshot failed.", exc_info=True)
+            return
+        handle = title = open_handles = None
+        try:
+            handle = driver.current_window_handle
+            title = driver.title or ""
+            open_handles = driver.window_handles
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not read the tab for a screenshot.", exc_info=True)
+        self._store_screenshot(screenshot_b64, handle, title or "", open_handles)
+
+    # Browser observer (see ``selenium_util.browser_observer_scope``).
+
+    def on_wait_retry(self, driver, wait_text: str) -> None:
+        self._record("Still %s. Retrying..." % (wait_text.lower() if wait_text else "waiting"))
+        self._capture(driver)
+
+    def on_progress(self, message: str) -> None:
+        self._record(message)
 
     def _open_browser(self):
         """A driver that screenshots each step for the page, and the MyColleges client."""
@@ -133,7 +209,11 @@ class AttendanceJob:
             raise RuntimeError(problem + " Add it to .env (or the app's secrets).")
 
         raw_driver, wait = get_session_driver()
-        driver = EventFiringWebDriver(raw_driver, ScreenshotListener(self._store_screenshot))
+        listener = ScreenshotListener(
+            lambda screenshot: self._capture(raw_driver, screenshot),
+            on_tab_closed=lambda: self._forget_closed_tabs(raw_driver),
+        )
+        driver = EventFiringWebDriver(raw_driver, listener)
         return driver, wait, MyColleges(driver, wait)
 
     def _raise_if_cancelled(self) -> None:
@@ -141,10 +221,11 @@ class AttendanceJob:
             raise AttendanceJobCancelled()
 
     def _run(self) -> None:
+        from cqc_cpcc.utilities.selenium_util import browser_observer_scope
         from cqc_cpcc.utilities.utils import mfa_handler_scope
 
         try:
-            with mfa_handler_scope(self.bridge):
+            with mfa_handler_scope(self.bridge), browser_observer_scope(self):
                 _run_tracked(self)
             self._set_phase(PHASE_SUCCEEDED, "Finished attendance.")
         except AttendanceJobCancelled:

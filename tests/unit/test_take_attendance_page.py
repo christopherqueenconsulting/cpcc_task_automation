@@ -141,6 +141,30 @@ class TestScreenshotSection:
         url = app.get("image")[0].proto.imgs[0].url
         assert "landscape" not in url
 
+    def test_each_open_browser_tab_gets_its_own_view(self, monkeypatch):
+        import base64
+
+        from cqc_streamlit_app import pexels_helper
+
+        monkeypatch.setattr(pexels_helper, "get_photo",
+                            lambda query: pytest.fail("placeholder not needed"))
+        png = base64.b64encode(base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        )).decode()
+        job = FakeJob(PHASE_AWAITING_PLAN)
+        job._store_screenshot(png, "faculty", "Faculty", ["faculty"])
+        job._store_screenshot(png, "course", "Section Details for a long course title here",
+                              ["faculty", "course"])
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        labels = [tab.label for tab in app.tabs]
+        assert labels[0] == "Live"
+        assert labels[1] == "Tab 1 · Faculty"
+        assert labels[2].startswith("Tab 2 · Section Details") and labels[2].endswith("…")
+        assert len(app.get("image")) == 3
+        assert any("The run is using this tab." in c.value for c in app.caption)
+
     def test_no_pexels_key_shows_a_caption_instead(self, monkeypatch):
         from cqc_streamlit_app import pexels_helper
 

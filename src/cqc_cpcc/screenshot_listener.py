@@ -13,8 +13,10 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 class ScreenshotListener(AbstractEventListener):
 
-    def __init__(self, screenshot_holder: Callable[..., None]):
+    def __init__(self, screenshot_holder: Callable[..., None],
+                 on_tab_closed: Callable[[], None] | None = None):
         self.screenshot_holder = screenshot_holder
+        self.on_tab_closed = on_tab_closed
 
     def after_navigate_to(self, url, driver) -> None:
         self.take_screenshot(driver)
@@ -44,6 +46,13 @@ class ScreenshotListener(AbstractEventListener):
         self.take_screenshot(driver)
         # self.take_screenshot_threaded(driver)
 
+    def after_close(self, driver) -> None:
+        if self.on_tab_closed is not None:
+            try:
+                self.on_tab_closed()
+            except Exception:  # noqa: BLE001 - never break the driver call
+                logger.debug("Tab-closed callback failed.", exc_info=True)
+
     def on_exception(self, exception, driver) -> None:
         self.take_screenshot(driver)
         # self.take_screenshot_threaded(driver)
@@ -53,13 +62,14 @@ class ScreenshotListener(AbstractEventListener):
         t.start()
 
     def take_screenshot(self, driver: WebDriver) -> None:
-
-        # TODO: Not sure if this is needed below
-        # Explicitly wait for an essential element to ensure content is loaded
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
-        # TODO: Not sure if this is needed above
-
-        saved = driver.get_screenshot_as_base64()
+        # Runs inside driver calls, so a hung or crashed tab must not turn a click
+        # or navigation into an error: screenshots are best-effort.
+        try:
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+            saved = driver.get_screenshot_as_base64()
+        except Exception as error:  # noqa: BLE001
+            logger.debug("Could Not Save Screenshot: %s", type(error).__name__)
+            return
         if saved:
             # logger.info("Screenshot taken!")
             # self.screenshot_holder(temp_file.name)
