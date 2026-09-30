@@ -36,16 +36,19 @@ from cqc_cpcc.utilities.env_constants import (
     EVA_DATE_PERCENT,
     MYCOLLEGE_URL,
 )
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
     click_given_element_wait_retry,
     close_tab,
+    describe_page,
     get_driver_wait,
     get_element_wait_retry,
     get_elements_text_as_list_wait_stale,
     getText,
+    notify_progress,
     wait_for_ajax,
     wait_for_element_to_hide,
 )
@@ -433,9 +436,23 @@ class MyColleges:
             course_end_date: DT.datetime,
     ) -> dict:
         """Read the deadline dates dialog, falling back to the course date range."""
-        click_element_wait_retry(self.driver, self.wait,
-                                 "deadline-dates-label",
-                                 "Waiting for Deadline Dates", By.ID)
+        try:
+            click_element_wait_retry(self.driver, self.wait,
+                                     "deadline-dates-label",
+                                     "Waiting for Deadline Dates", By.ID,
+                                     max_try=1)
+        except (NoSuchElementException, StaleElementReferenceException,
+                TimeoutException):
+            # Every deadline already has a fallback, so a page without the link
+            # (or one still loading) costs dates precision, not the course.
+            logger.warning(
+                "No Deadline Dates link on the course page (%s). Using the course "
+                "start and end dates instead.", describe_page(self.driver),
+            )
+            deadlines = self._fallback_deadline_dates(course_start_date, course_end_date)
+            if course_url in self.course_information:
+                self.course_information[course_url].update(deadlines)
+            return deadlines
 
         self._log_deadline_dialog_candidates()
 
@@ -475,6 +492,20 @@ class MyColleges:
                                  "Waiting for Deadline Dates Close Button")
 
         return deadlines
+
+    def _fallback_deadline_dates(
+            self,
+            course_start_date: DT.datetime,
+            course_end_date: DT.datetime,
+    ) -> dict:
+        """Deadlines built from the course dates alone, as when every span is missing."""
+        return {
+            "last_day_to_add": course_end_date,
+            "first_day_to_drop": course_start_date,
+            "last_day_to_drop_without_grade": course_end_date,
+            "last_day_to_drop_with_grade": course_end_date,
+            "eva_date": self._resolve_eva_date(None, course_start_date, course_end_date),
+        }
 
     def _read_term(self, course_name: str) -> tuple[str, str]:
         """Read the course term, tolerating anything that is not "<Semester> <Year>"."""
@@ -774,8 +805,10 @@ class MyColleges:
         bs_courses: List[BrightSpace_Course] = []
         failed_courses: list[tuple[str, Exception]] = []
 
-        for course_url, course_info in selected_courses.items():
+        total = len(selected_courses)
+        for number, (course_url, course_info) in enumerate(selected_courses.items(), start=1):
             course_name = course_info.get('name', str(course_url))
+            notify_progress("Course %d of %d: %s" % (number, total, course_name))
 
             try:
                 self.driver.switch_to.window(original_tab)
@@ -791,6 +824,12 @@ class MyColleges:
             except Exception as course_error:
                 # One course's DOM quirk must not discard the courses already processed.
                 failed_courses.append((course_name, course_error))
+                # The run itself still succeeds, so report the course's error on
+                # its own or it never reaches error tracking.
+                telemetry.capture_exception(
+                    course_error, feature="attendance",
+                    properties={"cqc_step": "course"},
+                )
                 logger.exception(
                     "Failed to process course: %s. Continuing with the remaining "
                     "courses.",
@@ -800,6 +839,7 @@ class MyColleges:
                 logger.info("Closing Tab for Course: %s" % course_name)
                 self._close_current_course_tab(original_tab)
 
+        telemetry.update_run(courses_selected=total, courses_failed=len(failed_courses))
         if failed_courses:
             logger.error("%s course(s) failed and were skipped:", len(failed_courses))
             for course_name, course_error in failed_courses:

@@ -177,6 +177,33 @@ class TestTakeScreenshot:
         mock_wait_instance.until.assert_called_once()
 
 
+    @patch('cqc_cpcc.screenshot_listener.WebDriverWait')
+    def test_take_screenshot_swallows_driver_errors(self, mock_wait_class):
+        """A hung tab must not break the driver call the listener runs inside."""
+        mock_holder = MagicMock()
+        listener = ScreenshotListener(mock_holder)
+        mock_wait_class.return_value.until.side_effect = TimeoutError("hung")
+
+        listener.take_screenshot(MagicMock())
+
+        mock_holder.assert_not_called()
+
+
+@pytest.mark.unit
+class TestAfterClose:
+    def test_after_close_calls_callback(self):
+        on_closed = MagicMock()
+        ScreenshotListener(MagicMock(), on_tab_closed=on_closed).after_close(MagicMock())
+        on_closed.assert_called_once_with()
+
+    def test_after_close_without_callback_is_a_no_op(self):
+        ScreenshotListener(MagicMock()).after_close(MagicMock())
+
+    def test_after_close_swallows_callback_errors(self):
+        on_closed = MagicMock(side_effect=RuntimeError("gone"))
+        ScreenshotListener(MagicMock(), on_tab_closed=on_closed).after_close(MagicMock())
+
+
 @pytest.mark.unit
 class TestTakeScreenshotThreaded:
     """Test take_screenshot_threaded method."""

@@ -573,6 +573,29 @@ class TestCourseFailureIsolation:
         assert processed == ["url-a", "url-b", "url-c"]
         assert len(courses) == 2
 
+    def test_course_failures_reach_error_tracking_and_progress(self):
+        from cqc_cpcc.utilities.selenium_util import browser_observer_scope
+
+        my_colleges = self._my_colleges()
+        progress = []
+        observer = type("Observer", (), {"on_progress": lambda self, m: progress.append(m)})()
+        error = RuntimeError("Waiting for Deadline Dates")
+
+        with patch.object(my_colleges, "_process_single_course",
+                          side_effect=[MagicMock(), error]), \
+                patch("cqc_cpcc.my_colleges.telemetry") as telemetry, \
+                browser_observer_scope(observer):
+            my_colleges._run_courses(
+                self._plan(["url-a", "url-b"]),
+                collect_attendance=True, mark_attendance=True,
+                collect_withdrawals=True, force_withdrawals=False,
+            )
+
+        assert progress == ["Course 1 of 2: Course A", "Course 2 of 2: Course B"]
+        telemetry.capture_exception.assert_called_once_with(
+            error, feature="attendance", properties={"cqc_step": "course"})
+        telemetry.update_run.assert_called_once_with(courses_selected=2, courses_failed=1)
+
     def test_the_course_tab_is_closed_even_when_the_course_raises(self):
         my_colleges = self._my_colleges()
 
@@ -1273,3 +1296,33 @@ class TestRunCoursesScrapesOnlyWhenNeeded:
 
         assert result == []
         assert "No courses selected" in caplog.text
+
+
+@pytest.mark.unit
+class TestMissingDeadlineDatesLink:
+    """A course page without the Deadline Dates link keeps going on the course dates."""
+
+    def test_falls_back_to_the_course_dates(self):
+        from selenium.common import TimeoutException
+
+        driver = MagicMock(title="Section Details", current_url="https://example.com/x")
+        my_colleges = MyColleges(driver, MagicMock())
+        course_url = "https://example.com/course"
+        start, end = DT.datetime(2026, 8, 17), DT.datetime(2026, 12, 11)
+        my_colleges.course_information = {course_url: {"name": "CSC-134"}}
+
+        with patch("cqc_cpcc.my_colleges.click_element_wait_retry",
+                   side_effect=TimeoutException("Waiting for Deadline Dates")) as click, \
+                patch.object(MyColleges, "_get_optional_deadline_date") as optional:
+            deadlines = my_colleges._read_deadline_dates(course_url, start, end)
+
+        # One short attempt, and no Close click for a dialog that never opened.
+        click.assert_called_once()
+        assert click.call_args.kwargs["max_try"] == 1
+        optional.assert_not_called()
+        assert deadlines["last_day_to_add"] == end
+        assert deadlines["first_day_to_drop"] == start
+        assert deadlines["last_day_to_drop_without_grade"] == end
+        assert deadlines["last_day_to_drop_with_grade"] == end
+        assert deadlines["eva_date"] is not None
+        assert my_colleges.course_information[course_url]["first_day_to_drop"] == start

@@ -39,6 +39,7 @@ from cqc_streamlit_app.utils import get_cpcc_css, on_download_click, render_mfa_
 
 JOB_KEY = "attendance_job"
 POLL_SECONDS = 1.5
+TAB_TITLE_CHARS = 32
 
 # Initialize session state variables
 init_session_state()
@@ -162,14 +163,38 @@ def _placeholder_image() -> str | None:
     return st.session_state["attendance_placeholder_image"]
 
 
+def _tab_label(number: int, title: str) -> str:
+    title = (title or "Loading...").strip()
+    if len(title) > TAB_TITLE_CHARS:
+        title = title[:TAB_TITLE_CHARS - 1] + "…"
+    return "Tab %d · %s" % (number, title)
+
+
 @st.fragment(run_every=1)
 def screenshot_section() -> None:
-    """The placeholder, replaced by each browser screenshot as the run moves along."""
+    """The placeholder, replaced by each browser screenshot as the run moves along.
+
+    "Live" shows the newest screenshot from whichever tab the run is using. Each
+    open browser tab then gets its own view with the last screenshot taken there.
+    """
     st.subheader("Attendance Screenshot")
     job: AttendanceJob | None = st.session_state.get(JOB_KEY)
     screenshot = job.latest_screenshot() if job is not None else None
     if screenshot:
-        st.image(base64.b64decode(screenshot), width="stretch")
+        browser_tabs = job.tab_screenshots()
+        if len(browser_tabs) < 2:
+            st.image(base64.b64decode(screenshot), width="stretch")
+            return
+        labels = ["Live"] + [_tab_label(number, shot.title)
+                             for number, shot in enumerate(browser_tabs, start=1)]
+        views = st.tabs(labels)
+        with views[0]:
+            st.image(base64.b64decode(screenshot), width="stretch")
+        for view, shot in zip(views[1:], browser_tabs):
+            with view:
+                if shot.active:
+                    st.caption("The run is using this tab.")
+                st.image(base64.b64decode(shot.screenshot_b64), width="stretch")
         return
     placeholder = _placeholder_image()
     if placeholder:

@@ -188,8 +188,20 @@ class TestAddHeadlessOptions:
         from cqc_cpcc.utilities.selenium_util import add_headless_options, getBaseOptions
         options = getBaseOptions()
         result = add_headless_options(options)
-        assert '--window-size=1920x1080' in result.arguments
-    
+        assert '--window-size=1920,1080' in result.arguments
+
+    def test_small_dev_shm_disables_shared_memory(self, monkeypatch):
+        from cqc_cpcc.utilities import selenium_util
+        monkeypatch.setattr(selenium_util, "dev_shm_is_small", lambda: True)
+        result = selenium_util.add_headless_options(selenium_util.getBaseOptions())
+        assert '--disable-dev-shm-usage' in result.arguments
+
+    def test_roomy_dev_shm_keeps_shared_memory(self, monkeypatch):
+        from cqc_cpcc.utilities import selenium_util
+        monkeypatch.setattr(selenium_util, "dev_shm_is_small", lambda: False)
+        result = selenium_util.add_headless_options(selenium_util.getBaseOptions())
+        assert '--disable-dev-shm-usage' not in result.arguments
+
     def test_add_headless_options_adds_no_sandbox(self):
         from cqc_cpcc.utilities.selenium_util import add_headless_options, getBaseOptions
         options = getBaseOptions()
