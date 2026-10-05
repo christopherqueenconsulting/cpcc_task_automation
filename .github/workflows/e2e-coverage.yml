@@ -1,6 +1,9 @@
 name: CI / E2E Test w/ Coverage
 
 on:
+  # Required checks must also run on merge-queue groups, or the queue waits
+  # for them until it times out.
+  merge_group:
   pull_request:
     branches:
       - master
