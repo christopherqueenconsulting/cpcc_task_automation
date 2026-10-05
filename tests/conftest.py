@@ -22,3 +22,10 @@ def _isolate_app_tempdir():
     tempfile.tempdir = _SYSTEM_TEMPDIR
     yield
     tempfile.tempdir = _SYSTEM_TEMPDIR
+
+
+@pytest.fixture(autouse=True)
+def _isolate_attendance_ledger(tmp_path, monkeypatch):
+    """Never let a test write to the real ~/.cqc_cpcc/attendance.sqlite3."""
+    monkeypatch.setenv("CQC_ATTENDANCE_DB", str(tmp_path / "attendance.sqlite3"))
+    monkeypatch.setenv("CQC_ATTENDANCE_REPORT_DIR", str(tmp_path / "attendance_reports"))

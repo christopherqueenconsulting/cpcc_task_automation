@@ -12,34 +12,6 @@ from cqc_cpcc.my_colleges import MyColleges
 
 
 @pytest.mark.unit
-class TestPromptAttendanceStartDate:
-    """Test attendance start-date prompting."""
-
-    def test_prompt_attendance_start_date_defaults_to_last_attendance_date(self):
-        my_colleges = MyColleges(MagicMock(), MagicMock())
-        course_start_date = DT.datetime(2026, 1, 10)
-
-        with patch("builtins.input", return_value=""):
-            result = my_colleges.prompt_attendance_start_date(
-                "CSC-151",
-                course_start_date,
-            )
-
-        assert result is None
-
-    def test_prompt_attendance_start_date_accepts_custom_date(self):
-        my_colleges = MyColleges(MagicMock(), MagicMock())
-
-        with patch("builtins.input", side_effect=["3", "02-15-2026"]):
-            result = my_colleges.prompt_attendance_start_date(
-                "CSC-151",
-                DT.datetime(2026, 1, 10),
-            )
-
-        assert result == DT.datetime(2026, 2, 15)
-
-
-@pytest.mark.unit
 class TestAttendanceDateRouting:
     """Test deterministic attendance date routing helpers."""
 
@@ -56,118 +28,6 @@ class TestAttendanceDateRouting:
         assert list(pending.keys()) == [DT.date(2026, 1, 10), DT.date(2026, 1, 12)]
         assert pending[DT.date(2026, 1, 10)] == ["Amy Student", "Bob Student"]
         assert pending[DT.date(2026, 1, 12)] == ["Amy Student", "Zed Student"]
-
-    def test_carry_students_to_next_consecutive_date_merges_deterministically(self):
-        my_colleges = MyColleges(MagicMock(), MagicMock())
-        pending = {DT.date(2026, 1, 12): ["Charlie Student", "Dora Student"]}
-
-        first_carry = my_colleges._carry_students_to_next_consecutive_date(
-            pending,
-            DT.date(2026, 1, 10),
-            ["Bob Student", "Amy Student"],
-            DT.date(2026, 1, 15),
-        )
-        second_carry = my_colleges._carry_students_to_next_consecutive_date(
-            pending,
-            DT.date(2026, 1, 11),
-            ["Bob Student", "Amy Student"],
-            DT.date(2026, 1, 15),
-        )
-
-        assert first_carry is True
-        assert second_carry is True
-        assert pending[DT.date(2026, 1, 11)] == ["Amy Student", "Bob Student"]
-        assert pending[DT.date(2026, 1, 12)] == [
-            "Amy Student",
-            "Bob Student",
-            "Charlie Student",
-            "Dora Student",
-        ]
-
-    def test_carry_students_to_next_consecutive_date_stops_when_no_next_selectable_date(self):
-        my_colleges = MyColleges(MagicMock(), MagicMock())
-        pending = {}
-
-        carry_result = my_colleges._carry_students_to_next_consecutive_date(
-            pending,
-            DT.date(2026, 1, 12),
-            ["Amy Student"],
-            DT.date(2026, 2, 1),
-            [DT.date(2026, 1, 12)],
-        )
-
-        assert carry_result is False
-        assert pending == {}
-
-
-@pytest.mark.unit
-class TestMarkStudentPresent:
-    """Test attendance select updates for a student."""
-
-    @patch("cqc_cpcc.my_colleges.wait_for_ajax")
-    @patch("cqc_cpcc.my_colleges.Select")
-    @patch("cqc_cpcc.my_colleges.click_given_element_wait_retry")
-    def test_mark_student_present_skips_select_when_already_present(
-        self,
-        mock_click,
-        mock_select_class,
-        mock_wait_for_ajax,
-    ):
-        driver = MagicMock()
-        wait = MagicMock()
-        select_element = MagicMock()
-        select_element.get_attribute.return_value = "P"
-        driver.find_elements.return_value = [select_element]
-        my_colleges = MyColleges(driver, wait)
-
-        success = my_colleges.mark_student_present("Jane Doe")
-
-        assert success is True
-        mock_click.assert_not_called()
-        mock_select_class.assert_not_called()
-        mock_wait_for_ajax.assert_not_called()
-        select_element.send_keys.assert_called_once_with(Keys.TAB)
-        driver.execute_script.assert_called_once_with(
-            "if (document.activeElement) { document.activeElement.blur(); }"
-        )
-
-    @patch("cqc_cpcc.my_colleges.wait_for_ajax")
-    @patch("cqc_cpcc.my_colleges.Select")
-    @patch("cqc_cpcc.my_colleges.click_given_element_wait_retry")
-    def test_mark_student_present_updates_absent_student(
-        self,
-        mock_click,
-        mock_select_class,
-        mock_wait_for_ajax,
-    ):
-        driver = MagicMock()
-        wait = MagicMock()
-        initial_select_element = MagicMock()
-        refreshed_select_element = MagicMock()
-        initial_select_element.get_attribute.return_value = "A"
-        refreshed_select_element.get_attribute.return_value = "A"
-        driver.find_elements.side_effect = [
-            [initial_select_element],
-            [refreshed_select_element],
-            [refreshed_select_element],
-        ]
-        select_instance = MagicMock()
-        mock_select_class.return_value = select_instance
-        my_colleges = MyColleges(driver, wait)
-
-        success = my_colleges.mark_student_present("Jane Doe")
-
-        assert success is True
-        mock_click.assert_called_once_with(
-            driver,
-            wait,
-            initial_select_element,
-            "Waiting for attendance select element 1",
-        )
-        mock_select_class.assert_called_once_with(refreshed_select_element)
-        select_instance.select_by_value.assert_called_once_with("P")
-        mock_wait_for_ajax.assert_called_once_with(driver)
-        refreshed_select_element.send_keys.assert_called_once_with(Keys.TAB)
 
 
 @pytest.mark.unit
@@ -315,7 +175,6 @@ class TestOptionalDeadlineDate:
     @patch("builtins.input", return_value="y")
     @patch("cqc_cpcc.my_colleges.close_tab")
     @patch("cqc_cpcc.my_colleges.BrightSpace_Course")
-    @patch("cqc_cpcc.my_colleges.get_latest_date", return_value="01-15-2026")
     @patch("cqc_cpcc.my_colleges.getText", return_value="Spring 2026")
     @patch("cqc_cpcc.my_colleges.get_element_wait_retry")
     @patch("cqc_cpcc.my_colleges.click_element_wait_retry")
@@ -334,12 +193,10 @@ class TestOptionalDeadlineDate:
         return_value=[],
     )
     @patch.object(MyColleges, "_get_last_selectable_attendance_date", return_value=None)
-    @patch.object(MyColleges, "prompt_attendance_start_date", return_value=None)
     @patch.object(MyColleges, "get_course_info")
     def test_process_attendance_uses_course_date_fallbacks_when_deadlines_missing(
         self,
         mock_get_course_info,
-        mock_prompt_attendance_start_date,
         _mock_get_last_selectable_attendance_date,
         _mock_get_selectable_attendance_dates_from_dropdown,
         mock_get_optional_deadline_date,
@@ -347,7 +204,6 @@ class TestOptionalDeadlineDate:
         mock_click_element_wait_retry,
         mock_get_element_wait_retry,
         mock_get_text,
-        mock_get_latest_date,
         mock_brightspace_course,
         mock_close_tab,
         _mock_input,
@@ -369,6 +225,8 @@ class TestOptionalDeadlineDate:
         }
         brightspace_course = MagicMock()
         brightspace_course.attendance_records = {}
+        brightspace_course.scrape_problems = []
+        brightspace_course.date_range_end = DT.date(2026, 1, 20)
         mock_brightspace_course.return_value = brightspace_course
 
         result = my_colleges.process_attendance()
@@ -378,6 +236,9 @@ class TestOptionalDeadlineDate:
         brightspace_args = mock_brightspace_course.call_args.args
         assert brightspace_args[3] == course_start_date
         assert brightspace_args[4] == course_end_date
+        # Empty ledger: the window starts at the course start (BrightSpace's start
+        # argument is exclusive, hence the day before).
+        assert brightspace_args[9] == course_start_date - DT.timedelta(days=1)
         assert (
             my_colleges.course_information[course_url]["last_day_to_add"]
             == course_end_date
@@ -795,123 +656,6 @@ class TestLastAttendanceByStudent:
         assert self._instance({})._collect_last_attendance_by_student() == {}
 
 
-@pytest.mark.unit
-class TestMarkAttendanceForCourse:
-    """The attendance-marking loop decides who gets marked present, and when.
-
-    A date the UI will not accept must carry its students forward rather than
-    dropping them, and one unmarkable student must not abort the rest.
-    """
-
-    COURSE_START = DT.datetime(2026, 1, 12)
-    COURSE_END = DT.datetime(2026, 5, 8)
-
-    def _my_colleges(self):
-        with patch("cqc_cpcc.my_colleges.get_driver_wait"):
-            return MyColleges(MagicMock(), MagicMock())
-
-    @staticmethod
-    def _context(**kwargs):
-        from cqc_cpcc.my_colleges import CourseContext
-
-        defaults = dict(
-            course_url="https://course",
-            course_name="CSC-151-N855",
-            course_start_date=TestMarkAttendanceForCourse.COURSE_START,
-            course_end_date=TestMarkAttendanceForCourse.COURSE_END,
-            last_selectable_attendance_date=DT.date(2026, 5, 8),
-            selectable_attendance_dates=[DT.date(2026, 2, 2), DT.date(2026, 2, 3)],
-        )
-        defaults.update(kwargs)
-        return CourseContext(**defaults)
-
-    @staticmethod
-    def _course(attendance_records):
-        course = MagicMock()
-        course.attendance_records = attendance_records
-        return course
-
-    def test_every_student_on_every_date_is_marked_present(self):
-        my_colleges = self._my_colleges()
-        records = {
-            DT.date(2026, 2, 2): ["Ann Adams", "Bob Brown"],
-            DT.date(2026, 2, 3): ["Cid Clark"],
-        }
-
-        with patch.object(my_colleges, "_select_attendance_date", return_value=True), \
-                patch.object(my_colleges, "mark_student_present",
-                             return_value=True) as mark:
-            my_colleges._mark_attendance_for_course(
-                self._context(), self._course(records)
-            )
-
-        assert sorted(call.args[0] for call in mark.call_args_list) == [
-            "Ann Adams", "Bob Brown", "Cid Clark",
-        ]
-
-    def test_dates_are_processed_oldest_first(self):
-        """Attendance is cumulative, so order is part of the contract."""
-        my_colleges = self._my_colleges()
-        records = {
-            DT.date(2026, 2, 3): ["Later"],
-            DT.date(2026, 2, 2): ["Earlier"],
-        }
-
-        with patch.object(my_colleges, "_select_attendance_date", return_value=True), \
-                patch.object(my_colleges, "mark_student_present",
-                             return_value=True) as mark:
-            my_colleges._mark_attendance_for_course(
-                self._context(), self._course(records)
-            )
-
-        assert [call.args[0] for call in mark.call_args_list] == ["Earlier", "Later"]
-
-    def test_a_student_who_cannot_be_marked_does_not_stop_the_others(self):
-        my_colleges = self._my_colleges()
-        records = {DT.date(2026, 2, 2): ["Ann Adams", "Bob Brown"]}
-
-        with patch.object(my_colleges, "_select_attendance_date", return_value=True), \
-                patch.object(
-                    my_colleges, "mark_student_present", side_effect=[False, True]
-                ) as mark:
-            my_colleges._mark_attendance_for_course(
-                self._context(), self._course(records)
-            )
-
-        assert mark.call_count == 2
-
-    def test_an_unselectable_date_carries_its_students_forward(self):
-        """Losing the students would silently under-report attendance."""
-        my_colleges = self._my_colleges()
-        records = {DT.date(2026, 2, 2): ["Ann Adams"]}
-
-        with patch.object(
-                my_colleges, "_select_attendance_date", side_effect=TimeoutException()
-        ), patch.object(my_colleges, "mark_student_present") as mark, \
-                patch.object(
-                    my_colleges, "_carry_students_to_next_consecutive_date",
-                    return_value=False,
-                ) as carry:
-            my_colleges._mark_attendance_for_course(
-                self._context(), self._course(records)
-            )
-
-        mark.assert_not_called()
-        carry.assert_called_once()
-        assert carry.call_args.args[1] == DT.date(2026, 2, 2)
-        assert carry.call_args.args[2] == ["Ann Adams"]
-
-    def test_no_attendance_records_is_a_no_op(self):
-        my_colleges = self._my_colleges()
-
-        with patch.object(my_colleges, "_select_attendance_date") as select, \
-                patch.object(my_colleges, "mark_student_present") as mark:
-            my_colleges._mark_attendance_for_course(self._context(), self._course({}))
-
-        select.assert_not_called()
-        mark.assert_not_called()
-
-
 # The project logger carries its own level, so caplog has to raise it by name --
 # raising only the root logger leaves DEBUG records dropped at the source.
 PROJECT_LOGGER = "cpcc_logger"
@@ -1136,38 +880,6 @@ class TestCloseCurrentCourseTab:
             my_colleges._close_current_course_tab("original")  # must not raise
 
         assert my_colleges.current_tab is None
-
-
-@pytest.mark.unit
-class TestResolveAttendanceStartDate:
-    """The plan's answer wins; otherwise the roster decides; otherwise the course."""
-
-    COURSE_START = DT.datetime(2026, 8, 17)
-
-    def test_the_plans_date_is_used_verbatim(self):
-        chosen = DT.datetime(2026, 9, 14)
-
-        assert MyColleges._resolve_attendance_start_date(
-            chosen, ["09/01/2026", "09/08/2026"], self.COURSE_START
-        ) == chosen
-
-    def test_without_a_plan_date_the_latest_recorded_attendance_wins(self):
-        resolved = MyColleges._resolve_attendance_start_date(
-            None, ["09/01/2026", "09/08/2026", "08/25/2026"], self.COURSE_START
-        )
-
-        assert resolved == DT.datetime(2026, 9, 8)
-
-    def test_an_empty_roster_falls_back_to_the_course_start(self):
-        """A brand-new course has no recorded attendance at all."""
-        assert MyColleges._resolve_attendance_start_date(
-            None, [], self.COURSE_START
-        ) == self.COURSE_START
-
-    def test_roster_dates_that_are_all_placeholders_fall_back(self):
-        assert MyColleges._resolve_attendance_start_date(
-            None, ["N/A", ""], self.COURSE_START
-        ) == self.COURSE_START
 
 
 @pytest.mark.unit

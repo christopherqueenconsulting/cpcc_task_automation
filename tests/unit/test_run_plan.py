@@ -15,7 +15,6 @@ from cqc_cpcc.run_plan import (
     MODE_SCRAPE,
     RunPlan,
     active_course_indexes,
-    prompt_attendance_start_date,
 )
 from cqc_cpcc.utilities.prompts import parse_index_selection, prompt_yes_no
 
@@ -95,73 +94,6 @@ class TestActiveCourseIndexes:
 
 
 @pytest.mark.unit
-class TestPromptAttendanceStartDate:
-    """Behaviour preserved from the original MyColleges implementation."""
-
-    def test_default_is_last_attendance_date(self):
-        with patch("builtins.input", return_value=""):
-            assert prompt_attendance_start_date(
-                "CSC-151", DT.datetime(2026, 1, 10)
-            ) is None
-
-    def test_course_start_date(self):
-        with patch("builtins.input", return_value="2"):
-            assert prompt_attendance_start_date(
-                "CSC-151", DT.datetime(2026, 1, 10)
-            ) == DT.datetime(2026, 1, 10)
-
-    def test_custom_date(self):
-        with patch("builtins.input", side_effect=["3", "02-15-2026"]):
-            assert prompt_attendance_start_date(
-                "CSC-151", DT.datetime(2026, 1, 10)
-            ) == DT.datetime(2026, 2, 15)
-
-    def test_invalid_custom_date_reprompts(self):
-        with patch("builtins.input", side_effect=["3", "not-a-date", "2"]):
-            assert prompt_attendance_start_date(
-                "CSC-151", DT.datetime(2026, 1, 10)
-            ) == DT.datetime(2026, 1, 10)
-
-    def test_non_numeric_selection_reprompts(self):
-        with patch("builtins.input", side_effect=["x", "2"]):
-            assert prompt_attendance_start_date(
-                "CSC-151", DT.datetime(2026, 1, 10)
-            ) == DT.datetime(2026, 1, 10)
-
-    def test_a_number_outside_the_menu_reprompts(self, caplog):
-        """4 is one past the last option -- the classic off-by-one."""
-        with patch("builtins.input", side_effect=["4", "2"]), \
-                caplog.at_level("WARNING"):
-            assert prompt_attendance_start_date(
-                "CSC-151", DT.datetime(2026, 1, 10)
-            ) == DT.datetime(2026, 1, 10)
-
-        assert "Invalid selection" in caplog.text
-
-    def test_a_placeholder_custom_date_reprompts_rather_than_being_accepted(self):
-        """dateparser resolves "N/A" to a real date; the start date must not."""
-        with patch("builtins.input", side_effect=["3", "N/A", "2"]):
-            assert prompt_attendance_start_date(
-                "CSC-151", DT.datetime(2026, 1, 10)
-            ) == DT.datetime(2026, 1, 10)
-
-    def test_a_date_shaped_but_impossible_value_still_reprompts(self):
-        """The digit guard lets this through; the parser has to reject it.
-
-        Proves the guard did not turn the parse failure below it into dead code.
-        The parser really does reject this value -- pinned once, against the real
-        dateparser, in test_date.py's TestPurgeRejectsPlaceholders; stubbed here
-        because each real rejection costs several seconds.
-        """
-        with patch("builtins.input", side_effect=["3", "2026-99-99", "2"]), \
-                patch("cqc_cpcc.run_plan.get_datetime",
-                      side_effect=[ValueError, DT.datetime(2026, 1, 10)]):
-            assert prompt_attendance_start_date(
-                "CSC-151", DT.datetime(2026, 1, 10)
-            ) == DT.datetime(2026, 1, 10)
-
-
-@pytest.mark.unit
 class TestNonInteractivePlan:
     """The Streamlit background thread must never hit a prompt."""
 
@@ -170,7 +102,8 @@ class TestNonInteractivePlan:
             plan = RunPlan.non_interactive(COURSES, tracker_url="https://x.sharepoint.com")
 
         assert plan.course_urls == list(COURSES)
-        assert plan.attendance_start_date is None
+        assert plan.full_recheck is False
+        assert plan.write_attendance is True
 
     def test_sync_requires_both_a_url_and_withdrawals(self):
         assert RunPlan.non_interactive(
@@ -190,11 +123,11 @@ class TestBuildInteractively:
     """All questions are asked before any course work begins."""
 
     def test_attendance_plan_gathers_courses_date_and_withdrawals(self):
-        # course selection -> start date menu -> withdrawals? -> sync? -> write for
-        # real?
+        # course selection -> full re-check? -> write attendance? -> withdrawals? ->
+        # sync? -> write for real?
         # 'all-terms' first: the picker now defaults to the current term and this
         # case deliberately spans two of them.
-        answers = ["all-terms", "1,2", "2", "y", "y", "n"]
+        answers = ["all-terms", "1,2", "y", "n", "y", "y", "n"]
 
         with patch("builtins.input", side_effect=answers):
             plan = RunPlan.build_interactively(
@@ -202,14 +135,15 @@ class TestBuildInteractively:
             )
 
         assert plan.course_urls == ["url-active", "url-ended"]
-        # The date prompt offers the earliest start among the selected courses.
-        assert plan.attendance_start_date == DT.datetime(2025, 8, 18)
+        # No start date is asked for; the ledger decides per course.
+        assert plan.full_recheck is True
+        assert plan.write_attendance is False
         assert plan.process_withdrawals is True
         assert plan.sync_to_tracker is True
         assert plan.dry_run is True
 
     def test_declining_withdrawals_skips_the_sync_questions(self):
-        with patch("builtins.input", side_effect=["all", "1", "n"]):
+        with patch("builtins.input", side_effect=["all", "", "", "n"]):
             plan = RunPlan.build_interactively(COURSES, action=ACTION_ATTENDANCE)
 
         assert plan.process_withdrawals is False
@@ -222,7 +156,7 @@ class TestBuildInteractively:
         assert plan.course_urls == []
 
     def test_default_selection_is_the_active_courses(self):
-        with patch("builtins.input", side_effect=["", "1", "n"]):
+        with patch("builtins.input", side_effect=["", "", "", "n"]):
             plan = RunPlan.build_interactively(COURSES, action=ACTION_ATTENDANCE)
 
         assert plan.course_urls == ["url-active"]
@@ -235,7 +169,7 @@ class TestBuildInteractively:
             )
 
         assert plan.withdrawals_mode == MODE_SCRAPE
-        assert plan.attendance_start_date is None
+        assert plan.full_recheck is False
         assert plan.process_withdrawals is True
 
     def test_confirming_a_real_write_clears_dry_run(self):
@@ -336,7 +270,7 @@ class TestCurrentTermFiltering:
 
     def test_picker_offers_only_current_term_courses(self):
         # Selecting "2" must mean the second FALL course, not the second overall.
-        with patch("builtins.input", side_effect=["2", "1", "n"]):
+        with patch("builtins.input", side_effect=["2", "", "", "n"]):
             plan = RunPlan.build_interactively(
                 MULTI_TERM_COURSES, action=ACTION_ATTENDANCE
             )
@@ -344,7 +278,7 @@ class TestCurrentTermFiltering:
         assert plan.course_urls == ["fall-late"]
 
     def test_all_selects_only_the_current_term(self):
-        with patch("builtins.input", side_effect=["all", "1", "n"]):
+        with patch("builtins.input", side_effect=["all", "", "", "n"]):
             plan = RunPlan.build_interactively(
                 MULTI_TERM_COURSES, action=ACTION_ATTENDANCE
             )
@@ -352,7 +286,7 @@ class TestCurrentTermFiltering:
         assert plan.course_urls == ["fall-active", "fall-late"]
 
     def test_all_terms_keyword_reveals_the_rest(self):
-        with patch("builtins.input", side_effect=["all-terms", "all", "1", "n"]):
+        with patch("builtins.input", side_effect=["all-terms", "all", "", "", "n"]):
             plan = RunPlan.build_interactively(
                 MULTI_TERM_COURSES, action=ACTION_ATTENDANCE
             )
@@ -361,7 +295,7 @@ class TestCurrentTermFiltering:
 
     def test_default_selection_is_the_running_course(self):
         # Empty answer takes the default, which is the course running today.
-        with patch("builtins.input", side_effect=["", "1", "n"]):
+        with patch("builtins.input", side_effect=["", "", "", "n"]):
             plan = RunPlan.build_interactively(
                 MULTI_TERM_COURSES, action=ACTION_ATTENDANCE
             )
@@ -374,7 +308,7 @@ class TestCurrentTermFiltering:
             if k in ("spring-past", "last-fall")
         }
 
-        with patch("builtins.input", side_effect=["all", "1", "n"]):
+        with patch("builtins.input", side_effect=["all", "", "", "n"]):
             plan = RunPlan.build_interactively(older, action=ACTION_ATTENDANCE)
 
         assert plan.course_urls == list(older)
@@ -440,39 +374,20 @@ class TestFormSelections:
         assert everything.hidden_count == 0
         assert everything.default_urls == ["url-future"]
 
-    def test_start_date_choices(self):
-        from cqc_cpcc.run_plan import (
-            START_COURSE_START,
-            START_CUSTOM,
-            START_LAST_ATTENDANCE,
-            resolve_attendance_start_date,
-        )
-
-        urls = ["url-active", "url-ended"]
-        assert resolve_attendance_start_date(START_LAST_ATTENDANCE, COURSES, urls) is None
-        assert resolve_attendance_start_date(START_COURSE_START, COURSES, urls) == DT.datetime(2025, 8, 18)
-        assert resolve_attendance_start_date(
-            START_CUSTOM, COURSES, urls, DT.date(2026, 2, 2)) == DT.datetime(2026, 2, 2)
-        with pytest.raises(ValueError):
-            resolve_attendance_start_date(START_CUSTOM, COURSES, urls)
-        with pytest.raises(ValueError):
-            resolve_attendance_start_date("bogus", COURSES, urls)
-
     def test_from_selections_matches_the_console_answers(self):
-        from cqc_cpcc.run_plan import START_CUSTOM
-
         plan = RunPlan.from_selections(
             COURSES,
             course_urls=["url-active"],
-            start_date_choice=START_CUSTOM,
-            custom_start_date=DT.date(2026, 3, 1),
+            full_recheck=True,
+            write_attendance=False,
             process_withdrawals=True,
             sync_to_tracker=True,
             write_to_tracker=True,
             tracker_url="https://tracker",
         )
         assert plan.course_urls == ["url-active"]
-        assert plan.attendance_start_date == DT.datetime(2026, 3, 1)
+        assert plan.full_recheck is True
+        assert plan.write_attendance is False
         assert plan.process_withdrawals and plan.sync_to_tracker
         assert plan.dry_run is False
         assert plan.withdrawals_mode == MODE_SCRAPE

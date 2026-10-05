@@ -75,19 +75,33 @@ class TestTakeAttendancePage:
         courses = app.multiselect[0]
         assert courses.label == "Courses to process"
         assert courses.value == ["url-now"]  # active course pre-selected
-        radio = app.radio[0]
-        assert radio.label == "Attendance start date"
-
-        radio.set_value("custom").run()
-        app.date_input[0].set_value(DT.date(2026, 9, 1)).run()
+        # No start-date question any more: the ledger decides per course.
+        assert not app.radio
+        recheck = next(c for c in app.checkbox if c.key == "attendance_full_recheck")
+        recheck.check().run()
         _button(app, "▶ Continue").click().run()
         assert not app.exception, app.exception
 
         plan = job.plan
         assert plan.course_urls == ["url-now"]
-        assert plan.attendance_start_date == DT.datetime(2026, 9, 1)
+        assert plan.full_recheck is True
+        assert plan.write_attendance is True
         assert plan.process_withdrawals is True
         assert "Attendance finished for 1 course(s)" in app.success[0].value
+
+    def test_ledger_section_shows_counts_without_names(self):
+        from cqc_cpcc.attendance_ledger import STATUS_VERIFIED, AttendanceLedger
+
+        ledger = AttendanceLedger()  # conftest points this at a temp file
+        ledger.set_status("Fall 2026", "CSC-134-N801", "1000001", DT.date(2026, 8, 19),
+                          STATUS_VERIFIED)
+        ledger.close()
+
+        app = _app()
+        app.run()
+        assert not app.exception, app.exception
+        assert any("Attendance ledger" in e.label for e in app.expander)
+        assert len(app.dataframe) >= 1
 
     def test_mfa_number_is_shown_while_signing_in(self):
         job = FakeJob(PHASE_STARTING)

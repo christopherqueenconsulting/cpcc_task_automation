@@ -145,14 +145,14 @@ prune_old_logs(LOG_DIR, _resolve_log_retention_days())
 
 
 class MyFormatter(logging.Formatter):
-    err_fmt = "ERROR: %(msg)s"
+    err_fmt = "ERROR: %(message)s"
     dbg_fmt = (
-        "[%(asctime)s %(filename)s->%(funcName)s():%(lineno)s]%(levelname)s: %(msg)s"
+        "[%(asctime)s %(filename)s->%(funcName)s():%(lineno)s]%(levelname)s: %(message)s"
     )
-    info_fmt = "%(msg)s"
+    info_fmt = "%(message)s"
 
     def __init__(self):
-        super().__init__(fmt="%(levelno)d: %(msg)s", datefmt=None, style='%')
+        super().__init__(fmt="%(levelno)d: %(message)s", datefmt=None, style='%')
 
     def format(self, record):
 
