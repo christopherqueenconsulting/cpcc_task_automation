@@ -5,7 +5,11 @@ permissions:
 
 on:
   pull_request:
+  # Required check, so it must also report on merge-queue groups.
+  merge_group:
   push:
+    branches:
+      - master
 
 jobs:
   pii-guard:
