@@ -53,7 +53,6 @@ from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
-    click_given_element_wait_retry,
     close_tab,
     describe_page,
     get_driver_wait,
@@ -305,7 +304,64 @@ class MyColleges:
             )
             return None
 
+    # Counts finished GetSectionAttendance requests (the roster load for a date).
+    # Verified live 2026-10-05: wait_for_ajax can return before that request even
+    # starts, so the roster read next was still the PREVIOUS date's. Verifying 8/17
+    # right after writing 9/28 read 9/28's roster: the 4 students present on both
+    # dates "verified", the 11 present only on 8/17 "failed", although MyColleges had
+    # saved them (its per-student totals were one higher than the ledger's).
+    _SECTION_LOADS_JS = """
+        if (!window.__cqcSectionLoads) {
+          window.__cqcSectionLoads = 0;
+          var open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function (method, url) {
+            this.__cqcUrl = url; return open.apply(this, arguments);
+          };
+          XMLHttpRequest.prototype.send = function () {
+            if (/GetSectionAttendance/i.test(String(this.__cqcUrl || ''))) {
+              this.addEventListener('loadend', function () { window.__cqcSectionLoads++; });
+            }
+            return send.apply(this, arguments);
+          };
+        }
+        return window.__cqcSectionLoads;
+    """
+    ROSTER_LOAD_TIMEOUT_SECONDS = 20
+
+    def _section_loads(self) -> int | None:
+        """How many roster loads this page has finished (None when unreadable)."""
+        try:
+            count = self.driver.execute_script(self._SECTION_LOADS_JS)
+        except Exception:
+            logger.debug("Could not count roster loads.", exc_info=True)
+            return None
+        return count if isinstance(count, int) else None
+
+    def _wait_for_roster_load(self, loads_before: int | None, formatted_date: str) -> None:
+        """Wait until the roster for the date just chosen has loaded and rendered."""
+        if loads_before is not None:
+            deadline = time.monotonic() + self.ROSTER_LOAD_TIMEOUT_SECONDS
+            while True:
+                loads = self._section_loads()
+                if loads is None or loads > loads_before:
+                    break
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "No roster reload seen after choosing %s; reading the page as it is.",
+                        formatted_date,
+                    )
+                    break
+                time.sleep(0.25)
+        wait_for_ajax(self.driver)
+
     def _select_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
+        """Choose ``record_date`` and return once MyColleges shows that date's roster."""
+        loads_before = self._section_loads()
+        datepicker_avail = self._choose_attendance_date(record_date, datepicker_avail)
+        self._wait_for_roster_load(loads_before, record_date.strftime("%-m/%-d/%Y (%A)"))
+        return datepicker_avail
+
+    def _choose_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
         formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
         datepicker_xpath = "//date-picker//input"
         date_input_found = False
@@ -814,20 +870,17 @@ class MyColleges:
                 select_element = self._student_selects(student_id)[index]
                 if select_element.get_attribute("value") == present_value:
                     continue
-                click_given_element_wait_retry(
-                    self.driver, self.wait, select_element,
-                    "Waiting for attendance select element %d" % (index + 1),
-                )
-                select_element = self._student_selects(student_id)[index]
-                if select_element.get_attribute("value") != present_value:
-                    Select(select_element).select_by_value(present_value)
-                    wait_for_ajax(self.driver)
+                # Choose the option directly; never click the select open first.
+                # Verified live 2026-10-05: clicking it opened the native dropdown in
+                # the Docker Chrome, and the TAB sent afterwards picked the dropdown's
+                # highlighted first option ("Select Attendance"). Each student was
+                # saved (PutStudentAttendance) then cleared (DeleteStudentAttendance),
+                # and the overlapping saves left the row spinner running.
+                Select(select_element).select_by_value(present_value)
+                wait_for_ajax(self.driver)
 
-            # Release focus so the change event fires and the tab can be closed.
+            # Release focus (no keystrokes: see above) so the tab can be closed.
             try:
-                final_selects = self._student_selects(student_id)
-                if final_selects:
-                    final_selects[-1].send_keys(Keys.TAB)
                 self.driver.execute_script(
                     "if (document.activeElement) { document.activeElement.blur(); }"
                 )

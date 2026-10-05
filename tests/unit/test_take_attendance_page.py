@@ -150,6 +150,21 @@ class TestTakeAttendancePage:
         assert any("Attendance ledger" in e.label for e in app.expander)
         assert len(app.dataframe) >= 1
 
+    def test_ledger_tables_explain_their_columns(self):
+        from cqc_cpcc.attendance_ledger import STATUS_FAILED, AttendanceLedger
+
+        ledger = AttendanceLedger()
+        ledger.set_status("Fall 2026", "CSC-134-N801", "1000001", DT.date(2026, 8, 17),
+                          STATUS_FAILED, "not Present after reload")
+        ledger.close()
+        app = _app()
+        app.run()
+        assert not app.exception, app.exception
+        assert any(block.value == "**Glossary** ⓘ" and "failed" in (block.help or "")
+                   for block in app.markdown)
+        # Hover help on the "failed" column header of the per-date table.
+        assert any('"failed": {"help"' in table.proto.columns for table in app.dataframe)
+
     def test_mfa_number_is_shown_while_signing_in(self):
         job = FakeJob(PHASE_STARTING)
         job.bridge.on_challenge(MfaChallenge(context="microsoft", number="47"))
