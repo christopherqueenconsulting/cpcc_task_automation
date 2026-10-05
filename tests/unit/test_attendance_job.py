@@ -289,3 +289,12 @@ def test_open_browser_wraps_the_driver_for_screenshots(monkeypatch):
     raw_driver.window_handles = []
     listener.after_close(raw_driver)
     assert job.tab_screenshots() == []
+
+
+@pytest.mark.unit
+def test_warnings_are_kept_in_order_for_the_page():
+    job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+    assert job.warnings() == []
+    job.on_warning("first")
+    job.on_warning("second")
+    assert job.warnings() == ["first", "second"]
