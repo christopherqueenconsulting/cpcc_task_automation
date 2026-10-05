@@ -58,6 +58,10 @@ jobs:
           
           # Coverage file to upload
           files: ./coverage-integration.xml
+          # Upload only this job's report. Without this the uploader also picks up
+          # any other coverage*.xml in the checkout (stale ones were once committed)
+          # and Codecov merges their old line numbers into the new report.
+          disable_search: true
           
           # Flag to categorize this upload
           flags: integration

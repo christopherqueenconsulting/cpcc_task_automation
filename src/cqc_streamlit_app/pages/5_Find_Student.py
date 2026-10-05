@@ -118,7 +118,7 @@ def main():
 
             # Add a editable table of all the students found
             edited_df = fs_placeholder.data_editor(data=df,
-                                                   use_container_width=True,
+                                                   width="stretch",
                                                    num_rows="dynamic",
                                                    hide_index=True,
                                                    column_config={
@@ -172,7 +172,7 @@ def on_find_by_change():
         found_students = json.loads(st.session_state.found_students)
         # found_students = st.session_state.found_students
         st.dataframe(data=found_students,
-                     use_container_width=True,
+                     width="stretch",
                      hide_index=True,
                      column_config={
                          1: st.column_config.TextColumn("ID"),

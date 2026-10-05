@@ -202,8 +202,8 @@ class TestLoggerConfiguration:
 
         for handler in logger.handlers:
             if isinstance(handler, RotatingFileHandler):
-                assert handler.maxBytes == 250000000  # 250MB
-                assert handler.backupCount == 10
+                assert handler.maxBytes == 50_000_000  # 50MB
+                assert handler.backupCount == 5
                 break
         else:
             pytest.fail("No RotatingFileHandler found in logger")
@@ -235,3 +235,45 @@ class TestLoggerUsage:
             assert "Test debug message" in caplog.text
         finally:
             logger.setLevel(original_level)
+
+
+@pytest.mark.unit
+class TestLogRetention:
+    """Old log files are pruned; recent ones are kept."""
+
+    def test_prune_old_logs(self, tmp_path):
+        import os
+        import time
+
+        from cqc_cpcc.utilities.logger import prune_old_logs
+
+        old = tmp_path / "cpcc_2026_01_01.log"
+        old_rotated = tmp_path / "openai" / "openai_debug_2026_01_01.log.1"
+        recent = tmp_path / "cpcc_today.log"
+        keep = tmp_path / ".gitkeep"
+        old_rotated.parent.mkdir()
+        for path in (old, old_rotated, recent, keep):
+            path.write_text("x")
+        now = time.time()
+        for path in (old, old_rotated, keep):
+            os.utime(path, (now - 30 * 86400, now - 30 * 86400))
+
+        assert prune_old_logs(str(tmp_path), 14, now=now) == 2
+        assert recent.exists() and keep.exists()
+        assert not old.exists() and not old_rotated.exists()
+
+    def test_zero_retention_disables_pruning(self, tmp_path):
+        from cqc_cpcc.utilities.logger import prune_old_logs
+
+        (tmp_path / "a.log").write_text("x")
+        assert prune_old_logs(str(tmp_path), 0) == 0
+
+    @pytest.mark.parametrize("raw,expected", [(None, 14), ("", 14), ("7", 7), ("-3", 0), ("x", 14)])
+    def test_retention_days_from_env(self, monkeypatch, raw, expected):
+        from cqc_cpcc.utilities.logger import _resolve_log_retention_days
+
+        if raw is None:
+            monkeypatch.delenv("CQC_LOG_RETENTION_DAYS", raising=False)
+        else:
+            monkeypatch.setenv("CQC_LOG_RETENTION_DAYS", raw)
+        assert _resolve_log_retention_days() == expected

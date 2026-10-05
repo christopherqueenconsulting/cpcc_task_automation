@@ -1,6 +1,7 @@
 import datetime as DT
 from typing import Optional, Annotated, List, TypeVar
 
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.exam_review import JavaCode
 from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm_model
 from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
@@ -138,6 +139,7 @@ def init_page(driver: WebDriver, wait: WebDriverWait) -> str:
     return original_window
 
 
+@telemetry.tracked_run("project_feedback")
 def give_project_feedback():
     driver, wait = get_session_driver()
 
@@ -145,6 +147,7 @@ def give_project_feedback():
 
     # Find All Courses in Brightspace
     course_urls = get_course_urls(driver, wait)
+    telemetry.update_run(courses=len(course_urls))
     logger.info("Course Urls:\n%s" % "\n".join(course_urls))
 
     # Process submissions for each course

@@ -5,6 +5,7 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriver
 from selenium.webdriver.support.wait import WebDriverWait
 
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.my_colleges import MyColleges
 from cqc_cpcc.run_plan import ACTION_ATTENDANCE, RunPlan
@@ -15,6 +16,7 @@ from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last
 from cqc_cpcc.withdrawal_processing import process_withdrawals_for_courses
 
 
+@telemetry.tracked_run("attendance")
 def take_attendance(attendance_tracker_url: str, plan: RunPlan = None):
     """Record attendance, then optionally process withdrawals.
 
@@ -37,16 +39,29 @@ def take_attendance(attendance_tracker_url: str, plan: RunPlan = None):
                 dry_run_default=WITHDRAWALS_TRACKER_DRY_RUN,
             )
 
-        bs_courses = mc.process_attendance(plan)
-
-        if plan.process_withdrawals:
-            process_withdrawals_for_courses(driver, wait, bs_courses, plan)
-        else:
-            logger.info("Skipping withdrawal processing (not requested).")
-
-        logger.info("Finished Attendance")
+        run_attendance_plan(driver, wait, mc, plan)
     finally:
         driver.quit()
+
+
+def run_attendance_plan(driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait,
+                        mc: MyColleges, plan: RunPlan) -> List[BrightSpace_Course]:
+    """Record attendance for an already-built plan, then process withdrawals if asked.
+
+    Shared by the console run and the Streamlit page, which builds the plan from a
+    form instead of console prompts.
+    """
+    telemetry.update_run(courses=len(plan.course_urls), dry_run=plan.dry_run,
+                         process_withdrawals=plan.process_withdrawals)
+    bs_courses = mc.process_attendance(plan)
+
+    if plan.process_withdrawals:
+        process_withdrawals_for_courses(driver, wait, bs_courses, plan)
+    else:
+        logger.info("Skipping withdrawal processing (not requested).")
+
+    logger.info("Finished Attendance")
+    return bs_courses
 
 
 def open_attendance_tracker(driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait,

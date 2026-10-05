@@ -251,6 +251,7 @@ def wait_for_user_action(
 # on-screen number (with a screenshot fallback) so the UI can surface it, and
 # ``MfaBridge`` relays that between a background login thread and the UI.
 
+import contextlib  # noqa: E402
 import threading  # noqa: E402  (kept local to the MFA section)
 from dataclasses import dataclass  # noqa: E402
 
@@ -347,6 +348,10 @@ class MfaBridge:
     def on_challenge(self, challenge: MfaChallenge) -> None:
         with self._lock:
             self._challenge = challenge
+            # A run can sign in more than once (MyColleges, then BrightSpace, then
+            # the tracker); a new challenge means the earlier approval no longer
+            # applies.
+            self._resolved.clear()
 
     def on_resolved(self) -> None:
         self._resolved.set()
@@ -365,8 +370,88 @@ class MfaBridge:
         return self._resolved.is_set()
 
     @property
+    def pending_challenge(self) -> MfaChallenge | None:
+        """The challenge still waiting for approval, or ``None`` once approved."""
+        with self._lock:
+            return None if self._resolved.is_set() else self._challenge
+
+    @property
     def cancelled(self) -> bool:
         return self._cancelled.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Browser observer: lets the web app see a run that is stuck waiting
+# ---------------------------------------------------------------------------
+#
+# The retry helpers below can spend minutes on one missing element. Screenshots
+# otherwise only come from driver events (navigate, click), so the page kept
+# showing an old view while the run waited. A background run sets an observer for
+# its thread; each failed wait tells it what is being waited for, so it can take a
+# screenshot of the current tab and say so on the page.
+
+_observer_scope = threading.local()
+
+
+@contextlib.contextmanager
+def browser_observer_scope(observer):
+    """Send wait and progress notices on this thread to ``observer``.
+
+    ``observer`` may define ``on_wait_retry(driver, wait_text)`` and
+    ``on_progress(message)``; either may be missing.
+    """
+    previous = getattr(_observer_scope, "observer", None)
+    _observer_scope.observer = observer
+    try:
+        yield observer
+    finally:
+        _observer_scope.observer = previous
+
+
+def current_browser_observer():
+    """The observer set by ``browser_observer_scope`` on this thread, or ``None``."""
+    return getattr(_observer_scope, "observer", None)
+
+
+def describe_page(driver: WebDriver) -> str:
+    """The current tab's title and path (no query string), for logs. Never raises."""
+    try:
+        title = driver.title or "(no title)"
+    except Exception:  # noqa: BLE001 - diagnostics only
+        return "(page unavailable)"
+    try:
+        from urllib.parse import urlsplit
+        path = urlsplit(driver.current_url or "").path or "/"
+    except Exception:  # noqa: BLE001
+        path = "?"
+    return "%r at %s" % (title, path)
+
+
+def notify_wait_retry(driver: WebDriver, wait_text: str) -> None:
+    """Log what the page shows while a wait retries, and tell the observer."""
+    logger.info("Still %s. Current page: %s", wait_text.lower() if wait_text else "waiting",
+                describe_page(driver))
+    observer = current_browser_observer()
+    callback = getattr(observer, "on_wait_retry", None)
+    if callback is None:
+        return
+    try:
+        callback(driver, wait_text)
+    except Exception:  # noqa: BLE001 - an observer must never break the run
+        logger.debug("Browser observer failed on wait retry.", exc_info=True)
+
+
+def notify_progress(message: str) -> None:
+    """Tell the observer (if any) where the run is. Logged either way."""
+    logger.info(message)
+    observer = current_browser_observer()
+    callback = getattr(observer, "on_progress", None)
+    if callback is None:
+        return
+    try:
+        callback(message)
+    except Exception:  # noqa: BLE001
+        logger.debug("Browser observer failed on progress.", exc_info=True)
 
 
 class BrowserType(Enum):
@@ -482,6 +567,30 @@ def close_tab(driver: WebDriver, handles: list[str] = None, max_retry=3):
             if (max_retry > 0):
                 close_tab(driver, handles, max_retry - 1)
                 pass
+
+
+def unattended_browser_problem() -> str | None:
+    """Why ``get_browser_driver`` would stop at a console prompt, or ``None``.
+
+    A web-app run happens on a background thread with no console, so a prompt
+    there hangs the run forever. Callers without a console check this first and
+    report the missing setting instead.
+    """
+    if IS_GITHUB_ACTION or HEADLESS_BROWSER or USE_VIRTUAL_DISPLAY:
+        return None
+    browser_type = _enum_from_env(BrowserType, BROWSER_TYPE)
+    if browser_type is None:
+        return ("BROWSER_TYPE is not set (DOCKER_CHROME, LOCAL_CHROME or BROWSERLESS), "
+                "so the browser choice would be asked on the console.")
+    if browser_type == BrowserType.DOCKER_CHROME:
+        docker_type = _enum_from_env(DockerType, DOCKER_TYPE)
+        if docker_type is None:
+            return ("DOCKER_TYPE is not set (LOCAL or REMOTE), so the Docker choice "
+                    "would be asked on the console.")
+        if docker_type == DockerType.REMOTE:
+            return ("DOCKER_TYPE=REMOTE asks for the remote host on the console; use "
+                    "DOCKER_TYPE=LOCAL, LOCAL_CHROME or BROWSERLESS for the web app.")
+    return None
 
 
 def get_browser_driver():
@@ -723,6 +832,19 @@ def add_docker_chrome_options(options: Options) -> Options:
 
     return options
 
+SMALL_DEV_SHM_BYTES = 512 * 1024 * 1024
+
+
+def dev_shm_is_small(path: str = "/dev/shm") -> bool:
+    """True when shared memory is too small for Chrome (common in containers)."""
+    try:
+        stats = os.statvfs(path)
+    except (AttributeError, OSError):
+        # No /dev/shm (macOS, Windows): Chrome does not use it there.
+        return False
+    return stats.f_frsize * stats.f_blocks < SMALL_DEV_SHM_BYTES
+
+
 def add_headless_options(options: Options) -> Options:
     # options.add_argument("--headless=new") # <--- DOES NOT WORK
     # options.add_argument("--headless=chrome")  # <--- WORKING
@@ -730,7 +852,7 @@ def add_headless_options(options: Options) -> Options:
 
     # Additional options while headless
     options.add_argument('--start-maximized')  # Working
-    options.add_argument("--window-size=1920x1080")  # Working
+    options.add_argument("--window-size=1920,1080")  # Chrome wants a comma, not an "x"
     options.add_argument('--disable-popup-blocking')  # Working
     options.add_argument('--incognito')  # Working
     options.add_argument('--no-sandbox')  # Working
@@ -739,7 +861,11 @@ def add_headless_options(options: Options) -> Options:
     options.add_argument('--disable-extensions')  # Working
     options.add_argument('--disable-infobars')  # Working
     options.add_argument('--disable-browser-side-navigation')  # Working
-    #options.add_argument('--disable-dev-shm-usage')  # Working
+    if dev_shm_is_small():
+        # Hosted containers (Streamlit Community Cloud) give /dev/shm about 64 MB.
+        # Chrome keeps each tab's rendering memory there, so the second tab
+        # (a course page) can hang or crash while the first loads fine.
+        options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-features=VizDisplayCompositor')  # Working
     options.add_argument('--dns-prefetch-disable')  # Working
     options.add_argument("--force-device-scale-factor=1")  # Working
@@ -770,7 +896,7 @@ def getBaseOptions(base_download_directory: str = None):
     # TODO: Make sure options above are working as expected
 
     # Options to make us undetectable (Review https://amiunique.org/fingerprint from the browser to verify)
-    options.add_argument("window-size=1920x1080")
+    options.add_argument("window-size=1920,1080")
     options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.91 Safari/537.36")
 
@@ -932,6 +1058,7 @@ def click_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_val
 
     except (StaleElementReferenceException, ElementNotInteractableException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale or Not Interactable | .....retrying")
+        notify_wait_retry(driver, wait_text)
         time.sleep(5)  # wait 5 seconds
         if max_try > 0:
             # Still have retries left, decrement and retry
@@ -999,6 +1126,7 @@ def get_element_wait_retry(driver: WebDriver, wait: WebDriverWait, find_by_value
 
     except (StaleElementReferenceException, TimeoutException) as se:
         logger.debug(wait_text + " | Stale | .....retrying")
+        notify_wait_retry(driver, wait_text)
         time.sleep(5)  # wait 5 seconds
         if max_try > 1:
             element = get_element_wait_retry(driver, wait, find_by_value, wait_text, find_by, max_try - 1)

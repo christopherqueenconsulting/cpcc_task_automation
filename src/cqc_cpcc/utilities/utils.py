@@ -1,8 +1,10 @@
 import os
 import os.path
 import tempfile
+import threading
 import time
 import zipfile
+from contextlib import contextmanager
 from enum import Enum, StrEnum
 from functools import lru_cache
 from random import randint
@@ -852,7 +854,32 @@ def _resolve_mfa(mfa_handler) -> None:
             logger.debug("MFA handler on_resolved failed: %s", e)
 
 
+# Login is triggered deep inside MyColleges / BrightSpace / tracker code that has no
+# way to pass an MFA handler down. A background job (the Streamlit attendance page)
+# sets one for its own thread with ``mfa_handler_scope`` and every ``login_if_needed``
+# on that thread picks it up. Thread-local, so concurrent sessions never share one.
+_mfa_scope = threading.local()
+
+
+@contextmanager
+def mfa_handler_scope(mfa_handler):
+    """Use ``mfa_handler`` for every login on this thread inside the ``with`` block."""
+    previous = getattr(_mfa_scope, "handler", None)
+    _mfa_scope.handler = mfa_handler
+    try:
+        yield mfa_handler
+    finally:
+        _mfa_scope.handler = previous
+
+
+def current_mfa_handler():
+    """The handler set by ``mfa_handler_scope`` on this thread, or ``None``."""
+    return getattr(_mfa_scope, "handler", None)
+
+
 def login_if_needed(driver: WebDriver, mfa_handler=None):
+    if mfa_handler is None:
+        mfa_handler = current_mfa_handler()
     # sleep for 3 seconds
     time.sleep(3)
     if "Web Login Service" in driver.title:

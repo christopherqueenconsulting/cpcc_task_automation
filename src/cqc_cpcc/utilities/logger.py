@@ -1,7 +1,14 @@
 import datetime as DT
 import logging
 import os
+import time
 from logging.handlers import RotatingFileHandler
+
+from cqc_cpcc.utilities.pii_redaction import install_log_redaction
+
+# Logs hold operational detail about runs over student records. Everything written
+# is passed through pii_redaction first; retention keeps what remains short-lived.
+DEFAULT_LOG_RETENTION_DAYS = 14
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -63,6 +70,43 @@ def _resolve_openai_debug_log_level() -> int:
     return logging.INFO
 
 
+def _resolve_log_retention_days() -> int:
+    """Days to keep log files (``CQC_LOG_RETENTION_DAYS``, default 14; 0 disables)."""
+    raw_value = os.getenv("CQC_LOG_RETENTION_DAYS")
+    try:
+        return max(0, int(raw_value)) if raw_value not in (None, "") else DEFAULT_LOG_RETENTION_DAYS
+    except ValueError:
+        return DEFAULT_LOG_RETENTION_DAYS
+
+
+def _restrict_permissions(path: str) -> None:
+    """Make ``path`` readable by the current user only (best effort; no-op on Windows)."""
+    try:
+        os.chmod(path, 0o700 if os.path.isdir(path) else 0o600)
+    except OSError:
+        pass
+
+
+def prune_old_logs(log_dir: str, retention_days: int, now: float | None = None) -> int:
+    """Delete ``*.log*`` files under ``log_dir`` older than ``retention_days``."""
+    if retention_days <= 0 or not os.path.isdir(log_dir):
+        return 0
+    cutoff = (now if now is not None else time.time()) - retention_days * 86400
+    removed = 0
+    for root, _dirs, files in os.walk(log_dir):
+        for name in files:
+            if ".log" not in name:
+                continue
+            path = os.path.join(root, name)
+            try:
+                if os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 def _replace_rotating_file_handlers(
         target_logger: logging.Logger,
         handler: RotatingFileHandler,
@@ -94,7 +138,10 @@ logger.setLevel(base_logger_level)
 today = DT.date.today()
 # Log to file
 LOGGING_FILENAME = 'logs/' + base_name + '_' + today.strftime("%Y_%m_%d") + '.log'
-os.makedirs(os.path.dirname(LOGGING_FILENAME), exist_ok=True)
+LOG_DIR = os.path.dirname(LOGGING_FILENAME)
+os.makedirs(LOG_DIR, exist_ok=True)
+_restrict_permissions(LOG_DIR)
+prune_old_logs(LOG_DIR, _resolve_log_retention_days())
 
 
 class MyFormatter(logging.Formatter):
@@ -140,11 +187,15 @@ fmt = MyFormatter()
 
 file_handler = RotatingFileHandler(
     LOGGING_FILENAME,
-    maxBytes=250000000,
-    backupCount=10,
-)  # 10 files of 250MB each
+    maxBytes=50_000_000,
+    backupCount=5,
+)  # 5 files of 50MB each per day; older days are pruned by prune_old_logs
 file_handler.setFormatter(fmt)
 _replace_rotating_file_handlers(logger, file_handler)
+_restrict_permissions(LOGGING_FILENAME)
+# Scrub student identifiers from the log file and from the console (the root
+# handler installed by basicConfig above, which every propagating logger reaches).
+install_log_redaction(file_handler, *logging.getLogger().handlers)
 
 # Setup OpenAI debug logger (separate channel)
 openai_debug_logger = logging.getLogger("openai.debug")
@@ -153,10 +204,11 @@ openai_debug_logger.setLevel(_resolve_openai_debug_log_level())
 # Add file handler for OpenAI debug logs (separate file)
 OPENAI_DEBUG_FILENAME = f'logs/openai/openai_debug_{today.strftime("%Y_%m_%d")}.log'
 os.makedirs(os.path.dirname(OPENAI_DEBUG_FILENAME), exist_ok=True)
+_restrict_permissions(os.path.dirname(OPENAI_DEBUG_FILENAME))
 openai_debug_handler = RotatingFileHandler(
     OPENAI_DEBUG_FILENAME,
-    maxBytes=250000000,
-    backupCount=10
+    maxBytes=50_000_000,
+    backupCount=5
 )
 
 # Use detailed format for debug logs
@@ -165,6 +217,7 @@ debug_format = logging.Formatter(
 )
 openai_debug_handler.setFormatter(debug_format)
 _replace_rotating_file_handlers(openai_debug_logger, openai_debug_handler)
+install_log_redaction(openai_debug_handler)
 
 # Prevent propagation to root logger (keep debug logs separate)
 openai_debug_logger.propagate = False

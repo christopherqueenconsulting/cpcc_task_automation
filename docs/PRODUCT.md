@@ -640,20 +640,25 @@ Not measured. Neither instructor time saved nor API spend has been tracked, so n
 - Feedback documents
 
 **What data is stored**:
-- Logs (rotated, no PII)
+- Logs (local, 14-day retention by default). Every line is scrubbed: student names become stable aliases (`student_xxxxxxxx`), and IDs, e-mails and BrightSpace ids are removed
+- Withdrawal CSVs (names, IDs, e-mails) in the git-ignored `WITHDRAWALS_CSV_DIR`
+- Temp files (downloaded submissions, screenshots, generated documents) in a private temp directory, purged after 24 hours by default
 - Configuration (no passwords in logs)
 
 **What data is transmitted**:
-- To OpenAI: Student code and context (for feedback)
-- To BrightSpace/MyColleges: Attendance records
+- To OpenAI / OpenRouter: Student code and context (for grading and feedback); file names in prompts are scrubbed
+- To BrightSpace/MyColleges/Attendance Tracker: Grades, attendance and withdrawal records
+- To PostHog (optional): Run counts, durations, token usage and scrubbed error types, with no student data
 
 ### Security Measures
 
 - Credentials stored in environment variables (not code)
 - HTTPS for all web requests
-- No long-term storage of student data
-- Logs exclude sensitive information
+- Runtime PII redaction on every log sink, plus the PII Guard CI check on the repository
+- Log and temp-file retention limits; log and temp directories readable only by the user
 - API keys never logged
+
+Details: [PRIVACY_AND_TELEMETRY.md](PRIVACY_AND_TELEMETRY.md)
 
 ### Compliance
 

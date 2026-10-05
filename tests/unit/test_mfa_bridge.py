@@ -125,3 +125,39 @@ def test_mfa_bridge_relays_challenge_and_lifecycle():
     bridge.cancel()
     bridge.on_resolved()
     assert bridge.cancelled and bridge.resolved
+
+
+@pytest.mark.unit
+def test_pending_challenge_clears_on_approval_and_returns_on_the_next_login():
+    bridge = MfaBridge()
+    bridge.on_challenge(MfaChallenge(context="microsoft", number="12"))
+    assert bridge.pending_challenge.number == "12"
+
+    bridge.on_resolved()
+    assert bridge.pending_challenge is None
+
+    # A later sign-in in the same run (e.g. BrightSpace after MyColleges).
+    bridge.on_challenge(MfaChallenge(context="microsoft", number="34"))
+    assert not bridge.resolved
+    assert bridge.pending_challenge.number == "34"
+
+
+@pytest.mark.unit
+def test_login_if_needed_uses_the_thread_mfa_handler(mocker):
+    from cqc_cpcc.utilities import utils
+
+    mocker.patch.object(utils.time, "sleep")
+    login = mocker.patch.object(utils, "microsoft_login")
+    driver = MagicMock(title="Sign in to your account")
+    handler = MfaBridge()
+
+    with utils.mfa_handler_scope(handler):
+        utils.login_if_needed(driver)
+    login.assert_called_once_with(driver, mfa_handler=handler)
+
+    # An explicit handler still wins, and the scope does not leak.
+    other = MfaBridge()
+    with utils.mfa_handler_scope(handler):
+        utils.login_if_needed(driver, mfa_handler=other)
+    assert login.call_args.kwargs["mfa_handler"] is other
+    assert utils.current_mfa_handler() is None

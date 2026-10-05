@@ -152,6 +152,73 @@ def current_term_indexes(
     return matching
 
 
+# Attendance start-date choices, shared by the console prompt and the web form.
+START_LAST_ATTENDANCE = "last_attendance"
+START_COURSE_START = "course_start"
+START_CUSTOM = "custom"
+
+
+@dataclass
+class CourseChoices:
+    """The courses a picker should offer, and which of them to pre-select."""
+
+    urls: list[str]
+    labels: list[str]
+    default_urls: list[str]
+    hidden_count: int
+    term_text: str
+
+
+def course_choices(
+        course_information: dict,
+        *,
+        include_all_terms: bool = False,
+        today: DT.date | None = None,
+) -> CourseChoices:
+    """Courses to offer: this term's by default, every course if asked or none match.
+
+    Currently active courses are pre-selected; when none are active, all offered
+    courses are.
+    """
+    today = today or DT.date.today()
+    all_urls = list(course_information.keys())
+    in_term = current_term_indexes(course_information, today)
+    show_all = include_all_terms or not in_term
+
+    urls = all_urls if show_all else [all_urls[i] for i in in_term]
+    active_urls = {
+        all_urls[i] for i in active_course_indexes(course_information, today)
+    }
+    defaults = [url for url in urls if url in active_urls] or list(urls)
+    current_term = term_for_date(today)
+
+    return CourseChoices(
+        urls=urls,
+        labels=[_course_label(course_information[url], url) for url in urls],
+        default_urls=defaults,
+        hidden_count=len(all_urls) - len(urls),
+        term_text=" ".join(current_term) if current_term else "this term",
+    )
+
+
+def resolve_attendance_start_date(
+        choice: str,
+        course_information: dict,
+        course_urls: list[str],
+        custom_date: DT.date | DT.datetime | None = None,
+) -> DT.datetime | None:
+    """Turn a start-date choice into the plan value (``None`` = last attendance date)."""
+    if choice == START_LAST_ATTENDANCE:
+        return None
+    if choice == START_COURSE_START:
+        return RunPlan._representative_start_date(course_information, course_urls)
+    if choice == START_CUSTOM:
+        if custom_date is None:
+            raise ValueError("A custom start date is required.")
+        return convert_date_to_datetime(custom_date)
+    raise ValueError("Unknown attendance start-date choice: %r" % choice)
+
+
 @dataclass
 class RunPlan:
     """Everything a run needs to know, gathered before any browser work starts."""
@@ -197,6 +264,42 @@ class RunPlan:
             tracker_url=tracker_url,
             sync_to_tracker=bool(tracker_url) and process_withdrawals,
             dry_run=dry_run,
+        )
+
+    @classmethod
+    def from_selections(
+            cls,
+            course_information: dict,
+            *,
+            course_urls: list[str],
+            start_date_choice: str = START_LAST_ATTENDANCE,
+            custom_start_date: DT.date | DT.datetime | None = None,
+            process_withdrawals: bool = True,
+            sync_to_tracker: bool = False,
+            write_to_tracker: bool = False,
+            tracker_url: str | None = None,
+    ) -> "RunPlan":
+        """Build an attendance plan from answers given in a form (the web app).
+
+        Same questions and meaning as :meth:`build_interactively`: courses, start
+        date, whether to process withdrawals, whether to sync them to the tracker,
+        and whether that sync writes for real (otherwise a dry run).
+        """
+        unknown = [url for url in course_urls if url not in course_information]
+        if unknown:
+            raise ValueError("%d selected course(s) are not in the course list." % len(unknown))
+
+        sync = bool(process_withdrawals and sync_to_tracker and tracker_url)
+        return cls(
+            course_urls=list(course_urls),
+            attendance_start_date=resolve_attendance_start_date(
+                start_date_choice, course_information, course_urls, custom_start_date
+            ) if course_urls else None,
+            process_withdrawals=process_withdrawals,
+            withdrawals_mode=MODE_SCRAPE,
+            tracker_url=tracker_url,
+            sync_to_tracker=sync,
+            dry_run=not (sync and write_to_tracker),
         )
 
     @staticmethod
@@ -306,60 +409,47 @@ class RunPlan:
 
     @staticmethod
     def _prompt_course_selection(course_information: dict) -> list[str]:
-        all_urls = list(course_information.keys())
-        if not all_urls:
+        if not course_information:
             logger.warning("No courses found on the Faculty page.")
             return []
 
-        current_term = term_for_date(DT.date.today())
-        in_term = current_term_indexes(course_information)
         # Show every course only when nothing matches this term, so the picker is
         # never empty.
-        show_all_terms = not in_term
+        include_all_terms = False
 
         while True:
-            visible_urls = (
-                all_urls if show_all_terms else [all_urls[i] for i in in_term]
+            choices = course_choices(
+                course_information, include_all_terms=include_all_terms
             )
-            labels = [
-                _course_label(course_information[url], url) for url in visible_urls
-            ]
-
-            active_urls = {
-                all_urls[i] for i in active_course_indexes(course_information)
-            }
-            defaults = [
-                position
-                for position, url in enumerate(visible_urls)
-                if url in active_urls
-            ] or list(range(len(visible_urls)))
-
-            hidden = len(all_urls) - len(visible_urls)
-            term_text = " ".join(current_term) if current_term else "this term"
+            show_all_terms = choices.hidden_count == 0
             question = (
                 "Which courses should be processed? (* = currently active)"
                 if show_all_terms
                 else "Which %s courses should be processed? (* = currently active)"
-                     % term_text
+                     % choices.term_text
             )
+            default_set = set(choices.default_urls)
 
             selection = prompt_index_selection(
                 question,
-                labels,
-                default_indexes=defaults,
-                expand_keyword="all-terms" if hidden else None,
+                choices.labels,
+                default_indexes=[
+                    position for position, url in enumerate(choices.urls)
+                    if url in default_set
+                ],
+                expand_keyword="all-terms" if choices.hidden_count else None,
                 expand_hint=(
                     "%d course(s) from other terms are hidden - "
                     "enter 'all-terms' to include them."
-                    % hidden
-                ) if hidden else None,
+                    % choices.hidden_count
+                ) if choices.hidden_count else None,
             )
 
             if selection is EXPAND:
-                show_all_terms = True
+                include_all_terms = True
                 continue
 
-            return [visible_urls[index] for index in selection]
+            return [choices.urls[index] for index in selection]
 
     @staticmethod
     def _representative_start_date(

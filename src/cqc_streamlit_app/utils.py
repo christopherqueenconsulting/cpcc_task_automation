@@ -850,6 +850,28 @@ mime_types_str = """
 """
 
 
+# Settings inputs are keyed with this prefix so the CSS below can mask them.
+_SECRET_KEY_PREFIX = "cqc_secret_"
+_SECRET_INPUT_CSS = (
+    "<style>[class*='st-key-%s'] input {"
+    "-webkit-text-security: disc; text-security: disc; }</style>" % _SECRET_KEY_PREFIX
+)
+
+
+def secret_text_input(label: str, value: str = "", *, key: str, help: str | None = None) -> str:
+    """A masked text field that browsers do not treat as a login password.
+
+    ``type="password"`` makes Streamlit set ``autocomplete="new-password"``, so
+    Safari (iPad/iPhone/Mac) sees a sign-up form and offers to save or fill a
+    password every time a field loses focus, which Streamlit does on every Tab.
+    This field is a plain text input with autocomplete off, shown as dots via
+    ``-webkit-text-security`` (Safari, Chrome, Edge and current Firefox).
+    """
+    st.markdown(_SECRET_INPUT_CSS, unsafe_allow_html=True)
+    return st.text_input(label, value=value, key=_SECRET_KEY_PREFIX + key, help=help,
+                         autocomplete="off")
+
+
 @st.cache_data
 def get_cpcc_css():
     # Embed custom fonts using HTML and CSS
@@ -1643,13 +1665,15 @@ class _BrightSpaceWritebackJob:
             self.done.set()
 
 
-def _render_mfa_prompt(bridge) -> None:
+def render_mfa_prompt(bridge) -> None:
     """Show the MFA number-matching prompt prominently (number + screenshot).
 
     Rendered inline rather than as a modal dialog because the running-job view
     auto-refreshes via a poll/rerun loop, which does not compose with a modal.
     """
-    challenge = bridge.challenge
+    # Only while approval is pending: a run can sign in several times, and an
+    # approved challenge must not linger on the page.
+    challenge = bridge.pending_challenge
     if challenge is None:
         return
     with st.container(border=True):
@@ -1675,7 +1699,7 @@ def _render_mfa_prompt(bridge) -> None:
                 st.image(
                     challenge.screenshot_png,
                     caption="Live browser view",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
 
@@ -1761,7 +1785,7 @@ def add_brightspace_submission_element(
     if job is not None and not job.done.is_set():
         status_msg = job.latest_progress() or "Starting..."
         st.info(f"⏳ {status_msg}")
-        _render_mfa_prompt(job.bridge)
+        render_mfa_prompt(job.bridge)
         if st.button("✖ Cancel", key=key_prefix + "cancel"):
             job.bridge.cancel()
             st.session_state.pop(job_key, None)
@@ -1845,7 +1869,7 @@ def _render_writeback_report(report) -> None:
             ("Posted" if is_quiz else "Saved draft"): "✅" if o.saved else ("—" if report.dry_run else "❌"),
             "Note": o.note,
         } for o in report.outcomes]
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
     if report.unmatched_students:
         st.warning("⚠️ Graded students with NO matching BrightSpace learner (skipped): "
@@ -2011,18 +2035,18 @@ def add_brightspace_writeback_element(
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🔍 Preview write (dry run)", key=key_prefix + "dry",
-                     disabled=not url, use_container_width=True):
+                     disabled=not url, width="stretch"):
             _launch(dry_run=True)
     with c2:
         confirm = st.checkbox(confirm_label, key=key_prefix + "confirm")
         if st.button(real_button_label, key=key_prefix + "real",
-                     disabled=not (url and confirm), use_container_width=True):
+                     disabled=not (url and confirm), width="stretch"):
             _launch(dry_run=False)
 
     # Job in progress: status + MFA prompt, then poll.
     if job is not None and not job.done.is_set():
         st.info(f"⏳ {job.latest_progress() or 'Starting...'}")
-        _render_mfa_prompt(job.bridge)
+        render_mfa_prompt(job.bridge)
         if st.button("✖ Cancel", key=key_prefix + "cancel"):
             job.bridge.cancel()
             st.session_state.pop(job_key, None)
@@ -2076,7 +2100,7 @@ def _render_zip_keep_table(zip_path: str, key_prefix: str) -> Optional[set]:
             "_arc": None,  # hidden
         },
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     kept = edited[edited["keep"]]
@@ -2220,7 +2244,8 @@ def process_file(file_path, allowed_file_extensions):
 
             for folder_path, files in folder_contents.items():
                 concatenated_contents = b''.join(files)
-                logger.debug("Contents of folder '%s': %s", folder_path, concatenated_contents.decode())
+                # Sizes only: the contents are student submissions.
+                logger.debug("Folder %s: %d file(s), %d bytes", folder_path, len(files), len(concatenated_contents))
 
     # If it's a single file
     else:

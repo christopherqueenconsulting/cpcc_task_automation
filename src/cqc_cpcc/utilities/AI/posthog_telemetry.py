@@ -1,39 +1,66 @@
-"""Optional PostHog LLM analytics for the AI clients.
+"""Optional PostHog analytics for the AI clients and the app's runs.
 
 Design rules, in priority order:
 
-1. **Never break the app.** If ``posthog`` is not installed, no API key is set, or
+1. **Never ship student data.** This application processes student submissions,
+   names, ids and grades (FERPA education records). PostHog receives *no* prompt
+   or completion text -- there is no switch to turn it on -- and no student-level
+   key of any kind, not even an alias. Every event goes through a property
+   allowlist, every string value through :func:`pii_redaction.scrub`, and the SDK's
+   ``before_send`` hook scrubs once more as a last line of defence. GeoIP lookup
+   and person profiles are off; the instructor is identified only by a hash.
+2. **Never break the app.** If ``posthog`` is not installed, no API key is set, or
    the network is down, every function here is a no-op. Telemetry failures are
-   swallowed and logged at debug level -- grading must never fail because an
-   analytics call did.
-2. **Never ship student work.** This application processes student submissions,
-   names, and grades. Prompt and completion text are NOT sent by default. Set
-   ``POSTHOG_LLM_CAPTURE_CONTENT=true`` only if you have established that doing so
-   is acceptable under your institution's FERPA obligations.
-3. **Instrument silent degradation, not just errors.** The client already raises on
-   hard failures. The interesting events are the ones that currently succeed while
-   quietly substituting placeholder data into a student's grade.
+   swallowed -- grading must never fail because an analytics call did.
+3. **Say when it is off.** A configured key with a missing SDK, or a client that
+   will not construct, is logged as a WARNING and reported by :func:`status`
+   (shown on the Settings page), rather than failing silently.
+4. **Instrument silent degradation, not just errors.** The interesting events are
+   the ones that currently succeed while quietly substituting placeholder data
+   into a student's grade.
 
-Events emitted follow PostHog's LLM analytics convention:
-``$ai_generation`` for a model call, ``$ai_span`` for a degradation inside one.
-Both carry ``$ai_trace_id`` so a run's spans group together; the trace id is the
-existing ``correlation_id``, so PostHog and the local debug JSON files line up.
+Events follow PostHog's LLM analytics convention (``$ai_generation`` for a model
+call, ``$ai_span`` for a degradation inside one, both carrying ``$ai_trace_id``,
+which is the existing ``correlation_id`` so PostHog and the local debug JSON files
+line up), plus ``cqc_run_*`` events for whole feature runs and ``$exception`` for
+errors (type, scrubbed message and file/line/function frames only -- no source
+lines, no local variables).
+
+Configuration comes from the environment (``POSTHOG_API_KEY``, ``POSTHOG_HOST``,
+``POSTHOG_LLM_ANALYTICS``), which the Streamlit Settings page can also set at
+runtime via :func:`configure`.
 """
 
+import atexit
+import functools
+import hashlib
+import inspect
 import os
+import threading
 import time
+import traceback
 from contextvars import ContextVar
 from typing import Any
 
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import scrub
+
+DEFAULT_HOST = "https://us.i.posthog.com"
+KNOWN_HOSTS = {
+    "US Cloud": "https://us.i.posthog.com",
+    "EU Cloud": "https://eu.i.posthog.com",
+}
 
 # The trace id of the model call currently in flight, so that deeply nested
 # normalization code can report a degradation without threading an id through
 # every call signature.
 _current_trace_id: ContextVar[str | None] = ContextVar("posthog_trace_id", default=None)
 
+_lock = threading.RLock()
 _client = None
 _client_initialised = False
+_status_reason = "not initialised"
+_atexit_registered = False
 
 # Degradation kinds. Named constants so dashboards and evaluations can filter on a
 # stable vocabulary rather than free text.
@@ -43,6 +70,20 @@ RESPONSE_TRUNCATED = "response_truncated"
 SMART_RETRY_FALLBACK = "smart_retry_fallback"
 PLACEHOLDER_BACKFILL = "placeholder_backfill"
 
+# PostHog-defined properties an event may carry. Anything else must be a cqc_*
+# property. $ai_input / $ai_output_choices are deliberately absent: prompts carry
+# student submissions and completions carry grades.
+_ALLOWED_SYSTEM_PROPERTIES = frozenset({
+    "$ai_trace_id", "$ai_span_id", "$ai_parent_id", "$ai_model", "$ai_provider",
+    "$ai_span_name", "$ai_latency", "$ai_input_tokens", "$ai_output_tokens",
+    "$ai_is_error", "$ai_error", "$ai_http_status", "$ai_base_url",
+    "$exception_list", "$exception_level", "$exception_type", "$exception_message",
+    "$process_person_profile", "$lib", "$lib_version", "$geoip_disable",
+})
+_BLOCKED_PROPERTIES = frozenset({"$ai_input", "$ai_output_choices", "$ai_output", "$ai_tools"})
+_MAX_STRING_LENGTH = 500
+_MAX_FRAMES = 30
+
 
 def _truthy(value: str | None, default: bool = False) -> bool:
     if value is None or value == "":
@@ -50,53 +91,183 @@ def _truthy(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"true", "1", "t", "y", "yes"}
 
 
+# --------------------------------------------------------------------------- client
+
+
 def is_enabled() -> bool:
     """True when an API key is configured, the SDK is importable, and not disabled."""
     return _get_client() is not None
 
 
-def capture_content() -> bool:
-    """Whether prompt/completion text may be sent. Defaults to False (student PII)."""
-    return _truthy(os.getenv("POSTHOG_LLM_CAPTURE_CONTENT"), default=False)
+def status() -> tuple[bool, str]:
+    """``(enabled, reason)`` for display, e.g. on the Settings page."""
+    enabled = _get_client() is not None
+    return enabled, _status_reason
+
+
+def configure(api_key: str | None, host: str | None = None) -> tuple[bool, str]:
+    """Set (or clear) the PostHog credentials at runtime and rebuild the client.
+
+    Used by the Streamlit Settings page when the key is not in ``.env``.
+    """
+    if api_key and api_key.strip():
+        os.environ["POSTHOG_API_KEY"] = api_key.strip()
+    else:
+        os.environ.pop("POSTHOG_API_KEY", None)
+    if host and host.strip():
+        os.environ["POSTHOG_HOST"] = host.strip()
+    reload()
+    return status()
+
+
+def reload() -> None:
+    """Flush and drop the current client so the next call re-reads the environment."""
+    global _client, _client_initialised
+    with _lock:
+        old_client = _client
+        _client = None
+        _client_initialised = False
+    if old_client is not None:
+        try:
+            old_client.shutdown()
+        except Exception as shutdown_error:
+            logger.debug("PostHog shutdown during reload failed (ignored): %s",
+                         type(shutdown_error).__name__)
 
 
 def _get_client():
     """Return a configured PostHog client, or None. Initialised once, lazily."""
-    global _client, _client_initialised
+    global _client, _client_initialised, _status_reason, _atexit_registered
 
     if _client_initialised:
         return _client
 
-    _client_initialised = True
+    with _lock:
+        if _client_initialised:
+            return _client
+        _client_initialised = True
 
-    api_key = os.getenv("POSTHOG_API_KEY")
-    if not api_key:
-        return None
+        api_key = os.getenv("POSTHOG_API_KEY")
+        if not api_key:
+            _status_reason = "disabled: POSTHOG_API_KEY is not set"
+            return None
 
-    if not _truthy(os.getenv("POSTHOG_LLM_ANALYTICS"), default=True):
-        logger.debug("PostHog LLM analytics disabled via POSTHOG_LLM_ANALYTICS.")
-        return None
+        if not _truthy(os.getenv("POSTHOG_LLM_ANALYTICS"), default=True):
+            _status_reason = "disabled: POSTHOG_LLM_ANALYTICS=false"
+            logger.info("PostHog analytics disabled via POSTHOG_LLM_ANALYTICS.")
+            return None
 
+        try:
+            from posthog import Posthog
+        except ImportError:
+            _status_reason = ("disabled: the posthog package is not installed "
+                              "(run: poetry install -E telemetry)")
+            logger.warning(
+                "POSTHOG_API_KEY is set but the posthog package is not installed; "
+                "analytics are OFF. Install it with: poetry install -E telemetry"
+            )
+            return None
+
+        host = os.getenv("POSTHOG_HOST") or DEFAULT_HOST
+        try:
+            _client = Posthog(
+                project_api_key=api_key,
+                host=host,
+                # Analytics must never add latency to a grading run.
+                sync_mode=False,
+                # No location lookup on the instructor's IP.
+                disable_geoip=True,
+                # The SDK's own AI integrations must not attach prompt/response text.
+                privacy_mode=True,
+                # Exceptions are sent explicitly by capture_exception, scrubbed;
+                # never automatically, and never with local variable values.
+                enable_exception_autocapture=False,
+                capture_exception_code_variables=False,
+                before_send=_before_send,
+            )
+            _status_reason = "enabled (host: %s)" % host
+            logger.info("PostHog analytics enabled (host: %s).", host)
+            if not _atexit_registered:
+                atexit.register(shutdown)
+                _atexit_registered = True
+        except Exception as setup_error:
+            _status_reason = "disabled: client failed to start (%s)" % type(setup_error).__name__
+            logger.warning("Could not initialise PostHog (%s); analytics are OFF.",
+                           type(setup_error).__name__)
+            _client = None
+
+        return _client
+
+
+# --------------------------------------------------------------------------- scrubbing
+
+
+def _clean_value(value: Any) -> Any:
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        return scrub(value)[:_MAX_STRING_LENGTH]
+    # Lists/dicts only appear in SDK-defined structures handled separately.
+    return scrub(str(value))[:_MAX_STRING_LENGTH]
+
+
+def _clean_exception_list(exception_list: Any) -> list:
+    cleaned = []
+    for entry in exception_list if isinstance(exception_list, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        frames = []
+        stacktrace = entry.get("stacktrace") or {}
+        for frame in (stacktrace.get("frames") or [])[-_MAX_FRAMES:]:
+            if isinstance(frame, dict):
+                frames.append({
+                    key: _clean_value(frame[key])
+                    for key in ("filename", "abs_path", "lineno", "function", "module",
+                                "in_app", "platform")
+                    if key in frame and frame[key] is not None
+                })
+        cleaned.append({
+            "type": _clean_value(entry.get("type") or "Exception"),
+            "value": _clean_value(entry.get("value") or ""),
+            "mechanism": {"type": "generic", "handled": True},
+            "stacktrace": {"type": "raw", "frames": frames},
+        })
+    return cleaned
+
+
+def clean_properties(properties: dict | None) -> dict:
+    """Apply the allowlist and scrub every value. Public for tests and callers."""
+    cleaned: dict[str, Any] = {}
+    for key, value in (properties or {}).items():
+        if value is None or key in _BLOCKED_PROPERTIES:
+            continue
+        if key == "$exception_list":
+            cleaned[key] = _clean_exception_list(value)
+        elif key in _ALLOWED_SYSTEM_PROPERTIES or (key.startswith("cqc_") and len(key) <= 64):
+            cleaned[key] = _clean_value(value)
+    return cleaned
+
+
+def _before_send(event: dict) -> dict | None:
+    """SDK hook: the final scrub of every outgoing event."""
     try:
-        from posthog import Posthog
-    except ImportError:
-        # Expected when the optional dependency is not installed.
-        logger.debug("posthog package not installed; LLM analytics disabled.")
+        event["properties"] = clean_properties(event.get("properties") or {})
+        event["properties"]["$process_person_profile"] = False
+        return event
+    except Exception:
+        # If it cannot be proven clean, it is not sent.
         return None
 
-    try:
-        _client = Posthog(
-            project_api_key=api_key,
-            host=os.getenv("POSTHOG_HOST", "https://us.i.posthog.com"),
-            # Analytics must never add latency to a grading run.
-            sync_mode=False,
-        )
-        logger.info("PostHog LLM analytics enabled.")
-    except Exception as setup_error:
-        logger.debug("Could not initialise PostHog: %s", setup_error)
-        _client = None
 
-    return _client
+def _distinct_id() -> str:
+    """The instructor, as a one-way hash; never a student."""
+    instructor = os.getenv("INSTRUCTOR_USERID")
+    if not instructor:
+        return "cpcc-task-automation"
+    return "instructor_" + hashlib.sha256(instructor.strip().lower().encode("utf-8")).hexdigest()[:16]
+
+
+# --------------------------------------------------------------------------- capture
 
 
 def set_trace_id(trace_id: str | None):
@@ -124,15 +295,15 @@ def _capture(event: str, properties: dict) -> None:
         return
 
     try:
+        cleaned = clean_properties(properties)
+        cleaned["$process_person_profile"] = False
         client.capture(
-            distinct_id=os.getenv("INSTRUCTOR_USERID") or "cpcc-task-automation",
+            distinct_id=_distinct_id(),
             event=event,
-            properties={
-                key: value for key, value in properties.items() if value is not None
-            },
+            properties=cleaned,
         )
     except Exception as capture_error:
-        logger.debug("PostHog capture failed (ignored): %s", capture_error)
+        logger.debug("PostHog capture failed (ignored): %s", type(capture_error).__name__)
 
 
 def capture_generation(
@@ -148,11 +319,9 @@ def capture_generation(
         provider: str = "openai",
         attempt: int | None = None,
         used_fallback: bool | None = None,
-        prompt: str | None = None,
-        completion: str | None = None,
         extra: dict[str, Any] | None = None,
 ) -> None:
-    """Record one model call."""
+    """Record one model call. Never carries prompt or completion text."""
     if not is_enabled():
         return
 
@@ -169,10 +338,6 @@ def capture_generation(
         "cqc_attempt": attempt,
         "cqc_used_fallback": used_fallback,
     }
-
-    if capture_content():
-        properties["$ai_input"] = prompt
-        properties["$ai_output_choices"] = completion
 
     if extra:
         properties.update(extra)
@@ -210,6 +375,168 @@ def capture_degradation(
     _capture("$ai_span", properties)
 
 
+def capture_event(event: str, properties: dict[str, Any] | None = None) -> None:
+    """Record an app event (``cqc_*`` properties only; values are scrubbed)."""
+    if not is_enabled():
+        return
+    _capture(event, dict(properties or {}))
+
+
+def _exception_list(error: BaseException) -> list:
+    frames = []
+    for frame in traceback.extract_tb(error.__traceback__)[-_MAX_FRAMES:]:
+        filename = frame.filename or ""
+        # Paths relative to the package, never the user's home directory layout.
+        marker = filename.rfind("/src/")
+        short = filename[marker + 5:] if marker != -1 else os.path.basename(filename)
+        frames.append({
+            "filename": short,
+            "lineno": frame.lineno,
+            "function": frame.name,
+            "in_app": "cqc_" in short,
+            "platform": "python",
+        })
+    return [{
+        "type": type(error).__name__,
+        "value": str(error),
+        "stacktrace": {"type": "raw", "frames": frames},
+    }]
+
+
+def capture_exception(
+        error: BaseException,
+        *,
+        feature: str | None = None,
+        properties: dict[str, Any] | None = None,
+) -> None:
+    """Record an error for PostHog error tracking, scrubbed.
+
+    Only the exception type, its scrubbed message and file/line/function frames are
+    sent -- no source lines and no local variable values.
+    """
+    if not is_enabled():
+        return
+    try:
+        event_properties: dict[str, Any] = {
+            "$exception_list": _exception_list(error),
+            "$exception_level": "error",
+            "cqc_feature": feature,
+        }
+        event_properties.update(properties or {})
+        _capture("$exception", event_properties)
+    except Exception as capture_error:
+        logger.debug("PostHog exception capture failed (ignored): %s",
+                     type(capture_error).__name__)
+
+
+# --------------------------------------------------------------------------- runs
+
+# Properties of the feature run in flight, so code deep inside it can add counts.
+_current_run: ContextVar[dict | None] = ContextVar("posthog_current_run", default=None)
+
+
+def _prefixed(properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        (key if key.startswith("cqc_") else "cqc_%s" % key): value
+        for key, value in properties.items()
+        if isinstance(value, (bool, int, float, str)) or value is None
+    }
+
+
+def update_run(**properties: Any) -> None:
+    """Add counts/flags to the run in flight (``students=12`` -> ``cqc_students``).
+
+    Only aggregate, non-identifying values belong here: counts, durations, modes.
+    Never a name, id, e-mail, URL or per-student score.
+    """
+    run = _current_run.get()
+    if run is not None:
+        run.update(_prefixed(properties))
+
+
+def _finish_run(feature: str, run: dict, started: float, error: BaseException | None) -> None:
+    properties = dict(run)
+    if error is None:
+        status_value = "succeeded"
+    elif isinstance(error, Exception):
+        status_value = "failed"
+    else:
+        # KeyboardInterrupt, SystemExit, Streamlit's stop/rerun control flow.
+        status_value = "interrupted"
+    properties.update({
+        "cqc_feature": feature,
+        "cqc_status": status_value,
+        "cqc_duration_seconds": round(time.monotonic() - started, 3),
+    })
+    if error is not None:
+        properties["cqc_error_type"] = type(error).__name__
+    if status_value == "failed":
+        capture_exception(error, feature=feature)
+    capture_event("cqc_run_completed", properties)
+
+
+def tracked_run(
+        feature: str,
+        result_properties=None,
+        **static_properties: Any,
+):
+    """Decorate a feature entry point to emit one ``cqc_run_completed`` event.
+
+    The event carries the feature, succeeded/failed, duration, ``static_properties``,
+    anything added with :func:`update_run`, and ``result_properties(return_value)``
+    (a callable returning a dict of counts). A failure also sends a scrubbed
+    ``$exception``. Works on sync and async functions; the function's own behaviour
+    and exceptions are unchanged, and telemetry errors are swallowed.
+    """
+
+    def decorator(function):
+        def _start():
+            run = _prefixed(static_properties)
+            return run, _current_run.set(run), time.monotonic()
+
+        def _end(run, token, started, result=None, error=None):
+            try:
+                if error is None and result_properties is not None:
+                    run.update(_prefixed(result_properties(result) or {}))
+                _finish_run(feature, run, started, error)
+            except Exception as telemetry_error:
+                logger.debug("Run telemetry failed (ignored): %s", type(telemetry_error).__name__)
+            finally:
+                try:
+                    _current_run.reset(token)
+                except Exception:
+                    _current_run.set(None)
+
+        if inspect.iscoroutinefunction(function):
+            @functools.wraps(function)
+            async def async_wrapper(*args, **kwargs):
+                run, token, started = _start()
+                try:
+                    result = await function(*args, **kwargs)
+                except BaseException as error:
+                    _end(run, token, started, error=error)
+                    raise
+                _end(run, token, started, result=result)
+                return result
+
+            return async_wrapper
+
+        @functools.wraps(function)
+        def sync_wrapper(*args, **kwargs):
+            run, token, started = _start()
+            try:
+                result = function(*args, **kwargs)
+            except BaseException as error:
+                _end(run, token, started, error=error)
+                raise
+            _end(run, token, started, result=result)
+            return result
+
+        return sync_wrapper
+
+    return decorator
+
+
 class GenerationTimer:
     """Measure wall-clock latency for a generation without importing time everywhere."""
 
@@ -222,17 +549,18 @@ class GenerationTimer:
 
 def shutdown() -> None:
     """Flush buffered events. Safe to call when telemetry was never enabled."""
-    client = _get_client()
+    client = _client if _client_initialised else None
     if client is None:
         return
     try:
         client.shutdown()
     except Exception as shutdown_error:
-        logger.debug("PostHog shutdown failed (ignored): %s", shutdown_error)
+        logger.debug("PostHog shutdown failed (ignored): %s", type(shutdown_error).__name__)
 
 
 def _reset_for_tests() -> None:
     """Clear the memoised client so tests can re-evaluate the environment."""
-    global _client, _client_initialised
+    global _client, _client_initialised, _status_reason
     _client = None
     _client_initialised = False
+    _status_reason = "not initialised"

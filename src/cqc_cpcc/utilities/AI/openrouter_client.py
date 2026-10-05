@@ -41,6 +41,7 @@ import os
 from typing import Optional, Type, TypeVar
 
 import httpx
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.AI.openai_client import _normalize_fallback_json
 from cqc_cpcc.utilities.AI.openai_debug import (
     create_correlation_id,
@@ -236,6 +237,47 @@ async def get_openrouter_completion(
         max_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> T:
+    """Get a structured completion from OpenRouter, reporting failures to analytics.
+
+    Wraps :func:`_get_openrouter_completion_impl` so a failure is recorded once,
+    whichever ``raise`` produced it. See ``posthog_telemetry`` for what is sent
+    (never prompt or completion content -- this pipeline handles student work).
+    """
+    effective_model = "openrouter/auto" if use_auto_route else (model_name or "")
+    span_name = schema_model.__name__ if schema_model else "structured_completion"
+    timer = telemetry.GenerationTimer()
+    try:
+        return await _get_openrouter_completion_impl(
+            prompt=prompt,
+            schema_model=schema_model,
+            use_auto_route=use_auto_route,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            max_retries=max_retries,
+        )
+    except Exception as call_error:
+        telemetry.capture_generation(
+            trace_id=telemetry.current_trace_id(),
+            model=effective_model,
+            span_name=span_name,
+            provider="openrouter",
+            latency_seconds=timer.elapsed(),
+            is_error=True,
+            error="%s: %s" % (type(call_error).__name__, str(call_error)[:500]),
+        )
+        raise
+    finally:
+        telemetry.set_trace_id(None)
+
+
+async def _get_openrouter_completion_impl(
+        prompt: str,
+        schema_model: Type[T],
+        use_auto_route: bool = True,
+        model_name: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+) -> T:
     """Get structured completion from OpenRouter using OpenAI-compatible API.
 
     OpenRouter provides an OpenAI-compatible API endpoint, so we use AsyncOpenAI
@@ -288,8 +330,13 @@ async def get_openrouter_completion(
 
     client = _get_openrouter_client()
 
-    # Debug logging setup
-    correlation_id = create_correlation_id() if should_debug() else None
+    # Debug logging setup. The correlation id doubles as the PostHog trace id.
+    correlation_id = (
+        create_correlation_id() if (should_debug() or telemetry.is_enabled()) else None
+    )
+    telemetry.set_trace_id(correlation_id)
+    telemetry_span = schema_model.__name__
+    telemetry_timer = telemetry.GenerationTimer()
 
     logger.info(
         f"Calling OpenRouter with model={effective_model}, "
@@ -370,6 +417,13 @@ async def get_openrouter_completion(
                 logger.error(
                     error_msg + (f" (correlation_id={correlation_id})" if correlation_id else "")
                 )
+                telemetry.capture_degradation(
+                    telemetry.RESPONSE_TRUNCATED,
+                    span_name=telemetry_span,
+                    model=getattr(response, "model", None) or effective_model,
+                    trace_id=correlation_id,
+                    details={"attempt": attempt + 1, "provider": "openrouter"},
+                )
                 if correlation_id:
                     record_response(
                         correlation_id=correlation_id,
@@ -386,6 +440,13 @@ async def get_openrouter_completion(
             content = choice.message.content
             if not content:
                 error_msg = "Empty content in OpenRouter response"
+                telemetry.capture_degradation(
+                    telemetry.EMPTY_RESPONSE,
+                    span_name=telemetry_span,
+                    model=getattr(response, "model", None) or effective_model,
+                    trace_id=correlation_id,
+                    details={"attempt": attempt + 1, "provider": "openrouter"},
+                )
                 if correlation_id:
                     record_response(
                         correlation_id=correlation_id,
@@ -428,6 +489,21 @@ async def get_openrouter_completion(
                 result = schema_model.model_validate(parsed_data)
             except ValidationError as e:
                 error_msg = f"Response doesn't match schema {schema_model.__name__}: {e}"
+                telemetry.capture_degradation(
+                    telemetry.SCHEMA_VALIDATION_FAILED,
+                    span_name=telemetry_span,
+                    model=getattr(response, "model", None) or effective_model,
+                    trace_id=correlation_id,
+                    details={
+                        "attempt": attempt + 1,
+                        "provider": "openrouter",
+                        "error_count": len(e.errors()),
+                        "fields": ",".join(
+                            ".".join(str(part) for part in err.get("loc", ()))
+                            for err in e.errors()[:5]
+                        ),
+                    },
+                )
                 if correlation_id:
                     record_response(
                         correlation_id=correlation_id,
@@ -452,6 +528,19 @@ async def get_openrouter_completion(
             logger.info(
                 f"OpenRouter completion successful with {effective_model}, "
                 f"used_model={response.model}, attempt={attempt + 1}"
+            )
+            usage = getattr(response, "usage", None)
+            telemetry.capture_generation(
+                trace_id=correlation_id,
+                # The model the auto-router actually picked, when it says.
+                model=getattr(response, "model", None) or effective_model,
+                span_name=telemetry_span,
+                provider="openrouter",
+                latency_seconds=telemetry_timer.elapsed(),
+                input_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
+                output_tokens=getattr(usage, "completion_tokens", None) if usage else None,
+                attempt=attempt + 1,
+                extra={"cqc_requested_model": effective_model, "cqc_auto_route": use_auto_route},
             )
 
             return result

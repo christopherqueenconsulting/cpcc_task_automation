@@ -32,6 +32,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import register_student
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
     wait_for_ajax,
@@ -1007,6 +1008,7 @@ def _gather_quiz_attempts(driver) -> list[dict]:
             continue
         if not r.get("name"):
             r["name"] = f"user_{r.get('userId')}"
+        register_student(r.get("name"), student_id=r.get("userId"))
         cleaned.append(r)
     return cleaned
 

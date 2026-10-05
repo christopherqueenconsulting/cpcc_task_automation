@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.zip_grading_utils import (
     parse_student_folder_name,
@@ -368,6 +369,18 @@ def _extract_zip_to_dir(zip_path: str, dest_dir: Optional[str] = None) -> str:
 # Public entry point (Selenium-driven routes imported lazily)
 # ---------------------------------------------------------------------------
 
+def _fetch_run_properties(result) -> dict:
+    """Aggregate, non-identifying facts about a fetch for analytics."""
+    return {
+        "route": result.route,
+        "students": len(result.students),
+        "files": sum(len(files) for files in result.students.values()),
+        "warnings": len(result.warnings),
+        "has_instructions": bool(result.instructions),
+    }
+
+
+@telemetry.tracked_run("brightspace_fetch", result_properties=_fetch_run_properties)
 def build_submissions_zip_from_brightspace_url(
         url: str,
         accepted_file_types: list[str],

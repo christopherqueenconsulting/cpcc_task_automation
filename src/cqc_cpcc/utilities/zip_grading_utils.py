@@ -25,6 +25,7 @@ from typing import Optional
 
 from cqc_cpcc.utilities.language_utils import get_language_from_file_path
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import alias, register_student, scrub
 from cqc_cpcc.utilities.utils import read_file, wrap_code_in_markdown_backticks
 
 # Token estimation constants
@@ -180,6 +181,13 @@ def parse_student_folder_name(directory_name: str) -> str:
         "Assignment1 - John Doe"                                  -> "John Doe"
         "Student1/subfolder"                                      -> "Student1"
     """
+    name = _parse_student_folder_name(directory_name)
+    # Every student-name source registers with the log redactor (see pii_redaction).
+    register_student(name)
+    return name
+
+
+def _parse_student_folder_name(directory_name: str) -> str:
     path = directory_name.replace('\\', '/')
     if _FOLDER_NAME_DELIMITER not in path:
         # No delimiter: the student's own folder is the first path segment
@@ -440,7 +448,7 @@ def extract_student_submissions_from_zip(
                     total_tokens += file_tokens
 
                 except Exception as e:
-                    logger.error(f"Error reading {file_name} for student {student_id}: {e}")
+                    logger.error(f"Error reading {file_name} for student {alias(student_id)}: {e}")
                     # Clean up temp file
                     os.unlink(temp_file_path)
                     continue
@@ -454,7 +462,7 @@ def extract_student_submissions_from_zip(
                     f"~{submission.estimated_tokens} tokens"
                 )
             else:
-                logger.warning(f"No valid files found for student: {student_id}")
+                logger.warning(f"No valid files found for student: {alias(student_id)}")
 
     if not students_data:
         # Provide helpful error message
@@ -510,7 +518,7 @@ def build_submission_text_with_token_limit(
 
     if is_truncated:
         omitted_list = omitted_files or []
-        omitted_text = "\n".join(f"- {name}" for name in omitted_list)
+        omitted_text = "\n".join(f"- {scrub(name)}" for name in omitted_list)
         notice = (
             "NOTE: Some files were omitted due to size limits.\n"
             f"{omitted_text}\n"
@@ -533,8 +541,9 @@ def build_submission_text_with_token_limit(
                     f"Preprocessing will be used automatically."
                 )
 
-            # Add file name details for AI (no budget check)
-            file_section = f"### Submission File Name: {filename}\n"
+            # Add file name details for AI (no budget check). The name is scrubbed:
+            # students often put their own name in it, and the model does not need it.
+            file_section = f"### Submission File Name: {scrub(filename)}\n"
             solution_language = get_language_from_file_path(filepath)
             if solution_language:
                 # Add the content inside a codeblock
