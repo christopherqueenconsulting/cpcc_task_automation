@@ -344,6 +344,10 @@ class MyColleges:
         self.wait.until(EC.new_window_is_opened(handles))
         self.current_tab = self.driver.current_window_handle
         self.driver.get(course_url)
+        # A fresh tab can land on Microsoft's "Sign in to your account" SAML page
+        # instead of the course (seen live 2026-10-05 right after an MFA login);
+        # without this every course timed out waiting for the Attendance tab.
+        login_if_needed(self.driver)
 
     def _close_current_course_tab(self, original_tab: str) -> None:
         """Close the course tab and return to the faculty tab, whatever happened.
