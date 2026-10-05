@@ -53,7 +53,6 @@ from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
-    click_given_element_wait_retry,
     close_tab,
     describe_page,
     get_driver_wait,
@@ -814,20 +813,17 @@ class MyColleges:
                 select_element = self._student_selects(student_id)[index]
                 if select_element.get_attribute("value") == present_value:
                     continue
-                click_given_element_wait_retry(
-                    self.driver, self.wait, select_element,
-                    "Waiting for attendance select element %d" % (index + 1),
-                )
-                select_element = self._student_selects(student_id)[index]
-                if select_element.get_attribute("value") != present_value:
-                    Select(select_element).select_by_value(present_value)
-                    wait_for_ajax(self.driver)
+                # Choose the option directly; never click the select open first.
+                # Verified live 2026-10-05: clicking it opened the native dropdown in
+                # the Docker Chrome, and the TAB sent afterwards picked the dropdown's
+                # highlighted first option ("Select Attendance"). Each student was
+                # saved (PutStudentAttendance) then cleared (DeleteStudentAttendance),
+                # and the overlapping saves left the row spinner running.
+                Select(select_element).select_by_value(present_value)
+                wait_for_ajax(self.driver)
 
-            # Release focus so the change event fires and the tab can be closed.
+            # Release focus (no keystrokes: see above) so the tab can be closed.
             try:
-                final_selects = self._student_selects(student_id)
-                if final_selects:
-                    final_selects[-1].send_keys(Keys.TAB)
                 self.driver.execute_script(
                     "if (document.activeElement) { document.activeElement.blur(); }"
                 )

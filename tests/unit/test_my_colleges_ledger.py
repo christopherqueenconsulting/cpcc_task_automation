@@ -297,23 +297,34 @@ class TestSelectsById:
         assert self._mc([[]])._read_present_by_id("1000001") is None
 
     @patch("cqc_cpcc.my_colleges.wait_for_ajax")
-    @patch("cqc_cpcc.my_colleges.click_given_element_wait_retry")
     @patch("cqc_cpcc.my_colleges.Select")
-    def test_mark_reports_failure_when_value_does_not_read_back(self, select_cls, _c, _w):
+    def test_mark_reports_failure_when_value_does_not_read_back(self, select_cls, _w):
         absent = self._select("A")
         mc = self._mc(lambda *_: [absent])
         assert mc._mark_present_by_id("1000001") is False
         select_cls.return_value.select_by_value.assert_called_with("P")
 
     @patch("cqc_cpcc.my_colleges.wait_for_ajax")
-    @patch("cqc_cpcc.my_colleges.click_given_element_wait_retry")
     @patch("cqc_cpcc.my_colleges.Select")
-    def test_mark_succeeds_when_value_reads_back_present(self, select_cls, _c, _w):
+    def test_mark_succeeds_when_value_reads_back_present(self, select_cls, _w):
         element = self._select("A")
         select_cls.return_value.select_by_value.side_effect = (
             lambda _v: setattr(element.get_attribute, "return_value", "P"))
         mc = self._mc(lambda *_: [element])
         assert mc._mark_present_by_id("1000001") is True
+
+    @patch("cqc_cpcc.my_colleges.wait_for_ajax")
+    @patch("cqc_cpcc.my_colleges.Select")
+    def test_mark_never_opens_the_dropdown_or_types_into_it(self, select_cls, _w):
+        """Opening the select then sending TAB picked "Select Attendance" and the
+        save was deleted right after it was made (seen live 2026-10-05)."""
+        element = self._select("A")
+        select_cls.return_value.select_by_value.side_effect = (
+            lambda _v: setattr(element.get_attribute, "return_value", "P"))
+        mc = self._mc(lambda *_: [element])
+        assert mc._mark_present_by_id("1000001") is True
+        element.click.assert_not_called()
+        element.send_keys.assert_not_called()
 
 
 @pytest.mark.unit
