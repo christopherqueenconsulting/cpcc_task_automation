@@ -854,7 +854,11 @@ def add_headless_options(options: Options) -> Options:
     options.add_argument('--start-maximized')  # Working
     options.add_argument("--window-size=1920,1080")  # Chrome wants a comma, not an "x"
     options.add_argument('--disable-popup-blocking')  # Working
-    options.add_argument('--incognito')  # Working
+    # NOT --incognito: a tab opened with driver.switch_to.new_window('tab') lands
+    # outside the incognito context and sees none of the first tab's cookies
+    # (verified 2026-10-05), so every MyColleges course tab re-ran the Microsoft
+    # login and asked for MFA again. A headless run already gets a throwaway
+    # profile, so incognito added no isolation.
     options.add_argument('--no-sandbox')  # Working
     options.add_argument('--enable-automation')  # Working
     options.add_argument('--disable-gpu')  # Working

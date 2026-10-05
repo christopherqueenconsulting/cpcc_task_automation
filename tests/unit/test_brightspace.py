@@ -441,3 +441,32 @@ class TestWithdrawalRecordShape:
         )
 
         assert list(records) == ["First_Student"]
+
+
+@pytest.mark.unit
+class TestXpathTextContains:
+    def test_folds_non_breaking_spaces(self):
+        from cqc_cpcc.brightspace import _xpath_text_contains
+
+        expr = _xpath_text_contains(".", "Aug 28, 2026 11:59 PM")
+        assert "translate(.," in expr
+        assert " " in expr
+        assert "'Aug 28, 2026 11:59 PM'" in expr
+
+    def test_quotes_are_safe(self):
+        from cqc_cpcc.brightspace import _xpath_literal
+
+        assert _xpath_literal("O'Neil") == '"O\'Neil"'
+        assert _xpath_literal("a'b\"c").startswith("concat(")
+
+    def test_real_xpath_engine_matches_nbsp_text(self):
+        lxml = pytest.importorskip("lxml.etree")
+        from cqc_cpcc.brightspace import _xpath_text_contains
+
+        doc = lxml.fromstring(
+            "<table><tr><th><a class='d2l-link' href='/q?qi=1&amp;ou=2'>Quiz</a></th>"
+            "<td><span class='ds_b'>Due on Aug 28, 2026 11:59 PM</span></td></tr></table>"
+        )
+        xpath = ("//tr[.//span[contains(@class,'ds_b') and %s]]//a[contains(@href,'qi=')]"
+                 % _xpath_text_contains(".", "Aug 28, 2026 11:59 PM"))
+        assert len(doc.xpath(xpath)) == 1

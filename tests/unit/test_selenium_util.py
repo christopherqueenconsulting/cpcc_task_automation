@@ -214,11 +214,12 @@ class TestAddHeadlessOptions:
         result = add_headless_options(options)
         assert '--disable-gpu' in result.arguments
     
-    def test_add_headless_options_enables_incognito(self):
+    def test_add_headless_options_does_not_use_incognito(self):
         from cqc_cpcc.utilities.selenium_util import add_headless_options, getBaseOptions
         options = getBaseOptions()
         result = add_headless_options(options)
-        assert '--incognito' in result.arguments
+        # Incognito splits new tabs into a separate cookie jar: one MFA per tab.
+        assert '--incognito' not in result.arguments
     
     def test_add_headless_options_returns_same_options_object(self):
         from cqc_cpcc.utilities.selenium_util import add_headless_options, getBaseOptions
