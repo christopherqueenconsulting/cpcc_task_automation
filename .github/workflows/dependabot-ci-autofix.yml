@@ -40,10 +40,10 @@ jobs:
             })
 
             const isDependabot = pr.user?.login === 'dependabot[bot]'
-            const isChoreDeps = /^chore\(deps\)/i.test(pr.title || '')
+            const isChoreDeps = /^chore\(deps/i.test(pr.title || '')
 
             if (!isDependabot || !isChoreDeps) {
-              core.info(`Skipping PR #${prNumber}: dependabot=${isDependabot}, chore(deps)=${isChoreDeps}`)
+              core.info(`Skipping PR #${prNumber}: dependabot=${isDependabot}, chore(deps*)=${isChoreDeps}`)
               return
             }
 

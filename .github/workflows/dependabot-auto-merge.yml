@@ -24,6 +24,9 @@ jobs:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
       
       - name: Auto-approve Dependabot PRs
+        # Approval is not required by branch protection; never let a failed
+        # approval stop auto-merge from being enabled below.
+        continue-on-error: true
         run: gh pr review --approve "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -31,8 +34,12 @@ jobs:
       
       - name: Enable auto-merge for patch and minor updates
         # Auto-merge patch and minor updates, but not major updates
-        # The --auto flag ensures the PR will only merge after all required
-        # status checks pass (including unit-tests) and branch protection rules are met
+        # --auto merges only once every REQUIRED status check on master passes.
+        # Which checks count is set in branch protection, not here: master must
+        # require unit-tests, integration-tests, e2e-tests, Analyze (python),
+        # Analyze (actions) and Student PII guard, with "require branches to be
+        # up to date" OFF. With it ON, auto-merge waits forever on any PR that
+        # is behind master, because Dependabot rebases only on conflict.
         if: |
           steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
           steps.metadata.outputs.update-type == 'version-update:semver-minor'

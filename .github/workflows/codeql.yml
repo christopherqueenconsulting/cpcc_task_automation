@@ -12,6 +12,7 @@
 name: "CodeQL Advanced"
 
 on:
+  merge_group:
   push:
     branches: [ "master" ]
   pull_request:
