@@ -45,6 +45,22 @@ class TestBrowserObserverScope:
         assert observer.waits == ["Waiting for Deadline Dates"]
         assert observer.progress == ["Course 1 of 2"]
 
+    def test_warnings_reach_the_observer(self):
+        seen = []
+        observer = type("WarnObserver", (), {"on_warning": lambda self, m: seen.append(m)})()
+        with su.browser_observer_scope(observer):
+            su.notify_warning("Attendance is not working for CSC-134-N801")
+        assert seen == ["Attendance is not working for CSC-134-N801"]
+
+    def test_warnings_without_a_hook_or_with_a_failing_one_only_log(self):
+        su.notify_warning("no observer")
+        with su.browser_observer_scope(object()):
+            su.notify_warning("no hook")
+        observer = MagicMock()
+        observer.on_warning.side_effect = RuntimeError("boom")
+        with su.browser_observer_scope(observer):
+            su.notify_warning("failing hook")
+
     def test_notices_without_an_observer_only_log(self):
         su.notify_wait_retry(MagicMock(), "")
         su.notify_progress("Course 1 of 1")

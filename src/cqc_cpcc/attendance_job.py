@@ -31,6 +31,9 @@ PHASE_CANCELLED = "cancelled"
 
 FINISHED_PHASES = (PHASE_SUCCEEDED, PHASE_FAILED, PHASE_CANCELLED)
 
+# Seconds between event screenshots; the page refreshes about this often anyway.
+SCREENSHOT_MIN_INTERVAL = 0.75
+
 
 @dataclass(frozen=True)
 class TabScreenshot:
@@ -65,6 +68,7 @@ class AttendanceJob:
         self.done = threading.Event()
         self._phase = PHASE_STARTING
         self._progress: list[str] = []
+        self._warnings: list[str] = []
         self._screenshot_b64: str | None = None
         # handle -> (title, screenshot); insertion order is the order tabs opened.
         self._tabs: dict[str, tuple[str, str]] = {}
@@ -105,6 +109,11 @@ class AttendanceJob:
     def latest_progress(self) -> str | None:
         with self._lock:
             return self._progress[-1] if self._progress else None
+
+    def warnings(self) -> list[str]:
+        """Problems the instructor should act on (for example, a course to re-run)."""
+        with self._lock:
+            return list(self._warnings)
 
     def latest_screenshot(self) -> str | None:
         """The most recent browser screenshot, base64 PNG."""
@@ -189,6 +198,10 @@ class AttendanceJob:
     def on_progress(self, message: str) -> None:
         self._record(message)
 
+    def on_warning(self, message: str) -> None:
+        with self._lock:
+            self._warnings.append(message)
+
     def _open_browser(self):
         """A driver that screenshots each step for the page, and the MyColleges client."""
         from selenium.webdriver.support.event_firing_webdriver import (
@@ -212,6 +225,7 @@ class AttendanceJob:
         listener = ScreenshotListener(
             lambda screenshot: self._capture(raw_driver, screenshot),
             on_tab_closed=lambda: self._forget_closed_tabs(raw_driver),
+            min_interval=SCREENSHOT_MIN_INTERVAL,
         )
         driver = EventFiringWebDriver(raw_driver, listener)
         return driver, wait, MyColleges(driver, wait)

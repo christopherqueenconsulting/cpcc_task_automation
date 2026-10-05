@@ -63,8 +63,55 @@ class TestTakeAttendancePage:
         app.run()
         assert not app.exception, app.exception
         assert [h.value for h in app.subheader].count("Log Output") == 1
-        assert len(app.text_area) == 1
+        assert not app.text_area
+        assert len(app.code) == 1
         assert _button(app, "Start Attendance")
+
+    def test_log_output_shows_new_lines_on_each_run(self):
+        from cqc_streamlit_app.streamlit_logger import streamlit_handler
+
+        app = _app()
+        app.run()
+        streamlit_handler.logs.append("Opened CSC-151-N855 roster")
+        app.run()
+        assert not app.exception, app.exception
+        assert "Opened CSC-151-N855 roster" in app.code[0].value
+
+    def test_running_job_refreshes_only_the_live_view(self):
+        job = FakeJob(PHASE_STARTING)
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        assert app.session_state["attendance_rendered_phase"] == PHASE_STARTING
+        assert any("Starting" in block.value for block in app.info)
+
+    def test_warnings_stay_on_the_page_while_running_and_after(self):
+        job = FakeJob(PHASE_STARTING)
+        job.on_warning("Attendance is not working in MyColleges for CSC-134-N801")
+        app = _app(job)
+        app.run()
+        assert any("CSC-134-N801" in w.value for w in app.warning)
+        job._set_phase(PHASE_SUCCEEDED)
+        app.run()
+        assert not app.exception, app.exception
+        assert any("CSC-134-N801" in w.value for w in app.warning)
+
+    def test_local_data_shows_the_ledger_path_and_reports(self, tmp_path, monkeypatch):
+        from cqc_cpcc.attendance_ledger import default_db_path
+
+        report_dir = tmp_path / "reports"
+        report_dir.mkdir()
+        (report_dir / "missing_CSC-134-N801_20261005_102944.csv").write_text(
+            "course_section,attend_date,student_id\n")
+        monkeypatch.setenv("CQC_ATTENDANCE_REPORT_DIR", str(report_dir))
+        app = _app()
+        app.run()
+        assert not app.exception, app.exception
+        assert "Local attendance data (view only)" in [h.value for h in app.subheader]
+        captions = [c.value for c in app.caption]
+        assert any(default_db_path() in c for c in captions)
+        assert any(str(report_dir) in c for c in captions)
+        assert any("missing_CSC-134-N801" in block.value for block in app.markdown)
 
     def test_form_builds_the_plan_from_the_selections(self):
         job = FakeJob(PHASE_AWAITING_PLAN)
@@ -154,6 +201,8 @@ class TestScreenshotSection:
         assert not app.exception, app.exception
         url = app.get("image")[0].proto.imgs[0].url
         assert "landscape" not in url
+        # Inline, so no media-file URL can expire before the browser fetches it.
+        assert url.startswith("data:image/png;base64,")
 
     def test_each_open_browser_tab_gets_its_own_view(self, monkeypatch):
         import base64

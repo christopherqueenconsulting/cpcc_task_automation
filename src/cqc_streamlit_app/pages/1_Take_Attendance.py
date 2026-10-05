@@ -9,9 +9,8 @@
 3. **Continue** records attendance (and withdrawals, if chosen) while the page shows
    progress, the browser view and the log.
 """
-import base64
+import datetime as DT
 import os
-import time
 
 import streamlit as st
 
@@ -32,6 +31,8 @@ from cqc_streamlit_app.streamlit_logger import streamlit_handler
 from cqc_streamlit_app.utils import get_cpcc_css, on_download_click, render_mfa_prompt
 
 JOB_KEY = "attendance_job"
+# The phase the last full page run drew; the live view reruns the page when it moves.
+RENDERED_PHASE_KEY = "attendance_rendered_phase"
 POLL_SECONDS = 1.5
 TAB_TITLE_CHARS = 32
 
@@ -146,7 +147,16 @@ def _tab_label(number: int, title: str) -> str:
     return "Tab %d · %s" % (number, title)
 
 
-@st.fragment(run_every=1)
+def _screenshot_src(screenshot_b64: str) -> str:
+    """A data URL, so the image travels with the page instead of as a media file.
+
+    A media-file URL is dropped when the next refresh draws a newer screenshot;
+    refreshing every second or so, the browser often asked for a URL already gone
+    and never painted the picture.
+    """
+    return "data:image/png;base64," + screenshot_b64
+
+
 def screenshot_section() -> None:
     """The placeholder, replaced by each browser screenshot as the run moves along.
 
@@ -159,18 +169,18 @@ def screenshot_section() -> None:
     if screenshot:
         browser_tabs = job.tab_screenshots()
         if len(browser_tabs) < 2:
-            st.image(base64.b64decode(screenshot), width="stretch")
+            st.image(_screenshot_src(screenshot), width="stretch")
             return
         labels = ["Live"] + [_tab_label(number, shot.title)
                              for number, shot in enumerate(browser_tabs, start=1)]
         views = st.tabs(labels)
         with views[0]:
-            st.image(base64.b64decode(screenshot), width="stretch")
+            st.image(_screenshot_src(screenshot), width="stretch")
         for view, shot in zip(views[1:], browser_tabs):
             with view:
                 if shot.active:
                     st.caption("The run is using this tab.")
-                st.image(base64.b64decode(shot.screenshot_b64), width="stretch")
+                st.image(_screenshot_src(shot.screenshot_b64), width="stretch")
         return
     placeholder = _placeholder_image()
     if placeholder:
@@ -179,11 +189,21 @@ def screenshot_section() -> None:
         st.caption("Screenshots of the browser appear here once the run starts.")
 
 
-def job_section(job: AttendanceJob) -> None:
-    phase = job.phase
+def warnings_section(job: AttendanceJob) -> None:
+    """Problems to act on, such as a course MyColleges would not update; kept all run."""
+    for message in job.warnings():
+        st.warning("⚠️ " + message)
 
+
+def _needs_full_page(phase: str) -> bool:
+    """The form and the finish screen hold page-level widgets, so the page draws them."""
+    return phase == PHASE_AWAITING_PLAN or phase in FINISHED_PHASES
+
+
+def job_section(job: AttendanceJob) -> None:
+    """The form or the finish screen; drawn by the full page run."""
+    phase = job.phase
     if job.cancelled and phase not in FINISHED_PHASES:
-        st.info("⏳ Cancelling...")
         return
 
     if phase == PHASE_AWAITING_PLAN:
@@ -201,12 +221,23 @@ def job_section(job: AttendanceJob) -> None:
             st.error("❌ Attendance failed: %s" % job.error)
         elif phase == PHASE_CANCELLED:
             st.warning("Attendance was cancelled.")
+        warnings_section(job)
         if st.button("Start a new run", key="attendance_reset"):
             st.session_state.pop(JOB_KEY, None)
             st.rerun()
+
+
+def progress_section(job: AttendanceJob) -> None:
+    """Progress, the MFA number and Cancel while the run works; part of the live view."""
+    phase = job.phase
+    if job.cancelled and phase not in FINISHED_PHASES:
+        st.info("⏳ Cancelling...")
+        return
+    if _needs_full_page(phase):
         return
 
     st.info("⏳ %s" % (job.latest_progress() or "Starting..."))
+    warnings_section(job)
     render_mfa_prompt(job.bridge)
     # Cancel is offered until attendance marking starts; after that the run finishes
     # so no course is left half-recorded.
@@ -215,18 +246,57 @@ def job_section(job: AttendanceJob) -> None:
         st.rerun()
 
 
-def _needs_polling(job: AttendanceJob) -> bool:
-    phase = job.phase
+def _needs_polling(job: AttendanceJob, phase: str) -> bool:
     if phase in FINISHED_PHASES:
         return False
     return job.cancelled or phase != PHASE_AWAITING_PLAN
 
 
-@st.fragment(run_every=3)
 def logging_section() -> None:
+    # Not a text_area: a keyed widget keeps its first value, so the box stayed empty.
     st.subheader("Log Output")
-    st.text_area("Log Output", value=streamlit_handler.get_logs(), height=400,
-                 key="cpcc_logs", label_visibility="collapsed")
+    st.code(streamlit_handler.get_logs() or "No log lines yet.", language=None,
+            height=400, wrap_lines=True)
+
+
+def live_view() -> None:
+    """Progress, screenshots and the log; refreshed on a timer while the run works."""
+    job: AttendanceJob | None = st.session_state.get(JOB_KEY)
+    if job is not None and job.phase != st.session_state.get(RENDERED_PHASE_KEY):
+        if _needs_full_page(job.phase):
+            # The form or finish screen is due: redraw the whole page once.
+            st.rerun(scope="app")
+    if job is not None:
+        progress_section(job)
+    screenshot_section()
+    logging_section()
+
+
+def _file_facts(path: str) -> str:
+    stat = os.stat(path)
+    modified = DT.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+    return "%.1f KB, updated %s" % (stat.st_size / 1024, modified)
+
+
+def reports_section() -> None:
+    """Dry-run CSVs of entries still owed (ids and dates only), to view or download."""
+    from cqc_cpcc.my_colleges import default_report_dir
+
+    directory = default_report_dir()
+    with st.expander("Missing-entry reports (saved by dry runs)"):
+        st.caption("Folder: `%s`" % directory)
+        names = sorted((name for name in os.listdir(directory) if name.endswith(".csv")),
+                       reverse=True) if os.path.isdir(directory) else []
+        if not names:
+            st.caption("No reports yet. A dry run saves one per course with entries owed.")
+            return
+        for name in names:
+            path = os.path.join(directory, name)
+            name_col, button_col = st.columns([3, 1])
+            name_col.markdown("`%s` · %s" % (name, _file_facts(path)))
+            with open(path, "rb") as handle:
+                button_col.download_button("Download", handle.read(), file_name=name,
+                                           mime="text/csv", key="report_%s" % name)
 
 
 def ledger_section() -> None:
@@ -236,11 +306,14 @@ def ledger_section() -> None:
     (``~/.cqc_cpcc/attendance.sqlite3``), so on a hosted deployment it starts
     empty each time and every course is simply re-checked from its start.
     """
-    with st.expander("Attendance ledger (what has been recorded and verified)"):
-        try:
-            from cqc_cpcc.attendance_ledger import AttendanceLedger, default_db_path
+    from cqc_cpcc.attendance_ledger import AttendanceLedger, default_db_path
 
-            if not os.path.exists(default_db_path()):
+    path = default_db_path()
+    with st.expander("Attendance ledger (what has been recorded and verified)"):
+        st.caption("Database: `%s`%s" % (
+            path, " · " + _file_facts(path) if os.path.exists(path) else ""))
+        try:
+            if not os.path.exists(path):
                 st.caption("No ledger yet. It is created by the first attendance run.")
                 return
             ledger = AttendanceLedger()
@@ -282,7 +355,10 @@ def main():
         return
 
     job: AttendanceJob | None = st.session_state.get(JOB_KEY)
-    idle = job is None or job.phase in FINISHED_PHASES
+    # Read once: the run moves on its own thread, and the live view compares against
+    # this to know when the page must redraw.
+    phase = job.phase if job is not None else None
+    idle = job is None or phase in FINISHED_PHASES
 
     tracker_url = st.text_input(
         "Attendance Tracker URL",
@@ -301,19 +377,19 @@ def main():
     else:
         job_section(job)
 
-    screenshot_section()
+    # Only the live view refreshes while the run works (signing in, or recording
+    # attendance), so progress, screenshots, the MFA number and the log stay current
+    # without redrawing the page. Waiting on the form needs no refresh.
+    st.session_state[RENDERED_PHASE_KEY] = phase
+    polling = job is not None and _needs_polling(job, phase)
+    st.fragment(live_view, run_every=POLL_SECONDS if polling else None)()
+
+    st.subheader("Local attendance data (view only)")
     ledger_section()
-    logging_section()
+    reports_section()
     if os.path.exists(LOGGING_FILENAME):
         on_download_click(st.empty(), LOGGING_FILENAME, "Download Log",
                           os.path.basename(LOGGING_FILENAME))
-
-    # Poll while the background run is working (signing in, or recording
-    # attendance) so progress and the MFA number stay current. Waiting on the form
-    # needs no polling.
-    if job is not None and _needs_polling(job):
-        time.sleep(POLL_SECONDS)
-        st.rerun()
 
 
 if __name__ == '__main__':
