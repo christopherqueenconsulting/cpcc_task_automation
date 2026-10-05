@@ -61,6 +61,7 @@ from cqc_cpcc.utilities.selenium_util import (
     get_elements_text_as_list_wait_stale,
     getText,
     notify_progress,
+    notify_warning,
     wait_for_ajax,
     wait_for_element_to_hide,
 )
@@ -100,6 +101,17 @@ class AttendanceOutcome:
     unmatched: list = field(default_factory=list)
     # (date, student id) pairs a dry run found not marked Present.
     missing: list = field(default_factory=list)
+    # Writes MyColleges refused with "Unable to update student attendance".
+    update_errors: int = 0
+    # True when refusals reached UPDATE_ERRORS_TO_SKIP_COURSE and the rest was skipped.
+    updates_down: bool = False
+
+
+def default_report_dir() -> str:
+    """Where dry runs save their missing-entry CSVs (``CQC_ATTENDANCE_REPORT_DIR``)."""
+    return os.environ.get("CQC_ATTENDANCE_REPORT_DIR") or os.path.join(
+        os.path.expanduser("~"), ".cqc_cpcc", "attendance_reports"
+    )
 
 
 class MyColleges:
@@ -121,6 +133,8 @@ class MyColleges:
         self.short_wait = get_driver_wait(driver, 3)
         self.course_information = {}
         self.student_info = {}
+        # Sections where MyColleges refused attendance updates this run.
+        self.update_error_sections: list[str] = []
         self.ledger = ledger
 
     def _get_ledger(self) -> AttendanceLedger:
@@ -699,6 +713,28 @@ class MyColleges:
     """
     ROW_SAVE_TIMEOUT_SECONDS = 15
 
+    # MyColleges shows this when the server refuses an attendance save, e.g.
+    #   <div class="esg-alert__message-text">Unable to update student attendance at
+    #   this time. Try again later.</div>
+    # The value can still read Present on the open page, so the alert decides.
+    UPDATE_ERROR_TEXT = "Unable to update student attendance"
+    # More than one refusal in a course means updates are down for it: stop writing.
+    UPDATE_ERRORS_TO_SKIP_COURSE = 2
+    _UPDATE_ERROR_JS = """
+        var needle = arguments[0].toLowerCase();
+        var found = false;
+        document.querySelectorAll('.esg-alert__message-text').forEach(function (el) {
+          var text = (el.innerText || el.textContent || '').toLowerCase();
+          if (text.indexOf(needle) === -1 || el.getClientRects().length === 0) { return; }
+          found = true;
+          // Dismiss it (as a user would) so the next refusal is a new alert.
+          var box = el.closest('.esg-alert') || el.parentElement;
+          var close = box ? box.querySelector('button') : null;
+          if (close) { close.click(); }
+        });
+        return found;
+    """
+
     _STUDENT_SELECTS_XPATH = (
         "//table[contains(@id,'student-attendance-table')]"
         "//tr[contains(normalize-space(.), '%s')]"
@@ -816,6 +852,15 @@ class MyColleges:
             logger.error("Could not mark Present: %s", type(error).__name__)
             return False
 
+    def _update_error_shown(self) -> bool:
+        """True when MyColleges shows "Unable to update student attendance" (then dismissed)."""
+        try:
+            return self.driver.execute_script(self._UPDATE_ERROR_JS,
+                                              self.UPDATE_ERROR_TEXT) is True
+        except Exception:
+            logger.debug("Could not check for the attendance update alert.", exc_info=True)
+            return False
+
     def _wait_for_row_save(self, student_id: str) -> bool:
         """Wait until the student's row has finished its autosave (spinner hidden)."""
         deadline = time.monotonic() + self.ROW_SAVE_TIMEOUT_SECONDS
@@ -893,7 +938,7 @@ class MyColleges:
         datepicker_avail = True
         written: dict[DT.date, list[str]] = {}
 
-        while outstanding:
+        while outstanding and not outcome.updates_down:
             record_date = min(outstanding)
             student_ids = sorted(set(outstanding.pop(record_date)))
             formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
@@ -934,7 +979,21 @@ class MyColleges:
                         outcome.missing.append((record_date, student_id))
                     continue
 
-                if self._mark_present_by_id(student_id):
+                marked = self._mark_present_by_id(student_id)
+                if self._update_error_shown():
+                    ledger.set_status(term, section, student_id, record_date,
+                                      STATUS_FAILED, "MyColleges: unable to update attendance")
+                    outcome.failed += 1
+                    outcome.update_errors += 1
+                    if outcome.update_errors >= self.UPDATE_ERRORS_TO_SKIP_COURSE:
+                        outcome.updates_down = True
+                        break
+                    notify_warning(
+                        "MyColleges could not save attendance for a student in %s on %s "
+                        "(\"Unable to update student attendance at this time\"). "
+                        "Continuing; it is retried on the next run." % (section, formatted_date)
+                    )
+                elif marked:
                     ledger.set_status(term, section, student_id, record_date, STATUS_RECORDED)
                     written.setdefault(record_date, []).append(student_id)
                 else:
@@ -944,6 +1003,18 @@ class MyColleges:
 
         if write and written:
             self._verify_written_dates(context, written, ledger, term, section, outcome)
+
+        if outcome.update_errors:
+            self.update_error_sections.append(section)
+        if outcome.updates_down:
+            # Skipped entries stay outstanding in the ledger, so the next run picks
+            # them up where this one stopped.
+            notify_warning(
+                "Attendance is not working in MyColleges for %s right now: %d students "
+                "got \"Unable to update student attendance at this time\". Skipped the "
+                "rest of this course (%d entr(ies) still owed). Run attendance again soon."
+                % (section, outcome.update_errors, len(ledger.outstanding(term, section)))
+            )
 
         logger.info(
             "Attendance %s for %s: %s expected, %s verified, %s failed, %s not selectable, "
@@ -1045,9 +1116,7 @@ class MyColleges:
         """Save a dry run's missing entries (ids + dates only) to a private CSV."""
         if not missing:
             return None
-        directory = os.environ.get("CQC_ATTENDANCE_REPORT_DIR") or os.path.join(
-            os.path.expanduser("~"), ".cqc_cpcc", "attendance_reports"
-        )
+        directory = default_report_dir()
         os.makedirs(directory, exist_ok=True)
         path = os.path.join(
             directory,
@@ -1098,7 +1167,11 @@ class MyColleges:
                 notes.extend(scrape_problems)
                 if counts_lower:
                     notes.append("count mismatch")
-                if not scrape_problems and not counts_lower \
+                if outcome.update_errors:
+                    notes.append("MyColleges refused %d update(s)%s" % (
+                        outcome.update_errors,
+                        "; rest of course skipped" if outcome.updates_down else ""))
+                if not scrape_problems and not counts_lower and not outcome.update_errors \
                         and not ledger.outstanding(term, section):
                     run_status = RUN_COMPLETE
         finally:
@@ -1249,6 +1322,7 @@ class MyColleges:
             logger.warning("No courses selected. Nothing to process.")
             return []
 
+        self.update_error_sections = []
         # Keep track of the original tab
         original_tab = self.driver.current_window_handle
 
@@ -1290,6 +1364,13 @@ class MyColleges:
                 self._close_current_course_tab(original_tab)
 
         telemetry.update_run(courses_selected=total, courses_failed=len(failed_courses))
+        if self.update_error_sections:
+            # Repeated at the end so it is not lost in a long console log.
+            logger.warning(
+                "MyColleges could not update attendance for: %s. Run attendance again "
+                "soon; the entries still owed are retried automatically.",
+                ", ".join(self.update_error_sections),
+            )
         if failed_courses:
             logger.error("%s course(s) failed and were skipped:", len(failed_courses))
             for course_name, course_error in failed_courses:

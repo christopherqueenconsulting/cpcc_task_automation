@@ -1,5 +1,6 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
+import time
 from threading import Thread
 from typing import Callable
 
@@ -14,9 +15,14 @@ from selenium.webdriver.support.wait import WebDriverWait
 class ScreenshotListener(AbstractEventListener):
 
     def __init__(self, screenshot_holder: Callable[..., None],
-                 on_tab_closed: Callable[[], None] | None = None):
+                 on_tab_closed: Callable[[], None] | None = None,
+                 min_interval: float = 0.0):
         self.screenshot_holder = screenshot_holder
         self.on_tab_closed = on_tab_closed
+        # Every click and script fires an event; a screenshot each time slows the
+        # run and floods the page. ``min_interval`` seconds between shots caps that.
+        self.min_interval = min_interval
+        self._last_shot = 0.0
 
     def after_navigate_to(self, url, driver) -> None:
         self.take_screenshot(driver)
@@ -64,6 +70,10 @@ class ScreenshotListener(AbstractEventListener):
     def take_screenshot(self, driver: WebDriver) -> None:
         # Runs inside driver calls, so a hung or crashed tab must not turn a click
         # or navigation into an error: screenshots are best-effort.
+        now = time.monotonic()
+        if self.min_interval and now - self._last_shot < self.min_interval:
+            return
+        self._last_shot = now
         try:
             WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
             saved = driver.get_screenshot_as_base64()

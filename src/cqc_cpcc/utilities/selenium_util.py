@@ -397,8 +397,8 @@ _observer_scope = threading.local()
 def browser_observer_scope(observer):
     """Send wait and progress notices on this thread to ``observer``.
 
-    ``observer`` may define ``on_wait_retry(driver, wait_text)`` and
-    ``on_progress(message)``; either may be missing.
+    ``observer`` may define ``on_wait_retry(driver, wait_text)``,
+    ``on_progress(message)`` and ``on_warning(message)``; any may be missing.
     """
     previous = getattr(_observer_scope, "observer", None)
     _observer_scope.observer = observer
@@ -452,6 +452,20 @@ def notify_progress(message: str) -> None:
         callback(message)
     except Exception:  # noqa: BLE001
         logger.debug("Browser observer failed on progress.", exc_info=True)
+
+
+def notify_warning(message: str) -> None:
+    """A problem the instructor must know about: logged as a warning and sent to
+    the observer (if any), which keeps it on the page rather than as passing progress."""
+    logger.warning(message)
+    observer = current_browser_observer()
+    callback = getattr(observer, "on_warning", None)
+    if callback is None:
+        return
+    try:
+        callback(message)
+    except Exception:  # noqa: BLE001
+        logger.debug("Browser observer failed on warning.", exc_info=True)
 
 
 class BrowserType(Enum):

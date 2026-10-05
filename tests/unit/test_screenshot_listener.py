@@ -228,3 +228,41 @@ class TestTakeScreenshotThreaded:
         
         # Should start the thread
         mock_thread.start.assert_called_once()
+
+
+@pytest.mark.unit
+class TestScreenshotListenerThrottle:
+    """``min_interval`` skips event screenshots that come too close together."""
+
+    def _driver(self):
+        driver = MagicMock()
+        driver.get_screenshot_as_base64.return_value = "shot"
+        return driver
+
+    @patch("cqc_cpcc.screenshot_listener.WebDriverWait")
+    def test_events_inside_the_interval_are_skipped(self, _wait):
+        holder = MagicMock()
+        listener = ScreenshotListener(holder, min_interval=60)
+        driver = self._driver()
+        listener.after_click(MagicMock(), driver)
+        listener.after_execute_script("x", driver)
+        assert holder.call_count == 1
+
+    @patch("cqc_cpcc.screenshot_listener.time.monotonic", side_effect=[100.0, 101.0])
+    @patch("cqc_cpcc.screenshot_listener.WebDriverWait")
+    def test_events_after_the_interval_are_taken(self, _wait, _clock):
+        holder = MagicMock()
+        listener = ScreenshotListener(holder, min_interval=0.75)
+        driver = self._driver()
+        listener.after_click(MagicMock(), driver)
+        listener.after_click(MagicMock(), driver)
+        assert holder.call_count == 2
+
+    @patch("cqc_cpcc.screenshot_listener.WebDriverWait")
+    def test_no_interval_takes_every_screenshot(self, _wait):
+        holder = MagicMock()
+        listener = ScreenshotListener(holder)
+        driver = self._driver()
+        listener.after_click(MagicMock(), driver)
+        listener.after_click(MagicMock(), driver)
+        assert holder.call_count == 2

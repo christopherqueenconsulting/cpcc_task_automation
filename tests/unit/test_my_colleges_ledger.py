@@ -37,8 +37,11 @@ class FakeAttendancePage:
     """Minimal MyColleges attendance page: a date selector and P values that
     may or may not survive a reload."""
 
-    def __init__(self, unselectable=(), drops=(), already=()):
+    def __init__(self, unselectable=(), drops=(), already=(), refused=()):
         self.current = None
+        # (date, id) whose save MyColleges refuses with its "Unable to update" alert.
+        self.refused = set(refused)
+        self.alert = False
         self.saved = set(already)  # (date, id) persisted on the server
         self.unselectable = set(unselectable)
         self.drops = set(drops)  # (date, id) whose write never saves
@@ -52,12 +55,19 @@ class FakeAttendancePage:
 
     def mark(self, student_id):
         self.writes.append((self.current, student_id))
+        if (self.current, student_id) in self.refused:
+            self.alert = True
+            return True  # the select still reads Present on the open page
         if (self.current, student_id) not in self.drops:
             self.saved.add((self.current, student_id))
         return True  # the open page always looks right; only a reload tells
 
     def read(self, student_id):
         return (self.current, student_id) in self.saved
+
+    def take_alert(self):
+        shown, self.alert = self.alert, False
+        return shown
 
 
 def _context(**kwargs):
@@ -96,6 +106,7 @@ def _my_colleges(page, ledger, totals=None):
     mc._select_attendance_date = page.select
     mc._mark_present_by_id = page.mark
     mc._read_present_by_id = page.read
+    mc._update_error_shown = page.take_alert
     mc._read_attendance_roster = lambda: ROSTER
     mc._read_attendance_totals = lambda: dict(totals or {})
     return mc
@@ -303,3 +314,69 @@ class TestSelectsById:
             lambda _v: setattr(element.get_attribute, "return_value", "P"))
         mc = self._mc(lambda *_: [element])
         assert mc._mark_present_by_id("1000001") is True
+
+
+@pytest.mark.unit
+class TestMyCollegesRefusesUpdates:
+    """MyColleges' "Unable to update student attendance at this time" alert."""
+
+    def _run(self, mc, ledger, records):
+        return mc._mark_attendance_for_course(
+            _context(), _course(records), ledger=ledger, term=TERM, section=SECTION,
+        )
+
+    def test_one_refusal_fails_that_student_warns_and_continues(self, ledger):
+        day = DT.date(2026, 8, 19)
+        page = FakeAttendancePage(refused={(day, "1000001")})
+        mc = _my_colleges(page, ledger)
+        with patch("cqc_cpcc.my_colleges.notify_warning") as warn:
+            outcome = self._run(mc, ledger, {"08-19-2026": ["Ann Adams", "Bob Brown"]})
+        assert (outcome.update_errors, outcome.updates_down) == (1, False)
+        assert ledger.get_status(TERM, SECTION, "1000001", "2026-08-19") == STATUS_FAILED
+        assert ledger.get_status(TERM, SECTION, "1000002", "2026-08-19") == STATUS_VERIFIED
+        assert warn.call_count == 1 and SECTION in warn.call_args.args[0]
+        assert mc.update_error_sections == [SECTION]
+
+    def test_two_refusals_skip_the_rest_of_the_course(self, ledger):
+        day = DT.date(2026, 8, 19)
+        page = FakeAttendancePage(refused={(day, "1000001"), (day, "1000002")})
+        mc = _my_colleges(page, ledger)
+        with patch("cqc_cpcc.my_colleges.notify_warning") as warn:
+            outcome = self._run(mc, ledger, {
+                "08-19-2026": ["Ann Adams", "Bob Brown", "Cid Clark"],
+                "08-20-2026": ["Ann Adams"],
+            })
+        assert outcome.updates_down is True
+        # Nobody after the second refusal is touched, on any date.
+        assert page.writes == [(day, "1000001"), (day, "1000002")]
+        # Everything not written stays owed, so the next run retries it.
+        assert len(ledger.outstanding(TERM, SECTION)) == 4
+        last = warn.call_args.args[0]
+        assert "not working" in last and SECTION in last and "again soon" in last
+
+    def test_refusals_keep_the_course_run_incomplete(self, ledger):
+        day = DT.date(2026, 8, 19)
+        page = FakeAttendancePage(refused={(day, "1000001"), (day, "1000002")})
+        mc = _my_colleges(page, ledger)
+        plan = RunPlan(write_attendance=True)
+        with patch("cqc_cpcc.my_colleges.notify_warning"):
+            mc._record_course_attendance(
+                _context(), _course({"08-19-2026": ["Ann Adams", "Bob Brown"]}), plan,
+                ledger, TERM, SECTION, DT.date(2026, 8, 17),
+            )
+        assert ledger.course_states()[0]["last_run_status"] == RUN_INCOMPLETE
+
+    def test_alert_check_reads_the_esg_alert_text(self):
+        with patch("cqc_cpcc.my_colleges.get_driver_wait"):
+            mc = MyColleges(MagicMock(), MagicMock())
+        mc.driver.execute_script.return_value = True
+        assert mc._update_error_shown() is True
+        script, needle = mc.driver.execute_script.call_args.args
+        assert ".esg-alert__message-text" in script
+        assert needle == "Unable to update student attendance"
+
+    def test_alert_check_failure_reads_as_no_alert(self):
+        with patch("cqc_cpcc.my_colleges.get_driver_wait"):
+            mc = MyColleges(MagicMock(), MagicMock())
+        mc.driver.execute_script.side_effect = RuntimeError("gone")
+        assert mc._update_error_shown() is False
