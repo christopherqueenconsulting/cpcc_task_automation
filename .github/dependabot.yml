@@ -22,6 +22,12 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      # Security updates also bump transitive packages (urllib3, anyio, ...),
+      # one PR each by default, all rewriting poetry.lock. Group them too.
+      python-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
     commit-message:
       prefix: "chore"
       include: "scope"
