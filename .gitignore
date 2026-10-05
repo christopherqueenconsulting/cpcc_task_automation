@@ -190,3 +190,6 @@ chrome-profile/
 output/withdrawals/
 withdrawals_*.csv
 *.csv.*.bak
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
