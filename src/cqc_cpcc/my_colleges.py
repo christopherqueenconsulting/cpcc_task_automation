@@ -304,7 +304,64 @@ class MyColleges:
             )
             return None
 
+    # Counts finished GetSectionAttendance requests (the roster load for a date).
+    # Verified live 2026-10-05: wait_for_ajax can return before that request even
+    # starts, so the roster read next was still the PREVIOUS date's. Verifying 8/17
+    # right after writing 9/28 read 9/28's roster: the 4 students present on both
+    # dates "verified", the 11 present only on 8/17 "failed", although MyColleges had
+    # saved them (its per-student totals were one higher than the ledger's).
+    _SECTION_LOADS_JS = """
+        if (!window.__cqcSectionLoads) {
+          window.__cqcSectionLoads = 0;
+          var open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function (method, url) {
+            this.__cqcUrl = url; return open.apply(this, arguments);
+          };
+          XMLHttpRequest.prototype.send = function () {
+            if (/GetSectionAttendance/i.test(String(this.__cqcUrl || ''))) {
+              this.addEventListener('loadend', function () { window.__cqcSectionLoads++; });
+            }
+            return send.apply(this, arguments);
+          };
+        }
+        return window.__cqcSectionLoads;
+    """
+    ROSTER_LOAD_TIMEOUT_SECONDS = 20
+
+    def _section_loads(self) -> int | None:
+        """How many roster loads this page has finished (None when unreadable)."""
+        try:
+            count = self.driver.execute_script(self._SECTION_LOADS_JS)
+        except Exception:
+            logger.debug("Could not count roster loads.", exc_info=True)
+            return None
+        return count if isinstance(count, int) else None
+
+    def _wait_for_roster_load(self, loads_before: int | None, formatted_date: str) -> None:
+        """Wait until the roster for the date just chosen has loaded and rendered."""
+        if loads_before is not None:
+            deadline = time.monotonic() + self.ROSTER_LOAD_TIMEOUT_SECONDS
+            while True:
+                loads = self._section_loads()
+                if loads is None or loads > loads_before:
+                    break
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "No roster reload seen after choosing %s; reading the page as it is.",
+                        formatted_date,
+                    )
+                    break
+                time.sleep(0.25)
+        wait_for_ajax(self.driver)
+
     def _select_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
+        """Choose ``record_date`` and return once MyColleges shows that date's roster."""
+        loads_before = self._section_loads()
+        datepicker_avail = self._choose_attendance_date(record_date, datepicker_avail)
+        self._wait_for_roster_load(loads_before, record_date.strftime("%-m/%-d/%Y (%A)"))
+        return datepicker_avail
+
+    def _choose_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
         formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
         datepicker_xpath = "//date-picker//input"
         date_input_found = False

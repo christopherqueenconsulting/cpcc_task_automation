@@ -299,6 +299,49 @@ def reports_section() -> None:
                                            mime="text/csv", key="report_%s" % name)
 
 
+# Hover help for the ledger tables: shown on each column header and in the ⓘ glossary.
+LEDGER_GLOSSARY = {
+    "term": "Semester and year the course belongs to.",
+    "course_section": "MyColleges course section, e.g. CSC-134-N801.",
+    "verified_through": "Latest date up to which every owed entry is verified. A normal "
+                        "run looks back from about a week before this date.",
+    "last_run_status": "complete = every owed entry verified; incomplete = something is "
+                       "still owed or a check failed (the next run re-checks); dry_run = "
+                       "checked only, nothing written.",
+    "needs_full_recheck": "1 = MyColleges showed fewer dates than the ledger, so the next "
+                          "run re-checks from the course start.",
+    "updated_at": "When this row last changed.",
+    "attend_date": "Class date the entries are for.",
+    "expected": "Students BrightSpace showed activity for on this date (entries owed).",
+    "verified": "Entries read back as Present after MyColleges reloaded the date.",
+    "recorded": "Written this run but not yet confirmed by a reload.",
+    "pending": "Owed but not written yet (for example, after a dry run).",
+    "failed": "A write or the reload check did not show Present. Retried on the next run.",
+    "not_selectable": "MyColleges did not offer this date; carried to the next date or "
+                      "not recordable.",
+    "student_id": "MyColleges student id (no names are stored).",
+    "mycolleges_count": "Days present according to MyColleges' own per-student total.",
+    "ledger_count": "Days the ledger has verified for the student.",
+    "outcome": "mycolleges_higher = MyColleges counts more days (it has entries the "
+               "ledger has not verified yet); mycolleges_lower = entries went missing in "
+               "MyColleges, so the next run re-checks from the course start.",
+}
+
+
+def _glossary_help() -> str:
+    return "\n".join("- **%s**: %s" % (name, text) for name, text in LEDGER_GLOSSARY.items())
+
+
+def _ledger_table(rows: list[dict]) -> None:
+    """A ledger table whose column headers explain themselves on hover."""
+    columns = rows[0].keys() if rows else []
+    st.dataframe(
+        rows, hide_index=True, width="stretch",
+        column_config={name: st.column_config.Column(help=LEDGER_GLOSSARY[name])
+                       for name in columns if name in LEDGER_GLOSSARY},
+    )
+
+
 def ledger_section() -> None:
     """What the local attendance ledger knows: per course, per date, by status.
 
@@ -312,6 +355,8 @@ def ledger_section() -> None:
     with st.expander("Attendance ledger (what has been recorded and verified)"):
         st.caption("Database: `%s`%s" % (
             path, " · " + _file_facts(path) if os.path.exists(path) else ""))
+        st.markdown("**Glossary** ⓘ", help=_glossary_help())
+        st.caption("Hover a column header for what it means.")
         try:
             if not os.path.exists(path):
                 st.caption("No ledger yet. It is created by the first attendance run.")
@@ -324,7 +369,7 @@ def ledger_section() -> None:
             states = ledger.course_states()
             if states:
                 st.markdown("**Courses**")
-                st.dataframe(states, hide_index=True, use_container_width=True)
+                _ledger_table(states)
             rows = ledger.report()
             if rows:
                 st.markdown("**Entries per date** (expected = BrightSpace showed activity)")
@@ -332,12 +377,12 @@ def ledger_section() -> None:
                                                value=False, key="ledger_outstanding_only")
                 if outstanding_only:
                     rows = [r for r in rows if r["verified"] + r["not_selectable"] < r["expected"]]
-                st.dataframe(rows, hide_index=True, use_container_width=True)
+                _ledger_table(rows)
             for state in states:
                 mismatches = ledger.latest_count_mismatches(state["term"], state["course_section"])
                 if mismatches:
                     st.markdown("**Count cross-check differences: %s**" % state["course_section"])
-                    st.dataframe(mismatches, hide_index=True, use_container_width=True)
+                    _ledger_table(mismatches)
         finally:
             ledger.close()
 

@@ -64,7 +64,7 @@ class TestSelectAttendanceDate:
         date_input_element.send_keys.assert_any_call("1/12/2026")
         date_input_element.send_keys.assert_any_call(Keys.ENTER)
         driver.find_element.assert_not_called()
-        mock_wait_for_ajax.assert_called_once_with(driver)
+        mock_wait_for_ajax.assert_called_with(driver)
 
     @patch("cqc_cpcc.my_colleges.wait_for_ajax")
     @patch("cqc_cpcc.my_colleges.Select")
@@ -108,7 +108,50 @@ class TestSelectAttendanceDate:
         select_instance.select_by_visible_text.assert_called_once_with(
             "1/12/2026 (Monday)"
         )
-        mock_wait_for_ajax.assert_called_once_with(driver)
+        mock_wait_for_ajax.assert_called_with(driver)
+
+
+@pytest.mark.unit
+class TestRosterLoadWait:
+    """Choosing a date must not return until that date's roster has loaded."""
+
+    def _mc(self):
+        with patch("cqc_cpcc.my_colleges.get_driver_wait"):
+            mc = MyColleges(MagicMock(), MagicMock())
+        mc._choose_attendance_date = MagicMock(return_value=True)
+        return mc
+
+    @patch("cqc_cpcc.my_colleges.wait_for_ajax")
+    @patch("cqc_cpcc.my_colleges.time.sleep")
+    def test_waits_until_a_new_roster_load_finishes(self, sleep, _ajax):
+        mc = self._mc()
+        # Before choosing: 3 loads; the reload lands on the third poll.
+        mc.driver.execute_script.side_effect = [3, 3, 3, 4]
+        assert mc._select_attendance_date(DT.date(2026, 8, 17), True) is True
+        mc._choose_attendance_date.assert_called_once_with(DT.date(2026, 8, 17), True)
+        assert mc.driver.execute_script.call_count == 4
+        assert sleep.call_count == 2
+
+    @patch("cqc_cpcc.my_colleges.wait_for_ajax")
+    @patch("cqc_cpcc.my_colleges.time.monotonic", side_effect=[0, 0, 100])
+    @patch("cqc_cpcc.my_colleges.time.sleep")
+    def test_gives_up_with_a_warning_when_no_reload_comes(self, _sleep, _clock, _ajax):
+        mc = self._mc()
+        mc.driver.execute_script.return_value = 5
+        with patch("cqc_cpcc.my_colleges.logger") as log:
+            mc._select_attendance_date(DT.date(2026, 8, 17), True)
+        assert "No roster reload seen" in log.warning.call_args.args[0]
+
+    @patch("cqc_cpcc.my_colleges.wait_for_ajax")
+    def test_unreadable_counter_does_not_block(self, ajax):
+        mc = self._mc()
+        mc.driver.execute_script.side_effect = RuntimeError("no page")
+        assert mc._select_attendance_date(DT.date(2026, 8, 17), False) is True
+        ajax.assert_called_once()
+
+    def test_counter_script_counts_section_attendance_loads(self):
+        assert "GetSectionAttendance" in MyColleges._SECTION_LOADS_JS
+        assert "loadend" in MyColleges._SECTION_LOADS_JS
 
 
 @pytest.mark.unit
