@@ -77,7 +77,8 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 **Responsibility**: Answer every console question once, before any browser work
 
 `RunPlan` is a dataclass holding the whole configuration of a run: which courses,
-the attendance start date, whether to process withdrawals, scrape-vs-push mode, the
+whether to force a full attendance re-check, whether to write attendance or dry-run
+it, whether to process withdrawals, scrape-vs-push mode, the
 tracker URL, and dry-run. Processing code reads the plan instead of calling
 `input()` mid-run, which is what makes an unattended pass possible — and what keeps
 the Streamlit background thread from blocking on a prompt nobody can see.
@@ -93,6 +94,25 @@ action → tracker URL → browser opens, login + MFA → scrape the course list
 remaining prompts** → unattended execution.
 
 **Dependencies**: `utilities/prompts.py`, `utilities/date.py`
+
+#### Attendance Ledger (`attendance_ledger.py`)
+**Responsibility**: Remember, per (term, course section, student id, date), what
+attendance MyColleges is owed and whether it has been verified.
+
+- SQLite file at `~/.cqc_cpcc/attendance.sqlite3` (override `CQC_ATTENDANCE_DB`),
+  created `0600`, outside the repo. Stores ids, sections, terms, dates, statuses — no
+  names or emails.
+- Statuses: `pending` → `recorded` (written, read back on the open page) →
+  `verified` (read back after the date is reloaded); `failed` is retried next run;
+  `carried` / `unrecordable` when MyColleges will not offer the date.
+- `lookback_start()` decides each course's scrape window: course start unless the
+  last run was `complete` with no count mismatch, else a week before
+  `verified_through`. `verified_through` only advances on a complete run.
+- `count_checks` records MyColleges' per-student total vs the ledger's verified count;
+  MyColleges lower forces the next run back to course start. (The roster column that
+  holds the total still needs live confirmation — see `_ATTENDANCE_TOTALS_JS`.)
+- Replaced the old "newest Last Attendance Recorded in the roster" start date, which
+  let one student's recent mark hide every earlier miss in the course.
 
 #### Attendance Module (`attendance.py`)
 **Responsibility**: Orchestrate the end-to-end attendance tracking workflow

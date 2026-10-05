@@ -12,10 +12,8 @@ from dataclasses import dataclass, field
 
 from cqc_cpcc.utilities.date import (
     convert_date_to_datetime,
-    get_datetime,
     is_date_in_range,
     is_same_term,
-    looks_like_a_scraped_date,
     term_for_date,
 )
 from cqc_cpcc.utilities.logger import logger
@@ -33,71 +31,6 @@ ACTION_WITHDRAWALS = "withdrawals"
 # How a withdrawals run sources its records.
 MODE_SCRAPE = "scrape"
 MODE_PUSH_ONLY = "push_only"
-
-
-def prompt_attendance_start_date(
-        course_name: str,
-        course_start_date: DT.date | DT.datetime,
-) -> DT.datetime | None:
-    """Prompt for the date from which attendance should start processing.
-
-    Returns ``None`` for "Last Attendance Date", meaning each course resolves its
-    own most recent recorded attendance date.
-    """
-    course_start_datetime = convert_date_to_datetime(course_start_date)
-
-    while True:
-        logger.info("Select attendance start date for Course: %s", course_name)
-        logger.info("1: Last Attendance Date")
-        logger.info(
-            "2: Course Start Date (%s)", course_start_datetime.strftime("%m-%d-%Y")
-        )
-        logger.info("3: Custom Date")
-
-        user_input = input("Enter your selection [1]: ").strip() or "1"
-
-        try:
-            selection = int(user_input)
-        except ValueError:
-            logger.warning("Invalid selection.")
-            continue
-
-        if selection == 1:
-            logger.info("Using Last Attendance Date")
-            return None
-
-        if selection == 2:
-            logger.info(
-                "Using Course Start Date: %s",
-                course_start_datetime.strftime("%m-%d-%Y"),
-            )
-            return course_start_datetime
-
-        if selection == 3:
-            custom_date = input(
-                "Enter custom attendance start date [MM-DD-YYYY]: "
-            ).strip()
-            # The digit guard runs first for the same reason it does on scraped
-            # cells: dateparser resolves "N/A" (and "a", and "b") to a real date
-            # without raising. Typed at this prompt that would silently pick an
-            # attendance start date nobody chose, and every week from it would be
-            # marked against the wrong range.
-            if not looks_like_a_scraped_date(custom_date):
-                logger.warning("Invalid custom date: %r holds no date.", custom_date)
-                continue
-
-            try:
-                custom_datetime = get_datetime(custom_date)
-            except ValueError:
-                logger.warning("Invalid custom date.")
-                continue
-            logger.info(
-                "Using Custom Attendance Start Date: %s",
-                custom_datetime.strftime("%m-%d-%Y"),
-            )
-            return custom_datetime
-
-        logger.warning("Invalid selection.")
 
 
 def _course_label(course_info: dict, course_url: str) -> str:
@@ -152,12 +85,6 @@ def current_term_indexes(
     return matching
 
 
-# Attendance start-date choices, shared by the console prompt and the web form.
-START_LAST_ATTENDANCE = "last_attendance"
-START_COURSE_START = "course_start"
-START_CUSTOM = "custom"
-
-
 @dataclass
 class CourseChoices:
     """The courses a picker should offer, and which of them to pre-select."""
@@ -201,30 +128,17 @@ def course_choices(
     )
 
 
-def resolve_attendance_start_date(
-        choice: str,
-        course_information: dict,
-        course_urls: list[str],
-        custom_date: DT.date | DT.datetime | None = None,
-) -> DT.datetime | None:
-    """Turn a start-date choice into the plan value (``None`` = last attendance date)."""
-    if choice == START_LAST_ATTENDANCE:
-        return None
-    if choice == START_COURSE_START:
-        return RunPlan._representative_start_date(course_information, course_urls)
-    if choice == START_CUSTOM:
-        if custom_date is None:
-            raise ValueError("A custom start date is required.")
-        return convert_date_to_datetime(custom_date)
-    raise ValueError("Unknown attendance start-date choice: %r" % choice)
-
-
 @dataclass
 class RunPlan:
     """Everything a run needs to know, gathered before any browser work starts."""
 
     course_urls: list[str] = field(default_factory=list)
-    attendance_start_date: DT.datetime | None = None
+    # The start of each course's attendance window is worked out per course from
+    # the attendance ledger; the teacher never picks it. ``full_recheck`` forces
+    # every course back to its start date (safe to repeat: verified entries skip).
+    full_recheck: bool = False
+    # False = dry run: read MyColleges and report what is missing, write nothing.
+    write_attendance: bool = True
     process_withdrawals: bool = False
     withdrawals_mode: str = MODE_SCRAPE
     tracker_url: str | None = None
@@ -255,10 +169,9 @@ class RunPlan:
             process_withdrawals: bool = False,
             dry_run: bool = True,
     ) -> "RunPlan":
-        """A plan that asks nothing: every course, last-attendance-date start."""
+        """A plan that asks nothing: every course, ledger-driven look-back."""
         return cls(
             course_urls=list(course_information.keys()),
-            attendance_start_date=None,
             process_withdrawals=process_withdrawals,
             withdrawals_mode=MODE_SCRAPE,
             tracker_url=tracker_url,
@@ -272,8 +185,8 @@ class RunPlan:
             course_information: dict,
             *,
             course_urls: list[str],
-            start_date_choice: str = START_LAST_ATTENDANCE,
-            custom_start_date: DT.date | DT.datetime | None = None,
+            full_recheck: bool = False,
+            write_attendance: bool = True,
             process_withdrawals: bool = True,
             sync_to_tracker: bool = False,
             write_to_tracker: bool = False,
@@ -281,8 +194,9 @@ class RunPlan:
     ) -> "RunPlan":
         """Build an attendance plan from answers given in a form (the web app).
 
-        Same questions and meaning as :meth:`build_interactively`: courses, start
-        date, whether to process withdrawals, whether to sync them to the tracker,
+        Same questions and meaning as :meth:`build_interactively`: courses, whether
+        to re-check every course from its start date, whether to write attendance
+        or only report what is missing, whether to process withdrawals, whether to sync them to the tracker,
         and whether that sync writes for real (otherwise a dry run).
         """
         unknown = [url for url in course_urls if url not in course_information]
@@ -292,9 +206,8 @@ class RunPlan:
         sync = bool(process_withdrawals and sync_to_tracker and tracker_url)
         return cls(
             course_urls=list(course_urls),
-            attendance_start_date=resolve_attendance_start_date(
-                start_date_choice, course_information, course_urls, custom_start_date
-            ) if course_urls else None,
+            full_recheck=full_recheck,
+            write_attendance=write_attendance,
             process_withdrawals=process_withdrawals,
             withdrawals_mode=MODE_SCRAPE,
             tracker_url=tracker_url,
@@ -381,9 +294,14 @@ class RunPlan:
             return plan
 
         if action == ACTION_ATTENDANCE:
-            plan.attendance_start_date = prompt_attendance_start_date(
-                "All Courses",
-                cls._representative_start_date(course_information, plan.course_urls),
+            plan.full_recheck = prompt_yes_no(
+                "Re-check attendance from each course's start date? "
+                "(Use after errors or missed entries; No = automatic look-back)",
+                default=False,
+            )
+            plan.write_attendance = prompt_yes_no(
+                "Write attendance to MyColleges? (No = dry run, report missing only)",
+                default=True,
             )
             plan.process_withdrawals = prompt_yes_no(
                 "Also process withdrawals after attendance finishes?",

@@ -49,9 +49,21 @@ Automatically calculates student attendance by analyzing activity completion in 
    - Identifies students who completed activities in the date range
 3. **Recording**: Records attendance in the MyColleges official attendance system
 
-Every question the run needs — which courses, which start date, whether to process
-withdrawals afterwards — is asked **once, up front**, right after login. From that
-point the run is unattended; you can walk away.
+Every question the run needs — which courses, whether to re-check from each course's
+start date, whether to write or only report (dry run), whether to process withdrawals
+afterwards — is asked **once, up front**, right after login. From that point the run
+is unattended; you can walk away.
+
+**You never pick an attendance start date.** Each course works out its own look-back
+from a local attendance ledger (`~/.cqc_cpcc/attendance.sqlite3`, student id + course
+section + date only — no names). A course goes back to its start date whenever the
+ledger cannot vouch for the past: first run, the last run did not finish cleanly, a
+BrightSpace scrape was incomplete, or MyColleges shows fewer attendance dates for a
+student than the ledger verified. Otherwise it starts a week before the last fully
+verified date. Every entry is written, then re-read after MyColleges reloads that date,
+and only then marked verified; anything that fails is retried on the next run. Tick
+"Re-check attendance from each course's start date" to force a full pass — verified
+entries are skipped, so it is safe to repeat.
 
 A course that fails part-way through no longer ends the run. It is logged, its tab is
 closed, and the remaining courses still process — the courses already finished keep

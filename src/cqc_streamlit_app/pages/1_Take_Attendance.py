@@ -4,12 +4,12 @@
 1. **Start** signs in to MyColleges on a background browser. When the sign-in asks
    for two-factor approval, the matching number appears here.
 2. Once your courses are read, the page asks what the console asks: which courses,
-   which start date, and what to do about withdrawals.
+   whether to re-check from course start, and what to do about withdrawals. The
+   attendance window itself is worked out per course from the local ledger.
 3. **Continue** records attendance (and withdrawals, if chosen) while the page shows
    progress, the browser view and the log.
 """
 import base64
-import datetime as DT
 import os
 import time
 
@@ -24,13 +24,7 @@ from cqc_cpcc.attendance_job import (
     PHASE_SUCCEEDED,
     AttendanceJob,
 )
-from cqc_cpcc.run_plan import (
-    START_COURSE_START,
-    START_CUSTOM,
-    START_LAST_ATTENDANCE,
-    RunPlan,
-    course_choices,
-)
+from cqc_cpcc.run_plan import RunPlan, course_choices
 from cqc_cpcc.utilities.env_constants import WITHDRAWALS_TRACKER_DRY_RUN
 from cqc_cpcc.utilities.logger import LOGGING_FILENAME, logger
 from cqc_streamlit_app.initi_pages import init_session_state
@@ -43,22 +37,6 @@ TAB_TITLE_CHARS = 32
 
 # Initialize session state variables
 init_session_state()
-
-
-def _start_date_label(choice: str, course_start: DT.datetime | None) -> str:
-    if choice == START_LAST_ATTENDANCE:
-        return "Last attendance date (each course picks up where it left off)"
-    if choice == START_COURSE_START:
-        if course_start is None:
-            return "Course start date"
-        return "Course start date (%s)" % course_start.strftime("%m/%d/%Y")
-    return "Custom date"
-
-
-def _earliest_start(course_information: dict, course_urls: list[str]) -> DT.datetime | None:
-    if not course_urls:
-        return None
-    return RunPlan._representative_start_date(course_information, course_urls)
 
 
 def plan_form(job: AttendanceJob) -> None:
@@ -92,21 +70,19 @@ def plan_form(job: AttendanceJob) -> None:
     elif not include_all:
         st.caption("No %s courses found, so every course is listed." % choices.term_text)
 
-    course_start = _earliest_start(info, selected)
-    start_choice = st.radio(
-        "Attendance start date",
-        [START_LAST_ATTENDANCE, START_COURSE_START, START_CUSTOM],
-        format_func=lambda choice: _start_date_label(choice, course_start),
-        key="attendance_start_choice",
+    full_recheck = st.checkbox(
+        "Re-check attendance from each course's start date",
+        value=False,
+        key="attendance_full_recheck",
+        help="Normally each course looks back automatically from its last verified "
+             "date. Tick this after errors or reported holes; entries already "
+             "verified are skipped, so it is safe to repeat.",
     )
-    custom_date = None
-    if start_choice == START_CUSTOM:
-        custom_date = st.date_input(
-            "Custom attendance start date",
-            value=(course_start or DT.datetime.now()).date(),
-            format="MM/DD/YYYY",
-            key="attendance_custom_date",
-        )
+    write_attendance = st.checkbox(
+        "Write attendance to MyColleges (unchecked = dry run, report missing only)",
+        value=True,
+        key="attendance_write",
+    )
 
     process_withdrawals = st.checkbox("Also process withdrawals after attendance finishes",
                                       value=True, key="attendance_process_withdrawals")
@@ -132,8 +108,8 @@ def plan_form(job: AttendanceJob) -> None:
             plan = RunPlan.from_selections(
                 info,
                 course_urls=selected,
-                start_date_choice=start_choice,
-                custom_start_date=custom_date,
+                full_recheck=full_recheck,
+                write_attendance=write_attendance,
                 process_withdrawals=process_withdrawals,
                 sync_to_tracker=sync_to_tracker,
                 write_to_tracker=write_to_tracker,
@@ -253,6 +229,46 @@ def logging_section() -> None:
                  key="cpcc_logs", label_visibility="collapsed")
 
 
+def ledger_section() -> None:
+    """What the local attendance ledger knows: per course, per date, by status.
+
+    Ids and counts only; names are never stored. The ledger lives on this machine
+    (``~/.cqc_cpcc/attendance.sqlite3``), so on a hosted deployment it starts
+    empty each time and every course is simply re-checked from its start.
+    """
+    with st.expander("Attendance ledger (what has been recorded and verified)"):
+        try:
+            from cqc_cpcc.attendance_ledger import AttendanceLedger, default_db_path
+
+            if not os.path.exists(default_db_path()):
+                st.caption("No ledger yet. It is created by the first attendance run.")
+                return
+            ledger = AttendanceLedger()
+        except Exception as error:  # noqa: BLE001 - the ledger view is optional
+            st.caption("The ledger could not be opened (%s)." % type(error).__name__)
+            return
+        try:
+            states = ledger.course_states()
+            if states:
+                st.markdown("**Courses**")
+                st.dataframe(states, hide_index=True, use_container_width=True)
+            rows = ledger.report()
+            if rows:
+                st.markdown("**Entries per date** (expected = BrightSpace showed activity)")
+                outstanding_only = st.checkbox("Only dates with entries still owed",
+                                               value=False, key="ledger_outstanding_only")
+                if outstanding_only:
+                    rows = [r for r in rows if r["verified"] + r["not_selectable"] < r["expected"]]
+                st.dataframe(rows, hide_index=True, use_container_width=True)
+            for state in states:
+                mismatches = ledger.latest_count_mismatches(state["term"], state["course_section"])
+                if mismatches:
+                    st.markdown("**Count cross-check differences: %s**" % state["course_section"])
+                    st.dataframe(mismatches, hide_index=True, use_container_width=True)
+        finally:
+            ledger.close()
+
+
 def main():
     st.set_page_config(layout="wide", page_title="CPCC Take Attendance", page_icon="✅")
     st.markdown(get_cpcc_css(), unsafe_allow_html=True)
@@ -286,6 +302,7 @@ def main():
         job_section(job)
 
     screenshot_section()
+    ledger_section()
     logging_section()
     if os.path.exists(LOGGING_FILENAME):
         on_download_click(st.empty(), LOGGING_FILENAME, "Download Log",

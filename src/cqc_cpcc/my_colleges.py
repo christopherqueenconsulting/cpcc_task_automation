@@ -1,8 +1,11 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
+import csv
 import datetime as DT
+import os
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 from selenium.common import (
@@ -19,16 +22,25 @@ from selenium.webdriver.support.event_firing_webdriver import EventFiringWebDriv
 from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 
+from cqc_cpcc.attendance_ledger import (
+    COUNT_MYCOLLEGES_LOWER,
+    RUN_COMPLETE,
+    RUN_DRY_RUN,
+    RUN_INCOMPLETE,
+    STATUS_CARRIED,
+    STATUS_FAILED,
+    STATUS_RECORDED,
+    STATUS_UNRECORDABLE,
+    STATUS_VERIFIED,
+    AttendanceLedger,
+    open_default_ledger,
+)
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.run_plan import RunPlan
-from cqc_cpcc.run_plan import (
-    prompt_attendance_start_date as _prompt_attendance_start_date,
-)
 from cqc_cpcc.utilities.date import (
     calculate_census_date,
     convert_date_to_datetime,
     get_datetime,
-    get_latest_date,
     is_date_in_range,
 )
 from cqc_cpcc.utilities.env_constants import (
@@ -76,6 +88,20 @@ class CourseContext:
     selectable_attendance_dates: list = None
 
 
+@dataclass
+class AttendanceOutcome:
+    """What one course's attendance pass did, in ledger terms (ids only)."""
+
+    expected: int = 0
+    verified: int = 0
+    failed: int = 0
+    not_selectable: int = 0
+    # (date, aliased name) pairs BrightSpace reported but no roster row matched.
+    unmatched: list = field(default_factory=list)
+    # (date, student id) pairs a dry run found not marked Present.
+    missing: list = field(default_factory=list)
+
+
 class MyColleges:
     driver: WebDriver
     wait: WebDriverWait
@@ -84,12 +110,28 @@ class MyColleges:
     current_tab: str
     student_info: dict
 
-    def __init__(self, driver: WebDriver | EventFiringWebDriver, wait: WebDriverWait):
+    def __init__(
+            self,
+            driver: WebDriver | EventFiringWebDriver,
+            wait: WebDriverWait,
+            ledger: AttendanceLedger | None = None,
+    ):
         self.driver = driver
         self.wait = wait
         self.short_wait = get_driver_wait(driver, 3)
         self.course_information = {}
         self.student_info = {}
+        self.ledger = ledger
+
+    def _get_ledger(self) -> AttendanceLedger:
+        """The attendance ledger, opened on first use.
+
+        Falls back to an in-memory ledger when the file cannot be opened: every
+        course then looks back to its start date, which is slow but never skips.
+        """
+        if self.ledger is None:
+            self.ledger = open_default_ledger() or AttendanceLedger(":memory:")
+        return self.ledger
 
     def open_faculty_page(self):
         faculty_url = MYCOLLEGE_URL + "/Student/Student/Faculty"
@@ -176,18 +218,6 @@ class MyColleges:
             )
             return None
 
-
-    def prompt_attendance_start_date(
-            self,
-            course_name: str,
-            course_start_date: DT.date | DT.datetime,
-    ) -> DT.datetime | None:
-        """Prompt for the attendance start date.
-
-        Kept as a method for callers and tests; the implementation now lives in
-        ``run_plan`` so the plan can gather it up front without a MyColleges instance.
-        """
-        return _prompt_attendance_start_date(course_name, course_start_date)
 
     @staticmethod
     def _normalize_attendance_record_date(record_date: str | DT.date | DT.datetime) -> DT.date:
@@ -527,17 +557,17 @@ class MyColleges:
     def _open_attendance_tab(
             self, course_url: str, course_end_date: DT.datetime
     ) -> tuple:
-        """Open the Attendance tab and read the dates the UI currently allows."""
+        """Open the Attendance tab and read the dates the UI currently allows.
+
+        The roster's "Last Attendance Recorded" column is deliberately NOT used to
+        pick a start date any more: its newest value across the whole roster hid
+        every student and date an earlier run had missed. The look-back now comes
+        from the attendance ledger (see ``_process_single_course``).
+        """
         click_element_wait_retry(self.driver, self.wait,
                                  "//a[contains(@class, 'esg-tab__link') "
                                  "and contains(text(),'Attendance')]",
                                  "Waiting for Attendance Tab")
-
-        # Find the latest attendance record to use as start date
-        last_attendance_record_dates = get_elements_text_as_list_wait_stale(
-            self.driver, self.wait,
-            "//td[@data-role='Last Attendance Recorded']",
-            "Waiting for Latest Attendance Records")
 
         # Cap attendance processing/carry-forward to what the UI currently allows.
         final_course_date = convert_date_to_datetime(course_end_date).date()
@@ -556,33 +586,9 @@ class MyColleges:
             ] = last_selectable_attendance_date
 
         return (
-            last_attendance_record_dates,
             selectable_attendance_dates,
             last_selectable_attendance_date,
         )
-
-    @staticmethod
-    def _resolve_attendance_start_date(
-            plan_start_date: DT.datetime | None,
-            last_attendance_record_dates: list,
-            course_start_date: DT.datetime,
-    ) -> DT.datetime:
-        """Use the plan's start date when set, else the latest recorded attendance."""
-        if plan_start_date:
-            return plan_start_date
-
-        try:
-            resolved = get_datetime(get_latest_date(last_attendance_record_dates))
-            logger.info(
-                "Latest Attendance Recorded Date: %s", resolved.strftime("%m-%d-%Y")
-            )
-            return resolved
-        except ValueError:
-            logger.info(
-                "No Attendance Records Found. Using Date: %s",
-                convert_date_to_datetime(course_start_date).strftime("%m-%d-%Y"),
-            )
-            return course_start_date
 
     def _open_course_context(
             self,
@@ -618,18 +624,12 @@ class MyColleges:
 
         if need_attendance_ui:
             (
-                last_attendance_record_dates,
                 selectable_attendance_dates,
                 last_selectable_attendance_date,
             ) = self._open_attendance_tab(course_url, course_end_date)
 
             context.selectable_attendance_dates = selectable_attendance_dates
             context.last_selectable_attendance_date = last_selectable_attendance_date
-            context.last_attendance_record_date = self._resolve_attendance_start_date(
-                plan.attendance_start_date,
-                last_attendance_record_dates,
-                course_start_date,
-            )
 
         context.term_semester, context.term_year = self._read_term(course_name)
 
@@ -639,53 +639,480 @@ class MyColleges:
     # Per-course work
     # ------------------------------------------------------------------
 
+    # One row per student on the attendance roster: the MyColleges student id
+    # (same value as BrightSpace's "Org Defined ID") and the row text, which holds
+    # the name. Names are only ever held in memory for matching; the ledger and
+    # the reports keep the id alone.
+    _ATTENDANCE_ROSTER_JS = """
+        var out = [];
+        document.querySelectorAll("table[id*='student-attendance-table'] tr")
+          .forEach(function (row) {
+            if (!row.querySelector("select.attendance-entry")) { return; }
+            var text = (row.innerText || '').replace(/\\s+/g, ' ').trim();
+            var idMatch = text.match(/\\b\\d{6,9}\\b/);
+            if (idMatch) { out.push({id: idMatch[0], text: text}); }
+          });
+        return out;
+    """
+
+    # Per-student count of Present entries, keyed by student id. Verified live
+    # 2026-10-05 on CSC-134-N801: the roster's "P" column is
+    # <td data-role="Present"> holding a whole number (A/E/L sit beside it as
+    # "Absent, no excuse" / "Absent, excused" / "Late").
+    _ATTENDANCE_TOTALS_JS = """
+        var out = {};
+        document.querySelectorAll("table[id*='student-attendance-table'] tbody tr")
+          .forEach(function (row) {
+            var studentCell = row.querySelector("td[data-role='Student']");
+            var idMatch = ((studentCell || row).innerText || '').match(/\\b\\d{6,9}\\b/);
+            var present = row.querySelector("td[data-role='Present']");
+            var value = present ? (present.innerText || '').trim() : '';
+            if (idMatch && /^\\d+$/.test(value)) { out[idMatch[0]] = parseInt(value, 10); }
+          });
+        return out;
+    """
+
+    # Verified live 2026-10-05: there is no Save button. Each row saves itself
+    # when its select changes and shows <spinner class="faculty-save__spinner-small">
+    # (its .esg-spinner-container is shown) until the server answers. Moving on before that
+    # finishes is how earlier runs "marked" students that never saved.
+    _ROW_SAVE_PENDING_JS = """
+        var sid = arguments[0];
+        var rows = document.querySelectorAll("table[id*='student-attendance-table'] tbody tr");
+        for (var i = 0; i < rows.length; i++) {
+          if ((rows[i].innerText || '').indexOf(sid) === -1) { continue; }
+          // <spinner class="faculty-save__spinner-small"> wraps
+          // <div class="esg-spinner-container" data-bind="visible: isVisible">,
+          // which Knockout shows (display != none) while the row is saving.
+          var spinners = rows[i].querySelectorAll(
+            '.faculty-save__spinner-small .esg-spinner-container');
+          for (var j = 0; j < spinners.length; j++) {
+            if (window.getComputedStyle(spinners[j]).display !== 'none') { return true; }
+          }
+          return false;
+        }
+        return false;
+    """
+    ROW_SAVE_TIMEOUT_SECONDS = 15
+
+    _STUDENT_SELECTS_XPATH = (
+        "//table[contains(@id,'student-attendance-table')]"
+        "//tr[contains(normalize-space(.), '%s')]"
+        "//select[contains(@class,'attendance-entry')]"
+    )
+
+    def _read_attendance_roster(self) -> list[dict]:
+        """Every roster row as ``{"id": ..., "text": ...}``; empty on any failure."""
+        try:
+            rows = self.driver.execute_script(self._ATTENDANCE_ROSTER_JS)
+        except Exception:
+            logger.debug("Could not read the attendance roster.", exc_info=True)
+            return []
+        if not isinstance(rows, list):
+            return []
+        return [
+            {"id": str(row["id"]).strip(), "text": str(row.get("text", ""))}
+            for row in rows
+            if isinstance(row, dict) and row.get("id")
+        ]
+
+    @staticmethod
+    def _match_student_id(full_name: str, roster: list[dict]) -> str | None:
+        """The roster id whose row holds every part of ``full_name``, if unique.
+
+        Substring matching first (the old behaviour); when that is ambiguous --
+        "Ann Lee" vs "Ann Leeson" -- whole-word matching breaks the tie. Anything
+        still ambiguous is left unmatched rather than marking the wrong student.
+        """
+        parts = [part.lower() for part in (full_name or "").split() if part]
+        if not parts:
+            return None
+
+        candidates = [
+            row for row in roster if all(part in row["text"].lower() for part in parts)
+        ]
+        if len(candidates) > 1:
+            candidates = [
+                row for row in candidates
+                if all(
+                    part in set(re.findall(r"[\w'\-]+", row["text"].lower()))
+                    for part in parts
+                )
+            ]
+        ids = {row["id"] for row in candidates}
+        return ids.pop() if len(ids) == 1 else None
+
+    def _student_selects(self, student_id: str) -> list:
+        return self.driver.find_elements(By.XPATH, self._STUDENT_SELECTS_XPATH % student_id)
+
+    def _read_present_by_id(self, student_id: str) -> bool | None:
+        """True when every attendance select in the student's row shows Present.
+
+        None when the row cannot be found at all.
+        """
+        selects = self._student_selects(student_id)
+        if not selects:
+            return None
+        return all(select.get_attribute("value") == "P" for select in selects)
+
+    def _mark_present_by_id(self, student_id: str, retry: int = 0) -> bool:
+        """Set every attendance select in the student's row to Present.
+
+        Returns True only when the selects read back as Present afterwards; the
+        caller still re-checks after MyColleges reloads the date.
+        """
+        present_value = "P"
+        try:
+            selects = self._student_selects(student_id)
+            if not selects:
+                logger.error("No attendance row found for student id ending %s",
+                             student_id[-3:])
+                return False
+
+            for index in range(len(selects)):
+                # Re-find on every pass: each change re-renders the row.
+                select_element = self._student_selects(student_id)[index]
+                if select_element.get_attribute("value") == present_value:
+                    continue
+                click_given_element_wait_retry(
+                    self.driver, self.wait, select_element,
+                    "Waiting for attendance select element %d" % (index + 1),
+                )
+                select_element = self._student_selects(student_id)[index]
+                if select_element.get_attribute("value") != present_value:
+                    Select(select_element).select_by_value(present_value)
+                    wait_for_ajax(self.driver)
+
+            # Release focus so the change event fires and the tab can be closed.
+            try:
+                final_selects = self._student_selects(student_id)
+                if final_selects:
+                    final_selects[-1].send_keys(Keys.TAB)
+                self.driver.execute_script(
+                    "if (document.activeElement) { document.activeElement.blur(); }"
+                )
+                wait_for_ajax(self.driver)
+            except Exception:
+                logger.debug("Unable to blur the attendance select.", exc_info=True)
+
+            if not self._wait_for_row_save(student_id):
+                logger.warning("Row save spinner did not clear for student id ending %s",
+                               student_id[-3:])
+                return False
+
+            return self._read_present_by_id(student_id) is True
+
+        except (StaleElementReferenceException, IndexError):
+            if retry < 3:
+                time.sleep(2)
+                return self._mark_present_by_id(student_id, retry + 1)
+            logger.error("Attendance row kept changing; giving up after %s retries.", retry)
+            return False
+        except Exception as error:
+            logger.error("Could not mark Present: %s", type(error).__name__)
+            return False
+
+    def _wait_for_row_save(self, student_id: str) -> bool:
+        """Wait until the student's row has finished its autosave (spinner hidden)."""
+        deadline = time.monotonic() + self.ROW_SAVE_TIMEOUT_SECONDS
+        while True:
+            try:
+                pending = self.driver.execute_script(self._ROW_SAVE_PENDING_JS, student_id)
+            except Exception:
+                logger.debug("Could not read the row save spinner.", exc_info=True)
+                return True  # cannot tell; the reload verification still decides
+            if pending is not True:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
+
+    def _next_selectable_date(
+            self,
+            current_date: DT.date,
+            final_course_date: DT.date,
+            selectable_attendance_dates: list[DT.date] | None,
+    ) -> DT.date | None:
+        if selectable_attendance_dates:
+            return next(
+                (day for day in selectable_attendance_dates if day > current_date), None
+            )
+        next_day = current_date + DT.timedelta(days=1)
+        return None if next_day > final_course_date else next_day
+
     def _mark_attendance_for_course(
-            self, context: CourseContext, bsc: BrightSpace_Course
-    ) -> None:
-        """Record attendance on the MyColleges Faculty page for one course."""
-        pending_attendance_records = self._build_pending_attendance_records(
-            bsc.attendance_records
-        )
+            self,
+            context: CourseContext,
+            bsc: BrightSpace_Course,
+            *,
+            ledger: AttendanceLedger,
+            term: str,
+            section: str,
+            write: bool = True,
+    ) -> AttendanceOutcome:
+        """Bring MyColleges in line with the ledger for one course.
 
-        # Flag for if datepicker available for this course
-        datepicker_avail = True
+        1. Match each BrightSpace name to a roster student id.
+        2. Add every (id, date) to the ledger as expected; verified rows stay put.
+        3. Work through EVERY outstanding ledger row for the course -- including
+           rows earlier runs failed on -- oldest date first.
+        4. Re-select each written date after the others (MyColleges reloads it from
+           the server) and only then call an entry verified.
 
-        # For each date update the attendance on MyColleges Faculty page
-        while pending_attendance_records:
-            record_date = min(pending_attendance_records)
-            students = pending_attendance_records.pop(record_date)
-            formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
+        ``write=False`` is a dry run: dates are selected and read, nothing changes
+        in MyColleges, and anything not already Present is reported as missing.
+        """
+        outcome = AttendanceOutcome()
+        pending_by_name = self._build_pending_attendance_records(bsc.attendance_records)
 
-            logger.info(
-                "Attendance Date: %s | Student(s): %s "
-                % (formatted_date, " | ".join(alias(name) for name in students))
+        roster = self._read_attendance_roster() if pending_by_name else []
+        for record_date, names in pending_by_name.items():
+            for name in names:
+                student_id = self._match_student_id(name, roster)
+                if student_id is None:
+                    outcome.unmatched.append((record_date, alias(name)))
+                    continue
+                ledger.upsert_expected(term, section, student_id, record_date)
+
+        if outcome.unmatched:
+            logger.warning(
+                "%s BrightSpace activity entr(ies) matched no single roster row in %s: %s",
+                len(outcome.unmatched), section,
+                ", ".join("%s %s" % (d.isoformat(), n) for d, n in outcome.unmatched),
             )
 
+        outstanding: dict[DT.date, list[str]] = {}
+        for entry in ledger.outstanding(term, section):
+            outstanding.setdefault(entry.attend_date, []).append(entry.student_id)
+        outcome.expected = sum(len(ids) for ids in outstanding.values())
+
+        datepicker_avail = True
+        written: dict[DT.date, list[str]] = {}
+
+        while outstanding:
+            record_date = min(outstanding)
+            student_ids = sorted(set(outstanding.pop(record_date)))
+            formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
+            logger.info("Attendance Date: %s | %s student(s)", formatted_date, len(student_ids))
+
             try:
-                datepicker_avail = self._select_attendance_date(
-                    record_date, datepicker_avail
-                )
-
-                # Update the attendance for each student
-                logger.info("Updating Attendance for Date: %s" % formatted_date)
-                for student_name in students:
-                    logger.info("Present: %s" % alias(student_name))
-
-                    # Set the present for OCLS and OLAB
-                    success = self.mark_student_present(student_name)
-                    if success:
-                        logger.info("Marked Present: %s" % alias(student_name))
-                    else:
-                        logger.info("Could Not Mark Present: %s" % alias(student_name))
-
+                datepicker_avail = self._select_attendance_date(record_date, datepicker_avail)
             except (NoSuchElementException, TimeoutException):
-                self._carry_students_to_next_consecutive_date(
-                    pending_attendance_records,
-                    record_date,
-                    students,
-                    context.last_selectable_attendance_date,
+                next_date = self._next_selectable_date(
+                    record_date, context.last_selectable_attendance_date,
                     context.selectable_attendance_dates,
                 )
+                for student_id in student_ids:
+                    if next_date is None:
+                        ledger.set_status(term, section, student_id, record_date,
+                                          STATUS_UNRECORDABLE, "date not selectable")
+                    else:
+                        ledger.set_status(term, section, student_id, record_date,
+                                          STATUS_CARRIED, "carried to %s" % next_date.isoformat())
+                        ledger.upsert_expected(term, section, student_id, next_date)
+                outcome.not_selectable += len(student_ids)
+                if next_date is None:
+                    logger.warning("Cannot select %s and no later date is available; "
+                                   "%s entr(ies) not recordable.", formatted_date, len(student_ids))
+                else:
+                    logger.info("Cannot select %s; carrying %s student(s) to %s.",
+                                formatted_date, len(student_ids),
+                                next_date.strftime("%-m/%-d/%Y (%A)"))
+                    outstanding.setdefault(next_date, []).extend(student_ids)
+                continue
+
+            for student_id in student_ids:
+                if not write:
+                    if self._read_present_by_id(student_id) is True:
+                        ledger.set_status(term, section, student_id, record_date, STATUS_VERIFIED)
+                        outcome.verified += 1
+                    else:
+                        outcome.missing.append((record_date, student_id))
+                    continue
+
+                if self._mark_present_by_id(student_id):
+                    ledger.set_status(term, section, student_id, record_date, STATUS_RECORDED)
+                    written.setdefault(record_date, []).append(student_id)
+                else:
+                    ledger.set_status(term, section, student_id, record_date,
+                                      STATUS_FAILED, "write did not read back Present")
+                    outcome.failed += 1
+
+        if write and written:
+            self._verify_written_dates(context, written, ledger, term, section, outcome)
+
+        logger.info(
+            "Attendance %s for %s: %s expected, %s verified, %s failed, %s not selectable, "
+            "%s unmatched, %s missing.",
+            "written" if write else "checked (dry run)", section, outcome.expected,
+            outcome.verified, outcome.failed, outcome.not_selectable,
+            len(outcome.unmatched), len(outcome.missing),
+        )
+        return outcome
+
+    def _verify_written_dates(
+            self,
+            context: CourseContext,
+            written: dict[DT.date, list[str]],
+            ledger: AttendanceLedger,
+            term: str,
+            section: str,
+            outcome: AttendanceOutcome,
+    ) -> None:
+        """Re-select each written date and confirm every student still shows Present.
+
+        Selecting a date makes MyColleges load that date's roster from the server,
+        so a value that did not save shows up here as not Present.
+        """
+        datepicker_avail = True
+        for record_date in sorted(written):
+            try:
+                datepicker_avail = self._select_attendance_date(record_date, datepicker_avail)
+            except (NoSuchElementException, TimeoutException):
+                for student_id in written[record_date]:
+                    ledger.set_status(term, section, student_id, record_date,
+                                      STATUS_FAILED, "could not reload date to verify")
+                outcome.failed += len(written[record_date])
+                continue
+
+            for student_id in written[record_date]:
+                if self._read_present_by_id(student_id) is True:
+                    ledger.set_status(term, section, student_id, record_date, STATUS_VERIFIED)
+                    outcome.verified += 1
+                else:
+                    ledger.set_status(term, section, student_id, record_date,
+                                      STATUS_FAILED, "not Present after reload")
+                    outcome.failed += 1
+
+    def _read_attendance_totals(self) -> dict[str, int]:
+        try:
+            totals = self.driver.execute_script(self._ATTENDANCE_TOTALS_JS)
+        except Exception:
+            logger.debug("Could not read attendance totals.", exc_info=True)
+            return {}
+        if not isinstance(totals, dict):
+            return {}
+        result = {}
+        for student_id, value in totals.items():
+            try:
+                result[str(student_id)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return result
+
+    def _cross_check_counts(
+            self, ledger: AttendanceLedger, run_id: str, term: str, section: str,
+    ) -> bool | None:
+        """Compare MyColleges' per-student attendance total with the ledger.
+
+        Returns True when any student has fewer dates in MyColleges than the ledger
+        has verified (entries went missing -> the next run re-checks from course
+        start), False when none do, and None when the totals could not be read.
+        """
+        totals = self._read_attendance_totals()
+        if not totals:
+            logger.warning(
+                "Attendance count cross-check unavailable for %s: no per-student total "
+                "found on the roster.", section,
+            )
+            return None
+
+        ledger_counts = ledger.verified_count_by_student(term, section)
+        lower = 0
+        for student_id in sorted(set(totals) | set(ledger_counts)):
+            if student_id not in totals:
+                continue
+            outcome = ledger.record_count_check(
+                run_id, term, section, student_id,
+                totals[student_id], ledger_counts.get(student_id, 0),
+            )
+            if outcome == COUNT_MYCOLLEGES_LOWER:
+                lower += 1
+        if lower:
+            logger.warning(
+                "%s student(s) in %s have fewer attendance dates in MyColleges than the "
+                "ledger verified; the next run re-checks from the course start.",
+                lower, section,
+            )
+        return lower > 0
+
+    @staticmethod
+    def _write_missing_report(section: str, missing: list) -> str | None:
+        """Save a dry run's missing entries (ids + dates only) to a private CSV."""
+        if not missing:
+            return None
+        directory = os.environ.get("CQC_ATTENDANCE_REPORT_DIR") or os.path.join(
+            os.path.expanduser("~"), ".cqc_cpcc", "attendance_reports"
+        )
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(
+            directory,
+            "missing_%s_%s.csv" % (re.sub(r"[^\w-]", "_", section),
+                                   DT.datetime.now().strftime("%Y%m%d_%H%M%S")),
+        )
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["course_section", "attend_date", "student_id"])
+            for record_date, student_id in sorted(missing):
+                writer.writerow([section, record_date.isoformat(), student_id])
+        return path
+
+    def _record_course_attendance(
+            self,
+            context: CourseContext,
+            bsc: BrightSpace_Course,
+            plan: RunPlan,
+            ledger: AttendanceLedger,
+            term: str,
+            section: str,
+            window_start: DT.date,
+    ) -> AttendanceOutcome:
+        """Mark, verify, cross-check, and record the run outcome for one course."""
+        write = plan.write_attendance
+        run_id = ledger.start_run(
+            term, section, window_start, bsc.date_range_end,
+            full_recheck=plan.full_recheck, dry_run=not write,
+        )
+        outcome = AttendanceOutcome()
+        run_status = RUN_INCOMPLETE
+        counts_lower = None
+        notes: list[str] = []
+        try:
+            outcome = self._mark_attendance_for_course(
+                context, bsc, ledger=ledger, term=term, section=section, write=write,
+            )
+            if not write:
+                run_status = RUN_DRY_RUN
+                report = self._write_missing_report(section, outcome.missing)
+                if report:
+                    logger.info("Dry run: %s entr(ies) missing in %s. Report: %s",
+                                len(outcome.missing), section, report)
+            else:
+                counts_lower = self._cross_check_counts(ledger, run_id, term, section)
+                scrape_problems = list(getattr(bsc, "scrape_problems", []) or [])
+                notes.extend(scrape_problems)
+                if counts_lower:
+                    notes.append("count mismatch")
+                if not scrape_problems and not counts_lower \
+                        and not ledger.outstanding(term, section):
+                    run_status = RUN_COMPLETE
+        finally:
+            ledger.update_course_state(
+                term, section, run_status=run_status, window_end=bsc.date_range_end,
+                needs_full_recheck=bool(counts_lower) if write else None,
+            )
+            ledger.finish_run(
+                run_id, status=run_status, expected=outcome.expected,
+                verified=outcome.verified, failed=outcome.failed,
+                unmatched=len(outcome.unmatched), notes="; ".join(notes),
+            )
+        if run_status == RUN_INCOMPLETE:
+            logger.warning(
+                "Attendance for %s is incomplete (%s); the next run re-checks from the "
+                "course start.", section, "; ".join(notes) or "entries still outstanding",
+            )
+        return outcome
 
     # Verified live 2026-09-01: the roster keeps a row for students who stop early,
     # with their real last-attendance date, and the student id sits in the same row's
@@ -754,6 +1181,23 @@ class MyColleges:
 
         logger.info("Processing Course: %s" % context.course_name)
 
+        term = ("%s %s" % (context.term_semester, context.term_year)).strip()
+        section = context.course_name.split(":")[0].strip()
+        ledger = None
+        window_start = convert_date_to_datetime(context.course_start_date).date()
+        if collect_attendance or mark_attendance:
+            ledger = self._get_ledger()
+            window_start, reason = ledger.lookback_start(
+                term, section, context.course_start_date,
+                force_full_recheck=plan.full_recheck,
+            )
+            logger.info("Attendance look-back for %s starts %s (%s).",
+                        section, window_start.isoformat(), reason)
+            # BrightSpace treats the date it is given as already done (exclusive).
+            context.last_attendance_record_date = convert_date_to_datetime(
+                window_start - DT.timedelta(days=1)
+            )
+
         bsc = BrightSpace_Course(
             context.course_name, context.term_semester, context.term_year,
             context.first_day_to_drop, context.final_day_to_drop,
@@ -768,7 +1212,9 @@ class MyColleges:
         if mark_attendance:
             # Switch back to the MyColleges course tab; BrightSpace used its own.
             self.driver.switch_to.window(self.current_tab)
-            self._mark_attendance_for_course(context, bsc)
+            self._record_course_attendance(
+                context, bsc, plan, ledger, term, section, window_start
+            )
 
         if collect_withdrawals and bsc.get_withdrawal_records():
             # Read AFTER marking, so the dates reflect what this run just recorded.
@@ -945,144 +1391,6 @@ class MyColleges:
             logger.debug("Datepicker input not available while determining selectable attendance date.")
 
         return None
-
-    def _carry_students_to_next_consecutive_date(
-            self,
-            pending_attendance_records: dict[DT.date, list[str]],
-            current_date: DT.date,
-            students: list[str],
-            final_course_date: DT.date,
-            selectable_attendance_dates: list[DT.date] | None = None,
-    ) -> bool:
-        next_selectable_date = None
-
-        if selectable_attendance_dates:
-            next_selectable_date = next(
-                (selectable_date for selectable_date in selectable_attendance_dates if selectable_date > current_date),
-                None,
-            )
-            if next_selectable_date is None:
-                logger.info(
-                    "Cannot update attendance for Date: %s | No next selectable attendance date is available.",
-                    current_date.strftime("%-m/%-d/%Y (%A)"),
-                )
-                logger.info(
-                    "Present (not recorded for %s): %s",
-                    current_date.strftime("%-m/%-d/%Y (%A)"),
-                    " | ".join(sorted(alias(name) for name in students)),
-                )
-                return False
-
-        if next_selectable_date is None:
-            next_selectable_date = current_date + DT.timedelta(days=1)
-            if next_selectable_date > final_course_date:
-                logger.info(
-                    "Cannot update attendance for Date: %s | No next selectable attendance date is available.",
-                    current_date.strftime("%-m/%-d/%Y (%A)"),
-                )
-                logger.info(
-                    "Present (not recorded for %s): %s",
-                    current_date.strftime("%-m/%-d/%Y (%A)"),
-                    " | ".join(sorted(alias(name) for name in students)),
-                )
-                return False
-
-        self._merge_students_for_date(pending_attendance_records, next_selectable_date, students)
-        logger.info(
-            "Cannot update attendance for Date: %s | Carrying students forward to next selectable date: %s",
-            current_date.strftime("%-m/%-d/%Y (%A)"),
-            next_selectable_date.strftime("%-m/%-d/%Y (%A)"),
-        )
-        logger.info(
-            "Present (not recorded for %s): %s",
-            current_date.strftime("%-m/%-d/%Y (%A)"),
-            " | ".join(sorted(alias(name) for name in students)),
-        )
-        return True
-
-    def mark_student_present(self, full_name: str, retry=0):
-        success = False
-        present_value = 'P'
-
-        # Use consolidated XPath to find all attendance-entry selects for the student
-        xpath_select = ("//table[contains(@id,'student-attendance-table')]//tr[descendant::div[" + " and ".join(
-            ['contains(text(), "{}")'.format(element) for element in
-             full_name.split(" ")]) + "]]//td//select[contains(@class,'attendance-entry')]")
-
-        try:
-            # Find all select elements for this student
-            select_elements = self.driver.find_elements(By.XPATH, xpath_select)
-
-            if not select_elements:
-                logger.error("No attendance select elements found for: %s" % alias(full_name))
-                return False
-
-            logger.info("Found %d attendance select element(s) for: %s" % (len(select_elements), alias(full_name)))
-
-            # Iterate over each select element
-            for idx, select_element in enumerate(select_elements):
-                try:
-                    if select_element.get_attribute("value") == present_value:
-                        logger.info(
-                            "Attendance already marked Present for %s on select element %d",
-                            full_name,
-                            idx + 1,
-                        )
-                        continue
-
-                    # Click the element
-                    click_given_element_wait_retry(self.driver, self.wait, select_element,
-                                                   "Waiting for attendance select element %d" % (idx + 1))
-
-                    # Re-find the element to avoid stale reference after click
-                    select_elements_refreshed = self.driver.find_elements(By.XPATH, xpath_select)
-                    if idx < len(select_elements_refreshed):
-                        select_element = select_elements_refreshed[idx]
-
-                    if select_element.get_attribute("value") != present_value:
-                        # Create Select object and select the present value
-                        select_obj = Select(select_element)
-                        select_obj.select_by_value(present_value)
-                        wait_for_ajax(self.driver)
-                except StaleElementReferenceException:
-                    # If element becomes stale, re-find all elements and continue
-                    logger.info("Stale element at index %d, re-finding elements" % idx)
-                    select_elements = self.driver.find_elements(By.XPATH, xpath_select)
-                    if idx < len(select_elements):
-                        select_element = select_elements[idx]
-                        if select_element.get_attribute("value") != present_value:
-                            select_obj = Select(select_element)
-                            select_obj.select_by_value(present_value)
-                            wait_for_ajax(self.driver)
-
-            # Always release focus from attendance controls so course tabs can be closed.
-            try:
-                select_elements_final = self.driver.find_elements(By.XPATH, xpath_select)
-                if select_elements_final:
-                    select_elements_final[-1].send_keys(Keys.TAB)
-            except Exception:
-                logger.debug("Unable to tab away from attendance select for %s", alias(full_name))
-
-            try:
-                self.driver.execute_script("if (document.activeElement) { document.activeElement.blur(); }")
-            except Exception:
-                logger.debug("Unable to blur active element after attendance update for %s", alias(full_name))
-
-            success = True
-
-        except NoSuchElementException as e:
-            logger.error("Exception: %s" % e)
-        except StaleElementReferenceException as se:
-            if retry < 3:
-                logger.error("Stale Element Exception. Trying again in 5 seconds...")
-                time.sleep(5)
-                success = self.mark_student_present(full_name, retry + 1)
-            else:
-                logger.error("Exception (after %s retries): %s" % (str(retry), se))
-        except Exception as oe:
-            logger.error("Exception: %s" % oe)
-
-        return success
 
     def get_student_info(self):
         return self.student_info

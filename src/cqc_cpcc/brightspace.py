@@ -26,6 +26,21 @@ from selenium.webdriver.support.select import Select
 from selenium.webdriver.support.wait import WebDriverWait
 
 
+def _xpath_literal(value: str) -> str:
+    """Quote ``value`` as an XPath 1.0 string literal, whatever quotes it holds."""
+    if "'" not in value:
+        return "'%s'" % value
+    if '"' not in value:
+        return '"%s"' % value
+    return "concat(%s)" % ", \"'\", ".join("'%s'" % part for part in value.split("'"))
+
+
+def _xpath_text_contains(node: str, needle: str) -> str:
+    """``contains()`` on whitespace-normalized text, with &nbsp; folded to a space."""
+    return "contains(normalize-space(translate(%s, '\u00a0', ' ')), %s)" % (
+        node, _xpath_literal(" ".join(needle.split())))
+
+
 class BrightSpace_Course:
     name: str
     url: str
@@ -80,6 +95,11 @@ class BrightSpace_Course:
                                      + DT.timedelta(days=1)
                                      )  # Start from the passed in date non-inclusive
         self.attendance_records = {}
+        # Anything that means this scrape may have missed activity (a list of due
+        # items whose links could not be read, a table that would not line up).
+        # A non-empty list keeps the course's ledger run "incomplete", so the next
+        # run looks back to the course start instead of trusting this window.
+        self.scrape_problems = []
         self.withdrawal_records = {}
         # student id -> last attendance date, filled in by MyColleges after
         # attendance is recorded. Empty means the week is reported as N/A.
@@ -102,6 +122,11 @@ class BrightSpace_Course:
             logger.info("Attendance Records (ALL):\n%s" % self.attendance_records)
         else:
             logger.warn("No Attendance Records - Cant find Course")
+
+    def _scrape_problem(self, description: str) -> None:
+        self.scrape_problems.append(description)
+        logger.error("Attendance scrape incomplete for %s: %s",
+                     self.get_course_and_section(), description)
 
     def get_course_and_section(self):
         # Derived from the name prior to the colon
@@ -481,12 +506,14 @@ class BrightSpace_Course:
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
             xpath_expression = table_prefix_xpath + "[descendant::*[" + " or ".join(
-                ["contains(.//text(), '{}')".format(d_date) for d_date in
+                [_xpath_text_contains(".", d_date) for d_date in
                  due_dates]) + "]]/ancestor::th[1]//a[contains(@class,'d2l-link')]"
 
             assignment_links = get_elements_href_as_list_wait_stale(self.driver, self.wait, xpath_expression,
                                                                     "Waiting for Assignment Links",
                                                                     refresh_on_stale=True)
+            if not assignment_links:
+                self._scrape_problem("assignments due %s found but no links read" % due_dates)
             logger.info("Assignment Link(s) Due Between %s - %s:" % (self.date_range_start, self.date_range_end))
             logger.info("\n".join(assignment_links))
 
@@ -560,6 +587,7 @@ class BrightSpace_Course:
                         logger.error(
                             "Mismatched lengths for student names and completed dates for assignment: %s | Student Names: %s | Completed Dates: %s" % (
                                 au, len(student_names), len(completed_dates)))
+                        self._scrape_problem("assignment table did not line up: %s" % au)
                         continue
 
                     student_completions_dict = dict(zip(student_names, completed_dates))
@@ -632,18 +660,27 @@ class BrightSpace_Course:
 
             # Get the links from due dates within the range
             # Constructing the dynamic XPath expression
-            xpath_expression = table_prefix_xpath + "//th[.//span[contains(@class,'ds_b') and (" + " or ".join(
-                ['text()[contains(., "{}")]'.format(d_date) for d_date in
-                 due_dates]) + ")]]/a[contains(@class,'d2l-link')]"
-
-            # logger.info("Quizzes Links XPath: %s" % xpath_expression)
+            # Match on the whole row with non-breaking spaces folded to spaces.
+            # The old ``th[.//span[text()[contains(...)]]]`` form compared against
+            # raw text nodes, while the due dates come from Selenium's ``.text``
+            # (which turns &nbsp; into a space) -- so on CSC-151-N805 every quiz
+            # link lookup timed out and no quiz attendance was ever recorded.
+            xpath_expression = table_prefix_xpath + "//tr[.//span[contains(@class,'ds_b') and (" + " or ".join(
+                [_xpath_text_contains(".", d_date) for d_date in
+                 due_dates]) + ")]]//a[contains(@class,'d2l-link') and contains(@href,'qi=')]"
 
             quizzes_links = get_elements_href_as_list_wait_stale(self.driver, self.wait, xpath_expression,
                                                                  "Waiting for Quizzes Links within due date range",
                                                                  refresh_on_stale=True)
 
             # Need to modify the links using the quiz id
-            quizzes_links = [self.modify_quiz_edit_url_to_attempt_log_url(link) for link in quizzes_links]
+            quizzes_links = list(dict.fromkeys(
+                link for link in (self.modify_quiz_edit_url_to_attempt_log_url(link)
+                                  for link in quizzes_links)
+                if link
+            ))
+            if not quizzes_links:
+                self._scrape_problem("quizzes due %s found but no links read" % due_dates)
 
             logger.info("Quiz Link(s) Due Between %s - %s:" % (self.date_range_start, self.date_range_end))
             logger.info("\n".join(quizzes_links))
@@ -831,6 +868,7 @@ class BrightSpace_Course:
                         logger.error(
                             "Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s" % (
                                 qu, len(student_names), len(completed_dates)))
+                        self._scrape_problem("quiz table did not line up: %s" % qu)
                         continue
 
                     student_completions_dict = dict(zip(student_names, completed_dates))

@@ -111,6 +111,20 @@ class TestMyFormatter:
         result = formatter.format(record2)
         assert result == 'Info'
 
+    @pytest.mark.parametrize("level", [logging.INFO, logging.WARNING, logging.ERROR, logging.DEBUG])
+    def test_my_formatter_interpolates_args(self, level):
+        """%-style args must be filled in, not printed as a literal '%s'."""
+        from cqc_cpcc.utilities.logger import MyFormatter
+        formatter = MyFormatter()
+        record = logging.LogRecord(
+            name='test', level=level, pathname='test.py', lineno=10,
+            msg='Window %s - %s', args=('2026-08-18', '2026-08-23'),
+            exc_info=None, func='test_func'
+        )
+        result = formatter.format(record)
+        assert 'Window 2026-08-18 - 2026-08-23' in result
+        assert '%s' not in result
+
 
 @pytest.mark.unit
 class TestLoggerConfiguration:
