@@ -137,3 +137,26 @@ class TestDevShmIsSmall:
 
         monkeypatch.setattr(su.os, "statvfs", missing, raising=False)
         assert su.dev_shm_is_small() is False
+
+
+@pytest.mark.unit
+class TestBrowserTimezoneGuard:
+    def test_a_utc_browser_is_warned_about_with_the_fix(self):
+        driver = MagicMock()
+        driver.execute_script.return_value = "UTC"
+        with patch.object(su, "logger") as log:
+            assert su.warn_if_browser_timezone_differs(driver, "America/New_York") == "UTC"
+        message = log.warning.call_args.args[0]
+        assert "force-recreate" in message
+
+    def test_matching_timezone_is_quiet(self):
+        driver = MagicMock()
+        driver.execute_script.return_value = "America/New_York"
+        with patch.object(su, "logger") as log:
+            su.warn_if_browser_timezone_differs(driver, "America/New_York")
+        log.warning.assert_not_called()
+
+    def test_unreadable_timezone_is_ignored(self):
+        driver = MagicMock()
+        driver.execute_script.side_effect = RuntimeError("gone")
+        assert su.warn_if_browser_timezone_differs(driver, "America/New_York") is None

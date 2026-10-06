@@ -135,12 +135,40 @@ class TestRosterLoadWait:
     @patch("cqc_cpcc.my_colleges.wait_for_ajax")
     @patch("cqc_cpcc.my_colleges.time.monotonic", side_effect=[0, 0, 100])
     @patch("cqc_cpcc.my_colleges.time.sleep")
-    def test_gives_up_with_a_warning_when_no_reload_comes(self, _sleep, _clock, _ajax):
+    def test_no_reload_for_a_new_date_raises_instead_of_reading_the_old_roster(
+            self, _sleep, _clock, _ajax):
         mc = self._mc()
         mc.driver.execute_script.return_value = 5
-        with patch("cqc_cpcc.my_colleges.logger") as log:
+        with pytest.raises(TimeoutException):
             mc._select_attendance_date(DT.date(2026, 8, 17), True)
-        assert "No roster reload seen" in log.warning.call_args.args[0]
+
+    @patch("cqc_cpcc.my_colleges.wait_for_ajax")
+    @patch("cqc_cpcc.my_colleges.time.monotonic", side_effect=[0, 0, 0, 0, 100])
+    @patch("cqc_cpcc.my_colleges.time.sleep")
+    def test_reselecting_the_date_already_shown_needs_no_reload(self, _sleep, _clock, _ajax):
+        mc = self._mc()
+        # First choice loads (5 -> 6); choosing the same date again loads nothing.
+        mc.driver.execute_script.side_effect = [5, 6, 6, 6, 6, 6]
+        mc._select_attendance_date(DT.date(2026, 9, 28), True)
+        assert mc._select_attendance_date(DT.date(2026, 9, 28), True) is True
+
+    @patch("cqc_cpcc.my_colleges.wait_for_ajax")
+    @patch("cqc_cpcc.my_colleges.Select")
+    @patch("cqc_cpcc.my_colleges.click_element_wait_retry")
+    @patch("cqc_cpcc.my_colleges.get_element_wait_retry")
+    def test_rejected_typed_date_falls_back_to_the_date_list(self, get_el, _click, select_cls, _a):
+        with patch("cqc_cpcc.my_colleges.get_driver_wait"):
+            mc = MyColleges(MagicMock(), MagicMock())
+        get_el.return_value = MagicMock()
+        mc.driver.execute_script.return_value = (
+            "Date entered is less than minimum allowed date of 8/17/2026")
+        assert mc._choose_attendance_date(DT.date(2026, 8, 17), True) is True
+        select_cls.return_value.select_by_visible_text.assert_called_once_with(
+            "8/17/2026 (Monday)")
+
+    def test_datepicker_error_script_targets_the_validation_text(self):
+        assert "minimum" in MyColleges._DATEPICKER_ERROR_JS
+        assert "date-picker" in MyColleges._DATEPICKER_ERROR_JS
 
     @patch("cqc_cpcc.my_colleges.wait_for_ajax")
     def test_unreadable_counter_does_not_block(self, ajax):
