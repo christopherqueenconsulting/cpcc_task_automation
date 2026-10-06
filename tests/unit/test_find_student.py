@@ -278,3 +278,82 @@ class TestTerminate:
         assert not finder.is_running()
         mock_driver.quit.assert_called_once()
         mock_logger.debug.assert_called_once_with("Find Students Process Terminated")
+
+
+@pytest.mark.unit
+class TestFindStudentsFromGatheredInfo:
+    def test_search_works_without_a_browser(self):
+        finder = FindStudents(student_info={"123": ("Adams, Ann", "a@x.edu", "CSC-134")})
+        assert finder.driver is None
+        assert finder.get_student_by_student_id("123")[0][1] == "Adams, Ann"
+        finder.terminate()  # nothing to quit
+
+
+def _wait_done(job, timeout=5):
+    import threading
+    gate = threading.Event()
+    for _ in range(int(timeout / 0.02)):
+        if job.phase != "running":
+            return
+        gate.wait(0.02)
+    raise AssertionError("job still running")
+
+
+@pytest.mark.unit
+class TestFindStudentJob:
+    @patch('cqc_cpcc.utilities.selenium_util.unattended_browser_problem', return_value=None)
+    @patch('cqc_cpcc.find_student.MyColleges')
+    @patch('cqc_cpcc.find_student.get_session_driver')
+    def test_gathers_on_a_thread_with_the_page_mfa_handler(self, get_driver, mc_class, _p):
+        from cqc_cpcc.find_student import PHASE_SUCCEEDED, FindStudentJob
+        from cqc_cpcc.utilities.utils import current_mfa_handler
+
+        driver = MagicMock()
+        get_driver.return_value = (driver, MagicMock())
+        seen = {}
+
+        def process(active_only):
+            seen["handler"] = current_mfa_handler()
+            seen["active_only"] = active_only
+
+        mc_class.return_value.process_student_info.side_effect = process
+        mc_class.return_value.get_student_info.return_value = {"1": ("A, B", "e", "C")}
+        job = FindStudentJob(active_courses_only=False)
+        job.start()
+        _wait_done(job)
+        assert job.phase == PHASE_SUCCEEDED
+        assert seen == {"handler": job.bridge, "active_only": False}
+        assert job.finder.get_student_by_student_id("1")
+        driver.quit.assert_called_once()
+        assert job.latest_progress() == "Found 1 student(s)."
+
+    @patch('cqc_cpcc.utilities.selenium_util.unattended_browser_problem', return_value=None)
+    @patch('cqc_cpcc.find_student.get_session_driver', side_effect=RuntimeError("no grid"))
+    def test_failure_is_reported(self, _driver, _p):
+        from cqc_cpcc.find_student import PHASE_FAILED, FindStudentJob
+
+        job = FindStudentJob()
+        job.start()
+        _wait_done(job)
+        assert job.phase == PHASE_FAILED and "no grid" in job.error
+
+    @patch('cqc_cpcc.utilities.selenium_util.unattended_browser_problem',
+           return_value="BROWSER_TYPE is not set.")
+    def test_missing_browser_setting_fails_fast_instead_of_prompting(self, _p):
+        from cqc_cpcc.find_student import PHASE_FAILED, FindStudentJob
+
+        job = FindStudentJob()
+        job.start()
+        _wait_done(job)
+        assert job.phase == PHASE_FAILED and "BROWSER_TYPE" in job.error
+
+    @patch('cqc_cpcc.utilities.selenium_util.unattended_browser_problem', return_value=None)
+    @patch('cqc_cpcc.find_student.get_session_driver')
+    def test_cancel_reads_as_cancelled(self, get_driver, _p):
+        from cqc_cpcc.find_student import PHASE_CANCELLED, FindStudentJob
+
+        job = FindStudentJob()
+        get_driver.side_effect = lambda: (job.cancel(), (_ for _ in ()).throw(RuntimeError("x")))
+        job.start()
+        _wait_done(job)
+        assert job.phase == PHASE_CANCELLED
