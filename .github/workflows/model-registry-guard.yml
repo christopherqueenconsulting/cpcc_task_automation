@@ -4,10 +4,11 @@ name: Model Registry Guard
 # pending forever on PRs that do not touch the path). It passes immediately when the
 # model registry is untouched.
 #
-# For bot PRs (promotion or rollback) it independently re-derives the decision from the
-# evaluation run's raw outputs and the committed labels, and checks the diff touches only
-# what the bot may change. It holds no secrets and merges nothing: model-automerge.yml
-# runs after this succeeds, on master, with the secrets.
+# For bot PRs (promotion or rollback) it re-derives the decision from the evaluation run's
+# raw outputs and the committed labels, and checks the diff touches only what the bot may
+# change. It holds no secrets and merges nothing. It runs the PR's own copy of this file,
+# so it is a fast convenience check, NOT the security boundary: model-automerge.yml repeats
+# every check on master, with master's code, before enabling auto-merge.
 
 on:
   pull_request:
@@ -88,9 +89,10 @@ jobs:
             exit 0
           fi
           # The bot may never touch the policy, workflows, or anything outside its lane.
-          if grep -vE "^(${REGISTRY}|evals/reports/.*)$" changed.txt | grep -q .; then
+          lane="^(${REGISTRY}|evals/reports/[^/]+/scorecard\.(json|md))$"
+          if grep -vE "${lane}" changed.txt | grep -q .; then
             echo "::error::Bot PR changes files outside the registry and evals/reports:"
-            grep -vE "^(${REGISTRY}|evals/reports/.*)$" changed.txt
+            grep -vE "${lane}" changed.txt
             exit 1
           fi
           git show "${BASE_SHA}:${REGISTRY}" > base_registry.json
@@ -113,7 +115,8 @@ jobs:
                 --base-registry base_registry.json --head-registry "${REGISTRY}"
               ;;
             *)
-              echo "::error::Bot PR has neither the model-promotion nor the model-rollback label"
-              exit 1
+              # gh adds labels just after creating the PR, so the "opened" run may see none.
+              # Without a label the PR is never auto-merged, so passing here is safe.
+              echo "::notice::Bot PR has no model-promotion/model-rollback label yet: not eligible for auto-merge."
               ;;
           esac

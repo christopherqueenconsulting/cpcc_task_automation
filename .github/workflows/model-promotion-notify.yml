@@ -29,7 +29,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
         uses: "./.github/actions/poetry_setup"
@@ -46,11 +46,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
           ASSIGNEE: ${{ vars.MODEL_BOT_ASSIGNEE }}
         run: |
           set -euo pipefail
-          git show "HEAD~1:${REGISTRY}" > base_registry.json
+          # Diff against the commit before this push (a push can carry several commits).
+          git show "${BEFORE}:${REGISTRY}" > base_registry.json 2>/dev/null || git show "HEAD~1:${REGISTRY}" > base_registry.json
           poetry run python -m cqc_cpcc.model_eval describe-change \
             --base-registry base_registry.json --head-registry "${REGISTRY}" > change.md
           {

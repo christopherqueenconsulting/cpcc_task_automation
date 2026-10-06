@@ -38,12 +38,16 @@ Roles: `grading` (rubric and exam grading), `digest` (very large submissions), `
      else worse by more than 0.02, cost at most 1.5x;
    - *cheaper*: nothing worse by more than 0.02 and cost at most 0.7x.
    Paired bootstrap over cases, Holm-corrected across candidates. Ties keep the current model.
-5. **Guard** (required check): re-scores the run's raw outputs against the labels, checks
-   the PR only changes the registry and the report, and that only allowed roles moved.
-6. **Auto-merge** (only if `MODEL_AUTOMERGE_ENABLED` is `true`): no grading freeze, at
-   most one promotion per month, the model is still listed at the same price and version,
-   and five recorded calls match OpenRouter's own generation records. Then GitHub merges
-   once every required check is green.
+5. **Guard** (required check, fast feedback): re-scores the run's raw outputs against the
+   labels and checks the PR only changes the registry and the report.
+6. **Auto-merge** (only if `MODEL_AUTOMERGE_ENABLED` is `true`) is the real safety check. On
+   master, with master's code, it repeats everything: the eval run is a successful master
+   Model Evaluation run, the committed scorecard is byte-identical to its artifact, the
+   winner re-derives from raw outputs, the registry equals exactly what the writer would
+   produce, no grading freeze, at most one promotion per month, the model is still listed
+   at the same price and version, and five recorded calls match OpenRouter's own
+   generation records. Then GitHub merges once every required check is green. Any refusal
+   is commented on the PR and relabelled `blocked-on-chris`.
 
 ## One-time setup (about 30 minutes)
 
@@ -65,7 +69,9 @@ Roles: `grading` (rubric and exam grading), `digest` (very large submissions), `
      have reviewed).
    - `MODEL_BOT_ASSIGNEE` = your GitHub username (issues are assigned to you).
    - Optional ClickUp mirror: secret `CLICKUP_API_TOKEN`, variable `CLICKUP_LIST_ID`.
-5. **Branch protection** on `master`: add **`model-registry-guard`** to the required checks.
+5. **Branch protection** on `master`: add **`model-registry-guard`** to the required checks,
+   keep required approvals at 0 (an App cannot approve its own PR), and keep the repository
+   setting **Allow auto-merge** on (it is on today).
 
 ## Day to day
 
