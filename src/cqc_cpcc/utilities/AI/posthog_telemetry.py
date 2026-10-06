@@ -69,6 +69,7 @@ EMPTY_RESPONSE = "empty_response"
 RESPONSE_TRUNCATED = "response_truncated"
 SMART_RETRY_FALLBACK = "smart_retry_fallback"
 PLACEHOLDER_BACKFILL = "placeholder_backfill"
+MODEL_FALLBACK = "model_fallback"
 
 # PostHog-defined properties an event may carry. Anything else must be a cqc_*
 # property. $ai_input / $ai_output_choices are deliberately absent: prompts carry
