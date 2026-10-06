@@ -291,30 +291,30 @@ class TestExamGradingWithGPT5:
     """Test exam grading specifically uses sanitized parameters."""
     
     async def test_exam_grading_omits_temperature_for_gpt5(self, mocker):
-        """Exam grading with GPT-5 should omit temperature=0.2."""
+        """Exam grading never sends temperature, even when a caller still passes one."""
+        from cqc_cpcc.utilities.AI import openrouter_client
         from cqc_cpcc.utilities.AI.exam_grading_openai import grade_exam_submission
-        
-        mock_client = AsyncMock()
+
+        mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        # Return valid ErrorDefinitions JSON with correct field names
         mock_response.choices[0].message.content = '{"all_major_errors": [], "all_minor_errors": []}'
-        mock_response.usage.total_tokens = 100
-        
+        mock_response.choices[0].message.refusal = None
+        mock_response.choices[0].finish_reason = "stop"
         mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-        mocker.patch('cqc_cpcc.utilities.AI.openai_client.get_client', return_value=mock_client)
-        
-        result = await grade_exam_submission(
+        mocker.patch.object(openrouter_client, "_get_openrouter_client", return_value=mock_client)
+
+        await grade_exam_submission(
             exam_instructions="Write Hello World",
             exam_solution="public class Hello {}",
             student_submission="public class Student {}",
             major_error_type_list=["SYNTAX_ERROR"],
             minor_error_type_list=["STYLE_ISSUE"],
             model_name="gpt-5-mini",
-            temperature=0.2,  # Default exam grading temperature
+            temperature=0.2,
         )
-        
-        # Verify temperature was filtered out in API call
+
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert "temperature" not in call_kwargs, "Exam grading should omit temperature for GPT-5"
-        assert call_kwargs["model"] == "gpt-5-mini"
+        assert "temperature" not in call_kwargs.get("extra_body", {})
+        assert call_kwargs["model"] == "openai/gpt-5-mini"

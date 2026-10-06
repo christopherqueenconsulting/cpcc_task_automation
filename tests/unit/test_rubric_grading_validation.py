@@ -98,7 +98,7 @@ class TestValidationAndRetry:
         
         # Mock get_structured_completion to succeed on first call
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(return_value=valid_result)
         )
         
@@ -117,7 +117,6 @@ class TestValidationAndRetry:
         mock_completion.assert_called_once()
         call_kwargs = mock_completion.call_args.kwargs
         assert call_kwargs['schema_model'] == RubricAssessmentResult
-        assert call_kwargs['max_retries'] == 3  # Should use 3 retries
         assert 'prompt' in call_kwargs
         assert 'Grading Task' in call_kwargs['prompt']
     
@@ -134,7 +133,7 @@ class TestValidationAndRetry:
         )
         
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(return_value=valid_result)
         )
         
@@ -155,7 +154,7 @@ class TestValidationAndRetry:
         
         # Mock get_structured_completion - it handles correlation ID internally
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(return_value=valid_result)
         )
         
@@ -188,7 +187,7 @@ class TestValidationAndRetry:
         
         # Mock to raise validation error after all retries
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(side_effect=validation_error)
         )
         
@@ -215,7 +214,7 @@ class TestValidationAndRetry:
         
         # Mock to raise transport error
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(side_effect=transport_error)
         )
         
@@ -243,7 +242,7 @@ class TestScoringWithValidation:
         
         # Mock get_structured_completion
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(return_value=llm_result)
         )
         
@@ -271,7 +270,7 @@ class TestScoringWithValidation:
         llm_result = create_valid_assessment_result(rubric_id="wrong_rubric")
         
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(return_value=llm_result)
         )
         
@@ -295,12 +294,12 @@ class TestScoringWithValidation:
 class TestRetryConfiguration:
     """Test retry configuration and behavior."""
     
-    async def test_max_retries_parameter_passed(self, base_rubric, mocker):
-        """Test that max_retries=3 is explicitly passed to get_structured_completion."""
+    async def test_grading_role_is_requested(self, base_rubric, mocker):
+        """Grading always asks the gateway for the registry's "grading" role."""
         valid_result = create_valid_assessment_result()
         
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(return_value=valid_result)
         )
         
@@ -310,16 +309,15 @@ class TestRetryConfiguration:
             student_submission=STUDENT_SUBMISSION,
         )
         
-        # Verify max_retries was explicitly set to 3
         call_kwargs = mock_completion.call_args.kwargs
-        assert call_kwargs['max_retries'] == 3
+        assert call_kwargs['role'] == "grading"
     
-    async def test_custom_model_and_temperature(self, base_rubric, mocker):
-        """Test that custom model and temperature are passed through."""
+    async def test_custom_model_is_passed_as_override(self, base_rubric, mocker):
+        """A chosen model overrides the registry; temperature is ignored (registry-driven)."""
         valid_result = create_valid_assessment_result()
         
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(return_value=valid_result)
         )
         
@@ -332,8 +330,8 @@ class TestRetryConfiguration:
         )
         
         call_kwargs = mock_completion.call_args.kwargs
-        assert call_kwargs['model_name'] == "gpt-5"
-        assert call_kwargs['temperature'] == 0.3
+        assert call_kwargs['override'] == "gpt-5"
+        assert 'temperature' not in call_kwargs
 
 
 @pytest.mark.unit
@@ -351,7 +349,7 @@ class TestErrorSurfacing:
         )
         
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(side_effect=error)
         )
         
@@ -376,7 +374,7 @@ class TestErrorSurfacing:
         )
         
         mock_completion = mocker.patch(
-            'cqc_cpcc.rubric_grading.get_structured_completion',
+            'cqc_cpcc.rubric_grading.llm_gateway.structured',
             new=AsyncMock(side_effect=error)
         )
         
@@ -410,7 +408,7 @@ class TestCompileGateWiring:
 
     async def test_no_source_files_means_the_gate_never_runs(self, base_rubric, mocker):
         gate = mocker.patch("cqc_cpcc.rubric_grading.apply_compile_gate")
-        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+        mocker.patch("cqc_cpcc.rubric_grading.llm_gateway.structured",
                      new=AsyncMock(return_value=create_valid_assessment_result()))
 
         await grade_with_rubric(
@@ -425,7 +423,7 @@ class TestCompileGateWiring:
         graded = create_valid_assessment_result()
         gate = mocker.patch("cqc_cpcc.rubric_grading.apply_compile_gate",
                             return_value=(graded, {"ran": True, "action": "none"}))
-        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+        mocker.patch("cqc_cpcc.rubric_grading.llm_gateway.structured",
                      new=AsyncMock(return_value=graded))
         files = {"HelloWorld.java": STUDENT_SUBMISSION}
 
@@ -448,7 +446,7 @@ class TestCompileGateWiring:
                          order.append("gate") or (r, {"ran": True, "action": "none"})))
         mocker.patch("cqc_cpcc.rubric_grading.apply_backend_scoring",
                      side_effect=lambda rub, r: order.append("score") or r)
-        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+        mocker.patch("cqc_cpcc.rubric_grading.llm_gateway.structured",
                      new=AsyncMock(return_value=graded))
 
         await grade_with_rubric(
@@ -469,7 +467,7 @@ class TestCompileGateWiring:
                                    "language": "java", "compiles": True,
                                    "tool": "javac"}),
         )
-        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+        mocker.patch("cqc_cpcc.rubric_grading.llm_gateway.structured",
                      new=AsyncMock(return_value=graded))
         report = {}
 
@@ -495,7 +493,7 @@ class TestCompileGateWiring:
                                    "language": "cpp", "compiles": False,
                                    "tool": "g++"}),
         )
-        mocker.patch("cqc_cpcc.rubric_grading.get_structured_completion",
+        mocker.patch("cqc_cpcc.rubric_grading.llm_gateway.structured",
                      new=AsyncMock(return_value=graded))
 
         with caplog.at_level("WARNING", logger="cpcc_logger"):

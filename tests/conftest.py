@@ -37,6 +37,18 @@ def _isolate_posthog_telemetry(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _block_real_openrouter_in_unit_tests(request, monkeypatch):
+    """A unit test that forgets to mock the LLM must fail fast, not spend real money
+    with the developer's .env OPENROUTER_API_KEY. Unroutable base URL for unit tests."""
+    if request.node.get_closest_marker("unit") is None:
+        return
+    from cqc_cpcc.utilities.AI import openrouter_client
+
+    monkeypatch.setattr(openrouter_client, "OPENROUTER_BASE_URL", "http://127.0.0.1:9/api/v1")
+    monkeypatch.setattr(openrouter_client, "DEFAULT_RETRY_DELAY", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_attendance_ledger(tmp_path, monkeypatch):
     """Never let a test write to the real ~/.cqc_cpcc/attendance.sqlite3."""
     monkeypatch.setenv("CQC_ATTENDANCE_DB", str(tmp_path / "attendance.sqlite3"))

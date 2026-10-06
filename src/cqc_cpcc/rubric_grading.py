@@ -38,14 +38,13 @@ from cqc_cpcc.rubric_models import (
     Rubric,
     RubricAssessmentResult,
 )
-from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
+from cqc_cpcc.utilities.AI import llm_gateway
 from cqc_cpcc.utilities.logger import logger
 from langchain_core.callbacks import BaseCallbackHandler
 
-# Default model configuration
-DEFAULT_GRADING_MODEL = "gpt-5-mini"
-DEFAULT_TEMPERATURE = 0.2
-DEFAULT_MAX_TOKENS = 16384
+# Model, reasoning effort and output budget come from config/model_registry.json
+# (role "grading"). "openrouter/auto" as model_name selects OpenRouter auto-routing.
+AUTO_ROUTE_MODEL = "openrouter/auto"
 
 
 def normalize_detected_errors_for_scoring(
@@ -357,15 +356,15 @@ async def grade_with_rubric(
         student_submission: str,
         reference_solution: Optional[str] = None,
         error_definitions: Optional[list[ErrorDefinition]] = None,
-        model_name: str = DEFAULT_GRADING_MODEL,
-        temperature: float = DEFAULT_TEMPERATURE,
+        model_name: Optional[str] = None,
+        temperature: Optional[float] = None,
         callback: Optional[BaseCallbackHandler] = None,
         source_files: Optional[dict] = None,
         gate_report: Optional[dict] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
-    This function uses OpenAI structured outputs to grade a submission according to
+    This function uses structured outputs (via llm_gateway / OpenRouter) to grade a submission according to
     a defined rubric. It returns a complete RubricAssessmentResult with per-criterion
     scores, feedback, and overall assessment.
     
@@ -381,8 +380,9 @@ async def grade_with_rubric(
         student_submission: Student's code or work to grade
         reference_solution: Optional reference solution for comparison
         error_definitions: Optional list of ErrorDefinition objects to check
-        model_name: OpenAI model to use (default: gpt-5-mini)
-        temperature: Sampling temperature (default: 0.2)
+        model_name: OpenRouter model id overriding the registry's grading model;
+            "openrouter/auto" enables auto-routing. None uses the registry.
+        temperature: Deprecated and ignored; sampling is set per model in the registry.
         callback: Optional LangChain callback for compatibility
         
     Returns:
@@ -420,38 +420,14 @@ async def grade_with_rubric(
     )
 
     try:
-        # Check if using OpenRouter model IDs (openrouter/auto or provider/model-name)
-        is_openrouter_model = model_name.startswith("openrouter/") or "/" in model_name
-
-        if is_openrouter_model:
-            # Route to OpenRouter client for structured output
-            from cqc_cpcc.utilities.AI.openrouter_client import get_openrouter_completion
-
-            logger.info(
-                f"Detected OpenRouter model ID '{model_name}', routing to OpenRouter client"
-            )
-
-            use_auto_route = model_name == "openrouter/auto"
-            explicit_model = None if use_auto_route else model_name
-
-            result = await get_openrouter_completion(
-                prompt=prompt,
-                schema_model=RubricAssessmentResult,
-                use_auto_route=use_auto_route,
-                model_name=explicit_model,
-                max_tokens=DEFAULT_MAX_TOKENS,
-            )
-        else:
-            # Call OpenAI with structured output validation
-            # Uses 3 retries (4 total attempts) with smart fallback for robustness
-            result = await get_structured_completion(
-                prompt=prompt,
-                model_name=model_name,
-                schema_model=RubricAssessmentResult,
-                temperature=temperature,
-                max_tokens=DEFAULT_MAX_TOKENS,
-                max_retries=3,  # 3 retries = 4 total attempts (initial + 3 fallback)
-            )
+        use_auto_route = model_name == AUTO_ROUTE_MODEL
+        result = await llm_gateway.structured(
+            role="grading",
+            prompt=prompt,
+            schema_model=RubricAssessmentResult,
+            override=None if use_auto_route else model_name,
+            use_auto_route=use_auto_route,
+        )
 
         # Log raw OpenAI response for debugging
         logger.info(
@@ -1089,8 +1065,8 @@ class RubricGrader:
             assignment_instructions: str,
             reference_solution: Optional[str] = None,
             error_definitions: Optional[list[ErrorDefinition]] = None,
-            model_name: str = DEFAULT_GRADING_MODEL,
-            temperature: float = DEFAULT_TEMPERATURE,
+            model_name: Optional[str] = None,
+            temperature: Optional[float] = None,
     ):
         """Initialize rubric grader with configuration.
         

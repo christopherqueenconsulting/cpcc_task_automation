@@ -38,6 +38,7 @@ def generate_grading_run_key(
         temperature: float = 0.2,
         debug_mode: bool = False,
         grading_mode: str = "rubric_and_errors",
+        model_config_hash: Optional[str] = None,
 ) -> str:
     """Generate a deterministic hash key from grading inputs.
     
@@ -55,6 +56,8 @@ def generate_grading_run_key(
         temperature: Sampling temperature
         debug_mode: Whether debug mode is enabled
         grading_mode: Grading mode identifier
+        model_config_hash: ``ResolvedModel.config_hash`` from the model registry, so a
+            change of model, reasoning effort or output budget invalidates cached results
         
     Returns:
         SHA256 hash string (64 hex characters)
@@ -77,6 +80,8 @@ def generate_grading_run_key(
         "debug_mode": debug_mode,
         "grading_mode": grading_mode,
     }
+    if model_config_hash is not None:
+        inputs["model_config_hash"] = model_config_hash
 
     # Serialize to JSON with sorted keys for determinism
     json_str = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
