@@ -3,8 +3,7 @@ from typing import Optional, Annotated, List, TypeVar
 
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.exam_review import JavaCode
-from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm_model
-from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
+from cqc_cpcc.utilities.AI import llm_gateway
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
@@ -298,7 +297,8 @@ class FeedbackGiver:
 
                  ):
         # Store configuration for generating feedback
-        self.model_name = feedback_llm if feedback_llm else get_default_llm_model()
+        # None means the registry's "feedback" role decides the model.
+        self.model_name = feedback_llm or None
         self.temperature = temperature
         self.course_name = course_name
         self.assignment_instructions = assignment_instructions
@@ -328,13 +328,11 @@ class FeedbackGiver:
             feedback_types=feedback_types_str
         )
 
-        # Call OpenAI structured completion
-        feedback_guide = await get_structured_completion(
+        feedback_guide = await llm_gateway.structured(
+            role="feedback",
             prompt=prompt,
-            model_name=self.model_name,
             schema_model=FeedbackGuide,
-            temperature=self.temperature,
-            max_tokens=4096
+            override=self.model_name,
         )
 
         unique_feedback = feedback_guide.get_feedback_unique()

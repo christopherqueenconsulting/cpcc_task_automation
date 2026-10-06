@@ -354,10 +354,10 @@ def main():
 
     st.markdown("""Here we will give feedback to student project submissions""")
 
-    if st.session_state.openai_api_key:
+    if st.session_state.openrouter_api_key:
         asyncio.run(get_feedback_content())
     else:
-        st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
+        st.write("Please visit the Settings page and enter the OpenRouter API Key to proceed")
 
 
 if __name__ == '__main__':

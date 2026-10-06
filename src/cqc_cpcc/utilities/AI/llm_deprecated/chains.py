@@ -2,7 +2,7 @@ import json
 from pprint import pprint
 from typing import Type, TypeVar
 
-from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_retry_model
+from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_retry_model, get_openrouter_chat_model
 from cqc_cpcc.utilities.AI.llm_deprecated.prompts import *
 from cqc_cpcc.utilities.env_constants import RETRY_PARSER_MAX_RETRY, SHOW_ERROR_LINE_NUMBERS, DEBUG
 from cqc_cpcc.utilities.logger import logger
@@ -15,7 +15,6 @@ from langchain_core.output_parsers import BaseOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableSerializable
 from langchain_core.runnables.utils import Output
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 T = TypeVar("T", bound=BaseModel)
@@ -24,7 +23,7 @@ T = TypeVar("T", bound=BaseModel)
 def retry_output(output: Output, parser: BaseOutputParser, prompt: PromptTemplate, retry_model: str,
                  **prompt_args) -> T:
     final_output = output
-    retry_llm = ChatOpenAI(temperature=0, model=retry_model, use_responses_api=True)
+    retry_llm = get_openrouter_chat_model("flowgorithm", override=retry_model, temperature=0)
     retry_parser = RetryWithErrorOutputParser.from_llm(parser=parser, llm=retry_llm,
                                                        max_retries=RETRY_PARSER_MAX_RETRY
                                                        )

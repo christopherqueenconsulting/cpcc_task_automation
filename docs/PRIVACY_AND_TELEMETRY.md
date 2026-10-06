@@ -14,7 +14,8 @@ analytics.
 | **AI debug dumps** (`CQC_AI_DEBUG_SAVE_DIR`, off by default) | Requests and responses | Student identifiers are always scrubbed from files on disk; `CQC_AI_DEBUG_REDACT` (default on) also masks secrets, e-mails, phone numbers and SSNs. Files `0600`. Submission *content* is still present: keep this off unless you are debugging. |
 | **Temp files** (downloaded ZIPs, extracted submissions, screenshots, generated `.docx`) | Student work | Written to a private `<system tmp>/cqc_cpcc/` (`0700`). Anything older than `CQC_TEMP_RETENTION_HOURS` (default 24) is deleted when the app starts. |
 | **Withdrawal CSVs** (`WITHDRAWALS_CSV_DIR`) | Names, IDs, e-mails | By design. Outside version control and git-ignored. Protect the folder. |
-| **LLM providers** (OpenAI, OpenRouter) | Submission content, instructions, rubric | Needed for grading. The `Submission File Name:` line in prompts is scrubbed. Header comments inside submissions are sent as written, because rubrics commonly grade them. See [Vendor settings](#vendor-settings-you-control). |
+| **OpenRouter** and the model provider it routes to | Submission content, instructions, rubric | Needed for grading. Every LLM path (rubric, exam/errors-only, digest, Give Feedback, Flowgorithm) goes through OpenRouter. Each request asks for zero data retention, no data collection and no fallback to other providers; the policy lives in `src/cqc_cpcc/config/model_policy.json`. The `Submission File Name:` line in prompts is scrubbed. Header comments inside submissions are sent as written, because rubrics commonly grade them. See [Vendor settings](#vendor-settings-you-control). |
+| **OpenAI** (direct) | Audio/video submissions only | Whisper transcription. `OPENAI_API_KEY` is optional and needed only for this. |
 | **PostHog** (optional) | Counts, durations, token usage, model names, scrubbed error types | No student data, not even an alias. See [Usage analytics](#usage-analytics-posthog). |
 | **BrightSpace, MyColleges, Attendance Tracker** | Grades, attendance, withdrawal rows | These are the institution's own systems. Grade write-back defaults to a dry run. |
 
@@ -69,7 +70,7 @@ PostHog drops events silently once a quota is hit.
 | Event | When | Properties |
 |---|---|---|
 | `$ai_generation` | Each OpenAI or OpenRouter call | model (the routed model for OpenRouter), provider, schema/span name, latency, input/output tokens, attempt, fallback used, error flag and scrubbed error text |
-| `$ai_span` | A silent degradation inside a call | `cqc_degradation`: `schema_validation_failed`, `empty_response`, `response_truncated`, `smart_retry_fallback`, `placeholder_backfill`; field *names* only |
+| `$ai_span` | A silent degradation inside a call | `cqc_degradation`: `schema_validation_failed`, `empty_response`, `response_truncated`, `smart_retry_fallback`, `placeholder_backfill`, `model_fallback` (primary model failed, the role's fallback model answered); field *names* only |
 | `cqc_run_completed` | End of each feature run: `attendance`, `withdrawals`, `project_feedback`, `brightspace_fetch`, `brightspace_writeback`, `rubric_grading`, `error_only_grading` | status (`succeeded`/`failed`/`interrupted`), duration, and counts such as courses, students, succeeded/failed, matched/saved; plus flags such as dry run, route, feedback mode and model |
 | `$exception` | A feature run fails | exception type, scrubbed message, file/line/function frames. No source lines, no local variables. |
 
@@ -88,12 +89,15 @@ PostHog drops events silently once a quota is hit.
 
 These are account settings, not code. Check them against your institution's policy.
 
-- **OpenAI**: review the organisation's data controls, including training opt-out and
-  retention, and whether your institution has a data-processing or zero-retention
-  agreement.
-- **OpenRouter**: in privacy settings, restrict routing to providers that do not train
-  on or log prompts. `OPENROUTER_ALLOWED_MODELS` limits which models auto-routing may
-  use.
+- **OpenRouter**: turn on account-level **Zero Data Retention** and disable prompt
+  logging and training in privacy settings. The app also sends
+  `provider: {zdr: true, data_collection: "deny", allow_fallbacks: false}` on every
+  request (from `model_policy.json`), so a request fails rather than reach a provider
+  that does not meet that bar. `OPENROUTER_ALLOWED_MODELS` limits which models
+  auto-routing may use. Which model each feature uses is set in
+  `src/cqc_cpcc/config/model_registry.json`.
+- **OpenAI** (Whisper only): review the organisation's data controls, including training
+  opt-out and retention.
 - **PostHog**: pick the region (US or EU) your institution prefers. No education
   records are sent, but the project still records the hashed instructor ID and usage
   patterns.

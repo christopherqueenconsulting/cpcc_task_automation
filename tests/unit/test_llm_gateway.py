@@ -208,3 +208,28 @@ class TestOpenRouterExtraParams:
         kwargs = client.chat.completions.create.call_args.kwargs
         assert kwargs["max_completion_tokens"] == 100
         assert "extra_body" not in kwargs
+
+
+@pytest.mark.unit
+class TestOpenRouterChatModel:
+    """LangChain chat models (Flowgorithm, legacy chains) point at OpenRouter."""
+
+    def test_default_llm_model_is_a_string(self, registry):
+        from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_llm_model
+
+        assert get_default_llm_model() == "openai/primary"
+
+    def test_chat_model_uses_openrouter_and_registry_params(self, registry):
+        from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_openrouter_chat_model
+
+        chat = get_openrouter_chat_model("flowgorithm", api_key="sk-test", temperature=0.5)
+        assert chat.model_name == "openai/primary"
+        assert "127.0.0.1" in str(chat.openai_api_base) or "openrouter" in str(chat.openai_api_base)
+        assert chat.temperature is None  # profile says no temperature support
+        assert chat.extra_body["provider"]["zdr"] is True
+        assert chat.extra_body["reasoning"] == {"effort": "high"}
+
+    def test_retry_model_is_role_fallback(self, registry):
+        from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_default_retry_model
+
+        assert get_default_retry_model() == "openai/backup"

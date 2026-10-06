@@ -50,7 +50,7 @@ class TestFeedbackGiverSuccess:
         )
         
         mock_get_structured = mocker.patch(
-            'cqc_cpcc.project_feedback.get_structured_completion',
+            'cqc_cpcc.project_feedback.llm_gateway.structured',
             new_callable=AsyncMock,
             return_value=mock_feedback_guide
         )
@@ -82,8 +82,8 @@ class TestFeedbackGiverSuccess:
         assert mock_get_structured.called
         call_kwargs = mock_get_structured.call_args.kwargs
         assert call_kwargs['schema_model'] == FeedbackGuide
-        assert call_kwargs['temperature'] == 0.2
-        assert call_kwargs['max_tokens'] == 4096
+        assert call_kwargs['role'] == "feedback"
+        assert call_kwargs['override'] is None
         assert 'CSC 151' in call_kwargs['prompt']
         assert student_code in call_kwargs['prompt']
         
@@ -97,7 +97,7 @@ class TestFeedbackGiverSuccess:
         mock_feedback_guide = FeedbackGuide(all_feedback=None)
         
         mocker.patch(
-            'cqc_cpcc.project_feedback.get_structured_completion',
+            'cqc_cpcc.project_feedback.llm_gateway.structured',
             new_callable=AsyncMock,
             return_value=mock_feedback_guide
         )
@@ -121,7 +121,7 @@ class TestFeedbackGiverSuccess:
         mock_feedback_guide = FeedbackGuide(all_feedback=[])
         
         mock_get_structured = mocker.patch(
-            'cqc_cpcc.project_feedback.get_structured_completion',
+            'cqc_cpcc.project_feedback.llm_gateway.structured',
             new_callable=AsyncMock,
             return_value=mock_feedback_guide
         )
@@ -141,7 +141,7 @@ class TestFeedbackGiverSuccess:
         
         # Verify custom model was used
         call_kwargs = mock_get_structured.call_args.kwargs
-        assert call_kwargs['model_name'] == "gpt-4o-mini"
+        assert call_kwargs['override'] == "gpt-4o-mini"
 
 
 @pytest.mark.unit
@@ -158,7 +158,7 @@ class TestFeedbackGiverSchemaValidation:
         )
         
         mocker.patch(
-            'cqc_cpcc.project_feedback.get_structured_completion',
+            'cqc_cpcc.project_feedback.llm_gateway.structured',
             new_callable=AsyncMock,
             side_effect=error
         )
@@ -190,7 +190,7 @@ class TestFeedbackGiverTransportRetry:
         error = OpenAITransportError("Timeout after 3 attempts")
         
         mocker.patch(
-            'cqc_cpcc.project_feedback.get_structured_completion',
+            'cqc_cpcc.project_feedback.llm_gateway.structured',
             new_callable=AsyncMock,
             side_effect=error
         )
@@ -219,7 +219,7 @@ class TestFeedbackGiverTransportRetry:
         )
         
         mocker.patch(
-            'cqc_cpcc.project_feedback.get_structured_completion',
+            'cqc_cpcc.project_feedback.llm_gateway.structured',
             new_callable=AsyncMock,
             side_effect=error
         )
@@ -259,7 +259,7 @@ class TestFeedbackGiverConcurrency:
         ]
         
         mock_get_structured = mocker.patch(
-            'cqc_cpcc.project_feedback.get_structured_completion',
+            'cqc_cpcc.project_feedback.llm_gateway.structured',
             new_callable=AsyncMock,
             side_effect=feedback_guides
         )
@@ -306,7 +306,7 @@ class TestFeedbackGiverConcurrency:
         ]
         
         mocker.patch(
-            'cqc_cpcc.project_feedback.get_structured_completion',
+            'cqc_cpcc.project_feedback.llm_gateway.structured',
             new_callable=AsyncMock,
             side_effect=feedback_guides
         )
@@ -341,13 +341,8 @@ class TestFeedbackGiverConcurrency:
 class TestFeedbackGiverInit:
     """Test FeedbackGiver initialization."""
     
-    def test_init_with_defaults(self, mocker):
-        """Should initialize with default model."""
-        # Mock to return a proper string (existing code has a bug returning tuple)
-        mocker.patch(
-            'cqc_cpcc.project_feedback.get_default_llm_model',
-            return_value='gpt-4o'
-        )
+    def test_init_with_defaults(self):
+        """No model given means the registry's "feedback" role decides (model_name None)."""
         
         giver = FeedbackGiver(
             course_name="CSC 151",
@@ -356,7 +351,7 @@ class TestFeedbackGiverInit:
             feedback_type_list=["Type 1", "Type 2"]
         )
         
-        assert giver.model_name == 'gpt-4o'
+        assert giver.model_name is None
         assert giver.course_name == "CSC 151"
         assert giver.assignment_instructions == "Test instructions"
         assert giver.assignment_solution == "Test solution"

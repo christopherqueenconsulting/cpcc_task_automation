@@ -916,18 +916,22 @@ def get_cpcc_css():
 
 
 @st.cache_resource(hash_funcs={ChatOpenAI: id})
-def get_custom_llm(temperature: float, model: str, service_tier: str = "default") -> ChatOpenAI:
+def get_custom_llm(temperature: float, model: str, service_tier: str = "default",
+                   openrouter_api_key: str | None = None, config_hash: str | None = None) -> ChatOpenAI:
+    """Cached LangChain chat model on OpenRouter for the Flowgorithm grader.
+
+    ``model`` overrides the registry's "flowgorithm" role. ``service_tier`` is
+    accepted for compatibility and ignored. ``config_hash`` is part of the cache key
+    so a registry change (model, effort, budget) builds a fresh client.
     """
-    This function returns a cached instance of ChatOpenAI based on the temperature and model.
-    If the temperature or model changes, a new instance will be created and cached.
-    """
-    return ChatOpenAI(temperature=temperature,
-                      model=model,
-                      openai_api_key=st.session_state.openai_api_key,
-                      use_responses_api=True,
-                      service_tier=service_tier
-                      # streaming=True
-                      )
+    from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_openrouter_chat_model
+
+    return get_openrouter_chat_model(
+        "flowgorithm",
+        override=model or None,
+        temperature=temperature,
+        api_key=openrouter_api_key or st.session_state.get("openrouter_api_key"),
+    )
 
 
 def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = False) -> str:
