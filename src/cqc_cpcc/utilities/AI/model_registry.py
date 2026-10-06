@@ -1,0 +1,314 @@
+#  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+
+"""Single source of truth for which LLM each process uses.
+
+Two checked-in files drive model choice:
+
+- ``config/model_registry.json`` (bot-editable): the model, reasoning effort,
+  output budget and fallback for each role, plus capability profiles synced
+  from OpenRouter's ``/models`` API.
+- ``config/model_policy.json`` (human-owned): vendor allowlist, provider
+  routing/privacy preferences, and price ceilings.
+
+Call sites ask for a role (``grading``, ``digest``, ``feedback``,
+``flowgorithm``) and get back a :class:`ResolvedModel` whose request params are
+built from the model's capabilities, never from its name.
+
+Model resolution order (first match wins):
+
+1. ``override`` argument (Settings-page pin, eval harness)
+2. ``CQC_MODEL_<ROLE>`` environment variable (fast rollback)
+3. the registry file (``CQC_MODEL_REGISTRY_PATH`` replaces the checked-in one)
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import warnings
+from pathlib import Path
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+DEFAULT_REGISTRY_PATH = _CONFIG_DIR / "model_registry.json"
+DEFAULT_POLICY_PATH = _CONFIG_DIR / "model_policy.json"
+
+ROLES = ("grading", "digest", "feedback", "flowgorithm")
+Role = Literal["grading", "digest", "feedback", "flowgorithm"]
+
+# Concrete OpenRouter ids only: "<vendor>/<slug>". No "~" aliases, no ":batch"/":free" variants.
+MODEL_ID_PATTERN = re.compile(r"^[a-z0-9-]+/[a-z0-9._-]+$")
+
+
+class ModelRegistryError(ValueError):
+    """Raised when the registry/policy files are missing, malformed, or inconsistent."""
+
+
+# ============================================================================
+# SCHEMA
+# ============================================================================
+
+class LongContextPricing(BaseModel):
+    above_prompt_tokens: int
+    prompt_per_mtok: float
+    completion_per_mtok: float
+
+
+class Pricing(BaseModel):
+    prompt_per_mtok: float = Field(ge=0)
+    completion_per_mtok: float = Field(ge=0)
+    cache_read_per_mtok: Optional[float] = None
+    long_context: Optional[LongContextPricing] = None
+
+
+class ModelProfile(BaseModel):
+    canonical_slug: str
+    context_length: int = Field(gt=0)
+    max_completion_tokens: int = Field(gt=0)
+    supports_temperature: bool
+    supports_seed: bool
+    supports_structured_outputs: bool
+    reasoning_efforts: list[str] = Field(default_factory=list)
+    token_param: Literal["max_completion_tokens", "max_tokens"] = "max_completion_tokens"
+    pricing: Pricing
+    expiration_date: Optional[str] = None
+    synced_at: str
+
+
+class RoleConfig(BaseModel):
+    model: str
+    reasoning_effort: Optional[str] = None
+    max_output_tokens: int = Field(gt=0)
+    seed: Optional[int] = None
+    fallback: Optional[str] = None
+    trigger_prompt_tokens: Optional[int] = None
+
+
+class Promotion(BaseModel):
+    last_promoted_month: Optional[str] = None
+    last_report_run_id: Optional[str] = None
+
+
+class RegistryFile(BaseModel):
+    schema_version: int
+    revision: str
+    roles: dict[str, RoleConfig]
+    previous: dict[str, str] = Field(default_factory=dict)
+    models: dict[str, ModelProfile]
+    promotion: Promotion = Field(default_factory=Promotion)
+
+    @field_validator("roles")
+    @classmethod
+    def _all_roles_present(cls, roles: dict[str, RoleConfig]) -> dict[str, RoleConfig]:
+        missing = [r for r in ROLES if r not in roles]
+        if missing:
+            raise ValueError(f"registry is missing roles: {missing}")
+        return roles
+
+    @model_validator(mode="after")
+    def _models_are_profiled(self) -> "RegistryFile":
+        ids = set(self.models)
+        for model_id in ids:
+            if not MODEL_ID_PATTERN.match(model_id):
+                raise ValueError(f"invalid model id in models: {model_id!r}")
+        for name, role in self.roles.items():
+            for model_id in (role.model, role.fallback):
+                if model_id is not None and model_id not in ids:
+                    raise ValueError(f"role {name!r} references unprofiled model {model_id!r}")
+            profile = self.models[role.model]
+            if role.reasoning_effort and profile.reasoning_efforts \
+                    and role.reasoning_effort not in profile.reasoning_efforts:
+                raise ValueError(
+                    f"role {name!r}: effort {role.reasoning_effort!r} not supported by {role.model}"
+                )
+        return self
+
+
+class ProviderPreferences(BaseModel):
+    zdr: bool = True
+    data_collection: Literal["allow", "deny"] = "deny"
+    require_parameters: bool = True
+    allow_fallbacks: bool = False
+    order: Optional[list[str]] = None
+
+
+class CostCeiling(BaseModel):
+    prompt: float
+    completion: float
+
+
+class PolicyFile(BaseModel):
+    schema_version: int
+    vendor_allowlist: list[str]
+    provider: ProviderPreferences
+    max_cost_per_mtok: dict[str, CostCeiling]
+    max_cost_per_submission: float = Field(gt=0)
+    grading_freeze: list[dict] = Field(default_factory=list)
+
+
+class ResolvedModel(BaseModel):
+    """Everything a call site needs to make a request for one role."""
+
+    role: str
+    model: str
+    profile: Optional[ModelProfile]
+    reasoning_effort: Optional[str]
+    max_output_tokens: int
+    seed: Optional[int]
+    fallback: Optional[str]
+    provider: ProviderPreferences
+    source: Literal["override", "env", "registry"]
+    registry_revision: str
+
+    @property
+    def config_hash(self) -> str:
+        """Short stable hash of everything that changes model output for this role."""
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "slug": self.profile.canonical_slug if self.profile else None,
+                "effort": self.reasoning_effort,
+                "max_output_tokens": self.max_output_tokens,
+                "seed": self.seed,
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()[:12]
+
+
+# ============================================================================
+# LOADING (re-read when the file changes on disk)
+# ============================================================================
+
+_cache: dict[tuple[str, str], tuple[float, BaseModel]] = {}
+
+
+def _load(path: Path, schema: type[BaseModel]) -> BaseModel:
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError as e:
+        raise ModelRegistryError(f"Missing config file: {path}") from e
+    key = (str(path), schema.__name__)
+    cached = _cache.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        parsed = schema.model_validate(data)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise ModelRegistryError(f"Invalid {path.name}: {e}") from e
+    _cache[key] = (mtime, parsed)
+    return parsed
+
+
+def registry_path() -> Path:
+    return Path(os.environ.get("CQC_MODEL_REGISTRY_PATH") or DEFAULT_REGISTRY_PATH)
+
+
+def load_registry() -> RegistryFile:
+    return _load(registry_path(), RegistryFile)  # type: ignore[return-value]
+
+
+def load_policy() -> PolicyFile:
+    return _load(DEFAULT_POLICY_PATH, PolicyFile)  # type: ignore[return-value]
+
+
+# ============================================================================
+# RESOLUTION
+# ============================================================================
+
+def normalize_model_id(model_id: str) -> str:
+    """Map legacy bare OpenAI names ("gpt-5-mini") to OpenRouter ids ("openai/gpt-5-mini")."""
+    model_id = model_id.strip()
+    if "/" in model_id:
+        return model_id
+    warnings.warn(
+        f"Bare model name {model_id!r} is deprecated; use 'openai/{model_id}'",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return f"openai/{model_id}"
+
+
+def resolve(role: Role, override: Optional[str] = None) -> ResolvedModel:
+    """Resolve the model and request settings for ``role``."""
+    if role not in ROLES:
+        raise ModelRegistryError(f"Unknown role {role!r}; expected one of {ROLES}")
+    registry = load_registry()
+    policy = load_policy()
+    role_cfg = registry.roles[role]
+
+    env_value = os.environ.get(f"CQC_MODEL_{role.upper()}")
+    if override:
+        model, source = normalize_model_id(override), "override"
+    elif env_value:
+        model, source = normalize_model_id(env_value), "env"
+    else:
+        model, source = role_cfg.model, "registry"
+
+    profile = registry.models.get(model)
+    effort = role_cfg.reasoning_effort
+    if profile is not None and effort and effort not in profile.reasoning_efforts:
+        # Overridden model doesn't support the role's effort (or reasoning at all):
+        # let the provider default apply.
+        effort = None
+
+    max_output = role_cfg.max_output_tokens
+    if profile is not None:
+        max_output = min(max_output, profile.max_completion_tokens)
+
+    return ResolvedModel(
+        role=role,
+        model=model,
+        profile=profile,
+        reasoning_effort=effort,
+        max_output_tokens=max_output,
+        seed=role_cfg.seed,
+        fallback=role_cfg.fallback if role_cfg.fallback != model else None,
+        provider=policy.provider,
+        source=source,
+        registry_revision=registry.revision,
+    )
+
+
+def build_request_params(resolved: ResolvedModel) -> dict:
+    """Build OpenRouter request params from capabilities (never from the model name).
+
+    Unknown (unprofiled) models get only the conservative common subset:
+    ``max_completion_tokens``, provider preferences and usage accounting.
+    """
+    profile = resolved.profile
+    token_param = profile.token_param if profile else "max_completion_tokens"
+    params: dict = {
+        token_param: resolved.max_output_tokens,
+        "provider": resolved.provider.model_dump(exclude_none=True),
+        "usage": {"include": True},
+    }
+    if profile is not None:
+        if resolved.reasoning_effort and profile.reasoning_efforts:
+            params["reasoning"] = {"effort": resolved.reasoning_effort}
+        if resolved.seed is not None and profile.supports_seed:
+            params["seed"] = resolved.seed
+    return params
+
+
+def supports_temperature(model: str) -> bool:
+    """True only when the registry profiles ``model`` as accepting ``temperature``."""
+    profile = load_registry().models.get(normalize_model_id(model))
+    return bool(profile and profile.supports_temperature)
+
+
+def estimate_cost(resolved: ResolvedModel, prompt_tokens: int, completion_tokens: int) -> Optional[float]:
+    """Estimated USD cost of one call, or None for an unprofiled model."""
+    if resolved.profile is None:
+        return None
+    pricing = resolved.profile.pricing
+    prompt_rate, completion_rate = pricing.prompt_per_mtok, pricing.completion_per_mtok
+    if pricing.long_context and prompt_tokens > pricing.long_context.above_prompt_tokens:
+        prompt_rate = pricing.long_context.prompt_per_mtok
+        completion_rate = pricing.long_context.completion_per_mtok
+    return (prompt_tokens * prompt_rate + completion_tokens * completion_rate) / 1_000_000
