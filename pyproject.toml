@@ -47,8 +47,12 @@ openpyxl = "^3"
 tabulate = "^0"
 pypdf = "^6"
 pymupdf = "^1"
-# onnxruntime is only used for a small subset of tests, so we specify a wide version range to avoid dependency conflicts for users who don't need it. The upper bound is set to 1.23.2 because that's the latest version that supports Python 3.12 as of the knowledge cutoff date.
-onnxruntime = ">=1.20,<=1.30.0"
+# onnxruntime 1.23.2 is the last release with macOS x86_64 (Intel Mac) wheels;
+# 1.24+ ship macOS arm64 only. Pin Intel Macs there; every other platform floats.
+onnxruntime = [
+    { version = ">=1.20,<=1.23.2", markers = "sys_platform == 'darwin' and platform_machine == 'x86_64'" },
+    { version = ">=1.20", markers = "sys_platform != 'darwin' or platform_machine != 'x86_64'" },
+]
 pandas-stubs = ">=2,<4"
 posthog = {version = "^7", optional = true}
 
