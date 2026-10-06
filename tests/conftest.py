@@ -25,6 +25,18 @@ def _isolate_app_tempdir():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_posthog_telemetry(monkeypatch):
+    """Never send test events to the real PostHog project from a developer's .env.
+    Tests that exercise telemetry set POSTHOG_API_KEY themselves."""
+    from cqc_cpcc.utilities.AI import posthog_telemetry
+
+    monkeypatch.delenv("POSTHOG_API_KEY", raising=False)
+    posthog_telemetry.reload()
+    yield
+    posthog_telemetry.reload()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_attendance_ledger(tmp_path, monkeypatch):
     """Never let a test write to the real ~/.cqc_cpcc/attendance.sqlite3."""
     monkeypatch.setenv("CQC_ATTENDANCE_DB", str(tmp_path / "attendance.sqlite3"))
