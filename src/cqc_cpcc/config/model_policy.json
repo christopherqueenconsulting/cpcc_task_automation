@@ -1,7 +1,11 @@
 {
   "schema_version": 1,
   "_owner": "human. The model-promotion bot must never edit this file; model-registry-guard rejects bot PRs that touch it.",
-  "vendor_allowlist": ["openai", "anthropic", "google"],
+  "vendor_allowlist": [
+    "openai",
+    "anthropic",
+    "google"
+  ],
   "provider": {
     "zdr": true,
     "data_collection": "deny",
@@ -9,11 +13,47 @@
     "allow_fallbacks": false
   },
   "max_cost_per_mtok": {
-    "grading": {"prompt": 2.50, "completion": 12.00},
-    "digest": {"prompt": 2.50, "completion": 12.00},
-    "feedback": {"prompt": 2.50, "completion": 12.00},
-    "flowgorithm": {"prompt": 2.50, "completion": 12.00}
+    "grading": {
+      "prompt": 2.5,
+      "completion": 12.0
+    },
+    "digest": {
+      "prompt": 2.5,
+      "completion": 12.0
+    },
+    "feedback": {
+      "prompt": 2.5,
+      "completion": 12.0
+    },
+    "flowgorithm": {
+      "prompt": 2.5,
+      "completion": 12.0
+    }
   },
   "max_cost_per_submission": 0.05,
-  "grading_freeze": []
+  "grading_freeze": [],
+  "eval": {
+    "_note": "Thresholds for the monthly model evaluation. Hard-gate floors are provisional until calibrated against the incumbent (PR 7).",
+    "repeats": 3,
+    "max_candidates": 3,
+    "budget_usd": 10.0,
+    "stop_at_usd": 9.0,
+    "bootstrap_resamples": 10000,
+    "alpha": 0.05,
+    "superiority_margin": 0.03,
+    "noninferiority_margin": 0.02,
+    "better_path_max_cost_ratio": 1.5,
+    "cheaper_path_max_cost_ratio": 0.7,
+    "min_scorable_cases": 30,
+    "hard_gates": {
+      "min_ok_rate": 0.98,
+      "max_refusals": 0,
+      "max_truncations": 0,
+      "max_invalid_ids": 0,
+      "min_injection_pass_rate": 1.0,
+      "min_f1": 0.6,
+      "min_score_accuracy": 0.85,
+      "max_latency_p95_s": 180
+    }
+  }
 }

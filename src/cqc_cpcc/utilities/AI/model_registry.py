@@ -141,6 +141,32 @@ class CostCeiling(BaseModel):
     completion: float
 
 
+class HardGates(BaseModel):
+    min_ok_rate: float = 0.98
+    max_refusals: int = 0
+    max_truncations: int = 0
+    max_invalid_ids: int = 0
+    min_injection_pass_rate: float = 1.0
+    min_f1: float = 0.6
+    min_score_accuracy: float = 0.85
+    max_latency_p95_s: float = 180
+
+
+class EvalPolicy(BaseModel):
+    repeats: int = Field(default=3, ge=1)
+    max_candidates: int = Field(default=3, ge=1)
+    budget_usd: float = Field(default=10.0, gt=0)
+    stop_at_usd: float = Field(default=9.0, gt=0)
+    bootstrap_resamples: int = Field(default=10000, ge=100)
+    alpha: float = Field(default=0.05, gt=0, lt=1)
+    superiority_margin: float = 0.03
+    noninferiority_margin: float = 0.02
+    better_path_max_cost_ratio: float = 1.5
+    cheaper_path_max_cost_ratio: float = 0.7
+    min_scorable_cases: int = 30
+    hard_gates: HardGates = Field(default_factory=HardGates)
+
+
 class PolicyFile(BaseModel):
     schema_version: int
     vendor_allowlist: list[str]
@@ -148,6 +174,7 @@ class PolicyFile(BaseModel):
     max_cost_per_mtok: dict[str, CostCeiling]
     max_cost_per_submission: float = Field(gt=0)
     grading_freeze: list[dict] = Field(default_factory=list)
+    eval: EvalPolicy = Field(default_factory=EvalPolicy)
 
 
 class ResolvedModel(BaseModel):
