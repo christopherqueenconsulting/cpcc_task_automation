@@ -29,12 +29,17 @@ ASSUMED_OUTPUT_TOKENS = 4000  # incl. reasoning; dry-run estimate only
 PROBE_CASES = 3
 
 
+EFFORT_PATTERN = __import__("re").compile(r"^[a-z]{1,16}$")
+
+
 def parse_model(spec: str) -> tuple[str, Optional[str]]:
     model, _, effort = spec.partition("@")
-    model = model.strip()
+    model, effort = model.strip(), effort.strip()
     if not model_registry.MODEL_ID_PATTERN.match(model):
         raise SystemExit(f"invalid model id: {model!r}")
-    return model, (effort.strip() or None)
+    if effort and not EFFORT_PATTERN.match(effort):
+        raise SystemExit(f"invalid reasoning effort: {effort!r}")
+    return model, (effort or None)
 
 
 def _profiles(models: list[str], live: Optional[list[dict]]) -> dict:
@@ -232,7 +237,9 @@ def _github_outputs(**values) -> None:
         return
     with open(path, "a", encoding="utf-8") as fh:
         for key, value in values.items():
-            fh.write(f"{key}={value}\n")
+            # Values can carry upstream catalogue text: never let them add output lines.
+            clean = str(value).replace("\r", " ").replace("\n", " ")
+            fh.write(f"{key}={clean}\n")
 
 
 def cmd_discover(args) -> int:
@@ -347,23 +354,59 @@ def cmd_verify(args) -> int:
     base = json.loads(Path(args.base_registry).read_text(encoding="utf-8"))
     head = json.loads(Path(args.head_registry).read_text(encoding="utf-8"))
     model_registry.RegistryFile.model_validate(head)
-    allowed_roles = set(model_registry.load_policy().auto_promote_roles)
-    for role, cfg in head["roles"].items():
-        if role not in allowed_roles and cfg != base["roles"].get(role):
-            problems.append(f"role {role} changed but is not in auto_promote_roles")
-    for key in set(base) | set(head):
-        if key not in {"roles", "models", "previous", "promotion", "revision"} and base.get(key) != head.get(key):
-            problems.append(f"registry key {key} changed")
-    if winner:
+    if not winner:
+        problems.append("no winner to promote")
+    else:
         model, effort = parse_model(winner)
-        if head["roles"]["grading"]["model"] != model or head["roles"]["grading"]["reasoning_effort"] != effort:
-            problems.append("registry grading role does not match the winner")
+        if model not in head["models"]:
+            problems.append(f"head registry has no profile for {model}")
+        else:
+            # Replay the only allowed edit on the base registry; the PR must match it exactly.
+            expected = _replay(base, lambda path: _promote_replay(path, model, effort, head))
+            problems += _compare(expected, head)
     if base.get("promotion", {}).get("last_promoted_month") == dt.date.today().strftime("%Y-%m"):
         problems.append("a promotion already happened this calendar month")
     for p in problems:
         print(f"::error::{p}")
     print("verify-promotion: OK" if not problems else f"verify-promotion: {len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def _replay(base: dict, edit) -> dict:
+    """Apply ``edit(path)`` to a temp copy of ``base`` and return the result."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "model_registry.json"
+        path.write_text(json.dumps(base), encoding="utf-8")
+        edit(path)
+        return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _promote_replay(path: Path, model: str, effort: Optional[str], head: dict) -> None:
+    from cqc_cpcc.model_eval import registry_writer
+
+    profile = model_registry.ModelProfile.model_validate(head["models"][model])
+    month = (head.get("promotion") or {}).get("last_promoted_month") or dt.date.today().strftime("%Y-%m")
+    registry_writer.promote(path, model, effort, profile,
+                            run_id=str((head.get("promotion") or {}).get("last_report_run_id")),
+                            today=dt.date.fromisoformat(f"{month}-01"))
+
+
+def _compare(expected: dict, head: dict) -> list[str]:
+    """Differences other than ``revision`` (a date stamp) between two registries."""
+    problems = []
+    for key in sorted(set(expected) | set(head)):
+        if key == "revision":
+            continue
+        a, b = expected.get(key), head.get(key)
+        if isinstance(a, dict) and isinstance(b, dict):
+            for sub in sorted(set(a) | set(b)):
+                if a.get(sub) != b.get(sub):
+                    problems.append(f"{key}.{sub} differs from what the registry writer would produce")
+        elif a != b:
+            problems.append(f"{key} differs from what the registry writer would produce")
+    return problems
 
 
 def in_freeze(policy, today: dt.date) -> Optional[str]:
@@ -457,15 +500,17 @@ def cmd_verify_rollback(args) -> int:
     head = json.loads(Path(args.head_registry).read_text(encoding="utf-8"))
     model_registry.RegistryFile.model_validate(head)
     problems = []
-    for key in set(base) | set(head):
-        if key not in {"roles", "previous", "revision"} and base.get(key) != head.get(key):
-            problems.append(f"registry key {key} changed")
-    changed = [r for r in head["roles"] if head["roles"][r]["model"] != base["roles"][r]["model"]]
+    changed = [r for r in head["roles"] if head["roles"][r]["model"] != base["roles"].get(r, {}).get("model")]
     if not changed:
         problems.append("no role changed")
-    for role in changed:
-        if head["roles"][role]["model"] != base["previous"].get(role):
-            problems.append(f"role {role} moved to a model that is not its previous model")
+    else:
+        from cqc_cpcc.model_eval import registry_writer
+
+        try:
+            expected = _replay(base, lambda path: registry_writer.rollback(path, changed))
+            problems += _compare(expected, head)
+        except ValueError as e:
+            problems.append(str(e))
     for p in problems:
         print(f"::error::{p}")
     print("verify-rollback: OK" if not problems else f"verify-rollback: {len(problems)} problem(s)")

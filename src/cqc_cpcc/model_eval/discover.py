@@ -119,9 +119,14 @@ def discover(models: list[dict], previous: dict, evaluated_slugs: set, registry:
         result.incumbent_expiring = "incumbent missing from /models"
     else:
         expires = inc.get("expiration_date")
-        if expires and dt.date.fromisoformat(str(expires)[:10]) - today < dt.timedelta(
-                days=policy.discovery.incumbent_expiry_warning_days):
-            result.incumbent_expiring = str(expires)
+        if expires:
+            try:
+                expiry = dt.date.fromisoformat(str(expires)[:10])
+            except ValueError:
+                result.incumbent_expiring = "unparseable expiration_date"
+            else:
+                if expiry - today < dt.timedelta(days=policy.discovery.incumbent_expiry_warning_days):
+                    result.incumbent_expiring = expiry.isoformat()
         known = registry.models.get(incumbent)
         if known and inc.get("canonical_slug") and inc["canonical_slug"] != known.canonical_slug:
             result.incumbent_changed = True

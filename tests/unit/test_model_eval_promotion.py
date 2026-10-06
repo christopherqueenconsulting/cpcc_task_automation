@@ -165,6 +165,11 @@ class TestRegistryWriter:
         with pytest.raises(ValueError, match="nothing to roll back"):
             registry_writer.rollback(registry_copy)
 
+    def test_unsupported_effort_refused(self, registry_copy):
+        profile = profile_from_openrouter(_model("openai/new-model"))
+        with pytest.raises(ValueError, match="effort"):
+            registry_writer.promote(registry_copy, "openai/new-model", "max", profile, "1")
+
     def test_invalid_id_refused(self, registry_copy):
         profile = profile_from_openrouter(_model("openai/new-model"))
         with pytest.raises(ValueError):
@@ -207,18 +212,35 @@ class TestVerifyPromotion:
                        "--head-registry", str(tmp_path / "head.json")])
         assert rc == 1
 
-    def test_accepts_matching_promotion(self, tmp_path, monkeypatch, registry_copy):
+    def _promoted(self, registry_copy):
         base = json.loads(registry_copy.read_text())
         base["promotion"]["last_promoted_month"] = "2000-01"
-        head = json.loads(json.dumps(base))
-        head["roles"]["grading"]["model"] = "openai/gpt-5-mini"
-        head["roles"]["grading"]["reasoning_effort"] = "low"
-        cli = self._write(tmp_path, "openai/gpt-5-mini@low", base, head)
-        monkeypatch.setattr(cli, "recompute", lambda *a, **k: "openai/gpt-5-mini@low")
-        rc = cli.main(["verify-promotion", "--scorecard", str(tmp_path / "scorecard.json"),
-                       "--raw", str(tmp_path / "raw.jsonl"), "--base-registry", str(tmp_path / "base.json"),
-                       "--head-registry", str(tmp_path / "head.json")])
-        assert rc == 0
+        registry_copy.write_text(json.dumps(base))
+        profile = profile_from_openrouter(_model("openai/new-model"), synced_at="2026-10-06")
+        registry_writer.promote(registry_copy, "openai/new-model", "low", profile, "77",
+                                roles=model_registry.load_policy().auto_promote_roles)
+        return base, json.loads(registry_copy.read_text())
+
+    def _verify(self, tmp_path, monkeypatch, base, head, winner="openai/new-model@low"):
+        cli = self._write(tmp_path, winner, base, head)
+        monkeypatch.setattr(cli, "recompute", lambda *a, **k: winner)
+        return cli.main(["verify-promotion", "--scorecard", str(tmp_path / "scorecard.json"),
+                         "--raw", str(tmp_path / "raw.jsonl"), "--base-registry", str(tmp_path / "base.json"),
+                         "--head-registry", str(tmp_path / "head.json")])
+
+    def test_accepts_exactly_what_the_writer_produces(self, tmp_path, monkeypatch, registry_copy):
+        base, head = self._promoted(registry_copy)
+        assert self._verify(tmp_path, monkeypatch, base, head) == 0
+
+    def test_rejects_extra_edits_in_an_allowed_role(self, tmp_path, monkeypatch, registry_copy):
+        base, head = self._promoted(registry_copy)
+        head["roles"]["grading"]["fallback"] = "openai/gpt-5"
+        assert self._verify(tmp_path, monkeypatch, base, head) == 1
+
+    def test_rejects_edits_to_other_model_profiles(self, tmp_path, monkeypatch, registry_copy):
+        base, head = self._promoted(registry_copy)
+        head["models"]["openai/gpt-5"]["pricing"]["completion_per_mtok"] = 0.01
+        assert self._verify(tmp_path, monkeypatch, base, head) == 1
 
 
 @pytest.mark.unit
@@ -281,9 +303,12 @@ class TestGuardHelpers:
 
     def test_verify_rollback(self, tmp_path, registry_copy):
         base = json.loads(registry_copy.read_text())
-        good = json.loads(json.dumps(base))
-        good["roles"]["grading"]["model"] = base["previous"]["grading"]
+        registry_writer.rollback(registry_copy, ["grading"])
+        good = json.loads(registry_copy.read_text())
         assert self._run(tmp_path, "verify-rollback", base, good) == 0
+        tampered = json.loads(json.dumps(good))
+        tampered["roles"]["grading"]["max_output_tokens"] = 1000
+        assert self._run(tmp_path, "verify-rollback", base, tampered) == 1
         bad = json.loads(json.dumps(base))
         bad["roles"]["grading"]["model"] = "openai/gpt-5-mini"
         assert self._run(tmp_path, "verify-rollback", base, bad) == 1
@@ -296,3 +321,22 @@ class TestGuardHelpers:
         assert self._run(tmp_path, "describe-change", base, head) == 0
         out = capsys.readouterr().out
         assert "| grading |" in out and "openai/gpt-5 (" in out and "| digest |" not in out
+
+
+@pytest.mark.unit
+def test_github_outputs_cannot_inject_lines(tmp_path, monkeypatch):
+    from cqc_cpcc.model_eval.__main__ import _github_outputs
+
+    out = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _github_outputs(incumbent_expiring="2026-11-01\ncandidates=evil/model")
+    assert out.read_text().count("\n") == 1
+
+
+@pytest.mark.unit
+def test_parse_model_validates_effort():
+    from cqc_cpcc.model_eval.__main__ import parse_model
+
+    assert parse_model("openai/x@high") == ("openai/x", "high")
+    with pytest.raises(SystemExit):
+        parse_model("openai/x@$(rm -rf)")

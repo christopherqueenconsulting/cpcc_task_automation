@@ -323,9 +323,10 @@ jobs:
             --body-file pr-body.md --label model-promotion --label auto-merge-eligible
 
   report:
-    needs: evaluate
+    needs: [evaluate, update-state, promote]
     if: >-
       always() && (needs.evaluate.result == 'failure' || needs.evaluate.result == 'cancelled' ||
+      needs.update-state.result == 'failure' || needs.promote.result == 'failure' ||
       needs.evaluate.outputs.incumbent_failed == 'true' ||
       needs.evaluate.outputs.incumbent_expiring != '' || needs.evaluate.outputs.incumbent_changed == 'true')
     runs-on: ubuntu-latest
@@ -338,6 +339,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RESULT: ${{ needs.evaluate.result }}
+          STATE_RESULT: ${{ needs.update-state.result }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
           INCUMBENT_FAILED: ${{ needs.evaluate.outputs.incumbent_failed }}
           EXPIRING: ${{ needs.evaluate.outputs.incumbent_expiring }}
           CHANGED: ${{ needs.evaluate.outputs.incumbent_changed }}
@@ -351,6 +354,8 @@ jobs:
             echo "Run: ${RUN_URL}"
             echo
             if [ "${RESULT}" != "success" ]; then echo "- The evaluation job ended with **${RESULT}**."; fi
+            if [ "${STATE_RESULT}" = "failure" ]; then echo "- Recording the snapshot/history on the state branch **failed** (next month may re-evaluate the same models)."; fi
+            if [ "${PROMOTE_RESULT}" = "failure" ]; then echo "- Opening the promotion PR **failed** although a winner was found."; fi
             if [ "${INCUMBENT_FAILED}" = "true" ]; then echo "- The current default model **failed a hard gate** (possible drift). Nothing is promoted until this is resolved."; fi
             if [ -n "${EXPIRING}" ]; then echo "- The current default model is expiring or missing (${EXPIRING//\`/}). Pick a replacement from the scorecard; this one needs a human merge."; fi
             if [ "${CHANGED}" = "true" ]; then echo "- OpenRouter changed the current model's \`canonical_slug\` (the model behind the id was updated). Review the scorecard."; fi

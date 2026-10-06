@@ -37,6 +37,8 @@ def promote(path: Path, model: str, effort: Optional[str], profile: ModelProfile
             roles: Optional[list[str]] = None, today: Optional[dt.date] = None) -> RegistryFile:
     if not MODEL_ID_PATTERN.match(model):
         raise ValueError(f"invalid model id {model!r}")
+    if effort is not None and effort not in profile.reasoning_efforts:
+        raise ValueError(f"{model} does not support reasoning effort {effort!r}")
     roles = roles or load_policy().auto_promote_roles
     data = json.loads(path.read_text(encoding="utf-8"))
     data["models"][model] = json.loads(profile.model_dump_json())
