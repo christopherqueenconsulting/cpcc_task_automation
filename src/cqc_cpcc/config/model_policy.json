@@ -56,5 +56,17 @@
       "min_score_accuracy": 0.85,
       "max_latency_p95_s": 180
     }
-  }
+  },
+  "discovery": {
+    "min_context_length": 400000,
+    "min_max_output_tokens": 32768,
+    "min_days_to_expiry": 90,
+    "incumbent_expiry_warning_days": 60,
+    "min_uptime_1d": 97.0,
+    "price_drop_pct": 20
+  },
+  "auto_promote_roles": [
+    "grading",
+    "digest"
+  ]
 }

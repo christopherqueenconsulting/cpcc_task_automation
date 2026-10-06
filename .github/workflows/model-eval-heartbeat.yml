@@ -1,0 +1,42 @@
+name: Model Evaluation Heartbeat
+
+# GitHub can silently disable or skip scheduled workflows. Weekly, check that the
+# monthly Model Evaluation actually ran recently; if not, open an issue.
+
+on:
+  schedule:
+    - cron: "30 14 * * 1"   # Mondays 14:30 UTC
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  issues: write
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the last scheduled evaluation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ASSIGNEE: ${{ vars.MODEL_BOT_ASSIGNEE }}
+        run: |
+          set -euo pipefail
+          last="$(gh run list --repo "${REPO}" --workflow model-eval.yml --event schedule --limit 1 \
+            --json createdAt --jq '.[0].createdAt // empty')"
+          now="$(date -u +%s)"
+          if [ -n "${last}" ] && [ $(( now - $(date -u -d "${last}" +%s) )) -lt $(( 35 * 86400 )) ]; then
+            echo "Last scheduled evaluation: ${last}"
+            exit 0
+          fi
+          title="Monthly model evaluation has not run in 35 days"
+          if [ -n "$(gh issue list --repo "${REPO}" --state open --search "${title} in:title" --json number --jq '.[0].number // empty')" ]; then
+            echo "Issue already open"; exit 0
+          fi
+          printf 'The scheduled **Model Evaluation** workflow last ran: %s.\n\nCheck Actions > Model Evaluation (it may have been disabled), then run it manually.\n' "${last:-never}" > body.md
+          gh label create blocked-on-chris --force --color d93f0b >/dev/null 2>&1 || true
+          assignee=()
+          if [ -n "${ASSIGNEE}" ]; then assignee=(--assignee "${ASSIGNEE}"); fi
+          gh issue create --repo "${REPO}" --title "${title}" --body-file body.md --label blocked-on-chris "${assignee[@]}"

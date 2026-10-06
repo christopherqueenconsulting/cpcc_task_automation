@@ -143,6 +143,14 @@ async def _run(args) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     raw = (out_dir / "raw_outputs.jsonl").open("w", encoding="utf-8")
     budget = Budget(limit=budget_limit, stop_at=stop_at)
+
+    def save(record: CallRecord) -> None:
+        raw.write(record.to_json() + "\n")
+        raw.flush()  # keep what was paid for even if the run dies
+
+    def save_probe(record: CallRecord) -> None:
+        record.repeat = -1  # cost probe: kept for spend accounting, never scored
+        save(record)
     all_records: dict[str, list[CallRecord]] = {}
     status, notes = "complete", []
     if repeats < 2 or args.limit or args.tags:
@@ -153,7 +161,7 @@ async def _run(args) -> int:
         for model, effort in runs:
             label = label_of((model, effort))
             probe = await run_model(model, effort, probe_cases(cases), 1, budget, seed=args.seed,
-                                    profile=profiles[model], on_record=lambda r: raw.write(r.to_json() + "\n"))
+                                    profile=profiles[model], on_record=save_probe)
             per_call = sum(r.cost_usd for r in probe) / max(1, len(probe))
             projected = per_call * len(cases) * repeats
             if projected > budget.remaining:
@@ -164,7 +172,7 @@ async def _run(args) -> int:
                 continue
             records = await run_model(model, effort, cases, repeats, budget, seed=args.seed,
                                       profile=profiles[model],
-                                      on_record=lambda r: raw.write(r.to_json() + "\n"))
+                                      on_record=save)
             all_records[label] = records
             if any(r.error_kind == "budget" for r in records):
                 status = "aborted_budget"
@@ -183,6 +191,9 @@ async def _run(args) -> int:
                                  policy.max_cost_per_submission, seed=args.seed, policy_problems=problems)
         if status == "complete":
             winner = gates.pick_winner(decisions, aggregates)
+    incumbent_failures = []
+    if incumbent_label in aggregates:
+        incumbent_failures = gates.hard_gate_failures(aggregates[incumbent_label], ev, float("inf"))
     for note in notes:
         print(note)
 
@@ -201,12 +212,279 @@ async def _run(args) -> int:
             "spent_usd": round(budget.spent, 6),
             "status": status,
             "notes": notes,
+            "incumbent_hard_gate_failures": incumbent_failures,
         },
         aggregates, decisions, winner,
     )
     json_path, md_path = scorecard.write(out_dir, sc)
     print(md_path.read_text(encoding="utf-8"))
     print(f"Scorecard: {json_path}")
+    _github_outputs(winner=winner or "", status=status, incumbent_failed=str(bool(incumbent_failures)).lower())
+    return 0
+
+
+def _github_outputs(**values) -> None:
+    """Expose results to later workflow steps (no-op outside GitHub Actions)."""
+    import os
+
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as fh:
+        for key, value in values.items():
+            fh.write(f"{key}={value}\n")
+
+
+def cmd_discover(args) -> int:
+    """Pick this month's candidates from free catalogue data; print them comma-separated."""
+    from cqc_cpcc.model_eval import discover as disc
+    from cqc_cpcc.model_eval.openrouter_models import fetch_models, profile_from_openrouter
+
+    policy = model_registry.load_policy()
+    registry = model_registry.load_registry()
+    models = fetch_models()
+    previous = json.loads(Path(args.snapshot_in).read_text()) if args.snapshot_in and Path(
+        args.snapshot_in).exists() else {}
+    history = disc.load_history(Path(args.history)) if args.history else set()
+    result = disc.discover(models, previous, history, registry, policy)
+
+    # Affordability: the incumbent always runs, so a candidate must fit what is left.
+    cases = ds.load_cases()
+    repeats = policy.eval.repeats
+    incumbent = registry.roles["grading"].model
+    remaining = policy.eval.stop_at_usd - estimate_cost(registry.models[incumbent], cases, repeats)
+    by_id = {m["id"]: m for m in models}
+    affordable = []
+    for c in result.candidates:
+        est = estimate_cost(profile_from_openrouter(by_id[c.model_id]), cases, repeats)
+        if est > remaining:
+            result.rejected[c.model_id] = f"estimated eval cost ${est:.2f} > remaining ${remaining:.2f}"
+            continue
+        remaining -= est
+        affordable.append(c)
+    result.candidates = affordable
+
+    Path(args.out).write_text(result.to_json() + "\n", encoding="utf-8")
+    if args.snapshot_out:
+        snapshot = disc.trim_snapshot(models, policy.vendor_allowlist)
+        Path(args.snapshot_out).write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(",".join(c.model_id for c in result.candidates))
+    _github_outputs(
+        candidates=",".join(c.model_id for c in result.candidates),
+        incumbent_expiring=result.incumbent_expiring or "",
+        incumbent_changed=str(result.incumbent_changed).lower(),
+    )
+    return 0
+
+
+def _records_from_jsonl(path: Path) -> dict[str, list[CallRecord]]:
+    out: dict[str, list[CallRecord]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            r = CallRecord(**json.loads(line))
+            label = f"{r.model}@{r.effort}" if r.effort else r.model
+            out.setdefault(label, []).append(r)
+    return out
+
+
+def recompute(scorecard_json: Path, raw_jsonl: Path, dataset: Path = ds.DEFAULT_DATASET) -> Optional[str]:
+    """Re-derive the winner from raw outputs + labels, independent of the scorecard's numbers."""
+    sc = json.loads(scorecard_json.read_text(encoding="utf-8"))
+    policy = model_registry.load_policy()
+    cases = ds.load_cases(dataset)
+    if sc.get("cases") != len(cases):
+        raise SystemExit(f"scorecard covers {sc.get('cases')} cases, dataset has {len(cases)}")
+    records = _records_from_jsonl(raw_jsonl)
+    aggregates = {
+        label: metrics.aggregate(cases, [r for r in recs if r.repeat >= 0])  # drop cost probes
+        for label, recs in records.items()
+    }
+    incumbent = sc["incumbent"]
+    if incumbent not in aggregates or sc.get("status") != "complete":
+        return None
+    candidates = [label for label in aggregates if label != incumbent]
+    decisions = gates.decide(candidates, incumbent, aggregates, policy.eval,
+                             policy.max_cost_per_submission, seed=sc.get("seed", 0))
+    return gates.pick_winner(decisions, aggregates)
+
+
+def cmd_promote(args) -> int:
+    from cqc_cpcc.model_eval import registry_writer
+    from cqc_cpcc.model_eval.openrouter_models import fetch_models
+
+    sc = json.loads(Path(args.scorecard).read_text(encoding="utf-8"))
+    winner = sc.get("winner")
+    if not winner or sc.get("status") != "complete":
+        print("No winner: nothing to promote.")
+        return 0
+    model, effort = parse_model(winner)
+    profile = _profiles([model], fetch_models() if model not in model_registry.load_registry().models else None)[model]
+    registry_writer.promote(Path(args.registry), model, effort, profile, run_id=str(sc.get("run_id")))
+    reports = Path(args.reports_dir) / dt.date.today().strftime("%Y-%m")
+    reports.mkdir(parents=True, exist_ok=True)
+    for name in ("scorecard.json", "scorecard.md"):
+        (reports / name).write_text((Path(args.scorecard).parent / name).read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"Promoted {winner} (roles: {', '.join(model_registry.load_policy().auto_promote_roles)})")
+    return 0
+
+
+def cmd_rollback(args) -> int:
+    from cqc_cpcc.model_eval import registry_writer
+
+    roles = None if args.role == "all" else [args.role]
+    registry_writer.rollback(Path(args.registry), roles)
+    print(f"Rolled back {args.role}")
+    return 0
+
+
+def cmd_verify(args) -> int:
+    """Guard check for a bot promotion PR. Exit 1 with reasons when anything is off."""
+    sc = json.loads(Path(args.scorecard).read_text(encoding="utf-8"))
+    problems = []
+    winner = recompute(Path(args.scorecard), Path(args.raw))
+    if winner != sc.get("winner"):
+        problems.append(f"recomputed winner {winner!r} != scorecard winner {sc.get('winner')!r}")
+    base = json.loads(Path(args.base_registry).read_text(encoding="utf-8"))
+    head = json.loads(Path(args.head_registry).read_text(encoding="utf-8"))
+    model_registry.RegistryFile.model_validate(head)
+    allowed_roles = set(model_registry.load_policy().auto_promote_roles)
+    for role, cfg in head["roles"].items():
+        if role not in allowed_roles and cfg != base["roles"].get(role):
+            problems.append(f"role {role} changed but is not in auto_promote_roles")
+    for key in set(base) | set(head):
+        if key not in {"roles", "models", "previous", "promotion", "revision"} and base.get(key) != head.get(key):
+            problems.append(f"registry key {key} changed")
+    if winner:
+        model, effort = parse_model(winner)
+        if head["roles"]["grading"]["model"] != model or head["roles"]["grading"]["reasoning_effort"] != effort:
+            problems.append("registry grading role does not match the winner")
+    if base.get("promotion", {}).get("last_promoted_month") == dt.date.today().strftime("%Y-%m"):
+        problems.append("a promotion already happened this calendar month")
+    for p in problems:
+        print(f"::error::{p}")
+    print("verify-promotion: OK" if not problems else f"verify-promotion: {len(problems)} problem(s)")
+    return 1 if problems else 0
+
+
+def in_freeze(policy, today: dt.date) -> Optional[str]:
+    """The grading-freeze window covering ``today``, if any (no automatic changes then)."""
+    for window in policy.grading_freeze:
+        try:
+            start = dt.date.fromisoformat(str(window["start"]))
+            end = dt.date.fromisoformat(str(window["end"]))
+        except (KeyError, ValueError):
+            return f"unreadable grading_freeze entry {window!r}"
+        if start <= today <= end:
+            return f"{start}..{end} {window.get('reason', '')}".strip()
+    return None
+
+
+def spot_check_generations(raw_jsonl: Path, model: str, sample: int, fetch) -> list[str]:
+    """Compare a sample of recorded calls with OpenRouter's own /generation records."""
+    import random
+
+    records = [r for recs in _records_from_jsonl(raw_jsonl).values() for r in recs
+               if r.model == model and r.ok and r.generation_id and r.repeat >= 0]
+    problems = []
+    for r in random.Random(0).sample(records, min(sample, len(records))):
+        try:
+            data = fetch(r.generation_id)
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"/generation lookup failed for {r.generation_id}: {type(e).__name__}")
+            continue
+        served = str(data.get("model") or "")
+        if not served.startswith(model):
+            problems.append(f"{r.generation_id}: served {served!r}, not {model!r}")
+        cost = data.get("total_cost")
+        if isinstance(cost, (int, float)) and r.cost_usd and abs(cost - r.cost_usd) > max(1e-6, 0.5 * r.cost_usd):
+            problems.append(f"{r.generation_id}: recorded cost {r.cost_usd} vs OpenRouter {cost}")
+    if not records:
+        problems.append("no recorded generations to spot-check")
+    return problems
+
+
+def cmd_automerge_check(args) -> int:
+    """Checks that need secrets or live data before a bot PR may auto-merge."""
+    import os
+
+    import httpx
+
+    from cqc_cpcc.model_eval.openrouter_models import fetch_models, profile_from_openrouter
+
+    policy = model_registry.load_policy()
+    today = dt.date.today()
+    problems = []
+    freeze = in_freeze(policy, today)
+    if freeze:
+        problems.append(f"inside a grading freeze ({freeze})")
+    if args.kind == "promotion":
+        sc = json.loads(Path(args.scorecard).read_text(encoding="utf-8"))
+        model, _ = parse_model(sc["winner"])
+        head = json.loads(Path(args.head_registry).read_text(encoding="utf-8"))
+        recorded = head["models"][model]
+        live = {m["id"]: m for m in fetch_models()}.get(model)
+        if live is None:
+            problems.append(f"{model} is no longer in OpenRouter's catalogue")
+        else:
+            now = profile_from_openrouter(live)
+            if now.canonical_slug != recorded["canonical_slug"]:
+                problems.append(f"{model} canonical_slug changed since the evaluation")
+            if now.pricing.completion_per_mtok > recorded["pricing"]["completion_per_mtok"] * 1.001 \
+                    or now.pricing.prompt_per_mtok > recorded["pricing"]["prompt_per_mtok"] * 1.001:
+                problems.append(f"{model} price went up since the evaluation")
+            if now.expiration_date:
+                problems.append(f"{model} now has an expiration date")
+            problems += policy_problems(model, now, policy)
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            problems.append("OPENROUTER_API_KEY missing: cannot spot-check generations")
+        else:
+            def fetch(gen_id):
+                response = httpx.get("https://openrouter.ai/api/v1/generation", params={"id": gen_id},
+                                     headers={"Authorization": f"Bearer {key}"}, timeout=30.0)
+                response.raise_for_status()
+                return response.json().get("data", {})
+            problems += spot_check_generations(Path(args.raw), model, args.sample, fetch)
+    for p in problems:
+        print(f"::error::{p}")
+    print("automerge-check: OK" if not problems else f"automerge-check: {len(problems)} problem(s)")
+    return 1 if problems else 0
+
+
+def cmd_verify_rollback(args) -> int:
+    """A rollback PR may only move roles back to the model recorded as ``previous``."""
+    base = json.loads(Path(args.base_registry).read_text(encoding="utf-8"))
+    head = json.loads(Path(args.head_registry).read_text(encoding="utf-8"))
+    model_registry.RegistryFile.model_validate(head)
+    problems = []
+    for key in set(base) | set(head):
+        if key not in {"roles", "previous", "revision"} and base.get(key) != head.get(key):
+            problems.append(f"registry key {key} changed")
+    changed = [r for r in head["roles"] if head["roles"][r]["model"] != base["roles"][r]["model"]]
+    if not changed:
+        problems.append("no role changed")
+    for role in changed:
+        if head["roles"][role]["model"] != base["previous"].get(role):
+            problems.append(f"role {role} moved to a model that is not its previous model")
+    for p in problems:
+        print(f"::error::{p}")
+    print("verify-rollback: OK" if not problems else f"verify-rollback: {len(problems)} problem(s)")
+    return 1 if problems else 0
+
+
+def cmd_describe_change(args) -> int:
+    """Markdown summary of what changed between two registry files (for notifications)."""
+    base = json.loads(Path(args.base_registry).read_text(encoding="utf-8"))
+    head = json.loads(Path(args.head_registry).read_text(encoding="utf-8"))
+    lines = [f"Model registry revision {base.get('revision')} -> {head.get('revision')}", "",
+             "| Role | Before | After |", "|---|---|---|"]
+    for role, cfg in head["roles"].items():
+        old = base["roles"].get(role, {})
+        before = f"{old.get('model')} ({old.get('reasoning_effort') or 'default'})"
+        after = f"{cfg.get('model')} ({cfg.get('reasoning_effort') or 'default'})"
+        if before != after:
+            lines.append(f"| {role} | `{before}` | `{after}` |")
+    print("\n".join(lines))
     return 0
 
 
@@ -234,6 +512,49 @@ def main(argv: Optional[list[str]] = None) -> int:
     r.add_argument("--run-id", default=None, help="CI run id, recorded in the scorecard")
     r.add_argument("--dry-run", action="store_true", help="print the cost estimate and stop")
     r.set_defaults(func=lambda a: asyncio.run(_run(a)))
+
+    dsc = sub.add_parser("discover", help="choose this month's candidates (no model calls)")
+    dsc.add_argument("--out", default="evals/runs/candidates.json")
+    dsc.add_argument("--snapshot-in", default=None)
+    dsc.add_argument("--snapshot-out", default=None)
+    dsc.add_argument("--history", default=None)
+    dsc.set_defaults(func=cmd_discover)
+
+    pr = sub.add_parser("promote", help="write the scorecard winner into the registry")
+    pr.add_argument("--scorecard", required=True)
+    pr.add_argument("--registry", default=str(model_registry.DEFAULT_REGISTRY_PATH))
+    pr.add_argument("--reports-dir", default="evals/reports")
+    pr.set_defaults(func=cmd_promote)
+
+    rb = sub.add_parser("rollback", help="swap roles back to their previous models")
+    rb.add_argument("--role", default="all", choices=["all", *model_registry.ROLES])
+    rb.add_argument("--registry", default=str(model_registry.DEFAULT_REGISTRY_PATH))
+    rb.set_defaults(func=cmd_rollback)
+
+    vf = sub.add_parser("verify-promotion", help="guard: recompute and check a promotion PR")
+    vf.add_argument("--scorecard", required=True)
+    vf.add_argument("--raw", required=True)
+    vf.add_argument("--base-registry", required=True)
+    vf.add_argument("--head-registry", required=True)
+    vf.set_defaults(func=cmd_verify)
+
+    am = sub.add_parser("automerge-check", help="live/secret checks before a bot PR auto-merges")
+    am.add_argument("--kind", choices=["promotion", "rollback"], required=True)
+    am.add_argument("--scorecard", default=None)
+    am.add_argument("--raw", default=None)
+    am.add_argument("--head-registry", default=str(model_registry.DEFAULT_REGISTRY_PATH))
+    am.add_argument("--sample", type=int, default=5)
+    am.set_defaults(func=cmd_automerge_check)
+
+    vr = sub.add_parser("verify-rollback", help="guard: a rollback PR only restores previous models")
+    vr.add_argument("--base-registry", required=True)
+    vr.add_argument("--head-registry", required=True)
+    vr.set_defaults(func=cmd_verify_rollback)
+
+    dc = sub.add_parser("describe-change", help="markdown summary of a registry change")
+    dc.add_argument("--base-registry", required=True)
+    dc.add_argument("--head-registry", required=True)
+    dc.set_defaults(func=cmd_describe_change)
 
     args = parser.parse_args(argv)
     return args.func(args)

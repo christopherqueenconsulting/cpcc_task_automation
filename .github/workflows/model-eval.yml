@@ -1,0 +1,368 @@
+name: Model Evaluation
+
+# Monthly: find new OpenRouter models (free catalogue data), grade the synthetic dataset
+# (evals/datasets) on up to three candidates and the current default, publish a
+# scorecard, and open a promotion PR when a candidate wins. The PR is merged by
+# model-registry-guard (when MODEL_AUTOMERGE_ENABLED is 'true') or by a human.
+#
+# Security notes:
+# - Inputs and step outputs reach shell steps only through env vars, never ${{ }} in run:.
+# - Model ids are validated by the CLI (concrete "vendor/slug" ids only).
+# - Secrets live in the "model-eval" environment, deployable from master only.
+# - The GitHub App token is used for pushes and PRs so required checks run on bot PRs
+#   (PRs opened with GITHUB_TOKEN never trigger workflows).
+
+on:
+  schedule:
+    - cron: "0 13 3 * *"   # 13:00 UTC on the 3rd of each month
+  workflow_dispatch:
+    inputs:
+      candidates:
+        description: "Comma-separated model ids, optional @effort. Blank = discover automatically."
+        required: false
+        type: string
+        default: ""
+      repeats:
+        description: "Repeats per case (blank = model_policy.json; fewer than 2 can never promote)"
+        required: false
+        type: string
+        default: ""
+      budget_usd:
+        description: "Spend cap in USD (never above model_policy.json eval.budget_usd)"
+        required: false
+        type: string
+        default: "10"
+      limit:
+        description: "Only the first N cases (blank = all; a limited run can never promote)"
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Print the cost estimate only"
+        required: false
+        type: boolean
+        default: true
+      no_promote:
+        description: "Never open a promotion PR"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-registry
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+  STATE_BRANCH: model-eval-state
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    environment: model-eval
+    timeout-minutes: 150
+    outputs:
+      winner: ${{ steps.run.outputs.winner }}
+      status: ${{ steps.run.outputs.status }}
+      incumbent_failed: ${{ steps.run.outputs.incumbent_failed }}
+      incumbent_expiring: ${{ steps.discover.outputs.incumbent_expiring }}
+      incumbent_changed: ${{ steps.discover.outputs.incumbent_changed }}
+      dry_run: ${{ steps.mode.outputs.dry_run }}
+      promote_allowed: ${{ steps.mode.outputs.promote_allowed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Resolve run mode
+        id: mode
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          NO_PROMOTE: ${{ inputs.no_promote }}
+        run: |
+          dry="false"; promote="true"
+          if [ "${EVENT}" = "workflow_dispatch" ]; then
+            if [ "${DRY_RUN}" = "true" ]; then dry="true"; fi
+            if [ "${NO_PROMOTE}" = "true" ]; then promote="false"; fi
+          fi
+          echo "dry_run=${dry}" >> "$GITHUB_OUTPUT"
+          echo "promote_allowed=${promote}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java (compile gate)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Load evaluation state
+        shell: bash
+        run: |
+          mkdir -p state evals/runs/ci
+          if git fetch --depth=1 origin "${STATE_BRANCH}" 2>/dev/null; then
+            git show "FETCH_HEAD:snapshots/latest.json" > state/latest.json 2>/dev/null || rm -f state/latest.json
+            git show "FETCH_HEAD:history.jsonl" > state/history.jsonl 2>/dev/null || : > state/history.jsonl
+          else
+            : > state/history.jsonl
+          fi
+
+      - name: Discover candidates
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot_in=()
+          if [ -s state/latest.json ]; then snapshot_in=(--snapshot-in state/latest.json); fi
+          poetry run python -m cqc_cpcc.model_eval discover "${snapshot_in[@]}" \
+            --snapshot-out evals/runs/ci/snapshot.json --history state/history.jsonl \
+            --out evals/runs/ci/candidates.json > discover.log 2>&1 || { tail -n 40 discover.log; exit 1; }
+          tail -n 3 discover.log
+
+      - name: Run evaluation
+        id: run
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          DISCOVERED: ${{ steps.discover.outputs.candidates }}
+          MANUAL: ${{ inputs.candidates }}
+          REPEATS: ${{ inputs.repeats }}
+          BUDGET_USD: ${{ inputs.budget_usd }}
+          LIMIT: ${{ inputs.limit }}
+          DRY_RUN: ${{ steps.mode.outputs.dry_run }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY}" ] && [ "${DRY_RUN}" != "true" ]; then
+            echo "::error::OPENROUTER_EVAL_API_KEY is not set in the model-eval environment"
+            exit 1
+          fi
+          candidates="${MANUAL:-$DISCOVERED}"
+          echo "Candidates: ${candidates:-none (current default re-baselined only)}"
+          args=(run --out evals/runs/ci --run-id "${RUN_ID}" --label "run-${RUN_ID}")
+          IFS=',' read -ra models <<< "${candidates}"
+          for m in "${models[@]}"; do
+            m="$(echo "$m" | xargs)"
+            if [ -n "$m" ]; then args+=(--candidate "$m"); fi
+          done
+          if [[ "${REPEATS}" =~ ^[0-9]+$ ]]; then args+=(--repeats "${REPEATS}"); fi
+          if [[ "${BUDGET_USD}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then args+=(--budget "${BUDGET_USD}"); fi
+          if [[ "${LIMIT}" =~ ^[0-9]+$ ]]; then args+=(--limit "${LIMIT}"); fi
+          if [ "${DRY_RUN}" = "true" ]; then args+=(--dry-run); fi
+          poetry run python -m cqc_cpcc.model_eval "${args[@]}" > eval.log 2>&1 || { tail -n 80 eval.log; exit 1; }
+          tail -n 60 eval.log
+
+      - name: Publish scorecard to job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f evals/runs/ci/scorecard.md ]; then
+            cat evals/runs/ci/scorecard.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No scorecard produced (dry run or failure). See the job log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evaluation artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: model-eval-${{ github.run_id }}
+          path: |
+            evals/runs/ci/scorecard.json
+            evals/runs/ci/scorecard.md
+            evals/runs/ci/raw_outputs.jsonl
+            evals/runs/ci/candidates.json
+            evals/runs/ci/snapshot.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  update-state:
+    needs: evaluate
+    if: needs.evaluate.result == 'success' && needs.evaluate.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    environment: model-eval
+    steps:
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.MODEL_BOT_APP_ID }}
+          private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
+
+      - name: Download evaluation artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: model-eval-${{ github.run_id }}
+          path: artifact
+
+      - name: Record snapshot and history on the state branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git init -q state && cd state
+          git config user.name "cpcc-model-bot"
+          git config user.email "cpcc-model-bot@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          if git fetch -q --depth=1 origin "${STATE_BRANCH}" 2>/dev/null; then
+            git checkout -q -b "${STATE_BRANCH}" FETCH_HEAD
+          else
+            git checkout -q --orphan "${STATE_BRANCH}"
+          fi
+          mkdir -p snapshots
+          month="$(date -u +%Y-%m)"
+          if [ -f ../artifact/snapshot.json ]; then
+            cp ../artifact/snapshot.json "snapshots/models-${month}.json"
+            cp ../artifact/snapshot.json snapshots/latest.json
+          fi
+          python3 - <<'PY'
+          import json, os, pathlib
+          art = pathlib.Path("../artifact")
+          sc_path, cand_path = art / "scorecard.json", art / "candidates.json"
+          if sc_path.exists():
+              sc = json.loads(sc_path.read_text())
+              slugs = {}
+              if cand_path.exists():
+                  for c in json.loads(cand_path.read_text()).get("candidates", []):
+                      slugs[c["model_id"]] = c["canonical_slug"]
+              with open("history.jsonl", "a") as fh:
+                  for label, m in sc.get("models", {}).items():
+                      model = label.split("@")[0]
+                      fh.write(json.dumps({
+                          "run_id": os.environ["RUN_ID"], "label": label,
+                          "canonical_slug": slugs.get(model, model), "composite": m.get("composite"),
+                          "cost_per_submission": m.get("cost_per_submission"), "status": sc.get("status"),
+                      }, sort_keys=True) + "\n")
+          PY
+          git add -A
+          if git diff --cached --quiet; then echo "nothing to record"; exit 0; fi
+          git commit -q -m "model-eval state: run ${RUN_ID}"
+          git push -q origin "HEAD:${STATE_BRANCH}"
+
+  promote:
+    needs: evaluate
+    if: >-
+      needs.evaluate.result == 'success' && needs.evaluate.outputs.winner != '' &&
+      needs.evaluate.outputs.status == 'complete' && needs.evaluate.outputs.dry_run != 'true' &&
+      needs.evaluate.outputs.promote_allowed == 'true'
+    runs-on: ubuntu-latest
+    environment: model-eval
+    steps:
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.MODEL_BOT_APP_ID }}
+          private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
+
+      - name: Checkout master
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Download evaluation artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: model-eval-${{ github.run_id }}
+          path: evals/runs/ci
+
+      - name: Open promotion PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          WINNER: ${{ needs.evaluate.outputs.winner }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          poetry run python -m cqc_cpcc.model_eval promote --scorecard evals/runs/ci/scorecard.json
+          branch="auto/model-promotion-$(date -u +%Y-%m)-${RUN_ID}"
+          git config user.name "cpcc-model-bot"
+          git config user.email "cpcc-model-bot@users.noreply.github.com"
+          git checkout -q -b "${branch}"
+          git add src/cqc_cpcc/config/model_registry.json evals/reports
+          git commit -q -m "chore(models): promote ${WINNER} to default grading model" \
+            -m "Evaluation run: ${RUN_URL}"
+          git push -q origin "${branch}"
+          for label in model-promotion auto-merge-eligible; do
+            gh label create "${label}" --force --color 5319e7 >/dev/null 2>&1 || true
+          done
+          {
+            echo "Automated model promotion from evaluation run ${RUN_URL}"
+            echo
+            echo "eval-run-id: ${RUN_ID}"
+            echo
+            cat evals/runs/ci/scorecard.md
+            echo
+            echo "After merge: \`git pull\` and restart the app. Roll back with the **Model Rollback** workflow, or set \`CQC_MODEL_GRADING=<previous model>\` in \`.env\`."
+          } > pr-body.md
+          gh pr create --base master --head "${branch}" \
+            --title "chore(models): promote ${WINNER} (eval run ${RUN_ID})" \
+            --body-file pr-body.md --label model-promotion --label auto-merge-eligible
+
+  report:
+    needs: evaluate
+    if: >-
+      always() && (needs.evaluate.result == 'failure' || needs.evaluate.result == 'cancelled' ||
+      needs.evaluate.outputs.incumbent_failed == 'true' ||
+      needs.evaluate.outputs.incumbent_expiring != '' || needs.evaluate.outputs.incumbent_changed == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update an issue for Christopher
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RESULT: ${{ needs.evaluate.result }}
+          INCUMBENT_FAILED: ${{ needs.evaluate.outputs.incumbent_failed }}
+          EXPIRING: ${{ needs.evaluate.outputs.incumbent_expiring }}
+          CHANGED: ${{ needs.evaluate.outputs.incumbent_changed }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ASSIGNEE: ${{ vars.MODEL_BOT_ASSIGNEE }}
+        run: |
+          set -euo pipefail
+          month="$(date -u +%Y-%m)"
+          title="Model evaluation needs attention (${month})"
+          {
+            echo "Run: ${RUN_URL}"
+            echo
+            if [ "${RESULT}" != "success" ]; then echo "- The evaluation job ended with **${RESULT}**."; fi
+            if [ "${INCUMBENT_FAILED}" = "true" ]; then echo "- The current default model **failed a hard gate** (possible drift). Nothing is promoted until this is resolved."; fi
+            if [ -n "${EXPIRING}" ]; then echo "- The current default model is expiring or missing (${EXPIRING//\`/}). Pick a replacement from the scorecard; this one needs a human merge."; fi
+            if [ "${CHANGED}" = "true" ]; then echo "- OpenRouter changed the current model's \`canonical_slug\` (the model behind the id was updated). Review the scorecard."; fi
+            echo
+            echo "_Opened by the Model Evaluation workflow._"
+          } > body.md
+          gh label create blocked-on-chris --force --color d93f0b >/dev/null 2>&1 || true
+          existing="$(gh issue list --repo "${REPO}" --state open --search "${title} in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --repo "${REPO}" --body-file body.md
+          else
+            assignee=()
+            if [ -n "${ASSIGNEE}" ]; then assignee=(--assignee "${ASSIGNEE}"); fi
+            gh issue create --repo "${REPO}" --title "${title}" --body-file body.md --label blocked-on-chris "${assignee[@]}"
+          fi
