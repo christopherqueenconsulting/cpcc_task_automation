@@ -4,41 +4,54 @@ import json
 import extra_streamlit_components as stx
 import pandas as pd
 import streamlit as st
-from cqc_cpcc.find_student import FindStudents
+from cqc_cpcc.find_student import (
+    FINISHED_PHASES,
+    PHASE_CANCELLED,
+    PHASE_FAILED,
+    PHASE_SUCCEEDED,
+    FindStudentJob,
+)
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css
+from cqc_streamlit_app.utils import get_cpcc_css, render_mfa_prompt
+
+JOB_KEY = "find_student_job"
+# The phase the last full page run drew; the live view reruns the page when it moves.
+RENDERED_PHASE_KEY = "find_student_rendered_phase"
+POLL_SECONDS = 1.5
 
 # Initialize session state variables
 init_session_state()
 
 
-def process_students():
-    # Wait for FindStudent to stop running before showing tabs
-    with st.spinner("Gathering Student Info for Searching... [Please Accept Duo Prompt]"):
-        if 'active_tab' not in st.session_state:
-            active_courses_only = True
-        else:
-            active_courses_only = st.session_state.active_courses_only
-
-        # Create FindStudent object
-        fs = FindStudents(active_courses_only=active_courses_only)
-
-        while fs.is_running():
-            pass
-        # Close the driver for the find student class
-        fs.terminate()
-
-        # Add it to the session
-        st.session_state.fs = fs
-
-    # Display success message
-    st.success("Done!")
+def start_job() -> None:
+    """Gather the rosters on a background thread (signs in, with MFA on the page)."""
+    old = st.session_state.get(JOB_KEY)
+    if old is not None and old.phase not in FINISHED_PHASES:
+        old.cancel()
+    job = FindStudentJob(active_courses_only=st.session_state.get("active_courses_only", True))
+    job.start()
+    st.session_state[JOB_KEY] = job
+    st.session_state.pop("found_students", None)
 
 
 def init_my_session_state():
     # Initialize session state for active tab
     if 'active_tab' not in st.session_state:
         st.session_state.active_tab = 0
+
+
+def live_view() -> None:
+    """Progress and the Authenticator number while the rosters are gathered."""
+    job: FindStudentJob | None = st.session_state.get(JOB_KEY)
+    if job is None:
+        return
+    if job.phase != st.session_state.get(RENDERED_PHASE_KEY):
+        st.rerun(scope="app")  # finished: draw the results on the whole page
+    st.info("⏳ %s" % (job.latest_progress() or "Starting..."))
+    render_mfa_prompt(job.bridge)
+    if st.button("✖ Cancel", key="find_student_cancel"):
+        job.cancel()
+        st.rerun()
 
 
 def main():
@@ -59,16 +72,31 @@ def main():
 
     if all(required_vars):
 
-        # Create checkbox for user to decide if they want active courses only or not
-        st.checkbox('Active Courses Only', value=True, on_change=process_students,
+        # Changing the scope gathers the rosters again.
+        st.checkbox('Active Courses Only', value=True, on_change=start_job,
                     key="active_courses_only")
 
-        if 'fs' not in st.session_state:
-            process_students()
-        else:
-            fs = st.session_state.fs
-            # st.subheader("Debug Info", divider="red")
-            # st.table(fs.get_student_info_items())
+        job: FindStudentJob | None = st.session_state.get(JOB_KEY)
+        if job is None:
+            start_job()
+            job = st.session_state[JOB_KEY]
+        phase = job.phase
+        st.session_state[RENDERED_PHASE_KEY] = phase
+
+        if phase not in FINISHED_PHASES:
+            st.fragment(live_view, run_every=POLL_SECONDS)()
+            return
+        if phase in (PHASE_FAILED, PHASE_CANCELLED):
+            if phase == PHASE_FAILED:
+                st.error("❌ Could not gather the students: %s" % job.error)
+            else:
+                st.warning("Gathering students was cancelled.")
+            st.button("Try again", on_click=start_job, key="find_student_retry")
+            return
+        fs = job.finder
+        if st.button("↻ Refresh student list", key="find_student_refresh"):
+            start_job()
+            st.rerun()
 
         # Create tabs
         # tab1, tab2, tab3 = st.tabs(["By Email", "By Name", "By ID"])
@@ -102,7 +130,7 @@ def main():
         else:
             placeholder = st.empty()
 
-        if fs:
+        if fs is not None:
             # Convert the fs.get_student_info_items() into a Pandas DataFrame usable for streamlit data_editor
             student_info_items = fs.get_student_info_items()
             data = [{"ID": item[0], "Name": item[1][0], "Email": item[1][1], "Course Name": item[1][2]} for item in
@@ -137,8 +165,9 @@ def main():
 def on_find_by_change():
     active_index = st.session_state.chosen_id
     # st.success(f"Active Tab: {active_index}")
-    if 'fs' in st.session_state:
-        fs = st.session_state.fs
+    job = st.session_state.get(JOB_KEY)
+    fs = job.finder if job is not None and job.phase == PHASE_SUCCEEDED else None
+    if fs is not None:
         found_students = []
         if active_index == "tab1" and "find_student_by_email" in st.session_state:
             # st.success("Searching for student by email")
