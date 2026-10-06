@@ -1,0 +1,136 @@
+name: Model Auto-Merge
+
+# Runs after Model Registry Guard succeeds on a bot PR. Lives on master and runs master's
+# code (never the PR's), with the model-eval environment's secrets, to do the checks that
+# need them; then enables GitHub auto-merge, which still waits for every required check.
+#
+# Kill switch: repository variable MODEL_AUTOMERGE_ENABLED must be exactly 'true'.
+
+on:
+  workflow_run:
+    workflows: ["Model Registry Guard"]
+    types: [completed]
+    branches:
+      - "auto/model-promotion-*"
+      - "auto/model-rollback-*"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: model-registry
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+  REGISTRY: src/cqc_cpcc/config/model_registry.json
+
+jobs:
+  automerge:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    environment: model-eval
+    steps:
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.MODEL_BOT_APP_ID }}
+          private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
+
+      - name: Checkout master (trusted code)
+        uses: actions/checkout@v7
+
+      - name: Identify the PR
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          BOT_LOGIN: ${{ vars.MODEL_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh pr list --repo "${REPO}" --head "${HEAD_BRANCH}" --state open --json number,headRefOid,author,labels,body --jq '.[0] // empty')"
+          if [ -z "${pr_json}" ]; then echo "No open PR for ${HEAD_BRANCH}"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          number="$(jq -r .number <<< "${pr_json}")"
+          head="$(jq -r .headRefOid <<< "${pr_json}")"
+          author="$(jq -r .author.login <<< "${pr_json}")"
+          labels="$(jq -r '[.labels[].name] | join(",")' <<< "${pr_json}")"
+          run_id="$(jq -r .body <<< "${pr_json}" | sed -n 's/^eval-run-id: \([0-9]\{1,20\}\)$/\1/p' | head -n1)"
+          skip=false
+          if [ "${head}" != "${HEAD_SHA}" ]; then echo "Guard ran on an older commit"; skip=true; fi
+          # gh reports app authors as "app/<slug>"; the event payload uses "<slug>[bot]".
+          bot_app="app/${BOT_LOGIN%"[bot]"}"
+          if [ -z "${BOT_LOGIN}" ] || { [ "${author}" != "${BOT_LOGIN}" ] && [ "${author}" != "${bot_app}" ]; }; then
+            echo "Not a bot PR (${author})"; skip=true
+          fi
+          kind=""
+          case ",${labels}," in
+            *,model-rollback,*) kind=rollback ;;
+            *,auto-merge-eligible,*) kind=promotion ;;
+            *) echo "Not labelled for auto-merge"; skip=true ;;
+          esac
+          {
+            echo "number=${number}"
+            echo "head=${head}"
+            echo "kind=${kind}"
+            echo "run_id=${run_id}"
+            echo "skip=${skip}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        if: steps.pr.outputs.skip != 'true'
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Live checks and enable auto-merge
+        if: steps.pr.outputs.skip != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          ENABLED: ${{ vars.MODEL_AUTOMERGE_ENABLED }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD: ${{ steps.pr.outputs.head }}
+          KIND: ${{ steps.pr.outputs.kind }}
+          RUN_ID: ${{ steps.pr.outputs.run_id }}
+        run: |
+          set -uo pipefail
+          refuse() {
+            {
+              echo "Auto-merge **not enabled** for this PR:"
+              echo
+              printf '%s\n' "$@"
+              echo
+              echo "A human can still review and merge it."
+            } > comment.md
+            gh pr comment "${NUMBER}" --repo "${REPO}" --body-file comment.md
+            gh pr edit "${NUMBER}" --repo "${REPO}" --remove-label auto-merge-eligible --add-label blocked-on-chris || true
+            exit 0
+          }
+          if [ "${ENABLED}" != "true" ]; then
+            refuse "- MODEL_AUTOMERGE_ENABLED is not 'true' (staged rollout: a human merges until it is turned on)."
+          fi
+          git fetch -q origin "${HEAD}"
+          git show "${HEAD}:${REGISTRY}" > head_registry.json
+          args=(automerge-check --kind "${KIND}" --head-registry head_registry.json)
+          if [ "${KIND}" = "promotion" ]; then
+            gh run download "${RUN_ID}" --repo "${REPO}" -n "model-eval-${RUN_ID}" -D artifact || refuse "- could not download evaluation artifact ${RUN_ID}"
+            args+=(--scorecard artifact/scorecard.json --raw artifact/raw_outputs.jsonl)
+          fi
+          if ! poetry run python -m cqc_cpcc.model_eval "${args[@]}" > check.log 2>&1; then
+            cat check.log
+            refuse "$(grep '::error::' check.log | sed 's/^::error::/- /')"
+          fi
+          cat check.log
+          gh pr merge "${NUMBER}" --repo "${REPO}" --auto --squash --match-head-commit "${HEAD}"
+          echo "Auto-merge enabled for #${NUMBER}; it completes when every required check passes."

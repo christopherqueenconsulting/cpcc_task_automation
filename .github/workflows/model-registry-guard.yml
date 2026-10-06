@@ -1,0 +1,119 @@
+name: Model Registry Guard
+
+# Required check on every PR (no paths filter: a path-filtered required check stays
+# pending forever on PRs that do not touch the path). It passes immediately when the
+# model registry is untouched.
+#
+# For bot PRs (promotion or rollback) it independently re-derives the decision from the
+# evaluation run's raw outputs and the committed labels, and checks the diff touches only
+# what the bot may change. It holds no secrets and merges nothing: model-automerge.yml
+# runs after this succeeds, on master, with the secrets.
+
+on:
+  pull_request:
+    branches:
+      - master
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+  REGISTRY: src/cqc_cpcc/config/model_registry.json
+  POLICY: src/cqc_cpcc/config/model_policy.json
+
+jobs:
+  model-registry-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Did this PR touch the model registry or policy?
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "${BASE_SHA}" HEAD)"
+          echo "${changed}" > changed.txt
+          if grep -qxE "${REGISTRY}|${POLICY}" changed.txt; then
+            echo "touched=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "touched=false" >> "$GITHUB_OUTPUT"
+            echo "Model registry untouched: nothing to check."
+          fi
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        if: steps.scope.outputs.touched == 'true'
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Registry and policy load
+        if: steps.scope.outputs.touched == 'true'
+        shell: bash
+        run: |
+          poetry run python -c "from cqc_cpcc.utilities.AI import model_registry as m; m.load_registry(); m.load_policy(); [m.resolve(r) for r in m.ROLES]; print('registry OK')"
+
+      - name: Check bot PR
+        if: steps.scope.outputs.touched == 'true' && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BOT_LOGIN: ${{ vars.MODEL_BOT_LOGIN }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BODY: ${{ github.event.pull_request.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BOT_LOGIN}" ] || [ "${AUTHOR}" != "${BOT_LOGIN}" ]; then
+            if grep -qx "${POLICY}" changed.txt; then
+              echo "Human PR changes the model policy: allowed, needs a human merge."
+            fi
+            echo "Not a bot PR: schema check only. Auto-merge will not apply."
+            exit 0
+          fi
+          # The bot may never touch the policy, workflows, or anything outside its lane.
+          if grep -vE "^(${REGISTRY}|evals/reports/.*)$" changed.txt | grep -q .; then
+            echo "::error::Bot PR changes files outside the registry and evals/reports:"
+            grep -vE "^(${REGISTRY}|evals/reports/.*)$" changed.txt
+            exit 1
+          fi
+          git show "${BASE_SHA}:${REGISTRY}" > base_registry.json
+          case ",${LABELS}," in
+            *,model-rollback,*)
+              poetry run python -m cqc_cpcc.model_eval verify-rollback \
+                --base-registry base_registry.json --head-registry "${REGISTRY}"
+              ;;
+            *,model-promotion,*)
+              run_id="$(printf '%s\n' "${BODY}" | sed -n 's/^eval-run-id: \([0-9]\{1,20\}\)$/\1/p' | head -n1)"
+              if [ -z "${run_id}" ]; then echo "::error::PR body has no eval-run-id"; exit 1; fi
+              gh run download "${run_id}" --repo "${REPO}" -n "model-eval-${run_id}" -D artifact
+              committed="$(git diff --name-only "${BASE_SHA}" HEAD -- 'evals/reports/*/scorecard.json' | head -n1)"
+              if [ -z "${committed}" ] || ! cmp -s artifact/scorecard.json "${committed}"; then
+                echo "::error::Committed scorecard differs from the evaluation run's artifact"
+                exit 1
+              fi
+              poetry run python -m cqc_cpcc.model_eval verify-promotion \
+                --scorecard artifact/scorecard.json --raw artifact/raw_outputs.jsonl \
+                --base-registry base_registry.json --head-registry "${REGISTRY}"
+              ;;
+            *)
+              echo "::error::Bot PR has neither the model-promotion nor the model-rollback label"
+              exit 1
+              ;;
+          esac
