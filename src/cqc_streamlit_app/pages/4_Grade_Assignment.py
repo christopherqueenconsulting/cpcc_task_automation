@@ -248,7 +248,7 @@ def get_flowgorithm_content():
         st.header("Assignment Total Points Possible")
         total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
 
-        model_cfg = define_chatGPTModel("flowgorithm_assignment", default_temp_value=.5)
+        model_cfg = define_chatGPTModel("flowgorithm_assignment", default_temp_value=.5, role="flowgorithm")
         selected_model = model_cfg.get("model", "openrouter/auto")
         selected_temperature = float(model_cfg.get("temperature", .5))
         selected_service_tier = model_cfg.get("langchain_service_tier", "default")
@@ -2318,6 +2318,10 @@ async def get_rubric_based_exam_grading():
         temperature=0.0,  # Temperature not used with OpenRouter
         debug_mode=False,
         grading_mode=grading_mode,
+        # Model, effort and output budget: a registry change re-grades instead of reusing cache.
+        model_config_hash=(
+            None if use_auto_route else resolve_model("grading", selected_model).config_hash
+        ),
     )
 
     results_cache = st.session_state.error_only_results_by_key if grading_mode == "errors_only" else st.session_state.grading_results_by_key
