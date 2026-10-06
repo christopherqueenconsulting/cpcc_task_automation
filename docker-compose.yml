@@ -31,6 +31,10 @@ services:
           - SE_NODE_MAX_SESSIONS=1
           - SE_NODE_SESSION_TIMEOUT=600
           - SE_LOG_LEVEL=WARN
+          # Browser timezone. MyColleges' date limits are midnight Eastern; on UTC the
+          # datepicker rejects a course's first date. Recreate the container after
+          # changing it: docker compose -p cpcc_task_automation up -d --force-recreate selenium-chrome
+          - TZ=${SELENIUM_TZ:-America/New_York}
           - SE_BROWSER_ARGS_USER_DATA_DIR=--user-data-dir=/home/seluser/chrome-profile
           - SE_BROWSER_ARGS_PROFILE=--profile-directory=Default
         volumes:

@@ -298,3 +298,21 @@ def test_warnings_are_kept_in_order_for_the_page():
     job.on_warning("first")
     job.on_warning("second")
     assert job.warnings() == ["first", "second"]
+
+
+@pytest.mark.unit
+def test_eva_flags_replace_per_course_and_list_past_eva_first():
+    import datetime as DT
+
+    from cqc_cpcc.eva_check import flag_no_attendance
+
+    roster = [{"id": "1", "text": "Zed, Z 1"}, {"id": "2", "text": "Amy, A 2"}]
+    eva = DT.date(2026, 8, 26)
+    job = AttendanceJob(tracker_url=None, bridge=MfaBridge())
+    soon = flag_no_attendance("CSC-151", {"1": 0}, roster, eva, DT.date(2026, 8, 20))
+    past = flag_no_attendance("CSC-134", {"2": 0}, roster, eva, DT.date(2026, 10, 6))
+    job.on_eva_flags("CSC-151", soon)
+    job.on_eva_flags("CSC-134", past)
+    assert [f.course_section for f in job.eva_flags()] == ["CSC-134", "CSC-151"]
+    job.on_eva_flags("CSC-134", [])
+    assert [f.course_section for f in job.eva_flags()] == ["CSC-151"]

@@ -189,6 +189,53 @@ def screenshot_section() -> None:
         st.caption("Screenshots of the browser appear here once the run starts.")
 
 
+EVA_COLUMNS_HELP = {
+    "Course": "MyColleges course section.",
+    "Student": "Name from the live MyColleges roster (shown here only, never stored).",
+    "Student id": "MyColleges student id.",
+    "EVA date": "Census date: the last day to drop without a grade. A student needs "
+                "at least one Present mark by then to stay in the course.",
+    "When": "Days left before EVA, or days since it passed.",
+    "Owed": "Entries BrightSpace shows activity for on or before EVA that are not "
+            "recorded in MyColleges yet. Above 0: re-run attendance first.",
+    "Action": "What to do next.",
+}
+SEEN_EVA_TOASTS_KEY = "attendance_eva_toasts"
+
+
+def _eva_rows(flags) -> list[dict]:
+    return [{"Course": f.course_section, "Student": f.student_name, "Student id": f.student_id,
+             "EVA date": f.eva_date.isoformat(), "When": f.when, "Owed": f.owed,
+             "Action": f.action} for f in flags]
+
+
+def eva_section(job: AttendanceJob) -> None:
+    """Students with no Present attendance at all: red after EVA, yellow before."""
+    flags = job.eva_flags()
+    if not flags:
+        return
+    past = [f for f in flags if f.past_eva]
+    before = [f for f in flags if not f.past_eva]
+    column_config = {name: st.column_config.Column(help=text)
+                     for name, text in EVA_COLUMNS_HELP.items()}
+    if past:
+        with st.container(border=True):
+            st.error("🚨 **Past EVA: no attendance recorded** for %d student(s). They should "
+                     "not stay in the course without a Present mark." % len(past))
+            st.dataframe(_eva_rows(past), hide_index=True, width="stretch",
+                         column_config=column_config)
+        seen = st.session_state.setdefault(SEEN_EVA_TOASTS_KEY, set())
+        for section in sorted({f.course_section for f in past} - seen):
+            st.toast("🚨 %s: students past EVA with no attendance" % section, icon="🚨")
+            seen.add(section)
+    if before:
+        with st.container(border=True):
+            st.warning("⚠️ **At risk before EVA**: %d student(s) have no Present mark yet."
+                       % len(before))
+            st.dataframe(_eva_rows(before), hide_index=True, width="stretch",
+                         column_config=column_config)
+
+
 def warnings_section(job: AttendanceJob) -> None:
     """Problems to act on, such as a course MyColleges would not update; kept all run."""
     for message in job.warnings():
@@ -267,6 +314,7 @@ def live_view() -> None:
             # The form or finish screen is due: redraw the whole page once.
             st.rerun(scope="app")
     if job is not None:
+        eva_section(job)
         progress_section(job)
     screenshot_section()
     logging_section()
@@ -322,6 +370,12 @@ LEDGER_GLOSSARY = {
     "student_id": "MyColleges student id (no names are stored).",
     "mycolleges_count": "Days present according to MyColleges' own per-student total.",
     "ledger_count": "Days the ledger has verified for the student.",
+    "eva_date": "Census date: the last day to drop without a grade.",
+    "phase": "before_eva = EVA not reached yet (at risk); past_eva = EVA passed with no "
+             "Present mark (should be withdrawn or confirmed).",
+    "owed": "Entries on or before EVA that BrightSpace shows but MyColleges does not "
+            "have yet. Above 0: re-run attendance first.",
+    "checked_at": "When the check ran.",
     "outcome": "mycolleges_higher = MyColleges counts more days (it has entries the "
                "ledger has not verified yet); mycolleges_lower = entries went missing in "
                "MyColleges, so the next run re-checks from the course start.",
@@ -379,6 +433,11 @@ def ledger_section() -> None:
                     rows = [r for r in rows if r["verified"] + r["not_selectable"] < r["expected"]]
                 _ledger_table(rows)
             for state in states:
+                eva_flags = ledger.latest_eva_flags(state["term"], state["course_section"])
+                if eva_flags:
+                    st.markdown("**No Present attendance (latest EVA check): %s**"
+                                % state["course_section"])
+                    _ledger_table(eva_flags)
                 mismatches = ledger.latest_count_mismatches(state["term"], state["course_section"])
                 if mismatches:
                     st.markdown("**Count cross-check differences: %s**" % state["course_section"])

@@ -648,6 +648,28 @@ def get_browser_driver():
     return driver
 
 
+def warn_if_browser_timezone_differs(driver, expected: str | None = None) -> str | None:
+    """Warn when the browser does not run in ``SELENIUM_TZ``; return its timezone.
+
+    A container created before TZ was set keeps UTC until it is recreated, and then
+    MyColleges rejects the first date of every course.
+    """
+    expected = expected or SELENIUM_TZ
+    try:
+        actual = driver.execute_script("return Intl.DateTimeFormat().resolvedOptions().timeZone")
+    except Exception:  # noqa: BLE001 - diagnostics only
+        logger.debug("Could not read the browser timezone.", exc_info=True)
+        return None
+    if actual and actual != expected:
+        logger.warning(
+            "The browser runs in %s, not %s, so MyColleges may reject the first date of "
+            "each course. Recreate the Selenium container: docker compose -p "
+            "cpcc_task_automation -f docker-compose.yml up -d --force-recreate "
+            "selenium-chrome", actual, expected,
+        )
+    return actual
+
+
 def get_docker_driver(headless=False):
     # Mark Docker browser usage so command-line wrappers can offer teardown prompts.
     set_docker_usage_flag(True)
@@ -720,6 +742,7 @@ def get_docker_driver(headless=False):
     # Give extra time for Docker container to fully initialize
     # (Docker startup is slower than local)
     time.sleep(3)
+    warn_if_browser_timezone_differs(driver)
 
     # Open the command executor URL in the user's local browser
     webbrowser.open(f"{selenium_container_url}:{SELENIUM_VNC_PORT}/?autoconnect=1&view_only=true&resize=scale&password=secret")
@@ -804,7 +827,9 @@ def get_local_chrome_driver(headless=True):
         # ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install() # Not working locally but works on streamlit cloud but partially (inputs not going into forms)
         # ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install() # Works locally but not in streamlit cloud
         # ),
-        service=Service(ChromeDriverManager().install()),  # Works locally and on streamlit cloud
+        # TZ is inherited by Chrome and every tab it opens (see SELENIUM_TZ).
+        service=Service(ChromeDriverManager().install(),
+                        env={**os.environ, "TZ": SELENIUM_TZ}),  # Works locally and on streamlit cloud
         # TODO: Working before above but checking for streamlit cloud
         options=options
     )

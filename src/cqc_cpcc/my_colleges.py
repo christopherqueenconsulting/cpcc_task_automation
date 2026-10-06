@@ -36,6 +36,7 @@ from cqc_cpcc.attendance_ledger import (
     open_default_ledger,
 )
 from cqc_cpcc.brightspace import BrightSpace_Course
+from cqc_cpcc.eva_check import EvaFlag, flag_no_attendance, notify_eva_flags, print_eva_block
 from cqc_cpcc.run_plan import RunPlan
 from cqc_cpcc.utilities.date import (
     calculate_census_date,
@@ -59,6 +60,7 @@ from cqc_cpcc.utilities.selenium_util import (
     get_element_wait_retry,
     get_elements_text_as_list_wait_stale,
     getText,
+    current_browser_observer,
     notify_progress,
     notify_warning,
     wait_for_ajax,
@@ -134,6 +136,10 @@ class MyColleges:
         self.student_info = {}
         # Sections where MyColleges refused attendance updates this run.
         self.update_error_sections: list[str] = []
+        # Tab handle -> attendance date its roster shows (after a confirmed load).
+        self._shown_dates: dict[str, DT.date] = {}
+        # Students with no Present attendance found this run (see eva_check).
+        self.eva_flags: list[EvaFlag] = []
         self.ledger = ledger
 
     def _get_ledger(self) -> AttendanceLedger:
@@ -337,8 +343,8 @@ class MyColleges:
             return None
         return count if isinstance(count, int) else None
 
-    def _wait_for_roster_load(self, loads_before: int | None, formatted_date: str) -> None:
-        """Wait until the roster for the date just chosen has loaded and rendered."""
+    def _wait_for_roster_load(self, loads_before: int | None) -> bool:
+        """Wait until a new roster load has finished; False when none came in time."""
         if loads_before is not None:
             deadline = time.monotonic() + self.ROSTER_LOAD_TIMEOUT_SECONDS
             while True:
@@ -346,20 +352,63 @@ class MyColleges:
                 if loads is None or loads > loads_before:
                     break
                 if time.monotonic() >= deadline:
-                    logger.warning(
-                        "No roster reload seen after choosing %s; reading the page as it is.",
-                        formatted_date,
-                    )
-                    break
+                    wait_for_ajax(self.driver)
+                    return False
                 time.sleep(0.25)
         wait_for_ajax(self.driver)
+        return True
+
+    def _current_tab_key(self) -> str:
+        try:
+            return str(self.driver.current_window_handle)
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _select_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
-        """Choose ``record_date`` and return once MyColleges shows that date's roster."""
+        """Choose ``record_date`` and return once MyColleges shows that date's roster.
+
+        Raises ``TimeoutException`` when the roster did not change to the date: the
+        page then still shows the previous date, and writing would mark that one.
+        Callers already treat the exception as "date not selectable".
+        """
+        formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
         loads_before = self._section_loads()
         datepicker_avail = self._choose_attendance_date(record_date, datepicker_avail)
-        self._wait_for_roster_load(loads_before, record_date.strftime("%-m/%-d/%Y (%A)"))
+        tab = self._current_tab_key()
+        if not self._wait_for_roster_load(loads_before):
+            if self._shown_dates.get(tab) != record_date:
+                raise TimeoutException(
+                    "MyColleges did not load the roster for %s" % formatted_date)
+            # Already showing this date (MyColleges does not reload it); read as is.
+            logger.info("%s is already shown; using the roster on the page.", formatted_date)
+        self._shown_dates[tab] = record_date
         return datepicker_avail
+
+    # The datepicker's own validation, e.g. "Date entered is less than minimum allowed
+    # date of 8/17/2026" (seen 2026-10-05 when the browser ran on UTC).
+    _DATEPICKER_ERROR_JS = """
+        var picker = document.querySelector('date-picker');
+        if (!picker) { return ''; }
+        var box = picker.closest('.esg-form__group') || picker.parentElement || picker;
+        var match = (box.innerText || '').match(/[^\\n]*(minimum|maximum) allowed date[^\\n]*/i);
+        return match ? match[0].trim() : '';
+    """
+
+    def _datepicker_rejected_date(self, formatted_date: str) -> bool:
+        """True (and logged) when the datepicker refused the typed date."""
+        try:
+            message = self.driver.execute_script(self._DATEPICKER_ERROR_JS)
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not read the datepicker validation.", exc_info=True)
+            return False
+        if not isinstance(message, str) or not message:
+            return False
+        logger.warning(
+            "The datepicker refused %s (\"%s\"). This usually means the browser is not "
+            "on Eastern time (see SELENIUM_TZ). Trying the date list instead.",
+            formatted_date, message,
+        )
+        return True
 
     def _choose_attendance_date(self, record_date: DT.date, datepicker_avail: bool) -> bool:
         formatted_date = record_date.strftime("%-m/%-d/%Y (%A)")
@@ -382,7 +431,7 @@ class MyColleges:
                     date_input_element.send_keys(date_for_picker)
                     date_input_element.send_keys(Keys.ENTER)
                     wait_for_ajax(self.driver)
-                    date_input_found = True
+                    date_input_found = not self._datepicker_rejected_date(formatted_date)
             except (NoSuchElementException, TimeoutException):
                 datepicker_avail = False
                 logger.info("Datepicker not found, trying dropdown")
@@ -1264,6 +1313,40 @@ class MyColleges:
         return out;
     """
 
+    def _check_eva_attendance(
+            self, context: CourseContext, ledger: AttendanceLedger, term: str, section: str,
+            today: DT.date | None = None,
+    ) -> list[EvaFlag]:
+        """Flag students with no Present mark in the course (before and after EVA).
+
+        Reads MyColleges' cumulative per-student Present totals, so the date the
+        roster shows does not matter. Must run on the course's attendance tab.
+        """
+        today = today or DT.date.today()
+        eva_date = context.eva_date
+        if eva_date is None:
+            logger.info("No EVA date for %s; skipping the no-attendance check.", section)
+            return []
+        start = convert_date_to_datetime(context.course_start_date).date()
+        if today < start:
+            return []
+        totals = self._read_attendance_totals()
+        if not totals:
+            logger.warning("No-attendance check skipped for %s: the Present totals could "
+                           "not be read from the roster.", section)
+            return []
+        flags = flag_no_attendance(
+            section, totals, self._read_attendance_roster(), eva_date, today,
+            ledger.owed_by_student(term, section, through=eva_date),
+        )
+        ledger.record_eva_check(term, section, flags)
+        if flags:
+            self.eva_flags.extend(flags)
+            notify_eva_flags(section, flags)
+        else:
+            logger.info("Every student in %s has at least one Present mark.", section)
+        return flags
+
     def _collect_last_attendance_by_student(self) -> dict[str, DT.date]:
         """Map student id -> last attendance date from the attendance roster.
 
@@ -1345,6 +1428,10 @@ class MyColleges:
             self._record_course_attendance(
                 context, bsc, plan, ledger, term, section, window_start
             )
+            try:
+                self._check_eva_attendance(context, ledger, term, section)
+            except Exception:  # noqa: BLE001 - the check must not fail the course
+                logger.warning("No-attendance check failed for %s.", section, exc_info=True)
 
         if collect_withdrawals and bsc.get_withdrawal_records():
             # Read AFTER marking, so the dates reflect what this run just recorded.
@@ -1376,6 +1463,7 @@ class MyColleges:
             return []
 
         self.update_error_sections = []
+        self.eva_flags = []
         # Keep track of the original tab
         original_tab = self.driver.current_window_handle
 
@@ -1417,6 +1505,9 @@ class MyColleges:
                 self._close_current_course_tab(original_tab)
 
         telemetry.update_run(courses_selected=total, courses_failed=len(failed_courses))
+        if self.eva_flags and getattr(current_browser_observer(), "on_eva_flags", None) is None:
+            # Console run: repeat every flagged student once more at the very end.
+            print_eva_block(self.eva_flags)
         if self.update_error_sections:
             # Repeated at the end so it is not lost in a long console log.
             logger.warning(

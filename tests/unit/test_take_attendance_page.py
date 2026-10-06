@@ -96,6 +96,28 @@ class TestTakeAttendancePage:
         assert not app.exception, app.exception
         assert any("CSC-134-N801" in w.value for w in app.warning)
 
+    def test_students_without_attendance_pop_out_red_after_eva_and_yellow_before(self):
+        from cqc_cpcc.eva_check import flag_no_attendance
+
+        roster = [{"id": "4340773", "text": "Marr, Tyler R. 4340773"},
+                  {"id": "4396124", "text": "Pulido, Ethan 4396124"}]
+        eva = DT.date(2026, 8, 26)
+        job = FakeJob(PHASE_STARTING)
+        job.on_eva_flags("CSC-134-N801", flag_no_attendance(
+            "CSC-134-N801", {"4340773": 0}, roster, eva, DT.date(2026, 10, 6)))
+        job.on_eva_flags("CSC-151-N805", flag_no_attendance(
+            "CSC-151-N805", {"4396124": 0}, roster, eva, DT.date(2026, 8, 20)))
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        assert any("Past EVA: no attendance recorded" in e.value for e in app.error)
+        assert any("At risk before EVA" in w.value for w in app.warning)
+        assert any("CSC-134-N801" in t.value for t in app.toast)
+        assert any("Marr, Tyler R." in str(table.value.to_dict()) for table in app.dataframe)
+        # The toast for a course pops once, not on every refresh.
+        app.run()
+        assert not any("CSC-134-N801" in t.value for t in app.toast)
+
     def test_local_data_shows_the_ledger_path_and_reports(self, tmp_path, monkeypatch):
         from cqc_cpcc.attendance_ledger import default_db_path
 

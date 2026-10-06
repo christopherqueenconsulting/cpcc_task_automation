@@ -106,6 +106,16 @@ CREATE TABLE IF NOT EXISTS count_checks (
     outcome TEXT NOT NULL,
     checked_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS eva_checks (
+    check_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    course_section TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    eva_date TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    owed INTEGER NOT NULL DEFAULT 0,
+    checked_at TEXT NOT NULL
+);
 """
 
 
@@ -334,6 +344,43 @@ class AttendanceLedger:
         )
         self._conn.commit()
         return outcome
+
+    def record_eva_check(self, term: str, course_section: str, flags) -> str:
+        """Store one course's EVA check (ids only; an empty list records "none flagged")."""
+        check_id = uuid.uuid4().hex
+        now = _now()
+        self._conn.executemany(
+            "INSERT INTO eva_checks (check_id, term, course_section, student_id, eva_date,"
+            " phase, owed, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(check_id, term, course_section, str(flag.student_id), _iso(flag.eva_date),
+              flag.phase, int(flag.owed), now) for flag in flags],
+        )
+        self._conn.commit()
+        return check_id
+
+    def latest_eva_flags(self, term: str, course_section: str) -> list[dict]:
+        """Students flagged by the course's most recent EVA check."""
+        row = self._conn.execute(
+            "SELECT check_id FROM eva_checks WHERE term=? AND course_section=?"
+            " ORDER BY checked_at DESC, rowid DESC LIMIT 1",
+            (term, course_section),
+        ).fetchone()
+        if row is None:
+            return []
+        return [dict(r) for r in self._conn.execute(
+            "SELECT student_id, eva_date, phase, owed, checked_at FROM eva_checks"
+            " WHERE check_id=? ORDER BY student_id",
+            (row["check_id"],),
+        ).fetchall()]
+
+    def owed_by_student(self, term: str, course_section: str,
+                        through: DT.date | None = None) -> dict[str, int]:
+        """Outstanding entries per student, optionally only dates on or before ``through``."""
+        owed: dict[str, int] = {}
+        for entry in self.outstanding(term, course_section):
+            if through is None or entry.attend_date <= through:
+                owed[entry.student_id] = owed.get(entry.student_id, 0) + 1
+        return owed
 
     # ------------------------------------------------------------------
     # Reporting

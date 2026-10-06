@@ -69,6 +69,8 @@ class AttendanceJob:
         self._phase = PHASE_STARTING
         self._progress: list[str] = []
         self._warnings: list[str] = []
+        # course section -> EvaFlag list from that course's latest no-attendance check
+        self._eva_flags: dict = {}
         self._screenshot_b64: str | None = None
         # handle -> (title, screenshot); insertion order is the order tabs opened.
         self._tabs: dict[str, tuple[str, str]] = {}
@@ -114,6 +116,12 @@ class AttendanceJob:
         """Problems the instructor should act on (for example, a course to re-run)."""
         with self._lock:
             return list(self._warnings)
+
+    def eva_flags(self) -> list:
+        """Students with no Present mark, every course checked so far, past-EVA first."""
+        with self._lock:
+            flags = [flag for course in self._eva_flags.values() for flag in course]
+        return sorted(flags, key=lambda f: (not f.past_eva, f.course_section, f.student_name))
 
     def latest_screenshot(self) -> str | None:
         """The most recent browser screenshot, base64 PNG."""
@@ -197,6 +205,10 @@ class AttendanceJob:
 
     def on_progress(self, message: str) -> None:
         self._record(message)
+
+    def on_eva_flags(self, section: str, flags: list) -> None:
+        with self._lock:
+            self._eva_flags[section] = list(flags)
 
     def on_warning(self, message: str) -> None:
         with self._lock:
