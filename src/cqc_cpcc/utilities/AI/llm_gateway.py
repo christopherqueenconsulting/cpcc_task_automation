@@ -51,7 +51,11 @@ _last_call: contextvars.ContextVar[Optional[GatewayCall]] = contextvars.ContextV
 
 
 def last_call() -> Optional[GatewayCall]:
-    """Metadata for the most recent successful gateway call in this context (task)."""
+    """Metadata for the most recent gateway call in this context (task).
+
+    Set on failure too: ``completion.ok`` is False and ``completion.cost_usd`` is what the
+    failed attempts cost.
+    """
     return _last_call.get()
 
 
@@ -88,6 +92,8 @@ async def structured(
         _last_call.set(_call_record(resolved, resolved.model, False))
         return result
     except (OpenAISchemaValidationError, OpenAITransportError) as primary_error:
+        # Record what the failed call spent, so callers (the eval budget) can charge it.
+        _last_call.set(_call_record(resolved, resolved.model, False))
         if use_auto_route or not resolved.fallback:
             raise
         logger.warning(

@@ -14,7 +14,8 @@
     "error_ids": [
       "CSC_134_PROJECT_1_CURLY_BRACES_OMITTED"
     ],
-    "acceptable_error_ids": []
+    "acceptable_error_ids": [],
+    "max_occurrences": {}
   },
   "mutations": [
     "braces_omitted"

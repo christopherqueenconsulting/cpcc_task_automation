@@ -105,6 +105,15 @@ class TestStructured:
         assert body["provider"]["allow_fallbacks"] is False
         assert body["usage"] == {"include": True}
 
+    async def test_retried_attempts_are_all_charged(self, registry):
+        patcher, _ = _fake_client(_response("not json"), _response('{"answer": "4"}'))
+        with patcher:
+            await llm_gateway.structured("grading", "2+2?", Answer)
+        completion = llm_gateway.last_call().completion
+        assert completion.attempts == 2
+        assert completion.cost_usd == pytest.approx(0.00004)
+        assert completion.prompt_tokens == 200
+
     async def test_records_call_metadata(self, registry):
         patcher, _ = _fake_client(_response('{"answer": "4"}', model="openai/primary-2026"))
         with patcher:
@@ -143,7 +152,9 @@ class TestStructured:
         patcher, _ = _fake_client(_response('{"wrong": 1}'), _response('{"wrong": 2}'))
         with patcher, pytest.raises(OpenAISchemaValidationError):
             await llm_gateway.structured("grading", "2+2?", Answer)
-        assert llm_gateway.last_call() is None
+        call = llm_gateway.last_call()
+        assert call.completion.ok is False
+        assert call.completion.cost_usd == pytest.approx(0.00002)  # the failed fallback still cost money
 
     async def test_auto_route_sends_no_model_specific_params(self, registry):
         patcher, client = _fake_client(_response('{"answer": "4"}', model="google/x"))

@@ -16,7 +16,10 @@
     ],
     "acceptable_error_ids": [
       "CSC_151_EXAM_1_INEFFICIENT_CODE"
-    ]
+    ],
+    "max_occurrences": {
+      "CSC_151_EXAM_1_SCANNER_CLASS": 2
+    }
   },
   "mutations": [
     "second_scanner"

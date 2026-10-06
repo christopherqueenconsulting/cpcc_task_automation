@@ -14,7 +14,8 @@
     "error_ids": [
       "CSC_151_EXAM_1_OUTPUT_FORMATTING"
     ],
-    "acceptable_error_ids": []
+    "acceptable_error_ids": [],
+    "max_occurrences": {}
   },
   "mutations": [
     "println_total"

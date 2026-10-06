@@ -17,7 +17,8 @@
     ],
     "acceptable_error_ids": [
       "CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR"
-    ]
+    ],
+    "max_occurrences": {}
   },
   "mutations": [
     "boundary",

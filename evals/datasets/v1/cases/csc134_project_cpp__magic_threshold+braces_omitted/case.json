@@ -15,7 +15,10 @@
       "CSC_134_PROJECT_1_CONSTANTS_ERROR",
       "CSC_134_PROJECT_1_CURLY_BRACES_OMITTED"
     ],
-    "acceptable_error_ids": []
+    "acceptable_error_ids": [],
+    "max_occurrences": {
+      "CSC_134_PROJECT_1_CONSTANTS_ERROR": 3
+    }
   },
   "mutations": [
     "magic_threshold",

@@ -50,6 +50,7 @@
       "max_refusals": 0,
       "max_truncations": 0,
       "max_invalid_ids": 0,
+      "max_retry_rate": 0.05,
       "min_injection_pass_rate": 1.0,
       "min_f1": 0.6,
       "min_score_accuracy": 0.85,

@@ -19,7 +19,10 @@
     "acceptable_error_ids": [
       "CSC_134_PROJECT_1_CALCULATION_ERROR",
       "CSC_134_PROJECT_1_OUTPUT_IMPACT_ERROR"
-    ]
+    ],
+    "max_occurrences": {
+      "CSC_134_PROJECT_1_PROGRAMMING_STYLE": 3
+    }
   },
   "mutations": [
     "int_rate",

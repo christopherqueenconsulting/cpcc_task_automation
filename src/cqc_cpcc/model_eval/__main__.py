@@ -54,6 +54,36 @@ def _profiles(models: list[str], live: Optional[list[dict]]) -> dict:
     return out
 
 
+def probe_cases(cases: list) -> list:
+    """A small cost probe spread across languages (case ids sort by assignment)."""
+    picked, seen = [], set()
+    for case in cases:
+        if case.language not in seen and not case.is_empty:
+            picked.append(case)
+            seen.add(case.language)
+    for case in cases:
+        if len(picked) >= PROBE_CASES:
+            break
+        if case not in picked and "multi" in case.tags:
+            picked.append(case)
+    return picked[:PROBE_CASES]
+
+
+def policy_problems(model: str, profile, policy) -> list[str]:
+    """Reasons ``model`` is outside model_policy.json; any one blocks promotion."""
+    problems = []
+    if model.split("/", 1)[0] not in policy.vendor_allowlist:
+        problems.append(f"vendor of {model} is not in vendor_allowlist")
+    ceiling = policy.max_cost_per_mtok["grading"]
+    if profile.pricing.prompt_per_mtok > ceiling.prompt or profile.pricing.completion_per_mtok > ceiling.completion:
+        problems.append(f"{model} price is above the grading price ceiling")
+    if profile.pricing.prompt_per_mtok <= 0 or profile.pricing.completion_per_mtok <= 0:
+        problems.append(f"{model} has no known price")
+    if profile.expiration_date:
+        problems.append(f"{model} has an expiration date ({profile.expiration_date})")
+    return problems
+
+
 def estimate_cost(profile, cases, repeats: int) -> float:
     pricing = profile.pricing
     prompt_tokens = sum(estimate_prompt_tokens(c) for c in cases)
@@ -115,10 +145,14 @@ async def _run(args) -> int:
     budget = Budget(limit=budget_limit, stop_at=stop_at)
     all_records: dict[str, list[CallRecord]] = {}
     status, notes = "complete", []
+    if repeats < 2 or args.limit or args.tags:
+        # Determinism needs repeats, and a partial dataset is not the dataset the gates
+        # were calibrated on: such runs report numbers but can never promote.
+        status = "smoke"
     try:
         for model, effort in runs:
             label = label_of((model, effort))
-            probe = await run_model(model, effort, cases[:PROBE_CASES], 1, budget, seed=args.seed,
+            probe = await run_model(model, effort, probe_cases(cases), 1, budget, seed=args.seed,
                                     profile=profiles[model], on_record=lambda r: raw.write(r.to_json() + "\n"))
             per_call = sum(r.cost_usd for r in probe) / max(1, len(probe))
             projected = per_call * len(cases) * repeats
@@ -144,8 +178,9 @@ async def _run(args) -> int:
     decisions, winner = {}, None
     if incumbent_label in aggregates:
         candidate_labels = [label_of(run) for run in runs[1:] if label_of(run) in aggregates]
+        problems = {label_of(run): policy_problems(run[0], profiles[run[0]], policy) for run in runs[1:]}
         decisions = gates.decide(candidate_labels, incumbent_label, aggregates, ev,
-                                 policy.max_cost_per_submission, seed=args.seed)
+                                 policy.max_cost_per_submission, seed=args.seed, policy_problems=problems)
         if status == "complete":
             winner = gates.pick_winner(decisions, aggregates)
     for note in notes:

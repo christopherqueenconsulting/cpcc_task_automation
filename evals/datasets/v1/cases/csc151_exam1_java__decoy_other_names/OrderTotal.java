@@ -1,7 +1,7 @@
 /*
  * Program: Order Total Calculator
  * Author: Cal Fixture
- * Purpose: Reads an item price and orderQuantity, applies a bulk discount,
+ * Purpose: Reads an item price and quantity, applies a bulk discount,
  *          adds sales tax and prints the order total.
  */
 import java.util.Scanner;
@@ -11,23 +11,23 @@ public class OrderTotal {
     public static final double TAX_RATE = 0.07;
     // Discount rate for bulk orders
     public static final double BULK_DISCOUNT_RATE = 0.10;
-    // Minimum orderQuantity that qualifies for the bulk discount
+    // Minimum quantity that qualifies for the bulk discount
     public static final int BULK_QUANTITY = 10;
 
     public static void main(String[] args) {
         Scanner input = new Scanner(System.in);
 
-        // Read the item price and orderQuantity from the user
+        // Read the item price and quantity from the user
         System.out.print("Enter the item price: ");
         double unitPrice = input.nextDouble();
-        System.out.print("Enter the orderQuantity: ");
-        int orderQuantity = input.nextInt();
+        System.out.print("Enter the quantity: ");
+        int quantity = input.nextInt();
 
         // Calculate the subtotal before discount and tax
-        double subtotal = unitPrice * orderQuantity;
+        double subtotal = unitPrice * quantity;
 
-        // Apply the bulk discount when the orderQuantity qualifies
-        if (orderQuantity >= BULK_QUANTITY) {
+        // Apply the bulk discount when the quantity qualifies
+        if (quantity >= BULK_QUANTITY) {
             subtotal = subtotal - (subtotal * BULK_DISCOUNT_RATE);
         }
 

@@ -17,7 +17,8 @@
     "acceptable_error_ids": [
       "CSC_134_PROJECT_1_CONSTANTS_ERROR",
       "CSC_134_PROJECT_1_OUTPUT_IMPACT_ERROR"
-    ]
+    ],
+    "max_occurrences": {}
   },
   "mutations": [
     "missing_multiplier"

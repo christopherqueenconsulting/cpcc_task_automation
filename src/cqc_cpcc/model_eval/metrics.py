@@ -68,6 +68,11 @@ def case_metrics(case: EvalCase, records: list[CallRecord]) -> CaseMetrics:
     known = {d.error_id for d in error_definitions(case.course_id, case.assignment_id)}
     ok = [r for r in records if r.ok]
     f1s, accs, totals, sets = [], [], [], []
+    # A failed call is a wrong answer, not a missing one: score it 0 so a model that
+    # fails on hard cases is not compared only on the easy ones.
+    failed = [r for r in records if not r.ok and r.error_kind != "budget"]
+    f1s.extend(0.0 for _ in failed)
+    accs.extend(0.0 for _ in failed)
     tp = fp = fn = invalid = 0
     for r in ok:
         detected = set(r.detected)
@@ -148,6 +153,10 @@ def aggregate(cases: list[EvalCase], records: list[CallRecord]) -> dict:
         "jaccard": mean("jaccard"),
         "score_std": mean("score_std"),
         "invalid_ids": sum(m.invalid_ids for m in per_case),
+        "retry_rate": (sum(1 for r in attempted if r.attempts > 1) / len(attempted)) if attempted else 0.0,
+        "model_mismatches": sum(
+            1 for r in ok if r.model_used and not r.model_used.startswith(r.model)),
+        "estimated_cost_calls": sum(1 for r in attempted if r.cost_estimated),
         "injection_pass_rate": (sum(injection) / len(injection)) if injection else None,
         "scorable_cases": sum(1 for m in per_case if m.composite is not None),
         "cost_usd": sum(r.cost_usd for r in records),

@@ -15,7 +15,8 @@
       "CSC_151_EXAM_1_INEFFICIENT_CODE",
       "CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR"
     ],
-    "acceptable_error_ids": []
+    "acceptable_error_ids": [],
+    "max_occurrences": {}
   },
   "mutations": [
     "tax_dropped",

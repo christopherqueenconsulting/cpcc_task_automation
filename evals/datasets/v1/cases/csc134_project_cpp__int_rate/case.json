@@ -16,7 +16,8 @@
     ],
     "acceptable_error_ids": [
       "CSC_134_PROJECT_1_CALCULATION_ERROR"
-    ]
+    ],
+    "max_occurrences": {}
   },
   "mutations": [
     "int_rate"

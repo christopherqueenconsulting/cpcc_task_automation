@@ -16,7 +16,8 @@
     ],
     "acceptable_error_ids": [
       "CSC_134_PROJECT_1_MAJOR_FORMATTING"
-    ]
+    ],
+    "max_occurrences": {}
   },
   "mutations": [
     "no_precision"

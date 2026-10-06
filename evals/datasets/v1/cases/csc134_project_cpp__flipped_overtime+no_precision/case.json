@@ -19,7 +19,8 @@
       "CSC_134_PROJECT_1_CALCULATION_ERROR",
       "CSC_134_PROJECT_1_MAJOR_FORMATTING",
       "CSC_134_PROJECT_1_OUTPUT_IMPACT_ERROR"
-    ]
+    ],
+    "max_occurrences": {}
   },
   "mutations": [
     "flipped_overtime",

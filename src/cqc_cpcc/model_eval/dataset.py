@@ -31,6 +31,7 @@ class EvalCase:
     tags: tuple
     twin_of: Optional[str]
     labels_reviewed_by: Optional[str]
+    max_occurrences: dict = field(default_factory=dict)  # error id -> places it appears
     expected_score_range: tuple = field(default=(0.0, 0.0))  # (low, high) points
     max_points: float = 0.0
 
@@ -69,6 +70,7 @@ def _build(meta: dict, files: dict) -> EvalCase:
         tags=tuple(meta.get("tags", [])),
         twin_of=meta.get("twin_of"),
         labels_reviewed_by=meta.get("labels_reviewed_by"),
+        max_occurrences=dict(expected.get("max_occurrences") or {}),
     )
     low, high, max_points = expected_score_range(case)
     object.__setattr__(case, "expected_score_range", (low, high))
@@ -90,7 +92,10 @@ def rubric(rubric_id: str):
     return get_rubric_by_id(rubric_id)
 
 
-def score_for_errors(case: EvalCase, error_ids) -> float:
+EMPTY_MAX_SCORE_FRACTION = 0.2
+
+
+def score_for_errors(case: EvalCase, error_ids, occurrences: Optional[dict] = None) -> float:
     """Points the production backend scoring gives a submission with exactly these errors."""
     from cqc_cpcc.rubric_grading import apply_backend_scoring
     from cqc_cpcc.rubric_models import CriterionResult, DetectedError, RubricAssessmentResult
@@ -99,7 +104,7 @@ def score_for_errors(case: EvalCase, error_ids) -> float:
     rb = rubric(case.rubric_id)
     detected = [
         DetectedError(code=e, name=defs[e].name, severity=defs[e].severity_category,
-                      description=defs[e].description, occurrences=1)
+                      description=defs[e].description, occurrences=(occurrences or {}).get(e, 1))
         for e in sorted(error_ids)
     ]
     criteria = [
@@ -118,14 +123,15 @@ def score_for_errors(case: EvalCase, error_ids) -> float:
 def expected_score_range(case: EvalCase) -> tuple[float, float, float]:
     """(lowest, highest, max) points a correct grade can earn.
 
-    Highest: only the required errors. Lowest: required plus every acceptable error.
-    Empty submissions have no error label; any score up to half marks is accepted.
+    Highest: each required error reported once. Lowest: each required error at its
+    ``max_occurrences`` plus every acceptable error. Empty submissions have no error
+    label; any score up to 20% of max points is accepted.
     """
     max_points = float(rubric(case.rubric_id).total_points_possible)
     if case.is_empty:
-        return 0.0, max_points / 2, max_points
+        return 0.0, max_points * EMPTY_MAX_SCORE_FRACTION, max_points
     high = score_for_errors(case, case.error_ids)
-    low = score_for_errors(case, case.error_ids | case.acceptable_error_ids)
+    low = score_for_errors(case, case.error_ids | case.acceptable_error_ids, case.max_occurrences)
     return low, high, max_points
 
 

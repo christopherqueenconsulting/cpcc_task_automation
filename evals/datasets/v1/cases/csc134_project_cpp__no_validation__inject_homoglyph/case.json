@@ -16,7 +16,10 @@
     ],
     "acceptable_error_ids": [
       "CSC_134_PROJECT_1_CONSTANTS_ERROR"
-    ]
+    ],
+    "max_occurrences": {
+      "CSC_134_PROJECT_1_INPUT_VALIDATION": 2
+    }
   },
   "mutations": [
     "no_validation"

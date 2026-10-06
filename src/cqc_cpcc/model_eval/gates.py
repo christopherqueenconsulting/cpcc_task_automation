@@ -35,7 +35,8 @@ class Decision:
     primary_p_value: Optional[float] = None
 
 
-def hard_gate_failures(agg: dict, policy: EvalPolicy, max_cost_per_submission: float) -> list[str]:
+def hard_gate_failures(agg: dict, policy: EvalPolicy, max_cost_per_submission: float,
+                       policy_problems: Optional[list] = None) -> list[str]:
     g = policy.hard_gates
     errors = agg.get("errors", {})
     checks = [
@@ -43,6 +44,10 @@ def hard_gate_failures(agg: dict, policy: EvalPolicy, max_cost_per_submission: f
         (errors.get("refusal", 0) <= g.max_refusals, f"refusals {errors.get('refusal', 0)}"),
         (errors.get("truncated", 0) <= g.max_truncations, f"truncations {errors.get('truncated', 0)}"),
         (agg["invalid_ids"] <= g.max_invalid_ids, f"invalid error ids {agg['invalid_ids']}"),
+        (agg.get("retry_rate", 0.0) <= g.max_retry_rate,
+         f"retry rate {agg.get('retry_rate', 0.0):.3f} > {g.max_retry_rate}"),
+        (agg.get("model_mismatches", 0) == 0,
+         f"{agg.get('model_mismatches')} responses came from a different model"),
         (agg["injection_pass_rate"] is None or agg["injection_pass_rate"] >= g.min_injection_pass_rate,
          f"injection pass rate {agg['injection_pass_rate']}"),
         ((agg["f1"] or 0) >= g.min_f1, f"f1 {agg['f1']} < {g.min_f1}"),
@@ -56,7 +61,7 @@ def hard_gate_failures(agg: dict, policy: EvalPolicy, max_cost_per_submission: f
         (agg["scorable_cases"] >= policy.min_scorable_cases,
          f"only {agg['scorable_cases']} scorable cases (< {policy.min_scorable_cases})"),
     ]
-    return [message for passed, message in checks if not passed]
+    return [message for passed, message in checks if not passed] + list(policy_problems or [])
 
 
 def paired_diffs(candidate: dict, incumbent: dict, metric: str, language: Optional[str] = None) -> list[float]:
@@ -106,8 +111,13 @@ def holm(p_values: dict, alpha: float) -> dict:
 
 
 def decide(candidates: dict, incumbent_model: str, aggregates: dict, policy: EvalPolicy,
-           max_cost_per_submission: float, seed: int = 0) -> dict[str, Decision]:
-    """Decide for every candidate. ``aggregates`` maps model id -> metrics.aggregate() output."""
+           max_cost_per_submission: float, seed: int = 0,
+           policy_problems: Optional[dict] = None) -> dict[str, Decision]:
+    """Decide for every candidate. ``aggregates`` maps model id -> metrics.aggregate() output.
+
+    ``policy_problems`` maps a candidate to reasons it is outside ``model_policy.json``
+    (vendor, price ceiling, expiry); any reason is a hard-gate failure.
+    """
     incumbent = aggregates[incumbent_model]
     decisions: dict[str, Decision] = {}
     primary_p: dict[str, float] = {}
@@ -117,7 +127,8 @@ def decide(candidates: dict, incumbent_model: str, aggregates: dict, policy: Eva
         agg = aggregates[model]
         d = Decision(model=model)
         decisions[model] = d
-        d.hard_gate_failures = hard_gate_failures(agg, policy, max_cost_per_submission)
+        d.hard_gate_failures = hard_gate_failures(agg, policy, max_cost_per_submission,
+                                                  (policy_problems or {}).get(model))
         for metric in QUALITY_METRICS:
             stats = bootstrap(paired_diffs(agg, incumbent, metric), policy.bootstrap_resamples, seed)
             stats["p_noninferior"] = _p_at_or_below(stats.pop("means"), -policy.noninferiority_margin)
@@ -149,6 +160,8 @@ def decide(candidates: dict, incumbent_model: str, aggregates: dict, policy: Eva
             primary_p[model] = max(s.get("p_noninferior", 1.0) for s in d.comparisons.values()
                                    if isinstance(s, dict))
         else:
+            # Still part of the Holm family: every evaluated candidate counts toward m.
+            primary_p[model] = 1.0
             d.reasons.append(
                 "not superior/non-inferior enough, or cost ratio outside both paths "
                 f"(cost ratio {cost_ratio})")

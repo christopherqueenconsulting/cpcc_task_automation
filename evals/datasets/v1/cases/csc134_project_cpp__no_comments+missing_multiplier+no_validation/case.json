@@ -19,7 +19,11 @@
     "acceptable_error_ids": [
       "CSC_134_PROJECT_1_CONSTANTS_ERROR",
       "CSC_134_PROJECT_1_OUTPUT_IMPACT_ERROR"
-    ]
+    ],
+    "max_occurrences": {
+      "CSC_134_PROJECT_1_INPUT_VALIDATION": 2,
+      "CSC_134_PROJECT_1_INSUFFICIENT_DOCUMENTATION": 3
+    }
   },
   "mutations": [
     "no_comments",

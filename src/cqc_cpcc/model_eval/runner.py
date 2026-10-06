@@ -37,6 +37,8 @@ class CallRecord:
     detected: list = field(default_factory=list)
     total: Optional[float] = None
     cost_usd: float = 0.0
+    cost_estimated: bool = False  # True when OpenRouter reported no cost (conservative estimate)
+    attempts: int = 1
     latency_s: Optional[float] = None
     generation_id: Optional[str] = None
     provider: Optional[str] = None
@@ -182,10 +184,16 @@ async def run_model(
                 logger.warning(f"[eval] {model} {case.case_id}#{repeat}: {record.error_kind}: {str(e)[:200]}")
             call = llm_gateway.last_call()
             completion = call.completion if call else None
+            if completion is not None and completion.cost_usd is not None:
+                record.cost_usd = completion.cost_usd
+            else:
+                # No reported cost (failed before a response, or usage missing): charge the
+                # worst case so the budget and cost comparisons never undercount.
+                record.cost_usd = model_registry.estimate_cost(
+                    resolved, estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0
+                record.cost_estimated = True
             if completion is not None:
-                record.cost_usd = completion.cost_usd if completion.cost_usd is not None else (
-                    model_registry.estimate_cost(resolved, completion.prompt_tokens or 0,
-                                                 completion.completion_tokens or 0) or 0.0)
+                record.attempts = completion.attempts or 1
                 record.latency_s = completion.latency_seconds
                 record.generation_id = completion.generation_id
                 record.provider = completion.provider

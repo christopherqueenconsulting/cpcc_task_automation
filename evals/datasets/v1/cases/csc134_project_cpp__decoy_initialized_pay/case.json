@@ -12,7 +12,8 @@
   "expected": {
     "compiles": true,
     "error_ids": [],
-    "acceptable_error_ids": []
+    "acceptable_error_ids": [],
+    "max_occurrences": {}
   },
   "mutations": [],
   "tags": [

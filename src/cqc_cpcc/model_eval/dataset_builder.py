@@ -34,6 +34,9 @@ class Mutation:
     edits: tuple  # ((old, new), ...) literal replacements, or ("__regex__", pattern, repl)
     acceptable: tuple = ()  # error-id suffixes that are fair extra reports
     compiles: bool = True
+    # The error appears at this many places, so a careful grader may report up to this
+    # many occurrences (production scoring counts occurrences).
+    max_occurrences: int = 1
 
 
 @dataclass(frozen=True)
@@ -124,18 +127,18 @@ _COMMENT_LINES = ("__regex__", r"(?m)^[ \t]*//.*\n|/\*[\s\S]*?\*/\n", "")
 _STRIP_INDENT = ("__regex__", r"(?m)^[ \t]+", "")
 
 JAVA_MUTATIONS = (
-    Mutation("no_comments", "INSUFFICIENT_DOCUMENTATION", (_COMMENT_LINES,)),
+    Mutation("no_comments", "INSUFFICIENT_DOCUMENTATION", (_COMMENT_LINES,), max_occurrences=3),
     Mutation("boundary", "SEQUENCE_AND_SELECTION_ERROR",
              (("quantity >= BULK_QUANTITY", "quantity > BULK_QUANTITY"),),
              acceptable=("OUTPUT_IMPACT_ERROR",)),
     Mutation("tax_dropped", "OUTPUT_IMPACT_ERROR",
              (("double total = subtotal + tax;", "double total = subtotal;"),)),
     Mutation("snake_case", "NAMING_CONVENTION",
-             (("itemPrice", "Item_Price"),)),
+             (("itemPrice", "Item_Price"),), max_occurrences=2),
     Mutation("magic_tax", "CONSTANTS_ERROR",
              (("    // Sales tax rate applied to every order\n"
                "    public static final double TAX_RATE = 0.07;\n", ""),
-              ("subtotal * TAX_RATE", "subtotal * 0.07"))),
+              ("subtotal * TAX_RATE", "subtotal * 0.07")), max_occurrences=2),
     Mutation("loop_multiply", "INEFFICIENT_CODE",
              (("        double subtotal = itemPrice * quantity;\n",
                "        double subtotal = 0;\n"
@@ -144,12 +147,12 @@ JAVA_MUTATIONS = (
                "        }\n"),)),
     Mutation("println_total", "OUTPUT_FORMATTING",
              (('System.out.printf("Total: $%.2f%n", total);', 'System.out.println("Total: $" + total);'),)),
-    Mutation("no_indent", "PROGRAMMING_STYLE", (_STRIP_INDENT,)),
+    Mutation("no_indent", "PROGRAMMING_STYLE", (_STRIP_INDENT,), max_occurrences=3),
     Mutation("second_scanner", "SCANNER_CLASS",
              (('        int quantity = input.nextInt();\n',
                '        Scanner input2 = new Scanner(System.in);\n'
                '        int quantity = input2.nextInt();\n'),),
-             acceptable=("INEFFICIENT_CODE",)),
+             acceptable=("INEFFICIENT_CODE",), max_occurrences=2),
 )
 
 JAVA_SYNTAX = Mutation("missing_semicolon", "SYNTAX_ERROR",
@@ -159,7 +162,7 @@ JAVA_SYNTAX = Mutation("missing_semicolon", "SYNTAX_ERROR",
 JAVA_DECOYS = (
     ("compound_ops", (("subtotal = subtotal - (subtotal * BULK_DISCOUNT_RATE);",
                        "subtotal -= subtotal * BULK_DISCOUNT_RATE;"),)),
-    ("other_names", (("itemPrice", "unitPrice"), ("quantity", "orderQuantity"))),
+    ("other_names", (("itemPrice", "unitPrice"),)),
     ("extra_comments", (("        input.close();\n",
                          "        // Release the keyboard input stream\n        input.close();\n"),)),
 )
@@ -243,7 +246,7 @@ double calculatePay(double hours, double rate) {
 _CPP_COMMENTS = ("__regex__", r"(?m)^[ \t]*//.*\n", "")
 
 CPP_MUTATIONS = (
-    Mutation("no_comments", "INSUFFICIENT_DOCUMENTATION", (_CPP_COMMENTS,)),
+    Mutation("no_comments", "INSUFFICIENT_DOCUMENTATION", (_CPP_COMMENTS,), max_occurrences=3),
     Mutation("flipped_overtime", "SEQUENCE_SELECTION_ERROR",
              (("if (hours > OVERTIME_THRESHOLD)", "if (hours < OVERTIME_THRESHOLD)"),),
              acceptable=("CALCULATION_ERROR", "OUTPUT_IMPACT_ERROR")),
@@ -259,7 +262,7 @@ CPP_MUTATIONS = (
                "        cout << \"Rate must be greater than 0. Enter hourly rate: \";\n"
                "        cin >> hourlyRate;\n"
                "    }\n", "")),
-             acceptable=("CONSTANTS_ERROR",)),
+             acceptable=("CONSTANTS_ERROR",), max_occurrences=2),
     Mutation("function_not_called", "FUNCTION_PROTOTYPE_ERROR",
              (("    double grossPay = calculatePay(hoursWorked, hourlyRate);\n",
                "    double grossPay = hoursWorked * hourlyRate;\n"
@@ -279,13 +282,13 @@ CPP_MUTATIONS = (
              acceptable=("CALCULATION_ERROR",)),
     Mutation("misspelled_prompt", "MISSPELLING",
              (('"Enter hours worked: "', '"Enter hours wroked: "'),
-              ("// Read hours until", "// Raed hours until"))),
+              ("// Read hours until", "// Raed hours until")), max_occurrences=2),
     Mutation("cryptic_names", "NAMING_CONVENTION",
-             (("hoursWorked", "HW"), ("hourlyRate", "R"))),
+             (("hoursWorked", "HW"), ("hourlyRate", "R")), max_occurrences=2),
     Mutation("magic_threshold", "CONSTANTS_ERROR",
              (("// Weekly hours before overtime applies\nconst double OVERTIME_THRESHOLD = 40.0;\n", ""),
-              ("OVERTIME_THRESHOLD", "40.0"))),
-    Mutation("no_indent", "PROGRAMMING_STYLE", (_STRIP_INDENT,)),
+              ("OVERTIME_THRESHOLD", "40.0")), max_occurrences=3),
+    Mutation("no_indent", "PROGRAMMING_STYLE", (_STRIP_INDENT,), max_occurrences=3),
     Mutation("braces_omitted", "CURLY_BRACES_OMITTED",
              (("    } else {\n        pay = hours * rate;\n    }\n",
                "    } else\n        pay = hours * rate;\n"),)),
@@ -353,6 +356,7 @@ class Case:
     tags: list = field(default_factory=list)
     twin_of: str | None = None
     mutations: list = field(default_factory=list)
+    max_occurrences: dict = field(default_factory=dict)
 
 
 def _apply(source: str, edits: tuple, where: str) -> str:
@@ -372,16 +376,19 @@ def _apply(source: str, edits: tuple, where: str) -> str:
 def _mutated(a: Assignment, keys: tuple, author: str) -> Case:
     by_key = {m.key: m for m in a.mutations}
     source = a.clean.replace("{author}", author)
-    required, acceptable = [], []
+    required, acceptable, occurrences = [], [], {}
     for key in keys:
         m = by_key[key]
         source = _apply(source, m.edits, f"{a.key}/{key}")
-        required.append(a.error_prefix + m.error_suffix)
+        error_id = a.error_prefix + m.error_suffix
+        required.append(error_id)
+        occurrences[error_id] = max(occurrences.get(error_id, 0), m.max_occurrences)
         acceptable.extend(a.error_prefix + s for s in m.acceptable)
     acceptable = sorted(set(acceptable) - set(required))
     tags = ["single"] if len(keys) == 1 else ["multi"]
     return Case(f"{a.key}__{'+'.join(keys)}", a, source, sorted(set(required)), acceptable,
-                tags=tags, mutations=list(keys))
+                tags=tags, mutations=list(keys),
+                max_occurrences={k: v for k, v in sorted(occurrences.items()) if v > 1})
 
 
 def build_cases() -> list[Case]:
@@ -423,7 +430,7 @@ def build_cases() -> list[Case]:
                     source = text + base.source
                 cases.append(Case(f"{base.case_id}__inject_{name}", a, source, list(base.required),
                                   list(base.acceptable), tags=["injection"], twin_of=base.case_id,
-                                  mutations=list(base.mutations)))
+                                  mutations=list(base.mutations), max_occurrences=dict(base.max_occurrences)))
     return cases
 
 
@@ -451,6 +458,7 @@ def write_dataset(root: Path, reviewed_by: str | None = None) -> int:
                 "compiles": case.compiles,
                 "error_ids": case.required,
                 "acceptable_error_ids": case.acceptable,
+                "max_occurrences": case.max_occurrences,
             },
             "mutations": case.mutations,
             "tags": case.tags,

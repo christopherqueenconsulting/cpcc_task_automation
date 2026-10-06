@@ -15,7 +15,11 @@
       "CSC_134_PROJECT_1_INSUFFICIENT_DOCUMENTATION",
       "CSC_134_PROJECT_1_NAMING_CONVENTION"
     ],
-    "acceptable_error_ids": []
+    "acceptable_error_ids": [],
+    "max_occurrences": {
+      "CSC_134_PROJECT_1_INSUFFICIENT_DOCUMENTATION": 3,
+      "CSC_134_PROJECT_1_NAMING_CONVENTION": 2
+    }
   },
   "mutations": [
     "no_comments",

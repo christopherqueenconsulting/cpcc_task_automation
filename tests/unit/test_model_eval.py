@@ -354,3 +354,78 @@ class TestScorecard:
         json_path, md_path = scorecard.write(tmp_path, sc)
         assert json.loads(json_path.read_text())["winner"] is None
         assert "incumbent stays" in md_path.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Round-2 review fixes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestReviewFixes:
+    def test_multi_site_errors_widen_the_expected_range(self, cases):
+        c = _case(cases, "csc134_project_cpp__magic_threshold")
+        low, high = c.expected_score_range
+        assert c.max_occurrences == {"CSC_134_PROJECT_1_CONSTANTS_ERROR": 3}
+        assert low == ds.score_for_errors(c, c.error_ids, {"CSC_134_PROJECT_1_CONSTANTS_ERROR": 3})
+        assert high == ds.score_for_errors(c, c.error_ids)
+        assert low < high
+
+    def test_empty_submissions_must_score_low(self, cases):
+        c = _case(cases, "csc151_exam1_java__empty")
+        assert c.expected_score_range == (0.0, 40.0)
+        m = metrics.case_metrics(c, [_rec(c, [], 100.0)])
+        assert m.score_accuracy < 1.0
+
+    def test_failed_calls_score_zero_instead_of_disappearing(self, cases):
+        c = _case(cases, "csc151_exam1_java__tax_dropped")
+        m = metrics.case_metrics(c, [_rec(c, c.error_ids, 160.0, repeat=0),
+                                     _rec(c, [], None, ok=False, kind="schema", repeat=1)])
+        assert m.f1 == 0.5 and m.composite == 0.5
+
+    def test_retries_and_model_mismatch_fail_hard_gates(self, cases):
+        agg = _agg(cases, 0.9, 0.001, 1)
+        agg["retry_rate"] = 0.2
+        agg["model_mismatches"] = 1
+        failures = gates.hard_gate_failures(agg, POLICY, 0.05)
+        assert any("retry rate" in f for f in failures)
+        assert any("different model" in f for f in failures)
+
+    def test_policy_problems_block_promotion(self, cases):
+        aggs = {"inc": _agg(cases, 0.86, 0.001, 1), "cand": _agg(cases, 0.94, 0.0012, 2)}
+        d = gates.decide(["cand"], "inc", aggs, POLICY, 0.05, policy_problems={"cand": ["vendor not allowed"]})
+        assert not d["cand"].eligible and "vendor not allowed" in d["cand"].hard_gate_failures
+
+    def test_holm_family_counts_every_candidate(self, cases):
+        """A lone passing candidate is corrected for the others that were evaluated."""
+        aggs = {"inc": _agg(cases, 0.86, 0.001, 1), "good": _agg(cases, 0.94, 0.0012, 2),
+                "bad1": _agg(cases, 0.70, 0.001, 3), "bad2": _agg(cases, 0.70, 0.001, 4)}
+        decisions = gates.decide(["good", "bad1", "bad2"], "inc", aggs, POLICY, 0.05)
+        assert decisions["bad1"].primary_p_value is None and decisions["good"].eligible
+
+    def test_policy_problem_detection(self):
+        from cqc_cpcc.model_eval.__main__ import policy_problems
+
+        policy = model_registry.load_policy()
+        registry = model_registry.load_registry()
+        luna = registry.models["openai/gpt-6-luna"]
+        assert policy_problems("openai/gpt-6-luna", luna, policy) == []
+        assert policy_problems("meta/llama", luna, policy)
+        pricey = luna.model_copy(update={"pricing": luna.pricing.model_copy(update={"completion_per_mtok": 99.0})})
+        assert any("ceiling" in p for p in policy_problems("openai/x", pricey, policy))
+
+    def test_probe_spans_languages(self, cases):
+        from cqc_cpcc.model_eval.__main__ import probe_cases
+
+        picked = probe_cases(cases)
+        assert len(picked) == 3 and {c.language for c in picked} == {"java", "cpp"}
+        assert not any(c.is_empty for c in picked)
+
+    @pytest.mark.asyncio
+    async def test_failed_call_is_charged_an_estimate(self, cases):
+        async def failing(**kwargs):
+            raise ValueError("Connection error")
+
+        budget = Budget(limit=1, stop_at=0.9)
+        records = await run_model("openai/gpt-5-mini", None, cases[:1], 1, budget, grade_fn=failing)
+        assert records[0].cost_estimated and records[0].cost_usd > 0
+        assert budget.spent == pytest.approx(records[0].cost_usd)

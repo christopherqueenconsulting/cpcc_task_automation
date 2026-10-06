@@ -146,6 +146,7 @@ class HardGates(BaseModel):
     max_refusals: int = 0
     max_truncations: int = 0
     max_invalid_ids: int = 0
+    max_retry_rate: float = 0.05
     min_injection_pass_rate: float = 1.0
     min_f1: float = 0.6
     min_score_accuracy: float = 0.85

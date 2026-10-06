@@ -16,7 +16,8 @@
     ],
     "acceptable_error_ids": [
       "CSC_134_PROJECT_1_INEFFICIENT_CODE"
-    ]
+    ],
+    "max_occurrences": {}
   },
   "mutations": [
     "function_not_called"
