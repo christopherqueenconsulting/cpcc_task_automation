@@ -37,7 +37,7 @@ jobs:
         # --auto merges only once every REQUIRED status check on master passes.
         # Which checks count is set in branch protection, not here: master must
         # require unit-tests, integration-tests, e2e-tests, Analyze (python),
-        # Analyze (actions) and Student PII guard, with "require branches to be
+        # Analyze (actions), Student PII guard and model-registry-guard, with "require branches to be
         # up to date" OFF. With it ON, auto-merge waits forever on any PR that
         # is behind master, because Dependabot rebases only on conflict.
         if: |

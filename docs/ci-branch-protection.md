@@ -79,6 +79,10 @@ To enforce that pull requests must pass the unit tests before merging into `mast
      - `unit-tests` (this is the job name from the unit tests workflow)
      - `integration-tests` (this is the job name from the integration tests workflow)
      - `e2e-tests` (this is the job name from the e2e tests workflow)
+     - `model-registry-guard` (Model Registry Guard; passes at once unless the PR touches
+       the model registry; see [MODEL_EVALUATION.md](MODEL_EVALUATION.md))
+   - Keep **required approvals at 0** if you want monthly model promotions to auto-merge:
+     a GitHub App cannot approve its own pull request.
    
    **Note**: The PR check labels will appear as:
    - `CI / Unit Tests`

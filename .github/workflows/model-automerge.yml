@@ -1,0 +1,196 @@
+name: Model Auto-Merge
+
+# The trust anchor for bot model PRs. Runs after Model Registry Guard succeeds, on master,
+# with master's code only, and RE-VERIFIES everything itself (the guard runs the PR's own
+# workflow file, so it is a convenience check, not a security boundary):
+#   - the PR is from this repository, by the bot, on its current head commit
+#   - the diff touches only the registry and evals/reports
+#   - promotions: the eval run is a master Model Evaluation run; the committed scorecard
+#     equals its artifact; the winner re-derives from raw outputs; the registry equals
+#     exactly what the registry writer produces; live catalogue and OpenRouter
+#     /generation records agree
+#   - rollbacks: the registry equals exactly what the rollback writer produces
+# Then it enables GitHub auto-merge, which still waits for every required check.
+#
+# Kill switch: repository variable MODEL_AUTOMERGE_ENABLED must be exactly 'true'.
+
+on:
+  workflow_run:
+    workflows: ["Model Registry Guard"]
+    types: [completed]
+    branches:
+      - "auto/model-promotion-*"
+      - "auto/model-rollback-*"
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+  REGISTRY: src/cqc_cpcc/config/model_registry.json
+
+jobs:
+  automerge:
+    # Same-repository branches only: a fork can name its branch auto/... too.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: model-eval
+    # One queue per PR branch, so a burst of guard runs cannot cancel another PR's
+    # auto-merge or a pending evaluation/rollback run.
+    concurrency:
+      group: model-automerge-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.MODEL_BOT_APP_ID }}
+          private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
+
+      - name: Checkout master (trusted code)
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Identify the PR
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          BOT_LOGIN: ${{ vars.MODEL_BOT_LOGIN }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh pr list --repo "${REPO}" --head "${HEAD_BRANCH}" --state open \
+            --json number,headRefOid,author,labels,body,isCrossRepository --jq '.[0] // empty')"
+          if [ -z "${pr_json}" ]; then echo "No open PR for ${HEAD_BRANCH}"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          number="$(jq -r .number <<< "${pr_json}")"
+          head="$(jq -r .headRefOid <<< "${pr_json}")"
+          author="$(jq -r .author.login <<< "${pr_json}")"
+          cross="$(jq -r .isCrossRepository <<< "${pr_json}")"
+          labels="$(jq -r '[.labels[].name] | join(",")' <<< "${pr_json}")"
+          run_id="$(jq -r .body <<< "${pr_json}" | sed -n 's/^eval-run-id: \([0-9]\{1,20\}\)$/\1/p' | head -n1)"
+          skip=false
+          if [ "${head}" != "${HEAD_SHA}" ]; then echo "Guard ran on an older commit"; skip=true; fi
+          if [ "${cross}" != "false" ]; then echo "Cross-repository PR"; skip=true; fi
+          # gh reports app authors as "app/<slug>"; the event payload uses "<slug>[bot]".
+          bot_app="app/${BOT_LOGIN%"[bot]"}"
+          if [ -z "${BOT_LOGIN}" ] || { [ "${author}" != "${BOT_LOGIN}" ] && [ "${author}" != "${bot_app}" ]; }; then
+            echo "Not a bot PR (${author})"; skip=true
+          fi
+          kind=""
+          case ",${labels}," in
+            *,blocked-on-chris,*) echo "Already handed to a human"; skip=true ;;
+            *,model-rollback,*) kind=rollback ;;
+            *,auto-merge-eligible,*) kind=promotion ;;
+            *) echo "Not labelled for auto-merge"; skip=true ;;
+          esac
+          {
+            echo "number=${number}"
+            echo "head=${head}"
+            echo "kind=${kind}"
+            echo "run_id=${run_id}"
+            echo "skip=${skip}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        if: steps.pr.outputs.skip != 'true'
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Verify on master and enable auto-merge
+        if: steps.pr.outputs.skip != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          ENABLED: ${{ vars.MODEL_AUTOMERGE_ENABLED }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD: ${{ steps.pr.outputs.head }}
+          KIND: ${{ steps.pr.outputs.kind }}
+          RUN_ID: ${{ steps.pr.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          refuse() {
+            {
+              echo "Auto-merge **not enabled** for this PR:"
+              echo
+              printf '%s\n' "$@"
+              echo
+              echo "A human can still review and merge it."
+            } > comment.md
+            gh pr comment "${NUMBER}" --repo "${REPO}" --body-file comment.md
+            gh label create blocked-on-chris --force --color d93f0b >/dev/null 2>&1 || true
+            gh pr edit "${NUMBER}" --repo "${REPO}" --remove-label auto-merge-eligible \
+              --remove-label model-rollback --add-label blocked-on-chris || true
+          }
+          cli() { poetry run python -m cqc_cpcc.model_eval "$@"; }
+          run_check() {  # run a CLI check; on failure refuse with its ::error:: lines (or the log tail)
+            if ! cli "$@" > check.log 2>&1; then
+              cat check.log
+              reasons="$(grep '::error::' check.log | sed 's/^::error::/- /' || true)"
+              refuse "${reasons:-- check \`$1\` crashed: $(tail -n 5 check.log | tr '\n' ' ')}"
+              exit 0
+            fi
+            cat check.log
+          }
+
+          if [ "${ENABLED}" != "true" ]; then
+            refuse "- MODEL_AUTOMERGE_ENABLED is not 'true' (staged rollout: a human merges until it is turned on)."
+            exit 0
+          fi
+
+          git fetch -q origin "${HEAD}"
+          merge_base="$(git merge-base origin/master "${HEAD}")"
+          outside="$(git diff --name-only "${merge_base}" "${HEAD}" | grep -vE "^(${REGISTRY}|evals/reports/[^/]+/scorecard\.(json|md))$" || true)"
+          if [ -n "${outside}" ]; then
+            # shellcheck disable=SC2001  # indent a multi-line list
+            refuse "- the PR changes files outside the registry and evals/reports:" "$(sed 's/^/  - /' <<< "${outside}")"
+            exit 0
+          fi
+          git show "${merge_base}:${REGISTRY}" > base_registry.json
+          git show "${HEAD}:${REGISTRY}" > head_registry.json
+
+          if [ "${KIND}" = "rollback" ]; then
+            run_check verify-rollback --base-registry base_registry.json --head-registry head_registry.json
+            run_check automerge-check --kind rollback --head-registry head_registry.json
+          else
+            if [ -z "${RUN_ID}" ]; then refuse "- PR body has no eval-run-id"; exit 0; fi
+            provenance="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" \
+              --jq '[.path, .head_branch, .event, .head_repository.full_name, .conclusion] | join(" ")' || true)"
+            case "${provenance}" in
+              ".github/workflows/model-eval.yml master schedule ${REPO} success"|".github/workflows/model-eval.yml master workflow_dispatch ${REPO} success") ;;
+              *) refuse "- eval run ${RUN_ID} is not a successful master Model Evaluation run (${provenance:-not found})"; exit 0 ;;
+            esac
+            if ! gh run download "${RUN_ID}" --repo "${REPO}" -n "model-eval-${RUN_ID}" -D artifact; then
+              refuse "- could not download evaluation artifact model-eval-${RUN_ID}"; exit 0
+            fi
+            committed="$(git diff --name-only "${merge_base}" "${HEAD}" -- 'evals/reports/*/scorecard.json' | head -n1)"
+            if [ -z "${committed}" ] || ! git show "${HEAD}:${committed}" | cmp -s - artifact/scorecard.json; then
+              refuse "- the committed scorecard is not byte-identical to the evaluation artifact"; exit 0
+            fi
+            run_check verify-promotion --scorecard artifact/scorecard.json --raw artifact/raw_outputs.jsonl \
+              --base-registry base_registry.json --head-registry head_registry.json
+            run_check automerge-check --kind promotion --scorecard artifact/scorecard.json \
+              --raw artifact/raw_outputs.jsonl --head-registry head_registry.json
+          fi
+
+          if ! gh pr merge "${NUMBER}" --repo "${REPO}" --auto --squash --match-head-commit "${HEAD}"; then
+            refuse "- \`gh pr merge --auto\` failed (repository 'Allow auto-merge' setting off, head moved, or merge conflict). See ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}."
+            exit 1
+          fi
+          echo "Auto-merge enabled for #${NUMBER}; it completes when every required check passes."

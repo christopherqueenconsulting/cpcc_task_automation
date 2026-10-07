@@ -1,0 +1,94 @@
+name: Model Change Notify
+
+# When the model registry changes on master, tell Christopher: the app runs locally, so
+# nothing changes for students until he pulls and restarts. Optionally mirrors the issue
+# as a ClickUp task (needs CLICKUP_API_TOKEN secret and CLICKUP_LIST_ID variable).
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - src/cqc_cpcc/config/model_registry.json
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+  REGISTRY: src/cqc_cpcc/config/model_registry.json
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    env:
+      HAS_CLICKUP: ${{ secrets.CLICKUP_API_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Open issue
+        id: issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          ASSIGNEE: ${{ vars.MODEL_BOT_ASSIGNEE }}
+        run: |
+          set -euo pipefail
+          # Diff against the commit before this push (a push can carry several commits).
+          git show "${BEFORE}:${REGISTRY}" > base_registry.json 2>/dev/null || git show "HEAD~1:${REGISTRY}" > base_registry.json
+          poetry run python -m cqc_cpcc.model_eval describe-change \
+            --base-registry base_registry.json --head-registry "${REGISTRY}" > change.md
+          {
+            echo "The default model configuration changed on master in ${COMMIT_URL}."
+            echo
+            cat change.md
+            echo
+            echo "**To use it:** \`git pull\` and restart the app (the Home page shows a banner until you do)."
+            echo
+            echo "**Watch for 7 days:** compare a few grades with your own judgement; check the Settings page shows the new model."
+            echo
+            echo "**Roll back:** run the *Model Rollback* workflow, or set \`CQC_MODEL_GRADING=<previous model>\` in \`.env\` and restart."
+          } > body.md
+          gh label create model-promotion --force --color 5319e7 >/dev/null 2>&1 || true
+          assignee=()
+          if [ -n "${ASSIGNEE}" ]; then assignee=(--assignee "${ASSIGNEE}"); fi
+          url="$(gh issue create --repo "${REPO}" --title "Model change on master: git pull + restart (${SHA:0:7})" \
+            --body-file body.md --label model-promotion "${assignee[@]}")"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
+      - name: Mirror to ClickUp (optional)
+        if: env.HAS_CLICKUP == 'true'
+        shell: bash
+        env:
+          CLICKUP_API_TOKEN: ${{ secrets.CLICKUP_API_TOKEN }}
+          CLICKUP_LIST_ID: ${{ vars.CLICKUP_LIST_ID }}
+          ISSUE_URL: ${{ steps.issue.outputs.url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLICKUP_LIST_ID}" ]; then echo "CLICKUP_LIST_ID not set"; exit 0; fi
+          due_ms="$(( ($(date -u +%s) + 7*86400) * 1000 ))"
+          jq -n --arg url "${ISSUE_URL}" --argjson due "${due_ms}" '{
+            name: "CPCC grading model changed: git pull + restart, then spot-check grades",
+            description: ("Details and rollback steps: " + $url),
+            tags: ["needs-chris"], status: "ready", due_date: $due
+          }' > task.json
+          curl -fsS -X POST "https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task" \
+            -H "Authorization: ${CLICKUP_API_TOKEN}" -H "Content-Type: application/json" --data @task.json > /dev/null
+          echo "ClickUp task created"

@@ -1,0 +1,78 @@
+name: Model Rollback
+
+# Opens a PR that moves roles back to the model recorded as "previous" in the registry.
+# Model Registry Guard verifies it only restores previous models; Model Auto-Merge may
+# merge it like a promotion. Faster rollback (no deploy): set CQC_MODEL_GRADING (or the
+# Settings page pin) to the previous model and restart the app.
+
+on:
+  workflow_dispatch:
+    inputs:
+      role:
+        description: "Role to roll back"
+        required: true
+        type: choice
+        default: all
+        options: [all, grading, digest, feedback, flowgorithm]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-registry
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: model-eval
+    steps:
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.MODEL_BOT_APP_ID }}
+          private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
+
+      - name: Checkout master
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Open rollback PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          ROLE: ${{ inputs.role }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          cp src/cqc_cpcc/config/model_registry.json base_registry.json
+          poetry run python -m cqc_cpcc.model_eval rollback --role "${ROLE}"
+          poetry run python -m cqc_cpcc.model_eval describe-change \
+            --base-registry base_registry.json --head-registry src/cqc_cpcc/config/model_registry.json > change.md
+          branch="auto/model-rollback-${RUN_ID}"
+          git config user.name "cpcc-model-bot"
+          git config user.email "cpcc-model-bot@users.noreply.github.com"
+          git checkout -q -b "${branch}"
+          git add src/cqc_cpcc/config/model_registry.json
+          git commit -q -m "chore(models): roll back ${ROLE} to previous model" -m "Rollback run: ${RUN_URL}"
+          git push -q origin "${branch}"
+          gh label create model-rollback --force --color b60205 >/dev/null 2>&1 || true
+          { echo "Rollback requested from ${RUN_URL}"; echo; cat change.md; echo;
+            echo "After merge: \`git pull\` and restart the app."; } > pr-body.md
+          gh pr create --base master --head "${branch}" --title "chore(models): roll back ${ROLE} (run ${RUN_ID})" \
+            --body-file pr-body.md --label model-rollback
