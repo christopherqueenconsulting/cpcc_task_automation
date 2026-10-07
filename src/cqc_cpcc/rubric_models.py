@@ -393,11 +393,9 @@ class RubricAssessmentResult(BaseModel):
         detected_errors: Optional list of detected errors
         error_counts_by_severity: Optional dict mapping severity (major/minor) to count
         error_counts_by_id: Optional dict mapping error_id to occurrence count
-        original_major_errors: Original major error count before normalization
-        original_minor_errors: Original minor error count before normalization
-        effective_major_errors: Effective major error count after Minor→Major conversion
-        effective_minor_errors: Effective minor error count after Minor→Major conversion
     """
+    # Not listed in the docstring above on purpose: the docstring becomes the JSON-schema
+    # description sent to the model, and the converted error counts are backend-only.
     rubric_id: Annotated[str, Field(description="ID of the rubric used")]
     rubric_version: Annotated[str, Field(description="Version of the rubric used")]
     total_points_possible: Annotated[int, Field(ge=0, description="Total possible points")]
@@ -424,22 +422,13 @@ class RubricAssessmentResult(BaseModel):
         Optional[dict[str, int]],
         Field(default=None, description="Error counts grouped by error_id")
     ]
-    original_major_errors: Annotated[
-        Optional[int],
-        Field(default=None, description="Original major error count before normalization")
-    ]
-    original_minor_errors: Annotated[
-        Optional[int],
-        Field(default=None, description="Original minor error count before normalization")
-    ]
-    effective_major_errors: Annotated[
-        Optional[int],
-        Field(default=None, description="Effective major error count after Minor→Major conversion")
-    ]
-    effective_minor_errors: Annotated[
-        Optional[int],
-        Field(default=None, description="Effective minor error count after Minor→Major conversion")
-    ]
+    # Error counts before and after the 4-minor-to-1-major conversion. The backend computes
+    # them (apply_backend_scoring); they stay out of the model's schema so the model reports
+    # errors as found and never converts them itself (ruling 2026-10-07).
+    original_major_errors: SkipJsonSchema[Optional[int]] = None  # Original major error count before normalization
+    original_minor_errors: SkipJsonSchema[Optional[int]] = None  # Original minor error count before normalization
+    effective_major_errors: SkipJsonSchema[Optional[int]] = None  # Effective major error count after Minor→Major conversion
+    effective_minor_errors: SkipJsonSchema[Optional[int]] = None  # Effective minor error count after Minor→Major conversion
     requirement_results: Annotated[
         Optional[list[RequirementResult]],
         Field(default=None, description="One entry per requirement in the checklist, when a checklist is given")

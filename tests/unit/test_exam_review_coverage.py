@@ -329,3 +329,19 @@ class TestCodeGraderTextFeedback:
         assert "Final Score:" in feedback
         # With 2 major errors using geometric series: 10 * (1 - 0.5^2) / 0.5 = 15
         assert "85.0" in feedback  # 100 - 15
+
+
+@pytest.mark.unit
+def test_major_deduction_is_geometric_and_capped_at_twice_the_per_major_amount():
+    """Ruling 2026-10-07: keep the geometric cap, and say so in the feedback."""
+    grader = CodeGrader(max_points=100, exam_instructions="x", exam_solution="x",
+                        deduction_per_major_error=20, deduction_per_minor_error=5)
+    grader.minor_errors = []
+    grader.major_errors = ["e1"]
+    assert grader.major_deduction_total == 20
+    assert "never exceeds" not in grader.major_code_deduction_points_text
+    grader.major_errors = ["e1", "e2", "e3"]
+    assert grader.major_deduction_total == 35
+    assert "never exceeds 40 points" in grader.major_code_deduction_points_text
+    grader.major_errors = ["e"] * 12
+    assert grader.major_deduction_total < 40

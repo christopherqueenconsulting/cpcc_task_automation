@@ -317,7 +317,7 @@ class TestCSC151V2Rubric:
         rubric = get_rubric_by_id("csc151_java_exam_rubric")
         
         # Rubric can be loaded by key "csc151_java_exam_rubric"
-        assert rubric.rubric_version in ("2.0", "3.0")  # Version may vary
+        assert rubric.rubric_version in ("2.0", "3.0", "3.1")  # Version may vary
         assert "CSC" in rubric.title  # Title contains CSC reference
         assert "Exam" in rubric.title  # Title mentions Exam
         assert "CSC_151" in rubric.course_ids
@@ -416,7 +416,7 @@ class TestCSC134Rubric:
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
 
         assert rubric.rubric_id == "csc134_cpp_exam_rubric"
-        assert rubric.rubric_version == "3.0"
+        assert rubric.rubric_version == "3.1"
         assert rubric.title == "CSC 134 C++ Program Performance Rubric"
         assert "CSC_134" in rubric.course_ids
 
@@ -522,3 +522,41 @@ class TestCSC134Rubric:
 
         course_ids = get_distinct_course_ids()
         assert "CSC_134" in course_ids
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rubric_id", ["csc151_java_exam_rubric", "csc134_cpp_exam_rubric",
+                                       "csc134_cpp_final_exam_rubric"])
+def test_conversion_rubrics_tell_the_grader_not_to_convert(rubric_id):
+    """Ruling 2026-10-07: the code converts 4 minor errors into 1 major error; the LLM never
+    does when it finds and classifies errors. The rubric text the grader reads must say so."""
+    import json
+    from pathlib import Path
+    data = json.loads((Path(__file__).resolve().parents[2] / "src/cqc_cpcc/config/rubrics.json").read_text())
+    rubric = data[rubric_id]
+    ratios = [c["error_rules"]["error_conversion"]["minor_to_major_ratio"]
+              for c in rubric["criteria"] if (c.get("error_rules") or {}).get("error_conversion")]
+    assert ratios == [4]
+    assert "never convert minor errors into major errors yourself" in rubric["description"]
+    assert not any("conversion first" in c["description"] for c in rubric["criteria"])
+    for criterion in rubric["criteria"]:
+        assert "do not convert minor errors into major errors yourself" in criterion["description"]
+    assert "No minor-to-major conversion is applied" not in rubric["description"]
+
+
+@pytest.mark.unit
+def test_conversion_counts_are_not_in_the_model_schema():
+    """The model must not be asked for converted counts; the backend computes them."""
+    from cqc_cpcc.rubric_models import RubricAssessmentResult
+    props = RubricAssessmentResult.model_json_schema()["properties"]
+    for name in ("original_major_errors", "original_minor_errors",
+                 "effective_major_errors", "effective_minor_errors"):
+        assert name not in props
+    assert RubricAssessmentResult.model_fields["effective_major_errors"].default is None
+    import json as _json
+    from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
+    sent = _json.dumps(normalize_json_schema_for_openai(RubricAssessmentResult.model_json_schema()),
+                       ensure_ascii=False)
+    for text in ("effective_major_errors", "effective_minor_errors", "original_major_errors",
+                 "Minor→Major", "Minor->Major"):
+        assert text not in sent
