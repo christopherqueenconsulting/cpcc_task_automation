@@ -90,7 +90,7 @@ async def _run_batch(page: Page, url: str, tmp_path, fresh: bool) -> int:
 async def test_zip_batch_fresh_then_same_assignment(page: Page, streamlit_app_url: str, tmp_path):
     first = await _run_batch(page, streamlit_app_url, tmp_path, fresh=True)
     # The empty submission is held for review, the real one graded.
-    await expect(page.get_by_text(re.compile(r"Needs review \(1\)"))).to_be_visible(timeout=60000)
+    await expect(page.get_by_text(re.compile(r"Needs review \(1\)")).first).to_be_visible(timeout=60000)
     # First-ever use (reported, not a target): course 2 + rubric 2 + assignment 2 +
     # instructions 1 + submissions 1 + Grade 1.
     assert first == 9
