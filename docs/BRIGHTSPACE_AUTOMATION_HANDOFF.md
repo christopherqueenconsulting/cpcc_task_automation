@@ -106,7 +106,7 @@ new top-level `add_brightspace_source_element` auto-fills Step 4 (Instructions) 
 Step 8 (Submissions) on the Grade Assignment page (the nested `allow_brightspace`
 uploader was removed).
 Files: `brightspace_submissions.py`, `cqc_streamlit_app/utils.py`,
-`pages/4_Grade_Assignment.py`, `brightspace_fetch.py`.
+`grade_assignment.py` (was `pages/4_Grade_Assignment.py`), `brightspace_fetch.py`.
 
 ### 3. MFA number re-published to the web-app page every poll — ✅ unit-tested / ❌ not live
 `_wait_for_mfa_approval` re-captures number + screenshot each poll (fixes

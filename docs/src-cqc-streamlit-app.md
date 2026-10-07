@@ -20,7 +20,7 @@ The `cqc_streamlit_app` package provides a user-friendly web interface for instr
 ```
 src/cqc_streamlit_app/
 ├── Home.py                    # Entry point: builds st.navigation and runs the page
-├── app_pages/                 # Page scripts (listed in Home.PAGE_SPECS)
+├── app_pages/                 # Page scripts (listed in navigation.PAGE_SPECS)
 │   ├── home.py                # Landing page
 │   ├── grade_assignment.py    # Rubric grading
 │   ├── flowgorithm.py         # Flowgorithm assignments
@@ -43,8 +43,8 @@ src/cqc_streamlit_app/
 ### Multi-Page Application
 
 `Home.py` defines the navigation with `st.navigation` and `st.Page`:
-- `PAGE_SPECS` lists each page's section, file in `app_pages/`, title and Material icon
-- Pages on the deprecation path (`LEGACY_PAGE_SPECS`) are added only when the local
+- `navigation.PAGE_SPECS` lists each page's section, file in `app_pages/`, title and Material icon
+- Pages on the deprecation path (`navigation.LEGACY_PAGE_SPECS`) are added only when the local
   "Show legacy pages" preference is on, so they cannot be reached by URL otherwise
 - Each page is an independent Python script with its own UI
 

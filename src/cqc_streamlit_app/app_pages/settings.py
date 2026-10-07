@@ -83,7 +83,10 @@ def main():
 
 
 def _on_legacy_toggle():
-    update_settings(show_legacy_pages=bool(st.session_state.show_legacy_pages_toggle))
+    try:
+        update_settings(show_legacy_pages=bool(st.session_state.show_legacy_pages_toggle))
+    except OSError as e:
+        st.session_state["_preferences_error"] = f"Could not save the preference: {e}"
 
 
 def preferences_section():
@@ -98,6 +101,8 @@ def preferences_section():
              "retired (currently: Exams (legacy)). Saved to this computer.",
     )
     st.caption("Legacy pages are deprecated and will be removed once they are no longer used.")
+    if error := st.session_state.pop("_preferences_error", None):
+        st.error(error)
 
 
 def model_settings_section():

@@ -5,13 +5,13 @@
 ## Application Structure
 
 ### Multi-Page App
-- `Home.py` - Entry point: builds `st.navigation` from `PAGE_SPECS` and runs the page
+- `Home.py` - Entry point: builds `st.navigation` from `navigation.PAGE_SPECS` and runs the page
 - `app_pages/` - Page scripts: `home.py`, `grade_assignment.py`, `flowgorithm.py`,
   `give_feedback.py`, `take_attendance.py`, `find_student.py`, `settings.py`, and
   `legacy_exam_grading.py` (deprecated; listed only when "Show legacy pages" is on)
 
 ### Adding a page
-- Add the script to `app_pages/` and a row to `PAGE_SPECS` in `Home.py`
+- Add the script to `app_pages/` and a row to `PAGE_SPECS` in `navigation.py`
   (section, file, sentence-case title, `:material/...:` icon)
 
 ## Streamlit Patterns

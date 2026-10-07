@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cqc_streamlit_app import app_settings
+from cqc_streamlit_app import app_settings, navigation
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
@@ -15,19 +15,9 @@ HOME = str(APP_DIR / "Home.py")
 
 
 
-def _home_module():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("cqc_home_router", HOME)
-    module = importlib.util.module_from_spec(spec)
-    # Only the specs are needed; executing the router needs a Streamlit runtime.
-    source = Path(HOME).read_text()
-    exec(compile(source.split("\ninit_session_state()\n")[0], HOME, "exec"), module.__dict__)
-    return module
-
-
 @pytest.mark.unit
 def test_legacy_pages_listed_only_when_enabled():
-    home = _home_module()
+    home = navigation
     off = {f for _, f, _, _ in home.page_specs(False)}
     on = {f for _, f, _, _ in home.page_specs(True)}
     assert "legacy_exam_grading.py" not in off
@@ -36,7 +26,7 @@ def test_legacy_pages_listed_only_when_enabled():
 
 @pytest.mark.unit
 def test_every_listed_page_file_exists():
-    home = _home_module()
+    home = navigation
     for _, file, _, _ in home.page_specs(True):
         assert (APP_DIR / "app_pages" / file).is_file(), file
 

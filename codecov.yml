@@ -104,7 +104,8 @@ comment:
 ignore:
   - "tests/**/*"
   - "src/cqc_cpcc/utilities/AI/llm_deprecated/**/*"
-  - "src/cqc_streamlit_app/pages/**/*"
+  - "src/cqc_streamlit_app/app_pages/**/*"
+  - "src/cqc_streamlit_app/grade_assignment.py"
   - "**/__pycache__/**"
   - "**/*.pyc"
   - "**/conftest.py"

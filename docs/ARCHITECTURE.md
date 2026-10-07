@@ -57,12 +57,14 @@ CPCC Task Automation is a **web scraping and AI-powered automation platform** de
 - **Purpose**: Primary user interface for instructors
 - **Technology**: Streamlit multi-page application
 - **Pages**:
-  - `Home.py` - Landing page with overview
-  - `1_Take_Attendance.py` - Attendance automation interface
-  - `2_Give_Feedback.py` - Project feedback generation
-  - `4_Grade_Assignment.py` - Exam grading interface
-  - `5_Find_Student.py` - Student lookup
-  - `6_Settings.py` - Configuration and credentials
+  - `Home.py` - Entry point; builds `st.navigation` from `navigation.PAGE_SPECS`
+  - `app_pages/home.py` - Landing page with overview
+  - `app_pages/grade_assignment.py`, `flowgorithm.py` - Grading (UI functions in `grade_assignment.py`)
+  - `app_pages/give_feedback.py` - Project feedback generation
+  - `app_pages/take_attendance.py` - Attendance automation interface
+  - `app_pages/find_student.py` - Student lookup
+  - `app_pages/settings.py` - Configuration, credentials and preferences
+  - `app_pages/legacy_exam_grading.py` - Deprecated; listed only when "Show legacy pages" is on
 - **State Management**: Uses `st.session_state` for persistence
 - **Styling**: Custom CSS for CPCC branding
 
@@ -644,7 +646,7 @@ yields "could not verify" rather than "does not compile" — see
 
 ### Extensibility Points
 - New automation modules (add to `src/cqc_cpcc/`)
-- New Streamlit pages (add to `src/cqc_streamlit_app/app_pages/` and `PAGE_SPECS` in `Home.py`)
+- New Streamlit pages (add to `src/cqc_streamlit_app/app_pages/` and `PAGE_SPECS` in `navigation.py`)
 - New LLM chains (add to `utilities/AI/llm/chains.py`)
 - New feedback types (extend `FeedbackType` enum)
 

@@ -68,7 +68,7 @@ Follow the interactive prompts to select an action: `TAKE_ATTENDANCE`, `GIVE_FEE
 
 ### Settings
 
-Configure these settings in `.streamlit/secrets.toml` (for local development) or environment variables (for deployment). `.env.example` lists the main variables; see `src/cqc_cpcc/utilities/env_constants.py` for the full set. The web app requires only `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `INSTRUCTOR_USERID`, and `INSTRUCTOR_PASS` (`pages/6_Settings.py:48`). Note that `.env.example` still lists the legacy `CQC_OPENAI_DEBUG*` names; the code reads `CQC_AI_DEBUG`, `CQC_AI_DEBUG_REDACT`, and `CQC_AI_DEBUG_SAVE_DIR`.
+Configure these settings in `.streamlit/secrets.toml` (for local development) or environment variables (for deployment). `.env.example` lists the main variables; see `src/cqc_cpcc/utilities/env_constants.py` for the full set. The web app requires only `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `INSTRUCTOR_USERID`, and `INSTRUCTOR_PASS` (`src/cqc_streamlit_app/app_pages/settings.py`). Note that `.env.example` still lists the legacy `CQC_OPENAI_DEBUG*` names; the code reads `CQC_AI_DEBUG`, `CQC_AI_DEBUG_REDACT`, and `CQC_AI_DEBUG_SAVE_DIR`.
 
 ```toml
 OPENAI_API_KEY = "sk-..."              # OpenAI API key (legacy path)
@@ -139,8 +139,10 @@ cpcc_task_automation/
 │   │       ├── logger.py      # Logging configuration
 │   │       └── AI/            # OpenAI/OpenRouter clients, prompts, telemetry
 │   └── cqc_streamlit_app/     # Streamlit UI package
-│       ├── Home.py            # Main entry point
-│       └── pages/             # Take Attendance, Give Feedback, Grade Assignment, Find Student, Settings
+│       ├── Home.py            # Entry point: builds the navigation (st.navigation)
+│       ├── navigation.py      # Page list: sections, titles, icons, legacy pages
+│       └── app_pages/         # Grade assignment, Flowgorithm, Give feedback, Take attendance,
+│                              # Find student, Settings, Exams (legacy, behind a preference)
 ├── tests/                     # unit/, integration/, e2e/
 ├── docs/                      # Documentation
 ├── scripts/                   # Shell and Python helper scripts

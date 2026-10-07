@@ -73,7 +73,6 @@ from cqc_streamlit_app.utils import (
     define_chatGPTModel,
     define_openrouter_model,
     export_grading_summary_to_excel,
-    get_cpcc_css,
     get_custom_llm,
     run_coroutine_blocking,
     get_file_extension_from_filepath,

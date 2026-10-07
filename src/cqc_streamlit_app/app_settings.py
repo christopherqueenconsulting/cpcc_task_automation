@@ -60,6 +60,6 @@ def save_settings(settings: AppSettings) -> None:
 
 def update_settings(**changes) -> AppSettings:
     """Load, apply ``changes``, save and return the new settings."""
-    settings = load_settings().model_copy(update=changes)
-    save_settings(AppSettings.model_validate(settings.model_dump()))
+    settings = AppSettings.model_validate({**load_settings().model_dump(), **changes})
+    save_settings(settings)
     return settings
