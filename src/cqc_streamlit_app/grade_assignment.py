@@ -1553,7 +1553,6 @@ async def grade_single_rubric_student(
             return (student_id, None)  # None signals failure
 
 
-@telemetry.tracked_run("rubric_grading")
 def _split_batch_results(student_ids: list[str], results: list):
     """Sort ``asyncio.gather(..., return_exceptions=True)`` output into finished results,
     failed student ids, and an interrupt to re-raise.
@@ -1576,6 +1575,7 @@ def _split_batch_results(student_ids: list[str], results: list):
     return finished, failed, interrupt
 
 
+@telemetry.tracked_run("rubric_grading")
 async def process_rubric_grading_batch(
         submission_file_paths: list[tuple[str, str]],
         effective_rubric: Rubric,
@@ -2555,8 +2555,12 @@ async def get_rubric_based_exam_grading():
 
     with run_tab:
         if status == "interrupted":
-            st.warning("The last grading run was interrupted before it finished. Grade again.",
-                       icon=":material/warning:")
+            if has_cached_results:
+                st.warning("The last grading run was interrupted. Finished students are kept; "
+                           "retry the rest from Results & review.", icon=":material/warning:")
+            else:
+                st.warning("The last grading run was interrupted before it finished. Grade again.",
+                           icon=":material/warning:")
         expected_language = (expected_language_for_rubric(effective_rubric) if effective_rubric
                              else language_for_course(selected_course_id))
         rows = batch_preview(tuple(tuple(p) for p in student_submission_file_paths), expected_language)

@@ -80,3 +80,12 @@ def test_split_batch_results_without_interrupt():
 
     finished, failed, interrupt = _split_batch_results(["a"], [("a", None)])
     assert finished == [("a", None)] and failed == [] and interrupt is None
+
+
+@pytest.mark.unit
+def test_rubric_batch_keeps_its_telemetry_run():
+    import inspect
+    from cqc_streamlit_app import grade_assignment
+
+    source = inspect.getsource(grade_assignment)
+    assert '@telemetry.tracked_run("rubric_grading")\nasync def process_rubric_grading_batch(' in source
