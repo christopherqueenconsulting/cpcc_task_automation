@@ -149,9 +149,10 @@ class TestWrapperFolderHandling:
         zip_path = tmp_path / "malformed.zip"
         
         with zipfile.ZipFile(zip_path, 'w') as zf:
-            # Files with no student folders - should fail
-            zf.writestr("Wrapper/file1.txt", "content")
-            zf.writestr("Wrapper/file2.doc", "content")
+            # Files with no student folders - should fail. (A single folder of files is
+            # indistinguishable from one student's folder, so it is kept as that student.)
+            zf.writestr("file1.txt", "content")
+            zf.writestr("file2.doc", "content")
         
         accepted_types = ['.java', '.py']
         

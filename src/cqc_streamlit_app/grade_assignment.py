@@ -2558,6 +2558,10 @@ async def get_rubric_based_exam_grading():
     is_grading_in_progress = should_grade or status == "running"
 
     with run_tab:
+        if status == "failed" and not should_grade:
+            error = st.session_state.grading_errors_by_key.get(current_run_key)
+            st.error(f"The last grading run failed: {error}" if error else "The last grading run failed.",
+                     icon=":material/error:")
         if status == "interrupted":
             if has_cached_results and grading_mode != "errors_only":
                 st.warning("The last grading run was interrupted. Finished students are kept; "
@@ -2643,6 +2647,13 @@ async def get_rubric_based_exam_grading():
                         run_key=current_run_key,
                         requirements=requirements_checklist,
                     )
+                produced = (st.session_state.error_only_results_by_key if grading_mode == "errors_only"
+                            else st.session_state.grading_results_by_key)
+                if current_run_key not in produced:
+                    # The batch found no students (the reason is shown above): stay on this
+                    # stage with the error visible instead of moving to an empty Results.
+                    raise ValueError("No student submissions were found in the upload. A ZIP "
+                                     "needs one folder per student.")
                 st.session_state.grading_status_by_key[current_run_key] = "done"
             except Exception as e:
                 st.session_state.grading_status_by_key[current_run_key] = "failed"
