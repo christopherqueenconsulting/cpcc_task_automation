@@ -1297,7 +1297,8 @@ def add_upload_file_element(
                                       accept_multiple_files=accept_multiple_files, key=widget_key)
 
     if accept_multiple_files:
-        if st.button("Remove All Files", key="Checkbox_" + widget_key):
+        if uploaded_files and st.button("Remove all files", key="Checkbox_" + widget_key,
+                                        icon=":material/delete_sweep:"):
             reset_session_key_value(reset_key)
             st.rerun()
 
@@ -2648,3 +2649,18 @@ def _confirm_writeback_dialog(label: str, count: int, route: str, is_quiz: bool,
             on_confirm()
         if st.button("Cancel"):
             st.rerun()
+
+
+def estimated_ai_cost(role: str, selected_model, input_chars: list[int], output_tokens: int = 2500) -> str:
+    """Rough cost caption for a batch of AI calls, one per entry in ``input_chars``,
+    from the model registry's pricing. An estimate never blocks the action."""
+    if not input_chars:
+        return "no AI calls"
+    try:
+        from cqc_cpcc.utilities.AI import model_registry
+        resolved = model_registry.resolve(role, selected_model)
+        total = sum(model_registry.estimate_cost(resolved, chars // 4, output_tokens) or 0
+                    for chars in input_chars)
+    except Exception:  # noqa: BLE001 - an estimate never blocks the action
+        return "cost unknown"
+    return f"about ${total:.2f}" if total >= 0.01 else "under $0.01"

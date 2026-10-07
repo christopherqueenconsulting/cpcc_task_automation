@@ -1,6 +1,5 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import asyncio
-import contextlib
 import os
 import re
 import tempfile
@@ -69,6 +68,7 @@ from cqc_cpcc.utilities.zip_grading_utils import (
 )
 from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.utils import (
+    estimated_ai_cost,
     add_brightspace_source_element,
     add_brightspace_writeback_element,
     add_file_to_zip,
@@ -186,7 +186,7 @@ def run_async_in_streamlit(coro):
 
 
 def define_grading_rubric():
-    st.header("Grading Rubric")
+    st.markdown("**Grading rubric** (criteria and points lost)")
 
     # Preload the table with default rows and values
     default_data = [
@@ -216,84 +216,83 @@ def define_grading_rubric():
     return edited_df
 
 
+def _flowgorithm_key(*parts) -> str:
+    import hashlib
+    return hashlib.sha256("\x00".join(str(p) for p in parts).encode()).hexdigest()[:16]
+
+
 def get_flowgorithm_content():
-    # Add elements to page to work with
+    """Flowgorithm assignments: instructions, then submissions, then an explicit Grade
+    button; results are kept for the session, so a rerun never grades again (UX goals §3)."""
+    _orig_file_name, instructions_file_path = add_upload_file_element(
+        "Instructions file", ["txt", "docx", "pdf"], key_prefix="flowgorithm_")
+    convert = st.checkbox("Convert to Markdown", True, key="convert_flowgoritm_instruction_to_markdown")
+    instructions = read_file(instructions_file_path, convert) if instructions_file_path else None
+    if instructions:
+        with st.expander("Preview instructions", icon=":material/description:"):
+            st.markdown(instructions, unsafe_allow_html=True)  # instructor's own document
 
-    st.header("Assignment Instructions")
+    total_points_possible = st.number_input("Points possible", min_value=1, value=50, step=1,
+                                            key="flowgorithm_points")
 
-    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Flowgorithm Instructions",
-                                                                      ["txt", "docx", "pdf"],
-                                                                      key_prefix="flowgorithm_")
-    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True,
-                                                   key="convert_flowgoritm_instruction_to_markdown")
-
-    assignment_instructions_content = None
-
-    if instructions_file_path:
-        # Get the assignment instructions
-        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-
-        if st.checkbox("Show Instructions", key="show_flowgorithn_instructions_check_box"):
-            st.markdown(assignment_instructions_content, unsafe_allow_html=True)
-            # st.info("Added: %s" % instructions_file_path)
-
-    # Add grading rubric
-    grading_rubric = define_grading_rubric()
-    if not grading_rubric.empty:
-        grading_rubric_dict = {}
-        # for _, row in grading_rubric.iterrows():
-        #    criteria = row[GR_CRITERIA]
-        #    ppl = row[GR_PPL]
-        #    grading_rubric_dict[criteria] = ppl
-
-        # Convert DataFrame to dictionary
-        grading_rubric_dict = grading_rubric.to_dict('records')
-
-        # Extract column names from DataFrame
-        headers = grading_rubric.columns.tolist()
-
-        # Convert the dictionary to a Markdown table
-        rubric_grading_markdown_table = dict_to_markdown_table(grading_rubric_dict, headers)
-
-        # Write the Markdown table to a Streamlit textarea
-        # st.text_area("Markdown Table", rubric_grading_markdown_table)
-
-        st.header("Assignment Total Points Possible")
-        total_points_possible = st.text_input("Enter total points possible for this assignment", "50")
-
+    with st.expander("Advanced options", icon=":material/tune:"):
+        grading_rubric = define_grading_rubric()
         model_cfg = define_chatGPTModel("flowgorithm_assignment", default_temp_value=.5, role="flowgorithm")
-        selected_model = model_cfg.get("model", "openrouter/auto")
-        selected_temperature = float(model_cfg.get("temperature", .5))
-        selected_service_tier = model_cfg.get("langchain_service_tier", "default")
+    selected_model = model_cfg.get("model", "openrouter/auto")
+    selected_temperature = float(model_cfg.get("temperature", .5))
+    selected_service_tier = model_cfg.get("langchain_service_tier", "default")
+    rubric_table = (dict_to_markdown_table(grading_rubric.to_dict('records'), grading_rubric.columns.tolist())
+                    if not grading_rubric.empty else "")
 
-        if st.session_state.openrouter_api_key:
-            custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model,
-                                        service_tier=selected_service_tier,
-                                        openrouter_api_key=st.session_state.openrouter_api_key,
-                                        config_hash=resolve_model("flowgorithm", selected_model).config_hash)
+    submissions = add_upload_file_element(
+        "Student submissions (.fprg, or text/PDF/Word)", ["txt", "docx", "pdf", "fprg"],
+        accept_multiple_files=True, key_prefix="flowgorithm_") or []
 
-            student_submission_file_path, student_submission_temp_file_path = add_upload_file_element(
-                "Upload Student Flowgorithm Submission",
-                ["txt", "docx", "pdf", "fprg"],
-                key_prefix="flowgorithm_")
+    if not st.session_state.openrouter_api_key:
+        st.error("Add your OpenRouter API key in Settings.", icon=":material/key:")
+        return
+    ready = bool(instructions and rubric_table and submissions)
+    key = _flowgorithm_key(instructions, rubric_table, total_points_possible, selected_model,
+                           [(os.path.basename(o), os.path.getsize(t)) for o, t in submissions])
+    store = st.session_state.setdefault("flowgorithm_results", {})
 
-            if student_submission_file_path and custom_llm and assignment_instructions_content and rubric_grading_markdown_table and total_points_possible:
-                student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-                student_submission = read_file(student_submission_temp_file_path)
+    count = len(submissions)
+    sizes = [len(instructions or "") + len(str(rubric_table)) + os.path.getsize(t)
+             for _, t in submissions] if ready else []
+    with st.container(horizontal=True, vertical_alignment="center"):
+        start = st.button(f"Grade {count} submission{'s' if count != 1 else ''}", type="primary",
+                          icon=":material/play_arrow:", key="flowgorithm_grade",
+                          disabled=not ready or key in store)
+        st.caption(f"Estimated {estimated_ai_cost('flowgorithm', selected_model, sizes)}. "
+                   "No AI call is made until you press the button.")
+    if start:
+        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model,
+                                    service_tier=selected_service_tier,
+                                    openrouter_api_key=st.session_state.openrouter_api_key,
+                                    config_hash=resolve_model("flowgorithm", selected_model).config_hash)
+        results = []
+        for orig_path, temp_path in submissions:
+            name = os.path.splitext(os.path.basename(orig_path))[0]
+            with st.spinner(f"Grading {name}..."):
+                try:
+                    feedback = generate_assignment_feedback_grade(
+                        custom_llm, instructions, rubric_table, read_file(temp_path), name,
+                        str(total_points_possible))
+                except Exception as e:  # noqa: BLE001 - one failure must not lose the others
+                    logger.error(f"Flowgorithm grading failed for {alias(name)}: {e}", exc_info=True)
+                    feedback = f"Grading failed: {e}"
+            results.append((name, feedback))
+        store[key] = results
+    if not ready:
+        st.caption("Add the instructions and at least one submission to grade.")
 
-                with st.spinner('Generating Feedback and Grade...'):
-                    feedback_with_grade = generate_assignment_feedback_grade(custom_llm,
-                                                                             assignment_instructions_content,
-                                                                             rubric_grading_markdown_table,
-                                                                             student_submission,
-                                                                             student_file_name,
-                                                                             total_points_possible)
-                    st.header("Feedback and Grade")
-                    # st.markdown(f"```\n{feedback_with_grade}\n")
-                    st.markdown(feedback_with_grade)
-
-        else:
-            st.error("Please provide your Open API Key on the settings page.")
+    results = store.get(key)
+    if results:
+        st.subheader("Feedback and grade", anchor=False)
+        tabs = st.tabs([name for name, _ in results])
+        for tab, (_name, feedback) in zip(tabs, results):
+            with tab:
+                st.markdown(feedback)
 
 
 def get_course_list_from_error_definitions() -> list[str]:
@@ -1033,6 +1032,7 @@ async def get_grade_exam_content():
     use_openrouter = model_cfg.get("use_openrouter", True)
     use_auto_route = model_cfg.get("use_auto_route", True)
     selected_model = model_cfg.get("model", "openrouter/auto")
+    selected_temperature = float(model_cfg.get("temperature", 0.2))
 
     st.header("Student Submission File(s)")
     # Added support for HTML, audio, and video files

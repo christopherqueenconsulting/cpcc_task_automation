@@ -1,0 +1,59 @@
+#  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+"""Give feedback and Flowgorithm pages: nothing runs until the button is pressed (UX goals §3)."""
+
+import zipfile
+from pathlib import Path
+
+import pytest
+
+
+def _page():
+    # Imported inside the tests: importing the page at collection time routes tempfile
+    # into the app's private temp dir before pytest picks its base temp directory.
+    from cqc_streamlit_app.app_pages import give_feedback
+    return give_feedback
+
+AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+
+APP_PAGES = Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "app_pages"
+
+
+@pytest.mark.unit
+def test_count_submissions_counts_zip_folders_and_loose_files(tmp_path):
+    archive = tmp_path / "subs.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("Student A/main.cpp", "int main(){}")
+        z.writestr("Student A/helper.h", "")
+        z.writestr("Student B/main.cpp", "int main(){}")
+        z.writestr("__MACOSX/Student B/._main.cpp", "")
+    loose = tmp_path / "c.java"
+    loose.write_text("class C {}")
+    paths = [("subs.zip", str(archive)), ("c.java", str(loose))]
+    assert _page()._count_submissions(paths) == 3
+
+
+@pytest.mark.unit
+def test_count_submissions_treats_a_bad_zip_as_one(tmp_path):
+    bad = tmp_path / "bad.zip"
+    bad.write_text("not a zip")
+    assert _page()._count_submissions([("bad.zip", str(bad))]) == 1
+
+
+@pytest.mark.unit
+def test_run_key_changes_with_inputs():
+    assert _page()._run_key("a", 1) == _page()._run_key("a", 1)
+    assert _page()._run_key("a", 1) != _page()._run_key("a", 2)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("page, button_key", [
+    ("give_feedback.py", "feedback_start"),
+    ("flowgorithm.py", "flowgorithm_grade"),
+])
+def test_start_button_is_disabled_until_inputs_are_ready(page, button_key):
+    app = AppTest.from_file(str(APP_PAGES / page), default_timeout=60).run()
+    assert not app.exception, [e.value for e in app.exception]
+    button = app.button(key=button_key)
+    assert button.disabled
+    assert button.label.endswith("0 submissions")
+    assert not any(h.value == "Chat GPT Prompt" for h in app.header)
