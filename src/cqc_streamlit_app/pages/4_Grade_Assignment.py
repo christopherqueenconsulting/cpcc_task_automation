@@ -33,6 +33,7 @@ from cqc_cpcc.rubric_overrides import (
     merge_rubric_overrides,
     validate_overrides_compatible,
 )
+from cqc_cpcc.utilities.AI.model_registry import resolve as resolve_model
 from cqc_cpcc.utilities.AI.llm_deprecated.chains import (
     generate_assignment_feedback_grade,
 )
@@ -252,9 +253,11 @@ def get_flowgorithm_content():
         selected_temperature = float(model_cfg.get("temperature", .5))
         selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
-        if st.session_state.openai_api_key:
+        if st.session_state.openrouter_api_key:
             custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model,
-                                        service_tier=selected_service_tier)
+                                        service_tier=selected_service_tier,
+                                        openrouter_api_key=st.session_state.openrouter_api_key,
+                                        config_hash=resolve_model("flowgorithm", selected_model).config_hash)
 
             student_submission_file_path, student_submission_temp_file_path = add_upload_file_element(
                 "Upload Student Flowgorithm Submission",

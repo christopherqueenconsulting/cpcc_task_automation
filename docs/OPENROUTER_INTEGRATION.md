@@ -119,19 +119,44 @@ Selected AI Model (Claude, GPT, etc.)
 
 ## Configuration
 
+### Which model each feature uses
+
+All LLM calls go through `src/cqc_cpcc/utilities/AI/llm_gateway.py`, which reads
+`src/cqc_cpcc/config/model_registry.json`. Each feature asks for a role:
+
+| Role | Used by |
+|---|---|
+| `grading` | Rubric grading, exam / errors-only grading (`CodeGrader`) |
+| `digest` | Preprocessing digest for very large submissions |
+| `feedback` | Give Feedback page (`FeedbackGiver`) |
+| `flowgorithm` | Flowgorithm grading (LangChain `ChatOpenAI` pointed at OpenRouter) |
+
+Each role sets the model, reasoning effort, output-token budget, seed and a fallback
+model (tried once if the primary fails). Request parameters come from each model's
+capability profile, so `temperature` is only sent to models that accept it.
+
+To change a model without editing the file:
+
+- `CQC_MODEL_GRADING=openai/gpt-5` (or `CQC_MODEL_DIGEST`, `CQC_MODEL_FEEDBACK`,
+  `CQC_MODEL_FLOWGORITHM`) in `.env`, then restart. This is the fast rollback.
+- A model picked on a Streamlit page overrides the role for that run.
+
+Vendor allowlist, provider privacy preferences and price ceilings are in the
+human-owned `src/cqc_cpcc/config/model_policy.json`.
+
 ### Environment Variables
 ```bash
-# Required for OpenRouter
+# Required for every LLM feature
 OPENROUTER_API_KEY=sk-or-v1-...
 
-# Legacy (still supported)
+# Optional: only for transcribing audio/video submissions (Whisper)
 OPENAI_API_KEY=sk-...
 ```
 
 ### .streamlit/secrets.toml
 ```toml
 OPENROUTER_API_KEY = "sk-or-v1-..."
-OPENAI_API_KEY = "sk-..."  # Optional, for direct OpenAI usage
+OPENAI_API_KEY = "sk-..."  # Optional, Whisper transcription only
 ```
 
 ## Benefits

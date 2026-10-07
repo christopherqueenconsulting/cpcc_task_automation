@@ -34,7 +34,8 @@ def main():
 
     openai_api_key = secret_text_input("OpenAI API Key", st.session_state.openai_api_key or "",
                                        key="openai_api_key")
-    st.caption("*Required for all apps; get it [here](https://platform.openai.com/account/api-keys).*")
+    st.caption("*Optional: only needed to transcribe audio/video submissions (Whisper); "
+               "get it [here](https://platform.openai.com/account/api-keys).*")
 
     # Get CPCC variables
     instructor_user_id = st.text_input("Instructor User ID", value=st.session_state.instructor_user_id or "",
@@ -52,7 +53,7 @@ def main():
                                            autocomplete="off")
     st.caption("URL to the Attendance Tracker (`ATTENDANCE_TRACKER_URL`).")
 
-    required_vars = [openai_api_key, openrouter_api_key, instructor_user_id, instructor_password]
+    required_vars = [openrouter_api_key, instructor_user_id, instructor_password]
 
     # If the 'Save' button is clicked
     if st.button("Save"):
@@ -61,7 +62,8 @@ def main():
         else:
             # Set both the st session state and the environment variable for required vars
             st.session_state.openrouter_api_key = os.environ["OPENROUTER_API_KEY"] = openrouter_api_key.strip()
-            st.session_state.openai_api_key = os.environ["OPENAI_API_KEY"] = openai_api_key.strip()
+            if openai_api_key and openai_api_key.strip():
+                st.session_state.openai_api_key = os.environ["OPENAI_API_KEY"] = openai_api_key.strip()
             st.session_state.instructor_user_id = os.environ["INSTRUCTOR_USERID"] = instructor_user_id.strip()
             st.session_state.instructor_password = os.environ["INSTRUCTOR_PASS"] = instructor_password.strip()
 

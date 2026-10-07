@@ -1,38 +1,55 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
+from typing import Optional
+
+from cqc_cpcc.utilities.AI import model_registry
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import RunnableSerializable
 from langchain_openai import ChatOpenAI
 
 
 def get_default_llm_model() -> str:
-    # model = "gpt-5"
-    model = "gpt-5-mini",
-    # model = "gpt-5-nano",
-    # model = "gpt-4.1",
-    # model = "gpt-4.1-mini",
-    # model = "gpt-4o",
-    # model = "gpt-4o-mini",
-    # model = 'gpt-3.5-turbo-1106'
-    # model = 'gpt-4-1106-preview'
-    # model = 'gpt-3.5-turbo' # Deprecated 'gpt-3.5-turbo-16k-0613'
-    # model = 'gpt-4-turbo'
-    # model = "gpt-4"
-    return model
+    """Model id for the "feedback" role from config/model_registry.json."""
+    return model_registry.resolve("feedback").model
 
 
 def get_default_retry_model() -> str:
-    model = "gpt-5"
-    # model = 'gpt-3.5-turbo' # Deprecated 'gpt-3.5-turbo-16k-0613'
-    return model
+    """Model for LangChain parser retries: the "flowgorithm" role's fallback."""
+    resolved = model_registry.resolve("flowgorithm")
+    return resolved.fallback or resolved.model
+
+
+def get_openrouter_chat_model(
+        role: model_registry.Role = "flowgorithm",
+        override: Optional[str] = None,
+        temperature: Optional[float] = None,
+        api_key: Optional[str] = None,
+) -> ChatOpenAI:
+    """LangChain chat model pointed at OpenRouter, configured from the model registry.
+
+    ``temperature`` is sent only when the registry says the model accepts it.
+    """
+    from cqc_cpcc.utilities.AI import openrouter_client
+
+    resolved = model_registry.resolve(role, override=override)
+    kwargs = {
+        "model": resolved.model,
+        "base_url": openrouter_client.OPENROUTER_BASE_URL,
+        "api_key": api_key or openrouter_client._get_openrouter_api_key(),
+        "use_responses_api": False,
+        "extra_body": model_registry.build_request_params(resolved),
+        "default_headers": {
+            "X-Title": openrouter_client.OPENROUTER_APP_NAME,
+            "HTTP-Referer": openrouter_client.OPENROUTER_APP_URL,
+        },
+    }
+    if temperature is not None and model_registry.supports_temperature(resolved.model):
+        kwargs["temperature"] = temperature
+    return ChatOpenAI(**kwargs)
 
 
 def get_default_llm() -> BaseChatModel:
-    model = get_default_llm_model()
-    # model = "gpt-4"
-    temperature = .2  # .2 <- More deterministic | More Creative -> .8
-    default_llm = ChatOpenAI(temperature=temperature, model=model, use_responses_api=True)
-    return default_llm
+    return get_openrouter_chat_model("grading", temperature=.2)
 
 
 def get_model_from_chat_model(chat_model: BaseChatModel):
