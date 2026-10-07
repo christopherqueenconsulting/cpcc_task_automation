@@ -621,7 +621,9 @@ def build_invalid_submission_result(rubric: Rubric, validity) -> RubricAssessmen
     """
     code, name, description = _VALIDITY_ERROR.get(
         validity.status, ("NO_SUBMISSION", "No Submission", "No gradeable work was found."))
-    message = f"{description} {validity.reason}".strip()
+    # The gate's reason is the specific, student-readable explanation; the generic
+    # description is only a fallback.
+    message = validity.reason or description
     criteria_results = [
         CriterionResult(
             criterion_id=c.criterion_id,
@@ -629,7 +631,7 @@ def build_invalid_submission_result(rubric: Rubric, validity) -> RubricAssessmen
             points_possible=c.max_points,
             points_earned=0,
             selected_level_label=_zero_level_label(c),
-            feedback=message,
+            feedback="No gradeable work was submitted for this criterion.",
         )
         for c in rubric.criteria if c.enabled
     ]
@@ -643,7 +645,7 @@ def build_invalid_submission_result(rubric: Rubric, validity) -> RubricAssessmen
         overall_feedback=message,
         detected_errors=[DetectedError(
             code=code, name=name, severity="major", description=description,
-            occurrences=1, notes=validity.reason,
+            occurrences=1,
         )],
         needs_review=True,
         validity_status=validity.status,

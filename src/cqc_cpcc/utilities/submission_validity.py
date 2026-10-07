@@ -68,11 +68,17 @@ NO_SUBMISSION_ID = "NO_SUBMISSION"
 WRONG_FILE_TYPE_ID = "WRONG_FILE_TYPE"
 GATE_ERROR_IDS = frozenset({NO_SUBMISSION_ID, WRONG_FILE_TYPE_ID})
 
-DEFAULT_MIN_STATEMENTS = 5
+# Without a reference solution only near-empty code is "trivial": a complete Hello
+# World is 3 meaningful lines and must not be flagged. With a reference, see below.
+DEFAULT_MIN_STATEMENTS = 3
 # With a reference solution, "trivial" means under this share of its meaningful lines
 # (capped at DEFAULT_MIN_STATEMENTS), so a 3-line Hello World assignment is not flagged.
 REFERENCE_MIN_FRACTION = 0.3
 STARTER_SIMILARITY_THRESHOLD = 0.90
+
+# Student-facing names and the extensions worth naming in a message.
+LANGUAGE_NAMES = {"cpp": ("C++", ".cpp"), "java": ("Java", ".java"),
+                  "python": ("Python", ".py"), "sas": ("SAS", ".sas")}
 
 # Lines that carry no program logic of their own.
 _BOILERPLATE_LINE = re.compile(
@@ -212,10 +218,12 @@ def check_validity(
     sources: list[tuple[str, str]] = []
     for name, ref in files.items():
         ext = os.path.splitext(name)[1].lower()
-        if ext in wanted_exts or not ext:
-            # No extension = pasted text with no filename: its type can't be judged,
-            # so only the content checks below apply.
+        if ext in wanted_exts:
             sources.append((name, _read_text(ref)))
+        elif not ext:
+            # No extension = pasted text with no filename: its type can't be judged,
+            # so only the content checks below apply (minus builder headers/fences).
+            sources.append((name, _strip_submission_headers(_read_text(ref))))
         elif ext in _TEXT_CONTAINERS:
             text = _read_text(ref)
             if detect_language("", text) == expected_language:
@@ -225,9 +233,10 @@ def check_validity(
     if not sources:
         v.status = WRONG_TYPE
         found = ", ".join(names) if names else "none"
-        exts = "/".join(wanted_exts) or expected_language
+        lang_name, ext = LANGUAGE_NAMES.get(expected_language, (expected_language, ""))
         v.reasons.append(
-            f"No {expected_language} source file ({exts}) was submitted; found: {found}."
+            f"The assignment requires a {lang_name} source file ({ext}), but the "
+            f"submission contained: {found}."
         )
         return v
 

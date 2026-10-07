@@ -69,6 +69,7 @@ from cqc_streamlit_app.utils import (
     export_grading_summary_to_excel,
     get_cpcc_css,
     get_custom_llm,
+    run_coroutine_blocking,
     get_file_extension_from_filepath,
     get_language_from_file_path,
     on_download_click,
@@ -1643,6 +1644,7 @@ async def process_rubric_grading_batch(
                 "Points Possible": result.total_points_possible,
                 "Percentage": percentage,
                 "Band": result.overall_band_label or "N/A",
+                "Status": _review_status_label(result),
             })
 
         # Add failure rows
@@ -1653,7 +1655,10 @@ async def process_rubric_grading_batch(
                 "Points Possible": effective_rubric.total_points_possible,
                 "Percentage": "Failed",
                 "Band": "❌ Failed",
+                "Status": "Failed",
             })
+
+        render_needs_review(run_key)
 
         if summary_data:
             st.subheader("📊 Grading Summary")
@@ -1663,8 +1668,9 @@ async def process_rubric_grading_batch(
             # Make the summary available to ZIP export in this same run.
             st.session_state[f"grading_summary_df_{run_key}"] = summary_df
 
-            # Calculate statistics - exclude failure rows from average
-            numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
+            # Calculate statistics - exclude failure rows and unconfirmed review zeros
+            graded = summary_df[~summary_df["Status"].str.startswith("Needs review")]
+            numeric_scores = pd.to_numeric(graded["Points Earned"], errors="coerce").dropna()
             avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
             total_possible = effective_rubric.total_points_possible
             if total_possible > 0:
@@ -1812,6 +1818,7 @@ async def grade_single_error_only_student(
                 "major_count": len(code_grader.major_errors or []),
                 "minor_count": len(code_grader.minor_errors or []),
                 "feedback_text": feedback_text,
+                "invalid_reason": code_grader.invalid_reason,
             }
 
             return student_id, result_summary, (download_filename, temp_doc.name)
@@ -1923,7 +1930,7 @@ async def process_error_only_grading_batch(
         all_results.append((student_id, result_summary))
         doc_files.append(doc_file)
 
-    st.session_state.error_only_results_by_key = all_results
+    st.session_state.error_only_results_by_key[run_key] = all_results
 
     success_count = len(all_results)
     failure_count = total_students - success_count
@@ -1945,6 +1952,8 @@ async def process_error_only_grading_batch(
                 "Percentage": percentage,
                 "Major Errors": result_summary.get("major_count", 0),
                 "Minor Errors": result_summary.get("minor_count", 0),
+                "Status": ("Needs review: " + result_summary["invalid_reason"]
+                           if result_summary.get("invalid_reason") else "Graded"),
             })
 
         if summary_data:
@@ -2053,6 +2062,8 @@ def display_cached_error_only_results(run_key: str, course_name: str) -> None:
             "Percentage": percentage,
             "Major Errors": result_summary.get("major_count", 0),
             "Minor Errors": result_summary.get("minor_count", 0),
+            "Status": ("Needs review: " + result_summary["invalid_reason"]
+                       if result_summary.get("invalid_reason") else "Graded"),
         })
 
     if summary_data:
@@ -2645,10 +2656,16 @@ def _review_status_label(result) -> str:
 
 
 def _replace_result(run_key: str, student_id: str, new_result) -> None:
+    """Swap one student's result and drop every output derived from the old one."""
     results = st.session_state.grading_results_by_key[run_key]
     st.session_state.grading_results_by_key[run_key] = [
         (sid, new_result if sid == student_id else r) for sid, r in results
     ]
+    # The feedback ZIP, its .docx paths (write-back attach mode) and the summary
+    # sheet inside the ZIP were built from the old result; rebuild them on rerun.
+    st.session_state.feedback_zip_bytes_by_key.pop(run_key, None)
+    st.session_state.get("feedback_doc_paths_by_key", {}).pop(run_key, None)
+    st.session_state.pop(f"grading_summary_df_{run_key}", None)
 
 
 def _grade_anyway(run_key: str, student_id: str) -> None:
@@ -2659,10 +2676,12 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
         return
     submission = inputs["submissions"][student_id]
     if not submission.files:
-        st.error("There are no files to grade for this student.")
+        rejected = ", ".join(submission.rejected_files) or "none"
+        st.error(f"There are no gradeable files for this student (files not accepted: {rejected}). "
+                 "Add the file type under accepted types and grade the batch again.")
         return
     with st.spinner(f"Grading {student_id}..."):
-        result = asyncio.run(grade_with_rubric(
+        result = run_coroutine_blocking(grade_with_rubric(
             student_submission=build_submission_text_with_token_limit(files=submission.files),
             source_files=submission.files,
             validity_gate=False,
@@ -2685,10 +2704,13 @@ def render_needs_review(run_key: str) -> None:
         st.subheader(f"Needs review ({len(flagged)})", anchor=False)
         st.caption("These scored 0 without an AI call because no gradeable work was found. "
                    "They are not written to BrightSpace until you confirm them.")
+        submissions = st.session_state.get("grading_inputs_by_key", {}).get(run_key, {}).get("submissions", {})
         for sid, r in flagged:
+            rejected = getattr(submissions.get(sid), "rejected_files", None)
+            extra = f" Files not accepted: {', '.join(rejected)}." if rejected else ""
             with st.container(horizontal=True, vertical_alignment="center"):
                 st.markdown(f"**{sid}** — {_VALIDITY_LABELS.get(r.validity_status, r.validity_status)}: "
-                            f"{r.validity_reason}")
+                            f"{r.validity_reason}{extra}")
                 if st.button("Confirm 0", key=f"confirm0_{run_key}_{sid}", icon=":material/check:"):
                     _replace_result(run_key, sid, r.model_copy(update={"review_confirmed": True}))
                     st.rerun()

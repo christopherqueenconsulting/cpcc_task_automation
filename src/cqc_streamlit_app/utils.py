@@ -2659,3 +2659,15 @@ def render_openai_debug_panel(
         - `CQC_OPENAI_DEBUG_REDACT=1` - Redact sensitive data (default: enabled)
         - `CQC_OPENAI_DEBUG_SAVE_DIR=/path/to/dir` - Save debug files to directory
         """)
+
+
+def run_coroutine_blocking(coro):
+    """Run ``coro`` to completion, even from code already inside a running event loop.
+
+    Grading pages run under ``asyncio.run``, so a nested ``asyncio.run`` raises
+    "cannot be called from a running event loop". A worker thread gets its own loop.
+    """
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()

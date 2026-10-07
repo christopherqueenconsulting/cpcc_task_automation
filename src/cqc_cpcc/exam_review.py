@@ -427,7 +427,7 @@ class CodeGrader:
     def get_text_feedback(self) -> str:
         grade_feedback = ""
         if self.invalid_reason:
-            grade_feedback += "\nNo gradeable submission (needs instructor review): " + self.invalid_reason
+            grade_feedback += "\nNo gradeable submission: " + self.invalid_reason
         if self.major_errors is not None:
             grade_feedback += "\n" + self.major_code_deduction_points_text
             for error in self.major_errors:

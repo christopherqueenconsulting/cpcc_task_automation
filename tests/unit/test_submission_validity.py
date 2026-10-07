@@ -95,6 +95,10 @@ def test_empty_source(tmp_path, text):
     assert v.status == sv.EMPTY
 
 
+HELLO_JAVA = 'public class Hello {\n    public static void main(String[] a) {\n        System.out.println("Hi");\n    }\n}\n'
+HELLO_CPP = '#include <iostream>\nusing namespace std;\nint main() {\n    cout << "Hi" << endl;\n    return 0;\n}\n'
+
+
 @pytest.mark.unit
 def test_trivial_source(tmp_path):
     code = "#include <iostream>\nint main() {\n    return 0;\n}\n"
@@ -104,11 +108,33 @@ def test_trivial_source(tmp_path):
 
 
 @pytest.mark.unit
-def test_short_reference_lowers_trivial_threshold(tmp_path):
-    hello = 'public class Hello {\n    public static void main(String[] a) {\n        System.out.println("Hi");\n    }\n}\n'
-    path = _write(tmp_path, "Hello.java", hello)
-    assert sv.check_validity({"Hello.java": path}, "java").status == sv.TRIVIAL
-    assert sv.check_validity({"Hello.java": path}, "java", reference_code=hello).ok
+@pytest.mark.parametrize("name,code,lang", [("Hello.java", HELLO_JAVA, "java"),
+                                            ("hello.cpp", HELLO_CPP, "cpp")])
+def test_complete_hello_world_is_not_trivial(tmp_path, name, code, lang):
+    """A short but complete program must not be zeroed (early labs)."""
+    assert sv.check_validity({name: _write(tmp_path, name, code)}, lang).ok
+
+
+@pytest.mark.unit
+def test_reference_only_lowers_threshold(tmp_path):
+    path = _write(tmp_path, "main.cpp", "int main() {\n    return 0;\n}\n")
+    assert sv.check_validity({"main.cpp": path}, "cpp").status == sv.TRIVIAL
+    tiny_reference = "int main() {\n    return 0;\n}\n"
+    assert sv.check_validity({"main.cpp": path}, "cpp", reference_code=tiny_reference).ok
+
+
+@pytest.mark.unit
+def test_wrong_type_message_is_student_readable(tmp_path):
+    path = _docx(tmp_path, "Project3.docx", "write-up")
+    v = sv.check_validity({"Project3.docx": path}, "cpp")
+    assert v.reason == ("The assignment requires a C++ source file (.cpp), but the "
+                        "submission contained: Project3.docx.")
+
+
+@pytest.mark.unit
+def test_builder_headers_are_not_counted_as_code():
+    text = "### Submission File Name: Main.java\n```java\n// TODO\n```\n"
+    assert sv.check_validity({"submission": text}, "java").status == sv.EMPTY
 
 
 @pytest.mark.unit
@@ -192,6 +218,9 @@ async def test_empty_submission_scores_zero_without_llm(tmp_path, cpp_rubric, na
     assert result.criteria_results[0].selected_level_label == "No Submission"
     assert result.detected_errors[0].code == sv.NO_SUBMISSION_ID
     assert report["validity"]["status"] == sv.EMPTY
+    # The student-facing explanation is said once, not repeated in every field.
+    assert result.overall_feedback.count("no code") == 1
+    assert "no code" not in result.criteria_results[0].feedback
 
 
 @pytest.mark.unit
@@ -291,3 +320,18 @@ async def test_code_grader_wrong_type_for_course_language(tmp_path):
                                       expected_language="cpp")
     llm.assert_not_called()
     assert grader.points == 0
+
+
+@pytest.mark.unit
+def test_run_coroutine_blocking_works_inside_a_running_loop():
+    """"Grade anyway" runs from inside the page's asyncio.run loop."""
+    import asyncio
+    from cqc_streamlit_app.utils import run_coroutine_blocking
+
+    async def inner():
+        return 42
+
+    async def page():
+        return run_coroutine_blocking(inner())
+
+    assert asyncio.run(page()) == 42
