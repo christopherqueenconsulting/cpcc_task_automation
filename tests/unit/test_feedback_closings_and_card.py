@@ -197,3 +197,23 @@ def test_saved_runs_keep_greeting_names():
     results_store.save_run("k1", "rubric", [("lab 4", _result(5))], [], greeting_names={"lab 4": ""})
     run = next(r for r in results_store.load_runs() if r["run_key"] == "k1")
     assert run["greeting_names"] == {"lab 4": ""}
+
+
+@pytest.mark.unit
+def test_resaving_after_a_restart_keeps_greeting_names(monkeypatch):
+    """A confirm after a restart re-saves the run; the greeting names must survive it."""
+    import streamlit as st
+
+    from cqc_streamlit_app import grade_assignment, results_store
+
+    state = {"grading_results_by_key": {"k2": [("lab 4", _result(0))]},
+             "grading_failures_by_key": {"k2": []},
+             "greeting_names_by_key": {"k2": {"lab 4": ""}}}
+
+    class State(dict):
+        __getattr__ = dict.__getitem__
+
+    monkeypatch.setattr(st, "session_state", State(state))
+    grade_assignment.remember_results("k2", "rubric")
+    run = next(r for r in results_store.load_runs() if r["run_key"] == "k2")
+    assert run["greeting_names"] == {"lab 4": ""}

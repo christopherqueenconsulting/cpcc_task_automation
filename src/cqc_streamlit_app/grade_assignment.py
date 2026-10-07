@@ -2214,7 +2214,9 @@ def remember_results(run_key: str, grading_mode: str) -> None:
             results = st.session_state.grading_results_by_key.get(run_key, [])
             failures = st.session_state.grading_failures_by_key.get(run_key, [])
         submissions = st.session_state.get("grading_inputs_by_key", {}).get(run_key, {}).get("submissions", {})
-        greeting_names = {sid: (sub.student_name or "") for sid, sub in submissions.items()} or None
+        greeting_names = ({sid: (sub.student_name or "") for sid, sub in submissions.items()}
+                          # After a restart the inputs are gone: keep the names the saved run had.
+                          or st.session_state.get("greeting_names_by_key", {}).get(run_key))
         results_store.save_run(run_key, grading_mode, results, failures, greeting_names=greeting_names)
     except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
         logger.warning(f"Could not save grading results to disk: {e}")
