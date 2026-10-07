@@ -309,6 +309,20 @@ class DetectedError(BaseModel):
     notes: Annotated[Optional[str], Field(default=None, description="Additional notes")]
 
 
+class RequirementResult(BaseModel):
+    """The model's verdict on one requirement from the assignment's checklist."""
+    requirement_id: Annotated[str, Field(description="Exact id from the requirement checklist (e.g. R1)")]
+    status: Annotated[
+        Literal["met", "partial", "missing"],
+        Field(description="met = fully implemented; partial = attempted but incomplete or wrong; "
+                          "missing = not implemented at all")
+    ]
+    evidence: Annotated[
+        Optional[str],
+        Field(default=None, description="Short quote or location in the submission supporting the status")
+    ]
+
+
 class CriterionResult(BaseModel):
     """Assessment result for a single criterion.
     
@@ -425,6 +439,10 @@ class RubricAssessmentResult(BaseModel):
     effective_minor_errors: Annotated[
         Optional[int],
         Field(default=None, description="Effective minor error count after Minor→Major conversion")
+    ]
+    requirement_results: Annotated[
+        Optional[list[RequirementResult]],
+        Field(default=None, description="One entry per requirement in the checklist, when a checklist is given")
     ]
     # Set by the backend submission-validity gate, never by the model: SkipJsonSchema
     # keeps these out of the structured-output schema sent to the LLM.

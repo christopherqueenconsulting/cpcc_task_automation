@@ -33,6 +33,7 @@ from typing import Optional
 
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
+from cqc_cpcc.requirement_coverage import apply_requirement_coverage, requirements_prompt_section
 from cqc_cpcc.rubric_models import (
     Criterion,
     CriterionResult,
@@ -120,6 +121,7 @@ def build_rubric_grading_prompt(
         student_submission: str,
         reference_solution: Optional[str] = None,
         error_definitions: Optional[list[ErrorDefinition]] = None,
+        requirements=None,
 ) -> str:
     """Build a deterministic prompt for rubric-based grading.
     
@@ -129,6 +131,7 @@ def build_rubric_grading_prompt(
         student_submission: Student's code or work to grade
         reference_solution: Optional reference solution for comparison
         error_definitions: Optional list of ErrorDefinition objects to check against
+        requirements: Optional ``RequirementChecklist``; the model marks each one
         
     Returns:
         Formatted prompt string for OpenAI
@@ -243,6 +246,9 @@ def build_rubric_grading_prompt(
 
             prompt_parts.append("")
 
+    # Requirement checklist (incomplete work must be marked, not just errors)
+    prompt_parts.extend(requirements_prompt_section(requirements))
+
     # Student submission
     prompt_parts.append("## Student Submission to Grade")
     # Note Need to wrap code in backticks. It is expected that the student submission is preprocessed to be safely included in a markdown code block with File Name included ahead of it.
@@ -309,7 +315,10 @@ def build_rubric_grading_prompt(
         "- Backend computes all point totals and percentages. Your role: identify performance levels, detect errors, provide feedback.")
     prompt_parts.append("- Do not invent requirements not in assignment instructions")
     prompt_parts.append(
-        "- If information is missing or unclear, state assumptions in feedback or set field to null where schema allows")
+        "- If the instructions are unclear, state your assumptions in feedback; optional schema fields may be null")
+    prompt_parts.append(
+        "- Functionality the submission does not implement is not 'unclear': it must lower the "
+        "assessment (a missing requirement or a detected error), never be ignored")
     prompt_parts.append("")
     prompt_parts.append("### Output Format")
     prompt_parts.append("**CRITICAL JSON Requirements:**")
@@ -365,6 +374,7 @@ async def grade_with_rubric(
         gate_report: Optional[dict] = None,
         validity_gate: bool = True,
         rejected_files: Optional[list] = None,
+        requirements=None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -396,6 +406,8 @@ async def grade_with_rubric(
             The instructor's "Grade anyway" passes False.
         rejected_files: Names of files the student turned in that were not an
             accepted type; with no other files the submission is ``wrong_type``.
+        requirements: Optional ``RequirementChecklist`` for the assignment. The model
+            marks each requirement; missing/partial ones become errors before scoring.
 
     Returns:
         RubricAssessmentResult with complete grading breakdown
@@ -437,6 +449,7 @@ async def grade_with_rubric(
         student_submission=student_submission,
         reference_solution=reference_solution,
         error_definitions=error_definitions,
+        requirements=requirements,
     )
 
     logger.info(
@@ -469,49 +482,15 @@ async def grade_with_rubric(
 
         # CRITICAL: Correct rubric_id and rubric_version if LLM returned incorrect/default values
         # This commonly happens in fallback JSON mode where the model might return generic values
-        if result.rubric_id != rubric.rubric_id:
+        if result.rubric_id != rubric.rubric_id or result.rubric_version != rubric.rubric_version:
             logger.warning(
-                f"Correcting rubric_id from '{result.rubric_id}' to '{rubric.rubric_id}' "
-                f"(LLM returned incorrect/generic rubric ID)"
+                f"Correcting rubric_id/version from '{result.rubric_id}'/'{result.rubric_version}' "
+                f"to '{rubric.rubric_id}'/'{rubric.rubric_version}' (LLM returned incorrect/generic values)"
             )
-            # Create a new result with corrected rubric_id
-            result = RubricAssessmentResult(
-                rubric_id=rubric.rubric_id,  # Use input rubric's ID
-                rubric_version=rubric.rubric_version,  # Use input rubric's version
-                total_points_possible=result.total_points_possible,
-                total_points_earned=result.total_points_earned,
-                criteria_results=result.criteria_results,
-                overall_band_label=result.overall_band_label,
-                overall_feedback=result.overall_feedback,
-                detected_errors=result.detected_errors,
-                error_counts_by_severity=result.error_counts_by_severity,
-                error_counts_by_id=result.error_counts_by_id,
-                original_major_errors=result.original_major_errors,
-                original_minor_errors=result.original_minor_errors,
-                effective_major_errors=result.effective_major_errors,
-                effective_minor_errors=result.effective_minor_errors,
-            )
-        elif result.rubric_version != rubric.rubric_version:
-            # If only version mismatch, correct it too
-            logger.warning(
-                f"Correcting rubric_version from '{result.rubric_version}' to '{rubric.rubric_version}'"
-            )
-            result = RubricAssessmentResult(
-                rubric_id=rubric.rubric_id,
-                rubric_version=rubric.rubric_version,  # Use input rubric's version
-                total_points_possible=result.total_points_possible,
-                total_points_earned=result.total_points_earned,
-                criteria_results=result.criteria_results,
-                overall_band_label=result.overall_band_label,
-                overall_feedback=result.overall_feedback,
-                detected_errors=result.detected_errors,
-                error_counts_by_severity=result.error_counts_by_severity,
-                error_counts_by_id=result.error_counts_by_id,
-                original_major_errors=result.original_major_errors,
-                original_minor_errors=result.original_minor_errors,
-                effective_major_errors=result.effective_major_errors,
-                effective_minor_errors=result.effective_minor_errors,
-            )
+            result = result.model_copy(update={
+                "rubric_id": rubric.rubric_id,
+                "rubric_version": rubric.rubric_version,
+            })
 
         # Gate fields are backend-only; never trust values the model may have sent.
         result = result.model_copy(update={
@@ -532,6 +511,15 @@ async def grade_with_rubric(
                     gate_info["action"], gate_info.get("language"),
                     gate_info.get("compiles"), gate_info.get("tool"),
                 )
+
+        # Requirement coverage: unimplemented requirements become errors, so incomplete
+        # work cannot outscore complete work with mistakes.
+        if requirements is not None:
+            result, coverage_info = apply_requirement_coverage(result, requirements)
+            if gate_report is not None:
+                gate_report["requirements"] = coverage_info
+        elif result.requirement_results:
+            result = result.model_copy(update={"requirement_results": None})
 
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
