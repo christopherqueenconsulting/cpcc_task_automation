@@ -1,0 +1,54 @@
+name: Model Evaluation Heartbeat
+
+# GitHub can silently disable or skip scheduled workflows. Weekly, check that the
+# monthly Model Evaluation actually ran recently; if not, open an issue.
+
+on:
+  schedule:
+    - cron: "30 14 * * 1"   # Mondays 14:30 UTC
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the last scheduled evaluation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ASSIGNEE: ${{ vars.MODEL_BOT_ASSIGNEE }}
+        run: |
+          set -euo pipefail
+          # Last SUCCESSFUL scheduled run: a cancelled or failed one does not count.
+          last="$(gh run list --repo "${REPO}" --workflow model-eval.yml --event schedule --limit 5 \
+            --json createdAt,conclusion --jq '[.[] | select(.conclusion == "success")][0].createdAt // empty')"
+          now="$(date -u +%s)"
+          # Bot PRs older than 60 days will soon lose their eval artifact (90-day retention).
+          stale="$(gh pr list --repo "${REPO}" --state open --label model-promotion --json number,createdAt \
+            --jq "[.[] | select((now - (.createdAt | fromdateiso8601)) > 5184000) | .number] | join(\", \")")"
+          if [ -n "${stale}" ]; then
+            echo "::warning::Stale model promotion PRs: ${stale}"
+            gh label create blocked-on-chris --force --color d93f0b >/dev/null 2>&1 || true
+            for n in ${stale//,/ }; do
+              gh pr comment "${n}" --repo "${REPO}" --body "This model promotion PR is over 60 days old; its evaluation artifact expires at 90 days, after which the guard cannot pass. Merge or close it." || true
+            done
+          fi
+          if [ -n "${last}" ] && [ $(( now - $(date -u -d "${last}" +%s) )) -lt $(( 35 * 86400 )) ]; then
+            echo "Last successful scheduled evaluation: ${last}"
+            exit 0
+          fi
+          title="Monthly model evaluation has not run in 35 days"
+          if [ -n "$(gh issue list --repo "${REPO}" --state open --search "${title} in:title" --json number --jq '.[0].number // empty')" ]; then
+            echo "Issue already open"; exit 0
+          fi
+          printf 'The scheduled **Model Evaluation** workflow last succeeded: %s.\n\nCheck Actions > Model Evaluation (it may have been disabled, cancelled or failing), then run it manually.\n' "${last:-never}" > body.md
+          gh label create blocked-on-chris --force --color d93f0b >/dev/null 2>&1 || true
+          assignee=()
+          if [ -n "${ASSIGNEE}" ]; then assignee=(--assignee "${ASSIGNEE}"); fi
+          gh issue create --repo "${REPO}" --title "${title}" --body-file body.md --label blocked-on-chris "${assignee[@]}"

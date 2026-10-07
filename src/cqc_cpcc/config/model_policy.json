@@ -33,7 +33,7 @@
   "max_cost_per_submission": 0.05,
   "grading_freeze": [],
   "eval": {
-    "_note": "Thresholds for the monthly model evaluation. Hard-gate floors are provisional until calibrated against the incumbent (PR 7).",
+    "_note": "Calibrated 2026-10-06 against openai/gpt-6-luna@high on dataset v1 (78 cases x 3): composite 0.873, F1 0.788, score accuracy 0.959, p95 latency 23s, $0.0009/submission. Hard-gate floors = incumbent minus a tolerance. Power for a +0.03 composite gain at n=78: 0.97. Scorecard: evals/reports/2026-10-calibration/.",
     "repeats": 3,
     "max_candidates": 3,
     "budget_usd": 10.0,
@@ -52,9 +52,21 @@
       "max_invalid_ids": 0,
       "max_retry_rate": 0.05,
       "min_injection_pass_rate": 1.0,
-      "min_f1": 0.6,
-      "min_score_accuracy": 0.85,
-      "max_latency_p95_s": 180
+      "min_f1": 0.7,
+      "min_score_accuracy": 0.9,
+      "max_latency_p95_s": 90
     }
-  }
+  },
+  "discovery": {
+    "min_context_length": 400000,
+    "min_max_output_tokens": 32768,
+    "min_days_to_expiry": 90,
+    "incumbent_expiry_warning_days": 60,
+    "min_uptime_1d": 97.0,
+    "price_drop_pct": 20
+  },
+  "auto_promote_roles": [
+    "grading",
+    "digest"
+  ]
 }

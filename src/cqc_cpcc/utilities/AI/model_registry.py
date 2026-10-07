@@ -168,6 +168,15 @@ class EvalPolicy(BaseModel):
     hard_gates: HardGates = Field(default_factory=HardGates)
 
 
+class DiscoveryPolicy(BaseModel):
+    min_context_length: int = 400000
+    min_max_output_tokens: int = 32768
+    min_days_to_expiry: int = 90
+    incumbent_expiry_warning_days: int = 60
+    min_uptime_1d: float = 97.0
+    price_drop_pct: float = 20
+
+
 class PolicyFile(BaseModel):
     schema_version: int
     vendor_allowlist: list[str]
@@ -176,6 +185,10 @@ class PolicyFile(BaseModel):
     max_cost_per_submission: float = Field(gt=0)
     grading_freeze: list[dict] = Field(default_factory=list)
     eval: EvalPolicy = Field(default_factory=EvalPolicy)
+    discovery: DiscoveryPolicy = Field(default_factory=DiscoveryPolicy)
+    # Roles a passing grading evaluation may move. Feedback and Flowgorithm are not
+    # covered by dataset v1, so they change only by hand.
+    auto_promote_roles: list[str] = Field(default_factory=lambda: ["grading", "digest"])
 
 
 class ResolvedModel(BaseModel):
