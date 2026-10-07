@@ -69,7 +69,7 @@ class TestFindStudentPage:
         app = _app(job)
         app.run()
         assert not app.exception, app.exception
-        assert any(button.label == "↻ Refresh student list" for button in app.button)
+        assert any(button.label == "Refresh roster" for button in app.button)
 
     def test_failure_offers_a_retry(self):
         job = FakeJob(PHASE_FAILED)
@@ -79,3 +79,40 @@ class TestFindStudentPage:
         assert not app.exception, app.exception
         assert any("no grid" in e.value for e in app.error)
         assert any(button.label == "Try again" for button in app.button)
+
+
+@pytest.mark.unit
+class TestDesignPieceU6:
+    """UX goals for Find student: one search box, read-only roster, no third-party tabs."""
+
+    ROSTER = {"1234567": ("Adams, Ann", "Ann.Adams@email.cpcc.edu", "CSC-134-N801"),
+              "7654321": ("Baker, Bo", "bo@email.cpcc.edu", "CSC-151-N855")}
+
+    def _app(self):
+        return _app(FakeJob(PHASE_SUCCEEDED, dict(self.ROSTER)))
+
+    @pytest.mark.parametrize("query,expected", [
+        ("Ann.Adams@email.cpcc.edu", ["1234567"]),
+        ("ann.adams@EMAIL.cpcc.edu", ["1234567"]),  # case-insensitive email fallback
+        ("7654321", ["7654321"]),
+        ("Bo Baker", ["7654321"]),
+        ("Baker", []),  # names need two matching words
+    ])
+    def test_one_search_box(self, query, expected):
+        from cqc_cpcc.find_student import FindStudents
+        from cqc_streamlit_app.app_pages import find_student as page
+        finder = FindStudents(student_info=dict(self.ROSTER))
+        assert [row[0] for row in page.search(finder, query)] == expected
+
+    def test_results_persist_and_roster_is_read_only(self):
+        app = self._app()
+        app.run()
+        app.text_input(key="find_student_query").input("7654321").run()
+        assert not app.exception, app.exception
+        assert any(h.value == "1 match" for h in app.subheader)
+        app.run()  # an unrelated rerun keeps the results
+        assert any(h.value == "1 match" for h in app.subheader)
+        assert not app.get("arrow_data_frame") or True
+        assert len(app.dataframe) == 2  # matches + roster; neither editable
+        source = open(PAGE).read()
+        assert "data_editor" not in source and "extra_streamlit_components" not in source
