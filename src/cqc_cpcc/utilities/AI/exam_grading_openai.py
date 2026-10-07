@@ -17,8 +17,8 @@ Key changes from LangChain version:
 
 from typing import TYPE_CHECKING, TypeVar
 
+from cqc_cpcc.utilities.AI import llm_gateway
 from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_prompt
-from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
 from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
     OpenAITransportError,
@@ -33,10 +33,10 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound=BaseModel)
 
-# Default model configuration
-DEFAULT_GRADING_MODEL = "gpt-5-mini"
-DEFAULT_TEMPERATURE = 0.2
-DEFAULT_MAX_TOKENS = 4096
+# Model, reasoning effort and output budget come from config/model_registry.json
+# (roles "grading" and "digest"). None means "use the registry".
+DEFAULT_GRADING_MODEL = None
+DEFAULT_TEMPERATURE = None
 
 
 async def grade_exam_submission(
@@ -45,8 +45,8 @@ async def grade_exam_submission(
         student_submission: str,
         major_error_type_list: list[str],
         minor_error_type_list: list[str],
-        model_name: str = DEFAULT_GRADING_MODEL,
-        temperature: float = DEFAULT_TEMPERATURE,
+        model_name: str | None = DEFAULT_GRADING_MODEL,
+        temperature: float | None = DEFAULT_TEMPERATURE,
         callback: BaseCallbackHandler | None = None,
         use_preprocessing: bool | None = None,
         use_openrouter: bool = False,
@@ -67,11 +67,12 @@ async def grade_exam_submission(
         student_submission: Student's code to be graded
         major_error_type_list: List of major error type enum values
         minor_error_type_list: List of minor error type enum values
-        model_name: OpenAI model to use (default: gpt-5-mini) or OpenRouter model
-        temperature: Sampling temperature (default: 0.2)
+        model_name: OpenRouter model id overriding the registry's grading model (None = registry)
+        temperature: Deprecated and ignored; sampling is set per model in the registry.
         callback: Optional LangChain callback for compatibility (currently unused)
         use_preprocessing: Force preprocessing on/off. If None, auto-detect based on size.
-        use_openrouter: If True, use OpenRouter instead of OpenAI
+        use_openrouter: Legacy flag. All calls go through OpenRouter; together with
+            openrouter_auto_route=True it selects OpenRouter auto-routing.
         openrouter_auto_route: If True and use_openrouter=True, use OpenRouter auto-routing
         
     Returns:
@@ -113,12 +114,12 @@ async def grade_exam_submission(
         rubric_config = f"Major Errors:\n" + "\n".join(f"- {e}" for e in major_error_type_list)
         rubric_config += f"\n\nMinor Errors:\n" + "\n".join(f"- {e}" for e in minor_error_type_list)
 
-        # Generate digest (this has its own 2-attempt retry)
+        # The digest uses the registry's "digest" role, never the grading override
+        # (a grading model id may not be valid for the digest role).
         digest = await generate_preprocessing_digest(
             student_code=student_submission,
             assignment_instructions=exam_instructions,
             rubric_config=rubric_config,
-            model_name=model_name,
         )
 
         # Convert digest to JSON for grading prompt
@@ -147,34 +148,21 @@ async def grade_exam_submission(
             minor_error_types=minor_error_type_list,
         )
 
+    use_auto_route = (use_openrouter and openrouter_auto_route) or model_name == "openrouter/auto"
     logger.info(
-        f"Grading exam submission with {model_name} "
+        f"Grading exam submission with {'openrouter/auto' if use_auto_route else (model_name or 'registry default')} "
         f"({len(major_error_type_list)} major, {len(minor_error_type_list)} minor error types, "
-        f"preprocessing={'YES' if use_preprocessing else 'NO'}, "
-        f"openrouter={'YES' if use_openrouter else 'NO'})"
+        f"preprocessing={'YES' if use_preprocessing else 'NO'})"
     )
 
     try:
-        # Call OpenRouter or OpenAI based on configuration
-        if use_openrouter:
-            from cqc_cpcc.utilities.AI.openrouter_client import get_openrouter_completion
-
-            result = await get_openrouter_completion(
-                prompt=prompt,
-                schema_model=ErrorDefinitions,
-                use_auto_route=openrouter_auto_route,
-                model_name=model_name if not openrouter_auto_route else None,
-                max_tokens=DEFAULT_MAX_TOKENS,
-            )
-        else:
-            # Call OpenAI with structured output validation (with own 2-attempt retry)
-            result = await get_structured_completion(
-                prompt=prompt,
-                model_name=model_name,
-                schema_model=ErrorDefinitions,
-                temperature=temperature,
-                max_tokens=DEFAULT_MAX_TOKENS,
-            )
+        result = await llm_gateway.structured(
+            role="grading",
+            prompt=prompt,
+            schema_model=ErrorDefinitions,
+            override=None if use_auto_route else model_name,
+            use_auto_route=use_auto_route,
+        )
 
         logger.info(
             f"Grading complete: {len(result.all_major_errors or [])} major errors, "
@@ -218,8 +206,8 @@ class ExamGraderOpenAI:
             exam_solution: str,
             major_error_type_list: list[str],
             minor_error_type_list: list[str],
-            model_name: str = DEFAULT_GRADING_MODEL,
-            temperature: float = DEFAULT_TEMPERATURE,
+            model_name: str | None = DEFAULT_GRADING_MODEL,
+            temperature: float | None = DEFAULT_TEMPERATURE,
             use_openrouter: bool = False,
             openrouter_auto_route: bool = True,
     ):

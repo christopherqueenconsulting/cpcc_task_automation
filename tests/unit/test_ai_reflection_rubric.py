@@ -162,7 +162,7 @@ def test_ai_reflection_backend_scoring():
 
 
 @pytest.mark.unit
-@patch('cqc_cpcc.rubric_grading.get_structured_completion')
+@patch('cqc_cpcc.rubric_grading.llm_gateway.structured')
 async def test_ai_reflection_full_grading(mock_openai):
     """Test full grading flow with AI reflection rubric."""
     rubric = get_rubric_by_id("ai_assignment_reflection_rubric")

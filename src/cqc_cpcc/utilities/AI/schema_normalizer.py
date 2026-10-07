@@ -140,6 +140,15 @@ def _normalize_schema_recursive(schema: dict[str, Any]) -> None:
     if not isinstance(schema, dict):
         return
 
+    # Rule 0: "$ref" must stand alone. Some strict providers (e.g. Azure OpenAI via
+    # OpenRouter) reject "$ref cannot have keywords {'description'}". Pydantic emits
+    # description/default next to $ref for enum and model fields, so wrap the ref in
+    # a single-branch anyOf that keeps the sibling keywords.
+    if "$ref" in schema and len(schema) > 1:
+        ref = schema.pop("$ref")
+        schema.pop("default", None)
+        schema["anyOf"] = [{"$ref": ref}]
+
     # Rule 1: If this node has "properties", it's a structured object
     # that needs both additionalProperties: false AND a complete required array.
     # 

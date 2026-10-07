@@ -128,7 +128,7 @@ class TestExamGradingOpenAI:
         
         # Mock get_structured_completion
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = ErrorDefinitions.model_validate(valid_response)
@@ -159,7 +159,7 @@ class TestExamGradingOpenAI:
         """Test that malformed LLM output raises OpenAISchemaValidationError."""
         # Arrange - mock to raise validation error
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.side_effect = OpenAISchemaValidationError(
@@ -188,7 +188,7 @@ class TestExamGradingOpenAI:
         """Test that OpenAI API errors propagate correctly."""
         # Arrange
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.side_effect = OpenAITransportError(
@@ -218,7 +218,7 @@ class TestExamGradingOpenAI:
         }
         
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = ErrorDefinitions.model_validate(empty_response)
@@ -243,7 +243,7 @@ class TestExamGradingOpenAI:
         valid_response = create_valid_error_definitions_response()
         
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = ErrorDefinitions.model_validate(valid_response)
@@ -263,19 +263,12 @@ class TestExamGradingOpenAI:
         assert len(result.all_major_errors) == 1
         assert len(result.all_minor_errors) == 1
 
-    async def test_grade_exam_submission_routes_openrouter_when_enabled(self, mocker):
-        """When use_openrouter=True, grading should not call OpenAI wrapper."""
-        valid_response = create_valid_error_definitions_response()
-
-        mock_openrouter = mocker.patch(
-            "cqc_cpcc.utilities.AI.openrouter_client.get_openrouter_completion",
+    async def test_explicit_model_is_passed_as_override(self, mocker):
+        """use_openrouter=True with auto-route off grades on the chosen model via the gateway."""
+        mock_gateway = mocker.patch(
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
-        )
-        mock_openrouter.return_value = ErrorDefinitions.model_validate(valid_response)
-
-        mock_openai = mocker.patch(
-            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
-            new_callable=AsyncMock,
+            return_value=ErrorDefinitions.model_validate(create_valid_error_definitions_response()),
         )
 
         result = await grade_exam_submission(
@@ -290,8 +283,65 @@ class TestExamGradingOpenAI:
         )
 
         assert isinstance(result, ErrorDefinitions)
-        mock_openrouter.assert_called_once()
-        mock_openai.assert_not_called()
+        kwargs = mock_gateway.call_args.kwargs
+        assert kwargs["role"] == "grading"
+        assert kwargs["override"] == "openai/gpt-5-mini"
+        assert kwargs["use_auto_route"] is False
+
+    async def test_auto_route_when_enabled(self, mocker):
+        mock_gateway = mocker.patch(
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
+            new_callable=AsyncMock,
+            return_value=ErrorDefinitions.model_validate(create_valid_error_definitions_response()),
+        )
+
+        await grade_exam_submission(
+            exam_instructions=EXAM_INSTRUCTIONS,
+            exam_solution=EXAM_SOLUTION,
+            student_submission=STUDENT_SUBMISSION,
+            major_error_type_list=MAJOR_ERROR_TYPES,
+            minor_error_type_list=MINOR_ERROR_TYPES,
+            use_openrouter=True,
+            openrouter_auto_route=True,
+        )
+
+        kwargs = mock_gateway.call_args.kwargs
+        assert kwargs["use_auto_route"] is True
+        assert kwargs["override"] is None
+
+    async def test_preprocessing_digest_uses_digest_role_not_openai(self, mocker):
+        """Regression: the digest once sent an OpenRouter id to the direct OpenAI client."""
+        from cqc_cpcc.utilities.AI.openai_client import PreprocessingDigest
+
+        digest = PreprocessingDigest.model_validate({
+            "files": [],
+            "overall_assessment": "x",
+            "completeness_check": {"required_components_present": [], "missing_components": []},
+        })
+        mock_gateway = mocker.patch(
+            "cqc_cpcc.utilities.AI.llm_gateway.structured",
+            new_callable=AsyncMock,
+            side_effect=[digest, ErrorDefinitions.model_validate(create_valid_error_definitions_response())],
+        )
+        direct_openai = mocker.patch(
+            "cqc_cpcc.utilities.AI.openai_client.get_structured_completion", new_callable=AsyncMock
+        )
+
+        await grade_exam_submission(
+            exam_instructions=EXAM_INSTRUCTIONS,
+            exam_solution=EXAM_SOLUTION,
+            student_submission=STUDENT_SUBMISSION,
+            major_error_type_list=MAJOR_ERROR_TYPES,
+            minor_error_type_list=MINOR_ERROR_TYPES,
+            model_name="openai/gpt-5",
+            use_preprocessing=True,
+        )
+
+        direct_openai.assert_not_called()
+        roles = [c.kwargs.get("role", c.args[0] if c.args else None) for c in mock_gateway.call_args_list]
+        assert roles == ["digest", "grading"]
+        digest_call = mock_gateway.call_args_list[0]
+        assert digest_call.kwargs.get("override") is None
 
 
 @pytest.mark.unit
@@ -318,7 +368,7 @@ class TestAsyncBatchBehavior:
         ]
         
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.side_effect = [
@@ -355,7 +405,7 @@ class TestAsyncBatchBehavior:
         valid_response = create_valid_error_definitions_response()
         
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.utilities.AI.exam_grading_openai.get_structured_completion",
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.side_effect = [
@@ -395,18 +445,12 @@ class TestCodeGraderIntegration:
         # Arrange
         valid_response = create_valid_error_definitions_response()
         
-        # Mock the underlying OpenAI client call
-        mock_get_client = mocker.patch(
-            "cqc_cpcc.utilities.AI.openai_client.get_client",
+        mocker.patch(
+            "cqc_cpcc.utilities.AI.exam_grading_openai.llm_gateway.structured",
             new_callable=AsyncMock,
+            return_value=ErrorDefinitions.model_validate(valid_response),
         )
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        
-        # Mock the actual API call
-        mock_response = create_structured_response(valid_response)
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-        
+
         grader = CodeGrader(
             max_points=100,
             exam_instructions=EXAM_INSTRUCTIONS,

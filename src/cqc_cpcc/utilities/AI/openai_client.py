@@ -125,7 +125,8 @@ DEFAULT_BACKOFF_MULTIPLIER = 2.0
 JITTER_MIN = 0.5  # seconds
 JITTER_MAX = 1.5  # seconds
 
-# Default model configuration
+# Default model for the legacy direct-OpenAI path (get_structured_completion).
+# Production LLM calls go through llm_gateway and config/model_registry.json.
 DEFAULT_MODEL = "gpt-5-mini"
 
 # Backward-compatible module-level constant (tests patch this name directly)
@@ -170,6 +171,17 @@ _client_api_key: str | None = None
 _client_lock = asyncio.Lock()
 
 
+def _registry_profile(model: str):
+    """Capability profile for ``model`` from config/model_registry.json, or None."""
+    try:
+        from cqc_cpcc.utilities.AI.model_registry import load_registry
+        model_id = model if "/" in model else f"openai/{model}"
+        return load_registry().models.get(model_id)
+    except Exception as e:  # registry problems must not break the legacy path
+        logger.debug(f"Model registry unavailable for {model}: {e}")
+        return None
+
+
 def get_token_param_for_model(model: str) -> str:
     """Determine the correct token parameter name for a given model.
     
@@ -185,7 +197,11 @@ def get_token_param_for_model(model: str) -> str:
     Returns:
         Parameter name to use: 'max_completion_tokens' or 'max_tokens'
     """
-    # GPT-5 family uses max_completion_tokens
+    profile = _registry_profile(model)
+    if profile is not None:
+        return profile.token_param
+
+    # Unprofiled models: GPT-5 family uses max_completion_tokens
     if model.startswith("gpt-5"):
         return "max_completion_tokens"
 
@@ -249,8 +265,12 @@ def sanitize_openai_params(model: str, params: dict) -> dict:
     """
     sanitized = params.copy()
 
-    # GPT-5 family models have strict parameter constraints
-    if model.startswith("gpt-5"):
+    # Registry capability wins; unprofiled models fall back to the GPT-5 name rule.
+    profile = _registry_profile(model)
+    rejects_temperature = (
+        not profile.supports_temperature if profile is not None else model.startswith("gpt-5")
+    )
+    if rejects_temperature:
         # Temperature constraint: only default (1) is supported
         # Remove temperature if it's not the default to avoid 400 errors
         if "temperature" in sanitized:
@@ -260,7 +280,7 @@ def sanitize_openai_params(model: str, params: dict) -> dict:
             if temp_value != 1:
                 logger.debug(
                     f"Removing temperature={temp_value} for {model} "
-                    f"(GPT-5 only supports default temperature=1)"
+                    f"(model only supports default temperature=1)"
                 )
                 del sanitized["temperature"]
 
@@ -652,18 +672,24 @@ PREPROCESSING_TOKEN_THRESHOLD = 0.70  # Trigger preprocessing at 70% of context 
 CHARS_PER_TOKEN_ESTIMATE = 4  # Conservative estimate for token counting
 
 
-def should_use_preprocessing(student_code: str, context_window: int = 128_000) -> bool:
+def should_use_preprocessing(student_code: str, context_window: int | None = None) -> bool:
     """Check if preprocessing should be used based on input size.
     
     Args:
         student_code: Raw student submission code
-        context_window: Model context window size (default: 128K for GPT-5)
+        context_window: Model context window size. When None, the threshold is the
+            registry's ``roles.digest.trigger_prompt_tokens``.
         
     Returns:
         True if preprocessing should be used, False otherwise
     """
     estimated_tokens = len(student_code) // CHARS_PER_TOKEN_ESTIMATE
-    threshold_tokens = int(context_window * PREPROCESSING_TOKEN_THRESHOLD)
+    if context_window is None:
+        from cqc_cpcc.utilities.AI.model_registry import load_registry
+        threshold_tokens = load_registry().roles["digest"].trigger_prompt_tokens or 128_000
+        context_window = int(threshold_tokens / PREPROCESSING_TOKEN_THRESHOLD)
+    else:
+        threshold_tokens = int(context_window * PREPROCESSING_TOKEN_THRESHOLD)
 
     if estimated_tokens > threshold_tokens:
         logger.info(
@@ -774,7 +800,7 @@ async def generate_preprocessing_digest(
         student_code: str,
         assignment_instructions: str,
         rubric_config: str = "",
-        model_name: str = DEFAULT_MODEL,
+        model_name: str | None = None,
 ) -> PreprocessingDigest:
     """Generate a preprocessing digest for large student submissions.
     
@@ -786,7 +812,7 @@ async def generate_preprocessing_digest(
         student_code: Full student submission (all files)
         assignment_instructions: Assignment requirements
         rubric_config: Rubric or error criteria (optional)
-        model_name: Model to use (default: gpt-5-mini)
+        model_name: OpenRouter model id overriding the registry's "digest" role
         
     Returns:
         PreprocessingDigest with comprehensive analysis
@@ -806,12 +832,9 @@ async def generate_preprocessing_digest(
         f"(~{len(student_code) // CHARS_PER_TOKEN_ESTIMATE} est. tokens)"
     )
 
-    # Call with own 2-attempt retry logic
-    digest = await get_structured_completion(
-        prompt=prompt,
-        model_name=model_name,
-        schema_model=PreprocessingDigest,
-        max_retries=DEFAULT_MAX_RETRIES,  # 2 attempts total
+    from cqc_cpcc.utilities.AI import llm_gateway  # local import: gateway imports this module
+    digest = await llm_gateway.structured(
+        role="digest", prompt=prompt, schema_model=PreprocessingDigest, override=model_name
     )
 
     # Save digest to debug artifacts if debug enabled

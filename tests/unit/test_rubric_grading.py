@@ -208,7 +208,7 @@ class TestRubricGrading:
         # Mock OpenAI response
         mock_response = create_valid_rubric_assessment()
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
@@ -231,7 +231,7 @@ class TestRubricGrading:
         """Test grading with error definitions included."""
         mock_response = create_valid_rubric_assessment()
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
@@ -253,7 +253,7 @@ class TestRubricGrading:
         mock_response["rubric_id"] = "wrong_rubric"
         
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
@@ -271,7 +271,7 @@ class TestRubricGrading:
     async def test_grade_handles_openai_error(self, base_rubric, mocker):
         """Test graceful handling of OpenAI errors."""
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.side_effect = Exception("OpenAI API error")
@@ -285,17 +285,12 @@ class TestRubricGrading:
         
         assert "Failed to grade with rubric" in str(exc_info.value)
 
-    async def test_grade_with_rubric_routes_openrouter_models(self, base_rubric, mocker):
-        """OpenRouter model IDs should use OpenRouter client, not OpenAI client."""
-        mock_response = create_valid_rubric_assessment()
-        mock_openrouter = mocker.patch(
-            "cqc_cpcc.utilities.AI.openrouter_client.get_openrouter_completion",
+    async def test_grade_with_rubric_auto_route(self, base_rubric, mocker):
+        """model_name='openrouter/auto' selects auto-routing with no model override."""
+        mock_gateway = mocker.patch(
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
-        )
-        mock_openrouter.return_value = RubricAssessmentResult.model_validate(mock_response)
-        mock_openai = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
-            new_callable=AsyncMock,
+            return_value=RubricAssessmentResult.model_validate(create_valid_rubric_assessment()),
         )
 
         result = await grade_with_rubric(
@@ -306,8 +301,28 @@ class TestRubricGrading:
         )
 
         assert isinstance(result, RubricAssessmentResult)
-        mock_openrouter.assert_called_once()
-        mock_openai.assert_not_called()
+        kwargs = mock_gateway.call_args.kwargs
+        assert kwargs["role"] == "grading"
+        assert kwargs["use_auto_route"] is True
+        assert kwargs["override"] is None
+
+    async def test_grade_with_rubric_defaults_to_registry_model(self, base_rubric, mocker):
+        """No model_name means the registry's grading role decides (no override)."""
+        mock_gateway = mocker.patch(
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
+            new_callable=AsyncMock,
+            return_value=RubricAssessmentResult.model_validate(create_valid_rubric_assessment()),
+        )
+
+        await grade_with_rubric(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+        )
+
+        kwargs = mock_gateway.call_args.kwargs
+        assert kwargs["override"] is None
+        assert kwargs["use_auto_route"] is False
 
 
 @pytest.mark.unit
@@ -459,7 +474,7 @@ class TestRubricGraderClass:
         """Test RubricGrader.grade() method."""
         mock_response = create_valid_rubric_assessment()
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
@@ -531,7 +546,7 @@ class TestRubricGradingOptionalParameters:
         # Mock OpenAI response without error definitions
         mock_response = create_valid_rubric_assessment()
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
@@ -563,7 +578,7 @@ class TestRubricGradingOptionalParameters:
         # Mock OpenAI response
         mock_response = create_valid_rubric_assessment()
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)
@@ -594,7 +609,7 @@ class TestRubricGradingOptionalParameters:
         # Mock OpenAI response
         mock_response = create_valid_rubric_assessment()
         mock_get_completion = mocker.patch(
-            "cqc_cpcc.rubric_grading.get_structured_completion",
+            "cqc_cpcc.rubric_grading.llm_gateway.structured",
             new_callable=AsyncMock,
         )
         mock_get_completion.return_value = RubricAssessmentResult.model_validate(mock_response)

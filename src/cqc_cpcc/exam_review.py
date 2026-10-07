@@ -336,8 +336,8 @@ class CodeGrader:
     major_error_type_list: list = None
     minor_error_type_list: list = None
     use_openai_wrapper: bool = True  # Default to new implementation
-    model_name: str = DEFAULT_GRADING_MODEL
-    temperature: float = DEFAULT_TEMPERATURE
+    model_name: Optional[str] = DEFAULT_GRADING_MODEL
+    temperature: Optional[float] = DEFAULT_TEMPERATURE
     use_openrouter: bool = False
     openrouter_auto_route: bool = True
 
@@ -348,8 +348,8 @@ class CodeGrader:
                  minor_error_type_list: list = None,
                  grader_llm: BaseChatModel = None,
                  use_openai_wrapper: bool = True,
-                 model_name: str = DEFAULT_GRADING_MODEL,
-                 temperature: float = DEFAULT_TEMPERATURE,
+                 model_name: Optional[str] = DEFAULT_GRADING_MODEL,
+                 temperature: Optional[float] = DEFAULT_TEMPERATURE,
                  use_openrouter: bool = False,
                  openrouter_auto_route: bool = True):
         self.max_points = max_points

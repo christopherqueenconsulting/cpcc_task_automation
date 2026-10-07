@@ -214,13 +214,17 @@ class TestPreprocessing:
         """Large input should trigger preprocessing detection."""
         from cqc_cpcc.utilities.AI.openai_client import should_use_preprocessing
         
-        # Small input (< 70% of 128K)
+        # Explicit context window: threshold is 70% of it
         small_code = "print('hello')" * 1000  # ~14K chars
-        assert not should_use_preprocessing(small_code)
-        
-        # Large input (> 70% of 128K = ~357K chars)
-        large_code = "print('hello')" * 30000  # ~420K chars
-        assert should_use_preprocessing(large_code)
+        assert not should_use_preprocessing(small_code, context_window=128_000)
+        large_code = "print('hello')" * 30000  # ~420K chars (~105K tokens > 89.6K)
+        assert should_use_preprocessing(large_code, context_window=128_000)
+
+        # Default: threshold is the registry's roles.digest.trigger_prompt_tokens
+        from cqc_cpcc.utilities.AI.model_registry import load_registry
+        trigger = load_registry().roles["digest"].trigger_prompt_tokens
+        assert not should_use_preprocessing("x" * (trigger * 4 - 400))
+        assert should_use_preprocessing("x" * (trigger * 4 + 400))
     
     async def test_preprocessing_builds_valid_prompt(self):
         """Preprocessing should build a valid prompt."""
