@@ -57,3 +57,26 @@ def test_start_button_is_disabled_until_inputs_are_ready(page, button_key):
     assert button.disabled
     assert button.label.endswith("0 submissions")
     assert not any(h.value == "Chat GPT Prompt" for h in app.header)
+
+
+@pytest.mark.unit
+def test_split_batch_results_keeps_finished_work_and_returns_the_interrupt():
+    from cqc_streamlit_app.grade_assignment import _split_batch_results
+
+    class Rerun(BaseException):
+        pass
+
+    stop = Rerun()
+    finished, failed, interrupt = _split_batch_results(
+        ["a", "b", "c", "d"], [("a", 1), stop, ValueError("boom"), ("d", 2)])
+    assert finished == [("a", 1), ("d", 2)]
+    assert failed == ["b", "c"]  # interrupted and errored students can both be retried
+    assert interrupt is stop
+
+
+@pytest.mark.unit
+def test_split_batch_results_without_interrupt():
+    from cqc_streamlit_app.grade_assignment import _split_batch_results
+
+    finished, failed, interrupt = _split_batch_results(["a"], [("a", None)])
+    assert finished == [("a", None)] and failed == [] and interrupt is None

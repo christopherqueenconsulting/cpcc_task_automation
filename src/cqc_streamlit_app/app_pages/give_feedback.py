@@ -160,9 +160,15 @@ async def get_feedback_content():
     if start:
         store[key] = await _run_feedback(course_name, instructions, solution, feedback_types_list,
                                          selected_model, selected_temperature, submission_paths, accepted)
+        st.session_state["feedback_last_key"] = key
         st.rerun()
 
     run = store.get(key)
+    if not run and not submission_paths:
+        # Uploads clear when you visit another page; the finished run is still here.
+        run = store.get(st.session_state.get("feedback_last_key"))
+        if run:
+            st.caption("Showing your last feedback run. Upload new files to start another.")
     if run:
         _show_feedback_results(run)
 

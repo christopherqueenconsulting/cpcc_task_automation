@@ -208,8 +208,8 @@ def define_grading_rubric():
     edited_df = st.data_editor(grading_rubric_df, key='grading_rubric', hide_index=True,
                                num_rows="dynamic",
                                column_config={
-                                   'Name': st.column_config.TextColumn(GR_CRITERIA + ' (required)', required=True),
-                                   'Description': st.column_config.TextColumn(GR_PPL + ' (required)', required=True)
+                                   GR_CRITERIA: st.column_config.TextColumn('Criteria (required)', required=True),
+                                   GR_PPL: st.column_config.NumberColumn('Possible points lost (required)', required=True)
                                }
                                )  # 👈 An editable dataframe
 
@@ -283,10 +283,16 @@ def get_flowgorithm_content():
                     feedback = f"Grading failed: {e}"
             results.append((name, feedback))
         store[key] = results
+        st.session_state["flowgorithm_last_key"] = key
     if not ready:
         st.caption("Add the instructions and at least one submission to grade.")
 
     results = store.get(key)
+    if not results and not submissions:
+        # Uploads clear when you visit another page; the graded run is still here.
+        results = store.get(st.session_state.get("flowgorithm_last_key"))
+        if results:
+            st.caption("Showing your last Flowgorithm run. Upload new files to grade another batch.")
     if results:
         st.subheader("Feedback and grade", anchor=False)
         tabs = st.tabs([name for name, _ in results])
@@ -561,9 +567,9 @@ def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
     Returns:
         RubricOverrides object with user edits
     """
-    st.header("Rubric Criteria Editor")
+    st.header("Rubric criteria editor")
     st.markdown(f"**Rubric:** {rubric.title} (v{rubric.rubric_version})")
-    st.markdown(f"**Total Points:** {rubric.total_points_possible}")
+    st.markdown(f"**Total points:** {rubric.total_points_possible}")
 
     # Build criteria dataframe for editing
     criteria_data = []
@@ -620,7 +626,7 @@ def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
             criterion_overrides[criterion_id] = override
 
     # Optional: Add level editor in expander
-    with st.expander("Advanced: Edit Performance Levels", expanded=False):
+    with st.expander("Advanced: edit performance levels", expanded=False):
         st.info(
             "Performance level editing is optional. Leave unchanged to use default levels from rubric configuration.")
         st.markdown("*Level editing UI can be added here in future if needed.*")
@@ -725,12 +731,12 @@ def display_assignment_and_error_definitions_selector(
 
     with col2:
         # Use a button instead of checkbox to avoid state modification issues
-        if st.button("+ Create New", key="show_create_assignment_button"):
+        if st.button("Create new", key="show_create_assignment_button", icon=":material/add:"):
             st.session_state.show_create_assignment_form = True
 
     # Handle new assignment creation
     if st.session_state.get('show_create_assignment_form', False):
-        st.subheader("Create New Assignment")
+        st.subheader("Create new assignment")
         col1, col2 = st.columns(2)
 
         with col1:
@@ -749,7 +755,7 @@ def display_assignment_and_error_definitions_selector(
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("✓ Create Assignment", key="create_assignment_button", type="primary"):
+            if st.button("Create assignment", key="create_assignment_button", type="primary", icon=":material/check:"):
                 if new_assignment_id and new_assignment_name:
                     try:
                         add_assignment_to_course(
@@ -1548,6 +1554,28 @@ async def grade_single_rubric_student(
 
 
 @telemetry.tracked_run("rubric_grading")
+def _split_batch_results(student_ids: list[str], results: list):
+    """Sort ``asyncio.gather(..., return_exceptions=True)`` output into finished results,
+    failed student ids, and an interrupt to re-raise.
+
+    A Stop or a click during grading raises Streamlit's rerun/stop exception (a
+    BaseException) inside one task. That student counts as failed, so it can be retried,
+    and the caller re-raises the interrupt only after it has saved every finished result
+    — paid work is never thrown away.
+    """
+    finished, failed, interrupt = [], [], None
+    for student_id, result in zip(student_ids, results):
+        if isinstance(result, BaseException):
+            if not isinstance(result, Exception):
+                interrupt = interrupt or result
+            else:
+                logger.warning(f"Grading task failed for {alias(student_id)}: {type(result).__name__}")
+            failed.append(student_id)
+        else:
+            finished.append(result)
+    return finished, failed, interrupt
+
+
 async def process_rubric_grading_batch(
         submission_file_paths: list[tuple[str, str]],
         effective_rubric: Rubric,
@@ -1636,13 +1664,6 @@ async def process_rubric_grading_batch(
         ),
     }
 
-    # Add "Expand All" button for student status blocks
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔽 Expand All Student Results", key="expand_all_students_button"):
-            st.session_state.expand_all_students = True
-            st.rerun()
-
     # Create async tasks for concurrent grading
     # Use gather with return_exceptions=True to ensure one failure doesn't stop others
     tasks = []
@@ -1667,14 +1688,8 @@ async def process_rubric_grading_batch(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Separate successful results from failures
-    failed_student_ids = []
-    for result in results:
-        if isinstance(result, Exception):
-            # Unexpected exception not caught inside grade_single_rubric_student
-            logger.debug(f"Skipping unexpected exception: {type(result).__name__}")
-            continue
-
-        student_id, assessment = result
+    finished, failed_student_ids, interrupt = _split_batch_results(list(student_submissions), results)
+    for student_id, assessment in finished:
         if assessment is None:
             # Grading failed - cache the failure
             failed_student_ids.append(student_id)
@@ -1684,6 +1699,10 @@ async def process_rubric_grading_batch(
     # Store results AND failures in session state for this run_key
     st.session_state.grading_results_by_key[run_key] = all_results
     st.session_state.grading_failures_by_key[run_key] = failed_student_ids
+    if interrupt is not None:
+        # Keep what was paid for; the unfinished students can be retried from Results.
+        remember_results(run_key, "rubric")
+        raise interrupt
 
     # Display summary
     success_count = len(all_results)
@@ -1885,12 +1904,6 @@ async def process_error_only_grading_batch(
     total_students = len(student_submissions)
     st.info(f"📊 Grading {total_students} student submission(s)...")
 
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔽 Expand All Student Results", key="expand_all_students_error_only_button"):
-            st.session_state.expand_all_students = True
-            st.rerun()
-
     tasks = []
     for student_id, submission in student_submissions.items():
         tasks.append(
@@ -1914,15 +1927,15 @@ async def process_error_only_grading_batch(
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for result in results:
-        if isinstance(result, Exception):
-            logger.debug(f"Skipping failed task: {type(result).__name__}")
-            continue
-        student_id, result_summary, doc_file = result
+    finished, _failed, interrupt = _split_batch_results(list(student_submissions), results)
+    for student_id, result_summary, doc_file in finished:
         all_results.append((student_id, result_summary))
         doc_files.append(doc_file)
 
     st.session_state.error_only_results_by_key[run_key] = all_results
+    if interrupt is not None:
+        remember_results(run_key, "errors_only")
+        raise interrupt
 
     success_count = len(all_results)
     failure_count = total_students - success_count
@@ -2770,7 +2783,8 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
     """Re-grade one flagged student with the validity gate bypassed."""
     inputs = st.session_state.get("grading_inputs_by_key", {}).get(run_key)
     if not inputs or student_id not in inputs["submissions"]:
-        st.error("The original files for this run are no longer available; grade the batch again.")
+        st.error("The original files for this run are no longer available (the app restarted). "
+                 "Use Clear results, then grade the batch again.")
         return
     submission = inputs["submissions"][student_id]
     if not submission.files:
@@ -2792,6 +2806,58 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
             return
     _replace_result(run_key, student_id, result)
     st.rerun()
+
+
+def _retry_failed(run_key: str) -> None:
+    """Grade only the students whose call failed or was interrupted, then merge them in."""
+    inputs = st.session_state.get("grading_inputs_by_key", {}).get(run_key)
+    failed = list(st.session_state.grading_failures_by_key.get(run_key, []))
+    if not inputs:
+        st.error("The original files for this run are no longer available (the app restarted). "
+                 "Use Clear results, then grade the batch again.")
+        return
+    still_failed, added = [], []
+    for student_id in failed:
+        submission = inputs["submissions"].get(student_id)
+        if submission is None:
+            still_failed.append(student_id)
+            continue
+        with st.spinner(f"Grading {student_id}..."):
+            try:
+                result = run_coroutine_blocking(grade_with_rubric(
+                    student_submission=build_submission_text_with_token_limit(files=submission.files),
+                    source_files=submission.files,
+                    rejected_files=submission.rejected_files,
+                    **inputs["kwargs"],
+                ))
+                added.append((student_id, result))
+            except Exception as e:  # noqa: BLE001 - one failure must not lose the others
+                logger.error(f"Retry failed for {alias(student_id)}: {e}", exc_info=True)
+                still_failed.append(student_id)
+    st.session_state.grading_results_by_key[run_key] = (
+        st.session_state.grading_results_by_key.get(run_key, []) + added)
+    st.session_state.grading_failures_by_key[run_key] = still_failed
+    st.session_state.feedback_zip_bytes_by_key.pop(run_key, None)
+    st.session_state.get("feedback_doc_paths_by_key", {}).pop(run_key, None)
+    st.session_state.pop(f"grading_summary_df_{run_key}", None)
+    remember_results(run_key, "rubric")
+    st.rerun()
+
+
+def render_failed(run_key: str) -> None:
+    """Offer to grade only the failed students again (UX goals: Failed can be retried)."""
+    failed = st.session_state.grading_failures_by_key.get(run_key, [])
+    if not failed:
+        return
+    with st.container(border=True, horizontal=True, vertical_alignment="center"):
+        st.markdown(f"**{len(failed)} submission(s) failed to grade:** {', '.join(failed)}")
+        if run_key in st.session_state.get("grading_inputs_by_key", {}):
+            if st.button(f"Retry {len(failed)} failed", key=f"retry_failed_{run_key}",
+                         icon=":material/refresh:"):
+                _retry_failed(run_key)
+        else:
+            st.caption("The original files are gone after an app restart. Use Clear results, "
+                       "then grade the batch again to retry them.")
 
 
 def render_needs_review(run_key: str) -> None:
@@ -2876,6 +2942,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
                   help="Excludes failed calls and zeros still waiting for your review.")
 
     render_needs_review(run_key)
+    render_failed(run_key)
 
     # Students, hand-back and write-back as tabs: each is one click away with no scrolling,
     # however long the class list is.
