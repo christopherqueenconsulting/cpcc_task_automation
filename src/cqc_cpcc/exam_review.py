@@ -443,7 +443,8 @@ class CodeGrader:
 
     async def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None,
                                validity_gate: bool = True, source_files: Optional[dict] = None,
-                               expected_language: Optional[str] = "java"):
+                               expected_language: Optional[str] = "java",
+                               rejected_files: Optional[list] = None):
         """Grade ``student_submission``; missing/empty/trivial/wrong-type work scores 0.
 
         ``source_files`` (``{filename: temp_path}``) lets the gate check file types;
@@ -455,9 +456,9 @@ class CodeGrader:
         self.invalid_reason = None
         if validity_gate:
             from cqc_cpcc.utilities.submission_validity import check_validity
-            files = source_files or {"submission": student_submission or ""}
+            files = source_files if source_files is not None else {"submission": student_submission or ""}
             validity = check_validity(files, expected_language, submission_text=student_submission,
-                                      reference_code=self.exam_solution)
+                                      reference_code=self.exam_solution, rejected_files=rejected_files)
             if not validity.ok:
                 self.invalid_reason = validity.reason
                 self.major_errors, self.minor_errors = [], []

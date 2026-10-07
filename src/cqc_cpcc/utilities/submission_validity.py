@@ -15,8 +15,7 @@ Statuses:
     wrong_type  a code assignment with no source file in the course language
                 (e.g. only a .docx/.pdf for a C++ project)
     empty       the source is only whitespace/comments (or the prose is blank)
-    trivial     fewer than ``min_statements`` meaningful code lines, or the code
-                is essentially the starter code
+    trivial     fewer than ``min_statements`` meaningful code lines
 
 The expected language comes from the rubric: only rubrics with an ``error_count``
 criterion are code rubrics, and their course maps to one language. Prose rubrics
@@ -28,7 +27,6 @@ SAFETY: this module only reads text; it never compiles or executes student code.
 
 from __future__ import annotations
 
-import difflib
 import math
 import os
 import re
@@ -74,7 +72,6 @@ DEFAULT_MIN_STATEMENTS = 3
 # With a reference solution, "trivial" means under this share of its meaningful lines
 # (capped at DEFAULT_MIN_STATEMENTS), so a 3-line Hello World assignment is not flagged.
 REFERENCE_MIN_FRACTION = 0.3
-STARTER_SIMILARITY_THRESHOLD = 0.90
 
 # Student-facing names and the extensions worth naming in a message.
 LANGUAGE_NAMES = {"cpp": ("C++", ".cpp"), "java": ("Java", ".java"),
@@ -112,6 +109,12 @@ class SubmissionValidity:
     @property
     def reason(self) -> str:
         return "; ".join(self.reasons)
+
+
+def language_for_course(course_name: Optional[str]) -> Optional[str]:
+    """Code language for a course id or composite name like ``CSC_134_N805_Project 1``."""
+    m = re.search(r"CSC[\s_-]?(\d{3})", course_name or "", re.IGNORECASE)
+    return COURSE_LANGUAGE.get(f"CSC_{m.group(1)}") if m else None
 
 
 def expected_language_for_rubric(rubric) -> Optional[str]:
@@ -170,7 +173,8 @@ def _read_text(ref: str) -> str:
 def _strip_submission_headers(text: str) -> str:
     """Drop the file-name headers and fences that submission builders add."""
     text = re.sub(r"^#+\s*Submission File Name:.*$", "", text or "", flags=re.MULTILINE)
-    text = re.sub(r"^```\w*\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^#+\s*Submission Content:\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"```[\w+#-]*", "", text)
     return text
 
 
@@ -178,9 +182,9 @@ def check_validity(
         files: Optional[dict],
         expected_language: Optional[str] = None,
         submission_text: Optional[str] = None,
-        starter_code: Optional[str] = None,
         min_statements: int = DEFAULT_MIN_STATEMENTS,
         reference_code: Optional[str] = None,
+        rejected_files: Optional[list] = None,
 ) -> SubmissionValidity:
     """Decide whether a submission contains real, gradeable work.
 
@@ -190,16 +194,24 @@ def check_validity(
             prose/unknown assignments (only the missing/empty checks run).
         submission_text: the text actually sent to the grader. Used for the empty
             check on prose assignments, where the files may be .docx/.pdf.
-        starter_code: optional starter template; code ≥ 90% similar to it is trivial.
         min_statements: minimum meaningful code lines for a code assignment.
         reference_code: optional reference solution; when given, the minimum becomes
             30% of its meaningful lines (never more than ``min_statements``, never < 1).
+        rejected_files: names of files the student turned in that were not an accepted
+            type (from ZIP extraction); with no other files this is ``wrong_type``.
     """
     files = files or {}
     names = list(files.keys())
     v = SubmissionValidity(status=OK, expected_language=expected_language, found_files=names)
 
-    if not files and not (submission_text or "").strip():
+    if not files and rejected_files:
+        v.status = WRONG_TYPE
+        v.found_files = list(rejected_files)
+        v.reasons.append("None of the submitted files is a type this assignment accepts: "
+                         + ", ".join(rejected_files) + ".")
+        return v
+
+    if not files and not _strip_submission_headers(submission_text or "").strip():
         v.status = MISSING
         v.reasons.append("No files were submitted.")
         return v
@@ -240,7 +252,6 @@ def check_validity(
         )
         return v
 
-    code = "\n".join(text for _, text in sources)
     meaningful = sum(count_meaningful_lines(text, expected_language) for _, text in sources)
     v.meaningful_lines = meaningful
 
@@ -259,16 +270,5 @@ def check_validity(
             f"Only {meaningful} meaningful line(s) of code (minimum {min_statements})."
         )
         return v
-
-    if starter_code and starter_code.strip():
-        ratio = difflib.SequenceMatcher(
-            None,
-            strip_comments(starter_code, expected_language).split(),
-            strip_comments(code, expected_language).split(),
-        ).ratio()
-        if ratio >= STARTER_SIMILARITY_THRESHOLD:
-            v.status = TRIVIAL
-            v.reasons.append(f"The code is {ratio:.0%} identical to the starter code.")
-            return v
 
     return v

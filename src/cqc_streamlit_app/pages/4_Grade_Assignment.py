@@ -25,9 +25,8 @@ from cqc_cpcc.rubric_config import (
     get_distinct_course_ids,
     get_rubrics_for_course,
 )
-from cqc_cpcc.course_identifier import normalize_course_id
 from cqc_cpcc.rubric_grading import grade_with_rubric
-from cqc_cpcc.utilities.submission_validity import COURSE_LANGUAGE
+from cqc_cpcc.utilities.submission_validity import language_for_course
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
 from cqc_cpcc.rubric_overrides import (
     CriterionOverride,
@@ -1365,6 +1364,7 @@ async def grade_single_rubric_student(
                 # toolchain using the student's real source files (name -> temp path).
                 source_files=student_submission.files,
                 gate_report=gate_report,
+                rejected_files=student_submission.rejected_files,
             )
 
             status.update(label=f"{status_label} | Processing results...")
@@ -1782,7 +1782,8 @@ async def grade_single_error_only_student(
                 submission_text,
                 callback=ChatGPTStatusCallbackHandler(status, status_label),
                 source_files=student_submission.files,
-                expected_language=COURSE_LANGUAGE.get(normalize_course_id(course_name)),
+                expected_language=language_for_course(course_name),
+                rejected_files=student_submission.rejected_files,
             )
 
             feedback_text = code_grader.get_text_feedback()

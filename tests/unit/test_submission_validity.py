@@ -138,13 +138,6 @@ def test_builder_headers_are_not_counted_as_code():
 
 
 @pytest.mark.unit
-def test_starter_code_is_trivial(tmp_path):
-    v = sv.check_validity({"main.cpp": _write(tmp_path, "main.cpp", CPP_PROGRAM)}, "cpp",
-                          starter_code=CPP_PROGRAM)
-    assert v.status == sv.TRIVIAL
-
-
-@pytest.mark.unit
 def test_docx_for_cpp_is_wrong_type(tmp_path):
     path = _docx(tmp_path, "Project3.docx", "Here is my project. I could not get it to work.")
     v = sv.check_validity({"Project3.docx": path}, "cpp")
@@ -335,3 +328,84 @@ def test_run_coroutine_blocking_works_inside_a_running_loop():
         return run_coroutine_blocking(inner())
 
     assert asyncio.run(page()) == 42
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["Week1.docx", "Week1.txt"])
+def test_blank_prose_through_real_builder_is_empty(tmp_path, name):
+    """Prose rubrics get the empty check on the real submission-text builder output."""
+    from cqc_cpcc.rubric_grading import check_submission_validity
+    from cqc_cpcc.utilities.zip_grading_utils import build_submission_text_with_token_limit
+    path = _docx(tmp_path, name, "") if name.endswith(".docx") else _write(tmp_path, name, "")
+    files = {name: path}
+    text = build_submission_text_with_token_limit(files=files)
+    rubric = get_rubric_by_id("csc113_week1_reflection_rubric")
+    assert check_submission_validity(rubric, files, text).status == sv.EMPTY
+
+
+@pytest.mark.unit
+def test_real_prose_through_real_builder_is_ok(tmp_path):
+    from cqc_cpcc.rubric_grading import check_submission_validity
+    from cqc_cpcc.utilities.zip_grading_utils import build_submission_text_with_token_limit
+    files = {"Week1.docx": _docx(tmp_path, "Week1.docx", "This week I learned about prompts.")}
+    text = build_submission_text_with_token_limit(files=files)
+    rubric = get_rubric_by_id("csc113_week1_reflection_rubric")
+    assert check_submission_validity(rubric, files, text).ok
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("course_name,lang", [
+    ("CSC_134_N805_Project 1", "cpp"), ("CSC151_Exam 1", "java"),
+    ("CSC_251", "java"), ("CSC_113_Week 1", None), ("", None),
+])
+def test_language_for_composite_course_name(course_name, lang):
+    assert sv.language_for_course(course_name) == lang
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_error_only_path_with_page_course_name_catches_empty_and_docx(tmp_path):
+    """The page passes '<course>_<section>_<assignment>'; the gate must still apply."""
+    from cqc_cpcc.exam_review import CodeGrader
+    from cqc_cpcc.utilities.zip_grading_utils import build_submission_text_with_token_limit
+    lang = sv.language_for_course("CSC_134_N805_Project 1")
+    for files in ({"main.cpp": _write(tmp_path, "main.cpp", "")},
+                  {"P.docx": _docx(tmp_path, "P.docx", "write-up")}):
+        grader = CodeGrader(max_points=30, exam_instructions="x", exam_solution="")
+        with patch("cqc_cpcc.exam_review.grade_exam_submission", new=AsyncMock()) as llm:
+            await grader.grade_submission(build_submission_text_with_token_limit(files=files),
+                                          source_files=files, expected_language=lang)
+        llm.assert_not_called()
+        assert grader.points == 0
+
+
+@pytest.mark.unit
+def test_only_rejected_files_is_wrong_type_not_missing():
+    v = sv.check_validity({}, "cpp", rejected_files=["Project.docx"])
+    assert v.status == sv.WRONG_TYPE
+    assert "Project.docx" in v.reason
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_model_cannot_set_gate_fields(tmp_path, cpp_rubric):
+    """A model response carrying needs_review etc. is reset by the backend."""
+    path = _write(tmp_path, "main.cpp", CPP_PROGRAM)
+    fake = RubricAssessmentResult(
+        rubric_id=cpp_rubric.rubric_id, rubric_version=cpp_rubric.rubric_version,
+        total_points_possible=cpp_rubric.total_points_possible, total_points_earned=0,
+        criteria_results=[{"criterion_id": "program_performance",
+                           "criterion_name": "Program Performance",
+                           "points_possible": cpp_rubric.total_points_possible,
+                           "feedback": "ok"}],
+        overall_feedback="ok", detected_errors=[],
+        needs_review=True, review_confirmed=True, validity_status="empty",
+    )
+    with patch("cqc_cpcc.rubric_grading.llm_gateway.structured", new=AsyncMock(return_value=fake)):
+        result = await grade_with_rubric(
+            rubric=cpp_rubric, assignment_instructions="Write a payroll program.",
+            student_submission=CPP_PROGRAM, source_files={"main.cpp": path},
+        )
+    assert not result.needs_review and not result.review_confirmed
+    assert result.validity_status is None
+    assert result.total_points_earned == cpp_rubric.total_points_possible

@@ -364,7 +364,7 @@ async def grade_with_rubric(
         source_files: Optional[dict] = None,
         gate_report: Optional[dict] = None,
         validity_gate: bool = True,
-        starter_code: Optional[str] = None,
+        rejected_files: Optional[list] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -394,8 +394,8 @@ async def grade_with_rubric(
         validity_gate: When True (default), a missing, empty, trivial or wrong-type
             submission scores 0 with ``needs_review`` set and NO LLM call is made.
             The instructor's "Grade anyway" passes False.
-        starter_code: Optional starter template; code that is essentially the starter
-            is treated as trivial.
+        rejected_files: Names of files the student turned in that were not an
+            accepted type; with no other files the submission is ``wrong_type``.
 
     Returns:
         RubricAssessmentResult with complete grading breakdown
@@ -421,8 +421,8 @@ async def grade_with_rubric(
     # evidence, before the model can call it error-free.
     if validity_gate:
         validity = check_submission_validity(
-            rubric, source_files, student_submission, starter_code=starter_code,
-            reference_solution=reference_solution)
+            rubric, source_files, student_submission,
+            reference_solution=reference_solution, rejected_files=rejected_files)
         if gate_report is not None:
             gate_report["validity"] = {"status": validity.status, "reason": validity.reason}
         if not validity.ok:
@@ -513,6 +513,12 @@ async def grade_with_rubric(
                 effective_minor_errors=result.effective_minor_errors,
             )
 
+        # Gate fields are backend-only; never trust values the model may have sent.
+        result = result.model_copy(update={
+            "needs_review": False, "review_confirmed": False,
+            "validity_status": None, "validity_reason": None,
+        })
+
         # Compile gate: verify the LLM's "Does Not Compile" call against the REAL
         # local toolchain and correct detected_errors BEFORE scoring, so the score/band
         # reflect the truth (a false "Does Not Compile" otherwise floors the grade).
@@ -566,8 +572,8 @@ def check_submission_validity(
         rubric: Rubric,
         source_files: Optional[dict],
         student_submission: str,
-        starter_code: Optional[str] = None,
         reference_solution: Optional[str] = None,
+        rejected_files: Optional[list] = None,
 ):
     """Run the submission-validity gate for ``rubric`` (see ``submission_validity``).
 
@@ -584,8 +590,8 @@ def check_submission_validity(
         files,
         expected_language=expected_language_for_rubric(rubric),
         submission_text=student_submission,
-        starter_code=starter_code,
         reference_code=reference_solution,
+        rejected_files=rejected_files,
     )
 
 
