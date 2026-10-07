@@ -4,25 +4,29 @@ Multi-page Streamlit application providing web interface for CPCC Task Automatio
 
 ## Features
 
-### Take Attendance
-Automated attendance tracking using student activities (assignments, quizzes, discussions) in BrightSpace. Records attendance in MyColleges and tracking spreadsheet.
+Pages are grouped in the navigation (`Home.py` builds it; page scripts live in `app_pages/`).
 
-### Give Feedback
-AI-powered feedback generation for student project submissions using OpenAI GPT models.
+### Grading
+* **Grade assignment**: rubric grading for exams, projects and reflections, with the
+  submission-validity gate (empty, missing or wrong-type work is scored 0 and held for
+  your review) and the requirement checklist (unfinished work loses points for what it
+  leaves out).
+* **Flowgorithm assignments**: feedback and grading for Flowgorithm submissions.
+* **Give feedback**: AI feedback on student project submissions (via OpenRouter).
 
-### Grade Exam
-Automated exam grading with AI-generated error definitions and rubric application.
-
-### Find Student
-Search and lookup student information across systems.
+### Students
+* **Take attendance**: records attendance from BrightSpace activity in MyColleges and
+  the tracking spreadsheet.
+* **Find student**: looks a student up across your course rosters.
 
 ### Settings
-Configure credentials and preferences:
-* [OpenAI API Key](https://platform.openai.com/account/api-keys)
-* Instructor User ID
-* Instructor Password
-* Instructor Signature
-* Attendance Tracker URL
+Credentials (OpenRouter API key; OpenAI key only for audio/video transcription),
+instructor login, analytics, a model per feature, and **Preferences**.
+
+### Legacy (deprecated)
+Hidden unless **Settings → Preferences → Show legacy pages** is on (saved to
+`~/.cqc_cpcc/app_settings.json`). Currently **Exams (legacy)**, the pre-rubric exam
+grader. Legacy pages will be removed once they are no longer used.
 
 ## Documentation
 

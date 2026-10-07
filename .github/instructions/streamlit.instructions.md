@@ -5,17 +5,14 @@
 ## Application Structure
 
 ### Multi-Page App
-- `Home.py` - Main entry point (landing page)
-- `pages/` - Individual feature pages:
-  - `1_Take_Attendance.py` - Attendance automation UI
-  - `2_Give_Feedback.py` - Feedback generation UI
-  - `4_Grade_Assignment.py` - Exam grading UI
-  - `5_Find_Student.py` - Student lookup UI
-  - `6_Settings.py` - Configuration and credentials
+- `Home.py` - Entry point: builds `st.navigation` from `navigation.PAGE_SPECS` and runs the page
+- `app_pages/` - Page scripts: `home.py`, `grade_assignment.py`, `flowgorithm.py`,
+  `give_feedback.py`, `take_attendance.py`, `find_student.py`, `settings.py`, and
+  `legacy_exam_grading.py` (deprecated; listed only when "Show legacy pages" is on)
 
-### Naming Convention
-- Page files prefixed with numbers for ordering: `1_`, `2_`, etc.
-- Names are converted to navigation: `1_Take_Attendance.py` → "Take Attendance"
+### Adding a page
+- Add the script to `app_pages/` and a row to `PAGE_SPECS` in `navigation.py`
+  (section, file, sentence-case title, `:material/...:` icon)
 
 ## Streamlit Patterns
 

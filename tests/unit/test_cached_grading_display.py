@@ -17,7 +17,7 @@ from cqc_cpcc.rubric_models import RubricAssessmentResult, CriterionResult
 
 
 def _import_grade_assignment_module():
-    return importlib.import_module("src.cqc_streamlit_app.pages.4_Grade_Assignment")
+    return importlib.import_module("cqc_streamlit_app.grade_assignment")
 
 
 class SessionState(SimpleNamespace):

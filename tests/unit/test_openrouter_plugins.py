@@ -17,6 +17,13 @@ from cqc_cpcc.utilities.AI.openrouter_client import (
     get_openrouter_plugins,
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_ambient_allowed_models(monkeypatch):
+    """These tests set OPENROUTER_ALLOWED_MODELS explicitly; a value loaded from the
+    developer's .env by another test must not leak in."""
+    monkeypatch.delenv("OPENROUTER_ALLOWED_MODELS", raising=False)
+
 AUTO_ROUTER_COMPONENT_CLASS = _get_auto_router_component_class(components)
 
 

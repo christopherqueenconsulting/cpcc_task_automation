@@ -3,6 +3,7 @@ import os
 
 import streamlit as st
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
+from cqc_streamlit_app.app_settings import load_settings, update_settings
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import get_cpcc_css, secret_text_input
 
@@ -78,6 +79,30 @@ def main():
 
     analytics_settings_section()
     model_settings_section()
+    preferences_section()
+
+
+def _on_legacy_toggle():
+    try:
+        update_settings(show_legacy_pages=bool(st.session_state.show_legacy_pages_toggle))
+    except OSError as e:
+        st.session_state["_preferences_error"] = f"Could not save the preference: {e}"
+
+
+def preferences_section():
+    """Preferences saved to this computer (they survive restarts and git pull)."""
+    st.subheader("Preferences")
+    st.toggle(
+        "Show legacy pages",
+        value=load_settings().show_legacy_pages,
+        key="show_legacy_pages_toggle",
+        on_change=_on_legacy_toggle,
+        help="Adds a Legacy section to the navigation with pages that are being "
+             "retired (currently: Exams (legacy)). Saved to this computer.",
+    )
+    st.caption("Legacy pages are deprecated and will be removed once they are no longer used.")
+    if error := st.session_state.pop("_preferences_error", None):
+        st.error(error)
 
 
 def model_settings_section():

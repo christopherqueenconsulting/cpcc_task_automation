@@ -62,7 +62,6 @@ from cqc_cpcc.utilities.zip_grading_utils import (
     extract_student_submissions_from_zip,
 )
 from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
-from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import (
     add_brightspace_source_element,
     add_brightspace_writeback_element,
@@ -74,7 +73,6 @@ from cqc_streamlit_app.utils import (
     define_chatGPTModel,
     define_openrouter_model,
     export_grading_summary_to_excel,
-    get_cpcc_css,
     get_custom_llm,
     run_coroutine_blocking,
     get_file_extension_from_filepath,
@@ -89,8 +87,8 @@ from streamlit.runtime.scriptrunner_utils.script_run_context import (
     get_script_run_ctx,
 )
 
-# Initialize session state variables
-init_session_state()
+# No init_session_state() here: this is a library module imported by the grading
+# pages, which initialize session state themselves. Import must have no side effects.
 
 GR_CRITERIA = "Criteria"
 GR_PPL = "Possible Points Loss"
@@ -3235,43 +3233,3 @@ def rubric_based_exam_grading_sync():
         logger.error(f"Error in rubric-based exam grading: {e}", exc_info=True)
         st.error(f"❌ Error: {e}")
         st.error("If this persists, please check the logs or contact support.")
-
-
-def main():
-    st.set_page_config(layout="wide", page_title="Grade Assignment", page_icon="📝")  # TODO: Change the page icon
-
-    css = get_cpcc_css()
-    st.markdown(
-        css,
-        unsafe_allow_html=True
-    )
-
-    st.markdown("""Here we will give feedback and grade a students assignment submission""")
-
-    # Create tabs - Added new "Exams (Rubric)" tab
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["Flowgorithm Assignments", "Online GDB", "Exams (Legacy)", "Exams (Rubric)", "Other"])
-
-    with tab1:
-        get_flowgorithm_content()
-    with tab2:
-        st.title("Online GDB")
-
-    with tab3:
-        if st.session_state.openai_api_key or st.session_state.openrouter_api_key:
-            grade_exam_content_sync()
-        else:
-            st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
-
-    with tab4:
-        if st.session_state.openai_api_key or st.session_state.openrouter_api_key:
-            rubric_based_exam_grading_sync()
-        else:
-            st.write("Please visit the Settings page and enter the OpenAPI Key to proceed")
-
-    with tab5:
-        st.title("Other")
-
-
-if __name__ == '__main__':
-    main()

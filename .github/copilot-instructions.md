@@ -164,7 +164,7 @@ cpcc_task_automation/
 │   │           └── llm/             # LLM chains, prompts, models
 │   └── cqc_streamlit_app/           # Streamlit UI package
 │       ├── Home.py                  # Main entry point
-│       ├── pages/                   # Multi-page app routes
+│       ├── app_pages/               # Page scripts (navigation in Home.py)
 │       └── utils.py                 # UI utilities
 ├── tests/
 │   ├── conftest.py                  # Shared fixtures

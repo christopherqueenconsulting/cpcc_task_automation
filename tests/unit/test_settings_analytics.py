@@ -12,7 +12,7 @@ from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
 SETTINGS_PAGE = str(
-    Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "pages" / "6_Settings.py"
+    Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "app_pages" / "settings.py"
 )
 
 

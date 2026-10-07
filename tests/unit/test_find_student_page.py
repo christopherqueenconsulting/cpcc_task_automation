@@ -16,8 +16,8 @@ from cqc_cpcc.utilities.selenium_util import MfaChallenge
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
-PAGE = str(Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "pages"
-           / "5_Find_Student.py")
+PAGE = str(Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "app_pages"
+           / "find_student.py")
 
 
 class FakeJob(FindStudentJob):

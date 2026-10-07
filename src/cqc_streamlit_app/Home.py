@@ -1,34 +1,29 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
-import os
+"""App entry point: builds the navigation and runs the selected page.
+
+``streamlit run src/cqc_streamlit_app/Home.py``. Pages live in ``app_pages/``.
+The page list is in ``navigation.py``. Pages on the deprecation path are listed only
+when the local "Show legacy pages" preference is on (``app_settings``), so they cannot be
+reached by URL otherwise.
+"""
+from pathlib import Path
 
 import streamlit as st
-from cqc_cpcc.utilities.utils import read_file
+from cqc_streamlit_app.app_settings import load_settings
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, show_model_update_banner
+from cqc_streamlit_app.navigation import page_specs
 
-# Initialize session state variables
+PAGES_DIR = Path(__file__).resolve().parent / "app_pages"
+
+
+def build_navigation(show_legacy: bool) -> dict:
+    sections: dict = {}
+    for i, (section, file, title, icon) in enumerate(page_specs(show_legacy)):
+        sections.setdefault(section, []).append(
+            st.Page(str(PAGES_DIR / file), title=title, icon=icon, default=(i == 0)))
+    return sections
+
+
 init_session_state()
-
-
-def main():
-    st.set_page_config(layout="wide", page_title="CPCC Task Automation", page_icon="📚🤖")
-
-    css = get_cpcc_css()
-    st.markdown(
-        css,
-        unsafe_allow_html=True
-    )
-
-    st.header("Welcome to CPCC Task Automation! 👋")
-    show_model_update_banner()
-
-    # Get the ReadMe Markdown and display it
-    current_directory = os.path.dirname(os.path.abspath(__file__))
-    # parent_directory = os.path.dirname(current_directory)
-    readme_markdown = read_file(current_directory + "/README.md")
-
-    st.markdown(readme_markdown)
-
-
-if __name__ == '__main__':
-    main()
+st.set_page_config(layout="wide", page_title="CPCC Task Automation", page_icon="📚")
+st.navigation(build_navigation(load_settings().show_legacy_pages)).run()
