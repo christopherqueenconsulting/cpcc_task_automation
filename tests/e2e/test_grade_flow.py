@@ -82,8 +82,15 @@ async def _run_batch(page: Page, url: str, tmp_path, fresh: bool) -> int:
     await expect(page.get_by_role("tab", name="Submissions & run", selected=True)).to_be_visible(timeout=60000)
     await actions.files(_uploader(page, "Student submissions"), batch,
                         shown_in=page.get_by_test_id("stFileUploader").filter(has_text="Student submissions"))
-    grade = page.get_by_role("button", name="Grade submissions")
+    students = 3 if not fresh else 2
+    grade = page.get_by_role("button", name=re.compile(r"Grade \d+ submission"))
     await expect(grade).to_be_enabled(timeout=60000)
+    await expect(grade).to_contain_text(f"Grade {students} submissions")
+    # The batch preview flags the empty file before any AI call, and the cost is shown.
+    await expect(page.get_by_text(f"Batch: {students} student(s)")).to_be_visible()
+    await expect(page.get_by_text(re.compile(r"^1 will be scored 0 without an AI call"))).to_be_visible()
+    await expect(page.get_by_text("Needs review: Empty submission").first).to_be_attached()
+    await expect(page.get_by_text(re.compile(r"(about \$|under \$0\.01).* on "))).to_be_visible()
     await actions.click(grade)
     await expect(page.get_by_role("tab", name="Results & review", selected=True)).to_be_visible(timeout=120000)
     return actions.n
