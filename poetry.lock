@@ -1464,21 +1464,6 @@ files = [
 tests = ["asttokens (>=2.1.0)", "coverage", "coverage-enable-subprocess", "ipython", "littleutils", "pytest", "rich ; python_version >= \"3.11\""]
 
 [[package]]
-name = "extra-streamlit-components"
-version = "0.1.81"
-description = "An all-in-one place, to find complex or just natively unavailable components on streamlit."
-optional = false
-python-versions = ">=3.6"
-groups = ["main"]
-files = [
-    {file = "extra_streamlit_components-0.1.81-py3-none-any.whl", hash = "sha256:11a4651dbd03cac04edfbb8711757b1d10e3cdf280b8fa3a43f970d05e684619"},
-    {file = "extra_streamlit_components-0.1.81.tar.gz", hash = "sha256:eb9beb7bacfe8b3d238f1888a21c78ac6cfa569341be484bca08c3ea0b15f20d"},
-]
-
-[package.dependencies]
-streamlit = ">=1.40.1"
-
-[[package]]
 name = "extract-msg"
 version = "0.55.0"
 description = "Extracts emails and attachments saved in Microsoft Outlook's .msg files"
@@ -2179,9 +2164,6 @@ files = [
     {file = "humanfriendly-10.0-py2.py3-none-any.whl", hash = "sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477"},
     {file = "humanfriendly-10.0.tar.gz", hash = "sha256:6b0b831ce8f15f7300721aa49829fc4e83921a9a301cc7f606be6686a2288ddc"},
 ]
-
-[package.dependencies]
-pyreadline3 = {version = "*", markers = "sys_platform == \"win32\" and python_version >= \"3.8\""}
 
 [[package]]
 name = "idna"
@@ -5772,22 +5754,6 @@ files = [
 ]
 
 [[package]]
-name = "pyreadline3"
-version = "3.5.6"
-description = "A python implementation of GNU readline."
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-markers = "<empty>"
-files = [
-    {file = "pyreadline3-3.5.6-py3-none-any.whl", hash = "sha256:8449b734232e42a5dcd74048e39b60db2839a4c38cf3ae2bf7707d58b5389c0d"},
-    {file = "pyreadline3-3.5.6.tar.gz", hash = "sha256:61e53218b99656091ddb077df9e71f25850e72e030b6183b39c9b7e6e4f4a9bf"},
-]
-
-[package.extras]
-dev = ["build", "flake8", "mypy", "pytest", "twine"]
-
-[[package]]
 name = "pysocks"
 version = "1.7.1"
 description = "A Python SOCKS client module. See https://github.com/Anorov/PySocks for more information."
@@ -7143,41 +7109,6 @@ pdf = ["streamlit-pdf (>=2.1.0)"]
 performance = ["orjson (>=3.5.0)", "uvloop (>=0.15.2) ; sys_platform != \"win32\" and sys_platform != \"cygwin\" and platform_python_implementation != \"PyPy\""]
 snowflake = ["snowflake-connector-python (>=3.3.0)", "snowflake-snowpark-python[modin] (>=1.17.0)"]
 sql = ["SQLAlchemy (>=2.0.0)"]
-
-[[package]]
-name = "streamlit-elements"
-version = "0.1.0"
-description = "React Components for Streamlit."
-optional = false
-python-versions = ">=3.6"
-groups = ["main"]
-files = [
-    {file = "streamlit-elements-0.1.0.tar.gz", hash = "sha256:5f9f116f22df3ce4a8636b1dee7c2fd3dc3cb0c66267fd28c3e0314aa1d303a7"},
-    {file = "streamlit_elements-0.1.0-py3-none-any.whl", hash = "sha256:593c4b88c399c55879aa76f7f42970f30106f66acaa4baada6338ae5571790df"},
-]
-
-[package.dependencies]
-streamlit = ">=1.4.0"
-
-[[package]]
-name = "streamlit-ext"
-version = "0.1.19"
-description = "Small handy widgets for streamlit, e.g. download button which won't cause rerun, set page width"
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "streamlit_ext-0.1.19-py3-none-any.whl", hash = "sha256:2d55cebfa7d5bb35067f7d1b362e94f1bc8a892151efc2eca99252e83af96cf2"},
-    {file = "streamlit_ext-0.1.19.tar.gz", hash = "sha256:af49b5947cff53060559684e472db8f90fe8139e27aa8a42d032248fccc4e9e6"},
-]
-
-[package.dependencies]
-packaging = "*"
-streamlit = ">=1.39.0"
-
-[package.extras]
-dev = ["mypy", "ruff (>=0.12)"]
-test = ["openpyxl", "pandas", "pytest (>=7.1)", "pytest-cov (>=3.0.0)"]
 
 [[package]]
 name = "sympy"
@@ -8726,4 +8657,4 @@ telemetry = ["posthog"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "22c08abfd370d815326c58d891d1688afa374f27a25c9498fbf1e2fc1127c814"
+content-hash = "6c2169abd6ef956ba765f1eb7dbfecff14cdea13906edddca08b3d02ad12c43e"
