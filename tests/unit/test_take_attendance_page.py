@@ -17,7 +17,7 @@ from cqc_cpcc.utilities.selenium_util import MfaChallenge
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
 PAGE = str(
-    Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "pages" / "1_Take_Attendance.py"
+    Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "app_pages" / "take_attendance.py"
 )
 
 TODAY = DT.datetime.now()

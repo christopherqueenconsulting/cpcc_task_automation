@@ -81,8 +81,11 @@ class TestGetClient:
         import cqc_cpcc.utilities.AI.openai_client as client_module
         client_module._client = None
         
-        # Mock empty API key
+        # Mock empty API key (and none loaded into the environment by another test)
         mocker.patch('cqc_cpcc.utilities.AI.openai_client.OPENAI_API_KEY', None)
+        mocker.patch.dict('os.environ', {}, clear=False)
+        import os
+        os.environ.pop("OPENAI_API_KEY", None)
         
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):
             await get_client()

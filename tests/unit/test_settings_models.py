@@ -12,7 +12,7 @@ from cqc_cpcc.utilities.AI import model_registry
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
 APP_DIR = Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app"
-SETTINGS_PAGE = str(APP_DIR / "pages" / "6_Settings.py")
+SETTINGS_PAGE = str(APP_DIR / "app_pages" / "settings.py")
 
 
 @pytest.fixture(autouse=True)

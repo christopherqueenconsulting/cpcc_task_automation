@@ -19,13 +19,18 @@ The `cqc_streamlit_app` package provides a user-friendly web interface for instr
 
 ```
 src/cqc_streamlit_app/
-├── Home.py                    # Main entry point (landing page)
-├── pages/                     # Multi-page app routes
-│   ├── 1_Take_Attendance.py   # Attendance automation UI
-│   ├── 2_Give_Feedback.py     # Feedback generation UI
-│   ├── 4_Grade_Assignment.py  # Exam grading UI
-│   ├── 5_Find_Student.py      # Student lookup UI
-│   └── 6_Settings.py          # Configuration and credentials
+├── Home.py                    # Entry point: builds st.navigation and runs the page
+├── app_pages/                 # Page scripts (listed in Home.PAGE_SPECS)
+│   ├── home.py                # Landing page
+│   ├── grade_assignment.py    # Rubric grading
+│   ├── flowgorithm.py         # Flowgorithm assignments
+│   ├── give_feedback.py       # Feedback generation
+│   ├── take_attendance.py     # Attendance automation
+│   ├── find_student.py        # Student lookup
+│   ├── settings.py            # Credentials, models, preferences
+│   └── legacy_exam_grading.py # Deprecated; only with "Show legacy pages"
+├── grade_assignment.py        # Grading UI functions used by the grading pages
+├── app_settings.py            # Local preferences (~/.cqc_cpcc/app_settings.json)
 ├── initi_pages.py             # Session state initialization
 ├── utils.py                   # UI utilities (CSS, formatting)
 ├── streamlit_logger.py        # UI-specific logger
@@ -37,9 +42,10 @@ src/cqc_streamlit_app/
 
 ### Multi-Page Application
 
-Streamlit automatically creates navigation from files in the `pages/` directory:
-- Files prefixed with numbers (`1_`, `2_`, etc.) determine order
-- File names are converted to page titles: `1_Take_Attendance.py` → "Take Attendance"
+`Home.py` defines the navigation with `st.navigation` and `st.Page`:
+- `PAGE_SPECS` lists each page's section, file in `app_pages/`, title and Material icon
+- Pages on the deprecation path (`LEGACY_PAGE_SPECS`) are added only when the local
+  "Show legacy pages" preference is on, so they cannot be reached by URL otherwise
 - Each page is an independent Python script with its own UI
 
 ### Session State
@@ -502,7 +508,7 @@ if st.session_state.get('openai_api_key'):
 else:
     st.warning("Please configure OpenAI API key in Settings")
     if st.button("Go to Settings"):
-        st.switch_page("pages/6_Settings.py")
+        st.switch_page("app_pages/settings.py")
 ```
 
 ### Tabs for Organization

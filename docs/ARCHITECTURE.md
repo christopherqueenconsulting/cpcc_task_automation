@@ -644,7 +644,7 @@ yields "could not verify" rather than "does not compile" — see
 
 ### Extensibility Points
 - New automation modules (add to `src/cqc_cpcc/`)
-- New Streamlit pages (add to `src/cqc_streamlit_app/pages/`)
+- New Streamlit pages (add to `src/cqc_streamlit_app/app_pages/` and `PAGE_SPECS` in `Home.py`)
 - New LLM chains (add to `utilities/AI/llm/chains.py`)
 - New feedback types (extend `FeedbackType` enum)
 
