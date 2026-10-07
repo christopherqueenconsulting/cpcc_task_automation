@@ -50,7 +50,16 @@ def test_run_key_changes_with_inputs():
     ("give_feedback.py", "feedback_start"),
     ("flowgorithm.py", "flowgorithm_grade"),
 ])
-def test_start_button_is_disabled_until_inputs_are_ready(page, button_key):
+def test_start_button_is_disabled_until_inputs_are_ready(page, button_key, monkeypatch):
+    # The pages stop and ask for an OpenRouter key when none is set (as in CI); give them a
+    # fake one and stub the model-list fetch so no network call is made.
+    from cqc_cpcc.utilities.AI import openrouter_client
+
+    async def _no_models(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-used")
+    monkeypatch.setattr(openrouter_client, "fetch_openrouter_models", _no_models)
     app = AppTest.from_file(str(APP_PAGES / page), default_timeout=60).run()
     assert not app.exception, [e.value for e in app.exception]
     button = app.button(key=button_key)
