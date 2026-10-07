@@ -2043,15 +2043,15 @@ def display_cached_error_only_results(run_key: str, course_name: str) -> None:
     all_results = st.session_state.error_only_results_by_key[run_key]
 
     if not all_results:
-        st.warning("⚠️ No successful grading results to display")
+        st.warning("No successful grading results to display.", icon=":material/warning:")
         return
 
     total_students = len(all_results)
-    st.success(f"✅ Displaying cached results for {total_students} student(s)")
+    st.success(f"Showing saved results for {total_students} student(s).", icon=":material/check_circle:")
 
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔽 Expand All Student Results", key="expand_all_cached_error_only_button"):
+    with st.container(horizontal=True, horizontal_alignment="right"):
+        if st.button("Expand all student results", key="expand_all_cached_error_only_button",
+                     icon=":material/unfold_more:"):
             st.session_state.expand_all_students = True
             st.rerun()
 
