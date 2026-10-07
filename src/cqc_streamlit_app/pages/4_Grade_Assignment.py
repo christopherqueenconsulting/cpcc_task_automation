@@ -26,6 +26,7 @@ from cqc_cpcc.rubric_config import (
     get_rubrics_for_course,
 )
 from cqc_cpcc.rubric_grading import grade_with_rubric
+from cqc_cpcc.utilities.submission_validity import language_for_course
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
 from cqc_cpcc.rubric_overrides import (
     CriterionOverride,
@@ -67,6 +68,7 @@ from cqc_streamlit_app.utils import (
     export_grading_summary_to_excel,
     get_cpcc_css,
     get_custom_llm,
+    run_coroutine_blocking,
     get_file_extension_from_filepath,
     get_language_from_file_path,
     on_download_click,
@@ -1362,6 +1364,7 @@ async def grade_single_rubric_student(
                 # toolchain using the student's real source files (name -> temp path).
                 source_files=student_submission.files,
                 gate_report=gate_report,
+                rejected_files=student_submission.rejected_files,
             )
 
             status.update(label=f"{status_label} | Processing results...")
@@ -1385,7 +1388,13 @@ async def grade_single_rubric_student(
             band_or_level = _get_band_or_level_label(result)
             score_str = f"{result.total_points_earned}/{result.total_points_possible}"
             level_str = f" [{band_or_level}]" if band_or_level else ""
-            status.update(label=f"✅ {student_id} — {score_str}{level_str}", state="complete")
+            if result.needs_review:
+                if student_submission.rejected_files:
+                    st.markdown("**Files not accepted:** " + ", ".join(student_submission.rejected_files))
+                status.update(label=f"⚠️ {student_id} — {score_str} needs review "
+                                    f"({result.validity_status})", state="error")
+            else:
+                status.update(label=f"✅ {student_id} — {score_str}{level_str}", state="complete")
 
             return (student_id, result)
 
@@ -1550,6 +1559,19 @@ async def process_rubric_grading_batch(
     total_students = len(student_submissions)
     st.info(f"📊 Grading {total_students} student submission(s)...")
 
+    # Kept so a submission the validity gate flagged can be re-graded ("Grade anyway").
+    st.session_state.setdefault("grading_inputs_by_key", {})[run_key] = {
+        "submissions": student_submissions,
+        "kwargs": dict(
+            rubric=effective_rubric,
+            assignment_instructions=assignment_instructions,
+            reference_solution=reference_solution,
+            error_definitions=error_definitions,
+            model_name=model_name,
+            temperature=temperature,
+        ),
+    }
+
     # Add "Expand All" button for student status blocks
     col1, col2 = st.columns([3, 1])
     with col2:
@@ -1622,6 +1644,7 @@ async def process_rubric_grading_batch(
                 "Points Possible": result.total_points_possible,
                 "Percentage": percentage,
                 "Band": result.overall_band_label or "N/A",
+                "Status": _review_status_label(result),
             })
 
         # Add failure rows
@@ -1632,7 +1655,10 @@ async def process_rubric_grading_batch(
                 "Points Possible": effective_rubric.total_points_possible,
                 "Percentage": "Failed",
                 "Band": "❌ Failed",
+                "Status": "Failed",
             })
+
+        render_needs_review(run_key)
 
         if summary_data:
             st.subheader("📊 Grading Summary")
@@ -1642,8 +1668,9 @@ async def process_rubric_grading_batch(
             # Make the summary available to ZIP export in this same run.
             st.session_state[f"grading_summary_df_{run_key}"] = summary_df
 
-            # Calculate statistics - exclude failure rows from average
-            numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
+            # Calculate statistics - exclude failure rows and unconfirmed review zeros
+            graded = summary_df[~summary_df["Status"].str.startswith("Needs review")]
+            numeric_scores = pd.to_numeric(graded["Points Earned"], errors="coerce").dropna()
             avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
             total_possible = effective_rubric.total_points_possible
             if total_possible > 0:
@@ -1713,6 +1740,7 @@ async def grade_single_error_only_student(
         temperature: float,
         use_openrouter: bool,
         openrouter_auto_route: bool,
+        course_name: str = "",
 ) -> tuple[str, dict, tuple[str, str]]:
     add_script_run_ctx(ctx=ctx)
 
@@ -1753,6 +1781,9 @@ async def grade_single_error_only_student(
             await code_grader.grade_submission(
                 submission_text,
                 callback=ChatGPTStatusCallbackHandler(status, status_label),
+                source_files=student_submission.files,
+                expected_language=language_for_course(course_name),
+                rejected_files=student_submission.rejected_files,
             )
 
             feedback_text = code_grader.get_text_feedback()
@@ -1776,7 +1807,11 @@ async def grade_single_error_only_student(
                 download_filename
             )
 
-            status.update(label=f"✅ {student_id} graded", state="complete")
+            if code_grader.invalid_reason:
+                status.update(label=f"⚠️ {student_id} — 0, needs review: {code_grader.invalid_reason}",
+                              state="error")
+            else:
+                status.update(label=f"✅ {student_id} graded", state="complete")
 
             result_summary = {
                 "points_earned": code_grader.points,
@@ -1784,6 +1819,7 @@ async def grade_single_error_only_student(
                 "major_count": len(code_grader.major_errors or []),
                 "minor_count": len(code_grader.minor_errors or []),
                 "feedback_text": feedback_text,
+                "invalid_reason": code_grader.invalid_reason,
             }
 
             return student_id, result_summary, (download_filename, temp_doc.name)
@@ -1881,6 +1917,7 @@ async def process_error_only_grading_batch(
                 temperature=temperature,
                 use_openrouter=use_openrouter,
                 openrouter_auto_route=openrouter_auto_route,
+                course_name=course_name,
             )
         )
 
@@ -1894,7 +1931,7 @@ async def process_error_only_grading_batch(
         all_results.append((student_id, result_summary))
         doc_files.append(doc_file)
 
-    st.session_state.error_only_results_by_key = all_results
+    st.session_state.error_only_results_by_key[run_key] = all_results
 
     success_count = len(all_results)
     failure_count = total_students - success_count
@@ -1916,6 +1953,8 @@ async def process_error_only_grading_batch(
                 "Percentage": percentage,
                 "Major Errors": result_summary.get("major_count", 0),
                 "Minor Errors": result_summary.get("minor_count", 0),
+                "Status": ("Needs review: " + result_summary["invalid_reason"]
+                           if result_summary.get("invalid_reason") else "Graded"),
             })
 
         if summary_data:
@@ -2024,6 +2063,8 @@ def display_cached_error_only_results(run_key: str, course_name: str) -> None:
             "Percentage": percentage,
             "Major Errors": result_summary.get("major_count", 0),
             "Minor Errors": result_summary.get("minor_count", 0),
+            "Status": ("Needs review: " + result_summary["invalid_reason"]
+                       if result_summary.get("invalid_reason") else "Graded"),
         })
 
     if summary_data:
@@ -2599,6 +2640,91 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                         st.markdown(f"*Notes:* {error.notes}")
 
 
+_VALIDITY_LABELS = {
+    "missing": "No files submitted",
+    "empty": "Empty submission",
+    "trivial": "No meaningful attempt",
+    "wrong_type": "Wrong file type",
+}
+
+
+def _review_status_label(result) -> str:
+    """Summary-table status for a graded result."""
+    if not getattr(result, "needs_review", False):
+        return "Graded"
+    label = _VALIDITY_LABELS.get(result.validity_status, "Needs review")
+    return f"{label} (confirmed 0)" if result.review_confirmed else f"Needs review: {label}"
+
+
+def _replace_result(run_key: str, student_id: str, new_result) -> None:
+    """Swap one student's result and drop every output derived from the old one."""
+    results = st.session_state.grading_results_by_key[run_key]
+    st.session_state.grading_results_by_key[run_key] = [
+        (sid, new_result if sid == student_id else r) for sid, r in results
+    ]
+    # The feedback ZIP, its .docx paths (write-back attach mode) and the summary
+    # sheet inside the ZIP were built from the old result; rebuild them on rerun.
+    st.session_state.feedback_zip_bytes_by_key.pop(run_key, None)
+    st.session_state.get("feedback_doc_paths_by_key", {}).pop(run_key, None)
+    st.session_state.pop(f"grading_summary_df_{run_key}", None)
+
+
+def _grade_anyway(run_key: str, student_id: str) -> None:
+    """Re-grade one flagged student with the validity gate bypassed."""
+    inputs = st.session_state.get("grading_inputs_by_key", {}).get(run_key)
+    if not inputs or student_id not in inputs["submissions"]:
+        st.error("The original files for this run are no longer available; grade the batch again.")
+        return
+    submission = inputs["submissions"][student_id]
+    if not submission.files:
+        rejected = ", ".join(submission.rejected_files) or "none"
+        st.error(f"There are no gradeable files for this student (files not accepted: {rejected}). "
+                 "Add the file type under accepted types and grade the batch again.")
+        return
+    with st.spinner(f"Grading {student_id}..."):
+        try:
+            result = run_coroutine_blocking(grade_with_rubric(
+                student_submission=build_submission_text_with_token_limit(files=submission.files),
+                source_files=submission.files,
+                validity_gate=False,
+                **inputs["kwargs"],
+            ))
+        except Exception as e:  # noqa: BLE001 - keep the rest of the results page usable
+            logger.error(f"Grade anyway failed for {alias(student_id)}: {e}", exc_info=True)
+            st.error(f"Grading {student_id} failed: {e}")
+            return
+    _replace_result(run_key, student_id, result)
+    st.rerun()
+
+
+def render_needs_review(run_key: str) -> None:
+    """List submissions the validity gate scored 0, with Confirm 0 / Grade anyway.
+
+    These are held back from BrightSpace write-back until confirmed.
+    """
+    flagged = [(sid, r) for sid, r in st.session_state.grading_results_by_key.get(run_key, [])
+               if getattr(r, "needs_review", False) and not r.review_confirmed]
+    if not flagged:
+        return
+    with st.container(border=True):
+        st.subheader(f"Needs review ({len(flagged)})", anchor=False)
+        st.caption("These scored 0 without an AI call because no gradeable work was found. "
+                   "They are not written to BrightSpace until you confirm them.")
+        submissions = st.session_state.get("grading_inputs_by_key", {}).get(run_key, {}).get("submissions", {})
+        for sid, r in flagged:
+            rejected = getattr(submissions.get(sid), "rejected_files", None)
+            extra = f" Files not accepted: {', '.join(rejected)}." if rejected else ""
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.markdown(f"**{sid}** — {_VALIDITY_LABELS.get(r.validity_status, r.validity_status)}: "
+                            f"{r.validity_reason}{extra}")
+                if st.button("Confirm 0", key=f"confirm0_{run_key}_{sid}", icon=":material/check:"):
+                    _replace_result(run_key, sid, r.model_copy(update={"review_confirmed": True}))
+                    st.rerun()
+                if st.button("Grade anyway", key=f"grade_anyway_{run_key}_{sid}",
+                             icon=":material/play_arrow:"):
+                    _grade_anyway(run_key, sid)
+
+
 def display_cached_grading_results(run_key: str, course_name: str) -> None:
     """Display cached grading results from session state.
     
@@ -2622,6 +2748,8 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
 
     total_students = len(all_results) + len(failed_student_ids)
     st.success(f"✅ Displaying cached results for {len(all_results)} student(s)")
+
+    render_needs_review(run_key)
 
     # Add "Expand All" button (passive - doesn't trigger re-grading)
     col1, col2 = st.columns([3, 1])
@@ -2649,6 +2777,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             "Points Possible": getattr(result, 'total_points_possible', 0),
             "Percentage": percentage,
             "Band": getattr(result, 'overall_band_label', None) or "N/A",
+            "Status": _review_status_label(result),
         })
 
     # Add failure rows
@@ -2662,12 +2791,16 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             "Points Possible": total_possible_for_failures,
             "Percentage": "Failed",
             "Band": "❌ Failed",
+            "Status": "Failed",
         })
 
     if summary_data:
         st.subheader("📊 Grading Summary")
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, hide_index=True)
+        # Rebuilt each render so the feedback ZIP's summary sheet follows Confirm 0 /
+        # Grade anyway changes.
+        st.session_state[f"grading_summary_df_{run_key}"] = summary_df
 
         # Export options for grading summary
         col1, col2 = st.columns(2)
@@ -2698,8 +2831,9 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
                         key="download_summary_csv_rubric"
                     )
 
-        # Calculate statistics - exclude failure rows from average
-        numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
+        # Calculate statistics - exclude failure rows and unconfirmed review zeros
+        graded = summary_df[~summary_df["Status"].str.startswith("Needs review")]
+        numeric_scores = pd.to_numeric(graded["Points Earned"], errors="coerce").dropna()
         avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
         # Get total_possible from first result, default to 100 if missing
         try:

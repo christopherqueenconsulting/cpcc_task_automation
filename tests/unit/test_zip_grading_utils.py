@@ -255,8 +255,10 @@ class TestZIPExtraction:
         assert "Student1" in students
         assert len(students["Student1"].files) == 2
         
-        # Student2 only has Python, should not appear
-        assert "Student2" not in students
+        # Student2 only has Python: kept with no gradeable files, so the validity gate
+        # scores them 0 for review instead of silently dropping them.
+        assert students["Student2"].files == {}
+        assert students["Student2"].rejected_files
     
     def test_extract_empty_zip_raises_error(self, tmp_path):
         """Test that empty ZIP raises error."""

@@ -235,8 +235,13 @@ def build_write_items_from_results(
         buffer_pct: float = DEFAULT_SCORE_BUFFER_PCT,
         include_criteria_feedback: bool = True,
         name_parser: Optional[Callable[[str], str]] = None,
+        skipped: Optional[list] = None,
 ) -> list[GradeWriteItem]:
     """Map grader results to :class:`GradeWriteItem`s, applying the buffer + feedback.
+
+    Results flagged ``needs_review`` by the submission-validity gate (missing, empty,
+    trivial or wrong-type work scored 0) are NOT written until the instructor confirms
+    them (``review_confirmed``). Their student ids are appended to ``skipped``.
 
     Args:
         results: ``list[tuple[student_id, RubricAssessmentResult]]`` from
@@ -258,9 +263,15 @@ def build_write_items_from_results(
 
     items: list[GradeWriteItem] = []
     for student_id, result in results:
+        if _get(result, "needs_review") and not _get(result, "review_confirmed"):
+            if skipped is not None:
+                skipped.append(student_id)
+            continue
         raw = float(_get(result, "total_points_earned") or 0.0)
         max_pts = float(_get(result, "total_points_possible") or 0.0)
-        buffered = apply_score_buffer(raw, max_pts, buffer_pct)
+        # A confirmed "no gradeable submission" 0 stays 0: the error buffer is for
+        # grading noise, not for work that was never turned in.
+        buffered = 0.0 if _get(result, "needs_review") else apply_score_buffer(raw, max_pts, buffer_pct)
         feedback = build_feedback_html(
             _get(result, "overall_feedback") or "",
             _get(result, "criteria_results"),
