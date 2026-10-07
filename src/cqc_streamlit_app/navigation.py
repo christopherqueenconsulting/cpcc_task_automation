@@ -4,7 +4,8 @@
 Kept free of Streamlit calls so it can be imported and tested without a running app.
 """
 
-# (section, file in app_pages/, title, icon). The first page is the default.
+# (section, file in app_pages/, title, icon). The first page is the default. Sections
+# group the specs for readers; the top navigation bar itself is flat (one click per page).
 PAGE_SPECS = [
     ("", "home.py", "Home", ":material/home:"),
     ("Grading", "grade_assignment.py", "Grade assignment", ":material/grading:"),
@@ -17,7 +18,7 @@ PAGE_SPECS = [
 
 # Pages on the deprecation path: listed only when the "Show legacy pages" preference is on.
 LEGACY_PAGE_SPECS = [
-    ("Legacy (deprecated)", "legacy_exam_grading.py", "Exams (legacy)", ":material/history:"),
+    ("Legacy (deprecated)", "legacy_exam_grading.py", "Exams (legacy, deprecated)", ":material/history:"),
 ]
 
 

@@ -211,7 +211,6 @@ def define_grading_rubric():
 
 
 def get_flowgorithm_content():
-    st.title('Flowgorithm Assignments')
     # Add elements to page to work with
 
     st.header("Assignment Instructions")
@@ -878,8 +877,6 @@ def all_required_inputs_filled(course_name, max_points, deduction_per_major_erro
 
 
 async def get_grade_exam_content():
-    st.title('Grade Exams')
-    st.markdown("""Here we will grade and give feedback to student exam submissions""")
 
     # Display dropdown of courses from error definitions
     course_list = get_course_list_from_error_definitions()
@@ -2153,14 +2150,6 @@ def render_requirement_checklist(instructions: str) -> Optional[RequirementCheck
 
 async def get_rubric_based_exam_grading():
     """Unified exam grading workflow with rubric and error-definition modes."""
-    st.title('Exam Grading')
-    st.markdown("""Grade exam submissions using structured rubrics and/or error definitions.
-    
-    **Supports:**
-    - Rubric + Error Definitions
-    - Rubric Only
-    - Error Definitions Only
-    """)
 
     grading_mode = select_grading_mode()
     use_rubric = grading_mode in ["rubric_and_errors", "rubric_only"]

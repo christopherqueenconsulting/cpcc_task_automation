@@ -12,7 +12,7 @@ from cqc_cpcc.find_student import (
     FindStudentJob,
 )
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, render_mfa_prompt
+from cqc_streamlit_app.utils import page_header, render_mfa_prompt
 
 JOB_KEY = "find_student_job"
 # The phase the last full page run drew; the live view reruns the page when it moves.
@@ -55,18 +55,12 @@ def live_view() -> None:
 
 
 def main():
-    st.set_page_config(layout="wide", page_title="Find Student", page_icon="🔍")  # TODO: Change the page icon
 
-    css = get_cpcc_css()
-    st.markdown(
-        css,
-        unsafe_allow_html=True
-    )
 
     init_my_session_state()
 
-    # Streamlit app
-    st.subheader('Find Student')
+    page_header("Find student", ":material/person_search:",
+                "Look a student up by email, ID or name across your course rosters.")
 
     required_vars = [st.session_state.instructor_user_id, st.session_state.instructor_password]
 

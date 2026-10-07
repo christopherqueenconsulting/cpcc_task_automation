@@ -11,7 +11,7 @@ from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackGiver
 from cqc_cpcc.utilities.utils import read_file, extract_and_read_zip, wrap_code_in_markdown_backticks
 from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, define_chatGPTModel, add_upload_file_element, \
+from cqc_streamlit_app.utils import define_chatGPTModel, add_upload_file_element, page_header, \
     create_zip_file, on_download_click, prefix_content_file_name, get_language_from_file_path
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 from streamlit.runtime.scriptrunner_utils.script_run_context import ScriptRunContext, get_script_run_ctx
@@ -62,7 +62,6 @@ def define_feedback_types():
 
 
 async def get_feedback_content():
-    st.title('Feedback Assignment')
 
     # Text input for entering a course name
     course_name = st.text_input("Enter Course Name")
@@ -344,15 +343,8 @@ async def add_feedback_status_extender(
 
 
 def main():
-    st.set_page_config(layout="wide", page_title="Give Feedback", page_icon="💬")  # TODO: Change the page icon
-
-    css = get_cpcc_css()
-    st.markdown(
-        css,
-        unsafe_allow_html=True
-    )
-
-    st.markdown("""Here we will give feedback to student project submissions""")
+    page_header("Give feedback", ":material/rate_review:",
+                "AI feedback, without a grade, on student project submissions.")
 
     if st.session_state.openrouter_api_key:
         asyncio.run(get_feedback_content())
