@@ -1,0 +1,70 @@
+{
+  "case_id": "csc134_project_cpp__function_not_called",
+  "language": "cpp",
+  "role": "grading",
+  "course_id": "CSC_134",
+  "assignment_id": "Project",
+  "rubric_id": "csc134_cpp_exam_rubric",
+  "instructions": "Write a C++ program in a file named payroll.cpp that:\n1. Prompts for hours worked and hourly pay rate (both doubles).\n2. Validates input: hours must be between 0 and 80 and the rate must be greater\n   than 0; re-prompt until valid.\n3. Declares a function prototype double calculatePay(double hours, double rate)\n   above main, defines it below main, and calls it to compute gross pay.\n4. Pays overtime at 1.5 times the rate for hours over 40.\n5. Prints exactly: Gross pay: $X.XX (two decimal places).\nUse named constants, curly braces on every control structure, consistent indentation\nand comments.\n",
+  "files": [
+    "payroll.cpp"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Prompt for and read hours worked and hourly pay rate as doubles.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Validate hours (0 to 80) and rate (greater than 0), re-prompting until valid.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Declare calculatePay above main, define it below main, and call it to compute gross pay.",
+      "weight": "core"
+    },
+    {
+      "id": "R4",
+      "text": "Pay overtime at 1.5 times the rate for hours over 40.",
+      "weight": "core"
+    },
+    {
+      "id": "R5",
+      "text": "Print exactly 'Gross pay: $X.XX' with two decimal places.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [
+      "CSC_134_PROJECT_1_FUNCTION_PROTOTYPE_ERROR"
+    ],
+    "acceptable_error_ids": [
+      "CSC_134_PROJECT_1_INEFFICIENT_CODE"
+    ],
+    "max_occurrences": {},
+    "requirements": {
+      "R3": [
+        "missing",
+        "partial"
+      ]
+    },
+    "error_satisfied_by": {
+      "CSC_134_PROJECT_1_FUNCTION_PROTOTYPE_ERROR": "R3"
+    },
+    "not_above": null
+  },
+  "mutations": [
+    "function_not_called"
+  ],
+  "tags": [
+    "single"
+  ],
+  "twin_of": null,
+  "labels_reviewed_by": null
+}

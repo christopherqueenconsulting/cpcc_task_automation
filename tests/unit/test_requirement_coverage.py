@@ -219,7 +219,7 @@ async def test_extract_requirements_caches_by_instructions():
     assert a == b
     llm.assert_called_once()
     prompt = llm.call_args.kwargs["prompt"]
-    assert "EXCLUDE style, naming, formatting" in prompt
+    assert "EXCLUDE style, naming, named constants" in prompt
 
 
 @pytest.mark.unit

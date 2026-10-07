@@ -1,0 +1,58 @@
+{
+  "case_id": "csc151_exam1_java__skeleton",
+  "language": "java",
+  "role": "grading",
+  "course_id": "CSC_151",
+  "assignment_id": "Exam1",
+  "rubric_id": "csc151_java_exam_rubric",
+  "instructions": "Write a Java program named OrderTotal.java that:\n1. Uses a Scanner to read an item price (double) and a quantity (int).\n2. Computes the subtotal as price times quantity.\n3. If the quantity is 10 or more, applies a 10% bulk discount to the subtotal.\n4. Adds 7% sales tax to the discounted subtotal.\n5. Prints three lines exactly like this, with two decimal places:\n   Subtotal: $X.XX\n   Tax: $X.XX\n   Total: $X.XX\nUse named constants for the tax rate, discount rate and bulk quantity, follow Java\nnaming conventions, and comment your code.\n",
+  "files": [
+    "OrderTotal.java"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Use a Scanner to read the item price (double) and the quantity (int).",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Compute the subtotal as price times quantity.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Apply a 10% bulk discount to the subtotal when the quantity is 10 or more.",
+      "weight": "core"
+    },
+    {
+      "id": "R4",
+      "text": "Add 7% sales tax to the discounted subtotal.",
+      "weight": "core"
+    },
+    {
+      "id": "R5",
+      "text": "Print the Subtotal, Tax and Total lines with two decimal places.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "empty",
+      "trivial"
+    ],
+    "compiles": true,
+    "error_ids": [],
+    "acceptable_error_ids": [],
+    "max_occurrences": {},
+    "requirements": {},
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [],
+  "tags": [
+    "empty"
+  ],
+  "twin_of": null,
+  "labels_reviewed_by": null
+}

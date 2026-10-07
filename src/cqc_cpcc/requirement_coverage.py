@@ -87,12 +87,16 @@ def build_requirement_extraction_prompt(instructions: str) -> str:
         "",
         "Rules:",
         f"- 1 to {MAX_REQUIREMENTS} requirements, ids R1, R2, ... in the order the instructions give them.",
+        "- When the instructions number or bullet their tasks, make exactly one requirement per "
+        "functional item, in the same order: do not split one item into several or merge items. "
+        "Skip items that are only about style, naming, constants, formatting or comments.",
         "- Each requirement is one observable behavior or required program element "
         "(an input it reads, a calculation, a decision, a loop, a function/method/class "
         "it must define, an output it must produce).",
         "- Only include what the instructions explicitly require. Do not invent requirements.",
-        "- EXCLUDE style, naming, formatting, comments/documentation and file naming: "
-        "those are graded separately by error definitions.",
+        "- EXCLUDE style, naming, named constants vs literal values, formatting, indentation, "
+        "braces, comments/documentation and file naming: those are graded separately by "
+        "error definitions.",
         "- weight 'core' for what the assignment is about; 'secondary' for smaller required details.",
         "- Write each requirement as a short sentence a student would understand.",
         "",

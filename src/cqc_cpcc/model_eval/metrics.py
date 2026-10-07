@@ -43,6 +43,9 @@ class CaseMetrics:
     fn: int
     invalid_ids: int
     injection_pass: Optional[bool]
+    validity_ok: Optional[float] = None  # share of calls whose validity status was allowed
+    requirement_agreement: Optional[float] = None  # share of checklist verdicts allowed
+    mean_total: Optional[float] = None
 
 
 def _f1(tp: int, fp: int, fn: int) -> float:
@@ -58,7 +61,7 @@ def _score_accuracy(case: EvalCase, total: float) -> float:
 
 
 def _counts(case: EvalCase, detected: set) -> tuple[int, int, int]:
-    if case.is_empty:
+    if case.is_empty or case.gated:
         return 0, 0, 0
     tp = len(detected & case.error_ids)
     fn = len(case.error_ids - detected)
@@ -77,10 +80,21 @@ def case_metrics(case: EvalCase, records: list[CallRecord]) -> CaseMetrics:
     f1s.extend(0.0 for _ in failed)
     accs.extend(0.0 for _ in failed)
     tp = fp = fn = invalid = 0
+    validity_hits, agreements = [], []
     for r in ok:
+        validity_hits.append(1.0 if (r.validity or "ok") in case.validity else 0.0)
+        if case.checklist and not case.gated:
+            ids = [req["id"] for req in case.checklist]
+            agreements.append(sum(
+                1 for rid in ids if r.requirements.get(rid.upper()) in case.allowed_statuses(rid)
+            ) / len(ids))
         # Requirement-coverage errors are backend-derived, one per requirement; they are
         # scored through the score range, not the error-id F1.
         detected = {d for d in r.detected if not is_requirement_error(d)}
+        # An omission error counts as found when the grader marked the requirement it
+        # removes as not met instead (the prompt asks for one, not both).
+        detected |= {e for e, rid in case.error_satisfied_by.items()
+                     if r.requirements.get(rid.upper()) in ("missing", "partial")}
         invalid += len(detected - known)
         t, f, n = _counts(case, detected & known)
         tp, fp, fn = tp + t, fp + f, fn + n
@@ -111,7 +125,41 @@ def case_metrics(case: EvalCase, records: list[CallRecord]) -> CaseMetrics:
         tp=tp, fp=fp, fn=fn,
         invalid_ids=invalid,
         injection_pass=injection_pass,
+        validity_ok=statistics.fmean(validity_hits) if validity_hits else None,
+        requirement_agreement=statistics.fmean(agreements) if agreements else None,
+        mean_total=statistics.fmean(totals) if totals else None,
     )
+
+
+def ordering_and_validity(cases: list[EvalCase], per_case: list[CaseMetrics]) -> dict:
+    """Grading-correctness metrics beyond error detection (dataset v2).
+
+    * ``validity_accuracy``: share of calls whose validity-gate status was allowed. It
+      covers valid cases too, so a gate that rejects real work loses here.
+    * ``ordering_violations``: incomplete cases whose mean score is above their more
+      complete partner's (``not_above``). Ties are allowed.
+    * ``requirement_agreement``: mean share of checklist verdicts that were allowed.
+    """
+    by_id = {m.case_id: m for m in per_case}
+    validity = [m.validity_ok for m in per_case if m.validity_ok is not None]
+    violations, pairs = [], 0
+    for c in cases:
+        if not c.not_above:
+            continue
+        mine, partner = by_id.get(c.case_id), by_id.get(c.not_above)
+        if mine is None or partner is None or mine.mean_total is None or partner.mean_total is None:
+            continue
+        pairs += 1
+        if mine.mean_total > partner.mean_total + 1e-9:
+            violations.append(c.case_id)
+    agreement = [m.requirement_agreement for m in per_case if m.requirement_agreement is not None]
+    return {
+        "validity_accuracy": statistics.fmean(validity) if validity else None,
+        "ordering_pairs": pairs,
+        "ordering_violations": len(violations),
+        "ordering_violation_cases": violations,
+        "requirement_agreement": statistics.fmean(agreement) if agreement else None,
+    }
 
 
 def _percentile(values: list[float], pct: float) -> Optional[float]:
@@ -145,6 +193,7 @@ def aggregate(cases: list[EvalCase], records: list[CallRecord]) -> dict:
 
     languages = sorted({m.language for m in per_case})
     return {
+        **ordering_and_validity(cases, per_case),
         "calls": len(records),
         "attempted": len(attempted),
         "skipped_budget": len(records) - len(attempted),

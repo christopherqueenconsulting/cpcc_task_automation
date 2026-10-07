@@ -18,6 +18,8 @@ AGGREGATE_KEYS = (
     "composite", "f1", "precision", "recall", "score_accuracy", "jaccard", "score_std",
     "ok_rate", "invalid_ids", "injection_pass_rate", "scorable_cases", "cost_usd",
     "cost_per_submission", "latency_p50_s", "latency_p95_s", "attempted", "skipped_budget",
+    "validity_accuracy", "ordering_pairs", "ordering_violations", "ordering_violation_cases",
+    "requirement_agreement",
 )
 
 
@@ -31,7 +33,9 @@ def build(meta: dict, aggregates: dict, decisions: dict[str, Decision], winner) 
                 "per_language": agg.get("per_language", {}),
                 "per_case": [
                     {"case_id": m.case_id, "composite": m.composite, "f1": m.f1,
-                     "score_accuracy": m.score_accuracy, "ok_calls": m.ok_calls, "calls": m.calls}
+                     "score_accuracy": m.score_accuracy, "ok_calls": m.ok_calls, "calls": m.calls,
+                     "mean_total": m.mean_total, "validity_ok": m.validity_ok,
+                     "requirement_agreement": m.requirement_agreement}
                     for m in agg.get("per_case", [])
                 ],
             }
@@ -85,6 +89,14 @@ def to_markdown(sc: dict) -> str:
             f"{_fmt(m['injection_pass_rate'])} | {_fmt(m['cost_per_submission'], 5)} | "
             f"{_fmt(m['latency_p95_s'], 1)} |"
         )
+    if any(m.get("ordering_pairs") for m in sc["models"].values()):
+        lines += ["", "| Model | Validity | Ordering violations | Requirement agreement |",
+                  "|---|---|---|---|"]
+        for model, m in sc["models"].items():
+            lines.append(
+                f"| `{_safe(model)}` | {_fmt(m.get('validity_accuracy'))} | "
+                f"{_fmt(m.get('ordering_violations'))} of {_fmt(m.get('ordering_pairs'))} pairs | "
+                f"{_fmt(m.get('requirement_agreement'))} |")
     lines += ["", "### Decisions", ""]
     for model, d in sc["decisions"].items():
         verdict = f"eligible via **{d['path']}** path" if d["eligible"] else "not eligible"

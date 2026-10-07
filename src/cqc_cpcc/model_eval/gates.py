@@ -60,6 +60,15 @@ def hard_gate_failures(agg: dict, policy: EvalPolicy, max_cost_per_submission: f
         (agg["skipped_budget"] == 0, f"{agg['skipped_budget']} calls skipped: budget exhausted"),
         (agg["scorable_cases"] >= policy.min_scorable_cases,
          f"only {agg['scorable_cases']} scorable cases (< {policy.min_scorable_cases})"),
+        # Grading correctness beyond error detection (dataset v2; absent on v1 runs).
+        (agg.get("validity_accuracy") is None or agg["validity_accuracy"] >= g.min_validity_accuracy,
+         f"validity accuracy {agg.get('validity_accuracy')} < {g.min_validity_accuracy}"),
+        (agg.get("ordering_violations", 0) <= g.max_ordering_violations,
+         f"{agg.get('ordering_violations')} incomplete case(s) outscored a more complete partner: "
+         f"{', '.join(agg.get('ordering_violation_cases') or [])}"),
+        (agg.get("requirement_agreement") is None
+         or agg["requirement_agreement"] >= g.min_requirement_agreement,
+         f"requirement agreement {agg.get('requirement_agreement')} < {g.min_requirement_agreement}"),
     ]
     return [message for passed, message in checks if not passed] + list(policy_problems or [])
 
