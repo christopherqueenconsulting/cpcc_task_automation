@@ -29,16 +29,20 @@ class Actions:
         """Set a file; when ``shown_in`` is given, wait until the uploader lists it.
 
         A rerun that lands while the file is uploading (the Setup stage advancing on
-        a slow CI runner) can drop it, so set it again once. That is still one action
-        for the user, who would simply see the file and carry on."""
-        await locator.set_input_files(str(path))
-        if shown_in is not None:
-            name = shown_in.get_by_text(path.name)
+        a slow CI runner) can drop it, so set it again, up to three times. That is still
+        one action for the user, who would simply see the file and carry on."""
+        for attempt in range(3):
+            # Right after a stage change the previous tabs can linger in the DOM for a moment.
+            await expect(locator).to_have_count(1, timeout=20000)
+            await locator.set_input_files(str(path))
+            if shown_in is None:
+                break
             try:
-                await expect(name).to_be_visible(timeout=15000)
+                await expect(shown_in.get_by_text(path.name).first).to_be_visible(timeout=15000)
+                break
             except AssertionError:
-                await locator.set_input_files(str(path))
-                await expect(name).to_be_visible(timeout=30000)
+                if attempt == 2:
+                    raise
         self.n += 1
 
 
