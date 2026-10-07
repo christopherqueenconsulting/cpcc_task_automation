@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Optional
 
 from cqc_cpcc.rubric_models import RubricAssessmentResult
-from cqc_cpcc.student_feedback_builder import build_student_feedback
+from cqc_cpcc.student_feedback_builder import build_student_feedback, closing_for_result
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -244,7 +244,8 @@ def generate_student_feedback_doc(
     feedback_text = build_student_feedback(
         feedback_result,
         student_name=student_name,
-        include_greeting=False  # Skip greeting in doc
+        include_greeting=False,  # Skip greeting in doc
+        include_closing=False,   # Added as its own paragraph at the end
     )
 
     # Parse feedback text into sections
@@ -299,6 +300,11 @@ def generate_student_feedback_doc(
 
             for error in minor_errors:
                 _add_error_to_doc(doc, error)
+
+    # Closing line matched to the score (no numbers are shown)
+    closing_para = doc.add_paragraph(closing_for_result(feedback_result))
+    _format_body_paragraph(closing_para)
+    closing_para.paragraph_format.space_before = Pt(12)
 
     # Convert document to bytes
     doc_bytes = io.BytesIO()

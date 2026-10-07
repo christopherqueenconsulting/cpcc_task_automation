@@ -25,10 +25,42 @@ from typing import Optional
 from cqc_cpcc.rubric_models import RubricAssessmentResult
 
 
+# Closing lines, matched to how the student did (Christopher, 2026-10-07): concise for
+# high scores, warm for the middle, mentoring for low scores. They never mention a next
+# assignment or a resubmission, which students usually cannot make.
+CLOSING_NO_WORK = (
+    "No gradable source file was received for this assignment, so it was scored 0. If the "
+    "wrong file was uploaded by mistake, email me right away with the correct file and "
+    "proof that it was completed before the deadline; a late correction may not be accepted."
+)
+CLOSING_BANDS = (
+    (90, "Excellent work. Your program meets the requirements cleanly."),
+    (80, "Strong work. The notes above point to the remaining details to polish."),
+    (70, "You are on the right track, and much of this works well. Take time with the notes "
+         "above; working through them will strengthen your understanding of this material."),
+    (60, "There is real progress here to build on. Work through the items above one at a "
+         "time, and please reach out if any of them are unclear."),
+    (0, "This submission does not yet meet several core requirements. I recommend reviewing "
+        "the related course material and practicing each concept noted above. Please come to "
+        "office hours or contact me so we can work through it together."),
+)
+
+
+def closing_for_result(result: RubricAssessmentResult) -> str:
+    """The closing line for a result, chosen by its score percent (or no-work status)."""
+    from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES
+    if getattr(result, "validity_status", None) in NO_WORK_STATUSES:
+        return CLOSING_NO_WORK
+    possible = result.total_points_possible or 0
+    percent = (result.total_points_earned or 0) / possible * 100 if possible else 0
+    return next(text for floor, text in CLOSING_BANDS if percent >= floor)
+
+
 def build_student_feedback(
         result: RubricAssessmentResult,
         student_name: Optional[str] = None,
         include_greeting: bool = True,
+        include_closing: bool = True,
 ) -> str:
     """Build student-facing feedback text from grading results.
     
@@ -42,6 +74,7 @@ def build_student_feedback(
         result: RubricAssessmentResult from grading
         student_name: Optional student name for personalized greeting
         include_greeting: Whether to include a greeting line
+        include_closing: Whether to end with the score-matched closing line
         
     Returns:
         Formatted feedback text ready to copy/paste
@@ -111,8 +144,9 @@ def build_student_feedback(
                 lines.append(error_text)
             lines.append("")
 
-    # Closing
-    lines.append("Keep up the good work and feel free to reach out with questions!")
+    # Closing, matched to the score (see closing_for_result)
+    if include_closing:
+        lines.append(closing_for_result(result))
 
     return "\n".join(lines)
 
