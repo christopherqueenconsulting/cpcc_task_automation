@@ -426,8 +426,8 @@ async def grade_with_rubric(
         if gate_report is not None:
             gate_report["validity"] = {"status": validity.status, "reason": validity.reason}
         if not validity.ok:
-            logger.warning("Validity gate: %s (%s) — scoring 0 without an LLM call",
-                           validity.status, validity.reason)
+            # The reason can contain student file names: log only the status.
+            logger.warning("Validity gate: %s — scoring 0 without an LLM call", validity.status)
             return build_invalid_submission_result(rubric, validity)
 
     # Build the prompt
@@ -637,7 +637,7 @@ def build_invalid_submission_result(rubric: Rubric, validity) -> RubricAssessmen
             points_possible=c.max_points,
             points_earned=0,
             selected_level_label=_zero_level_label(c),
-            feedback="No gradeable work was submitted for this criterion.",
+            feedback="No gradeable work was found for this criterion.",
         )
         for c in rubric.criteria if c.enabled
     ]

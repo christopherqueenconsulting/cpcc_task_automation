@@ -101,10 +101,16 @@ HELLO_CPP = '#include <iostream>\nusing namespace std;\nint main() {\n    cout <
 
 @pytest.mark.unit
 def test_trivial_source(tmp_path):
-    code = "#include <iostream>\nint main() {\n    return 0;\n}\n"
+    code = "#include <iostream>\nint main() {\n}\n"
     v = sv.check_validity({"main.cpp": _write(tmp_path, "main.cpp", code)}, "cpp")
     assert v.status == sv.TRIVIAL
-    assert v.meaningful_lines == 2  # int main() { / return 0;
+    assert v.meaningful_lines == 1  # int main() {
+
+
+@pytest.mark.unit
+def test_hello_world_without_return_is_not_trivial(tmp_path):
+    code = '#include <iostream>\nusing namespace std;\nint main() {\n    cout << "Hello World" << endl;\n}\n'
+    assert sv.check_validity({"hello.cpp": _write(tmp_path, "hello.cpp", code)}, "cpp").ok
 
 
 @pytest.mark.unit
@@ -117,9 +123,9 @@ def test_complete_hello_world_is_not_trivial(tmp_path, name, code, lang):
 
 @pytest.mark.unit
 def test_reference_only_lowers_threshold(tmp_path):
-    path = _write(tmp_path, "main.cpp", "int main() {\n    return 0;\n}\n")
+    path = _write(tmp_path, "main.cpp", "int main() {\n}\n")
     assert sv.check_validity({"main.cpp": path}, "cpp").status == sv.TRIVIAL
-    tiny_reference = "int main() {\n    return 0;\n}\n"
+    tiny_reference = "int main() {\n}\n"
     assert sv.check_validity({"main.cpp": path}, "cpp", reference_code=tiny_reference).ok
 
 
@@ -409,3 +415,22 @@ async def test_model_cannot_set_gate_fields(tmp_path, cpp_rubric):
     assert not result.needs_review and not result.review_confirmed
     assert result.validity_status is None
     assert result.total_points_earned == cpp_rubric.total_points_possible
+
+
+@pytest.mark.unit
+def test_comment_markers_inside_strings_are_code():
+    code = 'String a = "/*";\nint x = 1;\nint y = 2;\nString b = "*/";\nString c = "// not a comment";\n'
+    assert sv.count_meaningful_lines(code, "java") == 5
+
+
+@pytest.mark.unit
+def test_cpp_fragment_in_txt_is_source(tmp_path):
+    """A quiz written response saved as .txt may hold a fragment with no #include."""
+    path = _write(tmp_path, "answer.txt", "int add(int a, int b) {\n    return a + b;\n}\n")
+    assert sv.check_validity({"answer.txt": path}, "cpp").ok
+
+
+@pytest.mark.unit
+def test_java_in_txt_for_cpp_course_is_wrong_type(tmp_path):
+    path = _write(tmp_path, "answer.txt", JAVA_PROGRAM)
+    assert sv.check_validity({"answer.txt": path}, "cpp").status == sv.WRONG_TYPE

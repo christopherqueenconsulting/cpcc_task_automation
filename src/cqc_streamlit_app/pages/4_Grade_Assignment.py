@@ -2682,12 +2682,17 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
                  "Add the file type under accepted types and grade the batch again.")
         return
     with st.spinner(f"Grading {student_id}..."):
-        result = run_coroutine_blocking(grade_with_rubric(
-            student_submission=build_submission_text_with_token_limit(files=submission.files),
-            source_files=submission.files,
-            validity_gate=False,
-            **inputs["kwargs"],
-        ))
+        try:
+            result = run_coroutine_blocking(grade_with_rubric(
+                student_submission=build_submission_text_with_token_limit(files=submission.files),
+                source_files=submission.files,
+                validity_gate=False,
+                **inputs["kwargs"],
+            ))
+        except Exception as e:  # noqa: BLE001 - keep the rest of the results page usable
+            logger.error(f"Grade anyway failed for {alias(student_id)}: {e}", exc_info=True)
+            st.error(f"Grading {student_id} failed: {e}")
+            return
     _replace_result(run_key, student_id, result)
     st.rerun()
 
@@ -2793,6 +2798,9 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         st.subheader("📊 Grading Summary")
         summary_df = pd.DataFrame(summary_data)
         st.dataframe(summary_df, hide_index=True)
+        # Rebuilt each render so the feedback ZIP's summary sheet follows Confirm 0 /
+        # Grade anyway changes.
+        st.session_state[f"grading_summary_df_{run_key}"] = summary_df
 
         # Export options for grading summary
         col1, col2 = st.columns(2)
@@ -2823,8 +2831,9 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
                         key="download_summary_csv_rubric"
                     )
 
-        # Calculate statistics - exclude failure rows from average
-        numeric_scores = pd.to_numeric(summary_df["Points Earned"], errors="coerce").dropna()
+        # Calculate statistics - exclude failure rows and unconfirmed review zeros
+        graded = summary_df[~summary_df["Status"].str.startswith("Needs review")]
+        numeric_scores = pd.to_numeric(graded["Points Earned"], errors="coerce").dropna()
         avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
         # Get total_possible from first result, default to 100 if missing
         try:

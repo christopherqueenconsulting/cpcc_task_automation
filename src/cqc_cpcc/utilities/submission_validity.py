@@ -67,8 +67,8 @@ WRONG_FILE_TYPE_ID = "WRONG_FILE_TYPE"
 GATE_ERROR_IDS = frozenset({NO_SUBMISSION_ID, WRONG_FILE_TYPE_ID})
 
 # Without a reference solution only near-empty code is "trivial": a complete Hello
-# World is 3 meaningful lines and must not be flagged. With a reference, see below.
-DEFAULT_MIN_STATEMENTS = 3
+# World without `return 0;` is 2 meaningful lines and must not be flagged.
+DEFAULT_MIN_STATEMENTS = 2
 # With a reference solution, "trivial" means under this share of its meaningful lines
 # (capped at DEFAULT_MIN_STATEMENTS), so a 3-line Hello World assignment is not flagged.
 REFERENCE_MIN_FRACTION = 0.3
@@ -135,11 +135,17 @@ def expected_language_for_rubric(rubric) -> Optional[str]:
     return langs.pop() if len(langs) == 1 else None
 
 
+_C_COMMENT_OR_LITERAL = re.compile(
+    r"""("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|/\*.*?\*/|//[^\n]*""",
+    re.DOTALL,
+)
+
+
 def strip_comments(code: str, language: str) -> str:
     """Remove comments from ``code`` (best effort, string-literal naive)."""
     if language in ("cpp", "java"):
-        code = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
-        code = re.sub(r"//[^\n]*", "", code)
+        # Match string/char literals first so "/*" or "//" inside a string is kept.
+        code = _C_COMMENT_OR_LITERAL.sub(lambda m: m.group(1) or "", code)
     elif language == "python":
         code = re.sub(r'^\s*(""".*?"""|\'\'\'.*?\'\'\')', "", code, flags=re.DOTALL | re.MULTILINE)
         code = re.sub(r"#[^\n]*", "", code)
@@ -237,8 +243,11 @@ def check_validity(
             # so only the content checks below apply (minus builder headers/fences).
             sources.append((name, _strip_submission_headers(_read_text(ref))))
         elif ext in _TEXT_CONTAINERS:
+            # Code pasted into a .txt (or a quiz written response saved as .txt) counts
+            # unless it is clearly another language; a fragment with no #include or
+            # class header detects as "unknown" and must not be called the wrong type.
             text = _read_text(ref)
-            if detect_language("", text) == expected_language:
+            if detect_language("", text) in (expected_language, "unknown"):
                 sources.append((name, text))
     v.source_files = [n for n, _ in sources]
 
