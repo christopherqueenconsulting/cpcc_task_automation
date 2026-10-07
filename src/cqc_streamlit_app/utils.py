@@ -1830,7 +1830,7 @@ def add_brightspace_writeback_element(
             "in BrightSpace afterward."
         )
     else:
-        st.markdown("#### 📤 Write grades back to BrightSpace (draft)")
+        st.subheader("Write grades to BrightSpace", anchor=False)
         st.caption(
             "Pushes each student's score + feedback onto their BrightSpace evaluation "
             "page and **saves as a draft** (never published) so you can review, then "
@@ -1920,25 +1920,21 @@ def add_brightspace_writeback_element(
 
     # Re-evaluate the route from the URL the user actually entered above.
     is_quiz = _is_quiz_writeback_url(url)
-    real_button_label = (
-        "✍️ Write Grades and Feedback to Brightspace" if is_quiz
-        else "✍️ Write drafts to BrightSpace"
-    )
-    confirm_label = (
-        "I reviewed the dry run — POST grades & feedback to the quiz" if is_quiz
-        else "I reviewed the dry run — write drafts for real"
-    )
+    writable = len(results) - len(held)
+    plural = "s" if writable != 1 else ""
+    real_button_label = (f"Post {writable} grade{plural} to the quiz" if is_quiz
+                         else f"Write {writable} draft{plural} to BrightSpace")
+    route = ("post the grades and feedback to the quiz, published to students immediately"
+             if is_quiz else "save the grades and feedback as drafts (not published)")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("🔍 Preview write (dry run)", key=key_prefix + "dry",
-                     disabled=not url, width="stretch"):
+    with st.container(horizontal=True):
+        if st.button("Preview write (dry run)", key=key_prefix + "dry", icon=":material/preview:",
+                     disabled=not url):
             _launch(dry_run=True)
-    with c2:
-        confirm = st.checkbox(confirm_label, key=key_prefix + "confirm")
-        if st.button(real_button_label, key=key_prefix + "real",
-                     disabled=not (url and confirm), width="stretch"):
-            _launch(dry_run=False)
+        if st.button(real_button_label, key=key_prefix + "real", type="primary",
+                     icon=":material/cloud_upload:", disabled=not url or writable == 0):
+            _confirm_writeback_dialog(real_button_label, writable, route, is_quiz,
+                                      lambda: _launch(dry_run=False))
 
     # Job in progress: only this fragment refreshes (progress, MFA number), not the page.
     if job is not None and not job.done.is_set():
@@ -2637,3 +2633,18 @@ def _render_job_progress(job, job_key: str, key_prefix: str) -> None:
         job.bridge.cancel()
         st.session_state.pop(job_key, None)
         st.rerun()
+
+
+@st.dialog("Confirm write-back")
+def _confirm_writeback_dialog(label: str, count: int, route: str, is_quiz: bool, on_confirm) -> None:
+    """Names the count and the route before anything is written (replaces a checkbox)."""
+    st.write(f"This will {route} for **{count}** student{'s' if count != 1 else ''}.")
+    if is_quiz:
+        st.warning("Quiz grades are published to students immediately; there is no draft.",
+                   icon=":material/warning:")
+    st.caption("Run the dry run first to check that every student matches.")
+    with st.container(horizontal=True):
+        if st.button(label, type="primary", icon=":material/cloud_upload:"):
+            on_confirm()
+        if st.button("Cancel"):
+            st.rerun()
