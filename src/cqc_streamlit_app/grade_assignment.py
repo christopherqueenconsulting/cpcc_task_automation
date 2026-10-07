@@ -2558,6 +2558,10 @@ async def get_rubric_based_exam_grading():
     is_grading_in_progress = should_grade or status == "running"
 
     with run_tab:
+        if status == "failed" and not should_grade:
+            error = st.session_state.grading_errors_by_key.get(current_run_key)
+            st.error(f"The last grading run failed: {error}" if error else "The last grading run failed.",
+                     icon=":material/error:")
         if status == "interrupted":
             if has_cached_results and grading_mode != "errors_only":
                 st.warning("The last grading run was interrupted. Finished students are kept; "
