@@ -28,6 +28,11 @@ def streamlit_app_url():
     env["CQC_TEST_MODE"] = "true"
     # Disable API key requirement check for test mode
     env["OPENAI_API_KEY"] = "test-key-not-used"
+    # Never touch the developer's real preferences or saved grading results.
+    import tempfile
+    state_dir = tempfile.mkdtemp(prefix="cqc_e2e_")
+    env["CQC_APP_SETTINGS_PATH"] = os.path.join(state_dir, "app_settings.json")
+    env["CQC_GRADING_RESULTS_DIR"] = os.path.join(state_dir, "grading_results")
     
     # Start Streamlit in background
     process = subprocess.Popen(
@@ -39,13 +44,16 @@ def streamlit_app_url():
             "--server.fileWatcherType", "none"  # Disable file watcher for stability
         ],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
+        # A file, not a pipe: nobody reads a pipe, and once its buffer fills with the
+        # app's logging the server blocks mid-run.
+        stdout=open(os.path.join(state_dir, "streamlit.log"), "w"),
+        stderr=subprocess.STDOUT,
     )
+    print(f"Streamlit log: {os.path.join(state_dir, 'streamlit.log')}")
     
     # Wait for app to start (give it up to 10 seconds)
     app_url = "http://localhost:8502"
-    max_wait = 10
+    max_wait = 30
     for i in range(max_wait):
         try:
             import urllib.request

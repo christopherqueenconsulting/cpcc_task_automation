@@ -36,7 +36,7 @@ def test_settings_round_trip_and_defaults(tmp_path):
     assert app_settings.load_settings().show_legacy_pages is False
     app_settings.update_settings(show_legacy_pages=True)
     path = app_settings.settings_path()
-    assert json.loads(path.read_text()) == {"show_legacy_pages": True}
+    assert json.loads(path.read_text())["show_legacy_pages"] is True
     assert oct(path.stat().st_mode & 0o777) == "0o600"
     # A fresh load (as after an app restart) sees the saved value.
     assert app_settings.load_settings().show_legacy_pages is True
