@@ -2140,7 +2140,7 @@
       {
         "criterion_id": "program_performance",
         "name": "Program Performance",
-        "description": "Identify all major and minor errors first. Then select the performance level: Outstanding (no errors), Superior (≤2 minor, 0 major), Above Average (3-4 minor or 1 major), Average (5 minor or 2 major), Below Average (>5 minor or 3 major), Needs Improvement (4 major), Substandard (5 major), Unsatisfactory (6+ major), No Submission (not submitted).",
+        "description": "Report every major and minor error exactly as found; do not convert minor errors into major errors yourself. The scoring step first counts every 4 minor errors as 1 major error, then applies these levels: Outstanding (no errors), Superior (≤2 minor, 0 major), Above Average (3-4 minor or 1 major), Average (5 minor or 2 major), Below Average (>5 minor or 3 major), Needs Improvement (4 major), Substandard (5 major), Unsatisfactory (6+ major), No Submission (not submitted).",
         "max_points": 30,
         "enabled": true,
         "scoring_mode": "error_count",
@@ -2258,7 +2258,7 @@
       {
         "criterion_id": "program_performance",
         "name": "Program Performance",
-        "description": "Identify all major and minor errors first. Then select the performance level: Outstanding (no errors), Superior (≤2 minor, 0 major), Above Average (3-4 minor or 1 major), Average (5 minor or 2 major), Below Average (>5 minor or 3 major), Needs Improvement (4 major), Substandard (5 major), Unsatisfactory (6+ major), No Submission (not submitted).",
+        "description": "Report every major and minor error exactly as found; do not convert minor errors into major errors yourself. The scoring step first counts every 4 minor errors as 1 major error, then applies these levels: Outstanding (no errors), Superior (≤2 minor, 0 major), Above Average (3-4 minor or 1 major), Average (5 minor or 2 major), Below Average (>5 minor or 3 major), Needs Improvement (4 major), Substandard (5 major), Unsatisfactory (6+ major), No Submission (not submitted).",
         "max_points": 200,
         "enabled": true,
         "scoring_mode": "error_count",

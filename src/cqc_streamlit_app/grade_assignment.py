@@ -950,7 +950,8 @@ async def get_grade_exam_content():
     course_section = st.text_input("Enter Course Section and Assignment Name")
     course_name = selected_course + "_" + course_section if course_section else None
     max_points = st.number_input("Max points for assignment", value=200)
-    deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40)
+    deduction_per_major_error = st.number_input("Points deducted per major error", value=40,
+                                                help="Each additional major error deducts half as much as the one before, so the total for major errors never exceeds twice this value.")
     deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10)
 
     st.header("Instructions File")
@@ -2437,7 +2438,10 @@ async def get_rubric_based_exam_grading():
                 st.subheader("Error-only scoring", anchor=False)
                 max_points = st.number_input("Max points for assignment", value=200, key="error_only_max_points")
                 deduction_per_major_error = st.number_input("Points deducted per major error", value=40,
-                                                            key="error_only_major_deduction")
+                                                            key="error_only_major_deduction",
+                                                            help="Each additional major error deducts half as much "
+                                                                 "as the one before, so the total for major errors "
+                                                                 "never exceeds twice this value.")
                 deduction_per_minor_error = st.number_input("Points deducted per minor error", value=10,
                                                             key="error_only_minor_deduction")
             st.subheader("Model", anchor=False)

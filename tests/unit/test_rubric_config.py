@@ -539,6 +539,8 @@ def test_conversion_rubrics_tell_the_grader_not_to_convert(rubric_id):
     assert ratios == [4]
     assert "never convert minor errors into major errors yourself" in rubric["description"]
     assert not any("conversion first" in c["description"] for c in rubric["criteria"])
+    for criterion in rubric["criteria"]:
+        assert "do not convert minor errors into major errors yourself" in criterion["description"]
     assert "No minor-to-major conversion is applied" not in rubric["description"]
 
 
@@ -551,3 +553,10 @@ def test_conversion_counts_are_not_in_the_model_schema():
                  "effective_major_errors", "effective_minor_errors"):
         assert name not in props
     assert RubricAssessmentResult.model_fields["effective_major_errors"].default is None
+    import json as _json
+    from cqc_cpcc.utilities.AI.schema_normalizer import normalize_json_schema_for_openai
+    sent = _json.dumps(normalize_json_schema_for_openai(RubricAssessmentResult.model_json_schema()),
+                       ensure_ascii=False)
+    for text in ("effective_major_errors", "effective_minor_errors", "original_major_errors",
+                 "Minor→Major", "Minor->Major"):
+        assert text not in sent
