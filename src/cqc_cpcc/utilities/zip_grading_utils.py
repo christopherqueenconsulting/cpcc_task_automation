@@ -183,6 +183,7 @@ def parse_student_folder_name(directory_name: str) -> str:
         "100004-600001 - Dee Placeholder - Jun 24, 2026 11:21 PM" -> "Dee Placeholder"
         "10001 - Anne - Marie Smith - Oct 10, 2025 1022 AM"       -> "Anne - Marie Smith"
         "Assignment1 - John Doe"                                  -> "John Doe"
+        "student_8102d439 - Sep 28, 2026 901 PM"                 -> "student_8102d439"
         "Student1/subfolder"                                      -> "Student1"
     """
     name = _parse_student_folder_name(directory_name)
@@ -202,6 +203,9 @@ def _parse_student_folder_name(directory_name: str) -> str:
     # any un-stripped wrapper folder + the id/assignment (e.g. "Wrapper/123"); the
     # trailing timestamp is dropped; the middle segments are the student's name.
     parts = [p.strip() for p in path.split(_FOLDER_NAME_DELIMITER)]
+    if len(parts) == 2 and _segment_looks_like_timestamp(parts[1]):
+        # "{Student} - {Timestamp}" (no id/assignment prefix): the name is the first part.
+        return parts[0].split('/')[-1].strip() or path.split('/')[0].strip()
     end = len(parts) - 1 if (len(parts) >= 3 and _segment_looks_like_timestamp(parts[-1])) else len(parts)
     name = _FOLDER_NAME_DELIMITER.join(parts[1:end]).strip()
     # Defensively collapse any residual path separator to the deepest segment.
@@ -484,9 +488,12 @@ def extract_student_submissions_from_zip(
 
         # Students who turned in only unaccepted files: keep them, with no files, so
         # grading records a 0 for review rather than leaving them out of the results.
-        # If NO student has an accepted file, the accepted types are probably wrong, so
-        # fall through to the explanatory error below instead.
-        for student_id, rejected in (rejected_by_student.items() if students_data else []):
+        # This holds even when NO student has an accepted file (a one-student re-grade of
+        # a .docx, or a batch where everyone uploaded the wrong type): each one is flagged
+        # "wrong file type" and held for review, and nothing is sent to an AI model or
+        # written back unconfirmed. If the accepted types themselves are wrong, the batch
+        # preview shows every student flagged before anything runs.
+        for student_id, rejected in rejected_by_student.items():
             if student_id in students_data:
                 students_data[student_id].rejected_files = rejected
                 continue

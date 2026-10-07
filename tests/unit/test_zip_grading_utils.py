@@ -380,3 +380,28 @@ class TestSubmissionTextBuilding:
         # Should include both files (no truncation)
         assert "### Submission File Name: file1.txt" in text
         assert "### Submission File Name: file2.txt" in text
+
+
+@pytest.mark.unit
+def test_zip_where_every_student_has_only_unaccepted_files_keeps_them(tmp_path):
+    """Regression: a batch with only wrong-type work (e.g. one student's .dev or .docx for a
+    .cpp project, plus BrightSpace's index.html) must flag each student, not raise."""
+    zip_path = tmp_path / "wrong_type_only.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("101 - Ada Example - Sep 28, 2026 901 PM/Project.dev", "binary-ish")
+        zf.writestr("102 - Ben Sample - Sep 28, 2026 902 PM/Project.docx", "prose")
+        zf.writestr("index.html", "<html></html>")
+
+    students = extract_student_submissions_from_zip(str(zip_path), ["cpp"])
+
+    assert len(students) == 2
+    for submission in students.values():
+        assert submission.files == {}
+        assert submission.rejected_files
+
+
+@pytest.mark.unit
+def test_two_part_folder_with_timestamp_keeps_the_name():
+    from cqc_cpcc.utilities.zip_grading_utils import parse_student_folder_name
+    assert parse_student_folder_name("student_8102d439 - Sep 28, 2026 901 PM") == "student_8102d439"
+    assert parse_student_folder_name("Assignment1 - John Doe") == "John Doe"
