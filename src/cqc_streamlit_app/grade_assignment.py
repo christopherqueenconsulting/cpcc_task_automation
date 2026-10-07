@@ -2555,9 +2555,13 @@ async def get_rubric_based_exam_grading():
 
     with run_tab:
         if status == "interrupted":
-            if has_cached_results:
+            if has_cached_results and grading_mode != "errors_only":
                 st.warning("The last grading run was interrupted. Finished students are kept; "
                            "retry the rest from Results & review.", icon=":material/warning:")
+            elif has_cached_results:
+                st.warning("The last grading run was interrupted. Finished students are kept; to "
+                           "grade the rest, use Clear results and grade the batch again.",
+                           icon=":material/warning:")
             else:
                 st.warning("The last grading run was interrupted before it finished. Grade again.",
                            icon=":material/warning:")
