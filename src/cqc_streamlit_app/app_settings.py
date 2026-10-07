@@ -30,6 +30,8 @@ class AppSettings(BaseModel):
     last_course_id: Optional[str] = None
     last_rubric_id: Optional[str] = None
     last_assignment_id: Optional[str] = None
+    # Take attendance: courses chosen last time (MyColleges course URLs).
+    last_attendance_courses: list[str] = []
 
 
 def remember(**choices) -> None:

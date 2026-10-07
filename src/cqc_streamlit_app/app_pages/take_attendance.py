@@ -26,6 +26,7 @@ from cqc_cpcc.attendance_job import (
 from cqc_cpcc.run_plan import RunPlan, course_choices
 from cqc_cpcc.utilities.env_constants import WITHDRAWALS_TRACKER_DRY_RUN
 from cqc_cpcc.utilities.logger import LOGGING_FILENAME, logger
+from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.streamlit_logger import streamlit_handler
 from cqc_streamlit_app.utils import on_download_click, page_header, render_mfa_prompt
@@ -56,14 +57,16 @@ def plan_form(job: AttendanceJob) -> None:
     choices = course_choices(info, include_all_terms=include_all)
     labels = dict(zip(choices.urls, choices.labels))
 
+    # Last run's courses when they are still offered, else the active term's courses.
+    remembered = [url for url in load_settings().last_attendance_courses if url in choices.urls]
     selected = st.multiselect(
         "Courses to process",
         options=choices.urls,
-        default=choices.default_urls,
+        default=remembered or choices.default_urls,
         format_func=lambda url: labels.get(url, url),
         # A new key when the list changes, so the defaults follow it.
         key="attendance_courses_%s" % ("all" if include_all else "term"),
-        help="Currently active courses are pre-selected.",
+        help="Your last run's courses are pre-selected (else the active term's).",
     )
     if choices.hidden_count:
         st.caption("%d course(s) from other terms are hidden. Turn on "
@@ -71,7 +74,9 @@ def plan_form(job: AttendanceJob) -> None:
     elif not include_all:
         st.caption("No %s courses found, so every course is listed." % choices.term_text)
 
-    full_recheck = st.checkbox(
+    options = st.container(border=True)
+    options.markdown("**Options**")
+    full_recheck = options.checkbox(
         "Re-check attendance from each course's start date",
         value=False,
         key="attendance_full_recheck",
@@ -79,32 +84,32 @@ def plan_form(job: AttendanceJob) -> None:
              "date. Tick this after errors or reported holes; entries already "
              "verified are skipped, so it is safe to repeat.",
     )
-    write_attendance = st.checkbox(
+    write_attendance = options.checkbox(
         "Write attendance to MyColleges (unchecked = dry run, report missing only)",
         value=True,
         key="attendance_write",
     )
 
-    process_withdrawals = st.checkbox("Also process withdrawals after attendance finishes",
+    process_withdrawals = options.checkbox("Also process withdrawals after attendance finishes",
                                       value=True, key="attendance_process_withdrawals")
     has_tracker = bool(job.tracker_url)
-    sync_to_tracker = st.checkbox(
+    sync_to_tracker = options.checkbox(
         "Sync withdrawals to the online Attendance Tracker",
         value=has_tracker,
         disabled=not (process_withdrawals and has_tracker),
         key="attendance_sync_tracker",
         help=None if has_tracker else "Add the Attendance Tracker URL on the Settings page first.",
     )
-    write_to_tracker = st.checkbox(
+    write_to_tracker = options.checkbox(
         "Write to the tracker for real (unchecked = dry run, report only)",
         value=not WITHDRAWALS_TRACKER_DRY_RUN,
         disabled=not (process_withdrawals and sync_to_tracker and has_tracker),
         key="attendance_write_tracker",
     )
 
-    continue_col, cancel_col = st.columns([1, 1])
-    if continue_col.button("▶ Continue", type="primary", disabled=not selected,
-                           key="attendance_continue"):
+    actions = st.container(horizontal=True)
+    if actions.button("Continue", type="primary", disabled=not selected, icon=":material/play_arrow:",
+                      key="attendance_continue"):
         try:
             plan = RunPlan.from_selections(
                 info,
@@ -119,9 +124,10 @@ def plan_form(job: AttendanceJob) -> None:
         except ValueError as error:
             st.error(str(error))
         else:
+            remember(last_attendance_courses=list(selected))
             job.submit_plan(plan)
             st.rerun()
-    if cancel_col.button("✖ Cancel", key="attendance_cancel_plan"):
+    if actions.button("Cancel", key="attendance_cancel_plan", icon=":material/close:"):
         job.cancel()
         st.rerun()
 
@@ -163,7 +169,6 @@ def screenshot_section() -> None:
     "Live" shows the newest screenshot from whichever tab the run is using. Each
     open browser tab then gets its own view with the last screenshot taken there.
     """
-    st.subheader("Attendance Screenshot")
     job: AttendanceJob | None = st.session_state.get(JOB_KEY)
     screenshot = job.latest_screenshot() if job is not None else None
     if screenshot:
@@ -220,18 +225,18 @@ def eva_section(job: AttendanceJob) -> None:
                      for name, text in EVA_COLUMNS_HELP.items()}
     if past:
         with st.container(border=True):
-            st.error("🚨 **Past EVA: no attendance recorded** for %d student(s). They should "
-                     "not stay in the course without a Present mark." % len(past))
+            st.error("**Past EVA: no attendance recorded** for %d student(s). They should "
+                     "not stay in the course without a Present mark." % len(past), icon=":material/error:")
             st.dataframe(_eva_rows(past), hide_index=True, width="stretch",
                          column_config=column_config)
         seen = st.session_state.setdefault(SEEN_EVA_TOASTS_KEY, set())
         for section in sorted({f.course_section for f in past} - seen):
-            st.toast("🚨 %s: students past EVA with no attendance" % section, icon="🚨")
+            st.toast("%s: students past EVA with no attendance" % section, icon=":material/error:")
             seen.add(section)
     if before:
         with st.container(border=True):
-            st.warning("⚠️ **At risk before EVA**: %d student(s) have no Present mark yet."
-                       % len(before))
+            st.warning("**At risk before EVA**: %d student(s) have no Present mark yet."
+                       % len(before), icon=":material/warning:")
             st.dataframe(_eva_rows(before), hide_index=True, width="stretch",
                          column_config=column_config)
 
@@ -239,7 +244,7 @@ def eva_section(job: AttendanceJob) -> None:
 def warnings_section(job: AttendanceJob) -> None:
     """Problems to act on, such as a course MyColleges would not update; kept all run."""
     for message in job.warnings():
-        st.warning("⚠️ " + message)
+        st.warning(message, icon=":material/warning:")
 
 
 def _needs_full_page(phase: str) -> bool:
@@ -263,13 +268,14 @@ def job_section(job: AttendanceJob) -> None:
             if plan is None or not plan.course_urls:
                 st.info("Nothing was processed: no courses were selected.")
             else:
-                st.success("✅ Attendance finished for %d course(s)." % len(plan.course_urls))
+                st.success("Attendance finished for %d course(s)." % len(plan.course_urls),
+                           icon=":material/check_circle:")
         elif phase == PHASE_FAILED:
-            st.error("❌ Attendance failed: %s" % job.error)
+            st.error("Attendance failed: %s" % job.error, icon=":material/error:")
         elif phase == PHASE_CANCELLED:
             st.warning("Attendance was cancelled.")
         warnings_section(job)
-        if st.button("Start a new run", key="attendance_reset"):
+        if st.button("Start a new run", key="attendance_reset", icon=":material/refresh:"):
             st.session_state.pop(JOB_KEY, None)
             st.rerun()
 
@@ -278,17 +284,17 @@ def progress_section(job: AttendanceJob) -> None:
     """Progress, the MFA number and Cancel while the run works; part of the live view."""
     phase = job.phase
     if job.cancelled and phase not in FINISHED_PHASES:
-        st.info("⏳ Cancelling...")
+        st.info("Cancelling...", icon=":material/hourglass_top:")
         return
     if _needs_full_page(phase):
         return
 
-    st.info("⏳ %s" % (job.latest_progress() or "Starting..."))
+    st.info(job.latest_progress() or "Starting...", icon=":material/progress_activity:")
     warnings_section(job)
     render_mfa_prompt(job.bridge)
     # Cancel is offered until attendance marking starts; after that the run finishes
     # so no course is left half-recorded.
-    if phase == PHASE_STARTING and st.button("✖ Cancel", key="attendance_cancel"):
+    if phase == PHASE_STARTING and st.button("Cancel", key="attendance_cancel", icon=":material/close:"):
         job.cancel()
         st.rerun()
 
@@ -301,7 +307,6 @@ def _needs_polling(job: AttendanceJob, phase: str) -> bool:
 
 def logging_section() -> None:
     # Not a text_area: a keyed widget keeps its first value, so the box stayed empty.
-    st.subheader("Log Output")
     st.code(streamlit_handler.get_logs() or "No log lines yet.", language=None,
             height=400, wrap_lines=True)
 
@@ -316,8 +321,11 @@ def live_view() -> None:
     if job is not None:
         eva_section(job)
         progress_section(job)
-    screenshot_section()
-    logging_section()
+    screenshot_tab, log_tab = st.tabs(["Browser screenshot", "Log"])
+    with screenshot_tab:
+        screenshot_section()
+    with log_tab:
+        logging_section()
 
 
 def _file_facts(path: str) -> str:
@@ -406,7 +414,13 @@ def ledger_section() -> None:
     from cqc_cpcc.attendance_ledger import AttendanceLedger, default_db_path
 
     path = default_db_path()
-    with st.expander("Attendance ledger (what has been recorded and verified)"):
+    # Lazy: the database is opened only while this section is open (UX goals H-4).
+    ledger_box = st.expander("Attendance ledger (what has been recorded and verified)",
+                             on_change="rerun", key="attendance_ledger_open")
+    with ledger_box:
+        if not ledger_box.open:
+            st.caption("Open to load the ledger.")
+            return
         st.caption("Database: `%s`%s" % (
             path, " · " + _file_facts(path) if os.path.exists(path) else ""))
         st.markdown("**Glossary** ⓘ", help=_glossary_help())
@@ -460,18 +474,13 @@ def main():
     # Read once: the run moves on its own thread, and the live view compares against
     # this to know when the page must redraw.
     phase = job.phase if job is not None else None
-    idle = job is None or phase in FINISHED_PHASES
 
-    tracker_url = st.text_input(
-        "Attendance Tracker URL",
-        value=st.session_state.attendance_tracker_url or "",
-        disabled=not idle,
-        help="Used when withdrawals are synced to the tracker. Change the saved "
-             "value on the Settings page.",
-    )
+    tracker_url = st.session_state.attendance_tracker_url or ""
+    st.caption(("Attendance tracker: %s" % tracker_url if tracker_url else "No attendance tracker set")
+               + " (change it in Settings).")
 
     if job is None:
-        if st.button("Start Attendance", type="primary"):
+        if st.button("Start attendance", type="primary", icon=":material/play_arrow:"):
             job = AttendanceJob(tracker_url=tracker_url or None)
             job.start()
             st.session_state[JOB_KEY] = job
@@ -486,11 +495,11 @@ def main():
     polling = job is not None and _needs_polling(job, phase)
     st.fragment(live_view, run_every=POLL_SECONDS if polling else None)()
 
-    st.subheader("Local attendance data (view only)")
+    st.subheader("Local attendance data (view only)", anchor=False)
     ledger_section()
     reports_section()
     if os.path.exists(LOGGING_FILENAME):
-        on_download_click(st.empty(), LOGGING_FILENAME, "Download Log",
+        on_download_click(st.empty(), LOGGING_FILENAME, "Download log",
                           os.path.basename(LOGGING_FILENAME))
 
 
