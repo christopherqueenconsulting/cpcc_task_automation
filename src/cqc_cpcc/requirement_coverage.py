@@ -122,17 +122,24 @@ async def extract_requirements(instructions: str, model_name: Optional[str] = No
     return checklist
 
 
+def _id_key(requirement_id: Optional[str]) -> str:
+    """Canonical form for matching ids: the model may answer 'r1' or 'R1 ' for R1."""
+    return (requirement_id or "").strip().upper()
+
+
 def normalize_checklist(checklist: RequirementChecklist) -> RequirementChecklist:
-    """Drop blanks, cap the length and make ids unique."""
+    """Drop blanks, cap the length and make ids unique (case-insensitively)."""
     seen: set[str] = set()
     items: list[RequirementItem] = []
-    for i, r in enumerate(checklist.requirements or [], start=1):
+    n = 0
+    for r in checklist.requirements or []:
         text = (r.text or "").strip()
         if not text:
             continue
-        rid = (r.id or "").strip() or f"R{i}"
-        if rid in seen:
-            rid = f"R{i}"
+        rid = (r.id or "").strip().upper()
+        while not rid or rid in seen:
+            n += 1
+            rid = f"R{n}"
         seen.add(rid)
         items.append(RequirementItem(id=rid, text=text, weight=r.weight))
         if len(items) >= MAX_REQUIREMENTS:
@@ -153,7 +160,8 @@ def requirements_prompt_section(checklist: Optional[RequirementChecklist]) -> li
         "Unimplemented functionality is a MISSING requirement, not an absence of errors: "
         "a short or unfinished program must have its unimplemented requirements marked missing. "
         "Do not ALSO report a detected error for functionality that is entirely missing; "
-        "the missing requirement already accounts for it.",
+        "the missing requirement already accounts for it. Likewise, do not mark a "
+        "requirement partial only because of an error you already reported for it.",
         "",
     ]
     for r in checklist.requirements:
@@ -175,10 +183,10 @@ def apply_requirement_coverage(
     if not checklist or not checklist.requirements:
         return result, info
 
-    by_id = {r.requirement_id: r for r in (result.requirement_results or [])}
+    by_id = {_id_key(r.requirement_id): r for r in (result.requirement_results or [])}
     errors = [e for e in (result.detected_errors or []) if not is_requirement_error(e.code)]
     for req in checklist.requirements:
-        verdict = by_id.get(req.id)
+        verdict = by_id.get(_id_key(req.id))
         if verdict is None:
             info["unmarked"].append(req.id)
             continue
@@ -190,18 +198,24 @@ def apply_requirement_coverage(
         info[label].append(req.id)
         errors.append(DetectedError(
             code=code,
-            name="Missing Requirement" if major else "Incomplete Requirement",
+            name="Missing Requirement" if verdict.status == "missing" else "Incomplete Requirement",
             severity="major" if major else "minor",
             description=f"{req.text} ({'not implemented' if verdict.status == 'missing' else 'incomplete'})",
             occurrences=1,
             notes=verdict.evidence,
         ))
+    update = {"detected_errors": errors}
     if info["unmarked"]:
+        # Unmarked requirements would silently bring back the original bug (incomplete
+        # work not penalized), so the instructor must look at this student.
         logger.warning("Requirement coverage: model did not mark %s", ", ".join(info["unmarked"]))
+        update.update(needs_review=True, validity_status="requirements_unmarked",
+                      validity_reason="The grader did not assess requirement(s) "
+                                      + ", ".join(info["unmarked"]) + ".")
 
     info["applied"] = True
     result = result.model_copy(update={
-        "detected_errors": errors,
+        **update,
         "error_counts_by_severity": None,  # recompute from the corrected error list
         "error_counts_by_id": None,
     })

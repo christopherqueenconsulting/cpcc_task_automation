@@ -76,10 +76,68 @@ def test_missing_secondary_is_minor(rubric):
 
 
 @pytest.mark.unit
-def test_unmarked_requirements_do_not_change_score(rubric):
+def test_unmarked_requirements_add_no_errors_but_need_review(rubric):
     out, info = rc.apply_requirement_coverage(_llm_result(rubric, {"R1": "met"}), CHECKLIST)
     assert info["unmarked"] == ["R2", "R3"]
     assert not out.detected_errors
+    # Silently skipping requirements would bring back the original bug.
+    assert out.needs_review and out.validity_status == "requirements_unmarked"
+    assert "R2, R3" in out.validity_reason
+
+
+@pytest.mark.unit
+def test_verdict_ids_match_case_and_whitespace_insensitively(rubric):
+    result = _llm_result(rubric, {"r1": "missing", "R2 ": "missing", " r3": "met"})
+    out, info = rc.apply_requirement_coverage(result, CHECKLIST)
+    assert info["missing"] == ["R1", "R2"] and info["unmarked"] == []
+    assert not out.needs_review
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ids,expected", [
+    (["R2", "R2"], ["R2", "R1"]),
+    (["R2", "R3", "R3"], ["R2", "R3", "R1"]),
+    (["", "R1", "r1"], ["R1", "R2", "R3"]),
+])
+def test_normalize_checklist_makes_ids_unique(ids, expected):
+    items = [rc.RequirementItem(id=i, text=f"t{n}", weight="core") for n, i in enumerate(ids)]
+    out = rc.normalize_checklist(rc.RequirementChecklist(requirements=items))
+    assert [r.id for r in out.requirements] == expected
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_coverage_skipped_on_prose_rubric():
+    """CSC 113 reflections are level_band: requirement errors would show in feedback
+    without changing the score, contradicting it."""
+    prose = get_rubric_by_id("csc113_week1_reflection_rubric")
+    llm = RubricAssessmentResult(
+        rubric_id=prose.rubric_id, rubric_version=prose.rubric_version,
+        total_points_possible=prose.total_points_possible, total_points_earned=0,
+        criteria_results=[{"criterion_id": c.criterion_id, "criterion_name": c.name,
+                           "points_possible": c.max_points, "feedback": "ok",
+                           "selected_level_label": "Proficient"} for c in prose.criteria if c.enabled],
+        overall_feedback="ok", detected_errors=[],
+        requirement_results=[RequirementResult(requirement_id="R1", status="missing")],
+    )
+    with patch("cqc_cpcc.rubric_grading.llm_gateway.structured", new=AsyncMock(return_value=llm)) as call:
+        result = await grade_with_rubric(
+            rubric=prose, assignment_instructions="Reflect on an AI tool.",
+            student_submission="A long and thoughtful reflection about an AI tool.",
+            requirements=CHECKLIST,
+        )
+    assert "## Requirement Checklist" not in call.call_args.kwargs["prompt"]
+    assert not any(rc.is_requirement_error(e.code) for e in (result.detected_errors or []))
+    assert result.requirement_results is None
+
+
+@pytest.mark.unit
+def test_accepted_unmarked_result_keeps_its_buffered_score(rubric):
+    from cqc_cpcc.utilities.brightspace_writeback import build_write_items_from_results
+    out, _ = rc.apply_requirement_coverage(_llm_result(rubric, {"R1": "met"}), CHECKLIST)
+    out = out.model_copy(update={"total_points_earned": 24.0, "review_confirmed": True})
+    items = build_write_items_from_results([("101 - Ada Example - Oct 1", out)], buffer_pct=10)
+    assert items[0].score == 27.0  # 24 + 10% of 30, not forced to 0
 
 
 @pytest.mark.unit
@@ -162,3 +220,17 @@ async def test_extract_requirements_caches_by_instructions():
     llm.assert_called_once()
     prompt = llm.call_args.kwargs["prompt"]
     assert "EXCLUDE style, naming, formatting" in prompt
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_csc134_ties_at_band_floor_are_allowed_never_higher(rubric):
+    """Recorded ruling: CSC 134 bands take the worse of the major and minor tiers, so a
+    missing requirement can tie a complete program that already sits in that band.
+    The approved plan's rule is score(incomplete) <= score(complete): ties are allowed,
+    a higher score never is."""
+    majors = [DetectedError(code=f"CSC_134_PROJECT_1_E{i}", name="e", severity="major",
+                            description="d", occurrences=1) for i in range(3)]
+    complete, _ = await _grade(rubric, _llm_result(rubric, {"R1": "met", "R2": "met", "R3": "met"}, majors))
+    incomplete, _ = await _grade(rubric, _llm_result(rubric, {"R1": "missing", "R2": "met", "R3": "met"}, majors))
+    assert incomplete.total_points_earned <= complete.total_points_earned

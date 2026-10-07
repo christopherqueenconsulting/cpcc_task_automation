@@ -428,6 +428,10 @@ async def grade_with_rubric(
         ... )
         >>> print(f"Score: {result.total_points_earned}/{result.total_points_possible}")
     """
+    # Requirement coverage only applies where errors change the score.
+    if requirements is not None and not rubric_scores_errors(rubric):
+        requirements = None
+
     # Validity gate: deduction-only scoring gives full marks to "no errors", so work
     # that is missing, empty, trivial or the wrong file type is decided here, on hard
     # evidence, before the model can call it error-free.
@@ -554,6 +558,16 @@ async def grade_with_rubric(
     except Exception as e:
         logger.error(f"Rubric grading failed: {e}")
         raise ValueError(f"Failed to grade with rubric: {e}")
+
+
+def rubric_scores_errors(rubric: Rubric) -> bool:
+    """True when detected errors change the score (an enabled error_count criterion).
+
+    Requirement coverage only applies to such rubrics: on level_band/manual rubrics
+    (e.g. CSC 113 reflections) requirement errors would appear in the student's
+    feedback without affecting the score.
+    """
+    return any(c.enabled and c.scoring_mode == "error_count" for c in rubric.criteria)
 
 
 def check_submission_validity(
