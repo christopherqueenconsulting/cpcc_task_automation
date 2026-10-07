@@ -36,8 +36,10 @@ Example usage:
 """
 
 import asyncio
+import contextvars
 import json
 import os
+from dataclasses import dataclass
 from typing import Optional, Type, TypeVar
 
 import httpx
@@ -64,8 +66,9 @@ from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
 
-# OpenRouter API endpoints
-OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+# OpenRouter API endpoints (OPENROUTER_BASE_URL lets tests point at a stub server)
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODELS_URL = f"{OPENROUTER_BASE_URL}/models"
 OPENROUTER_APP_NAME = "CPCC Task Automation"
 OPENROUTER_APP_URL = "https://github.com/gitchrisqueen/cpcc_task_automation"
 
@@ -76,6 +79,50 @@ DEFAULT_RETRY_DELAY = 1.0  # Base delay in seconds
 # Backward-compatible module-level constants (tests patch these names directly)
 OPENROUTER_API_KEY = DEFAULT_OPENROUTER_API_KEY
 OPENROUTER_ALLOWED_MODELS = DEFAULT_OPENROUTER_ALLOWED_MODELS
+
+
+@dataclass(frozen=True)
+class CompletionMetadata:
+    """What OpenRouter reported about the last successful completion."""
+
+    requested_model: str
+    model: str
+    provider: Optional[str]
+    generation_id: Optional[str]
+    prompt_tokens: Optional[int]
+    completion_tokens: Optional[int]
+    reasoning_tokens: Optional[int]
+    cost_usd: Optional[float]
+    latency_seconds: float
+    attempts: int
+
+
+_last_completion: contextvars.ContextVar[Optional[CompletionMetadata]] = contextvars.ContextVar(
+    "openrouter_last_completion", default=None
+)
+
+
+def last_completion_metadata() -> Optional[CompletionMetadata]:
+    """Metadata for the most recent successful completion in this context (task)."""
+    return _last_completion.get()
+
+
+def _completion_metadata(response, requested_model: str, latency: float, attempts: int) -> CompletionMetadata:
+    usage = getattr(response, "usage", None)
+    details = getattr(usage, "completion_tokens_details", None) if usage else None
+    cost = getattr(usage, "cost", None) if usage else None
+    return CompletionMetadata(
+        requested_model=requested_model,
+        model=getattr(response, "model", None) or requested_model,
+        provider=getattr(response, "provider", None),
+        generation_id=getattr(response, "id", None),
+        prompt_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
+        completion_tokens=getattr(usage, "completion_tokens", None) if usage else None,
+        reasoning_tokens=getattr(details, "reasoning_tokens", None) if details else None,
+        cost_usd=float(cost) if isinstance(cost, (int, float)) else None,
+        latency_seconds=latency,
+        attempts=attempts,
+    )
 
 
 def _get_openrouter_api_key() -> str | None:
@@ -113,7 +160,7 @@ def _get_openrouter_client() -> AsyncOpenAI:
     # OpenRouter provides OpenAI-compatible API at https://openrouter.ai/api/v1
     return AsyncOpenAI(
         api_key=api_key,
-        base_url="https://openrouter.ai/api/v1",
+        base_url=OPENROUTER_BASE_URL,
         default_headers={
             "X-Title": OPENROUTER_APP_NAME,
             "HTTP-Referer": OPENROUTER_APP_URL,
@@ -236,6 +283,7 @@ async def get_openrouter_completion(
         model_name: Optional[str] = None,
         max_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        extra_params: Optional[dict] = None,
 ) -> T:
     """Get a structured completion from OpenRouter, reporting failures to analytics.
 
@@ -254,6 +302,7 @@ async def get_openrouter_completion(
             model_name=model_name,
             max_tokens=max_tokens,
             max_retries=max_retries,
+            extra_params=extra_params,
         )
     except Exception as call_error:
         telemetry.capture_generation(
@@ -277,6 +326,7 @@ async def _get_openrouter_completion_impl(
         model_name: Optional[str] = None,
         max_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        extra_params: Optional[dict] = None,
 ) -> T:
     """Get structured completion from OpenRouter using OpenAI-compatible API.
 
@@ -292,6 +342,9 @@ async def _get_openrouter_completion_impl(
         model_name: Specific model to use (required if use_auto_route=False)
         max_tokens: Maximum tokens in response (optional)
         max_retries: Maximum number of retry attempts (default: 2)
+        extra_params: Extra OpenRouter request body fields from the model registry
+            (reasoning, provider, seed, usage, token limit). See
+            ``model_registry.build_request_params``.
         
     Returns:
         Validated Pydantic model instance
@@ -337,6 +390,7 @@ async def _get_openrouter_completion_impl(
     telemetry.set_trace_id(correlation_id)
     telemetry_span = schema_model.__name__
     telemetry_timer = telemetry.GenerationTimer()
+    _last_completion.set(None)
 
     logger.info(
         f"Calling OpenRouter with model={effective_model}, "
@@ -362,6 +416,12 @@ async def _get_openrouter_completion_impl(
             if max_tokens:
                 api_kwargs["max_completion_tokens"] = max_tokens
 
+            # Registry-driven params (reasoning, provider, seed, usage, token limit)
+            # go in the request body as-is; the OpenAI SDK forwards extra_body verbatim.
+            extra_body = dict(extra_params or {})
+            if max_tokens and ("max_tokens" in extra_body or "max_completion_tokens" in extra_body):
+                api_kwargs.pop("max_completion_tokens", None)
+
             # Constrain auto-router if OPENROUTER_ALLOWED_MODELS is configured
             if use_auto_route:
                 allowed_models = _parse_allowed_models()
@@ -370,14 +430,14 @@ async def _get_openrouter_completion_impl(
                         f"Attempt {attempt + 1}: Applying OPENROUTER_ALLOWED_MODELS constraints: "
                         f"{', '.join(allowed_models)}"
                     )
-                    api_kwargs["extra_body"] = {
-                        "plugins": [
-                            {
-                                "id": "auto-router",
-                                "allowed_models": allowed_models,
-                            }
-                        ]
-                    }
+                    extra_body["plugins"] = [
+                        {
+                            "id": "auto-router",
+                            "allowed_models": allowed_models,
+                        }
+                    ]
+            if extra_body:
+                api_kwargs["extra_body"] = extra_body
 
             # Debug: Record request
             if correlation_id:
@@ -530,6 +590,11 @@ async def _get_openrouter_completion_impl(
                 f"used_model={response.model}, attempt={attempt + 1}"
             )
             usage = getattr(response, "usage", None)
+            _last_completion.set(
+                _completion_metadata(
+                    response, effective_model, telemetry_timer.elapsed(), attempt + 1
+                )
+            )
             telemetry.capture_generation(
                 trace_id=correlation_id,
                 # The model the auto-router actually picked, when it says.
@@ -598,6 +663,7 @@ def get_openrouter_completion_sync(
         model_name: Optional[str] = None,
         max_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        extra_params: Optional[dict] = None,
 ) -> T:
     """Sync wrapper for get_openrouter_completion.
     
@@ -615,5 +681,6 @@ def get_openrouter_completion_sync(
             model_name=model_name,
             max_tokens=max_tokens,
             max_retries=max_retries,
+            extra_params=extra_params,
         )
     )
