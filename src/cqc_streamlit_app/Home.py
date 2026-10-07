@@ -4,7 +4,7 @@ import os
 import streamlit as st
 from cqc_cpcc.utilities.utils import read_file
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css
+from cqc_streamlit_app.utils import get_cpcc_css, show_model_update_banner
 
 # Initialize session state variables
 init_session_state()
@@ -20,6 +20,7 @@ def main():
     )
 
     st.header("Welcome to CPCC Task Automation! 👋")
+    show_model_update_banner()
 
     # Get the ReadMe Markdown and display it
     current_directory = os.path.dirname(os.path.abspath(__file__))

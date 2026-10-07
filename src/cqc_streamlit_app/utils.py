@@ -991,191 +991,70 @@ def define_chatGPTModel(unique_key: str | int,
                         default_max_value: float = 0.8,
                         default_temp_value: float = 0.2,
                         default_step: float = 0.1,
-                        default_option: str = "gpt-5") -> Dict[str, Any]:
-    """
-    Presents model selection, temperature slider, and service tier.
-    Returns JSON-serializable dict:
-      {
-        "model": str,
-        "temperature": float,
-        "service_tier": "Standard" | "Priority" | "Flex",
-        "pricing": {input, cached, output, unit},
-        "token_limits": {"context_window": int, "max_input": int|None, "max_output": int|None}
-      }
+                        default_option: str | None = None,
+                        role: str = "feedback") -> Dict[str, Any]:
+    """Model picker for the Give Feedback and Flowgorithm pages.
 
-    Notes
-    - Units are per **1M tokens** (matches OpenAI pricing pages).
-    - Models listed support structured outputs (JSON/JSON Schema via Responses API).
+    Thin wrapper over :func:`define_openrouter_model` (every LLM call goes through
+    OpenRouter). Defaults to the registry model for ``role``. Temperature is only
+    offered when the chosen model accepts it.
+
+    Returns the legacy dict shape: ``model``, ``temperature``, ``service_tier``,
+    ``langchain_service_tier``, ``pricing`` (per 1M tokens) and ``token_limits``.
     """
+    from cqc_cpcc.utilities.AI import model_registry
 
     uk = str(unique_key)
+    cfg = define_openrouter_model(uk, default_use_auto_route=False, default_model=default_option, role=role)
+    selected_model = cfg["model"]
 
-    # === Models supporting structured output ===
-    model_options = [
-        # GPT-5 family only (standardized)
-        "gpt-5",
-        "gpt-5-mini",
-        "gpt-5-nano",
-    ]
-    if default_option not in model_options:
-        default_option = "gpt-5"
+    temperature = default_temp_value
+    if not cfg["use_auto_route"] and model_registry.supports_temperature(selected_model):
+        temperature = st.slider(
+            label="Temperature",
+            key=f"chat_temp_{uk}",
+            min_value=max(default_min_value, 0.0),
+            max_value=min(default_max_value, 1.0),
+            step=default_step,
+            value=default_temp_value,
+            format="%.2f",
+        )
 
-    # === Indicative context windows ===
-    token_limits = {
-        # GPT-5 family (API page lists 400K total; 128K max output cap)
-        "gpt-5": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
-        "gpt-5-mini": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
-        "gpt-5-nano": {"context_window": 400_000, "max_input": 272_000, "max_output": 128_000},
-    }
+    profile = model_registry.load_registry().models.get(selected_model)
+    pricing = {"input": None, "cached": None, "output": None, "unit": "1M tokens"}
+    token_limits = {"context_window": None, "max_input": None, "max_output": None}
+    if profile is not None:
+        pricing = {
+            "input": profile.pricing.prompt_per_mtok,
+            "cached": profile.pricing.cache_read_per_mtok,
+            "output": profile.pricing.completion_per_mtok,
+            "unit": "1M tokens",
+        }
+        token_limits = {
+            "context_window": profile.context_length,
+            "max_input": None,
+            "max_output": profile.max_completion_tokens,
+        }
 
-    # === Standard pricing (per 1M tokens) ===
-    # Source: OpenAI API Pricing page
-    standard_prices = {
-        "gpt-5": {"input": 1.25, "cached": 0.125, "output": 10.00, "unit": "1M tokens"},
-        "gpt-5-mini": {"input": 0.25, "cached": 0.025, "output": 2.00, "unit": "1M tokens"},
-        "gpt-5-nano": {"input": 0.05, "cached": 0.005, "output": 0.40, "unit": "1M tokens"},
-    }
-
-    # === Priority pricing (per 1M tokens) ===
-    # Source: OpenAI "Priority Processing for API Customers"
-    priority_prices = {
-        "gpt-5": {"input": 2.50, "cached": 0.250, "output": 20.00, "unit": "1M tokens"},
-        "gpt-5-mini": {"input": 0.45, "cached": 0.045, "output": 3.60, "unit": "1M tokens"},
-    }
-
-    # === Flex pricing (per 1M tokens) — updated from your screenshot ===
-    # If you want to override via env, set FLEX_PRICE_OVERRIDES as JSON.
-    flex_prices_default = {
-        "gpt-5": {"input": 0.625, "cached": 0.0625, "output": 5.00, "unit": "1M tokens"},
-        "gpt-5-mini": {"input": 0.125, "cached": 0.0125, "output": 1.00, "unit": "1M tokens"},
-        "gpt-5-nano": {"input": 0.025, "cached": 0.0025, "output": 0.20, "unit": "1M tokens"},
-        # Leaving 4.x Flex out unless you explicitly want them; easy to add later.
-    }
-    flex_overrides_env = os.getenv("FLEX_PRICE_OVERRIDES")
-    if flex_overrides_env:
-        try:
-            parsed = json.loads(flex_overrides_env)
-            for k, v in parsed.items():
-                if isinstance(v, dict):
-                    flex_prices_default[k] = {**v, "unit": "1M tokens"}
-        except Exception:
-            pass
-
-    def get_flex_price(model: str) -> Dict[str, Optional[float]]:
-        if model in flex_prices_default:
-            d = flex_prices_default[model]
-            return {
-                "input": d.get("input"),
-                "cached": d.get("cached"),
-                "output": d.get("output"),
-                "unit": d.get("unit", "1M tokens"),
-            }
-        return {"input": None, "cached": None, "output": None, "unit": "1M tokens"}
-
-    # === UI controls ===
-    selected_model = st.selectbox(
-        label="Select Model (structured output capable)",
-        key=f"chat_select_{uk}",
-        options=model_options,
-        index=model_options.index(default_option)
-    )
-
-    service_tier = st.radio(
-        label="Service Tier",
-        key=f"chat_tier_{uk}",
-        options=["Standard", "Priority", "Flex"],
-        index=0
-    )
-
-    temperature = st.slider(
-        label="Temperature",
-        key=f"chat_temp_{uk}",
-        min_value=max(default_min_value, 0.0),
-        max_value=min(default_max_value, 1.0),
-        step=default_step,
-        value=default_temp_value,
-        format="%.2f"
-    )
-    if temperature <= 0.3:
-        st.caption("Low: most deterministic, best for strict JSON/schema.")
-    elif temperature <= 0.7:
-        st.caption("Medium: balanced creativity vs. schema adherence.")
-    else:
-        st.caption("High: diverse outputs; may reduce schema adherence.")
-
-    # === Resolve pricing based on tier ===
-    if service_tier == "Standard":
-        pricing = standard_prices.get(selected_model,
-                                      {"input": None, "cached": None, "output": None, "unit": "1M tokens"})
-    elif service_tier == "Priority":
-        pricing = priority_prices.get(selected_model,
-                                      {"input": None, "cached": None, "output": None, "unit": "1M tokens"})
-    else:  # Flex
-        pricing = get_flex_price(selected_model)
-
-    # === Display price + limits ===
-    tl = token_limits.get(selected_model, {})
-    cw = tl.get("context_window")
-    max_in = tl.get("max_input")
-    max_out = tl.get("max_output")
-
-    def _fmt_price(p: Optional[float], label: str) -> Optional[str]:
-        return f"{label}: ${p:.4f} / {pricing['unit']}" if isinstance(p, (int, float)) else None
-
-    parts = [
-        _fmt_price(pricing.get("input"), "Input"),
-        _fmt_price(pricing.get("cached"), "Cached input"),
-        _fmt_price(pricing.get("output"), "Output"),
-    ]
-    price_line = " | ".join([p for p in parts if p]) if any(parts) else "Pricing: not available"
-
-    cw_bits = [f"Context window: ~{cw:,} tokens" if cw else "Context window: see model docs"]
-    if max_in:
-        cw_bits.append(f"Max input: ~{max_in:,}")
-    if max_out:
-        cw_bits.append(f"Max output: ~{max_out:,}")
-    st.info(f"Model: {selected_model} | Tier: {service_tier} | {price_line} | {' | '.join(cw_bits)}")
-
-    # === Optional: inline cost estimator ===
     with st.expander("Estimate cost for this request (optional)"):
         in_tokens = st.number_input("Estimated input tokens (prompt)", min_value=0, value=0, step=1000,
                                     key=f"in_tokens_{uk}")
-        cached_ratio = st.slider("Estimated % of input tokens served from prompt cache", 0, 100, 0, 5,
-                                 key=f"cached_ratio_{uk}")
-        out_tokens = st.number_input("Estimated output tokens (completion)", min_value=0, value=0, step=1000,
-                                     key=f"out_tokens_{uk}")
-
-        def estimate_cost(pr: Dict[str, Any], in_tok: int, cached_pct: int, out_tok: int) -> Optional[float]:
-            if pr.get("input") is None or pr.get("output") is None:
-                return None
-            cached = pr.get("cached")
-            cached_tokens = int(in_tok * (cached_pct / 100.0))
-            regular_tokens = max(0, in_tok - cached_tokens)
-            per_m = 1_000_000.0
-            input_cost = (regular_tokens / per_m) * pr["input"]
-            cached_cost = (cached_tokens / per_m) * (cached if cached is not None else pr["input"])
-            output_cost = (out_tok / per_m) * pr["output"]
-            return round(input_cost + cached_cost + output_cost, 6)
-
-        est = estimate_cost(pricing, in_tokens, cached_ratio, out_tokens)
+        out_tokens = st.number_input("Estimated output tokens (completion, incl. reasoning)", min_value=0,
+                                     value=0, step=1000, key=f"out_tokens_{uk}")
+        resolved = model_registry.resolve(role, override=selected_model)  # type: ignore[arg-type]
+        est = model_registry.estimate_cost(resolved, int(in_tokens), int(out_tokens))
         if est is None:
-            st.warning("Pricing not available for this tier/model combination.")
+            st.warning("Pricing not available for this model (not in config/model_registry.json).")
         else:
             st.success(f"Estimated cost: ${est:,.6f}")
-
-    # Map UI service tiers to LangChain BaseChatOpenAI service_tier values
-    _service_tier_map = {"Standard": "default", "Priority": "auto", "Flex": "flex"}
-
-    # ... inside define_chatGPTModel, after service_tier is set:
-    langchain_service_tier = _service_tier_map.get(service_tier, "default")
 
     return {
         "model": selected_model,
         "temperature": float(temperature),
-        "service_tier": service_tier,  # UI-facing
-        "langchain_service_tier": langchain_service_tier,  # use this when creating ChatOpenAI(...)
+        "service_tier": "Standard",
+        "langchain_service_tier": "default",
         "pricing": pricing,
-        "token_limits": {"context_window": cw, "max_input": max_in, "max_output": max_out},
+        "token_limits": token_limits,
     }
 
 
@@ -1205,13 +1084,63 @@ def _fetch_openrouter_models_cached() -> list:
         return []
 
 
-RECOMMENDED_GRADING_MODEL = "openai/gpt-5"
+def recommended_model(role: str = "grading") -> str:
+    """The model the registry (or a Settings / CQC_MODEL_<ROLE> pin) picks for ``role``."""
+    from cqc_cpcc.utilities.AI.model_registry import resolve
+
+    return resolve(role).model  # type: ignore[arg-type]
+
+
+def registry_model_choices() -> list[str]:
+    """Models named anywhere in the registry: role models, fallbacks, previous models."""
+    from cqc_cpcc.utilities.AI.model_registry import load_registry
+
+    registry = load_registry()
+    ids = {role.model for role in registry.roles.values()}
+    ids |= {role.fallback for role in registry.roles.values() if role.fallback}
+    ids |= set(registry.previous.values())
+    return sorted(ids)
+
+
+REGISTRY_RAW_URL = (
+    "https://raw.githubusercontent.com/christopherqueenconsulting/cpcc_task_automation/"
+    "master/src/cqc_cpcc/config/model_registry.json"
+)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def remote_registry_revision() -> str | None:
+    """Model registry revision on GitHub master, or None when it can't be fetched."""
+    try:
+        import httpx
+
+        response = httpx.get(REGISTRY_RAW_URL, timeout=5.0)
+        response.raise_for_status()
+        return str(response.json().get("revision") or "") or None
+    except Exception as e:
+        logger.debug(f"Could not fetch remote model registry: {e}")
+        return None
+
+
+def show_model_update_banner() -> None:
+    """Tell the instructor a newer default model is on master (needs git pull + restart)."""
+    from cqc_cpcc.utilities.AI.model_registry import load_registry
+
+    remote = remote_registry_revision()
+    local = load_registry().revision
+    if remote and remote > local:
+        st.info(
+            f"A newer model configuration is on GitHub (revision {remote}; this copy is "
+            f"{local}). Run `git pull` and restart the app to use it.",
+            icon=":material/system_update:",
+        )
 
 
 def define_openrouter_model(
         unique_key: str | int,
         default_use_auto_route: bool = False,
-        default_model: str = RECOMMENDED_GRADING_MODEL,
+        default_model: str | None = None,
+        role: str = "grading",
 ) -> Dict[str, Any]:
     """
     Presents OpenRouter model configuration with auto-routing option.
@@ -1222,21 +1151,24 @@ def define_openrouter_model(
         "use_openrouter": True,
       }
 
-    Defaults to the specific model ``openai/gpt-5`` (NOT the Auto Router). Grading is
-    correctness-critical: the Auto Router can silently pick a cheaper/weaker model
-    (e.g. gpt-5-mini), which has produced wrong determinations such as flagging valid
-    code as "Does Not Compile". gpt-5 is the recommended default for grading accuracy;
-    the compiler gate independently backstops the compile call regardless of model.
+    Defaults to the registry model for ``role`` (NOT the Auto Router). Grading is
+    correctness-critical: the Auto Router can silently pick a cheaper/weaker model,
+    which has produced wrong determinations such as flagging valid code as "Does Not
+    Compile". The registry default is chosen by the model evaluation; the compiler
+    gate independently backstops the compile call regardless of model.
 
     Args:
         unique_key: Unique key for widget state management
         default_use_auto_route: Default state of the auto-routing checkbox (default False)
-        default_model: Model pre-selected when auto-routing is off (default openai/gpt-5)
+        default_model: Model pre-selected when auto-routing is off. None means the
+            registry model for ``role`` (config/model_registry.json).
+        role: Registry role whose model is the default ("grading", "feedback", ...)
 
     Returns:
         Configuration dictionary for OpenRouter
     """
     uk = str(unique_key)
+    default_model = default_model or recommended_model(role)
 
     # Checkbox for auto-routing (default: OFF — grading prefers a known strong model).
     use_auto_route = st.checkbox(
@@ -1276,13 +1208,8 @@ def define_openrouter_model(
                     st.info(
                         f"Using allowed models from OPENROUTER_ALLOWED_MODELS environment variable ({len(allowed_model_ids)} models)")
                 else:
-                    # Use default list of known GPT-5 models
-                    allowed_model_ids = [
-                        "openai/gpt-5-mini",
-                        "openai/gpt-5",
-                        "openai/gpt-5-nano"
-                    ]
-                    st.info("Using default allowed models: GPT-5 family")
+                    allowed_model_ids = registry_model_choices()
+                    st.info("Using the models listed in config/model_registry.json")
 
                 # Create model options from allowed list; guarantee the recommended
                 # default is present and pre-selected.
@@ -1343,15 +1270,21 @@ def define_openrouter_model(
                     None
                 )
                 if selected_model_info:
-                    context_length = selected_model_info.get("context_length", "N/A")
+                    context_length = selected_model_info.get("context_length")
                     pricing = selected_model_info.get("pricing", {})
-                    prompt_price = pricing.get("prompt", "N/A")
-                    completion_price = pricing.get("completion", "N/A")
 
+                    def _per_mtok(value) -> str:
+                        try:
+                            return f"${float(value) * 1_000_000:,.2f}"
+                        except (TypeError, ValueError):
+                            return "n/a"
+
+                    context_text = f"{context_length:,}" if isinstance(context_length, int) else "n/a"
                     st.info(
                         f"**Model:** {selected_model}  \n"
-                        f"**Context Length:** {context_length:,} tokens  \n"
-                        f"**Pricing:** Prompt: ${prompt_price} / token, Completion: ${completion_price} / token"
+                        f"**Context length:** {context_text} tokens  \n"
+                        f"**Pricing per 1M tokens:** input {_per_mtok(pricing.get('prompt'))}, "
+                        f"output {_per_mtok(pricing.get('completion'))}"
                     )
     else:
         st.info("**Auto Router:** OpenRouter will automatically select the best model for your request.")

@@ -77,6 +77,62 @@ def main():
             st.success("Settings Saved")
 
     analytics_settings_section()
+    model_settings_section()
+
+
+def model_settings_section():
+    """Show the registry's model per feature and let the instructor pin a different one.
+
+    A pin sets ``CQC_MODEL_<ROLE>`` for this app process, which every LLM call honours
+    (including the preprocessing digest, which has no picker of its own). It lasts until
+    the app restarts; put the variable in ``.env`` to keep it.
+    """
+    from cqc_cpcc.utilities.AI import model_registry
+    from cqc_streamlit_app.utils import registry_model_choices
+
+    st.divider()
+    st.subheader("AI models")
+    registry = model_registry.load_registry()
+    st.caption(
+        f"Defaults come from `config/model_registry.json` (revision {registry.revision}), "
+        "which the monthly model evaluation updates."
+    )
+
+    rows = []
+    for role in model_registry.ROLES:
+        resolved = model_registry.resolve(role)
+        rows.append({
+            "Feature": role,
+            "Model in use": resolved.model,
+            "Source": resolved.source,
+            "Reasoning effort": resolved.reasoning_effort or "default",
+            "Fallback": resolved.fallback or "none",
+            "Previous": registry.previous.get(role, "none"),
+        })
+    st.dataframe(rows, hide_index=True)
+
+    unpinned = "Use registry default"
+    choices = [unpinned] + registry_model_choices()
+    with st.form("model_pins"):
+        pins = {}
+        for role in model_registry.ROLES:
+            current = os.environ.get(f"CQC_MODEL_{role.upper()}")
+            options = choices if not current or current in choices else choices + [current]
+            pins[role] = st.selectbox(
+                f"Pin model for {role}",
+                options,
+                index=options.index(current) if current in options else 0,
+                key=f"model_pin_{role}",
+            )
+        if st.form_submit_button("Save model pins"):
+            for role, choice in pins.items():
+                env_key = f"CQC_MODEL_{role.upper()}"
+                if choice == unpinned:
+                    os.environ.pop(env_key, None)
+                else:
+                    os.environ[env_key] = choice
+            st.success("Model pins saved for this session. Add CQC_MODEL_<FEATURE> to .env to keep them.")
+            st.rerun()
 
 
 _CUSTOM_HOST = "Custom (self-hosted)"

@@ -132,7 +132,7 @@ async def get_feedback_content():
         feedback_types_list = feedback_types[DESCRIPTION].to_list()
 
     model_cfg = define_chatGPTModel("give_feedback", default_temp_value=.3)
-    selected_model = model_cfg.get("model", "gpt-5")
+    selected_model = model_cfg.get("model")
     selected_temperature = float(model_cfg.get("temperature", .3))
     selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
