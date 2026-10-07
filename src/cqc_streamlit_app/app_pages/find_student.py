@@ -111,7 +111,9 @@ def main():
     courses = sorted({course for *_, course in roster if course})
 
     query = st.text_input("Search", key="find_student_query",
-                          placeholder="Email, student ID, or first and last name")
+                          placeholder="Email, student ID, or first and last name",
+                          help="An exact email, an exact student ID, or a name with at least "
+                               "two matching words (for example first and last name).")
     if query:
         matches = _rows(search(finder, query))
         if matches:
