@@ -16,14 +16,15 @@ from cqc_streamlit_app.navigation import page_specs
 PAGES_DIR = Path(__file__).resolve().parent / "app_pages"
 
 
-def build_navigation(show_legacy: bool) -> dict:
-    sections: dict = {}
-    for i, (section, file, title, icon) in enumerate(page_specs(show_legacy)):
-        sections.setdefault(section, []).append(
-            st.Page(str(PAGES_DIR / file), title=title, icon=icon, default=(i == 0)))
-    return sections
+def build_navigation(show_legacy: bool) -> list:
+    """A flat page list for the top navigation bar: every page stays one click away."""
+    return [
+        st.Page(str(PAGES_DIR / file), title=title, icon=icon, default=(i == 0))
+        for i, (_section, file, title, icon) in enumerate(page_specs(show_legacy))
+    ]
 
 
 init_session_state()
-st.set_page_config(layout="wide", page_title="CPCC Task Automation", page_icon="📚")
-st.navigation(build_navigation(load_settings().show_legacy_pages)).run()
+# The one page config for the whole app; page titles come from st.Page.
+st.set_page_config(layout="wide", page_title="CPCC Task Automation", page_icon=":material/school:")
+st.navigation(build_navigation(load_settings().show_legacy_pages), position="top").run()

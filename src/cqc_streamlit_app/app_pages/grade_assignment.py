@@ -3,13 +3,12 @@
 import streamlit as st
 from cqc_streamlit_app.grade_assignment import rubric_based_exam_grading_sync
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css
+from cqc_streamlit_app.utils import page_header
 
 init_session_state()
 
-st.set_page_config(layout="wide", page_title="Grade Assignment", page_icon="📝")
-st.markdown(get_cpcc_css(), unsafe_allow_html=True)
-st.markdown("""Here we will give feedback and grade a students assignment submission""")
+page_header("Grade assignment", ":material/grading:",
+            "Grade a batch of submissions against a rubric and your error definitions.")
 
 if st.session_state.openai_api_key or st.session_state.openrouter_api_key:
     rubric_based_exam_grading_sync()

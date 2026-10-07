@@ -54,7 +54,7 @@ def test_corrupt_settings_file_falls_back_to_defaults():
 def test_router_runs_default_page():
     app = AppTest.from_file(HOME, default_timeout=60).run()
     assert not app.exception, [e.value for e in app.exception]
-    assert any("Welcome to CPCC Task Automation" in h.value for h in app.header)
+    assert any("CPCC Task Automation" in t.value for t in app.title)
 
 
 @pytest.mark.unit
@@ -110,3 +110,27 @@ def test_legacy_page_reachable_when_enabled():
     app = AppTest.from_file(HOME, default_timeout=60).run()
     app.switch_page("app_pages/legacy_exam_grading.py").run()
     assert any("Deprecated" in w.value for w in app.warning)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("page,title", [
+    ("home.py", "CPCC Task Automation"), ("grade_assignment.py", "Grade assignment"),
+    ("flowgorithm.py", "Flowgorithm assignments"), ("give_feedback.py", "Give feedback"),
+    ("take_attendance.py", "Take attendance"), ("find_student.py", "Find student"),
+    ("settings.py", "Settings"), ("legacy_exam_grading.py", "Exams (legacy, deprecated)"),
+])
+def test_every_page_starts_with_its_title_and_one_caption(page, title):
+    """Design system: one st.title matching the nav label, then one caption (UX goals §2.2)."""
+    app = AppTest.from_file(str(APP_DIR / "app_pages" / page), default_timeout=60).run()
+    assert [t.value for t in app.title][:1] == [title]
+    assert app.caption, "page has no caption under its title"
+
+
+@pytest.mark.unit
+def test_no_page_injects_css_or_sets_page_config():
+    """Fonts and colours come only from the theme; the router sets the one page config."""
+    import re
+    for path in (APP_DIR / "app_pages").glob("*.py"):
+        source = path.read_text()
+        assert "get_cpcc_css" not in source, path.name
+        assert not re.search(r"st\.set_page_config", source), path.name

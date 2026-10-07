@@ -5,26 +5,15 @@ import streamlit as st
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_streamlit_app.app_settings import load_settings, update_settings
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, secret_text_input
+from cqc_streamlit_app.utils import page_header, secret_text_input
 
 # Initialize session state variables
 init_session_state()
 
 
 def main():
-    st.set_page_config(layout="wide", page_title="Settings", page_icon="⚙️")  # TODO: Change the page icon
-
-    css = get_cpcc_css()
-    st.markdown(
-        css,
-        unsafe_allow_html=True
-    )
-
-    # Streamlit app
-    st.subheader('Settings')
-
-    st.write(
-        'The information entered on this page is not stored online. It is only available in the browser for the other pages to use and run properly')
+    page_header("Settings", ":material/settings:",
+                "Keys and logins stay on this computer; nothing here is stored online.")
 
     # Get API keys
     # No type="password" fields on this page: Safari treats them as a login form

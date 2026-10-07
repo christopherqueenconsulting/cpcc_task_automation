@@ -28,7 +28,7 @@ from cqc_cpcc.utilities.env_constants import WITHDRAWALS_TRACKER_DRY_RUN
 from cqc_cpcc.utilities.logger import LOGGING_FILENAME, logger
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.streamlit_logger import streamlit_handler
-from cqc_streamlit_app.utils import get_cpcc_css, on_download_click, render_mfa_prompt
+from cqc_streamlit_app.utils import on_download_click, page_header, render_mfa_prompt
 
 JOB_KEY = "attendance_job"
 # The phase the last full page run drew; the live view reruns the page when it moves.
@@ -447,10 +447,8 @@ def ledger_section() -> None:
 
 
 def main():
-    st.set_page_config(layout="wide", page_title="CPCC Take Attendance", page_icon="✅")
-    st.markdown(get_cpcc_css(), unsafe_allow_html=True)
-    st.markdown("Here we will take attendance for you and provide log of what we have "
-                "for each of our courses for each date")
+    page_header("Take attendance", ":material/how_to_reg:",
+                "Record attendance from BrightSpace activity in MyColleges and your tracker.")
 
     required_vars = [st.session_state.instructor_user_id, st.session_state.instructor_password]
     if not all(required_vars):

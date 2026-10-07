@@ -5,13 +5,13 @@ import streamlit as st
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_streamlit_app.grade_assignment import grade_exam_content_sync
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css
+from cqc_streamlit_app.utils import page_header
 
 init_session_state()
 
-st.set_page_config(layout="wide", page_title="Exams (Legacy)", page_icon="📝")
-st.markdown(get_cpcc_css(), unsafe_allow_html=True)
 
+page_header("Exams (legacy, deprecated)", ":material/history:",
+            "The pre-rubric exam grader, kept while legacy pages are turned on.")
 st.warning(
     "**Deprecated — will be removed.** Use **Grade Assignment** (rubric grading) instead. "
     "This page stays available while legacy pages are turned on in Settings.",

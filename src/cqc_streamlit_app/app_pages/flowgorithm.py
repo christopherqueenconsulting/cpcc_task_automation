@@ -3,11 +3,11 @@
 import streamlit as st
 from cqc_streamlit_app.grade_assignment import get_flowgorithm_content
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css
+from cqc_streamlit_app.utils import page_header
 
 init_session_state()
 
-st.set_page_config(layout="wide", page_title="Flowgorithm Assignments", page_icon="📝")
-st.markdown(get_cpcc_css(), unsafe_allow_html=True)
+page_header("Flowgorithm assignments", ":material/account_tree:",
+            "Feedback and a grade for a Flowgorithm submission.")
 
 get_flowgorithm_content()

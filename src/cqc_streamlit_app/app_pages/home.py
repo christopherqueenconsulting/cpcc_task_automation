@@ -4,21 +4,15 @@ import os
 import streamlit as st
 from cqc_cpcc.utilities.utils import read_file
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import get_cpcc_css, show_model_update_banner
+from cqc_streamlit_app.utils import page_header, show_model_update_banner
 
 # Initialize session state variables
 init_session_state()
 
 
 def main():
-
-    css = get_cpcc_css()
-    st.markdown(
-        css,
-        unsafe_allow_html=True
-    )
-
-    st.header("Welcome to CPCC Task Automation! 👋")
+    page_header("CPCC Task Automation", ":material/home:",
+                "Grading, feedback and attendance tools for your CPCC courses.")
     show_model_update_banner()
 
     # Get the ReadMe Markdown and display it

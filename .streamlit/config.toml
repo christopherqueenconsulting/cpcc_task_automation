@@ -1,12 +1,38 @@
+# CPCC brand: Blue #007396, Gold #B6A269, Gray #636466.
+# Fonts are self-hosted from src/cqc_streamlit_app/static/fonts (SIL Open Font License,
+# see OFL-*.txt there): Libre Franklin / Libre Baskerville, open look-alikes of the
+# Franklin Gothic / New Baskerville CPCC faces. Font changes need a server restart.
+
+[server]
+enableStaticServing = true  # serves src/cqc_streamlit_app/static/ at app/static/
+
 [theme]
 base = "light"
-primaryColor = "#007396" # Blue
-secondaryBackgroundColor = "#B6A269" # Gold
-backgroundColor = "#ffffff"  # White background
-#textColor = "#B6A269"
-font="sans serif"
+primaryColor = "#007396"            # CPCC blue: primary buttons, links, active nav
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F2E9"  # light tint of CPCC gold (inputs, sidebars)
+textColor = "#1F2A30"
+linkColor = "#007396"
+borderColor = "#D8DCDF"
+showWidgetBorder = true
+baseRadius = "0.5rem"
+yellowColor = "#B6A269"             # CPCC gold: accents and the "Draft" badge
+grayColor = "#636466"               # CPCC gray: captions and neutral badges
+font = "libre-franklin, sans-serif"
+headingFont = "libre-baskerville, serif"
+codeFont = "monospace"
 
+[[theme.fontFaces]]
+family = "libre-franklin"
+url = "app/static/fonts/LibreFranklin-Variable.woff2"
+weight = "100 900"
 
-# "#B6A269"  # CENTRAL PIEDMONT Gold
-# "#636466"  # CENTRAL PIEDMONT Gray
-# "#007396"  # CENTRAL PIEDMONT Blue
+[[theme.fontFaces]]
+family = "libre-baskerville"
+url = "app/static/fonts/LibreBaskerville-Regular.woff2"
+weight = 400
+
+[[theme.fontFaces]]
+family = "libre-baskerville"
+url = "app/static/fonts/LibreBaskerville-Bold.woff2"
+weight = 700
