@@ -13,6 +13,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 from pydantic import BaseModel, ValidationError
 
@@ -24,6 +25,22 @@ DEFAULT_PATH = Path.home() / ".cqc_cpcc" / "app_settings.json"
 class AppSettings(BaseModel):
     # Show pages on the deprecation path (currently: Exams (Legacy)).
     show_legacy_pages: bool = False
+    # Grade assignment: last choices, so a weekly re-run starts pre-filled.
+    last_grading_mode: Optional[str] = None
+    last_course_id: Optional[str] = None
+    last_rubric_id: Optional[str] = None
+    last_assignment_id: Optional[str] = None
+
+
+def remember(**choices) -> None:
+    """Save changed last-used choices; a no-op when nothing changed (no disk write)."""
+    current = load_settings()
+    changed = {k: v for k, v in choices.items() if getattr(current, k) != v}
+    if changed:
+        try:
+            update_settings(**changed)
+        except OSError as e:  # remembering is a convenience; never break grading over it
+            logger.warning("Could not save last-used choices: %s", e)
 
 
 def settings_path() -> Path:

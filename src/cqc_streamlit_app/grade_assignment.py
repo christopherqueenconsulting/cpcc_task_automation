@@ -1,5 +1,6 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 import asyncio
+import contextlib
 import os
 import re
 import tempfile
@@ -34,6 +35,8 @@ from cqc_cpcc.requirement_coverage import (
     normalize_checklist,
 )
 from cqc_cpcc.rubric_grading import grade_with_rubric, rubric_scores_errors
+from cqc_streamlit_app import results_store
+from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES, language_for_course
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
 from cqc_cpcc.rubric_overrides import (
@@ -42,6 +45,7 @@ from cqc_cpcc.rubric_overrides import (
     merge_rubric_overrides,
     validate_overrides_compatible,
 )
+from cqc_cpcc.utilities.AI import model_registry
 from cqc_cpcc.utilities.AI.model_registry import resolve as resolve_model
 from cqc_cpcc.utilities.AI.llm_deprecated.chains import (
     generate_assignment_feedback_grade,
@@ -361,26 +365,39 @@ def define_error_definitions(course_filter: str = None) -> tuple[pd.DataFrame, p
     return major_error_types_data_edited_df, minor_error_types_data_edited_df
 
 
+GRADING_MODE_LABELS = {
+    "rubric_and_errors": "Rubric + error definitions",
+    "rubric_only": "Rubric only",
+    "errors_only": "Error definitions only",
+}
+
+
 def select_grading_mode() -> str:
+    """Grading mode, kept visible at the top of Setup and remembered across restarts.
+
+    A rubric without an error-count criterion (e.g. CSC 113 reflections) asks for
+    "Rubric only"; that switch arrives through ``_pending_grading_mode`` because a
+    widget's value can only be set before the widget is drawn.
+    """
     if "grading_mode" not in st.session_state:
-        st.session_state.grading_mode = "rubric_and_errors"
+        remembered = load_settings().last_grading_mode
+        st.session_state.grading_mode = remembered if remembered in GRADING_MODE_LABELS else "rubric_and_errors"
+    pending = st.session_state.pop("_pending_grading_mode", None)
+    if pending in GRADING_MODE_LABELS:
+        st.session_state.grading_mode = pending
 
-    mode_labels = {
-        "rubric_and_errors": "Rubric + Error Definitions",
-        "rubric_only": "Rubric Only",
-        "errors_only": "Error Definitions Only",
-    }
-
-    return st.radio(
-        "Grading Mode",
-        options=list(mode_labels.keys()),
-        format_func=lambda value: mode_labels.get(value, value),
+    mode = st.segmented_control(
+        "Grading mode",
+        options=list(GRADING_MODE_LABELS.keys()),
+        format_func=lambda value: GRADING_MODE_LABELS.get(value, value),
         key="grading_mode",
+        required=True,
     )
+    remember(last_grading_mode=mode)
+    return mode
 
 
 def select_course_from_error_definitions() -> str | None:
-    st.header("Course Selection")
     course_ids = get_distinct_course_ids_from_errors()
 
     if not course_ids:
@@ -388,7 +405,7 @@ def select_course_from_error_definitions() -> str | None:
         return None
 
     if "selected_error_course_id" not in st.session_state:
-        st.session_state.selected_error_course_id = None
+        st.session_state.selected_error_course_id = load_settings().last_course_id
 
     course_display_map = {
         "-- Select Course --": None,
@@ -403,7 +420,7 @@ def select_course_from_error_definitions() -> str | None:
             current_index = course_display_options.index(display_label)
 
     selected_course_display = st.selectbox(
-        "Select Course",
+        "Course",
         course_display_options,
         index=current_index,
         key="error_course_selector"
@@ -419,6 +436,8 @@ def select_course_from_error_definitions() -> str | None:
         if "assignment_selector" in st.session_state:
             st.session_state.assignment_selector = "-- Select Assignment --"
         st.session_state.show_create_assignment_form = False
+    if selected_course_id:
+        remember(last_course_id=selected_course_id)
 
     return selected_course_id
 
@@ -429,8 +448,6 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
     Returns:
         Tuple of (selected_course_id, selected_rubric) or (None, None) if not selected
     """
-    st.header("Rubric Selection")
-
     # Get distinct courses from rubrics
     course_ids = get_distinct_course_ids()
 
@@ -441,7 +458,7 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
     # Course dropdown
     # Initialize session state for course selection persistence
     if "selected_course_id" not in st.session_state:
-        st.session_state.selected_course_id = None
+        st.session_state.selected_course_id = load_settings().last_course_id
 
     # Create display labels for courses (e.g., "CSC151" -> "CSC 151")
     course_display_map = {
@@ -458,7 +475,7 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
             current_index = course_display_options.index(display_label)
 
     selected_course_display = st.selectbox(
-        "Select Course",
+        "Course",
         course_display_options,
         index=current_index,
         key="course_selector"
@@ -479,6 +496,7 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
 
     if not selected_course_id:
         return None, None
+    remember(last_course_id=selected_course_id)
 
     # Get rubrics for selected course
     course_rubrics = get_rubrics_for_course(selected_course_id)
@@ -489,7 +507,7 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
 
     # Rubric dropdown
     if "selected_rubric_id" not in st.session_state:
-        st.session_state.selected_rubric_id = None
+        st.session_state.selected_rubric_id = load_settings().last_rubric_id
 
     rubric_options = ["-- Select Rubric --"] + [
         f"{rubric.title} (v{rubric.rubric_version}, {rubric.total_points_possible} pts)"
@@ -503,7 +521,7 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
         rubric_index = rubric_ids.index(st.session_state.selected_rubric_id) + 1
 
     selected_rubric_display = st.selectbox(
-        "Select Rubric",
+        "Rubric",
         rubric_options,
         index=rubric_index,
         key="rubric_selector"
@@ -515,10 +533,20 @@ def select_rubric_with_course_filter() -> tuple[str | None, Rubric | None]:
     # Get rubric ID from selection
     selected_rubric_idx = rubric_options.index(selected_rubric_display) - 1
     selected_rubric_id = rubric_ids[selected_rubric_idx]
+    rubric_changed = st.session_state.get("_last_seen_rubric_id") != selected_rubric_id
     st.session_state.selected_rubric_id = selected_rubric_id
+    st.session_state["_last_seen_rubric_id"] = selected_rubric_id
+    remember(last_rubric_id=selected_rubric_id)
 
     # Load the rubric
     selected_rubric = course_rubrics[selected_rubric_id]
+
+    # A rubric whose score doesn't come from errors (e.g. CSC 113 reflections) defaults to
+    # "Rubric only" when it is newly chosen; an explicit choice afterwards is respected.
+    if (rubric_changed and not rubric_scores_errors(selected_rubric)
+            and st.session_state.get("grading_mode") == "rubric_and_errors"):
+        st.session_state["_pending_grading_mode"] = "rubric_only"
+        st.rerun()
 
     return selected_course_id, selected_rubric
 
@@ -619,9 +647,14 @@ def display_assignment_and_error_definitions_selector(
         course_id: str,
         *,
         allow_skip: bool = True,
-) -> tuple[str | None, str | None, list[ErrorDefinition] | None]:
+        defer_editor: bool = False,
+):
     """Display assignment selector and error definitions editor.
-    
+
+    With ``defer_editor`` the third value is a callable that draws the
+    error-definitions editor (Setup's Advanced area, drawn last) and returns the
+    effective error definitions; otherwise it is the list itself.
+
     Returns:
         Tuple of (selected_assignment_id, selected_assignment_name, effective_error_definitions)
     """
@@ -663,6 +696,13 @@ def display_assignment_and_error_definitions_selector(
             for a in assignments
         ]
 
+        # First visit this session: pre-select the remembered assignment for this course.
+        if "assignment_selector" not in st.session_state and not newly_created_assignment_id:
+            remembered = load_settings().last_assignment_id
+            for a in assignments:
+                if a.assignment_id == remembered:
+                    st.session_state.assignment_selector = f"{a.assignment_name} ({a.assignment_id})"
+
         # Auto-select newly created assignment if available
         # We need to set the session state value directly because the index parameter
         # is ignored when the key already exists in session state
@@ -674,8 +714,10 @@ def display_assignment_and_error_definitions_selector(
                     st.session_state.assignment_selector = auto_select_value
                     break
 
+        if st.session_state.get("assignment_selector") not in assignment_options:
+            st.session_state.assignment_selector = assignment_options[0]
         selected_assignment_display = st.selectbox(
-            "Select Assignment",
+            "Assignment",
             assignment_options,
             key="assignment_selector"
         )
@@ -745,6 +787,7 @@ def display_assignment_and_error_definitions_selector(
     selected_assignment = assignments[selected_assignment_idx]
     selected_assignment_id = selected_assignment.assignment_id
     selected_assignment_name = selected_assignment.assignment_name
+    remember(last_assignment_id=selected_assignment_id)
     skip_key = (course_id, selected_assignment_id)
 
     use_error_definitions = True
@@ -758,11 +801,23 @@ def display_assignment_and_error_definitions_selector(
         st.session_state.error_definitions_skipped[skip_key] = not use_error_definitions
 
     if not use_error_definitions:
-        st.info("ℹ️ Error definitions are disabled for this run. Grading will use rubric-only scoring.")
-        return selected_assignment_id, selected_assignment_name, []
+        st.info("Error definitions are off for this run: rubric-only scoring.", icon=":material/info:")
+        return selected_assignment_id, selected_assignment_name, ((lambda: []) if defer_editor else [])
 
+    def editor():
+        # _render_error_definitions_editor returns (id, name, effective definitions).
+        return _render_error_definitions_editor(
+            registry, course_id, selected_assignment_id, selected_assignment_name)[2]
+
+    if defer_editor:
+        return selected_assignment_id, selected_assignment_name, editor
+    return selected_assignment_id, selected_assignment_name, editor()
+
+
+def _render_error_definitions_editor(registry, course_id, selected_assignment_id, selected_assignment_name):
+    """Editable error definitions for one assignment, with Save / Reset / Export."""
     # Display error definitions editor
-    st.subheader(f"Error Definitions for {selected_assignment_name}")
+    st.subheader(f"Error definitions for {selected_assignment_name}")
 
     # Get base error definitions from config
     base_error_definitions = registry.get_error_definitions(course_id, selected_assignment_id)
@@ -2095,10 +2150,24 @@ def display_cached_error_only_results(run_key: str, course_name: str) -> None:
         )
 
 
-def render_requirement_checklist(instructions: str) -> Optional[RequirementChecklist]:
+def _extraction_cost_caption(instructions: str) -> str:
+    """Rough cost of one checklist extraction on the registry grading model."""
+    try:
+        resolved = resolve_model("grading", None)
+        cost = model_registry.estimate_cost(resolved, len(instructions) // 4 + 400, 1500)
+    except Exception:  # noqa: BLE001 - a missing estimate never blocks the checklist
+        cost = None
+    return f"about ${cost:.4f}" if cost else "a fraction of a cent"
+
+
+def render_requirement_checklist(instructions: str, source_id: str) -> Optional[RequirementChecklist]:
     """Extract, show and let the instructor edit the assignment's requirement checklist.
 
-    Returns the checklist to grade with, or None when coverage is off or not extracted.
+    Extraction runs automatically once per newly loaded instructions source (a fetch or
+    an upload, ``source_id``), never on text edits, and its cost is shown. Edits to the
+    checklist are kept while the instructions text is edited. "Re-extract" starts over.
+
+    Returns the checklist to grade with, or None when coverage is off or extraction failed.
     """
     st.subheader("Requirement checklist", anchor=False)
     st.caption("Each requirement is marked met, partial or missing for every student. A missing "
@@ -2108,21 +2177,26 @@ def render_requirement_checklist(instructions: str) -> Optional[RequirementCheck
         return None
 
     store = st.session_state.setdefault("requirement_checklists", {})
-    key = instructions_hash(instructions)
+    key = instructions_hash(source_id)
+    cost = _extraction_cost_caption(instructions)
     if key not in store:
-        if st.button("Extract requirements", key=f"extract_requirements_{key[:12]}",
-                     icon=":material/checklist:"):
-            with st.spinner("Reading the instructions..."):
-                try:
-                    store[key] = run_coroutine_blocking(extract_requirements(instructions))
-                except Exception as e:  # noqa: BLE001 - shown to the instructor
-                    logger.error(f"Requirement extraction failed: {e}", exc_info=True)
-                    st.error(f"Could not extract requirements: {e}")
-                    return None
-        else:
-            st.warning("Extract the checklist before grading; without it, unfinished work is "
-                       "only penalized for the errors it contains.", icon=":material/warning:")
-            return None
+        with st.spinner(f"Reading the instructions for the checklist ({cost})..."):
+            try:
+                store[key] = run_coroutine_blocking(extract_requirements(instructions))
+            except Exception as e:  # noqa: BLE001 - shown to the instructor
+                logger.error(f"Requirement extraction failed: {e}", exc_info=True)
+                st.error(f"Could not extract requirements: {e}")
+                if st.button("Try again", key=f"retry_requirements_{key[:12]}", icon=":material/refresh:"):
+                    st.rerun()
+                return None
+    st.caption(f"Extracted automatically from the instructions ({cost}). Edit the table if needed.")
+    if st.button("Re-extract", key=f"reextract_requirements_{key[:12]}", icon=":material/refresh:",
+                 help="Read the instructions again; your edits to the table are discarded."):
+        store.pop(key, None)
+        from cqc_cpcc.requirement_coverage import _CHECKLIST_CACHE
+        _CHECKLIST_CACHE.clear()
+        st.session_state.pop(f"requirements_editor_{key[:12]}", None)
+        st.rerun()
 
     edited = st.data_editor(
         pd.DataFrame([r.model_dump() for r in store[key].requirements],
@@ -2148,250 +2222,299 @@ def render_requirement_checklist(instructions: str) -> Optional[RequirementCheck
     return normalize_checklist(RequirementChecklist(requirements=items)) if items else None
 
 
-async def get_rubric_based_exam_grading():
-    """Unified exam grading workflow with rubric and error-definition modes."""
+GRADE_STAGES = ("Setup", "Submissions & run", "Results & review")
+SUBMISSION_FILE_TYPES = [
+    "txt", "docx", "pdf", "java", "cpp", "sas", "zip",
+    "html", "htm",
+    "mp3", "wav", "m4a", "ogg",
+    "mp4", "avi", "mov", "webm",
+]
 
-    grading_mode = select_grading_mode()
-    use_rubric = grading_mode in ["rubric_and_errors", "rubric_only"]
-    use_error_definitions = grading_mode in ["rubric_and_errors", "errors_only"]
 
-    # Step 1: Course (and Rubric) Selection
-    if use_rubric:
-        selected_course_id, selected_rubric = select_rubric_with_course_filter()
-        if not selected_rubric:
-            st.info("👆 Please select a course and rubric to begin grading.")
-            return
+def _go_to_stage(stage: str) -> None:
+    """Select a stage tab on the next run (call ``st.rerun()`` after).
+
+    The tabs are created with ``default=`` the target, without state tracking, so a tab
+    click never reruns the script (it cannot interrupt a grading run in progress).
+    """
+    st.session_state["grade_stage_target"] = stage
+    # A new key makes Streamlit draw new tabs, so the new default is selected.
+    st.session_state["grade_stage_generation"] = st.session_state.get("grade_stage_generation", 0) + 1
+
+
+def _start_grading(run_key: str) -> None:
+    """Grade button callback: runs before the script, so the page draws as 'running'."""
+    st.session_state.do_grade = True
+    st.session_state.grading_run_key = run_key
+    st.session_state.grading_status_by_key[run_key] = "running"
+
+
+def _clear_results(run_key: str, grading_mode: str) -> None:
+    caches = (("error_only_results_by_key", "error_only_feedback_zip_by_key")
+              if grading_mode == "errors_only" else ("grading_results_by_key", "feedback_zip_bytes_by_key"))
+    for name in caches + ("grading_status_by_key", "grading_errors_by_key"):
+        st.session_state[name].pop(run_key, None)
+    forget_results(run_key)
+
+
+def remember_results(run_key: str, grading_mode: str) -> None:
+    """Save a finished run so it survives an app restart (see results_store)."""
+    try:
+        if grading_mode == "errors_only":
+            results = st.session_state.error_only_results_by_key.get(run_key, [])
+            failures = []
+        else:
+            results = st.session_state.grading_results_by_key.get(run_key, [])
+            failures = st.session_state.grading_failures_by_key.get(run_key, [])
+        results_store.save_run(run_key, grading_mode, results, failures)
+    except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
+        logger.warning(f"Could not save grading results to disk: {e}")
+
+
+def forget_results(run_key: str) -> None:
+    results_store.delete_run(run_key)
+
+
+def restore_saved_results() -> None:
+    """Once per browser session, load runs saved on this computer into the caches."""
+    if st.session_state.get("_saved_results_loaded"):
+        return
+    st.session_state["_saved_results_loaded"] = True
+    runs = results_store.load_runs()
+    for run in reversed(runs):  # oldest first, so the newest ends up as the last run key
+        key = run["run_key"]
+        if run["mode"] == "errors_only":
+            st.session_state.error_only_results_by_key.setdefault(key, run["results"])
+        else:
+            st.session_state.grading_results_by_key.setdefault(key, run["results"])
+            st.session_state.grading_failures_by_key.setdefault(key, run["failures"])
+        st.session_state.grading_status_by_key.setdefault(key, "done")
+    if runs and not st.session_state.get("last_grading_run_key"):
+        st.session_state.last_grading_run_key = runs[0]["run_key"]
+
+
+def _render_instructions_source() -> tuple:
+    """Instructions from a BrightSpace fetch (which also brings the submissions) or a
+    file/link. Returns (instructions_text, source_id, bs_submission)."""
+    source = st.segmented_control(
+        "Instructions from",
+        ["BrightSpace", "File or link"],
+        key="instructions_source",
+        required=True,
+        default="File or link",
+    )
+    instructions, source_id, bs_submission = None, None, None
+    if source == "BrightSpace":
+        st.caption("One BrightSpace fetch brings the instructions and the student submissions.")
+        brightspace_source = add_brightspace_source_element(
+            accepted_file_types=SUBMISSION_FILE_TYPES,
+            key_prefix="rubric_exam_bs_source_",
+        )
+        fetched = (brightspace_source or {}).get("instructions")
+        if brightspace_source and brightspace_source.get("path"):
+            bs_submission = (brightspace_source["name"], brightspace_source["path"])
+        if fetched:
+            instructions = st.text_area(
+                "Instructions (from BrightSpace; edit if needed)",
+                value=fetched,
+                key="rubric_exam_bs_instructions_area",
+                height=200,
+            )
+            # The fetched text identifies the source; edits to it do not.
+            source_id = "brightspace:" + fetched
     else:
-        selected_course_id = select_course_from_error_definitions()
-        if not selected_course_id:
-            st.info("👆 Please select a course to begin grading.")
-            return
-        selected_rubric = None
-
-    # Step 2: Assignment Selection and Error Definitions (if enabled)
-    selected_assignment_id = None
-    selected_assignment_name = None
-    effective_error_definitions: list[ErrorDefinition] = []
-
-    if use_error_definitions:
-        st.header("Assignment & Error Definitions")
-        selected_assignment_id, selected_assignment_name, effective_error_definitions = display_assignment_and_error_definitions_selector(
-            selected_course_id,
-            allow_skip=(grading_mode == "rubric_and_errors"),
-        )
-        if not selected_assignment_id:
-            st.info("👆 Please select or create an assignment configuration.")
-            return
-    else:
-        st.header("Assignment Label")
-        assignment_label = st.text_input(
-            "Assignment Label (optional)",
-            placeholder="e.g., Exam 1",
-            key="rubric_only_assignment_label"
-        )
-        selected_assignment_name = assignment_label.strip() or "Rubric Only"
-        selected_assignment_id = sanitize_filename(assignment_label) if assignment_label else "RubricOnly"
-
-    # Class section input (shown for all grading modes)
-    course_section = st.text_input(
-        "Class Section (e.g., N805, N804)",
-        placeholder="Enter class section identifier",
-        key="rubric_grading_course_section"
-    )
-
-    # Build course_name including optional section
-    course_name_parts = [selected_course_id]
-    if course_section and course_section.strip():
-        course_name_parts.append(course_section.strip())
-    course_name_parts.append(selected_assignment_name)
-    course_name = "_".join(course_name_parts)
-
-    # Step 2.5: BrightSpace Source (optional) — one URL fetch grabs BOTH the
-    # student submissions AND the instructions (assignment description, or the
-    # first quiz question), auto-filling the Instructions and Submissions steps.
-    st.header("🎓 BrightSpace Source (optional)")
-    st.caption(
-        "Paste a BrightSpace Assignment or Quiz URL to auto-fetch student "
-        "submissions and instructions in one step. Or skip this and provide them "
-        "manually below."
-    )
-    brightspace_submission_file_types = [
-        "txt", "docx", "pdf", "java", "cpp", "sas", "zip",
-        "html", "htm", "mp3", "wav", "m4a", "ogg", "mp4", "avi", "mov", "webm",
-    ]
-    brightspace_source = add_brightspace_source_element(
-        accepted_file_types=brightspace_submission_file_types,
-        key_prefix="rubric_exam_bs_source_",
-    )
-    bs_instructions = (brightspace_source or {}).get("instructions")
-    bs_submission = None
-    if brightspace_source and brightspace_source.get("path"):
-        bs_submission = (brightspace_source["name"], brightspace_source["path"])
-
-    # Step 3: Rubric Overrides Editor (if rubric mode)
-    if use_rubric:
-        rubric_overrides = display_rubric_overrides_editor(selected_rubric)
-
-        try:
-            is_valid, errors = validate_overrides_compatible(selected_rubric, rubric_overrides)
-            if not is_valid:
-                st.error("Invalid rubric overrides:")
-                for error in errors:
-                    st.error(f"  - {error}")
-                return
-
-            effective_rubric = merge_rubric_overrides(selected_rubric, rubric_overrides)
-
-            st.success(f"Effective rubric: {effective_rubric.total_points_possible} total points, "
-                       f"{len([c for c in effective_rubric.criteria if c.enabled])} enabled criteria")
-
-        except ValueError as e:
-            st.error(f"Failed to merge rubric overrides: {e}")
-            return
-    else:
-        effective_rubric = None
-
-    # Step 4: Assignment Instructions
-    st.header("Assignment Instructions")
-    assignment_instructions_content = None
-
-    # When BrightSpace instructions were fetched, pre-fill an editable text area —
-    # but the instructor can still override them with an uploaded file below.
-    if bs_instructions:
-        st.success(
-            "📝 Using instructions captured from BrightSpace (edit if needed, or "
-            "override with a file below)."
-        )
-        assignment_instructions_content = st.text_area(
-            "Assignment instructions (from BrightSpace)",
-            value=bs_instructions,
-            key="rubric_exam_bs_instructions_area",
-            height=200,
-        )
-
-    # File override — always available. .docx/.html are decoded to markdown (what the
-    # LLM is given); .md/.txt pass through. A file here takes precedence over the
-    # BrightSpace text above.
-    override_label = (
-        "Override instructions with a file (optional)"
-        if bs_instructions else "Upload Exam Instructions"
-    )
-    _orig_file_name, instructions_file_path = add_flexible_upload_element(
-        override_label,
-        ["txt", "md", "docx", "html", "htm", "pdf"],
-        key_prefix="rubric_exam_",
-        allow_url=True,
-    )
-    convert_instructions_to_markdown = st.checkbox(
-        "Convert To Markdown",
-        True,
-        key="convert_rubric_exam_instruction_to_markdown",
-    )
-
-    if instructions_file_path:
-        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-        if bs_instructions:
-            st.info("Using the uploaded instructions file (overrides the BrightSpace text above).")
-        if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
-            st.markdown(assignment_instructions_content, unsafe_allow_html=True)
-
-    # Requirement checklist: unfinished work loses points for what it leaves out.
-    requirements_checklist = None
-    if (assignment_instructions_content and grading_mode != "errors_only"
-            and effective_rubric is not None and rubric_scores_errors(effective_rubric)):
-        requirements_checklist = render_requirement_checklist(assignment_instructions_content)
-    st.session_state["active_requirement_checklist"] = requirements_checklist
-
-    # Step 5: Solution File (Optional)
-    st.header("Solution File (Optional)")
-    solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
-    solution_file_paths = add_flexible_upload_element(
-        "Upload Exam Solution (Optional)",
-        solution_accepted_file_types,
-        accept_multiple_files=True,
-        key_prefix="rubric_exam_",
-        allow_url=True
-    )
-
-    assignment_solution_contents = None
-    if solution_file_paths:
-        assignment_solution_contents = []
-        for orig_solution_file_path, solution_file_path in solution_file_paths:
-            solution_file_name = os.path.basename(orig_solution_file_path)
-            read_content = read_file(solution_file_path, False)
-            read_content = prefix_content_file_name(solution_file_name, read_content)
-
-            solution_language = get_language_from_file_path(orig_solution_file_path)
-            if solution_language:
-                read_content = wrap_code_in_markdown_backticks(read_content, solution_language)
-
-            assignment_solution_contents.append(read_content)
-
-        assignment_solution_contents = "\n\n".join(assignment_solution_contents)
-
-    # Step 6: Error-Only Scoring Config
-    max_points = None
-    deduction_per_major_error = None
-    deduction_per_minor_error = None
-    if grading_mode == "errors_only":
-        st.header("Error-Only Scoring")
-        max_points = st.number_input("Max points for assignment", value=200, key="error_only_max_points")
-        deduction_per_major_error = st.number_input("Point deducted per Major Error", value=40,
-                                                    key="error_only_major_deduction")
-        deduction_per_minor_error = st.number_input("Point deducted per Minor Error", value=10,
-                                                    key="error_only_minor_deduction")
-
-    # Step 7: Model Configuration
-    st.header("Model Configuration")
-    model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=False)
-    use_openrouter = model_cfg.get("use_openrouter", True)
-    use_auto_route = model_cfg.get("use_auto_route", True)
-    selected_model = model_cfg.get("model", "openrouter/auto")
-
-    # Step 8: Student Submissions
-    st.header("Student Submission File(s)")
-    student_submission_accepted_file_types = [
-        "txt", "docx", "pdf", "java", "cpp", "sas", "zip",
-        "html", "htm",
-        "mp3", "wav", "m4a", "ogg",
-        "mp4", "avi", "mov", "webm"
-    ]
-    if bs_submission:
-        # Auto-filled from the BrightSpace fetch above.
-        st.success(f"📦 Using submissions fetched from BrightSpace: {bs_submission[0]}")
-        st.caption(
-            "📂 To see the ZIP contents and select/de-select student folders or files "
-            "before grading, use **\"Review / change selected files\"** in the "
-            "🎓 BrightSpace Source section above. You can also Start over there."
-        )
-        student_submission_file_paths = [bs_submission]
-    else:
-        student_submission_file_paths = add_flexible_upload_element(
-            "Upload Student Exam Submission",
-            student_submission_accepted_file_types,
-            accept_multiple_files=True,
+        _orig_file_name, instructions_file_path = add_flexible_upload_element(
+            "Instructions file",
+            ["txt", "md", "docx", "html", "htm", "pdf"],
             key_prefix="rubric_exam_",
             allow_url=True,
-            # BrightSpace is now hoisted to the "BrightSpace Source" section above.
         )
+        convert = st.checkbox("Convert to Markdown", True, key="convert_rubric_exam_instruction_to_markdown")
+        if instructions_file_path:
+            instructions = read_file(instructions_file_path, convert)
+            source_id = f"file:{_orig_file_name}:{instructions}"
+            with st.expander("Preview instructions", icon=":material/description:"):
+                st.markdown(instructions, unsafe_allow_html=True)  # instructor's own document
+    return instructions, source_id, bs_submission
 
-    # Step 9: Generate Run Key and Check Cache
-    # If files are not uploaded but we have a previous run_key in session state,
-    # try to display cached results for that run_key
+
+def _read_solution(solution_file_paths) -> Optional[str]:
+    if not solution_file_paths:
+        return None
+    parts = []
+    for orig_solution_file_path, solution_file_path in solution_file_paths:
+        content = read_file(solution_file_path, False)
+        content = prefix_content_file_name(os.path.basename(orig_solution_file_path), content)
+        language = get_language_from_file_path(orig_solution_file_path)
+        if language:
+            content = wrap_code_in_markdown_backticks(content, language)
+        parts.append(content)
+    return "\n\n".join(parts)
+
+
+async def get_rubric_based_exam_grading():
+    """Grade assignment as one page with three stages: Setup, Submissions & run,
+    Results & review (docs/ui/UX-GOALS.md §3).
+
+    Every stage's inputs are rendered on every run (tabs keep all content alive), so
+    switching stages or collapsing "Advanced" never drops a widget's value or changes
+    the run key. Grading runs in-script inside the "Submissions & run" tab.
+    """
+    restore_saved_results()
+    target = st.session_state.get("grade_stage_target", GRADE_STAGES[0])
+    setup_tab, run_tab, results_tab = st.tabs(
+        list(GRADE_STAGES), default=target,
+        key=f"grade_stages_{st.session_state.get('grade_stage_generation', 0)}")
+
+    # ------------------------------------------------------------------ Setup
+    with setup_tab:
+        grading_mode = select_grading_mode()
+        use_rubric = grading_mode in ["rubric_and_errors", "rubric_only"]
+        use_error_definitions = grading_mode in ["rubric_and_errors", "errors_only"]
+
+        selected_rubric = None
+        with st.container(horizontal=True):
+            if use_rubric:
+                selected_course_id, selected_rubric = select_rubric_with_course_filter()
+            else:
+                selected_course_id = select_course_from_error_definitions()
+
+        if (use_rubric and not selected_rubric) or not selected_course_id:
+            st.info("Choose a course" + (" and a rubric" if use_rubric else "") + " to start.",
+                    icon=":material/arrow_upward:")
+            with run_tab:
+                st.info("Finish Setup first.", icon=":material/arrow_back:")
+            return
+
+        selected_assignment_id = None
+        selected_assignment_name = None
+        error_definitions_editor = lambda: []  # noqa: E731
+        if use_error_definitions:
+            selected_assignment_id, selected_assignment_name, error_definitions_editor = \
+                display_assignment_and_error_definitions_selector(
+                    selected_course_id,
+                    allow_skip=(grading_mode == "rubric_and_errors"),
+                    defer_editor=True,
+                )
+            if not selected_assignment_id:
+                st.info("Choose or create an assignment.", icon=":material/arrow_upward:")
+                with run_tab:
+                    st.info("Finish Setup first.", icon=":material/arrow_back:")
+                return
+        else:
+            assignment_label = st.text_input("Assignment label (optional)", placeholder="e.g., Exam 1",
+                                             key="rubric_only_assignment_label")
+            selected_assignment_name = assignment_label.strip() or "Rubric Only"
+            selected_assignment_id = sanitize_filename(assignment_label) if assignment_label else "RubricOnly"
+
+        st.subheader("Instructions", anchor=False)
+        assignment_instructions_content, instructions_source_id, bs_submission = _render_instructions_source()
+
+        requirements_checklist = None
+        needs_checklist = (grading_mode != "errors_only" and selected_rubric is not None
+                           and rubric_scores_errors(selected_rubric))
+        if assignment_instructions_content and needs_checklist:
+            requirements_checklist = render_requirement_checklist(
+                assignment_instructions_content, instructions_source_id)
+        st.session_state["active_requirement_checklist"] = requirements_checklist
+
+        with st.expander("Advanced options", icon=":material/tune:"):
+            if use_error_definitions:
+                effective_error_definitions = error_definitions_editor()
+            else:
+                effective_error_definitions = []
+            course_section = st.text_input("Class section (e.g., N805)", placeholder="Optional",
+                                           key="rubric_grading_course_section")
+            if use_rubric:
+                rubric_overrides = display_rubric_overrides_editor(selected_rubric)
+            solution_file_paths = add_flexible_upload_element(
+                "Solution file(s) (optional)",
+                ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"],
+                accept_multiple_files=True,
+                key_prefix="rubric_exam_",
+                allow_url=True,
+            )
+            max_points = deduction_per_major_error = deduction_per_minor_error = None
+            if grading_mode == "errors_only":
+                st.subheader("Error-only scoring", anchor=False)
+                max_points = st.number_input("Max points for assignment", value=200, key="error_only_max_points")
+                deduction_per_major_error = st.number_input("Points deducted per major error", value=40,
+                                                            key="error_only_major_deduction")
+                deduction_per_minor_error = st.number_input("Points deducted per minor error", value=10,
+                                                            key="error_only_minor_deduction")
+            st.subheader("Model", anchor=False)
+            model_cfg = define_openrouter_model("rubric_grade_exam", default_use_auto_route=False)
+
+        course_name_parts = [selected_course_id]
+        if course_section and course_section.strip():
+            course_name_parts.append(course_section.strip())
+        course_name_parts.append(selected_assignment_name)
+        course_name = "_".join(course_name_parts)
+
+        effective_rubric = None
+        if use_rubric:
+            try:
+                is_valid, errors = validate_overrides_compatible(selected_rubric, rubric_overrides)
+                if not is_valid:
+                    st.error("Invalid rubric overrides: " + "; ".join(errors))
+                    return
+                effective_rubric = merge_rubric_overrides(selected_rubric, rubric_overrides)
+            except ValueError as e:
+                st.error(f"Failed to apply the rubric changes: {e}")
+                return
+            st.caption(f"Rubric: {effective_rubric.total_points_possible} points, "
+                       f"{len([c for c in effective_rubric.criteria if c.enabled])} enabled criteria.")
+
+        assignment_solution_contents = _read_solution(solution_file_paths)
+        use_openrouter = model_cfg.get("use_openrouter", True)
+        use_auto_route = model_cfg.get("use_auto_route", True)
+        selected_model = model_cfg.get("model", "openrouter/auto")
+
+        setup_complete = bool(assignment_instructions_content) and (
+            requirements_checklist is not None or not needs_checklist
+            or not st.session_state.get("use_requirement_checklist", True))
+        if setup_complete:
+            st.success("Setup is complete.", icon=":material/check_circle:")
+            # Auto-advance once per newly loaded instructions source (never on a click
+            # back to Setup).
+            if st.session_state.get("auto_advanced_for") != instructions_source_id:
+                st.session_state["auto_advanced_for"] = instructions_source_id
+                _go_to_stage(GRADE_STAGES[1])
+                st.rerun()
+        else:
+            st.info("Add the instructions to continue.", icon=":material/arrow_upward:")
+
+    # ------------------------------------------------- Submissions & run
+    with run_tab:
+        if not assignment_instructions_content:
+            st.info("Finish Setup first: the instructions are missing.", icon=":material/arrow_back:")
+        if bs_submission:
+            st.success(f"Using the submissions fetched from BrightSpace: {bs_submission[0]}",
+                       icon=":material/cloud_download:")
+            st.caption("To review or change the selected files, open the BrightSpace fetch in Setup.")
+            student_submission_file_paths = [bs_submission]
+        else:
+            student_submission_file_paths = add_flexible_upload_element(
+                "Student submissions (files or a ZIP)",
+                SUBMISSION_FILE_TYPES,
+                accept_multiple_files=True,
+                key_prefix="rubric_exam_",
+                allow_url=True,
+            )
+
     if not all([assignment_instructions_content, student_submission_file_paths]):
-        # Check if we have a stored run_key from a previous grading session
-        stored_run_key = st.session_state.get('last_grading_run_key')
-        if stored_run_key:
-            results_cache = st.session_state.error_only_results_by_key if grading_mode == "errors_only" else st.session_state.grading_results_by_key
-            if stored_run_key in results_cache:
-                st.info("📦 Displaying cached results from previous grading session")
+        with results_tab:
+            stored_run_key = st.session_state.get('last_grading_run_key')
+            results_cache = (st.session_state.error_only_results_by_key if grading_mode == "errors_only"
+                             else st.session_state.grading_results_by_key)
+            if stored_run_key and stored_run_key in results_cache:
+                st.caption("Showing the last results from this session.")
                 if grading_mode == "errors_only":
                     display_cached_error_only_results(stored_run_key, course_name)
                 else:
                     display_cached_grading_results(stored_run_key, course_name)
-                return
-
-        st.info("📝 Please upload assignment instructions and student submissions to begin grading.")
+            else:
+                st.info("No grading run yet.", icon=":material/info:")
         return
 
     from cqc_cpcc.grading_run_key import (
@@ -2400,13 +2523,8 @@ async def get_rubric_based_exam_grading():
     )
     file_metadata = generate_file_metadata(student_submission_file_paths)
     error_definition_ids = [ed.error_id for ed in (effective_error_definitions or []) if ed.enabled]
-
-    if use_rubric:
-        rubric_id = selected_rubric.rubric_id
-        rubric_version = selected_rubric.rubric_version
-    else:
-        rubric_id = "errors_only"
-        rubric_version = 0
+    rubric_id = selected_rubric.rubric_id if use_rubric else "errors_only"
+    rubric_version = selected_rubric.rubric_version if use_rubric else 0
 
     current_run_key = generate_grading_run_key(
         course_id=selected_course_id,
@@ -2426,122 +2544,100 @@ async def get_rubric_based_exam_grading():
         requirements_hash=checklist_hash(requirements_checklist),
     )
 
-    results_cache = st.session_state.error_only_results_by_key if grading_mode == "errors_only" else st.session_state.grading_results_by_key
+    results_cache = (st.session_state.error_only_results_by_key if grading_mode == "errors_only"
+                     else st.session_state.grading_results_by_key)
     has_cached_results = current_run_key in results_cache
-    is_grading_in_progress = st.session_state.grading_status_by_key.get(current_run_key) == "running"
-
-    st.success("All required inputs provided. Ready to grade!")
-
-    with st.expander("🔑 Run Key (for debugging)", expanded=False):
-        st.code(current_run_key, language="text")
-        if has_cached_results:
-            st.info("✅ Cached results available for this configuration")
-
-    # Step 10: Grade Button and Action Guard
-    col1, col2, col3 = st.columns([2, 2, 3])
-
-    with col1:
-        grade_button_clicked = st.button(
-            "🎯 Grade Submissions",
-            key="grade_submissions_button",
-            disabled=is_grading_in_progress,
-            type="primary",
-            help="Click to start grading (or re-grade if inputs changed)"
-        )
-
-    with col2:
-        if has_cached_results:
-            if st.button("🔄 Clear Results", key="clear_results_button"):
-                if grading_mode == "errors_only":
-                    if current_run_key in st.session_state.error_only_results_by_key:
-                        del st.session_state.error_only_results_by_key[current_run_key]
-                    if current_run_key in st.session_state.error_only_feedback_zip_by_key:
-                        del st.session_state.error_only_feedback_zip_by_key[current_run_key]
-                else:
-                    if current_run_key in st.session_state.grading_results_by_key:
-                        del st.session_state.grading_results_by_key[current_run_key]
-                    if current_run_key in st.session_state.feedback_zip_bytes_by_key:
-                        del st.session_state.feedback_zip_bytes_by_key[current_run_key]
-                if current_run_key in st.session_state.grading_status_by_key:
-                    del st.session_state.grading_status_by_key[current_run_key]
-                if current_run_key in st.session_state.grading_errors_by_key:
-                    del st.session_state.grading_errors_by_key[current_run_key]
-                st.success("Results cleared! Click Grade to re-run.")
-                st.rerun()
-
-    with col3:
-        if has_cached_results:
-            st.info("📦 Using cached results (click Clear to re-grade)")
-        elif is_grading_in_progress:
-            st.warning("⏳ Grading in progress...")
-
-    if grade_button_clicked:
-        st.session_state.do_grade = True
-        st.session_state.grading_run_key = current_run_key
-
+    status = st.session_state.grading_status_by_key.get(current_run_key)
     should_grade = (
             st.session_state.do_grade
             and st.session_state.grading_run_key == current_run_key
             and not has_cached_results
     )
+    is_grading_in_progress = should_grade or status == "running"
 
-    if should_grade:
-        st.session_state.grading_status_by_key[current_run_key] = "running"
-        # Store the run_key so we can display cached results even after page rerun
-        st.session_state.last_grading_run_key = current_run_key
+    with run_tab:
+        if status == "interrupted":
+            st.warning("The last grading run was interrupted before it finished. Grade again.",
+                       icon=":material/warning:")
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.button(
+                "Grade submissions",
+                key="grade_submissions_button",
+                disabled=is_grading_in_progress or has_cached_results,
+                type="primary",
+                icon=":material/play_arrow:",
+                on_click=_start_grading,
+                args=(current_run_key,),
+            )
+            if has_cached_results:
+                st.button("Clear results", key="clear_results_button", icon=":material/delete:",
+                          on_click=_clear_results, args=(current_run_key, grading_mode),
+                          help="Remove the results for these inputs so they can be graded again.")
+                st.caption("Already graded with these inputs; the results are in Results & review.")
+        with st.expander("Run details", icon=":material/info:"):
+            st.code(current_run_key, language="text")
 
-        try:
+        if should_grade:
+            st.session_state.last_grading_run_key = current_run_key
+            try:
+                if grading_mode == "errors_only":
+                    await process_error_only_grading_batch(
+                        submission_file_paths=student_submission_file_paths,
+                        assignment_instructions=assignment_instructions_content,
+                        reference_solution=assignment_solution_contents,
+                        error_definitions=effective_error_definitions,
+                        max_points=int(max_points or 0),
+                        deduction_per_major_error=int(deduction_per_major_error or 0),
+                        deduction_per_minor_error=int(deduction_per_minor_error or 0),
+                        model_name=selected_model,
+                        temperature=0.0,  # Temperature not used with OpenRouter
+                        use_openrouter=use_openrouter,
+                        openrouter_auto_route=use_auto_route,
+                        course_name=course_name,
+                        accepted_file_types=SUBMISSION_FILE_TYPES,
+                        run_key=current_run_key,
+                    )
+                else:
+                    await process_rubric_grading_batch(
+                        submission_file_paths=student_submission_file_paths,
+                        effective_rubric=effective_rubric,
+                        assignment_instructions=assignment_instructions_content,
+                        reference_solution=assignment_solution_contents,
+                        error_definitions=effective_error_definitions,
+                        model_name=selected_model,
+                        temperature=0.0,  # Temperature not used with OpenRouter
+                        course_name=course_name,
+                        accepted_file_types=SUBMISSION_FILE_TYPES,
+                        run_key=current_run_key,
+                        requirements=requirements_checklist,
+                    )
+                st.session_state.grading_status_by_key[current_run_key] = "done"
+            except Exception as e:
+                st.session_state.grading_status_by_key[current_run_key] = "failed"
+                st.session_state.grading_errors_by_key[current_run_key] = str(e)
+                st.error(f"Grading failed: {e}", icon=":material/error:")
+                logger.error(f"Grading failed for run_key {current_run_key}: {e}", exc_info=True)
+            finally:
+                st.session_state.do_grade = False
+                # Stop, a reconnect or a click during the run raises a BaseException that
+                # skips the handler above: never leave the page locked in "running".
+                if st.session_state.grading_status_by_key.get(current_run_key) == "running":
+                    st.session_state.grading_status_by_key[current_run_key] = "interrupted"
+            if st.session_state.grading_status_by_key.get(current_run_key) == "done":
+                remember_results(current_run_key, grading_mode)
+                _go_to_stage(GRADE_STAGES[2])
+                st.rerun()
+
+    with results_tab:
+        if has_cached_results:
+            st.session_state.last_grading_run_key = current_run_key
             if grading_mode == "errors_only":
-                await process_error_only_grading_batch(
-                    submission_file_paths=student_submission_file_paths,
-                    assignment_instructions=assignment_instructions_content,
-                    reference_solution=assignment_solution_contents,
-                    error_definitions=effective_error_definitions,
-                    max_points=int(max_points or 0),
-                    deduction_per_major_error=int(deduction_per_major_error or 0),
-                    deduction_per_minor_error=int(deduction_per_minor_error or 0),
-                    model_name=selected_model,
-                    temperature=0.0,  # Temperature not used with OpenRouter
-                    use_openrouter=use_openrouter,
-                    openrouter_auto_route=use_auto_route,
-                    course_name=course_name,
-                    accepted_file_types=student_submission_accepted_file_types,
-                    run_key=current_run_key,
-                )
+                display_cached_error_only_results(current_run_key, course_name)
             else:
-                await process_rubric_grading_batch(
-                    submission_file_paths=student_submission_file_paths,
-                    effective_rubric=effective_rubric,
-                    assignment_instructions=assignment_instructions_content,
-                    reference_solution=assignment_solution_contents,
-                    error_definitions=effective_error_definitions,
-                    model_name=selected_model,
-                    temperature=0.0,  # Temperature not used with OpenRouter
-                    course_name=course_name,
-                    accepted_file_types=student_submission_accepted_file_types,
-                    run_key=current_run_key,
-                    requirements=requirements_checklist,
-                )
-
-            st.session_state.grading_status_by_key[current_run_key] = "done"
-
-        except Exception as e:
-            st.session_state.grading_status_by_key[current_run_key] = "failed"
-            st.session_state.grading_errors_by_key[current_run_key] = str(e)
-            st.error(f"❌ Grading failed: {e}")
-            logger.error(f"Grading failed for run_key {current_run_key}: {e}", exc_info=True)
-
-        finally:
-            st.session_state.do_grade = False
-
-    elif has_cached_results:
-        # Store the run_key so we can display cached results even after page rerun
-        st.session_state.last_grading_run_key = current_run_key
-        st.info("📦 Displaying cached results")
-        if grading_mode == "errors_only":
-            display_cached_error_only_results(current_run_key, course_name)
-        else:
-            display_cached_grading_results(current_run_key, course_name)
+                display_cached_grading_results(current_run_key, course_name)
+        elif not should_grade:
+            st.info("No results for these inputs yet. Grade them in Submissions & run.",
+                    icon=":material/info:")
 
 
 def _get_band_or_level_label(result) -> Optional[str]:
@@ -2747,6 +2843,7 @@ def _replace_result(run_key: str, student_id: str, new_result) -> None:
     st.session_state.feedback_zip_bytes_by_key.pop(run_key, None)
     st.session_state.get("feedback_doc_paths_by_key", {}).pop(run_key, None)
     st.session_state.pop(f"grading_summary_df_{run_key}", None)
+    remember_results(run_key, "rubric")
 
 
 def _grade_anyway(run_key: str, student_id: str) -> None:

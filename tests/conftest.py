@@ -60,3 +60,9 @@ def _isolate_app_settings(tmp_path, monkeypatch):
     """Never read or write the real ~/.cqc_cpcc/app_settings.json."""
     monkeypatch.setenv("CQC_APP_SETTINGS_PATH", str(tmp_path / "app_settings.json"))
 
+
+
+@pytest.fixture(autouse=True)
+def _isolate_grading_results(tmp_path, monkeypatch):
+    """Never read or write the real ~/.cqc_cpcc/grading_results (student data)."""
+    monkeypatch.setenv("CQC_GRADING_RESULTS_DIR", str(tmp_path / "grading_results"))

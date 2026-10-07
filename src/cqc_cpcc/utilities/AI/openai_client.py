@@ -1547,6 +1547,7 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
             criteria_results=[
                 CriterionResult(
                     criterion_id="criterion_1",
+                    criterion_name="Criterion 1",
                     points_earned=85,
                     points_possible=100,
                     feedback="Test criterion feedback: Code demonstrates good understanding."
@@ -1554,7 +1555,12 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
             ],
             overall_feedback="Test mode: Overall the submission shows solid work with minor improvements needed.",
             detected_errors=[],
-            error_counts_by_severity={}
+            error_counts_by_severity={},
+            # Matches the test-mode RequirementChecklist below.
+            requirement_results=[
+                {"requirement_id": "R1", "status": "met", "evidence": "Test mode"},
+                {"requirement_id": "R2", "status": "met", "evidence": "Test mode"},
+            ],
         )
 
     # ErrorDefinitions for exam review
@@ -1574,6 +1580,13 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
                 )
             ]
         )
+
+    # Requirement checklist (requirement coverage), deterministic for E2E tests
+    elif model_name == "RequirementChecklist":
+        return schema_model.model_validate({"requirements": [
+            {"id": "R1", "text": "Read the program's inputs.", "weight": "core"},
+            {"id": "R2", "text": "Compute and print the required result.", "weight": "core"},
+        ]})
 
     # Default: return empty instance
     else:

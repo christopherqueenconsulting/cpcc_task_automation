@@ -1033,7 +1033,7 @@ def _fetch_openrouter_models_cached() -> list:
         from cqc_cpcc.utilities.AI.openrouter_client import fetch_openrouter_models
 
         # st.cache_data runs in a context where asyncio.run() is safe
-        models = asyncio.run(fetch_openrouter_models())
+        models = run_coroutine_blocking(fetch_openrouter_models())  # pages run inside a loop
         logger.info(f"Fetched {len(models)} models from OpenRouter")
         return models
     except Exception as e:
