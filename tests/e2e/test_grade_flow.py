@@ -25,8 +25,20 @@ class Actions:
         await locator.click()
         self.n += 1
 
-    async def files(self, locator, path):
+    async def files(self, locator, path, shown_in=None):
+        """Set a file; when ``shown_in`` is given, wait until the uploader lists it.
+
+        A rerun that lands while the file is uploading (the Setup stage advancing on
+        a slow CI runner) can drop it, so set it again once. That is still one action
+        for the user, who would simply see the file and carry on."""
         await locator.set_input_files(str(path))
+        if shown_in is not None:
+            name = shown_in.get_by_text(path.name)
+            try:
+                await expect(name).to_be_visible(timeout=15000)
+            except AssertionError:
+                await locator.set_input_files(str(path))
+                await expect(name).to_be_visible(timeout=30000)
         self.n += 1
 
 
@@ -64,7 +76,8 @@ async def _run_batch(page: Page, url: str, tmp_path, fresh: bool) -> int:
     await actions.files(_uploader(page, "Instructions file"), instructions)
     # Setup completes (canned checklist in test mode) and moves on by itself.
     await expect(page.get_by_role("tab", name="Submissions & run", selected=True)).to_be_visible(timeout=60000)
-    await actions.files(_uploader(page, "Student submissions"), batch)
+    await actions.files(_uploader(page, "Student submissions"), batch,
+                        shown_in=page.get_by_test_id("stFileUploader").filter(has_text="Student submissions"))
     grade = page.get_by_role("button", name="Grade submissions")
     await expect(grade).to_be_enabled(timeout=60000)
     await actions.click(grade)
