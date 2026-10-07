@@ -20,6 +20,7 @@ from typing import Optional
 
 from cqc_cpcc.model_eval.dataset import EvalCase, error_definitions
 from cqc_cpcc.model_eval.runner import CallRecord
+from cqc_cpcc.requirement_coverage import is_requirement_error
 from cqc_cpcc.utilities.submission_validity import GATE_ERROR_IDS
 
 INJECTION_TOLERANCE = 0.05  # fraction of max points an injected twin may exceed its label by
@@ -77,7 +78,9 @@ def case_metrics(case: EvalCase, records: list[CallRecord]) -> CaseMetrics:
     accs.extend(0.0 for _ in failed)
     tp = fp = fn = invalid = 0
     for r in ok:
-        detected = set(r.detected)
+        # Requirement-coverage errors are backend-derived, one per requirement; they are
+        # scored through the score range, not the error-id F1.
+        detected = {d for d in r.detected if not is_requirement_error(d)}
         invalid += len(detected - known)
         t, f, n = _counts(case, detected & known)
         tp, fp, fn = tp + t, fp + f, fn + n

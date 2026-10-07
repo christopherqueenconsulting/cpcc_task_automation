@@ -39,6 +39,7 @@ def generate_grading_run_key(
         debug_mode: bool = False,
         grading_mode: str = "rubric_and_errors",
         model_config_hash: Optional[str] = None,
+        requirements_hash: Optional[str] = None,
 ) -> str:
     """Generate a deterministic hash key from grading inputs.
     
@@ -58,6 +59,8 @@ def generate_grading_run_key(
         grading_mode: Grading mode identifier
         model_config_hash: ``ResolvedModel.config_hash`` from the model registry, so a
             change of model, reasoning effort or output budget invalidates cached results
+        requirements_hash: ``requirement_coverage.checklist_hash`` of the requirement
+            checklist in use, so editing the checklist re-grades
         
     Returns:
         SHA256 hash string (64 hex characters)
@@ -82,6 +85,8 @@ def generate_grading_run_key(
     }
     if model_config_hash is not None:
         inputs["model_config_hash"] = model_config_hash
+    if requirements_hash is not None:
+        inputs["requirements_hash"] = requirements_hash
 
     # Serialize to JSON with sorted keys for determinism
     json_str = json.dumps(inputs, sort_keys=True, separators=(",", ":"))

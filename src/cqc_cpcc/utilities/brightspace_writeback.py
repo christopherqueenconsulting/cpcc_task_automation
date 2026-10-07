@@ -271,7 +271,9 @@ def build_write_items_from_results(
         max_pts = float(_get(result, "total_points_possible") or 0.0)
         # A confirmed "no gradeable submission" 0 stays 0: the error buffer is for
         # grading noise, not for work that was never turned in.
-        buffered = 0.0 if _get(result, "needs_review") else apply_score_buffer(raw, max_pts, buffer_pct)
+        from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES
+        no_work = _get(result, "validity_status") in NO_WORK_STATUSES
+        buffered = 0.0 if no_work else apply_score_buffer(raw, max_pts, buffer_pct)
         feedback = build_feedback_html(
             _get(result, "overall_feedback") or "",
             _get(result, "criteria_results"),

@@ -25,8 +25,16 @@ from cqc_cpcc.rubric_config import (
     get_distinct_course_ids,
     get_rubrics_for_course,
 )
-from cqc_cpcc.rubric_grading import grade_with_rubric
-from cqc_cpcc.utilities.submission_validity import language_for_course
+from cqc_cpcc.requirement_coverage import (
+    RequirementChecklist,
+    RequirementItem,
+    checklist_hash,
+    extract_requirements,
+    instructions_hash,
+    normalize_checklist,
+)
+from cqc_cpcc.rubric_grading import grade_with_rubric, rubric_scores_errors
+from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES, language_for_course
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
 from cqc_cpcc.rubric_overrides import (
     CriterionOverride,
@@ -1289,6 +1297,7 @@ async def grade_single_rubric_student(
         model_name: str,
         temperature: float,
         course_name: str,
+        requirements: Optional[RequirementChecklist] = None,
 ) -> tuple[str, RubricAssessmentResult | None]:
     """Grade a single student submission with rubric using async OpenAI call.
     
@@ -1365,6 +1374,7 @@ async def grade_single_rubric_student(
                 source_files=student_submission.files,
                 gate_report=gate_report,
                 rejected_files=student_submission.rejected_files,
+                requirements=requirements,
             )
 
             status.update(label=f"{status_label} | Processing results...")
@@ -1497,6 +1507,7 @@ async def process_rubric_grading_batch(
         course_name: str,
         accepted_file_types: list[str],
         run_key: str,
+        requirements: Optional[RequirementChecklist] = None,
 ) -> None:
     """Process a batch of student submissions with async grading.
     
@@ -1569,6 +1580,7 @@ async def process_rubric_grading_batch(
             error_definitions=error_definitions,
             model_name=model_name,
             temperature=temperature,
+            requirements=requirements,
         ),
     }
 
@@ -1595,6 +1607,7 @@ async def process_rubric_grading_batch(
             model_name=model_name,
             temperature=temperature,
             course_name=course_name,
+            requirements=requirements,
         )
         tasks.append(task)
 
@@ -2087,6 +2100,59 @@ def display_cached_error_only_results(run_key: str, course_name: str) -> None:
         )
 
 
+def render_requirement_checklist(instructions: str) -> Optional[RequirementChecklist]:
+    """Extract, show and let the instructor edit the assignment's requirement checklist.
+
+    Returns the checklist to grade with, or None when coverage is off or not extracted.
+    """
+    st.subheader("Requirement checklist", anchor=False)
+    st.caption("Each requirement is marked met, partial or missing for every student. A missing "
+               "core requirement costs a major error and a partial one a minor error, so "
+               "unfinished work cannot outscore complete work that has mistakes.")
+    if not st.toggle("Check requirement coverage", value=True, key="use_requirement_checklist"):
+        return None
+
+    store = st.session_state.setdefault("requirement_checklists", {})
+    key = instructions_hash(instructions)
+    if key not in store:
+        if st.button("Extract requirements", key=f"extract_requirements_{key[:12]}",
+                     icon=":material/checklist:"):
+            with st.spinner("Reading the instructions..."):
+                try:
+                    store[key] = run_coroutine_blocking(extract_requirements(instructions))
+                except Exception as e:  # noqa: BLE001 - shown to the instructor
+                    logger.error(f"Requirement extraction failed: {e}", exc_info=True)
+                    st.error(f"Could not extract requirements: {e}")
+                    return None
+        else:
+            st.warning("Extract the checklist before grading; without it, unfinished work is "
+                       "only penalized for the errors it contains.", icon=":material/warning:")
+            return None
+
+    edited = st.data_editor(
+        pd.DataFrame([r.model_dump() for r in store[key].requirements],
+                     columns=["id", "text", "weight"]),
+        key=f"requirements_editor_{key[:12]}",
+        num_rows="dynamic",
+        hide_index=True,
+        column_config={
+            "id": st.column_config.TextColumn("Id", width="small", required=True),
+            "text": st.column_config.TextColumn("Requirement", width="large", required=True),
+            "weight": st.column_config.SelectboxColumn(
+                "Weight", options=["core", "secondary"], required=True, default="core"),
+        },
+    )
+    items = []
+    for i, row in enumerate(edited.to_dict("records"), start=1):
+        text = str(row.get("text") or "").strip()
+        if not text or text == "nan":
+            continue
+        weight = row.get("weight") if row.get("weight") in ("core", "secondary") else "core"
+        rid = str(row.get("id") or "").strip()
+        items.append(RequirementItem(id=rid if rid and rid != "nan" else f"R{i}", text=text, weight=weight))
+    return normalize_checklist(RequirementChecklist(requirements=items)) if items else None
+
+
 async def get_rubric_based_exam_grading():
     """Unified exam grading workflow with rubric and error-definition modes."""
     st.title('Exam Grading')
@@ -2242,6 +2308,13 @@ async def get_rubric_based_exam_grading():
         if st.checkbox("Show Instructions", key="show_rubric_exam_instructions_check_box"):
             st.markdown(assignment_instructions_content, unsafe_allow_html=True)
 
+    # Requirement checklist: unfinished work loses points for what it leaves out.
+    requirements_checklist = None
+    if (assignment_instructions_content and grading_mode != "errors_only"
+            and effective_rubric is not None and rubric_scores_errors(effective_rubric)):
+        requirements_checklist = render_requirement_checklist(assignment_instructions_content)
+    st.session_state["active_requirement_checklist"] = requirements_checklist
+
     # Step 5: Solution File (Optional)
     st.header("Solution File (Optional)")
     solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"]
@@ -2363,6 +2436,7 @@ async def get_rubric_based_exam_grading():
         model_config_hash=(
             None if use_auto_route else resolve_model("grading", selected_model).config_hash
         ),
+        requirements_hash=checklist_hash(requirements_checklist),
     )
 
     results_cache = st.session_state.error_only_results_by_key if grading_mode == "errors_only" else st.session_state.grading_results_by_key
@@ -2459,6 +2533,7 @@ async def get_rubric_based_exam_grading():
                     course_name=course_name,
                     accepted_file_types=student_submission_accepted_file_types,
                     run_key=current_run_key,
+                    requirements=requirements_checklist,
                 )
 
             st.session_state.grading_status_by_key[current_run_key] = "done"
@@ -2565,6 +2640,19 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
         if result.overall_band_label:
             st.metric("Performance Band", result.overall_band_label)
 
+    if result.requirement_results:
+        st.markdown("#### Requirement coverage")
+        checklist = st.session_state.get("active_requirement_checklist")
+        texts = {r.id.upper(): (r.text, r.weight) for r in (checklist.requirements if checklist else [])}
+        st.dataframe(
+            pd.DataFrame([{"Id": r.requirement_id,
+                           "Requirement": texts.get(r.requirement_id.strip().upper(), ("", ""))[0],
+                           "Weight": texts.get(r.requirement_id.strip().upper(), ("", ""))[1],
+                           "Status": r.status, "Evidence": r.evidence or ""}
+                          for r in result.requirement_results]),
+            hide_index=True,
+        )
+
     # Display error counts if available
     if result.error_counts_by_severity:
         st.markdown("#### 📋 Error Counts")
@@ -2645,7 +2733,10 @@ _VALIDITY_LABELS = {
     "empty": "Empty submission",
     "trivial": "No meaningful attempt",
     "wrong_type": "Wrong file type",
+    "requirements_unmarked": "Requirements not assessed",
 }
+# Statuses where the gate scored 0 because no gradeable work was found.
+_NO_WORK_STATUSES = NO_WORK_STATUSES
 
 
 def _review_status_label(result) -> str:
@@ -2653,7 +2744,9 @@ def _review_status_label(result) -> str:
     if not getattr(result, "needs_review", False):
         return "Graded"
     label = _VALIDITY_LABELS.get(result.validity_status, "Needs review")
-    return f"{label} (confirmed 0)" if result.review_confirmed else f"Needs review: {label}"
+    if result.review_confirmed:
+        return f"{label} (confirmed 0)" if result.validity_status in _NO_WORK_STATUSES else f"{label} (accepted)"
+    return f"Needs review: {label}"
 
 
 def _replace_result(run_key: str, student_id: str, new_result) -> None:
@@ -2708,8 +2801,9 @@ def render_needs_review(run_key: str) -> None:
         return
     with st.container(border=True):
         st.subheader(f"Needs review ({len(flagged)})", anchor=False)
-        st.caption("These scored 0 without an AI call because no gradeable work was found. "
-                   "They are not written to BrightSpace until you confirm them.")
+        st.caption("Missing, empty or wrong-type work scored 0 without an AI call; results "
+                   "where the grader skipped requirements need a look. None of these is "
+                   "written to BrightSpace until you confirm it.")
         submissions = st.session_state.get("grading_inputs_by_key", {}).get(run_key, {}).get("submissions", {})
         for sid, r in flagged:
             rejected = getattr(submissions.get(sid), "rejected_files", None)
@@ -2717,10 +2811,13 @@ def render_needs_review(run_key: str) -> None:
             with st.container(horizontal=True, vertical_alignment="center"):
                 st.markdown(f"**{sid}** — {_VALIDITY_LABELS.get(r.validity_status, r.validity_status)}: "
                             f"{r.validity_reason}{extra}")
-                if st.button("Confirm 0", key=f"confirm0_{run_key}_{sid}", icon=":material/check:"):
+                no_work = r.validity_status in _NO_WORK_STATUSES
+                if st.button("Confirm 0" if no_work else f"Accept {r.total_points_earned:g}",
+                             key=f"confirm0_{run_key}_{sid}", icon=":material/check:"):
                     _replace_result(run_key, sid, r.model_copy(update={"review_confirmed": True}))
                     st.rerun()
-                if st.button("Grade anyway", key=f"grade_anyway_{run_key}_{sid}",
+                if st.button("Grade anyway" if no_work else "Grade again",
+                             key=f"grade_anyway_{run_key}_{sid}",
                              icon=":material/play_arrow:"):
                     _grade_anyway(run_key, sid)
 
