@@ -34,7 +34,7 @@ from cqc_cpcc.requirement_coverage import (
     normalize_checklist,
 )
 from cqc_cpcc.rubric_grading import grade_with_rubric, rubric_scores_errors
-from cqc_cpcc.utilities.submission_validity import language_for_course
+from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES, language_for_course
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
 from cqc_cpcc.rubric_overrides import (
     CriterionOverride,
@@ -2736,7 +2736,7 @@ _VALIDITY_LABELS = {
     "requirements_unmarked": "Requirements not assessed",
 }
 # Statuses where the gate scored 0 because no gradeable work was found.
-_NO_WORK_STATUSES = {"missing", "empty", "trivial", "wrong_type"}
+_NO_WORK_STATUSES = NO_WORK_STATUSES
 
 
 def _review_status_label(result) -> str:

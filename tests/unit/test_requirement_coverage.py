@@ -82,7 +82,7 @@ def test_unmarked_requirements_add_no_errors_but_need_review(rubric):
     assert not out.detected_errors
     # Silently skipping requirements would bring back the original bug.
     assert out.needs_review and out.validity_status == "requirements_unmarked"
-    assert "R2, R3" in out.validity_reason
+    assert "R2 (Compute gross pay with overtime)" in out.validity_reason
 
 
 @pytest.mark.unit
@@ -225,8 +225,9 @@ async def test_extract_requirements_caches_by_instructions():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_csc134_ties_at_band_floor_are_allowed_never_higher(rubric):
-    """Recorded ruling: CSC 134 bands take the worse of the major and minor tiers, so a
-    missing requirement can tie a complete program that already sits in that band.
+    """Recorded ruling: CSC 134 bands take the worse of the major and minor tiers (and
+    CSC 151 bands saturate the same way), so a missing requirement can tie a complete
+    program that already sits in that band.
     The approved plan's rule is score(incomplete) <= score(complete): ties are allowed,
     a higher score never is."""
     majors = [DetectedError(code=f"CSC_134_PROJECT_1_E{i}", name="e", severity="major",

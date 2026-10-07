@@ -40,6 +40,8 @@ MISSING = "missing"
 WRONG_TYPE = "wrong_type"
 EMPTY = "empty"
 TRIVIAL = "trivial"
+# Statuses meaning no gradeable work was found (scored 0; a confirmed 0 is never buffered).
+NO_WORK_STATUSES = frozenset({MISSING, WRONG_TYPE, EMPTY, TRIVIAL})
 
 # Course id (as used in rubrics.json ``course_ids``) -> source language of its code work.
 COURSE_LANGUAGE = {

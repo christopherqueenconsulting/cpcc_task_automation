@@ -209,9 +209,11 @@ def apply_requirement_coverage(
         # Unmarked requirements would silently bring back the original bug (incomplete
         # work not penalized), so the instructor must look at this student.
         logger.warning("Requirement coverage: model did not mark %s", ", ".join(info["unmarked"]))
+        texts = {r.id: r.text for r in checklist.requirements}
         update.update(needs_review=True, validity_status="requirements_unmarked",
-                      validity_reason="The grader did not assess requirement(s) "
-                                      + ", ".join(info["unmarked"]) + ".")
+                      validity_reason="The grader did not assess: "
+                                      + "; ".join(f"{rid} ({texts[rid]})" for rid in info["unmarked"])
+                                      + ". Accepting keeps the score as if they were met.")
 
     info["applied"] = True
     result = result.model_copy(update={
