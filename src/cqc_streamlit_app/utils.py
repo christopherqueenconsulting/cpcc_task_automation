@@ -1675,18 +1675,10 @@ def add_brightspace_submission_element(
         st.session_state.pop(fetch_result_key, None)
         st.rerun()
 
-    # Job in progress: show status + MFA prompt, then poll.
+    # Job in progress: only this fragment refreshes (progress, MFA number), not the page.
     if job is not None and not job.done.is_set():
-        status_msg = job.latest_progress() or "Starting..."
-        st.info(f"⏳ {status_msg}")
-        render_mfa_prompt(job.bridge)
-        if st.button("✖ Cancel", key=key_prefix + "cancel"):
-            job.bridge.cancel()
-            st.session_state.pop(job_key, None)
-            st.rerun()
-        # Poll: brief sleep then rerun to refresh progress / MFA number.
-        time.sleep(1.5)
-        st.rerun()
+        _render_job_progress(job, job_key, key_prefix)
+        return None
 
     # Job finished.
     if job is not None and job.done.is_set():
@@ -1948,16 +1940,10 @@ def add_brightspace_writeback_element(
                      disabled=not (url and confirm), width="stretch"):
             _launch(dry_run=False)
 
-    # Job in progress: status + MFA prompt, then poll.
+    # Job in progress: only this fragment refreshes (progress, MFA number), not the page.
     if job is not None and not job.done.is_set():
-        st.info(f"⏳ {job.latest_progress() or 'Starting...'}")
-        render_mfa_prompt(job.bridge)
-        if st.button("✖ Cancel", key=key_prefix + "cancel"):
-            job.bridge.cancel()
-            st.session_state.pop(job_key, None)
-            st.rerun()
-        time.sleep(1.5)
-        st.rerun()
+        _render_job_progress(job, job_key, key_prefix)
+        return
 
     if job is not None and job.done.is_set():
         if job.error:
@@ -2634,3 +2620,20 @@ def page_header(title: str, icon: str, caption: str) -> None:
     """Every page starts the same way: a title matching its nav label, then one caption."""
     st.title(title, icon=icon, anchor=False)
     st.caption(caption)
+
+
+@st.fragment(run_every=1.5)
+def _render_job_progress(job, job_key: str, key_prefix: str) -> None:
+    """Progress and the MFA number of a background BrightSpace job (fetch or write-back).
+
+    Runs as a fragment: every 1.5 s only this block redraws, instead of the whole page
+    (UX goals §2.2). When the job finishes, one full rerun shows its result.
+    """
+    if job.done.is_set():
+        st.rerun()
+    st.info(job.latest_progress() or "Starting...", icon=":material/progress_activity:")
+    render_mfa_prompt(job.bridge)
+    if st.button("Cancel", key=key_prefix + "cancel", icon=":material/close:"):
+        job.bridge.cancel()
+        st.session_state.pop(job_key, None)
+        st.rerun()

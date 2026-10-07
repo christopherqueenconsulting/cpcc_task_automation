@@ -37,7 +37,9 @@ from cqc_cpcc.requirement_coverage import (
 from cqc_cpcc.rubric_grading import grade_with_rubric, rubric_scores_errors
 from cqc_streamlit_app import results_store
 from cqc_streamlit_app.app_settings import load_settings, remember
-from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES, language_for_course
+from cqc_cpcc.utilities.submission_validity import (
+    NO_WORK_STATUSES, expected_language_for_rubric, language_for_course,
+)
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
 from cqc_cpcc.rubric_overrides import (
     CriterionOverride,
@@ -2338,6 +2340,63 @@ def _render_instructions_source() -> tuple:
     return instructions, source_id, bs_submission
 
 
+@st.cache_data(ttl=3600, max_entries=8, show_spinner="Checking the submissions...")
+def batch_preview(file_paths: tuple, expected_language: Optional[str]) -> list[dict]:
+    """One row per student: files found and what the validity gate will do.
+
+    Runs the same deterministic checks as grading (no AI call), so empty, missing and
+    wrong-type submissions show up before Grade is pressed. Cached per upload.
+    """
+    from cqc_cpcc.utilities.submission_validity import check_validity
+    rows = []
+    for orig_path, temp_path in file_paths:
+        if str(orig_path).endswith(".zip"):
+            try:
+                students = extract_student_submissions_from_zip(temp_path, SUBMISSION_FILE_TYPES)
+            except Exception as e:  # noqa: BLE001 - shown in the table
+                rows.append({"Student": os.path.basename(orig_path), "Files": "", "Chars": 0,
+                             "Check": f"Could not read the ZIP: {e}"})
+                continue
+            items = [(sid, sub.files, sub.rejected_files) for sid, sub in students.items()]
+        else:
+            base = os.path.basename(orig_path)
+            items = [(os.path.splitext(base)[0], {base: temp_path}, [])]
+        for sid, files, rejected in items:
+            v = check_validity(files, expected_language, rejected_files=rejected)
+            chars = 0
+            for path in files.values():
+                try:
+                    chars += os.path.getsize(path)
+                except OSError:
+                    pass
+            rows.append({
+                "Student": sid,
+                "Files": ", ".join(list(files) + [f"{r} (not accepted)" for r in rejected]),
+                "Chars": chars,
+                "Check": "Ready" if v.ok else f"Needs review: {_VALIDITY_LABELS.get(v.status, v.status)}",
+            })
+    return rows
+
+
+def _estimated_batch_cost(rows: list[dict], instructions: str, selected_model: str,
+                          use_auto_route: bool) -> str:
+    """Cost caption for the Grade button, from the registry's pricing."""
+    ready = [r for r in rows if r["Check"] == "Ready"]
+    if not ready:
+        return "no AI calls"
+    if use_auto_route:
+        return "cost varies (auto-routing)"
+    try:
+        resolved = resolve_model("grading", selected_model)
+        # Prompt: rubric, error definitions and instructions (~3k tokens) plus the submission;
+        # output: feedback and reasoning (~2.5k tokens). Rough by design.
+        total = sum(model_registry.estimate_cost(
+            resolved, 3000 + len(instructions or "") // 4 + r["Chars"] // 4, 2500) or 0 for r in ready)
+    except Exception:  # noqa: BLE001 - an estimate never blocks grading
+        return "cost unknown"
+    return f"about ${total:.2f}" if total >= 0.01 else "under $0.01"
+
+
 def _read_solution(solution_file_paths) -> Optional[str]:
     if not solution_file_paths:
         return None
@@ -2559,9 +2618,24 @@ async def get_rubric_based_exam_grading():
         if status == "interrupted":
             st.warning("The last grading run was interrupted before it finished. Grade again.",
                        icon=":material/warning:")
+        expected_language = (expected_language_for_rubric(effective_rubric) if effective_rubric
+                             else language_for_course(selected_course_id))
+        rows = batch_preview(tuple(tuple(p) for p in student_submission_file_paths), expected_language)
+        flagged = [r for r in rows if r["Check"] != "Ready"]
+        st.subheader(f"Batch: {len(rows)} student(s)", anchor=False)
+        if flagged:
+            st.caption(f"{len(flagged)} will be scored 0 without an AI call and held for your review "
+                       "in Results (missing, empty or wrong file type).")
+        st.dataframe(
+            rows, hide_index=True,
+            column_config={"Chars": st.column_config.NumberColumn("Size (bytes)"),
+                           "Check": st.column_config.TextColumn("Check", width="medium")},
+        )
+        model_label = "auto-routed model" if use_auto_route else selected_model
+        cost = _estimated_batch_cost(rows, assignment_instructions_content, selected_model, use_auto_route)
         with st.container(horizontal=True, vertical_alignment="center"):
             st.button(
-                "Grade submissions",
+                f"Grade {len(rows)} submission{'s' if len(rows) != 1 else ''}",
                 key="grade_submissions_button",
                 disabled=is_grading_in_progress or has_cached_results,
                 type="primary",
@@ -2569,6 +2643,7 @@ async def get_rubric_based_exam_grading():
                 on_click=_start_grading,
                 args=(current_run_key,),
             )
+            st.caption(f"{cost} on {model_label}")
             if has_cached_results:
                 st.button("Clear results", key="clear_results_button", icon=":material/delete:",
                           on_click=_clear_results, args=(current_run_key, grading_mode),
