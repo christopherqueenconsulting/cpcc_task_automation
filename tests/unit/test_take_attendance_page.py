@@ -62,10 +62,10 @@ class TestTakeAttendancePage:
         app = _app()
         app.run()
         assert not app.exception, app.exception
-        assert [h.value for h in app.subheader].count("Log Output") == 1
+        assert [t.label for t in app.tabs][:2] == ["Browser screenshot", "Log"]
         assert not app.text_area
         assert len(app.code) == 1
-        assert _button(app, "Start Attendance")
+        assert _button(app, "Start attendance")
 
     def test_log_output_shows_new_lines_on_each_run(self):
         from cqc_streamlit_app.streamlit_logger import streamlit_handler
@@ -127,6 +127,7 @@ class TestTakeAttendancePage:
             "course_section,attend_date,student_id\n")
         monkeypatch.setenv("CQC_ATTENDANCE_REPORT_DIR", str(report_dir))
         app = _app()
+        app.session_state["attendance_ledger_open"] = True  # the ledger loads only when open
         app.run()
         assert not app.exception, app.exception
         assert "Local attendance data (view only)" in [h.value for h in app.subheader]
@@ -148,7 +149,7 @@ class TestTakeAttendancePage:
         assert not app.radio
         recheck = next(c for c in app.checkbox if c.key == "attendance_full_recheck")
         recheck.check().run()
-        _button(app, "▶ Continue").click().run()
+        _button(app, "Continue").click().run()
         assert not app.exception, app.exception
 
         plan = job.plan
@@ -167,6 +168,7 @@ class TestTakeAttendancePage:
         ledger.close()
 
         app = _app()
+        app.session_state["attendance_ledger_open"] = True
         app.run()
         assert not app.exception, app.exception
         assert any("Attendance ledger" in e.label for e in app.expander)
@@ -180,6 +182,7 @@ class TestTakeAttendancePage:
                           STATUS_FAILED, "not Present after reload")
         ledger.close()
         app = _app()
+        app.session_state["attendance_ledger_open"] = True
         app.run()
         assert not app.exception, app.exception
         assert any(block.value == "**Glossary** ⓘ" and "failed" in (block.help or "")
@@ -218,7 +221,7 @@ class TestScreenshotSection:
         app = _app()
         app.run()
         assert not app.exception, app.exception
-        assert "Attendance Screenshot" in [h.value for h in app.subheader]
+        assert "Browser screenshot" in [t.label for t in app.tabs]
         assert app.get("image")[0].proto.imgs[0].url == photo.original
 
     def test_screenshot_replaces_the_placeholder(self, monkeypatch):
@@ -258,7 +261,8 @@ class TestScreenshotSection:
         app = _app(job)
         app.run()
         assert not app.exception, app.exception
-        labels = [tab.label for tab in app.tabs]
+        all_labels = [tab.label for tab in app.tabs]
+        labels = all_labels[all_labels.index("Live"):]  # the browser views, inside "Browser screenshot"
         assert labels[0] == "Live"
         assert labels[1] == "Tab 1 · Faculty"
         assert labels[2].startswith("Tab 2 · Section Details") and labels[2].endswith("…")
@@ -274,3 +278,39 @@ class TestScreenshotSection:
         app.run()
         assert not app.exception, app.exception
         assert any("Screenshots of the browser appear here" in c.value for c in app.caption)
+
+
+
+@pytest.mark.unit
+class TestDesignPieceU5:
+    """UX goals for Take attendance: lazy ledger, tracker URL from Settings, remembered courses."""
+
+    def test_collapsed_ledger_does_not_open_the_database(self, monkeypatch):
+        from cqc_cpcc import attendance_ledger
+
+        opened = []
+        monkeypatch.setattr(attendance_ledger.AttendanceLedger, "__init__",
+                            lambda self, *a, **k: opened.append(1) or None)
+        open(attendance_ledger.default_db_path(), "w").close()
+        app = _app()
+        app.run()
+        assert not app.exception, app.exception
+        assert opened == []
+
+    def test_tracker_url_comes_from_settings_not_a_page_input(self):
+        app = _app()
+        app.run()
+        assert not app.text_input
+        assert any("https://tracker" in c.value and "Settings" in c.value for c in app.caption)
+
+    def test_last_run_courses_are_remembered(self):
+        from cqc_streamlit_app import app_settings
+
+        job = FakeJob(PHASE_AWAITING_PLAN)
+        app = _app(job)
+        app.run()
+        app.multiselect[0].set_value(["url-now", "url-old"])
+        app.toggle[0].set_value(True).run()  # show other terms so url-old is offered
+        app.multiselect[0].set_value(["url-now", "url-old"]).run()
+        _button(app, "Continue").click().run()
+        assert app_settings.load_settings().last_attendance_courses == ["url-now", "url-old"]
