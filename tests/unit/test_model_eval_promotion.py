@@ -256,8 +256,10 @@ def test_recompute_derives_winner_from_raw_outputs(tmp_path):
         for repeat in range(3):
             for c in cases:
                 total = c.expected_score_range[1] if not c.is_empty else 0.0
+                statuses = {r["id"]: c.allowed_statuses(r["id"])[0] for r in c.checklist}
                 lines.append(CallRecord(c.case_id, model, effort, repeat, ok=True, detected=sorted(c.error_ids),
-                                        total=total, cost_usd=cost, latency_s=5.0).to_json())
+                                        total=total, cost_usd=cost, latency_s=5.0,
+                                        validity=c.validity[0], requirements=statuses).to_json())
         # A failed probe call must not count against the model.
         lines.append(CallRecord(cases[0].case_id, model, effort, -1, ok=False, error_kind="schema").to_json())
     (tmp_path / "raw.jsonl").write_text("\n".join(lines) + "\n")

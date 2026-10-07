@@ -100,11 +100,23 @@ HELLO_CPP = '#include <iostream>\nusing namespace std;\nint main() {\n    cout <
 
 
 @pytest.mark.unit
-def test_trivial_source(tmp_path):
-    code = "#include <iostream>\nint main() {\n}\n"
+def test_skeleton_is_empty(tmp_path):
+    """Class/main headers and `return 0;` are wrappers, not logic."""
+    code = "#include <iostream>\nint main() {\n    // TODO\n    return 0;\n}\n"
     v = sv.check_validity({"main.cpp": _write(tmp_path, "main.cpp", code)}, "cpp")
-    assert v.status == sv.TRIVIAL
-    assert v.meaningful_lines == 1  # int main() {
+    assert v.status == sv.EMPTY
+    assert v.meaningful_lines == 0
+    java = "public class A {\n    public static void main(String[] args) {\n    }\n}\n"
+    assert sv.check_validity({"A.java": _write(tmp_path, "A.java", java)}, "java").status == sv.EMPTY
+
+
+@pytest.mark.unit
+def test_trivial_against_reference(tmp_path):
+    reference = "\n".join(f"int v{i} = {i};" for i in range(25))
+    path = _write(tmp_path, "main.cpp", "int main() {\n    int x = 1;\n    cout << x;\n}\n")
+    v = sv.check_validity({"main.cpp": path}, "cpp", reference_code=reference)
+    assert v.status == sv.TRIVIAL  # 2 lines < 15% of 25
+    assert sv.check_validity({"main.cpp": path}, "cpp").ok  # no reference: an attempt
 
 
 @pytest.mark.unit
@@ -119,14 +131,6 @@ def test_hello_world_without_return_is_not_trivial(tmp_path):
 def test_complete_hello_world_is_not_trivial(tmp_path, name, code, lang):
     """A short but complete program must not be zeroed (early labs)."""
     assert sv.check_validity({name: _write(tmp_path, name, code)}, lang).ok
-
-
-@pytest.mark.unit
-def test_reference_only_lowers_threshold(tmp_path):
-    path = _write(tmp_path, "main.cpp", "int main() {\n}\n")
-    assert sv.check_validity({"main.cpp": path}, "cpp").status == sv.TRIVIAL
-    tiny_reference = "int main() {\n}\n"
-    assert sv.check_validity({"main.cpp": path}, "cpp", reference_code=tiny_reference).ok
 
 
 @pytest.mark.unit
@@ -434,3 +438,21 @@ def test_cpp_fragment_in_txt_is_source(tmp_path):
 def test_java_in_txt_for_cpp_course_is_wrong_type(tmp_path):
     path = _write(tmp_path, "answer.txt", JAVA_PROGRAM)
     assert sv.check_validity({"answer.txt": path}, "cpp").status == sv.WRONG_TYPE
+
+
+@pytest.mark.unit
+def test_reference_threshold_counts_only_source_sections(tmp_path):
+    """The app joins every solution file (sample output, notes) into the reference with
+    file-name headers; only the source sections may size the trivial threshold."""
+    from pathlib import Path
+    clean = (Path(__file__).resolve().parents[2] / "evals" / "datasets" / "v2" / "cases"
+             / "csc134_project_cpp__clean" / "payroll.cpp").read_text()
+    reference = ("// File: payroll.cpp\n```cpp\n" + clean + "\n```\n\n"
+                 "// File: sample_output.txt\n" + "\n".join(f"Gross pay: ${i}.00" for i in range(90)))
+    attempt = ("#include <iostream>\nusing namespace std;\nint main() {\n    double h, r;\n"
+               '    cout << "Hours: ";\n    cin >> h;\n    cout << "Rate: ";\n    cin >> r;\n'
+               '    cout << "Gross pay: $" << h * r << endl;\n}\n')
+    path = _write(tmp_path, "payroll.cpp", attempt)
+    assert sv.check_validity({"payroll.cpp": path}, "cpp", reference_code=reference).ok
+    source = sv.reference_source(reference, "cpp")
+    assert "sample_output" not in source and "```" not in source and "Gross pay: $5.00" not in source

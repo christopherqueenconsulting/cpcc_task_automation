@@ -151,6 +151,10 @@ class HardGates(BaseModel):
     min_f1: float = 0.6
     min_score_accuracy: float = 0.85
     max_latency_p95_s: float = 180
+    # Dataset v2 grading-correctness gates
+    min_validity_accuracy: float = 1.0
+    max_ordering_violations: int = 0
+    min_requirement_agreement: float = 0.0
 
 
 class EvalPolicy(BaseModel):

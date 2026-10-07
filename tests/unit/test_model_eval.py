@@ -370,9 +370,9 @@ class TestReviewFixes:
         assert high == ds.score_for_errors(c, c.error_ids)
         assert low < high
 
-    def test_empty_submissions_must_score_low(self, cases):
+    def test_empty_submissions_must_score_zero(self, cases):
         c = _case(cases, "csc151_exam1_java__empty")
-        assert c.expected_score_range == (0.0, 40.0)
+        assert c.gated and c.expected_score_range == (0.0, 0.0)
         m = metrics.case_metrics(c, [_rec(c, [], 100.0)])
         assert m.score_accuracy < 1.0
 
@@ -429,3 +429,68 @@ class TestReviewFixes:
         records = await run_model("openai/gpt-5-mini", None, cases[:1], 1, budget, grade_fn=failing)
         assert records[0].cost_estimated and records[0].cost_usd > 0
         assert budget.spent == pytest.approx(records[0].cost_usd)
+
+
+@pytest.mark.unit
+class TestDatasetV2:
+    """Grading correctness beyond error detection: validity, ordering, requirements."""
+
+    def test_validity_gate_matches_every_label(self, cases):
+        from cqc_cpcc.rubric_grading import check_submission_validity
+        for c in cases:
+            v = check_submission_validity(ds.rubric(c.rubric_id), dict(c.files), "\n".join(c.files.values()))
+            assert v.status in c.validity, c.case_id
+
+    def test_mix_has_incomplete_and_validity_cases(self, cases):
+        tags = [t for c in cases for t in c.tags]
+        assert tags.count("incomplete") >= 6
+        assert tags.count("wrong_type") >= 3
+        assert sum(1 for c in cases if c.gated) >= 9
+
+    def test_incomplete_partner_ranges_are_consistent(self, cases):
+        by_id = {c.case_id: c for c in cases}
+        for c in cases:
+            if c.not_above:
+                # Even the best correct grade of the incomplete case is below the partner's,
+                # so the ordering gate can tell incomplete work from complete work.
+                assert c.expected_score_range[1] < by_id[c.not_above].expected_score_range[1], c.case_id
+
+    def test_ordering_violation_is_counted(self, cases):
+        inc = _case(cases, "csc151_exam1_java__inc_no_discount")
+        clean = _case(cases, "csc151_exam1_java__clean")
+        agg = metrics.aggregate([inc, clean], [_rec(inc, [], 200.0), _rec(clean, [], 190.0)])
+        assert agg["ordering_pairs"] == 1
+        assert agg["ordering_violations"] == 1
+        assert agg["ordering_violation_cases"] == [inc.case_id]
+        ok = metrics.aggregate([inc, clean], [_rec(inc, [], 190.0), _rec(clean, [], 190.0)])
+        assert ok["ordering_violations"] == 0  # ties are allowed
+
+    def test_missing_requirement_stands_in_for_omission_error(self, cases):
+        c = _case(cases, "csc134_project_cpp__no_validation")
+        assert c.error_satisfied_by == {"CSC_134_PROJECT_1_INPUT_VALIDATION": "R2"}
+        rec = _rec(c, [], c.expected_score_range[1])
+        rec.requirements = {"R1": "met", "R2": "missing", "R3": "met", "R4": "met", "R5": "met"}
+        m = metrics.case_metrics(c, [rec])
+        assert m.f1 == 1.0
+        assert m.requirement_agreement == 1.0
+
+    def test_validity_false_positive_and_agreement(self, cases):
+        c = _case(cases, "csc151_exam1_java__clean")
+        rec = _rec(c, [], 0.0)
+        rec.validity = "empty"  # the gate rejected real work
+        rec.requirements = {"R1": "met", "R2": "met", "R3": "partial", "R4": "met", "R5": "met"}
+        m = metrics.case_metrics(c, [rec])
+        assert m.validity_ok == 0.0
+        assert m.requirement_agreement == pytest.approx(0.8)
+
+    def test_hard_gates_cover_v2_metrics(self, cases):
+        from cqc_cpcc.utilities.AI.model_registry import load_policy
+        policy = load_policy().eval
+        agg = {"ok_rate": 1.0, "errors": {}, "invalid_ids": 0, "retry_rate": 0.0, "model_mismatches": 0,
+               "injection_pass_rate": 1.0, "f1": 1.0, "score_accuracy": 1.0, "latency_p95_s": 1.0,
+               "cost_per_submission": 0.001, "skipped_budget": 0, "scorable_cases": 100,
+               "validity_accuracy": 0.99, "ordering_violations": 1,
+               "ordering_violation_cases": ["x"], "requirement_agreement": 0.0}
+        failures = gates.hard_gate_failures(agg, policy, 1.0)
+        assert any("validity accuracy" in f for f in failures)
+        assert any("outscored a more complete partner: x" in f for f in failures)

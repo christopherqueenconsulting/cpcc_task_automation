@@ -15,7 +15,7 @@ Statuses:
     wrong_type  a code assignment with no source file in the course language
                 (e.g. only a .docx/.pdf for a C++ project)
     empty       the source is only whitespace/comments (or the prose is blank)
-    trivial     fewer than ``min_statements`` meaningful code lines
+    trivial     with a reference solution, under 15% of its meaningful lines
 
 The expected language comes from the rubric: only rubrics with an ``error_count``
 criterion are code rubrics, and their course maps to one language. Prose rubrics
@@ -68,12 +68,13 @@ NO_SUBMISSION_ID = "NO_SUBMISSION"
 WRONG_FILE_TYPE_ID = "WRONG_FILE_TYPE"
 GATE_ERROR_IDS = frozenset({NO_SUBMISSION_ID, WRONG_FILE_TYPE_ID})
 
-# Without a reference solution only near-empty code is "trivial": a complete Hello
-# World without `return 0;` is 2 meaningful lines and must not be flagged.
-DEFAULT_MIN_STATEMENTS = 2
+# Class/main headers and `return 0;` are wrappers, not logic, so a skeleton counts 0
+# lines (empty). Without a reference solution, any line of logic is an attempt: a Hello
+# World is 1 meaningful line and must not be flagged.
+DEFAULT_MIN_STATEMENTS = 1
 # With a reference solution, "trivial" means under this share of its meaningful lines
-# (capped at DEFAULT_MIN_STATEMENTS), so a 3-line Hello World assignment is not flagged.
-REFERENCE_MIN_FRACTION = 0.3
+# (a 4-line answer to a 25-line program). It only sends the work to review.
+REFERENCE_MIN_FRACTION = 0.15
 
 # Student-facing names and the extensions worth naming in a message.
 LANGUAGE_NAMES = {"cpp": ("C++", ".cpp"), "java": ("Java", ".java"),
@@ -89,6 +90,10 @@ _BOILERPLATE_LINE = re.compile(
       | from\s+\S+\s+import\b.*                    # python from-imports
       | package\s+[\w.]+\s*;                       # java package
       | (public|private|protected)\s*:             # C++ access labels
+      | (public\s+)?(final\s+)?class\s+\w+[^{;]*\{?  # class header (a wrapper, not logic)
+      | (public\s+)?static\s+void\s+main\s*\([^)]*\)\s*\{?  # Java main header
+      | int\s+main\s*\([^)]*\)\s*\{?            # C++ main header
+      | return\s+0\s*;                           # C++ main's default return
     )$""",
     re.VERBOSE,
 )
@@ -178,6 +183,25 @@ def _read_text(ref: str) -> str:
     return ref if isinstance(ref, str) else ""
 
 
+_FILE_HEADER = re.compile(r"^(?://\s*File:|#+\s*Submission File Name:)\s*(.+?)\s*$", re.MULTILINE)
+
+
+def reference_source(reference: str, language: str) -> str:
+    """The source-code part of a reference solution, for sizing the trivial threshold.
+
+    The app joins every uploaded solution file with a file-name header (and sometimes
+    markdown fences), including sample output and notes. Only sections whose file is
+    source in ``language`` (or that have no name) count; headers and fences are dropped.
+    """
+    parts = _FILE_HEADER.split(reference or "")
+    # parts = [before_first_header, name1, body1, name2, body2, ...]
+    sections = [("", parts[0])] + list(zip(parts[1::2], parts[2::2]))
+    wanted = LANGUAGE_EXTENSIONS.get(language, ())
+    kept = [body for name, body in sections
+            if not name or os.path.splitext(name)[1].lower() in wanted]
+    return _strip_submission_headers("\n".join(kept))
+
+
 def _strip_submission_headers(text: str) -> str:
     """Drop the file-name headers and fences that submission builders add."""
     text = re.sub(r"^#+\s*Submission File Name:.*$", "", text or "", flags=re.MULTILINE)
@@ -204,7 +228,7 @@ def check_validity(
             check on prose assignments, where the files may be .docx/.pdf.
         min_statements: minimum meaningful code lines for a code assignment.
         reference_code: optional reference solution; when given, the minimum becomes
-            30% of its meaningful lines (never more than ``min_statements``, never < 1).
+            15% of its meaningful lines (never below ``min_statements``).
         rejected_files: names of files the student turned in that were not an accepted
             type (from ZIP extraction); with no other files this is ``wrong_type``.
     """
@@ -272,8 +296,9 @@ def check_validity(
         return v
 
     if reference_code and reference_code.strip():
-        ref_lines = count_meaningful_lines(reference_code, expected_language)
-        min_statements = max(1, min(min_statements, math.ceil(REFERENCE_MIN_FRACTION * ref_lines)))
+        ref_lines = count_meaningful_lines(reference_source(reference_code, expected_language),
+                                           expected_language)
+        min_statements = max(min_statements, math.ceil(REFERENCE_MIN_FRACTION * ref_lines))
 
     if meaningful < min_statements:
         v.status = TRIVIAL

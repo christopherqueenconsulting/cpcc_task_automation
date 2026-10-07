@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import datetime as dt
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -298,6 +299,11 @@ def recompute(scorecard_json: Path, raw_jsonl: Path, dataset: Path = ds.DEFAULT_
     """Re-derive the winner from raw outputs + labels, independent of the scorecard's numbers."""
     sc = json.loads(scorecard_json.read_text(encoding="utf-8"))
     policy = model_registry.load_policy()
+    # Score against the dataset version the run used (a v1-era scorecard stays verifiable).
+    if dataset == ds.DEFAULT_DATASET and sc.get("dataset"):
+        if not re.fullmatch(r"v\d+", str(sc["dataset"])):
+            raise SystemExit(f"unknown dataset version in scorecard: {sc['dataset']!r}")
+        dataset = ds.DEFAULT_DATASET.parent / sc["dataset"]
     cases = ds.load_cases(dataset)
     if sc.get("cases") != len(cases):
         raise SystemExit(f"scorecard covers {sc.get('cases')} cases, dataset has {len(cases)}")

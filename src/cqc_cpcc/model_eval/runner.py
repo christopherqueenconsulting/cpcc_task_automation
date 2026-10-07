@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from cqc_cpcc.model_eval.budget import Budget
-from cqc_cpcc.model_eval.dataset import AUTHORS_IN_DATASET, EvalCase, error_definitions, rubric
+from cqc_cpcc.model_eval.dataset import AUTHORS_IN_DATASET, EvalCase, checklist_model, error_definitions, rubric
 from cqc_cpcc.utilities.AI import model_registry
 from cqc_cpcc.utilities.logger import logger
 
@@ -48,6 +48,8 @@ class CallRecord:
     reasoning_tokens: Optional[int] = None
     output_sha256: Optional[str] = None
     compile_gate: Optional[str] = None
+    validity: Optional[str] = None  # validity-gate status ("ok" when graded by the model)
+    requirements: dict = field(default_factory=dict)  # checklist id -> met|partial|missing
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -142,6 +144,7 @@ async def _grade_once(case: EvalCase, files: dict, grade_fn: GradeFn) -> tuple:
             error_definitions=list(error_definitions(case.course_id, case.assignment_id)),
             source_files=paths,
             gate_report=gate_report,
+            requirements=checklist_model(case),
         )
     return result, gate_report
 
@@ -179,12 +182,19 @@ async def run_model(
                 record.total = float(result.total_points_earned)
                 record.output_sha256 = hashlib.sha256(result.model_dump_json().encode()).hexdigest()
                 record.compile_gate = gate.get("action")
+                record.validity = (gate.get("validity") or {}).get("status", "ok")
+                record.requirements = {
+                    r.requirement_id.strip().upper(): r.status for r in (result.requirement_results or [])}
             except Exception as e:  # noqa: BLE001 - every failure is a data point
                 record.error_kind = classify_error(e)
                 logger.warning(f"[eval] {model} {case.case_id}#{repeat}: {record.error_kind}: {str(e)[:200]}")
             call = llm_gateway.last_call()
             completion = call.completion if call else None
-            if completion is not None and completion.cost_usd is not None:
+            if record.ok and record.validity not in (None, "ok"):
+                # Rejected by the validity gate: no model call was made, nothing to charge.
+                completion = None
+                record.cost_usd = 0.0
+            elif completion is not None and completion.cost_usd is not None:
                 record.cost_usd = completion.cost_usd
             else:
                 # No reported cost (failed before a response, or usage missing): charge the
