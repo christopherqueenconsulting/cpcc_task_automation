@@ -102,6 +102,17 @@ async def test_zip_batch_fresh_then_same_assignment(page: Page, streamlit_app_ur
     first = await _run_batch(page, streamlit_app_url, tmp_path, fresh=True)
     # The empty submission is held for review, the real one graded.
     await expect(page.get_by_text(re.compile(r"Needs review \(1\)")).first).to_be_visible(timeout=60000)
+    # Totals on top; a student's row opens the full result in a drawer.
+    await expect(page.get_by_test_id("stMetric").filter(has_text="Needs review")).to_contain_text("1")
+    table = page.locator('[class*="st-key-results_table_"]').first
+    await table.scroll_into_view_if_needed()
+    box = await table.bounding_box()
+    # The grid is a canvas: click the first row's selection checkbox (left edge, row 1).
+    await page.mouse.click(box["x"] + 14, box["y"] + 35 + 17)
+    dialog = page.get_by_role("dialog")
+    await expect(dialog).to_be_visible(timeout=20000)
+    await expect(dialog.get_by_role("tab", name="Criteria")).to_be_visible()
+    await page.keyboard.press("Escape")
     # First-ever use (reported, not a target): course 2 + rubric 2 + assignment 2 +
     # instructions 1 + submissions 1 + Grade 1.
     assert first == 9

@@ -1692,83 +1692,9 @@ async def process_rubric_grading_batch(
                          failed=failure_count, model=model_name)
 
     if success_count > 0:
-        st.success(f"✅ Successfully graded {success_count}/{total_students} submission(s)")
-
-        # Display summary table
-        summary_data = []
-        for student_id, result in all_results:
-            # Calculate percentage safely
-            if result.total_points_possible > 0:
-                percentage = f"{(result.total_points_earned / result.total_points_possible * 100):.1f}%"
-            else:
-                percentage = "N/A"
-
-            summary_data.append({
-                "Student": student_id,
-                "Points Earned": result.total_points_earned,
-                "Points Possible": result.total_points_possible,
-                "Percentage": percentage,
-                "Band": result.overall_band_label or "N/A",
-                "Status": _review_status_label(result),
-            })
-
-        # Add failure rows
-        for failed_id in failed_student_ids:
-            summary_data.append({
-                "Student": failed_id,
-                "Points Earned": "—",
-                "Points Possible": effective_rubric.total_points_possible,
-                "Percentage": "Failed",
-                "Band": "❌ Failed",
-                "Status": "Failed",
-            })
-
-        render_needs_review(run_key)
-
-        if summary_data:
-            st.subheader("📊 Grading Summary")
-            summary_df = pd.DataFrame(summary_data)
-            st.dataframe(summary_df, hide_index=True)
-
-            # Make the summary available to ZIP export in this same run.
-            st.session_state[f"grading_summary_df_{run_key}"] = summary_df
-
-            # Calculate statistics - exclude failure rows and unconfirmed review zeros
-            graded = summary_df[~summary_df["Status"].str.startswith("Needs review")]
-            numeric_scores = pd.to_numeric(graded["Points Earned"], errors="coerce").dropna()
-            avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
-            total_possible = effective_rubric.total_points_possible
-            if total_possible > 0:
-                avg_pct = (avg_score / total_possible * 100)
-                st.metric("Average Score", f"{avg_score:.1f}/{total_possible} ({avg_pct:.1f}%)")
-            else:
-                logger.warning(
-                    "Effective rubric has zero total_points_possible; skipping average percentage calculation.")
-                st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
-
-        # Compile-gate tracking tally (Streamlit report only; per model, this session).
-        render_compile_gate_summary()
-
-        # Generate Word docs and ZIP download
-        st.markdown("---")
-        _generate_feedback_docs_and_zip(
-            all_results=all_results,
-            course_name=course_name,
-            total_points_possible=effective_rubric.total_points_possible,
-            model_name=model_name,
-            temperature=temperature,
-            run_key=run_key
-        )
-
-        # Optional: push these grades back into BrightSpace as drafts. Pre-fill the URL
-        # from the BrightSpace source fetch (if this run was sourced from one).
-        st.markdown("---")
-        add_brightspace_writeback_element(
-            results=all_results,
-            key_prefix=f"rubric_exam_wb_{run_key}_",
-            default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
-            feedback_docs=st.session_state.get("feedback_doc_paths_by_key", {}).get(run_key),
-        )
+        # The finished run moves to Results & review, which shows the summary, the
+        # downloads and write-back (display_cached_grading_results).
+        st.success(f"Graded {success_count}/{total_students} submission(s).", icon=":material/check_circle:")
 
     if failure_count > 0:
         st.error(f"❌ {failure_count} submission(s) failed to grade")
@@ -2621,18 +2547,13 @@ async def get_rubric_based_exam_grading():
         expected_language = (expected_language_for_rubric(effective_rubric) if effective_rubric
                              else language_for_course(selected_course_id))
         rows = batch_preview(tuple(tuple(p) for p in student_submission_file_paths), expected_language)
+        # Problems first: flagged students sort to the top and are highlighted.
+        rows = sorted(rows, key=lambda r: r["Check"] == "Ready")
         flagged = [r for r in rows if r["Check"] != "Ready"]
-        st.subheader(f"Batch: {len(rows)} student(s)", anchor=False)
-        if flagged:
-            st.caption(f"{len(flagged)} will be scored 0 without an AI call and held for your review "
-                       "in Results (missing, empty or wrong file type).")
-        st.dataframe(
-            rows, hide_index=True,
-            column_config={"Chars": st.column_config.NumberColumn("Size (bytes)"),
-                           "Check": st.column_config.TextColumn("Check", width="medium")},
-        )
         model_label = "auto-routed model" if use_auto_route else selected_model
         cost = _estimated_batch_cost(rows, assignment_instructions_content, selected_model, use_auto_route)
+        st.subheader(f"Batch: {len(rows)} student(s)", anchor=False)
+        # The action bar sits above the table so it stays in view for a large batch.
         with st.container(horizontal=True, vertical_alignment="center"):
             st.button(
                 f"Grade {len(rows)} submission{'s' if len(rows) != 1 else ''}",
@@ -2649,6 +2570,17 @@ async def get_rubric_based_exam_grading():
                           on_click=_clear_results, args=(current_run_key, grading_mode),
                           help="Remove the results for these inputs so they can be graded again.")
                 st.caption("Already graded with these inputs; the results are in Results & review.")
+        if flagged:
+            st.warning(f"{len(flagged)} will be scored 0 without an AI call and held for your review "
+                       "in Results (missing, empty or wrong file type).", icon=":material/flag:")
+        st.dataframe(
+            pd.DataFrame(rows).style.apply(
+                lambda row: ["background-color: #FFF4E5" if row["Check"] != "Ready" else ""] * len(row),
+                axis=1),
+            hide_index=True,
+            column_config={"Chars": st.column_config.NumberColumn("Size (bytes)"),
+                           "Check": st.column_config.TextColumn("Check", width="medium")},
+        )
         with st.expander("Run details", icon=":material/info:"):
             st.code(current_run_key, language="text")
 
@@ -2725,165 +2657,78 @@ def _get_band_or_level_label(result) -> Optional[str]:
 
 
 def display_rubric_assessment_result(result, student_name: str, correlation_id: Optional[str] = None):
-    """Display rubric assessment results in a structured format.
-    
-    Args:
-        result: RubricAssessmentResult from grading
-        student_name: Name of the student for display
-        correlation_id: Optional correlation ID for OpenAI debug info (may not be available for successful grading)
-    """
+    """One student's result in tabs: Feedback, Criteria, Errors, Requirements (and Debug
+    only in debug mode). Tables instead of nested expanders (UX goals §2.2, §3)."""
     from cqc_cpcc.student_feedback_builder import build_student_feedback
     from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
 
-    st.subheader(f"📊 Results for {student_name}")
+    pct = (result.total_points_earned / result.total_points_possible * 100) if result.total_points_possible else 0
+    with st.container(horizontal=True):
+        st.metric("Score", f"{result.total_points_earned:g}/{result.total_points_possible}", border=True)
+        st.metric("Percent", f"{pct:.1f}%", border=True)
+        st.metric("Level", _get_band_or_level_label(result) or "—", border=True)
+        counts = result.error_counts_by_severity or {}
+        st.metric("Errors (major / minor)", f"{counts.get('major', 0)} / {counts.get('minor', 0)}", border=True)
+    if getattr(result, "needs_review", False):
+        st.warning(f"{_review_status_label(result)}: {result.validity_reason}", icon=":material/flag:")
 
-    # Show debug panel placeholder if debug mode is on (even without correlation_id)
-    # The debug panel will check debug files for recent requests
+    labels = ["Feedback", "Criteria", "Errors", "Requirements"] + (["Debug"] if CQC_OPENAI_DEBUG else [])
+    tabs = st.tabs(labels)
+    with tabs[0]:
+        st.caption("For the student: no numeric scores. Copy it or use the feedback document.")
+        st.text_area("Student feedback", value=build_student_feedback(result, student_name=student_name),
+                     height=280, key=f"student_feedback_{student_name}", label_visibility="collapsed")
+        st.markdown("**Instructor notes**")
+        st.markdown(result.overall_feedback)
+    with tabs[1]:
+        st.dataframe(
+            [{"Criterion": c.criterion_name, "Points": f"{c.points_earned:g}/{c.points_possible}"
+              if c.points_earned is not None else f"—/{c.points_possible}",
+              "Level": c.selected_level_label or "", "Feedback": c.feedback}
+             for c in result.criteria_results],
+            hide_index=True,
+            column_config={"Feedback": st.column_config.TextColumn("Feedback", width="large")},
+        )
+    with tabs[2]:
+        errors = result.detected_errors or []
+        if errors:
+            st.dataframe(
+                [{"Severity": e.severity, "Error": e.name, "Code": e.code, "Times": e.occurrences or 1,
+                  "Details": "\n".join(x for x in (e.description, e.notes) if x)}
+                 for e in sorted(errors, key=lambda e: (e.severity != "major", e.code))],
+                hide_index=True,
+                column_config={"Details": st.column_config.TextColumn("Details", width="large")},
+            )
+        else:
+            st.caption("No errors detected.")
+    with tabs[3]:
+        if result.requirement_results:
+            checklist = st.session_state.get("active_requirement_checklist")
+            texts = {r.id.upper(): (r.text, r.weight) for r in (checklist.requirements if checklist else [])}
+            st.dataframe(
+                [{"Id": r.requirement_id,
+                  "Requirement": texts.get(r.requirement_id.strip().upper(), ("", ""))[0],
+                  "Weight": texts.get(r.requirement_id.strip().upper(), ("", ""))[1],
+                  "Status": r.status, "Evidence": r.evidence or ""}
+                 for r in result.requirement_results],
+                hide_index=True,
+            )
+        else:
+            st.caption("No requirement checklist was used for this result.")
     if CQC_OPENAI_DEBUG:
-        from cqc_streamlit_app.utils import render_openai_debug_panel
-        # Show debug panel - it will find the latest request if correlation_id not provided
-        with st.expander("🔍 OpenAI Grading Debug Info", expanded=False):
+        with tabs[4]:
+            from cqc_streamlit_app.utils import render_openai_debug_panel
             if correlation_id:
                 st.markdown(f"**Correlation ID:** `{correlation_id}`")
                 render_openai_debug_panel(correlation_id=correlation_id, error=None)
             else:
-                st.info(
-                    "Debug mode is enabled. To see request/response details, check the logs directory "
-                    "or ensure CQC_OPENAI_DEBUG environment variable is set before grading."
-                )
-                st.markdown(
-                    "**Recent Grading Info:**\n"
-                    f"- Total Points: {result.total_points_earned}/{result.total_points_possible}\n"
-                    f"- Band: {result.overall_band_label or 'N/A'}\n"
-                    f"- Criteria Assessed: {len(result.criteria_results)}\n"
-                    f"- Errors Detected: {len(result.detected_errors) if result.detected_errors else 0}"
-                )
-                if result.error_counts_by_severity:
-                    st.markdown("**Error Counts:**")
-                    for severity, count in result.error_counts_by_severity.items():
-                        st.markdown(f"  - {severity.capitalize()}: {count}")
+                st.caption("Debug mode is on; request and response details are in the logs directory.")
 
-    # Add Student Feedback section at the top (copy/paste-able)
-    st.markdown("### 📝 Student Feedback (Copy/Paste)")
-    st.markdown("*This feedback is formatted for students and does not include numeric scores.*")
 
-    # Build student-facing feedback
-    student_feedback = build_student_feedback(result, student_name=student_name)
-
-    # Display in a text area for easy copying
-    st.text_area(
-        label="Copy this feedback to paste to the student:",
-        value=student_feedback,
-        height=300,
-        key=f"student_feedback_{student_name}",
-        help="Select all text (Ctrl+A or Cmd+A) and copy (Ctrl+C or Cmd+C) to paste into your LMS"
-    )
-
-    st.markdown("---")  # Visual separator
-
-    # Instructor View - Detailed Scoring Breakdown
-    st.markdown("### 📊 Instructor View - Detailed Breakdown")
-    st.markdown("*The sections below show detailed scoring information for instructor reference only.*")
-
-    # Overall score (instructor view)
-    score_percentage = (
-                result.total_points_earned / result.total_points_possible * 100) if result.total_points_possible > 0 else 0
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Points", f"{result.total_points_earned}/{result.total_points_possible}")
-    with col2:
-        st.metric("Percentage", f"{score_percentage:.1f}%")
-    with col3:
-        if result.overall_band_label:
-            st.metric("Performance Band", result.overall_band_label)
-
-    if result.requirement_results:
-        st.markdown("#### Requirement coverage")
-        checklist = st.session_state.get("active_requirement_checklist")
-        texts = {r.id.upper(): (r.text, r.weight) for r in (checklist.requirements if checklist else [])}
-        st.dataframe(
-            pd.DataFrame([{"Id": r.requirement_id,
-                           "Requirement": texts.get(r.requirement_id.strip().upper(), ("", ""))[0],
-                           "Weight": texts.get(r.requirement_id.strip().upper(), ("", ""))[1],
-                           "Status": r.status, "Evidence": r.evidence or ""}
-                          for r in result.requirement_results]),
-            hide_index=True,
-        )
-
-    # Display error counts if available
-    if result.error_counts_by_severity:
-        st.markdown("#### 📋 Error Counts")
-
-        # Create columns for error counts
-        severity_cols = st.columns(len(result.error_counts_by_severity))
-        for col, (severity, count) in zip(severity_cols, sorted(result.error_counts_by_severity.items())):
-            with col:
-                # Use different colors for different severities
-                if severity.lower() == "major":
-                    st.metric(f"🔴 {severity.capitalize()} Errors", count)
-                elif severity.lower() == "minor":
-                    st.metric(f"🟡 {severity.capitalize()} Errors", count)
-                else:
-                    st.metric(f"{severity.capitalize()} Errors", count)
-
-        # Optionally show per-error breakdown
-        if result.error_counts_by_id:
-            with st.expander("📊 Error Breakdown by ID", expanded=False):
-                error_breakdown_df = pd.DataFrame([
-                    {"Error ID": error_id, "Count": count}
-                    for error_id, count in sorted(result.error_counts_by_id.items())
-                ])
-                st.dataframe(error_breakdown_df, hide_index=True)
-
-    # Per-criterion results
-    st.markdown("#### Criterion Breakdown")
-
-    for criterion_result in result.criteria_results:
-        # Build expander title with level label if available
-        title = f"**{criterion_result.criterion_name}** - {criterion_result.points_earned}/{criterion_result.points_possible} pts"
-        if criterion_result.selected_level_label:
-            title += f" (Level: {criterion_result.selected_level_label})"
-
-        with st.expander(title, expanded=False):
-            st.markdown("**Feedback:**")
-            st.markdown(criterion_result.feedback)
-
-            if criterion_result.evidence:
-                st.markdown("**Evidence:**")
-                for evidence in criterion_result.evidence:
-                    st.code(evidence, language="text")
-
-    # Overall feedback
-    st.markdown("#### Overall Feedback (Instructor Notes)")
-    st.markdown(result.overall_feedback)
-
-    # Detected errors
-    if result.detected_errors:
-        st.markdown("#### Detected Errors (Detailed)")
-
-        major_errors = [e for e in result.detected_errors if e.severity == "major"]
-        minor_errors = [e for e in result.detected_errors if e.severity == "minor"]
-
-        if major_errors:
-            st.markdown("**Major Errors:**")
-            for error in major_errors:
-                with st.expander(f"{error.name} ({error.code})", expanded=False):
-                    st.markdown(error.description)
-                    if error.occurrences:
-                        st.markdown(f"*Occurrences:* {error.occurrences}")
-                    if error.notes:
-                        st.markdown(f"*Notes:* {error.notes}")
-
-        if minor_errors:
-            st.markdown("**Minor Errors:**")
-            for error in minor_errors:
-                with st.expander(f"{error.name} ({error.code})", expanded=False):
-                    st.markdown(error.description)
-                    if error.occurrences:
-                        st.markdown(f"*Occurrences:* {error.occurrences}")
-                    if error.notes:
-                        st.markdown(f"*Notes:* {error.notes}")
+@st.dialog("Student result", width="large")
+def _student_drawer(student_id: str, result) -> None:
+    st.subheader(student_id, anchor=False)
+    display_rubric_assessment_result(result, student_id)
 
 
 _VALIDITY_LABELS = {
@@ -2981,167 +2826,126 @@ def render_needs_review(run_key: str) -> None:
                     _grade_anyway(run_key, sid)
 
 
+def _summary_rows(all_results, failed_student_ids) -> list[dict]:
+    rows = []
+    for student_id, result in all_results:
+        possible = getattr(result, "total_points_possible", 0) or 0
+        earned = getattr(result, "total_points_earned", 0) or 0
+        rows.append({
+            "Student": student_id,
+            "Status": _review_status_label(result),
+            "Score": (earned / possible * 100) if possible else 0.0,
+            "Points Earned": earned,
+            "Points Possible": possible,
+            "Level": _get_band_or_level_label(result) or "",
+        })
+    possible = next((r.total_points_possible for _, r in all_results if r is not None), 0)
+    for failed_id in failed_student_ids:
+        rows.append({"Student": failed_id, "Status": "Failed", "Score": 0.0, "Points Earned": None,
+                     "Points Possible": possible, "Level": ""})
+    return rows
+
+
 def display_cached_grading_results(run_key: str, course_name: str) -> None:
-    """Display cached grading results from session state.
-    
-    This function renders cached results without instantiating any RubricModel.
-    It works solely with the RubricAssessmentResult objects stored in session state.
-    
-    Args:
-        run_key: The run key to retrieve cached results
-        course_name: Course name for display and file naming
-    """
+    """Results & review: totals, the Needs review card, a summary table whose rows open a
+    student drawer, the hand-back downloads, and BrightSpace write-back (UX goals §3)."""
     if run_key not in st.session_state.grading_results_by_key:
-        st.error("❌ No cached results found for this configuration")
+        st.error("No results found for these inputs.", icon=":material/error:")
         return
 
     all_results = st.session_state.grading_results_by_key[run_key]
     failed_student_ids = st.session_state.grading_failures_by_key.get(run_key, [])
-
     if not all_results and not failed_student_ids:
-        st.warning("⚠️ No successful grading results to display")
+        st.warning("No successful grading results to display.", icon=":material/warning:")
         return
 
-    total_students = len(all_results) + len(failed_student_ids)
-    st.success(f"✅ Displaying cached results for {len(all_results)} student(s)")
+    rows = _summary_rows(all_results, failed_student_ids)
+    review = [r for r in rows if r["Status"].startswith("Needs review")]
+    counted = [r for r in rows if r["Status"] != "Failed" and not r["Status"].startswith("Needs review")]
+    try:
+        total_possible = all_results[0][1].total_points_possible
+    except (IndexError, AttributeError):
+        total_possible = 100
+    average = (sum(r["Points Earned"] for r in counted) / len(counted)) if counted else 0.0
+
+    with st.container(horizontal=True):
+        st.metric("Graded", len(counted), border=True)
+        st.metric("Needs review", len(review), border=True)
+        st.metric("Failed", len(failed_student_ids), border=True)
+        st.metric("Average", f"{average:.1f}/{total_possible}", border=True,
+                  help="Excludes failed calls and zeros still waiting for your review.")
 
     render_needs_review(run_key)
 
-    # Add "Expand All" button (passive - doesn't trigger re-grading)
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔽 Expand All Student Results", key="expand_all_cached_button"):
-            st.session_state.expand_all_students = True
-            st.rerun()
-
-    # Display summary table
-    summary_data = []
-    for student_id, result in all_results:
-        # Calculate percentage safely - handle missing or invalid fields gracefully
-        try:
-            if result.total_points_possible > 0:
-                percentage = f"{(result.total_points_earned / result.total_points_possible * 100):.1f}%"
-            else:
-                percentage = "N/A"
-        except (AttributeError, TypeError, ZeroDivisionError) as e:
-            logger.warning(f"Error calculating percentage for {alias(student_id)}: {e}")
-            percentage = "N/A"
-
-        summary_data.append({
-            "Student": student_id,
-            "Points Earned": getattr(result, 'total_points_earned', 0),
-            "Points Possible": getattr(result, 'total_points_possible', 0),
-            "Percentage": percentage,
-            "Band": getattr(result, 'overall_band_label', None) or "N/A",
-            "Status": _review_status_label(result),
-        })
-
-    # Add failure rows
-    total_possible_for_failures = next(
-        (r[1].total_points_possible for r in all_results if r[1] is not None), 0
+    # Students, hand-back and write-back as tabs: each is one click away with no scrolling,
+    # however long the class list is.
+    students_tab, handback_tab, writeback_tab = st.tabs(
+        ["Students", "Hand back", "Write to BrightSpace"], key=f"results_sections_{run_key}")
+    students_tab.caption("Click a row to open that student's full result.")
+    # Problems first, then by student.
+    rows = sorted(rows, key=lambda r: (r["Status"] in ("Graded",) or r["Status"].endswith(")"), r["Student"]))
+    summary_df = pd.DataFrame(rows)
+    # Rebuilt each render so the feedback ZIP's summary sheet follows review changes.
+    st.session_state[f"grading_summary_df_{run_key}"] = summary_df.drop(columns=["Score"])
+    selection = students_tab.dataframe(
+        summary_df,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"results_table_{run_key}",
+        column_order=["Student", "Status", "Score", "Points Earned", "Points Possible", "Level"],
+        column_config={
+            "Score": st.column_config.ProgressColumn("Score", format="%.0f%%", min_value=0, max_value=100),
+            "Points Earned": st.column_config.NumberColumn("Points"),
+            "Points Possible": st.column_config.NumberColumn("Of"),
+        },
     )
-    for failed_id in failed_student_ids:
-        summary_data.append({
-            "Student": failed_id,
-            "Points Earned": "—",
-            "Points Possible": total_possible_for_failures,
-            "Percentage": "Failed",
-            "Band": "❌ Failed",
-            "Status": "Failed",
-        })
+    try:
+        selected = [int(i) for i in selection.selection.rows]
+    except (AttributeError, TypeError, ValueError):
+        selected = []
+    if selected and selected[0] < len(summary_df):
+        sid = summary_df.iloc[selected[0]]["Student"]
+        result = dict(all_results).get(sid)
+        if result is not None and st.session_state.get(f"_drawer_shown_{run_key}") != sid:
+            st.session_state[f"_drawer_shown_{run_key}"] = sid
+            _student_drawer(sid, result)
+    else:
+        st.session_state.pop(f"_drawer_shown_{run_key}", None)
 
-    if summary_data:
-        st.subheader("📊 Grading Summary")
-        summary_df = pd.DataFrame(summary_data)
-        st.dataframe(summary_df, hide_index=True)
-        # Rebuilt each render so the feedback ZIP's summary sheet follows Confirm 0 /
-        # Grade anyway changes.
-        st.session_state[f"grading_summary_df_{run_key}"] = summary_df
+    with students_tab.expander("Compiler check tally (this session)", icon=":material/fact_check:"):
+        render_compile_gate_summary()
 
-        # Export options for grading summary
-        col1, col2 = st.columns(2)
-        with col1:
-            # Excel export (default)
-            excel_file_path, csv_file_path = export_grading_summary_to_excel(
-                summary_df,
-                include_csv=True
-            )
+    with handback_tab:
+        excel_file_path, csv_file_path = export_grading_summary_to_excel(
+            st.session_state[f"grading_summary_df_{run_key}"], include_csv=True)
+        with st.container(horizontal=True):
             with open(excel_file_path, "rb") as f:
-                st.download_button(
-                    label="📊 Download Summary (.xlsx)",
-                    data=f.read(),
-                    file_name=f"Grading_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="download_summary_xlsx_rubric"
-                )
-
-        with col2:
-            # CSV export (alternative)
+                st.download_button("Summary (.xlsx)", data=f.read(), icon=":material/table:",
+                                   file_name=f"Grading_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   key="download_summary_xlsx_rubric")
             if csv_file_path:
                 with open(csv_file_path, "rb") as f:
-                    st.download_button(
-                        label="📄 Download Summary (.csv)",
-                        data=f.read(),
-                        file_name=f"Grading_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                        mime="text/csv",
-                        key="download_summary_csv_rubric"
-                    )
+                    st.download_button("Summary (.csv)", data=f.read(), icon=":material/csv:",
+                                       file_name=f"Grading_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                       mime="text/csv", key="download_summary_csv_rubric")
+        _generate_feedback_docs_and_zip(
+            all_results=all_results,
+            course_name=course_name,
+            total_points_possible=total_possible,
+            model_name="cached",
+            temperature=0.0,
+            run_key=run_key
+        )
 
-        # Calculate statistics - exclude failure rows and unconfirmed review zeros
-        graded = summary_df[~summary_df["Status"].str.startswith("Needs review")]
-        numeric_scores = pd.to_numeric(graded["Points Earned"], errors="coerce").dropna()
-        avg_score = numeric_scores.mean() if not numeric_scores.empty else 0
-        # Get total_possible from first result, default to 100 if missing
-        try:
-            total_possible = all_results[0][1].total_points_possible
-        except (IndexError, AttributeError):
-            logger.warning("Could not extract total_points_possible from results, defaulting to 100")
-            total_possible = 100
-
-        if total_possible > 0:
-            avg_pct = (avg_score / total_possible * 100)
-            st.metric("Average Score", f"{avg_score:.1f}/{total_possible} ({avg_pct:.1f}%)")
-        else:
-            st.metric("Average Score", f"{avg_score:.1f}/0 (N/A%)")
-
-
-    # Display individual student results
-    st.markdown("---")
-    st.subheader("Individual Student Results")
-
-    for student_id, result in all_results:
-        # Use expand_all_students flag from session state
-        expanded_state = st.session_state.get('expand_all_students', False)
-
-        band_or_level = _get_band_or_level_label(result)
-        score_str = f"{getattr(result, 'total_points_earned', 0)}/{getattr(result, 'total_points_possible', 0)}"
-        level_str = f" [{band_or_level}]" if band_or_level else ""
-        with st.expander(f"📝 {student_id} — {score_str}{level_str}", expanded=expanded_state):
-            display_rubric_assessment_result(result, student_id)
-
-    # Generate Word docs and ZIP download (uses cached ZIP if available)
-    st.markdown("---")
-
-    _generate_feedback_docs_and_zip(
-        all_results=all_results,
-        course_name=course_name,
-        total_points_possible=total_possible,
-        model_name="cached",
-        temperature=0.0,
-        run_key=run_key
-    )
-
-    # Optional: push these grades back into BrightSpace as drafts. Rendered here too
-    # (not only in the live-grading path) so the section persists across reruns
-    # triggered by "Download Feedback" and other cached-display interactions. The
-    # run_key-scoped key_prefix matches the live path, so widget state carries over.
-    st.markdown("---")
-    add_brightspace_writeback_element(
-        results=all_results,
-        key_prefix=f"rubric_exam_wb_{run_key}_",
-        default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
-        feedback_docs=st.session_state.get("feedback_doc_paths_by_key", {}).get(run_key),
-    )
+    with writeback_tab:
+        add_brightspace_writeback_element(
+            results=all_results,
+            key_prefix=f"rubric_exam_wb_{run_key}_",
+            default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
+            feedback_docs=st.session_state.get("feedback_doc_paths_by_key", {}).get(run_key),
+        )
 
 
 def _get_brightspace_submissions_zip() -> tuple[Optional[str], Optional[str]]:
@@ -3190,12 +2994,10 @@ def _generate_feedback_docs_and_zip(
         temperature: Temperature for file naming
         run_key: Stable key for caching ZIP bytes
     """
-    st.subheader("📥 Download Feedback Documents")
-    st.markdown("*CPCC-branded Word documents containing student feedback (no scores)*")
+    st.markdown("**Feedback documents** (CPCC-branded Word, no scores)")
 
     # Check if we have cached ZIP bytes for this run_key
     if run_key in st.session_state.feedback_zip_bytes_by_key:
-        st.info("📦 Using cached ZIP file")
         zip_file_path = st.session_state.feedback_zip_bytes_by_key[run_key]
 
         # Generate ZIP filename with timestamp
@@ -3318,13 +3120,11 @@ def _generate_feedback_docs_and_zip(
                 doc_paths_by_student
 
             # Create ZIP file
-            st.info(f"📦 Creating ZIP archive with {len(doc_files)} document(s)...")
             zip_file_path = create_zip_file(doc_files)
 
             # Add grading summary to zip if available
             if f"grading_summary_df_{run_key}" in st.session_state:
                 summary_df = st.session_state[f"grading_summary_df_{run_key}"]
-                st.info("📊 Adding grading summary to ZIP archive...")
                 zip_file_path = add_grading_summary_to_zip(
                     zip_file_path,
                     summary_df,
@@ -3359,8 +3159,7 @@ def _generate_feedback_docs_and_zip(
                 zip_filename
             )
 
-            st.success(f"✅ Generated {len(doc_files)} Word document(s)")
-            st.info(f"📄 Files included: {', '.join([fn for fn, _ in doc_files])}")
+            st.caption(f"{len(doc_files)} Word document(s): {', '.join([fn for fn, _ in doc_files])}")
 
         except Exception as e:
             logger.error(f"Error generating feedback documents: {e}", exc_info=True)

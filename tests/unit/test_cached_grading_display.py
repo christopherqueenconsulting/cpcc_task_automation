@@ -126,6 +126,7 @@ class TestCachedGradingDisplay:
             mock_st.session_state = mock_session_state
             mock_st.session_state.grading_results_by_key['test_run_key'] = sample_cached_results
             mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
+            mock_st.tabs.side_effect = lambda labels, **kw: [MagicMock() for _ in labels]
             
             # Mock the Rubric import to track if it's instantiated
             with patch.object(grade_assignment, 'Rubric') as mock_rubric:
@@ -167,6 +168,7 @@ class TestCachedGradingDisplay:
             mock_st.session_state = mock_session_state
             mock_st.session_state.grading_results_by_key['test_key'] = cached_results
             mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
+            mock_st.tabs.side_effect = lambda labels, **kw: [MagicMock() for _ in labels]
             mock_st.expander.return_value.__enter__ = MagicMock()
             mock_st.expander.return_value.__exit__ = MagicMock()
             
@@ -207,6 +209,7 @@ class TestCachedGradingDisplay:
             mock_st.session_state = mock_session_state
             mock_st.session_state.grading_results_by_key['test_key'] = cached_results
             mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
+            mock_st.tabs.side_effect = lambda labels, **kw: [MagicMock() for _ in labels]
             
             # Should handle 0 points without division by zero
             try:
@@ -239,6 +242,7 @@ class TestCachedGradingDisplay:
                 feedback_zip_bytes_by_key={},
             )
             mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
+            mock_st.tabs.side_effect = lambda labels, **kw: [MagicMock() for _ in labels]
             
             # If this runs without ValidationError, the fix is working
             try:
@@ -379,6 +383,7 @@ class TestCachedErrorOnlyDisplay:
                 expand_all_students=False,
             )
             mock_st.columns.side_effect = lambda spec: [MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))]
+            mock_st.tabs.side_effect = lambda labels, **kw: [MagicMock() for _ in labels]
             mock_st.empty.return_value = MagicMock()
             
             try:
