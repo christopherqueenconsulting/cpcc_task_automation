@@ -40,7 +40,7 @@ def credentials_section():
             "OpenAI API key (optional)", st.session_state.openai_api_key or "", key="openai_api_key",
             help="Only needed to transcribe audio/video submissions (Whisper); "
                  "get it at https://platform.openai.com/account/api-keys.")
-        attendance_tracker_url = st.text_input("Attendance tracker URL",
+        attendance_tracker_url = st.text_input("Attendance tracker URL (optional)",
                                                value=st.session_state.attendance_tracker_url or "",
                                                autocomplete="off", help="ATTENDANCE_TRACKER_URL in .env.")
     with login:
@@ -48,7 +48,7 @@ def credentials_section():
                                            value=st.session_state.instructor_user_id or "", autocomplete="off")
         instructor_password = secret_text_input("Instructor password (required)",
                                                 st.session_state.instructor_password or "", key="instructor_password")
-        instructor_signature = st.text_input("Instructor signature", value=st.session_state.instructor_signature or "",
+        instructor_signature = st.text_input("Instructor signature (optional)", value=st.session_state.instructor_signature or "",
                                              autocomplete="off", help="Used at the end of feedback.")
 
     required_vars = [openrouter_api_key, instructor_user_id, instructor_password]

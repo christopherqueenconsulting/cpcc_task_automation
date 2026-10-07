@@ -11,7 +11,7 @@ from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackGiver
 from cqc_cpcc.utilities.utils import read_file, extract_and_read_zip, wrap_code_in_markdown_backticks
 from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.utils import define_chatGPTModel, add_upload_file_element, page_header, \
+from cqc_streamlit_app.utils import estimated_ai_cost, define_chatGPTModel, add_upload_file_element, page_header, \
     create_zip_file, on_download_click, prefix_content_file_name, get_language_from_file_path
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 from streamlit.runtime.scriptrunner_utils.script_run_context import ScriptRunContext, get_script_run_ctx
@@ -61,170 +61,177 @@ def define_feedback_types():
     return edited_df
 
 
+def _course_options() -> list[str]:
+    from cqc_cpcc.rubric_config import get_distinct_course_ids
+    try:
+        return [c.replace("_", " ") for c in get_distinct_course_ids()]
+    except Exception:  # noqa: BLE001 - the list is a convenience; any name can be typed
+        return []
+
+
+def _count_submissions(paths) -> int:
+    """Students in the upload: one per ZIP folder, else one per file."""
+    import zipfile
+    total = 0
+    for original, temp in paths:
+        if original.endswith(".zip"):
+            try:
+                with zipfile.ZipFile(temp) as z:
+                    folders = {name.split("/")[-2] for name in z.namelist()
+                               if "/" in name and not name.endswith("/") and "__MACOSX" not in name}
+                total += len(folders) or 1
+            except zipfile.BadZipFile:
+                total += 1
+        else:
+            total += 1
+    return total
+
+
+def _run_key(*parts) -> str:
+    import hashlib
+    return hashlib.sha256("\x00".join(str(p) for p in parts).encode()).hexdigest()[:16]
+
+
 async def get_feedback_content():
+    """Give feedback (no grade): set up, upload, then press the button. Results are kept
+    for the session, so a rerun never sends the batch again (UX goals §3)."""
+    last_course = st.session_state.get("feedback_last_course")
+    options = _course_options()
+    if last_course and last_course not in options:
+        options = [last_course] + options
+    course_name = st.selectbox("Course", options, index=options.index(last_course) if last_course in options else None,
+                               placeholder="Choose or type a course", accept_new_options=True,
+                               key="feedback_course")
+    if course_name:
+        st.session_state["feedback_last_course"] = course_name
 
-    # Text input for entering a course name
-    course_name = st.text_input("Enter Course Name")
+    _orig_file_name, instructions_file_path = add_upload_file_element(
+        "Instructions file", ["txt", "docx", "pdf"], key_prefix="feedback_")
+    convert = st.checkbox("Convert to Markdown", True, key="convert_assignment_instruction_to_markdown")
+    instructions = read_file(instructions_file_path, convert) if instructions_file_path else None
+    if instructions:
+        with st.expander("Preview instructions", icon=":material/description:"):
+            st.markdown(instructions, unsafe_allow_html=True)  # instructor's own document
 
-    st.header("Instructions File")
-    _orig_file_name, instructions_file_path = add_upload_file_element("Upload Assignment Instructions",
-                                                                      ["txt", "docx", "pdf"],
-                                                                      key_prefix="feedback_")
-
-    convert_instructions_to_markdown = st.checkbox("Convert To Markdown", True,
-                                                   key="convert_assignment_instruction_to_markdown")
-
-    assignment_instructions_content = None
-
-    if instructions_file_path:
-        # Get the assignment instructions
-        assignment_instructions_content = read_file(instructions_file_path, convert_instructions_to_markdown)
-
-        st.markdown(assignment_instructions_content, unsafe_allow_html=True)
-        # st.info("Added: %s" % instructions_file_path)
-
-    st.header("Solution File")
-    solution_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "zip"]
-    solution_file_paths = add_upload_file_element("Upload Assignment Solution",
-                                                  solution_accepted_file_types,
-                                                  accept_multiple_files=True,
-                                                  key_prefix="feedback_")
-
-    assignment_solution_contents = None
-
+    solution_file_paths = add_upload_file_element(
+        "Solution file(s)", ["txt", "docx", "pdf", "java", "cpp", "zip"],
+        accept_multiple_files=True, key_prefix="feedback_")
+    solution = None
     if solution_file_paths:
-        assignment_solution_contents = []
+        parts = []
+        for orig_path, temp_path in solution_file_paths:
+            content = prefix_content_file_name(os.path.basename(orig_path), read_file(temp_path))
+            language = get_language_from_file_path(orig_path)
+            parts.append(wrap_code_in_markdown_backticks(content, language) if language else content)
+        solution = "\n\n".join(parts)
 
-        for orig_solution_file_path, solution_file_path in solution_file_paths:
-            solution_language = get_language_from_file_path(orig_solution_file_path)
-            solution_file_name = os.path.basename(orig_solution_file_path)
-
-            # Get the assignment  solution
-            read_content = read_file(solution_file_path)
-            # Prefix with the file name
-            read_content = prefix_content_file_name(solution_file_name, read_content)
-
-            # Detect file langauge then display accordingly
-            if solution_language:
-                # Display the Java code in a code block
-                st.code(read_content, language=solution_language,
-                        line_numbers=True)
-                # Wrap the code in markdown backticks
-                read_content = wrap_code_in_markdown_backticks(
-                    read_content, solution_language)
-
-            else:
-                st.text_area(label="Solution Content", value=read_content,
-                             key=f"feedback_solution_{solution_file_name}")
-            # Append the content to the list
-            assignment_solution_contents.append(read_content)
-
-        assignment_solution_contents = "\n\n".join(assignment_solution_contents)
-
-    st.header("Feedback Types")
-    feedback_types = define_feedback_types()
-    feedback_types_list = []
-    # Show success message if feedback types are defined
-    if not feedback_types.empty:
-        # st.success("Feedback types defined.")
-        # Convert DataFrame to list of FeedbackType objects
-        feedback_types_list = feedback_types[DESCRIPTION].to_list()
-
-    model_cfg = define_chatGPTModel("give_feedback", default_temp_value=.3)
+    with st.expander("Advanced options", icon=":material/tune:"):
+        st.markdown("**Feedback types**")
+        feedback_types = define_feedback_types()
+        model_cfg = define_chatGPTModel("give_feedback", default_temp_value=.3)
+    feedback_types_list = feedback_types[DESCRIPTION].to_list() if not feedback_types.empty else []
     selected_model = model_cfg.get("model")
     selected_temperature = float(model_cfg.get("temperature", .3))
-    selected_service_tier = model_cfg.get("langchain_service_tier", "default")
 
-    st.header("Student Submission File(s)")
-    student_submission_accepted_file_types = ["txt", "docx", "pdf", "java", "cpp", "zip"]
-    student_submission_file_paths = add_upload_file_element("Upload Student Project Submission",
-                                                            student_submission_accepted_file_types,
-                                                            accept_multiple_files=True,
-                                                            key_prefix="feedback_")
+    accepted = ["txt", "docx", "pdf", "java", "cpp", "zip"]
+    submission_paths = add_upload_file_element(
+        "Student submissions (files or a ZIP)", accepted, accept_multiple_files=True,
+        key_prefix="feedback_") or []
 
-    process_feedback = all(
-        [course_name, assignment_instructions_content,
-         assignment_solution_contents, student_submission_file_paths])
+    ready = all([course_name, instructions, solution, submission_paths])
+    count = _count_submissions(submission_paths)
+    key = _run_key(course_name, instructions, solution, feedback_types_list, selected_model,
+                   [(os.path.basename(o), os.path.getsize(t)) for o, t in submission_paths])
+    store = st.session_state.setdefault("feedback_runs", {})
 
-    if process_feedback:
+    with st.container(horizontal=True, vertical_alignment="center"):
+        start = st.button(f"Give feedback on {count} submission{'s' if count != 1 else ''}",
+                          type="primary", icon=":material/play_arrow:", key="feedback_start",
+                          disabled=not ready or key in store)
+        base_chars = len(instructions or "") + len(solution or "") + 2000
+        sizes = [base_chars + os.path.getsize(t) for _, t in submission_paths] if ready else []
+        if count > len(sizes) and sizes:  # a ZIP holds several students; spread its size
+            sizes = [sum(sizes) // count] * count
+        st.caption(f"Estimated {estimated_ai_cost('feedback', selected_model, sizes)}. "
+                   "No AI call is made until you press the button.")
+    if not ready:
+        st.caption("Choose a course and add the instructions, a solution and the submissions.")
 
-        # Note: FeedbackGiver now accepts model name string and temperature
-        feedback_giver = FeedbackGiver(
-            course_name=course_name,
-            assignment_instructions=assignment_instructions_content,
-            assignment_solution=str(assignment_solution_contents),
-            feedback_type_list=feedback_types_list,
-            feedback_llm=selected_model,  # Pass model name directly
-            temperature=selected_temperature,  # Pass temperature directly
-        )
+    if start:
+        store[key] = await _run_feedback(course_name, instructions, solution, feedback_types_list,
+                                         selected_model, selected_temperature, submission_paths, accepted)
+        st.session_state["feedback_last_key"] = key
+        st.rerun()
 
-        tasks = []
-        ctx = get_script_run_ctx()
-        graded_feedback_file_map = []
-        total_student_submissions = len(student_submission_file_paths)
-        download_all_results_placeholder = st.empty()
+    run = store.get(key)
+    if not run and not submission_paths:
+        # Uploads clear when you visit another page; the finished run is still here.
+        run = store.get(st.session_state.get("feedback_last_key"))
+        if run:
+            st.caption("Showing your last feedback run. Upload new files to start another.")
+    if run:
+        _show_feedback_results(run)
 
-        async with asyncio.TaskGroup() as tg:
 
-            for student_submission_file_path, student_submission_temp_file_path in student_submission_file_paths:
+async def _run_feedback(course_name, instructions, solution, feedback_types_list, selected_model,
+                        selected_temperature, submission_paths, accepted) -> dict:
+    """Generate feedback for every submission; returns the run for the session cache."""
+    feedback_giver = FeedbackGiver(
+        course_name=course_name,
+        assignment_instructions=instructions,
+        assignment_solution=str(solution),
+        feedback_type_list=feedback_types_list,
+        feedback_llm=selected_model,
+        temperature=selected_temperature,
+    )
+    ctx = get_script_run_ctx()
+    tasks = []
+    async with asyncio.TaskGroup() as tg:
+        for original, temp in submission_paths:
+            if original.endswith(".zip"):
+                for student, files in extract_and_read_zip(temp, accepted).items():
+                    tasks.append(tg.create_task(add_feedback_status_extender(
+                        ctx=ctx, base_student_filename=student, filename_file_path_map=files,
+                        feedback_giver=feedback_giver, course_name=course_name,
+                        selected_model=selected_model, selected_temperature=selected_temperature)))
+            else:
+                base = os.path.basename(original)
+                tasks.append(tg.create_task(add_feedback_status_extender(
+                    ctx=ctx, base_student_filename=base, filename_file_path_map={base: temp},
+                    feedback_giver=feedback_giver, course_name=course_name,
+                    selected_model=selected_model, selected_temperature=selected_temperature)))
+    files = [task.result() for task in tasks]
+    time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    zip_name = f"{course_name}_Feedback_{time_stamp}".replace(" ", "_") + ".zip"
+    return {"files": files, "zip_path": create_zip_file(files), "zip_name": zip_name}
 
-                # If zip go through each folder as student name and grade using files in each folder as the submission
-                if student_submission_file_path.endswith('.zip'):
-                    # Process the zip file for student name sub-folder and submitted files
-                    student_submissions_map = extract_and_read_zip(student_submission_temp_file_path,
-                                                                   student_submission_accepted_file_types)
 
-                    total_student_submissions = len(student_submissions_map)
-                    for base_student_filename, student_submission_files_map in student_submissions_map.items():
-                        task = tg.create_task(add_feedback_status_extender(
-                            ctx=ctx,
-                            base_student_filename=base_student_filename,
-                            filename_file_path_map=student_submission_files_map,
-                            feedback_giver=feedback_giver,
-                            course_name=course_name,
-                            selected_model=selected_model,
-                            selected_temperature=selected_temperature,
-                        ))
-                        tasks.append(task)
+@st.dialog("Student feedback", width="large")
+def _feedback_drawer(name: str, path: str) -> None:
+    st.subheader(name, anchor=False)
+    st.markdown(read_file(path, True))
+    with open(path, "rb") as f:
+        st.download_button("Download .docx", f.read(), file_name=name, icon=":material/download:")
 
-                else:
-                    # Go through the file and grade
 
-                    # student_file_name, student_file_extension = os.path.splitext(student_submission_file_path)
-                    base_student_filename = os.path.basename(student_submission_file_path)
-
-                    # status_prefix_label = "Grading: " + student_file_name + student_file_extension
-
-                    # Add a new expander element with grade and feedback from the grader class
-
-                    task = tg.create_task(add_feedback_status_extender(
-                        ctx=ctx,
-                        base_student_filename=base_student_filename,
-                        filename_file_path_map={base_student_filename: student_submission_temp_file_path},
-                        feedback_giver=feedback_giver,
-                        course_name=course_name,
-                        selected_model=selected_model,
-                        selected_temperature=selected_temperature
-                    ))
-                    tasks.append(task)
-
-        for complete_task in tasks:
-            graded_feedback_file_name, graded_feedback_temp_file_name = complete_task.result()
-            # for graded_feedback_file_name, graded_feedback_temp_file_name in results:
-            graded_feedback_file_map.append((graded_feedback_file_name, graded_feedback_temp_file_name))
-
-            # TODO: Get a list of the created status container and when they are all complete add the download button. Use place holder up front
-        if total_student_submissions == len(graded_feedback_file_map):
-            # Add button to download all feedback from all tabs at once
-            zip_file_path = create_zip_file(graded_feedback_file_map)
-            time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            zip_file_name_prefix = f"{course_name}_Graded_Feedback__{selected_model}_temp({str(selected_temperature)})_{time_stamp}".replace(
-                " ", "_")
-            on_download_click(download_all_results_placeholder, zip_file_path, "Download All Feedback Files",
-                              zip_file_name_prefix + ".zip")
-        else:
-            download_all_results_placeholder.error(
-                f"Total Student Submissions: {total_student_submissions} | Total Graded Feedback Files: {len(graded_feedback_file_map)}")
+def _show_feedback_results(run: dict) -> None:
+    files = run["files"]
+    st.subheader(f"Feedback ready for {len(files)} student(s)", anchor=False)
+    with open(run["zip_path"], "rb") as f:
+        st.download_button("Download all feedback (.zip)", f.read(), file_name=run["zip_name"],
+                           icon=":material/download:", key="feedback_zip_download")
+    st.caption("Click a row to read one student's feedback.")
+    selection = st.dataframe([{"Student": name} for name, _ in files], hide_index=True,
+                             on_select="rerun", selection_mode="single-row", key="feedback_results_table")
+    try:
+        rows = [int(i) for i in selection.selection.rows]
+    except (AttributeError, TypeError, ValueError):
+        rows = []
+    if rows and rows[0] < len(files) and st.session_state.get("_feedback_drawer_for") != rows[0]:
+        st.session_state["_feedback_drawer_for"] = rows[0]
+        _feedback_drawer(*files[rows[0]])
+    elif not rows:
+        st.session_state.pop("_feedback_drawer_for", None)
 
 
 def run_callback_within_context(callback, *args, **kwargs):
@@ -273,7 +280,7 @@ async def add_feedback_status_extender(
 
             code_langauge = get_language_from_file_path(filename)
 
-            st.header(filename)
+            st.markdown(f"**{filename}**")
             if code_langauge:
                 st.code(student_submission_file_path_contents, language=code_langauge, line_numbers=True)
                 student_submission_file_path_contents_final = wrap_code_in_markdown_backticks(
@@ -289,9 +296,8 @@ async def add_feedback_status_extender(
         prompt_value = feedback_giver.feedback_prompt.format_prompt(
             submission=student_submission_file_path_contents_all)
 
-        st.header("Chat GPT Prompt")
-        prompt_value_text = getattr(prompt_value, 'text', '')
-        st.code(prompt_value_text)
+        with st.expander("Prompt sent to the model", icon=":material/code:"):
+            st.code(getattr(prompt_value, 'text', ''))
 
         feedback_placeholder = st.empty()
         download_button_placeholder = st.empty()
