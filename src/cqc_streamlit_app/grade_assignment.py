@@ -1452,7 +1452,8 @@ async def grade_single_rubric_student(
             )
 
             # Display results with debug information
-            display_rubric_assessment_result(result, student_id, correlation_id=grading_correlation_id)
+            display_rubric_assessment_result(result, student_id, correlation_id=grading_correlation_id,
+                                             greeting_name=student_submission.student_name or None)
 
             band_or_level = _get_band_or_level_label(result)
             score_str = f"{result.total_points_earned}/{result.total_points_possible}"
@@ -2212,7 +2213,9 @@ def remember_results(run_key: str, grading_mode: str) -> None:
         else:
             results = st.session_state.grading_results_by_key.get(run_key, [])
             failures = st.session_state.grading_failures_by_key.get(run_key, [])
-        results_store.save_run(run_key, grading_mode, results, failures)
+        submissions = st.session_state.get("grading_inputs_by_key", {}).get(run_key, {}).get("submissions", {})
+        greeting_names = {sid: (sub.student_name or "") for sid, sub in submissions.items()} or None
+        results_store.save_run(run_key, grading_mode, results, failures, greeting_names=greeting_names)
     except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
         logger.warning(f"Could not save grading results to disk: {e}")
 
@@ -2234,6 +2237,8 @@ def restore_saved_results() -> None:
         else:
             st.session_state.grading_results_by_key.setdefault(key, run["results"])
             st.session_state.grading_failures_by_key.setdefault(key, run["failures"])
+            if run.get("greeting_names") is not None:
+                st.session_state.setdefault("greeting_names_by_key", {}).setdefault(key, run["greeting_names"])
         st.session_state.grading_status_by_key.setdefault(key, "done")
     if runs and not st.session_state.get("last_grading_run_key"):
         st.session_state.last_grading_run_key = runs[0]["run_key"]
@@ -2762,6 +2767,10 @@ def _greeting_name(run_key: str, student_id: str) -> Optional[str]:
                   .get("submissions", {}).get(student_id))
     if submission is not None:
         return submission.student_name or None
+    # After a restart the inputs are gone; the saved run keeps the greeting names.
+    saved = st.session_state.get("greeting_names_by_key", {}).get(run_key)
+    if saved is not None:
+        return saved.get(student_id) or None
     return student_id
 
 

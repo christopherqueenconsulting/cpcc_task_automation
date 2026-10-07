@@ -450,7 +450,15 @@ class CodeGrader:
                 grade_feedback += "\n\n\t" + str(error).replace("\n", "\n\t")
 
         grade_feedback += "\n\n" + self.final_score_text
+        grade_feedback += "\n\n" + self.closing_text
         return grade_feedback
+
+    @property
+    def closing_text(self) -> str:
+        """Score-matched closing, the same wording as the rubric feedback's closing."""
+        from cqc_cpcc.student_feedback_builder import closing_for_percent
+        percent = (self.points / self.max_points * 100) if self.max_points else 0
+        return closing_for_percent(percent, no_work=bool(self.invalid_reason))
 
     async def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None,
                                validity_gate: bool = True, source_files: Optional[dict] = None,
@@ -598,6 +606,7 @@ class CodeGrader:
 
         # Add The Final Score to the Document
         document.add_heading(self.final_score_text, 3)
+        document.add_paragraph(self.closing_text)
 
         # Save the feedback to file
         document.save(file_path)

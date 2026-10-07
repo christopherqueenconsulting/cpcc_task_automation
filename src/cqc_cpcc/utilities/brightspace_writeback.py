@@ -281,6 +281,11 @@ def build_write_items_from_results(
             band_label=_get(result, "overall_band_label"),
             errors=_get(result, "detected_errors"),
         )
+        # Same score-matched closing as the feedback .docx and the copyable text.
+        from html import escape as _escape
+
+        from cqc_cpcc.student_feedback_builder import closing_for_result
+        feedback += f"<p>{_escape(closing_for_result(result))}</p>"
         try:
             display = name_parser(student_id)
         except Exception:  # noqa: BLE001 - tolerant of odd folder names

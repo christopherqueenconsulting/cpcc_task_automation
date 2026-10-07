@@ -662,6 +662,17 @@ def build_invalid_submission_result(rubric: Rubric, validity) -> RubricAssessmen
 
 
 _LANGUAGE_NAMES = {"cpp": "C++", "java": "Java", "python": "Python", "sas": "SAS"}
+_SOURCE_EXTENSIONS = frozenset({".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".java", ".py", ".sas"})
+_CODE_LINE = re.compile(r"[;{}]\s*$|^\s*(#include|import |package |public |private |class |def |int |void |"
+                        r"return\b|for\s*\(|while\s*\(|if\s*\()")
+
+
+def _looks_like_code(text: str) -> bool:
+    """True when at least two lines, and at least a third of the non-blank lines, read
+    like code (end in ; { or }, or start with a declaration or control keyword)."""
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    code = sum(1 for ln in lines if _CODE_LINE.search(ln))
+    return code >= 2 and code * 3 >= len(lines)
 
 
 def apply_no_code_floor(result: RubricAssessmentResult, rubric: Rubric,
@@ -694,7 +705,11 @@ def apply_no_code_floor(result: RubricAssessmentResult, rubric: Rubric,
         except Exception as e:  # noqa: BLE001 - an unreadable file holds no gradeable code
             logger.info("No-code floor: could not read %s: %s", name, e)
             text = ""
-        if detect_language(name, text) == expected and count_meaningful_lines(text, expected) > 0:
+        if detect_language(name, text) != expected or count_meaningful_lines(text, expected) == 0:
+            continue
+        # A source file (.cpp, .java...) is code by its extension. Text in a .docx, .txt or
+        # .pdf must also look like code: a lab report that mentions "std::cout" is prose.
+        if os.path.splitext(name)[1].lower() in _SOURCE_EXTENSIONS or _looks_like_code(text):
             return result
 
     language = _LANGUAGE_NAMES.get(expected, expected)

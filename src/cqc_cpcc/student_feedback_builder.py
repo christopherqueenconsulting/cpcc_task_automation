@@ -29,9 +29,9 @@ from cqc_cpcc.rubric_models import RubricAssessmentResult
 # high scores, warm for the middle, mentoring for low scores. They never mention a next
 # assignment or a resubmission, which students usually cannot make.
 CLOSING_NO_WORK = (
-    "No gradable source file was received for this assignment, so it was scored 0. If the "
-    "wrong file was uploaded by mistake, email me right away with the correct file and "
-    "proof that it was completed before the deadline; a late correction may not be accepted."
+    "No gradable source file was received for this assignment. If the wrong file was "
+    "uploaded by mistake, email me right away with the correct file and proof that it was "
+    "completed before the deadline; a late correction may not be accepted."
 )
 CLOSING_BANDS = (
     (90, "Excellent work. Your program meets the requirements cleanly."),
@@ -46,14 +46,23 @@ CLOSING_BANDS = (
 )
 
 
-def closing_for_result(result: RubricAssessmentResult) -> str:
-    """The closing line for a result, chosen by its score percent (or no-work status)."""
-    from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES
-    if getattr(result, "validity_status", None) in NO_WORK_STATUSES:
+def closing_for_percent(percent: float, no_work: bool = False) -> str:
+    """The closing line for a score percent. The text itself never contains a number."""
+    if no_work:
         return CLOSING_NO_WORK
-    possible = result.total_points_possible or 0
-    percent = (result.total_points_earned or 0) / possible * 100 if possible else 0
     return next(text for floor, text in CLOSING_BANDS if percent >= floor)
+
+
+def closing_for_result(result) -> str:
+    """The closing line for a rubric result (duck-typed; dicts work too)."""
+    from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES
+
+    def get(name):
+        return result.get(name) if isinstance(result, dict) else getattr(result, name, None)
+
+    possible = get("total_points_possible") or 0
+    percent = (get("total_points_earned") or 0) / possible * 100 if possible else 0
+    return closing_for_percent(percent, no_work=get("validity_status") in NO_WORK_STATUSES)
 
 
 def build_student_feedback(
@@ -186,7 +195,7 @@ def _extract_strengths(result: RubricAssessmentResult) -> list[str]:
         # Consider a criterion a "strength" if earned >= 80% of possible
         if criterion_result.points_possible > 0:
             percentage = (
-                    criterion_result.points_earned
+                    (criterion_result.points_earned or 0)
                     / criterion_result.points_possible
             )
 
@@ -226,7 +235,7 @@ def _extract_improvements(result: RubricAssessmentResult) -> list[str]:
         # Consider a criterion an "improvement area" if < 80%
         if criterion_result.points_possible > 0:
             percentage = (
-                    criterion_result.points_earned
+                    (criterion_result.points_earned or 0)
                     / criterion_result.points_possible
             )
 

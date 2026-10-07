@@ -17,6 +17,15 @@ from cqc_cpcc.rubric_models import RubricAssessmentResult
 from cqc_cpcc.student_feedback_builder import build_student_feedback
 
 
+def _cell(text) -> str:
+    """Text safe inside a Markdown table cell."""
+    return str(text if text is not None else "—").replace("\n", " ").replace("|", "\\|")
+
+
+def _points(value) -> str:
+    return f"{value:g}" if isinstance(value, (int, float)) else "—"
+
+
 def _percent(result: RubricAssessmentResult) -> float:
     possible = result.total_points_possible or 0
     return (result.total_points_earned or 0) / possible * 100 if possible else 0.0
@@ -36,7 +45,7 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
         f"# Result card: {student}",
         "",
         f"- **Rubric:** {result.rubric_id} (v{result.rubric_version})",
-        f"- **Score:** {result.total_points_earned:g} / {result.total_points_possible} "
+        f"- **Score:** {_points(result.total_points_earned)} / {result.total_points_possible} "
         f"({_percent(result):.1f}%)",
         f"- **Level:** {_level(result)}",
     ]
@@ -51,9 +60,8 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
     if result.criteria_results:
         lines += ["", "## Criteria", "", "| Criterion | Points | Level | Feedback |", "|---|---|---|---|"]
         for c in result.criteria_results:
-            feedback = (c.feedback or "").replace("\n", " ").replace("|", "\\|")
-            lines.append(f"| {c.criterion_name} | {c.points_earned:g}/{c.points_possible} | "
-                         f"{c.selected_level_label or '—'} | {feedback} |")
+            lines.append(f"| {_cell(c.criterion_name)} | {_points(c.points_earned)}/{c.points_possible} | "
+                         f"{_cell(c.selected_level_label)} | {_cell(c.feedback or '')} |")
 
     if result.detected_errors:
         lines += ["", "## Errors", ""]
@@ -67,8 +75,7 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
     if requirements:
         lines += ["", "## Requirements", "", "| Id | Status | Evidence |", "|---|---|---|"]
         for r in requirements:
-            evidence = (r.evidence or "").replace("\n", " ").replace("|", "\\|")
-            lines.append(f"| {r.requirement_id} | {r.status} | {evidence} |")
+            lines.append(f"| {_cell(r.requirement_id)} | {_cell(r.status)} | {_cell(r.evidence or '')} |")
 
     lines += ["", "## Feedback for the student", "",
               build_student_feedback(result, student_name=greeting_name)]
@@ -79,7 +86,7 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
 
 def result_card_text(student: str, result: RubricAssessmentResult,
                      greeting_name: Optional[str] = None) -> str:
-    """Plain text for the copy button: the Markdown card without table pipes or bold marks."""
+    """Plain text for the copy button: the Markdown card without bold marks."""
     text = result_card_markdown(student, result, greeting_name)
     return text.replace("**", "")
 

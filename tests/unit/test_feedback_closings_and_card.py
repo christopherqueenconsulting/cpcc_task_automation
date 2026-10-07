@@ -138,3 +138,62 @@ def test_student_drawer_is_the_dialog():
     from cqc_streamlit_app import grade_assignment
     source = inspect.getsource(grade_assignment)
     assert '@st.dialog("Student result", width="large")\ndef _student_drawer(' in source
+
+
+@pytest.mark.unit
+def test_no_closing_contains_a_number():
+    import re
+    for text in [t for _, t in CLOSING_BANDS] + [CLOSING_NO_WORK]:
+        assert not re.search(r"\d", text)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("prose", [
+    "Lab report. In C++ we use std::cout to print.\nI wrote using namespace std at top.\nThe waves add up.",
+    "My notes: Java prints with System.out.println and that is how output works.\nConclusion: it worked.",
+])
+def test_no_code_floor_is_not_fooled_by_prose_mentioning_code(tmp_path, prose):
+    from cqc_cpcc.rubric_config import get_rubric_by_id
+    from cqc_cpcc.rubric_grading import apply_no_code_floor
+
+    report = tmp_path / "report.txt"
+    report.write_text(prose)
+    rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
+    assert apply_no_code_floor(_result(4.5), rubric, {report.name: str(report)}).total_points_earned == 0
+
+
+@pytest.mark.unit
+def test_inline_brightspace_feedback_ends_with_the_closing():
+    from cqc_cpcc.utilities.brightspace_writeback import build_write_items_from_results
+    items = build_write_items_from_results([("Ada Example", _result(29))])
+    assert items[0].feedback_html.rstrip().endswith(f"<p>{dict(CLOSING_BANDS)[90]}</p>")
+
+
+@pytest.mark.unit
+def test_error_only_feedback_ends_with_a_matching_closing():
+    from cqc_cpcc.exam_review import CodeGrader
+    grader = CodeGrader(max_points=100, exam_instructions="x", exam_solution="x",
+                        deduction_per_major_error=20, deduction_per_minor_error=5)
+    grader.major_errors, grader.minor_errors = [], []
+    assert grader.get_text_feedback().rstrip().endswith(dict(CLOSING_BANDS)[90])
+    grader.invalid_reason = "No files were submitted."
+    assert grader.get_text_feedback().rstrip().endswith(CLOSING_NO_WORK)
+
+
+@pytest.mark.unit
+def test_result_card_handles_missing_points_and_escapes_cells():
+    from cqc_cpcc.result_card_export import result_card_markdown, result_card_pdf
+    result = _result(10)
+    result.criteria_results[0].points_earned = None
+    result.criteria_results[0].criterion_name = "Name | with pipe\nand newline"
+    md = result_card_markdown("Ada Example", result)
+    assert "| Name \\| with pipe and newline | —/30 |" in md
+    assert result_card_pdf("Ada Example", result).startswith(b"%PDF")
+
+
+@pytest.mark.unit
+def test_saved_runs_keep_greeting_names():
+    from cqc_streamlit_app import results_store
+    results_store.save_run("k1", "rubric", [("lab 4", _result(5))], [], greeting_names={"lab 4": ""})
+    run = next(r for r in results_store.load_runs() if r["run_key"] == "k1")
+    assert run["greeting_names"] == {"lab 4": ""}
