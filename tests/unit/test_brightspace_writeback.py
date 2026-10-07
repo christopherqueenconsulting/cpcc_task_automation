@@ -139,7 +139,8 @@ def test_build_write_items_applies_buffer_and_parses_name():
     assert it.score == 90.0           # buffered
     assert it.max_points == 100.0
     # Overall feedback + band, but no per-criterion list (include_criteria_feedback=False).
-    assert it.feedback_html == "<p>ok</p>\n<p><strong>Overall:</strong> Proficient</p>"
+    # The feedback ends with the score-matched closing (same as the .docx).
+    assert it.feedback_html.startswith("<p>ok</p>\n<p><strong>Overall:</strong> Proficient</p><p>")
 
 
 @pytest.mark.unit

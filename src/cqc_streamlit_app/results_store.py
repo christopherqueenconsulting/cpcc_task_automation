@@ -35,7 +35,8 @@ def _path(run_key: str) -> Path:
     return results_dir() / f"{run_key}.json"
 
 
-def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = None) -> None:
+def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = None,
+             greeting_names: Optional[dict] = None) -> None:
     """Write one run's results atomically (0600 file in a 0700 folder) and prune old runs."""
     directory = results_dir()
     directory.mkdir(parents=True, exist_ok=True)
@@ -45,7 +46,9 @@ def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = 
     else:
         payload_results = [[sid, r.model_dump(mode="json")] for sid, r in results]
     payload = {"run_key": run_key, "mode": mode, "saved_at": time.time(),
-               "results": payload_results, "failures": list(failures or [])}
+               "results": payload_results, "failures": list(failures or []),
+               # Name to greet each student by ("" for a loose file named after nothing).
+               "greeting_names": greeting_names}
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".run.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

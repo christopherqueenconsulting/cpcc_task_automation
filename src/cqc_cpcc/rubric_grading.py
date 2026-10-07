@@ -661,6 +661,73 @@ def build_invalid_submission_result(rubric: Rubric, validity) -> RubricAssessmen
     )
 
 
+_LANGUAGE_NAMES = {"cpp": "C++", "java": "Java", "python": "Python", "sas": "SAS"}
+_SOURCE_EXTENSIONS = frozenset({".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".java", ".py", ".sas"})
+_CODE_LINE = re.compile(r"[;{}]\s*$|^\s*(#include|import |package |public |private |class |def |int |void |"
+                        r"return\b|for\s*\(|while\s*\(|if\s*\()")
+
+
+def _looks_like_code(text: str) -> bool:
+    """True when at least two lines, and at least a third of the non-blank lines, read
+    like code (end in ; { or }, or start with a declaration or control keyword)."""
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    code = sum(1 for ln in lines if _CODE_LINE.search(ln))
+    return code >= 2 and code * 3 >= len(lines)
+
+
+def apply_no_code_floor(result: RubricAssessmentResult, rubric: Rubric,
+                        source_files: Optional[dict]) -> RubricAssessmentResult:
+    """Score 0 when no source code in the rubric's language was found ("Grade anyway").
+
+    Christopher's ruling (2026-10-07): grading wrong-type work anyway (a .docx lab report
+    for a C++ project) must not earn the lowest band's points. If none of the files holds
+    code in the expected language, the result scores 0 at the "No Submission" level, but
+    the model's written feedback, errors and requirement statuses are kept. Real code
+    inside a .docx or .txt still grades normally. Rubrics with no code language are
+    returned unchanged.
+    """
+    import os
+    from types import SimpleNamespace
+
+    from cqc_cpcc.utilities.compiler_gate import detect_language
+    from cqc_cpcc.utilities.submission_validity import (
+        count_meaningful_lines,
+        expected_language_for_rubric,
+    )
+    from cqc_cpcc.utilities.utils import read_file
+
+    expected = expected_language_for_rubric(rubric)
+    if not expected:
+        return result
+    for name, ref in (source_files or {}).items():
+        try:
+            text = read_file(ref) if isinstance(ref, str) and os.path.exists(ref) else str(ref or "")
+        except Exception as e:  # noqa: BLE001 - an unreadable file holds no gradeable code
+            logger.info("No-code floor: could not read %s: %s", name, e)
+            text = ""
+        if detect_language(name, text) != expected or count_meaningful_lines(text, expected) == 0:
+            continue
+        # A source file (.cpp, .java...) is code by its extension. Text in a .docx, .txt or
+        # .pdf must also look like code: a lab report that mentions "std::cout" is prose.
+        if os.path.splitext(name)[1].lower() in _SOURCE_EXTENSIONS or _looks_like_code(text):
+            return result
+
+    language = _LANGUAGE_NAMES.get(expected, expected)
+    reason = (f"No {language} source code was found in the submitted files, so this scores 0. "
+              "It was graded anyway for written feedback.")
+    zero = build_invalid_submission_result(rubric, SimpleNamespace(status="wrong_type", reason=reason))
+    feedback_by_id = {c.criterion_id: c.feedback for c in result.criteria_results}
+    return zero.model_copy(update={
+        "criteria_results": [c.model_copy(update={"feedback": feedback_by_id.get(c.criterion_id) or c.feedback})
+                             for c in zero.criteria_results],
+        "overall_feedback": result.overall_feedback or zero.overall_feedback,
+        "detected_errors": zero.detected_errors + list(result.detected_errors or []),
+        "error_counts_by_severity": result.error_counts_by_severity,
+        "error_counts_by_id": result.error_counts_by_id,
+        "requirement_results": result.requirement_results,
+    })
+
+
 def _find_compile_error_def(error_definitions):
     """Return the (enabled) 'Does Not Compile' ErrorDefinition for this rubric, or None."""
     from cqc_cpcc.utilities.compiler_gate import is_compile_error

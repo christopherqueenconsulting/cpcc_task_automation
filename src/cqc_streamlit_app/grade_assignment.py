@@ -33,7 +33,7 @@ from cqc_cpcc.requirement_coverage import (
     instructions_hash,
     normalize_checklist,
 )
-from cqc_cpcc.rubric_grading import grade_with_rubric, rubric_scores_errors
+from cqc_cpcc.rubric_grading import apply_no_code_floor, grade_with_rubric, rubric_scores_errors
 from cqc_streamlit_app import results_store
 from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_cpcc.utilities.submission_validity import (
@@ -1452,7 +1452,8 @@ async def grade_single_rubric_student(
             )
 
             # Display results with debug information
-            display_rubric_assessment_result(result, student_id, correlation_id=grading_correlation_id)
+            display_rubric_assessment_result(result, student_id, correlation_id=grading_correlation_id,
+                                             greeting_name=student_submission.student_name or None)
 
             band_or_level = _get_band_or_level_label(result)
             score_str = f"{result.total_points_earned}/{result.total_points_possible}"
@@ -1640,7 +1641,9 @@ async def process_rubric_grading_batch(
 
             student_submissions[student_id] = StudentSubmission(
                 student_id=student_id,
-                student_name=student_id,
+                # A loose file's name is not the student's name (e.g. "lab 4 super
+                # positon"), so the feedback greets with a plain "Hello,".
+                student_name="",
                 files={base_filename: temp_path},
             )
 
@@ -1894,7 +1897,9 @@ async def process_error_only_grading_batch(
             student_id = os.path.splitext(base_filename)[0]
             student_submissions[student_id] = StudentSubmission(
                 student_id=student_id,
-                student_name=student_id,
+                # A loose file's name is not the student's name (e.g. "lab 4 super
+                # positon"), so the feedback greets with a plain "Hello,".
+                student_name="",
                 files={base_filename: temp_path},
             )
 
@@ -2208,7 +2213,11 @@ def remember_results(run_key: str, grading_mode: str) -> None:
         else:
             results = st.session_state.grading_results_by_key.get(run_key, [])
             failures = st.session_state.grading_failures_by_key.get(run_key, [])
-        results_store.save_run(run_key, grading_mode, results, failures)
+        submissions = st.session_state.get("grading_inputs_by_key", {}).get(run_key, {}).get("submissions", {})
+        greeting_names = ({sid: (sub.student_name or "") for sid, sub in submissions.items()}
+                          # After a restart the inputs are gone: keep the names the saved run had.
+                          or st.session_state.get("greeting_names_by_key", {}).get(run_key))
+        results_store.save_run(run_key, grading_mode, results, failures, greeting_names=greeting_names)
     except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
         logger.warning(f"Could not save grading results to disk: {e}")
 
@@ -2230,6 +2239,8 @@ def restore_saved_results() -> None:
         else:
             st.session_state.grading_results_by_key.setdefault(key, run["results"])
             st.session_state.grading_failures_by_key.setdefault(key, run["failures"])
+            if run.get("greeting_names") is not None:
+                st.session_state.setdefault("greeting_names_by_key", {}).setdefault(key, run["greeting_names"])
         st.session_state.grading_status_by_key.setdefault(key, "done")
     if runs and not st.session_state.get("last_grading_run_key"):
         st.session_state.last_grading_run_key = runs[0]["run_key"]
@@ -2692,7 +2703,8 @@ def _get_band_or_level_label(result) -> Optional[str]:
     return next((cr.selected_level_label for cr in criteria if cr.selected_level_label), None)
 
 
-def display_rubric_assessment_result(result, student_name: str, correlation_id: Optional[str] = None):
+def display_rubric_assessment_result(result, student_name: str, correlation_id: Optional[str] = None,
+                                     greeting_name: Optional[str] = ...):
     """One student's result in tabs: Feedback, Criteria, Errors, Requirements (and Debug
     only in debug mode). Tables instead of nested expanders (UX goals §2.2, §3)."""
     from cqc_cpcc.student_feedback_builder import build_student_feedback
@@ -2712,7 +2724,8 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
     tabs = st.tabs(labels)
     with tabs[0]:
         st.caption("For the student: no numeric scores. Copy it or use the feedback document.")
-        st.text_area("Student feedback", value=build_student_feedback(result, student_name=student_name),
+        st.text_area("Student feedback", value=build_student_feedback(
+                         result, student_name=student_name if greeting_name is ... else greeting_name),
                      height=280, key=f"student_feedback_{student_name}", label_visibility="collapsed")
         st.markdown("**Instructor notes**")
         st.markdown(result.overall_feedback)
@@ -2761,10 +2774,51 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                 st.caption("Debug mode is on; request and response details are in the logs directory.")
 
 
+def _greeting_name(run_key: str, student_id: str) -> Optional[str]:
+    """The name to greet the student by: none for a loose file (its name is a file name)."""
+    submission = (st.session_state.get("grading_inputs_by_key", {}).get(run_key, {})
+                  .get("submissions", {}).get(student_id))
+    if submission is not None:
+        return submission.student_name or None
+    # After a restart the inputs are gone; the saved run keeps the greeting names.
+    saved = st.session_state.get("greeting_names_by_key", {}).get(run_key)
+    if saved is not None:
+        return saved.get(student_id) or None
+    return student_id
+
+
+def _render_result_card_export(student_id: str, result, greeting_name: Optional[str]) -> None:
+    """Downloads of the instructor's result card: PDF, Markdown (for AI tools), JSON, text."""
+    from cqc_cpcc.result_card_export import (
+        result_card_json,
+        result_card_markdown,
+        result_card_pdf,
+        result_card_text,
+    )
+    stem = sanitize_filename(student_id) or "student"
+    st.markdown("**Export result card**")
+    with st.container(horizontal=True):
+        # The PDF is built only when clicked, so opening the drawer stays fast.
+        st.download_button("PDF", lambda: result_card_pdf(student_id, result, greeting_name),
+                           file_name=f"{stem}_result.pdf", mime="application/pdf",
+                           icon=":material/picture_as_pdf:", key=f"card_pdf_{student_id}")
+        st.download_button("Markdown", result_card_markdown(student_id, result, greeting_name),
+                           file_name=f"{stem}_result.md", mime="text/markdown",
+                           icon=":material/description:", key=f"card_md_{student_id}",
+                           help="Best for pasting into ChatGPT or other AI tools.")
+        st.download_button("JSON", result_card_json(student_id, result),
+                           file_name=f"{stem}_result.json", mime="application/json",
+                           icon=":material/data_object:", key=f"card_json_{student_id}")
+    with st.expander("Copy as text", icon=":material/content_copy:"):
+        st.code(result_card_text(student_id, result, greeting_name), language=None, wrap_lines=True)
+
+
 @st.dialog("Student result", width="large")
-def _student_drawer(student_id: str, result) -> None:
+def _student_drawer(student_id: str, result, run_key: str = "") -> None:
     st.subheader(student_id, anchor=False)
-    display_rubric_assessment_result(result, student_id)
+    greeting = _greeting_name(run_key, student_id)
+    display_rubric_assessment_result(result, student_id, greeting_name=greeting)
+    _render_result_card_export(student_id, result, greeting)
 
 
 _VALIDITY_LABELS = {
@@ -2827,6 +2881,9 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
             logger.error(f"Grade anyway failed for {alias(student_id)}: {e}", exc_info=True)
             st.error(f"Grading {student_id} failed: {e}")
             return
+    # No code in the course language (e.g. a .docx lab report for a C++ project): keep the
+    # written feedback but score 0, still held for review (ruling 2026-10-07).
+    result = apply_no_code_floor(result, inputs["kwargs"]["rubric"], submission.files)
     _replace_result(run_key, student_id, result)
     st.rerun()
 
@@ -2999,7 +3056,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         result = dict(all_results).get(sid)
         if result is not None and st.session_state.get(f"_drawer_shown_{run_key}") != sid:
             st.session_state[f"_drawer_shown_{run_key}"] = sid
-            _student_drawer(sid, result)
+            _student_drawer(sid, result, run_key)
     else:
         st.session_state.pop(f"_drawer_shown_{run_key}", None)
 
