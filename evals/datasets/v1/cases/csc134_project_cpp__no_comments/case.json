@@ -1,0 +1,30 @@
+{
+  "case_id": "csc134_project_cpp__no_comments",
+  "language": "cpp",
+  "role": "grading",
+  "course_id": "CSC_134",
+  "assignment_id": "Project",
+  "rubric_id": "csc134_cpp_exam_rubric",
+  "instructions": "Write a C++ program in a file named payroll.cpp that:\n1. Prompts for hours worked and hourly pay rate (both doubles).\n2. Validates input: hours must be between 0 and 80 and the rate must be greater\n   than 0; re-prompt until valid.\n3. Declares a function prototype double calculatePay(double hours, double rate)\n   above main, defines it below main, and calls it to compute gross pay.\n4. Pays overtime at 1.5 times the rate for hours over 40.\n5. Prints exactly: Gross pay: $X.XX (two decimal places).\nUse named constants, curly braces on every control structure, consistent indentation\nand comments.\n",
+  "files": [
+    "payroll.cpp"
+  ],
+  "expected": {
+    "compiles": true,
+    "error_ids": [
+      "CSC_134_PROJECT_1_INSUFFICIENT_DOCUMENTATION"
+    ],
+    "acceptable_error_ids": [],
+    "max_occurrences": {
+      "CSC_134_PROJECT_1_INSUFFICIENT_DOCUMENTATION": 3
+    }
+  },
+  "mutations": [
+    "no_comments"
+  ],
+  "tags": [
+    "single"
+  ],
+  "twin_of": null,
+  "labels_reviewed_by": null
+}

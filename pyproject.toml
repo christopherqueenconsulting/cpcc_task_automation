@@ -149,6 +149,7 @@ markers = [
     "unit: mark a test as a unit test",
     "integration: mark a test as an integration test",
     "e2e: mark a test as an end-to-end test",
+    "eval_live: calls real models through OpenRouter (needs OPENROUTER_API_KEY and CQC_EVAL_LIVE=1)",
 ]
 asyncio_mode = "auto"
 # Load environment variables for tests via pytest-dotenv

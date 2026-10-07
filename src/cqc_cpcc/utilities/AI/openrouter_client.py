@@ -83,7 +83,11 @@ OPENROUTER_ALLOWED_MODELS = DEFAULT_OPENROUTER_ALLOWED_MODELS
 
 @dataclass(frozen=True)
 class CompletionMetadata:
-    """What OpenRouter reported about the last successful completion."""
+    """What OpenRouter reported about the last completion call (successful or not).
+
+    ``cost_usd`` and the token counts cover EVERY attempt of the call (retries included),
+    so a failed or retried call is still charged for what it spent.
+    """
 
     requested_model: str
     model: str
@@ -95,6 +99,7 @@ class CompletionMetadata:
     cost_usd: Optional[float]
     latency_seconds: float
     attempts: int
+    ok: bool = True
 
 
 _last_completion: contextvars.ContextVar[Optional[CompletionMetadata]] = contextvars.ContextVar(
@@ -103,26 +108,57 @@ _last_completion: contextvars.ContextVar[Optional[CompletionMetadata]] = context
 
 
 def last_completion_metadata() -> Optional[CompletionMetadata]:
-    """Metadata for the most recent successful completion in this context (task)."""
+    """Metadata for the most recent completion call in this context (task)."""
     return _last_completion.get()
 
 
-def _completion_metadata(response, requested_model: str, latency: float, attempts: int) -> CompletionMetadata:
-    usage = getattr(response, "usage", None)
-    details = getattr(usage, "completion_tokens_details", None) if usage else None
-    cost = getattr(usage, "cost", None) if usage else None
-    return CompletionMetadata(
-        requested_model=requested_model,
-        model=getattr(response, "model", None) or requested_model,
-        provider=getattr(response, "provider", None),
-        generation_id=getattr(response, "id", None),
-        prompt_tokens=getattr(usage, "prompt_tokens", None) if usage else None,
-        completion_tokens=getattr(usage, "completion_tokens", None) if usage else None,
-        reasoning_tokens=getattr(details, "reasoning_tokens", None) if details else None,
-        cost_usd=float(cost) if isinstance(cost, (int, float)) else None,
-        latency_seconds=latency,
-        attempts=attempts,
-    )
+class _Spend:
+    """Usage summed over every attempt of one call."""
+
+    def __init__(self):
+        self.attempts = 0
+        self.cost: Optional[float] = None
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.reasoning_tokens = 0
+        self.last_response = None
+
+    def add(self, response) -> None:
+        self.attempts += 1
+        self.last_response = response
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        cost = getattr(usage, "cost", None)
+        if isinstance(cost, (int, float)):
+            self.cost = (self.cost or 0.0) + float(cost)
+        for attr in ("prompt_tokens", "completion_tokens"):
+            value = getattr(usage, attr, None)
+            if isinstance(value, int):
+                setattr(self, attr, getattr(self, attr) + value)
+        details = getattr(usage, "completion_tokens_details", None)
+        reasoning = getattr(details, "reasoning_tokens", None) if details else None
+        if isinstance(reasoning, int):
+            self.reasoning_tokens += reasoning
+
+    def metadata(self, requested_model: str, latency: float, ok: bool) -> CompletionMetadata:
+        response = self.last_response
+        return CompletionMetadata(
+            requested_model=requested_model,
+            model=(getattr(response, "model", None) if response is not None else None) or requested_model,
+            provider=getattr(response, "provider", None) if response is not None else None,
+            generation_id=getattr(response, "id", None) if response is not None else None,
+            prompt_tokens=self.prompt_tokens or None,
+            completion_tokens=self.completion_tokens or None,
+            reasoning_tokens=self.reasoning_tokens or None,
+            cost_usd=self.cost,
+            latency_seconds=latency,
+            attempts=self.attempts,
+            ok=ok,
+        )
+
+
+_spend: contextvars.ContextVar[Optional[_Spend]] = contextvars.ContextVar("openrouter_spend", default=None)
 
 
 def _get_openrouter_api_key() -> str | None:
@@ -294,6 +330,9 @@ async def get_openrouter_completion(
     effective_model = "openrouter/auto" if use_auto_route else (model_name or "")
     span_name = schema_model.__name__ if schema_model else "structured_completion"
     timer = telemetry.GenerationTimer()
+    spend = _Spend()
+    _spend.set(spend)
+    _last_completion.set(None)
     try:
         return await _get_openrouter_completion_impl(
             prompt=prompt,
@@ -305,6 +344,7 @@ async def get_openrouter_completion(
             extra_params=extra_params,
         )
     except Exception as call_error:
+        _last_completion.set(spend.metadata(effective_model, timer.elapsed(), ok=False))
         telemetry.capture_generation(
             trace_id=telemetry.current_trace_id(),
             model=effective_model,
@@ -452,6 +492,9 @@ async def _get_openrouter_completion_impl(
 
             # Call OpenRouter API using OpenAI-compatible client
             response = await client.chat.completions.create(**api_kwargs)
+            spend = _spend.get()
+            if spend is not None:
+                spend.add(response)
 
             # Extract and validate response
             if not response.choices:
@@ -590,11 +633,9 @@ async def _get_openrouter_completion_impl(
                 f"used_model={response.model}, attempt={attempt + 1}"
             )
             usage = getattr(response, "usage", None)
-            _last_completion.set(
-                _completion_metadata(
-                    response, effective_model, telemetry_timer.elapsed(), attempt + 1
-                )
-            )
+            spend = _spend.get()
+            if spend is not None:
+                _last_completion.set(spend.metadata(effective_model, telemetry_timer.elapsed(), ok=True))
             telemetry.capture_generation(
                 trace_id=correlation_id,
                 # The model the auto-router actually picked, when it says.
