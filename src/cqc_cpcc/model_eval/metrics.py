@@ -156,6 +156,9 @@ def ordering_and_validity(cases: list[EvalCase], per_case: list[CaseMetrics]) ->
     return {
         "validity_accuracy": statistics.fmean(validity) if validity else None,
         "ordering_pairs": pairs,
+        # Pairs that could not be compared (every call on one side failed) must not
+        # silently drop out of the gate.
+        "ordering_pairs_expected": sum(1 for c in cases if c.not_above),
         "ordering_violations": len(violations),
         "ordering_violation_cases": violations,
         "requirement_agreement": statistics.fmean(agreement) if agreement else None,

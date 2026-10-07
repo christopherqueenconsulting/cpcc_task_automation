@@ -50,12 +50,10 @@
     "max_occurrences": {},
     "requirements": {
       "R3": [
-        "missing",
-        "partial"
+        "missing"
       ],
       "R4": [
-        "missing",
-        "partial"
+        "missing"
       ],
       "R5": [
         "missing",

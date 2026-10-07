@@ -183,6 +183,25 @@ def _read_text(ref: str) -> str:
     return ref if isinstance(ref, str) else ""
 
 
+_FILE_HEADER = re.compile(r"^(?://\s*File:|#+\s*Submission File Name:)\s*(.+?)\s*$", re.MULTILINE)
+
+
+def reference_source(reference: str, language: str) -> str:
+    """The source-code part of a reference solution, for sizing the trivial threshold.
+
+    The app joins every uploaded solution file with a file-name header (and sometimes
+    markdown fences), including sample output and notes. Only sections whose file is
+    source in ``language`` (or that have no name) count; headers and fences are dropped.
+    """
+    parts = _FILE_HEADER.split(reference or "")
+    # parts = [before_first_header, name1, body1, name2, body2, ...]
+    sections = [("", parts[0])] + list(zip(parts[1::2], parts[2::2]))
+    wanted = LANGUAGE_EXTENSIONS.get(language, ())
+    kept = [body for name, body in sections
+            if not name or os.path.splitext(name)[1].lower() in wanted]
+    return _strip_submission_headers("\n".join(kept))
+
+
 def _strip_submission_headers(text: str) -> str:
     """Drop the file-name headers and fences that submission builders add."""
     text = re.sub(r"^#+\s*Submission File Name:.*$", "", text or "", flags=re.MULTILINE)
@@ -277,7 +296,8 @@ def check_validity(
         return v
 
     if reference_code and reference_code.strip():
-        ref_lines = count_meaningful_lines(reference_code, expected_language)
+        ref_lines = count_meaningful_lines(reference_source(reference_code, expected_language),
+                                           expected_language)
         min_statements = max(min_statements, math.ceil(REFERENCE_MIN_FRACTION * ref_lines))
 
     if meaningful < min_statements:

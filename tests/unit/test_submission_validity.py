@@ -438,3 +438,21 @@ def test_cpp_fragment_in_txt_is_source(tmp_path):
 def test_java_in_txt_for_cpp_course_is_wrong_type(tmp_path):
     path = _write(tmp_path, "answer.txt", JAVA_PROGRAM)
     assert sv.check_validity({"answer.txt": path}, "cpp").status == sv.WRONG_TYPE
+
+
+@pytest.mark.unit
+def test_reference_threshold_counts_only_source_sections(tmp_path):
+    """The app joins every solution file (sample output, notes) into the reference with
+    file-name headers; only the source sections may size the trivial threshold."""
+    from pathlib import Path
+    clean = (Path(__file__).resolve().parents[2] / "evals" / "datasets" / "v2" / "cases"
+             / "csc134_project_cpp__clean" / "payroll.cpp").read_text()
+    reference = ("// File: payroll.cpp\n```cpp\n" + clean + "\n```\n\n"
+                 "// File: sample_output.txt\n" + "\n".join(f"Gross pay: ${i}.00" for i in range(90)))
+    attempt = ("#include <iostream>\nusing namespace std;\nint main() {\n    double h, r;\n"
+               '    cout << "Hours: ";\n    cin >> h;\n    cout << "Rate: ";\n    cin >> r;\n'
+               '    cout << "Gross pay: $" << h * r << endl;\n}\n')
+    path = _write(tmp_path, "payroll.cpp", attempt)
+    assert sv.check_validity({"payroll.cpp": path}, "cpp", reference_code=reference).ok
+    source = sv.reference_source(reference, "cpp")
+    assert "sample_output" not in source and "```" not in source and "Gross pay: $5.00" not in source

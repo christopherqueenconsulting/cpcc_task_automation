@@ -49,8 +49,7 @@
     "max_occurrences": {},
     "requirements": {
       "R3": [
-        "missing",
-        "partial"
+        "missing"
       ]
     },
     "error_satisfied_by": {},

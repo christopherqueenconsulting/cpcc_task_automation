@@ -51,12 +51,10 @@
     "max_occurrences": {},
     "requirements": {
       "R2": [
-        "missing",
-        "partial"
+        "missing"
       ],
       "R4": [
-        "missing",
-        "partial"
+        "missing"
       ]
     },
     "error_satisfied_by": {},

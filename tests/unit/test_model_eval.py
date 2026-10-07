@@ -451,8 +451,9 @@ class TestDatasetV2:
         by_id = {c.case_id: c for c in cases}
         for c in cases:
             if c.not_above:
-                # The best correct grade of the incomplete case never beats the partner's.
-                assert c.expected_score_range[1] <= by_id[c.not_above].expected_score_range[1], c.case_id
+                # Even the best correct grade of the incomplete case is below the partner's,
+                # so the ordering gate can tell incomplete work from complete work.
+                assert c.expected_score_range[1] < by_id[c.not_above].expected_score_range[1], c.case_id
 
     def test_ordering_violation_is_counted(self, cases):
         inc = _case(cases, "csc151_exam1_java__inc_no_discount")

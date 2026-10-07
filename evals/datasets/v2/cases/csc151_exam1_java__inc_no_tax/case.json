@@ -49,8 +49,7 @@
     "max_occurrences": {},
     "requirements": {
       "R4": [
-        "missing",
-        "partial"
+        "missing"
       ],
       "R5": [
         "missing",

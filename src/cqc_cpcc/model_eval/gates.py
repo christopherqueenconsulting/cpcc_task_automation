@@ -60,9 +60,12 @@ def hard_gate_failures(agg: dict, policy: EvalPolicy, max_cost_per_submission: f
         (agg["skipped_budget"] == 0, f"{agg['skipped_budget']} calls skipped: budget exhausted"),
         (agg["scorable_cases"] >= policy.min_scorable_cases,
          f"only {agg['scorable_cases']} scorable cases (< {policy.min_scorable_cases})"),
-        # Grading correctness beyond error detection (dataset v2; absent on v1 runs).
+        # Grading correctness beyond error detection (dataset v2 labels).
         (agg.get("validity_accuracy") is None or agg["validity_accuracy"] >= g.min_validity_accuracy,
          f"validity accuracy {agg.get('validity_accuracy')} < {g.min_validity_accuracy}"),
+        (agg.get("ordering_pairs", 0) == agg.get("ordering_pairs_expected", 0),
+         f"only {agg.get('ordering_pairs')} of {agg.get('ordering_pairs_expected')} ordering pairs "
+         f"could be compared (failed calls)"),
         (agg.get("ordering_violations", 0) <= g.max_ordering_violations,
          f"{agg.get('ordering_violations')} incomplete case(s) outscored a more complete partner: "
          f"{', '.join(agg.get('ordering_violation_cases') or [])}"),

@@ -18,7 +18,8 @@ AGGREGATE_KEYS = (
     "composite", "f1", "precision", "recall", "score_accuracy", "jaccard", "score_std",
     "ok_rate", "invalid_ids", "injection_pass_rate", "scorable_cases", "cost_usd",
     "cost_per_submission", "latency_p50_s", "latency_p95_s", "attempted", "skipped_budget",
-    "validity_accuracy", "ordering_pairs", "ordering_violations", "ordering_violation_cases",
+    "validity_accuracy", "ordering_pairs", "ordering_pairs_expected", "ordering_violations",
+    "ordering_violation_cases",
     "requirement_agreement",
 )
 

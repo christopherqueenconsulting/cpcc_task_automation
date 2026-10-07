@@ -556,7 +556,11 @@ def _incomplete(a: Assignment, inc: Incomplete, author: str) -> Case:
         case = Case(f"{a.key}__clean", a, a.clean.replace("{author}", author))
     source = _apply(case.source, inc.edits, f"{a.key}/{inc.key}")
     requirements = dict(case.requirements)
-    for rid in inc.missing + inc.partial:
+    # Functionality that was deleted is missing, not partial: allowing "partial" would let
+    # an incomplete program tie its more complete partner.
+    for rid in inc.missing:
+        requirements[rid] = ("missing",)
+    for rid in inc.partial:
         requirements[rid] = NOT_MET
     acceptable = sorted((set(case.acceptable) | {a.error_prefix + s for s in inc.acceptable})
                         - set(case.required))

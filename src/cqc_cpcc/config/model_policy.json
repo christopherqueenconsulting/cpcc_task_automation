@@ -33,7 +33,7 @@
   "max_cost_per_submission": 0.05,
   "grading_freeze": [],
   "eval": {
-    "_note": "Calibrated 2026-10-06 against openai/gpt-6-luna@high. Dataset v1 (78 cases x 3): composite 0.873, F1 0.788, score accuracy 0.959, p95 latency 23s, $0.0009/submission; power for +0.03 at n=78: 0.97 (evals/reports/2026-10-calibration/). Dataset v2 (90 cases x 3, adds validity, incomplete-program and requirement labels): composite 0.881, F1 0.776, score accuracy 0.985, validity accuracy 1.000, 0 of 7 ordering violations, requirement agreement 0.955, $0.0011/submission (evals/reports/2026-10-v2-calibration/). Hard-gate floors = incumbent minus a tolerance; validity and ordering are absolute.",
+    "_note": "Calibrated 2026-10-06 against openai/gpt-6-luna@high. Dataset v1 (78 cases x 3): composite 0.873, F1 0.788, score accuracy 0.959, p95 latency 23s, $0.0009/submission; power for +0.03 at n=78: 0.97 (evals/reports/2026-10-calibration/). Dataset v2 (90 cases x 3, adds validity, incomplete-program and requirement labels): composite 0.879, F1 0.772, score accuracy 0.986, validity accuracy 1.000, 0 of 7 ordering violations, requirement agreement 0.947, $0.0011/submission (evals/reports/2026-10-v2-calibration/). Hard-gate floors = incumbent minus a tolerance; validity and ordering are absolute. Caveats: 7 ordering pairs on 2 synthetic assignments cannot estimate an inversion rate (95% upper bound for 0/7 is ~35%); validity accuracy depends only on deterministic gate code; v1 vs v2 composite comparisons are descriptive (different datasets).",
     "repeats": 3,
     "max_candidates": 3,
     "budget_usd": 10.0,

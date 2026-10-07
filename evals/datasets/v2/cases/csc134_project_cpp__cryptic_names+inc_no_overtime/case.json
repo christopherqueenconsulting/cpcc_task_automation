@@ -54,8 +54,7 @@
     },
     "requirements": {
       "R4": [
-        "missing",
-        "partial"
+        "missing"
       ]
     },
     "error_satisfied_by": {},

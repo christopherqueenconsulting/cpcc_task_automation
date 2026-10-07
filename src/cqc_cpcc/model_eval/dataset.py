@@ -86,7 +86,9 @@ def _build(meta: dict, files: dict) -> EvalCase:
         twin_of=meta.get("twin_of"),
         labels_reviewed_by=meta.get("labels_reviewed_by"),
         max_occurrences=dict(expected.get("max_occurrences") or {}),
-        validity=tuple(expected.get("validity") or ("ok",)),
+        # v1 labels have no validity: its empty cases may be gated ("empty") or graded.
+        validity=tuple(expected.get("validity")
+                       or (("empty", "ok") if "empty" in meta.get("tags", []) else ("ok",))),
         checklist=tuple(meta.get("requirements") or ()),
         requirements={k: tuple(v) for k, v in (expected.get("requirements") or {}).items()},
         error_satisfied_by=dict(expected.get("error_satisfied_by") or {}),
