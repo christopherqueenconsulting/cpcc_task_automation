@@ -394,7 +394,13 @@ class CodeGrader:
 
     @property
     def major_deduction_total(self):
-        """ Calculates diminishing major error penalties as a geometric series: d * (1 - 0.5^n) / 0.5 """
+        """Diminishing major-error penalty, a geometric series: d * (1 - 0.5^n) / 0.5.
+
+        The first major error costs the full per-major deduction ``d``, and each further one
+        costs half the previous one (20, 10, 5, ... with the default 20). The total therefore
+        never exceeds 2 * d, however many major errors there are. This leniency is intended
+        (Christopher's ruling, 2026-10-07); the linear total is ``major_deduction_total_orig``.
+        """
         return self.deduction_per_major_error * (1 - 0.5 ** len(self.major_errors)) / (1 - 0.5)
 
     @property
@@ -418,7 +424,12 @@ class CodeGrader:
 
     @property
     def major_code_deduction_points_text(self) -> str:
-        return "Major Code Errors: (-" + str(self.major_deduction_total) + " points)"
+        text = "Major Code Errors: (-" + str(self.major_deduction_total) + " points)"
+        if len(self.major_errors or []) > 1:
+            text += (" — each additional major error costs half as much as the one before, so "
+                     "the total for major errors never exceeds " + str(2 * self.deduction_per_major_error)
+                     + " points")
+        return text
 
     @property
     def minor_code_deduction_points_text(self) -> str:

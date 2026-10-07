@@ -28,7 +28,7 @@ class TestCSC151V2IntegrationFlow:
         rubric = get_rubric_by_id("csc151_java_exam_rubric")
         
         # The rubric is stored with key "csc151_java_exam_rubric"
-        assert rubric.rubric_version in ("2.0", "3.0")  # Version may vary
+        assert rubric.rubric_version in ("2.0", "3.0", "3.1")  # Version may vary
         assert len(rubric.criteria) == 1
         assert rubric.criteria[0].criterion_id == "program_performance"
         assert rubric.total_points_possible == 200

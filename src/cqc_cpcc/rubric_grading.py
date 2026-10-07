@@ -931,8 +931,10 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
             f"Original error counts: {original_major} major, {original_minor} minor"
         )
 
-        # Apply error normalization only when any criterion has error_conversion defined.
-        # CSC134 and other rubrics without error_conversion use original counts as-is.
+        # Apply error normalization only when a criterion has error_conversion defined
+        # (CSC151 and CSC134: every 4 minor errors count as 1 major). The model reports errors
+        # as found and never converts them; this is the only place conversion happens.
+        # Rubrics without error_conversion use the original counts as-is.
         has_conversion = any(
             c.error_rules and c.error_rules.error_conversion
             for c in rubric.criteria
