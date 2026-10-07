@@ -44,6 +44,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 
 class PerformanceLevel(BaseModel):
@@ -425,6 +426,12 @@ class RubricAssessmentResult(BaseModel):
         Optional[int],
         Field(default=None, description="Effective minor error count after Minor→Major conversion")
     ]
+    # Set by the backend submission-validity gate, never by the model: SkipJsonSchema
+    # keeps these out of the structured-output schema sent to the LLM.
+    needs_review: SkipJsonSchema[bool] = False
+    review_confirmed: SkipJsonSchema[bool] = False
+    validity_status: SkipJsonSchema[Optional[str]] = None
+    validity_reason: SkipJsonSchema[Optional[str]] = None
 
     @field_validator('total_points_earned')
     @classmethod

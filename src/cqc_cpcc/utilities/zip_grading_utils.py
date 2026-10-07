@@ -133,6 +133,10 @@ class StudentSubmission:
     estimated_tokens: int = 0
     is_truncated: bool = False
     omitted_files: list[str] = field(default_factory=list)
+    # Files the student turned in that were not an accepted type. A student with only
+    # rejected files is still returned (with empty ``files``) so the validity gate can
+    # score them 0 for review instead of silently dropping them.
+    rejected_files: list[str] = field(default_factory=list)
 
 
 def estimate_tokens(text: str) -> int:
@@ -344,6 +348,7 @@ def extract_student_submissions_from_zip(
 
         # Second pass: group files by student folder
         student_files: dict[str, list[tuple[str, str]]] = {}  # student_id -> [(filename, zip_path)]
+        rejected_by_student: dict[str, list[str]] = {}  # student_id -> [unaccepted filenames]
 
         for file_info in zip_ref.infolist():
             # Skip directories
@@ -358,10 +363,17 @@ def extract_student_submissions_from_zip(
                 logger.debug(f"Skipping file in root: {file_name}")
                 continue
 
-            # Check if should ignore
+            # Check if should ignore. A binary file (screenshot, .class, .exe...) in a
+            # student folder is still ignored for grading, but recorded as rejected so a
+            # student who turned in only binaries is not silently dropped.
+            binary_reject = False
             if should_ignore_file(file_info.filename):
-                logger.debug(f"Ignoring file: {file_info.filename}")
-                continue
+                if (Path(file_name).suffix.lower() in BINARY_EXTENSIONS
+                        and not should_ignore_file(str(Path(file_info.filename).with_suffix('.txt')))):
+                    binary_reject = True
+                else:
+                    logger.debug(f"Ignoring file: {file_info.filename}")
+                    continue
 
             # Remove wrapper folder from directory path if present
             if wrapper_folder and directory_name.startswith(wrapper_folder):
@@ -376,6 +388,11 @@ def extract_student_submissions_from_zip(
             # preserving multi-word and dashed names (see parse_student_folder_name).
             student_id = parse_student_folder_name(directory_name)
 
+            if binary_reject:
+                logger.debug(f"Ignoring binary file: {file_name}")
+                rejected_by_student.setdefault(student_id, []).append(file_name)
+                continue
+
             # Check file extension
             # accepted_file_types can contain extensions with or without dots
             # e.g., ['java', 'txt'] or ['.java', '.txt']
@@ -388,6 +405,7 @@ def extract_student_submissions_from_zip(
             if file_ext not in normalized_accepted:
                 logger.debug(
                     f"Skipping file with unaccepted type: {file_name} (extension: .{file_ext}, accepted: {normalized_accepted})")
+                rejected_by_student.setdefault(student_id, []).append(file_name)
                 continue
 
             # Skip files with ignored prefixes
@@ -463,6 +481,21 @@ def extract_student_submissions_from_zip(
                 )
             else:
                 logger.warning(f"No valid files found for student: {alias(student_id)}")
+
+        # Students who turned in only unaccepted files: keep them, with no files, so
+        # grading records a 0 for review rather than leaving them out of the results.
+        # If NO student has an accepted file, the accepted types are probably wrong, so
+        # fall through to the explanatory error below instead.
+        for student_id, rejected in (rejected_by_student.items() if students_data else []):
+            if student_id in students_data:
+                students_data[student_id].rejected_files = rejected
+                continue
+            students_data[student_id] = StudentSubmission(
+                student_id=student_id, student_name=student_id, files={},
+                rejected_files=rejected,
+            )
+            logger.warning(f"Only unaccepted files for student {alias(student_id)}: "
+                           f"{len(rejected)} file(s); recorded as missing")
 
     if not students_data:
         # Provide helpful error message

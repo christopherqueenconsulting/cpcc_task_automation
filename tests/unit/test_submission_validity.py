@@ -1,0 +1,293 @@
+#  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+
+"""Unit tests for the submission-validity gate.
+
+Deduction-only scoring gave full marks to work with "no errors": an empty .cpp scored
+30/30 and a .docx turned in for a C++ project scored 30/30. These tests pin the gate
+that scores such work 0, flags it for review, skips the LLM, and holds it back from
+BrightSpace write-back until the instructor confirms it.
+"""
+
+import zipfile
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from docx import Document
+
+from cqc_cpcc.rubric_config import get_rubric_by_id
+from cqc_cpcc.rubric_grading import grade_with_rubric
+from cqc_cpcc.rubric_models import RubricAssessmentResult
+from cqc_cpcc.utilities import submission_validity as sv
+
+CPP_PROGRAM = """// Payroll calculator
+#include <iostream>
+using namespace std;
+
+int main() {
+    double hours = 0;
+    double rate = 0;
+    cout << "Hours: ";
+    cin >> hours;
+    cout << "Rate: ";
+    cin >> rate;
+    double pay = hours * rate;
+    cout << "Pay: " << pay << endl;
+    return 0;
+}
+"""
+
+JAVA_PROGRAM = """import java.util.Scanner;
+
+public class Payroll {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        double hours = in.nextDouble();
+        double rate = in.nextDouble();
+        double pay = hours * rate;
+        System.out.println("Pay: " + pay);
+        in.close();
+    }
+}
+"""
+
+
+@pytest.fixture
+def cpp_rubric():
+    return get_rubric_by_id("csc134_cpp_exam_rubric")
+
+
+def _write(tmp_path, name, text):
+    path = tmp_path / name
+    path.write_text(text)
+    return str(path)
+
+
+def _docx(tmp_path, name, text):
+    doc = Document()
+    doc.add_paragraph(text)
+    path = tmp_path / name
+    doc.save(str(path))
+    return str(path)
+
+
+# --------------------------------------------------------------------------- #
+# check_validity
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+def test_expected_language_only_for_code_rubrics():
+    assert sv.expected_language_for_rubric(get_rubric_by_id("csc134_cpp_exam_rubric")) == "cpp"
+    assert sv.expected_language_for_rubric(get_rubric_by_id("csc151_java_exam_rubric")) == "java"
+    # Prose rubric: a .docx is the right submission, so no type check.
+    assert sv.expected_language_for_rubric(get_rubric_by_id("csc113_week1_reflection_rubric")) is None
+    assert sv.expected_language_for_rubric(get_rubric_by_id("default_100pt_rubric")) is None
+
+
+@pytest.mark.unit
+def test_missing_when_no_files():
+    v = sv.check_validity({}, "cpp")
+    assert v.status == sv.MISSING
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("text", ["", "   \n\t\n", "// just a comment\n/* and a block */\n"])
+def test_empty_source(tmp_path, text):
+    v = sv.check_validity({"main.cpp": _write(tmp_path, "main.cpp", text)}, "cpp")
+    assert v.status == sv.EMPTY
+
+
+@pytest.mark.unit
+def test_trivial_source(tmp_path):
+    code = "#include <iostream>\nint main() {\n    return 0;\n}\n"
+    v = sv.check_validity({"main.cpp": _write(tmp_path, "main.cpp", code)}, "cpp")
+    assert v.status == sv.TRIVIAL
+    assert v.meaningful_lines == 2  # int main() { / return 0;
+
+
+@pytest.mark.unit
+def test_short_reference_lowers_trivial_threshold(tmp_path):
+    hello = 'public class Hello {\n    public static void main(String[] a) {\n        System.out.println("Hi");\n    }\n}\n'
+    path = _write(tmp_path, "Hello.java", hello)
+    assert sv.check_validity({"Hello.java": path}, "java").status == sv.TRIVIAL
+    assert sv.check_validity({"Hello.java": path}, "java", reference_code=hello).ok
+
+
+@pytest.mark.unit
+def test_starter_code_is_trivial(tmp_path):
+    v = sv.check_validity({"main.cpp": _write(tmp_path, "main.cpp", CPP_PROGRAM)}, "cpp",
+                          starter_code=CPP_PROGRAM)
+    assert v.status == sv.TRIVIAL
+
+
+@pytest.mark.unit
+def test_docx_for_cpp_is_wrong_type(tmp_path):
+    path = _docx(tmp_path, "Project3.docx", "Here is my project. I could not get it to work.")
+    v = sv.check_validity({"Project3.docx": path}, "cpp")
+    assert v.status == sv.WRONG_TYPE
+    assert "Project3.docx" in v.reason
+
+
+@pytest.mark.unit
+def test_docx_containing_code_is_still_wrong_type(tmp_path):
+    path = _docx(tmp_path, "Project3.docx", CPP_PROGRAM)
+    assert sv.check_validity({"Project3.docx": path}, "cpp").status == sv.WRONG_TYPE
+
+
+@pytest.mark.unit
+def test_docx_for_prose_assignment_is_ok(tmp_path):
+    path = _docx(tmp_path, "Reflection.docx", "A real reflection.")
+    v = sv.check_validity({"Reflection.docx": path}, None, submission_text="A real reflection.")
+    assert v.ok
+
+
+@pytest.mark.unit
+def test_blank_prose_is_empty():
+    v = sv.check_validity({"r.docx": "unused"}, None,
+                          submission_text="### Submission File Name: r.docx\n```text\n\n```\n")
+    assert v.status == sv.EMPTY
+
+
+@pytest.mark.unit
+def test_java_pasted_into_txt_is_source(tmp_path):
+    v = sv.check_validity({"Payroll.txt": _write(tmp_path, "Payroll.txt", JAVA_PROGRAM)}, "java")
+    assert v.ok
+    assert v.source_files == ["Payroll.txt"]
+
+
+@pytest.mark.unit
+def test_real_program_is_ok(tmp_path):
+    v = sv.check_validity({"main.cpp": _write(tmp_path, "main.cpp", CPP_PROGRAM),
+                           "notes.docx": _docx(tmp_path, "notes.docx", "extra")}, "cpp")
+    assert v.ok
+    assert v.source_files == ["main.cpp"]
+
+
+@pytest.mark.unit
+def test_extensionless_text_is_judged_by_content_only():
+    assert sv.check_validity({"submission": JAVA_PROGRAM}, "java").ok
+    assert sv.check_validity({"submission": "   "}, "java").status == sv.EMPTY
+
+
+# --------------------------------------------------------------------------- #
+# grade_with_rubric integration (G-1, G-2)
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,text", [
+    ("main.cpp", ""),
+    ("main.cpp", "\n   \n"),
+    ("main.cpp", "// TODO: write the program\n"),
+])
+async def test_empty_submission_scores_zero_without_llm(tmp_path, cpp_rubric, name, text):
+    path = _write(tmp_path, name, text)
+    with patch("cqc_cpcc.rubric_grading.llm_gateway.structured", new=AsyncMock()) as llm:
+        report: dict = {}
+        result = await grade_with_rubric(
+            rubric=cpp_rubric, assignment_instructions="Write a payroll program.",
+            student_submission=text, source_files={name: path}, gate_report=report,
+        )
+    llm.assert_not_called()
+    assert result.total_points_earned == 0
+    assert result.needs_review and not result.review_confirmed
+    assert result.validity_status == sv.EMPTY
+    assert result.criteria_results[0].selected_level_label == "No Submission"
+    assert result.detected_errors[0].code == sv.NO_SUBMISSION_ID
+    assert report["validity"]["status"] == sv.EMPTY
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_docx_for_cpp_scores_zero_and_grade_anyway_calls_llm(tmp_path, cpp_rubric):
+    path = _docx(tmp_path, "Project3.docx", "My project write-up.")
+    files = {"Project3.docx": path}
+    with patch("cqc_cpcc.rubric_grading.llm_gateway.structured", new=AsyncMock()) as llm:
+        result = await grade_with_rubric(
+            rubric=cpp_rubric, assignment_instructions="Write a payroll program.",
+            student_submission="My project write-up.", source_files=files,
+        )
+        llm.assert_not_called()
+        assert result.total_points_earned == 0
+        assert result.validity_status == sv.WRONG_TYPE
+        assert result.detected_errors[0].code == sv.WRONG_FILE_TYPE_ID
+
+        # "Grade anyway" bypasses the gate and reaches the model.
+        llm.side_effect = RuntimeError("model reached")
+        with pytest.raises(ValueError, match="model reached"):
+            await grade_with_rubric(
+                rubric=cpp_rubric, assignment_instructions="Write a payroll program.",
+                student_submission="My project write-up.", source_files=files,
+                validity_gate=False,
+            )
+        llm.assert_called_once()
+
+
+@pytest.mark.unit
+def test_gate_fields_are_not_in_llm_schema():
+    props = RubricAssessmentResult.model_json_schema()["properties"]
+    for name in ("needs_review", "review_confirmed", "validity_status", "validity_reason"):
+        assert name not in props
+
+
+# --------------------------------------------------------------------------- #
+# ZIP extraction (G-3)
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+def test_zip_student_with_only_unaccepted_files_is_kept(tmp_path):
+    from cqc_cpcc.utilities.zip_grading_utils import extract_student_submissions_from_zip
+    zpath = tmp_path / "subs.zip"
+    with zipfile.ZipFile(zpath, "w") as z:
+        z.writestr("101 - Ada Example - Oct 1, 2026 900 AM/main.cpp", CPP_PROGRAM)
+        z.writestr("102 - Bo Example - Oct 1, 2026 900 AM/screenshot.png", b"\x89PNG")
+    students = extract_student_submissions_from_zip(str(zpath), ["cpp", "txt"])
+    assert len(students) == 2
+    bo = next(s for sid, s in students.items() if "Bo" in sid)
+    assert bo.files == {}
+    assert bo.rejected_files == ["screenshot.png"]
+
+
+# --------------------------------------------------------------------------- #
+# Write-back hold (G-4)
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+def test_writeback_holds_unconfirmed_review_items(cpp_rubric):
+    from cqc_cpcc.rubric_grading import build_invalid_submission_result
+    from cqc_cpcc.utilities.brightspace_writeback import build_write_items_from_results
+    flagged = build_invalid_submission_result(
+        cpp_rubric, sv.SubmissionValidity(status=sv.EMPTY, reasons=["empty"]))
+    confirmed = flagged.model_copy(update={"review_confirmed": True})
+    skipped: list = []
+    items = build_write_items_from_results(
+        [("101 - Ada Example - Oct 1", flagged), ("102 - Bo Example - Oct 1", confirmed)],
+        skipped=skipped,
+    )
+    assert [it.student_key for it in items] == ["102 - Bo Example - Oct 1"]
+    assert items[0].score == 0
+    assert skipped == ["101 - Ada Example - Oct 1"]
+
+
+# --------------------------------------------------------------------------- #
+# Legacy exam / error-only path
+# --------------------------------------------------------------------------- #
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_code_grader_empty_submission_scores_zero_without_llm():
+    from cqc_cpcc.exam_review import CodeGrader
+    grader = CodeGrader(max_points=200, exam_instructions="x", exam_solution="y")
+    with patch("cqc_cpcc.exam_review.grade_exam_submission", new=AsyncMock()) as llm:
+        await grader.grade_submission("   \n// nothing yet\n")
+    llm.assert_not_called()
+    assert grader.points == 0
+    assert grader.invalid_reason
+    assert "No gradeable submission" in grader.get_text_feedback()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_code_grader_wrong_type_for_course_language(tmp_path):
+    from cqc_cpcc.exam_review import CodeGrader
+    grader = CodeGrader(max_points=30, exam_instructions="x", exam_solution="y")
+    path = _docx(tmp_path, "Project.docx", "write-up")
+    with patch("cqc_cpcc.exam_review.grade_exam_submission", new=AsyncMock()) as llm:
+        await grader.grade_submission("write-up", source_files={"Project.docx": path},
+                                      expected_language="cpp")
+    llm.assert_not_called()
+    assert grader.points == 0

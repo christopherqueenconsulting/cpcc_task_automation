@@ -28,12 +28,14 @@ Usage:
     >>> print(result.overall_feedback)
 """
 
+import re
 from typing import Optional
 
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
 from cqc_cpcc.rubric_models import (
     Criterion,
+    CriterionResult,
     DetectedError,
     Rubric,
     RubricAssessmentResult,
@@ -361,6 +363,8 @@ async def grade_with_rubric(
         callback: Optional[BaseCallbackHandler] = None,
         source_files: Optional[dict] = None,
         gate_report: Optional[dict] = None,
+        validity_gate: bool = True,
+        starter_code: Optional[str] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -384,7 +388,15 @@ async def grade_with_rubric(
             "openrouter/auto" enables auto-routing. None uses the registry.
         temperature: Deprecated and ignored; sampling is set per model in the registry.
         callback: Optional LangChain callback for compatibility
-        
+        source_files: ``{filename: temp_path}`` of the student's real files, used by the
+            validity gate and the compile gate.
+        gate_report: Optional dict filled with the validity and compile gate outcomes.
+        validity_gate: When True (default), a missing, empty, trivial or wrong-type
+            submission scores 0 with ``needs_review`` set and NO LLM call is made.
+            The instructor's "Grade anyway" passes False.
+        starter_code: Optional starter template; code that is essentially the starter
+            is treated as trivial.
+
     Returns:
         RubricAssessmentResult with complete grading breakdown
         
@@ -404,6 +416,20 @@ async def grade_with_rubric(
         ... )
         >>> print(f"Score: {result.total_points_earned}/{result.total_points_possible}")
     """
+    # Validity gate: deduction-only scoring gives full marks to "no errors", so work
+    # that is missing, empty, trivial or the wrong file type is decided here, on hard
+    # evidence, before the model can call it error-free.
+    if validity_gate:
+        validity = check_submission_validity(
+            rubric, source_files, student_submission, starter_code=starter_code,
+            reference_solution=reference_solution)
+        if gate_report is not None:
+            gate_report["validity"] = {"status": validity.status, "reason": validity.reason}
+        if not validity.ok:
+            logger.warning("Validity gate: %s (%s) — scoring 0 without an LLM call",
+                           validity.status, validity.reason)
+            return build_invalid_submission_result(rubric, validity)
+
     # Build the prompt
     prompt = build_rubric_grading_prompt(
         rubric=rubric,
@@ -534,6 +560,95 @@ async def grade_with_rubric(
     except Exception as e:
         logger.error(f"Rubric grading failed: {e}")
         raise ValueError(f"Failed to grade with rubric: {e}")
+
+
+def check_submission_validity(
+        rubric: Rubric,
+        source_files: Optional[dict],
+        student_submission: str,
+        starter_code: Optional[str] = None,
+        reference_solution: Optional[str] = None,
+):
+    """Run the submission-validity gate for ``rubric`` (see ``submission_validity``).
+
+    Without real files (text-only callers), the submission text stands in as one
+    plain-text file, so the content checks still apply.
+    """
+    from cqc_cpcc.utilities.submission_validity import (
+        check_validity, expected_language_for_rubric,
+    )
+    files = source_files
+    if not files and (student_submission or "").strip():
+        files = {"submission": student_submission}
+    return check_validity(
+        files,
+        expected_language=expected_language_for_rubric(rubric),
+        submission_text=student_submission,
+        starter_code=starter_code,
+        reference_code=reference_solution,
+    )
+
+
+# Error ids recorded on a gated submission, for the feedback text and the .docx.
+_VALIDITY_ERROR = {
+    "missing": ("NO_SUBMISSION", "No Submission", "No files were submitted."),
+    "empty": ("NO_SUBMISSION", "No Submission",
+              "The submission contains no code or content."),
+    "trivial": ("NO_SUBMISSION", "No Submission",
+                "The submission does not contain a meaningful attempt at the assignment."),
+    "wrong_type": ("WRONG_FILE_TYPE", "Wrong File Type",
+                   "The submission is not in the file type the assignment requires."),
+}  # ids match submission_validity.GATE_ERROR_IDS
+
+
+def _zero_level_label(criterion) -> Optional[str]:
+    """The criterion's "No Submission" style level, else its lowest level."""
+    levels = list(getattr(criterion, "levels", None) or [])
+    for lvl in levels:
+        if re.search(r"no submission|not submitted", lvl.label, re.IGNORECASE):
+            return lvl.label
+    if levels:
+        return min(levels, key=lambda lvl: lvl.score_min).label
+    return None
+
+
+def build_invalid_submission_result(rubric: Rubric, validity) -> RubricAssessmentResult:
+    """A 0-point result for a submission the validity gate rejected.
+
+    Every enabled criterion scores 0 at its "No Submission" (or lowest) level, and the
+    result is flagged ``needs_review`` so it is never written back to BrightSpace until
+    the instructor confirms it.
+    """
+    code, name, description = _VALIDITY_ERROR.get(
+        validity.status, ("NO_SUBMISSION", "No Submission", "No gradeable work was found."))
+    message = f"{description} {validity.reason}".strip()
+    criteria_results = [
+        CriterionResult(
+            criterion_id=c.criterion_id,
+            criterion_name=c.name,
+            points_possible=c.max_points,
+            points_earned=0,
+            selected_level_label=_zero_level_label(c),
+            feedback=message,
+        )
+        for c in rubric.criteria if c.enabled
+    ]
+    return RubricAssessmentResult(
+        rubric_id=rubric.rubric_id,
+        rubric_version=rubric.rubric_version,
+        total_points_possible=rubric.total_points_possible,
+        total_points_earned=0,
+        criteria_results=criteria_results,
+        overall_band_label=None,
+        overall_feedback=message,
+        detected_errors=[DetectedError(
+            code=code, name=name, severity="major", description=description,
+            occurrences=1, notes=validity.reason,
+        )],
+        needs_review=True,
+        validity_status=validity.status,
+        validity_reason=validity.reason,
+    )
 
 
 def _find_compile_error_def(error_definitions):

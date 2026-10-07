@@ -340,6 +340,9 @@ class CodeGrader:
     temperature: Optional[float] = DEFAULT_TEMPERATURE
     use_openrouter: bool = False
     openrouter_auto_route: bool = True
+    # Set when the submission-validity gate rejects the work (missing/empty/trivial/
+    # wrong type): the score is 0 and the instructor must review it.
+    invalid_reason: Optional[str] = None
 
     def __init__(self, max_points: int, exam_instructions: str, exam_solution: str,
                  deduction_per_major_error: int = 20,
@@ -404,6 +407,8 @@ class CodeGrader:
 
     @property
     def points(self) -> float:
+        if self.invalid_reason:
+            return 0
         # Ensure the calculated points are non-negative
         return max(self.max_points - self.total_deduction, 0)
 
@@ -421,6 +426,8 @@ class CodeGrader:
 
     def get_text_feedback(self) -> str:
         grade_feedback = ""
+        if self.invalid_reason:
+            grade_feedback += "\nNo gradeable submission (needs instructor review): " + self.invalid_reason
         if self.major_errors is not None:
             grade_feedback += "\n" + self.major_code_deduction_points_text
             for error in self.major_errors:
@@ -434,8 +441,27 @@ class CodeGrader:
         grade_feedback += "\n\n" + self.final_score_text
         return grade_feedback
 
-    async def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None):
-        # print("Identifying Errors")
+    async def grade_submission(self, student_submission: str, callback: BaseCallbackHandler = None,
+                               validity_gate: bool = True, source_files: Optional[dict] = None,
+                               expected_language: Optional[str] = "java"):
+        """Grade ``student_submission``; missing/empty/trivial/wrong-type work scores 0.
+
+        ``source_files`` (``{filename: temp_path}``) lets the gate check file types;
+        without it the submission text is checked as pasted code. ``expected_language``
+        is the course's code language (the legacy exam flow is Java).
+        """
+        # Deduction-only scoring gives full marks to "no errors", so missing, empty or
+        # trivial code is decided here, before the model can call it error-free.
+        self.invalid_reason = None
+        if validity_gate:
+            from cqc_cpcc.utilities.submission_validity import check_validity
+            files = source_files or {"submission": student_submission or ""}
+            validity = check_validity(files, expected_language, submission_text=student_submission,
+                                      reference_code=self.exam_solution)
+            if not validity.ok:
+                self.invalid_reason = validity.reason
+                self.major_errors, self.minor_errors = [], []
+                return
 
         if self.use_openai_wrapper:
             # New OpenAI wrapper path (supports OpenRouter)
@@ -543,6 +569,10 @@ class CodeGrader:
 
         # Set the styles for the document
         self.set_document_style(document)
+
+        if self.invalid_reason:
+            document.add_heading("No gradeable submission", 3)
+            document.add_paragraph(self.invalid_reason)
 
         # Add the Major Errors, Deductions, and Details to the document
         if self.major_deduction_total > 0:

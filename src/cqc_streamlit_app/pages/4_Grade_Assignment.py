@@ -25,7 +25,9 @@ from cqc_cpcc.rubric_config import (
     get_distinct_course_ids,
     get_rubrics_for_course,
 )
+from cqc_cpcc.course_identifier import normalize_course_id
 from cqc_cpcc.rubric_grading import grade_with_rubric
+from cqc_cpcc.utilities.submission_validity import COURSE_LANGUAGE
 from cqc_cpcc.rubric_models import Rubric, RubricAssessmentResult
 from cqc_cpcc.rubric_overrides import (
     CriterionOverride,
@@ -1385,7 +1387,13 @@ async def grade_single_rubric_student(
             band_or_level = _get_band_or_level_label(result)
             score_str = f"{result.total_points_earned}/{result.total_points_possible}"
             level_str = f" [{band_or_level}]" if band_or_level else ""
-            status.update(label=f"✅ {student_id} — {score_str}{level_str}", state="complete")
+            if result.needs_review:
+                if student_submission.rejected_files:
+                    st.markdown("**Files not accepted:** " + ", ".join(student_submission.rejected_files))
+                status.update(label=f"⚠️ {student_id} — {score_str} needs review "
+                                    f"({result.validity_status})", state="error")
+            else:
+                status.update(label=f"✅ {student_id} — {score_str}{level_str}", state="complete")
 
             return (student_id, result)
 
@@ -1550,6 +1558,19 @@ async def process_rubric_grading_batch(
     total_students = len(student_submissions)
     st.info(f"📊 Grading {total_students} student submission(s)...")
 
+    # Kept so a submission the validity gate flagged can be re-graded ("Grade anyway").
+    st.session_state.setdefault("grading_inputs_by_key", {})[run_key] = {
+        "submissions": student_submissions,
+        "kwargs": dict(
+            rubric=effective_rubric,
+            assignment_instructions=assignment_instructions,
+            reference_solution=reference_solution,
+            error_definitions=error_definitions,
+            model_name=model_name,
+            temperature=temperature,
+        ),
+    }
+
     # Add "Expand All" button for student status blocks
     col1, col2 = st.columns([3, 1])
     with col2:
@@ -1713,6 +1734,7 @@ async def grade_single_error_only_student(
         temperature: float,
         use_openrouter: bool,
         openrouter_auto_route: bool,
+        course_name: str = "",
 ) -> tuple[str, dict, tuple[str, str]]:
     add_script_run_ctx(ctx=ctx)
 
@@ -1753,6 +1775,8 @@ async def grade_single_error_only_student(
             await code_grader.grade_submission(
                 submission_text,
                 callback=ChatGPTStatusCallbackHandler(status, status_label),
+                source_files=student_submission.files,
+                expected_language=COURSE_LANGUAGE.get(normalize_course_id(course_name)),
             )
 
             feedback_text = code_grader.get_text_feedback()
@@ -1776,7 +1800,11 @@ async def grade_single_error_only_student(
                 download_filename
             )
 
-            status.update(label=f"✅ {student_id} graded", state="complete")
+            if code_grader.invalid_reason:
+                status.update(label=f"⚠️ {student_id} — 0, needs review: {code_grader.invalid_reason}",
+                              state="error")
+            else:
+                status.update(label=f"✅ {student_id} graded", state="complete")
 
             result_summary = {
                 "points_earned": code_grader.points,
@@ -1881,6 +1909,7 @@ async def process_error_only_grading_batch(
                 temperature=temperature,
                 use_openrouter=use_openrouter,
                 openrouter_auto_route=openrouter_auto_route,
+                course_name=course_name,
             )
         )
 
@@ -2599,6 +2628,75 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                         st.markdown(f"*Notes:* {error.notes}")
 
 
+_VALIDITY_LABELS = {
+    "missing": "No files submitted",
+    "empty": "Empty submission",
+    "trivial": "No meaningful attempt",
+    "wrong_type": "Wrong file type",
+}
+
+
+def _review_status_label(result) -> str:
+    """Summary-table status for a graded result."""
+    if not getattr(result, "needs_review", False):
+        return "Graded"
+    label = _VALIDITY_LABELS.get(result.validity_status, "Needs review")
+    return f"{label} (confirmed 0)" if result.review_confirmed else f"Needs review: {label}"
+
+
+def _replace_result(run_key: str, student_id: str, new_result) -> None:
+    results = st.session_state.grading_results_by_key[run_key]
+    st.session_state.grading_results_by_key[run_key] = [
+        (sid, new_result if sid == student_id else r) for sid, r in results
+    ]
+
+
+def _grade_anyway(run_key: str, student_id: str) -> None:
+    """Re-grade one flagged student with the validity gate bypassed."""
+    inputs = st.session_state.get("grading_inputs_by_key", {}).get(run_key)
+    if not inputs or student_id not in inputs["submissions"]:
+        st.error("The original files for this run are no longer available; grade the batch again.")
+        return
+    submission = inputs["submissions"][student_id]
+    if not submission.files:
+        st.error("There are no files to grade for this student.")
+        return
+    with st.spinner(f"Grading {student_id}..."):
+        result = asyncio.run(grade_with_rubric(
+            student_submission=build_submission_text_with_token_limit(files=submission.files),
+            source_files=submission.files,
+            validity_gate=False,
+            **inputs["kwargs"],
+        ))
+    _replace_result(run_key, student_id, result)
+    st.rerun()
+
+
+def render_needs_review(run_key: str) -> None:
+    """List submissions the validity gate scored 0, with Confirm 0 / Grade anyway.
+
+    These are held back from BrightSpace write-back until confirmed.
+    """
+    flagged = [(sid, r) for sid, r in st.session_state.grading_results_by_key.get(run_key, [])
+               if getattr(r, "needs_review", False) and not r.review_confirmed]
+    if not flagged:
+        return
+    with st.container(border=True):
+        st.subheader(f"Needs review ({len(flagged)})", anchor=False)
+        st.caption("These scored 0 without an AI call because no gradeable work was found. "
+                   "They are not written to BrightSpace until you confirm them.")
+        for sid, r in flagged:
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.markdown(f"**{sid}** — {_VALIDITY_LABELS.get(r.validity_status, r.validity_status)}: "
+                            f"{r.validity_reason}")
+                if st.button("Confirm 0", key=f"confirm0_{run_key}_{sid}", icon=":material/check:"):
+                    _replace_result(run_key, sid, r.model_copy(update={"review_confirmed": True}))
+                    st.rerun()
+                if st.button("Grade anyway", key=f"grade_anyway_{run_key}_{sid}",
+                             icon=":material/play_arrow:"):
+                    _grade_anyway(run_key, sid)
+
+
 def display_cached_grading_results(run_key: str, course_name: str) -> None:
     """Display cached grading results from session state.
     
@@ -2622,6 +2720,8 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
 
     total_students = len(all_results) + len(failed_student_ids)
     st.success(f"✅ Displaying cached results for {len(all_results)} student(s)")
+
+    render_needs_review(run_key)
 
     # Add "Expand All" button (passive - doesn't trigger re-grading)
     col1, col2 = st.columns([3, 1])
@@ -2649,6 +2749,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             "Points Possible": getattr(result, 'total_points_possible', 0),
             "Percentage": percentage,
             "Band": getattr(result, 'overall_band_label', None) or "N/A",
+            "Status": _review_status_label(result),
         })
 
     # Add failure rows
@@ -2662,6 +2763,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
             "Points Possible": total_possible_for_failures,
             "Percentage": "Failed",
             "Band": "❌ Failed",
+            "Status": "Failed",
         })
 
     if summary_data:

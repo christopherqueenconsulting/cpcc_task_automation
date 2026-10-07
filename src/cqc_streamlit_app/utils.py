@@ -1936,6 +1936,17 @@ def add_brightspace_writeback_element(
             "drafts in one step (only students who submitted are matched). Scores/rubric "
             "are written separately — choose “Add feedback directly” for those.")
 
+    # Submissions the validity gate scored 0 (missing/empty/wrong type) are held back
+    # until confirmed in the results' "Needs review" section.
+    held = [sid for sid, r in results
+            if getattr(r, "needs_review", False) and not getattr(r, "review_confirmed", False)]
+    if held:
+        st.warning(
+            f"{len(held)} submission(s) need review and will NOT be written until you "
+            f"confirm them in the Needs review section: {', '.join(held)}",
+            icon=":material/flag:",
+        )
+
     job = st.session_state.get(job_key)
 
     def _launch(dry_run: bool):
