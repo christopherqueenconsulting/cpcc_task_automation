@@ -50,11 +50,11 @@ class TestAnalyticsSettings:
         posthog_module = MagicMock()
         with patch.dict("sys.modules", {"posthog": posthog_module}):
             app = _run_page()
-            _field(app, "PostHog Project API Key").input("phc_from_settings")
-            app.selectbox[0].select("EU Cloud")
+            _field(app, "PostHog project API key").input("phc_from_settings")
+            next(s for s in app.selectbox if s.label == "PostHog region").select("EU Cloud")
             app.run()
             next(button for button in app.button
-                 if button.label == "Save Analytics Settings").click()
+                 if button.label == "Save analytics settings").click()
             app.run()
 
         assert not app.exception
@@ -66,10 +66,10 @@ class TestAnalyticsSettings:
 
     def test_custom_host_must_be_https(self):
         app = _run_page()
-        app.selectbox[0].select("Custom (self-hosted)")
+        next(s for s in app.selectbox if s.label == "PostHog region").select("Custom (self-hosted)")
         app.run()
-        _field(app, "PostHog Host URL").input("http://insecure.example.edu")
-        next(button for button in app.button if button.label == "Save Analytics Settings").click()
+        _field(app, "PostHog host URL").input("http://insecure.example.edu")
+        next(button for button in app.button if button.label == "Save analytics settings").click()
         app.run()
         assert any("https://" in block.value for block in app.error)
 

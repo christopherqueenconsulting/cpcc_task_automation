@@ -15,38 +15,46 @@ def main():
     page_header("Settings", ":material/settings:",
                 "Keys and logins stay on this computer; nothing here is stored online.")
 
-    # Get API keys
+    credentials_tab, models_tab, preferences_tab, analytics_tab = st.tabs(
+        ["Credentials", "Models", "Preferences", "Analytics"])
+    with credentials_tab:
+        credentials_section()
+    with models_tab:
+        model_settings_section()
+    with preferences_tab:
+        preferences_section()
+    with analytics_tab:
+        analytics_settings_section()
+
+
+def credentials_section():
+    """Keys and logins for this browser session (from .env by default)."""
     # No type="password" fields on this page: Safari treats them as a login form
     # and offers to save/fill a password on every Tab (see secret_text_input).
-    openrouter_api_key = secret_text_input("Openrouter API Key", st.session_state.openrouter_api_key or "",
-                                           key="openrouter_api_key")
-    st.caption("*Required for all apps")
-
-    openai_api_key = secret_text_input("OpenAI API Key", st.session_state.openai_api_key or "",
-                                       key="openai_api_key")
-    st.caption("*Optional: only needed to transcribe audio/video submissions (Whisper); "
-               "get it [here](https://platform.openai.com/account/api-keys).*")
-
-    # Get CPCC variables
-    instructor_user_id = st.text_input("Instructor User ID", value=st.session_state.instructor_user_id or "",
-                                       autocomplete="off")
-    st.caption("*Required for all apps")
-    instructor_password = secret_text_input("Instructor Password", st.session_state.instructor_password or "",
-                                            key="instructor_password")
-    st.caption("*Required for all apps")
-
-    instructor_signature = st.text_input("Instructor Signature", value=st.session_state.instructor_signature or "",
-                                         autocomplete="off")
-    st.caption("Used at end of feedback.")
-
-    attendance_tracker_url = st.text_input("Advanced Tracker URL", value=st.session_state.attendance_tracker_url or "",
-                                           autocomplete="off")
-    st.caption("URL to the Attendance Tracker (`ATTENDANCE_TRACKER_URL`).")
+    # Two columns keep the Save button in view at 1280x800 (UX goals: 0 scrolls per tab).
+    keys, login = st.columns(2)
+    with keys:
+        openrouter_api_key = secret_text_input("OpenRouter API key (required)",
+                                               st.session_state.openrouter_api_key or "", key="openrouter_api_key")
+        openai_api_key = secret_text_input(
+            "OpenAI API key (optional)", st.session_state.openai_api_key or "", key="openai_api_key",
+            help="Only needed to transcribe audio/video submissions (Whisper); "
+                 "get it at https://platform.openai.com/account/api-keys.")
+        attendance_tracker_url = st.text_input("Attendance tracker URL",
+                                               value=st.session_state.attendance_tracker_url or "",
+                                               autocomplete="off", help="ATTENDANCE_TRACKER_URL in .env.")
+    with login:
+        instructor_user_id = st.text_input("Instructor user ID (required)",
+                                           value=st.session_state.instructor_user_id or "", autocomplete="off")
+        instructor_password = secret_text_input("Instructor password (required)",
+                                                st.session_state.instructor_password or "", key="instructor_password")
+        instructor_signature = st.text_input("Instructor signature", value=st.session_state.instructor_signature or "",
+                                             autocomplete="off", help="Used at the end of feedback.")
 
     required_vars = [openrouter_api_key, instructor_user_id, instructor_password]
 
     # If the 'Save' button is clicked
-    if st.button("Save"):
+    if st.button("Save credentials", type="primary", icon=":material/save:"):
         if any(not str(v or "").strip() for v in required_vars):
             st.error("Please provide the missing required settings.")
         else:
@@ -64,11 +72,7 @@ def main():
                 st.session_state.attendance_tracker_url = os.environ[
                     "ATTENDANCE_TRACKER_URL"] = attendance_tracker_url.strip()
 
-            st.success("Settings Saved")
-
-    analytics_settings_section()
-    model_settings_section()
-    preferences_section()
+            st.success("Credentials saved for this session.", icon=":material/check_circle:")
 
 
 def _on_legacy_toggle():
@@ -80,7 +84,6 @@ def _on_legacy_toggle():
 
 def preferences_section():
     """Preferences saved to this computer (they survive restarts and git pull)."""
-    st.subheader("Preferences")
     st.toggle(
         "Show legacy pages",
         value=load_settings().show_legacy_pages,
@@ -104,8 +107,6 @@ def model_settings_section():
     from cqc_cpcc.utilities.AI import model_registry
     from cqc_streamlit_app.utils import registry_model_choices
 
-    st.divider()
-    st.subheader("AI models")
     registry = model_registry.load_registry()
     st.caption(
         f"Defaults come from `config/model_registry.json` (revision {registry.revision}), "
@@ -154,9 +155,7 @@ _CUSTOM_HOST = "Custom (self-hosted)"
 
 def analytics_settings_section():
     """PostHog credentials, for when they are not in ``.env``. Optional."""
-    st.divider()
-    st.subheader("Usage Analytics (PostHog)")
-    st.write(
+    st.caption(
         "Optional. Sends run counts, durations, token usage and scrubbed errors to your "
         "PostHog project. Student names, IDs, e-mails, submissions and grades are never "
         "sent. Leave the key blank to turn analytics off."
@@ -166,7 +165,7 @@ def analytics_settings_section():
     (st.success if enabled else st.info)("Analytics status: %s" % reason)
 
     posthog_api_key = secret_text_input(
-        "PostHog Project API Key",
+        "PostHog project API key",
         st.session_state.posthog_api_key or "",
         key="posthog_api_key",
         help="Project settings > Project API key (starts with phc_). Same as POSTHOG_API_KEY in .env.",
@@ -176,14 +175,14 @@ def analytics_settings_section():
     region_labels = list(telemetry.KNOWN_HOSTS) + [_CUSTOM_HOST]
     known_by_url = {url: label for label, url in telemetry.KNOWN_HOSTS.items()}
     region = st.selectbox(
-        "PostHog Region",
+        "PostHog region",
         region_labels,
         index=region_labels.index(known_by_url.get(current_host, _CUSTOM_HOST)),
         help="Must match the region your PostHog project was created in.",
     )
     if region == _CUSTOM_HOST:
         posthog_host = st.text_input(
-            "PostHog Host URL",
+            "PostHog host URL",
             value="" if current_host in known_by_url else current_host,
             placeholder="https://posthog.example.edu",
             autocomplete="off",
@@ -191,7 +190,7 @@ def analytics_settings_section():
     else:
         posthog_host = telemetry.KNOWN_HOSTS[region]
 
-    if st.button("Save Analytics Settings"):
+    if st.button("Save analytics settings", icon=":material/save:"):
         host = (posthog_host or "").strip()
         if host and not host.startswith("https://"):
             st.error("The PostHog host must be an https:// URL.")
