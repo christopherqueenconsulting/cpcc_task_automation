@@ -52,9 +52,11 @@ student work in a prompt renderer or eval fixture. Details: `docs/security-workf
 - The LLM detects errors or picks a level; **points are computed deterministically** in
   `src/cqc_cpcc/scoring/rubric_scoring_engine.py` (`manual`, `level_band`, `error_count`
   modes). Do not move arithmetic into prompts. See `docs/SCORING_ENGINE_SUMMARY.md`.
-- `apply_compile_gate` runs immediately before `apply_backend_scoring`; a real compiler
-  (`utilities/compiler_gate.py`), not the model, decides "Does Not Compile". "Cannot
-  verify" must never be treated as "does not compile". See `docs/compiler-gate.md`.
+- In `grade_with_rubric` the order is `apply_compile_gate` (when source files are given),
+  then `apply_requirement_coverage` (when requirements are given), then
+  `apply_backend_scoring`. A real compiler (`utilities/compiler_gate.py`), not the model,
+  decides "Does Not Compile". "Cannot verify" must never be treated as "does not compile".
+  See `docs/compiler-gate.md`.
 - BrightSpace write-back defaults to `dry_run=True`. Assignment write-back saves a draft;
   quiz write-back publishes to the student immediately. See "Writing Grades Back to
   BrightSpace" in `docs/ARCHITECTURE.md`.
@@ -71,12 +73,14 @@ The model per role (`grading`, `digest`, `feedback`, `flowgorithm`) is set in
 (vendor allowlist, price ceilings, thresholds, freeze windows, `auto_promote_roles`) is
 human-edited only. Full design: `docs/MODEL_EVALUATION.md`.
 
-- **`model-eval.yml`** (Mondays 13:00 UTC, or manual dispatch): free OpenRouter discovery;
-  only when there is a candidate does it grade `evals/datasets` with up to three candidates
-  plus the incumbent, run the cross-suite gate on the winner, record state on the
-  `model-eval-state` branch, and open an `auto/model-promotion-*` PR labelled
-  `model-promotion`. Dispatch defaults to `dry_run: true` (cost estimate only). Secrets live
-  in the `model-eval` environment (master only).
+- **`model-eval.yml`** (Mondays 13:00 UTC, or manual dispatch): free OpenRouter discovery.
+  It grades `evals/datasets` (up to three candidates plus the incumbent) only on a manual
+  dispatch, when discovery finds a candidate, or when the incumbent's OpenRouter
+  `canonical_slug` changed; otherwise the run makes no model calls. A complete non-dry run
+  with a winner then runs the cross-suite gate and, if it passes, opens an
+  `auto/model-promotion-*` PR labelled `model-promotion`. Non-dry runs record state on the
+  `model-eval-state` branch. Dispatch defaults to `dry_run: true` (cost estimate only).
+  Secrets live in the `model-eval` environment (master only).
 - **`model-registry-guard.yml`**: required check on every PR (no path filter, so it never
   sits pending). Passes immediately when the registry and policy are untouched. For bot PRs
   it checks the diff stays inside the registry and `evals/reports/*/scorecard.*`, and runs
