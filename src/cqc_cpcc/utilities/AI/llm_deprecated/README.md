@@ -1,61 +1,18 @@
 # LangChain Legacy Code (Deprecated)
 
-⚠️ **This directory contains deprecated LangChain-based code scheduled for removal.**
+⚠️ **Only one LangChain path is left, and it is scheduled for removal.**
 
-## Migration Status
+## What is left
+- `chains.py` — `generate_assignment_feedback_grade()`: Flowgorithm grading. Its prompt
+  lives in `src/cqc_cpcc/prompts/flowgorithm.py` (registry id `flowgorithm-grade`).
+  It moves onto `llm_gateway.structured()` with a schema in phase 2 of
+  [`docs/PROMPT_EVAL_PLAN.md`](../../../../../docs/PROMPT_EVAL_PLAN.md).
+- `llms.py` — the LangChain chat model on OpenRouter that the chain uses.
 
-### ✅ Migrated to OpenAI Wrapper
-- **Exam Grading**: Now uses `exam_grading_openai.py` by default
-- **Project Feedback**: Now uses `openai_client.get_structured_completion()`
+## Removed (October 2026)
+The legacy exam-review and project-feedback chains, `CodeGrader(use_openai_wrapper=False)`,
+and every unused prompt version (`EXAM_REVIEW_PROMPT_BASE*`, `*_FEEDBACK_PROMPT_BASE*`,
+`GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE_v1`). Git history keeps them. The live
+Give Feedback prompt moved to `src/cqc_cpcc/prompts/project_feedback.py`.
 
-### ⏳ Pending Migration
-- **Assignment Grading**: `generate_assignment_feedback_grade()` in `chains.py`
-  - Still uses LangChain PromptTemplate and chains
-  - Should be migrated to OpenAI wrapper
-
-### 🔒 Backward Compatibility
-- Legacy code paths preserved with `use_openai_wrapper=False` flag
-- Will be removed in future major version
-
-## Files in This Directory
-
-- `chains.py` (500 lines) - LangChain chain builders, prompt templates
-- `llms.py` (59 lines) - LangChain LLM configuration helpers
-- `prompts.py` (530 lines) - Legacy prompt templates
-
-## Why Deprecated?
-
-LangChain was removed due to:
-1. Pydantic v2 compatibility issues
-2. Complex retry/parsing logic
-3. Maintenance burden
-4. Native OpenAI structured outputs are more reliable
-
-## Migration Guide
-
-### Old (LangChain)
-```python
-from cqc_cpcc.utilities.AI.llm.chains import get_feedback_completion_chain
-from cqc_cpcc.utilities.AI.llm.llms import get_default_llm
-
-llm = get_default_llm()
-chain, parser, prompt = get_feedback_completion_chain(llm=llm, ...)
-result = await chain.ainvoke(...)
-```
-
-### New (OpenAI Wrapper)
-```python
-from cqc_cpcc.utilities.AI.openai_client import get_structured_completion
-
-result = await get_structured_completion(
-    prompt="...",
-    model_name="gpt-4o",
-    schema_model=YourModel,
-    temperature=0.2
-)
-```
-
-## References
-- `MIGRATION_NOTES.md` - Project feedback migration details
-- `DEPENDENCY_CLEANUP.md` - Dependency changes
-- `docs/ARCHITECTURE.md` - System architecture
+All live prompts are listed in [`docs/PROMPTS.md`](../../../../../docs/PROMPTS.md).

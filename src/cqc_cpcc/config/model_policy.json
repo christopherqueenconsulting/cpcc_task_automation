@@ -69,7 +69,6 @@
     "price_drop_pct": 20
   },
   "auto_promote_roles": [
-    "grading",
-    "digest"
+    "grading"
   ]
 }

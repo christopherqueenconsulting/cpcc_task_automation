@@ -120,6 +120,7 @@ async def extract_requirements(instructions: str, model_name: Optional[str] = No
         prompt=build_requirement_extraction_prompt(instructions),
         schema_model=RequirementChecklist,
         override=model_name,
+        prompt_id="requirement-extraction",
     )
     checklist = normalize_checklist(checklist)
     _CHECKLIST_CACHE[key] = checklist

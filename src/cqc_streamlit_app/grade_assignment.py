@@ -1064,10 +1064,6 @@ async def get_grade_exam_content():
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
 
-        # Note: custom_llm is still needed for legacy LangChain compatibility
-        # but the actual grading will use OpenRouter
-        custom_llm = None  # Not used with OpenRouter
-
         # Start status wheel and display with updates from the coder
 
         code_grader = CodeGrader(
@@ -1078,7 +1074,6 @@ async def get_grade_exam_content():
             deduction_per_minor_error=int(deduction_per_minor_error),
             major_error_type_list=major_error_type_list,
             minor_error_type_list=minor_error_type_list,
-            grader_llm=custom_llm,
             model_name=selected_model,
             temperature=0.0,  # Temperature not used with OpenRouter
             use_openrouter=use_openrouter,

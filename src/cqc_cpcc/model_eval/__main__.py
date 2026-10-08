@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import datetime as dt
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -539,6 +540,46 @@ def cmd_describe_change(args) -> int:
     return 0
 
 
+def cmd_prompts(args) -> int:
+    """List prompts, check fingerprints and version bumps, or rewrite stale fingerprints."""
+    from cqc_cpcc.model_eval import prompt_registry as pr
+
+    registry = pr.load()
+    if args.action == "list":
+        print("| id | version | status | role | suite | fingerprint |")
+        print("|---|---|---|---|---|---|")
+        for pid, entry in registry.prompts.items():
+            print(f"| {pid} | {entry.version} | {entry.status} | {entry.role or '-'} | "
+                  f"{entry.suite or '-'} | {entry.fingerprint[:19]}… |")
+        return 0
+
+    base = pr.load_at_ref(args.base_ref) if args.base_ref else None
+    if args.action == "fingerprint":
+        stale = pr.mismatches(registry)
+        if not args.write:
+            for pid, (old, new) in stale.items():
+                print(f"{pid}: recorded {old[:19]}… computed {new[:19]}…")
+            print("all fingerprints current" if not stale else f"{len(stale)} stale fingerprint(s)")
+            return 1 if stale else 0
+        try:
+            changed = pr.write_fingerprints(bump=args.bump, base=base)
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 1
+        print("\n".join(f"updated {pid}" for pid in changed) or "nothing to update")
+        return 0
+
+    # check: fingerprints current + every change since --base-ref came with a version bump
+    problems = [f"{pid}: stale fingerprint (run `prompts fingerprint --write`)"
+                for pid in pr.mismatches(registry)]
+    problems += pr.version_problems(registry, base)
+    for problem in problems:
+        print(f"::error::{problem}" if os.environ.get("GITHUB_ACTIONS") else problem)
+    if not problems:
+        print("prompt registry OK" + (f" (vs {args.base_ref})" if args.base_ref else ""))
+    return 1 if problems else 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m cqc_cpcc.model_eval", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -606,6 +647,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     dc.add_argument("--base-registry", required=True)
     dc.add_argument("--head-registry", required=True)
     dc.set_defaults(func=cmd_describe_change)
+
+    pm = sub.add_parser("prompts", help="list / fingerprint / check the prompt registry")
+    pm.add_argument("action", choices=["list", "fingerprint", "check"])
+    pm.add_argument("--write", action="store_true", help="fingerprint: rewrite stale fingerprints")
+    pm.add_argument("--bump", action="store_true", help="fingerprint --write: bump versions as needed")
+    pm.add_argument("--base-ref", default=None,
+                    help="git ref to compare versions against (e.g. origin/master)")
+    pm.set_defaults(func=cmd_prompts)
 
     args = parser.parse_args(argv)
     return args.func(args)

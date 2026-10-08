@@ -834,7 +834,8 @@ async def generate_preprocessing_digest(
 
     from cqc_cpcc.utilities.AI import llm_gateway  # local import: gateway imports this module
     digest = await llm_gateway.structured(
-        role="digest", prompt=prompt, schema_model=PreprocessingDigest, override=model_name
+        role="digest", prompt=prompt, schema_model=PreprocessingDigest, override=model_name,
+        prompt_id="preprocessing-digest",
     )
 
     # Save digest to debug artifacts if debug enabled

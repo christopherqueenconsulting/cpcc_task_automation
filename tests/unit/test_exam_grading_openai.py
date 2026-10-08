@@ -457,7 +457,6 @@ class TestCodeGraderIntegration:
             exam_solution=EXAM_SOLUTION,
             major_error_type_list=MAJOR_ERROR_TYPES,
             minor_error_type_list=MINOR_ERROR_TYPES,
-            use_openai_wrapper=True,  # Explicit but is default
         )
         
         # Act
@@ -467,47 +466,6 @@ class TestCodeGraderIntegration:
         assert grader.major_errors is not None
         assert grader.minor_errors is not None
         assert len(grader.major_errors) >= 0  # May be modified by comment detection
-    
-    async def test_code_grader_backward_compatibility_langchain(self, mocker):
-        """Test that CodeGrader still supports LangChain path."""
-        # Arrange
-        valid_response = create_valid_error_definitions_response()
-        
-        # Mock get_default_llm to avoid API key requirement
-        mock_llm = MagicMock()
-        mocker.patch(
-            "cqc_cpcc.exam_review.get_default_llm",
-            return_value=mock_llm
-        )
-        
-        # Mock LangChain functions
-        mock_get_chain = mocker.patch(
-            "cqc_cpcc.exam_review.get_exam_error_definitions_completion_chain"
-        )
-        mock_get_chain.return_value = (MagicMock(), MagicMock(), MagicMock())
-        
-        mock_get_error = mocker.patch(
-            "cqc_cpcc.exam_review.get_exam_error_definition_from_completion_chain",
-            new_callable=AsyncMock,
-        )
-        mock_get_error.return_value = valid_response
-        
-        grader = CodeGrader(
-            max_points=100,
-            exam_instructions=EXAM_INSTRUCTIONS,
-            exam_solution=EXAM_SOLUTION,
-            major_error_type_list=MAJOR_ERROR_TYPES,
-            minor_error_type_list=MINOR_ERROR_TYPES,
-            use_openai_wrapper=False,  # Use legacy path
-        )
-        
-        # Act
-        await grader.grade_submission(STUDENT_SUBMISSION)
-        
-        # Assert
-        mock_get_error.assert_called_once()
-        assert grader.major_errors is not None
-        assert grader.minor_errors is not None
 
 
 @pytest.mark.unit

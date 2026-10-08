@@ -169,7 +169,6 @@ async def demo_exam_grading_migration():
             minor_error_type_list=minor_error_types,
             deduction_per_major_error=20,
             deduction_per_minor_error=5,
-            use_openai_wrapper=True,  # Using new implementation
         )
         
         await grader.grade_submission(GOOD_SUBMISSION)
@@ -198,7 +197,6 @@ async def demo_exam_grading_migration():
             minor_error_type_list=minor_error_types,
             deduction_per_major_error=20,
             deduction_per_minor_error=5,
-            use_openai_wrapper=True,
         )
         
         await grader.grade_submission(BAD_SUBMISSION)

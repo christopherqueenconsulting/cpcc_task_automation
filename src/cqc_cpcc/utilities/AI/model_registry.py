@@ -192,7 +192,7 @@ class PolicyFile(BaseModel):
     discovery: DiscoveryPolicy = Field(default_factory=DiscoveryPolicy)
     # Roles a passing grading evaluation may move. Feedback and Flowgorithm are not
     # covered by dataset v1, so they change only by hand.
-    auto_promote_roles: list[str] = Field(default_factory=lambda: ["grading", "digest"])
+    auto_promote_roles: list[str] = Field(default_factory=lambda: ["grading"])
 
 
 class ResolvedModel(BaseModel):

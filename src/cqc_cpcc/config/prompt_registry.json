@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "_owner": "human. Every LLM prompt the app sends is listed here; see docs/PROMPTS.md. The model-promotion bot must never edit this file.",
+  "prompts": {
+    "rubric-grading": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Main rubric grading (Grade Assignment page, rubric mode): error detection, per-criterion levels/feedback, requirement marking.",
+      "builder": "cqc_cpcc.rubric_grading:build_rubric_grading_prompt",
+      "schema": "cqc_cpcc.rubric_models:RubricAssessmentResult",
+      "call_sites": [
+        "cqc_cpcc.rubric_grading:grade_with_rubric"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/rubric_grading.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock",
+        "src/cqc_cpcc/rubric_models.py",
+        "src/cqc_cpcc/utilities/zip_grading_utils.py",
+        "src/cqc_cpcc/scoring/"
+      ],
+      "suite": "grading",
+      "graders": [
+        "ok_rate",
+        "f1",
+        "score_accuracy",
+        "validity_accuracy",
+        "ordering_violations",
+        "requirement_agreement",
+        "injection_pass_rate"
+      ],
+      "fingerprint": "sha256:bab7c37b0b30661fb39a713de47e4d1b19500f2a5ca03a6a63297f0407a86a7a"
+    },
+    "requirements-section": {
+      "version": 1,
+      "status": "fragment",
+      "role": "grading",
+      "parent": "rubric-grading",
+      "description": "Requirement checklist section embedded in the rubric grading prompt (the model marks each R# met/partial/missing).",
+      "builder": "cqc_cpcc.requirement_coverage:requirements_prompt_section",
+      "schema": null,
+      "call_sites": [],
+      "source_files": [
+        "src/cqc_cpcc/requirement_coverage.py"
+      ],
+      "shared_files": [],
+      "suite": "grading",
+      "graders": [
+        "requirement_agreement"
+      ],
+      "fingerprint": "sha256:0af1b7a6db0db837485915f7b86352ee85ec3734d9e611bbbd4bc9dcaabb7771"
+    },
+    "requirement-extraction": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Turns assignment instructions into a 1-12 item functional requirement checklist (cached per instructions).",
+      "builder": "cqc_cpcc.requirement_coverage:build_requirement_extraction_prompt",
+      "schema": "cqc_cpcc.requirement_coverage:RequirementChecklist",
+      "call_sites": [
+        "cqc_cpcc.requirement_coverage:extract_requirements"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/requirement_coverage.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "suite": "requirement-extraction",
+      "fingerprint": "sha256:635bde730fcb44bf7a63d45324bc40b62f469e745d9218b2634cb7555985b01e"
+    },
+    "exam-grading": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Exam grading (Grade Assignment page, exam mode via CodeGrader): major/minor error detection against the course's error enums.",
+      "builder": "cqc_cpcc.utilities.AI.exam_grading_prompts:build_exam_grading_prompt",
+      "schema": "cqc_cpcc.exam_review:ErrorDefinitions",
+      "call_sites": [
+        "cqc_cpcc.utilities.AI.exam_grading_openai:grade_exam_submission"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/utilities/AI/exam_grading_prompts.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock",
+        "src/cqc_cpcc/exam_review.py",
+        "src/cqc_cpcc/utilities/utils.py"
+      ],
+      "suite": "exam-grading",
+      "fingerprint": "sha256:f25dd7073aa33a8cdffb2440cb1f1006a9071939cf2e95245387c4bb7c91131f"
+    },
+    "preprocessing-digest": {
+      "version": 1,
+      "status": "live",
+      "role": "digest",
+      "description": "Compresses a very large submission into a per-file grading digest before exam grading.",
+      "builder": "cqc_cpcc.utilities.AI.openai_client:_build_preprocessing_prompt",
+      "schema": "cqc_cpcc.utilities.AI.openai_client:PreprocessingDigest",
+      "call_sites": [
+        "cqc_cpcc.utilities.AI.openai_client:generate_preprocessing_digest"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/utilities/AI/openai_client.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "suite": "digest",
+      "fingerprint": "sha256:41852226b43ed8821f72fbb3ec0471164937a3c17818f607980684abd28bc5be"
+    },
+    "project-feedback": {
+      "version": 1,
+      "status": "live",
+      "role": "feedback",
+      "description": "Give Feedback page: typed feedback items (FeedbackType) on a project submission.",
+      "builder": "cqc_cpcc.prompts.project_feedback:CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI",
+      "schema": "cqc_cpcc.project_feedback:FeedbackGuide",
+      "call_sites": [
+        "cqc_cpcc.project_feedback:FeedbackGiver.generate_feedback"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/prompts/project_feedback.py",
+        "src/cqc_cpcc/project_feedback.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "suite": "project-feedback",
+      "fingerprint": "sha256:ecfa0f09874c3f7f698006a1a279d8063f283726586472ae2a78bf8d5e7add8b"
+    },
+    "flowgorithm-grade": {
+      "version": 1,
+      "status": "live",
+      "role": "flowgorithm",
+      "description": "Flowgorithm grading: markdown deductions + final grade (LangChain, free text; moves onto llm_gateway with a schema in phase 2).",
+      "builder": "cqc_cpcc.prompts.flowgorithm:GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE",
+      "schema": null,
+      "call_sites": [
+        "cqc_cpcc.utilities.AI.llm_deprecated.chains:generate_assignment_feedback_grade"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/prompts/flowgorithm.py",
+        "src/cqc_cpcc/utilities/AI/llm_deprecated/chains.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_deprecated/llms.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "suite": "flowgorithm-grade",
+      "fingerprint": "sha256:f50b7fb5e393e39f21d110552c991c2d033b3b65a4c1cb93ecbd48a70244ab7e"
+    },
+    "structured-fallback": {
+      "version": 1,
+      "status": "dead-path",
+      "role": null,
+      "description": "Plain-JSON retry suffix used only by openai_client.get_structured_completion, which no production code calls. Remove with that function.",
+      "builder": "cqc_cpcc.utilities.AI.openai_client:_build_fallback_prompt",
+      "schema": null,
+      "call_sites": [
+        "cqc_cpcc.utilities.AI.openai_client:_get_structured_completion_impl"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/utilities/AI/openai_client.py"
+      ],
+      "shared_files": [],
+      "suite": null,
+      "fingerprint": "sha256:5aca8a649fb60455bba8defd41efdec15ec81e352eca50a38cd380d11c6da1f0"
+    }
+  }
+}

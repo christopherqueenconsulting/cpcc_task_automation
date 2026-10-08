@@ -315,7 +315,7 @@ class FeedbackGiver:
         Returns:
             None (sets self.feedback_list)
         """
-        from cqc_cpcc.utilities.AI.llm_deprecated.prompts import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
+        from cqc_cpcc.prompts.project_feedback import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
 
         # Build the prompt with all parameters
         feedback_types_str = "\n\t".join(self.feedback_type_list) if self.feedback_type_list else "N/A"
@@ -333,6 +333,7 @@ class FeedbackGiver:
             prompt=prompt,
             schema_model=FeedbackGuide,
             override=self.model_name,
+            prompt_id="project-feedback",
         )
 
         unique_feedback = feedback_guide.get_feedback_unique()

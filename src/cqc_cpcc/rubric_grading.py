@@ -470,6 +470,7 @@ async def grade_with_rubric(
             schema_model=RubricAssessmentResult,
             override=None if use_auto_route else model_name,
             use_auto_route=use_auto_route,
+            prompt_id="rubric-grading",
         )
 
         # Log raw OpenAI response for debugging
