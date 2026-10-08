@@ -115,6 +115,15 @@ class TestRunAndScore:
         assert base.gate_failures(agg, {"exact": {"min": 0.8}}) == ["exact 0.75 < 0.8"]
         assert base.gate_failures(agg, {"ok_rate": {"min": 0.98}, "errors.schema": {"max": 0}}) == []
 
+    def test_judge_gate_applies_only_to_a_calibrated_judge_score(self):
+        gate = {"judge.feedback-quality": {"min": 0.7}}
+        low = {"judges": {"feedback-quality": {"mean": 0.6, "calibrated": True}}}
+        assert base.gate_failures(low, gate) == ["judge.feedback-quality 0.6 < 0.7"]
+        assert base.gate_failures({"judges": {"feedback-quality": {"mean": 0.8, "calibrated": True}}}, gate) == []
+        # No judge run, or a judge that does not count for this run: the gate does not apply.
+        assert base.gate_failures({}, gate) == []
+        assert base.gate_failures({"judges": {"feedback-quality": {"mean": 0.1, "calibrated": False}}}, gate) == []
+
     def test_compare_needs_enough_paired_cases(self):
         suite = _toy_suite()
         cases = _cases(10)
