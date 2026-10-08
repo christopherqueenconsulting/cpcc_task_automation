@@ -675,7 +675,9 @@ jobs:
               else
                 suites=(); if [ -n "${SUITES}" ] && [ "${SUITES}" != "all" ]; then suites=(--suites "${SUITES}"); fi
                 poetry run python -m cqc_cpcc.model_eval prompt-calibrate "${suites[@]}" --out evals/runs/dispatch | tee run.log
-                echo "Review evals/runs/dispatch/policy_patch.json in the artifact, then apply it to model_policy.json in a PR." >> "$GITHUB_STEP_SUMMARY"
+                # The baseline scorecards the patch cites (baseline_report), at their repo paths.
+                if [ -d evals/reports/prompt-calibration ]; then cp -r evals/reports evals/runs/dispatch/; fi
+                echo "Review policy_patch.json in the artifact. To apply it, commit the artifact's reports/ folder under evals/ and merge the patch into model_policy.json (prompt-calibrate --apply does the merge) in a PR." >> "$GITHUB_STEP_SUMMARY"
               fi ;;
             ab)
               git fetch -q origin "${BASE}"

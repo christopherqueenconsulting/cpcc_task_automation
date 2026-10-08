@@ -83,9 +83,24 @@ class TestFeedback:
     def test_full_solution_in_feedback_is_penalized(self):
         case = self.cases["csc151_exam1_java__magic_tax"]
         leak = "```java\n" + "int x;\n" * 20 + "```"
-        payload = {"feedback": [{"type": "JAVA_CONSTANTS_ERROR", "details": leak}]}
+        payload = {"feedback": [{"type": "PROGRAMMING_STYLE", "details": leak}]}
         score = _composite(self.suite, case, payload)
         assert score.graders["no_solution_leak"] == 0.0 and score.composite < 1.0
+
+    def test_expected_types_are_offered_by_the_page(self):
+        """The prompt says to use only the offered types, so labels may only expect those."""
+        from cqc_cpcc.project_feedback import FeedbackType, schema_feedback_types
+
+        for case in self.cases.values():
+            offered = {FeedbackType(v).name for v in schema_feedback_types(case.inputs["feedback_type_list"])}
+            assert set(case.labels["expected"]) <= offered, case.case_id
+
+    def test_the_specific_type_is_still_fair(self):
+        case = self.cases["csc151_exam1_java__magic_tax"]
+        assert case.labels["expected"] == ["PROGRAMMING_STYLE"]
+        payload = {"feedback": [{"type": "JAVA_CONSTANTS_ERROR", "details": "Use a named constant for the tax."},
+                                {"type": "PROGRAMMING_STYLE", "details": "Use a named constant for the tax."}]}
+        assert _composite(self.suite, case, payload).graders["type_f1"] == 1.0
 
     def test_extra_tips_are_always_fair(self):
         case = self.cases["csc134_project_cpp__clean"]
@@ -160,13 +175,19 @@ class TestDigest:
         for case in self.cases.values():
             score = _composite(self.suite, case, self._payload(case))
             assert score.composite == 1.0, (case.case_id, score.graders)
-            assert score.graders["compression"] == 1.0
 
-    def test_copying_the_code_fails_compression(self):
+    def test_compression_applies_only_to_large_programs(self):
+        import dataclasses
+
+        from cqc_cpcc.model_eval.suites.digest import COMPRESSION_MIN_CHARS
+
         case = next(iter(self.cases.values()))
         payload = self._payload(case)
-        payload["overall_assessment"] = case.inputs["student_code"]
-        assert _composite(self.suite, case, payload).graders["compression"] == 0.0
+        assert _composite(self.suite, case, payload).graders["compression"] is None  # small program
+        big = dataclasses.replace(case, labels={**case.labels, "code_chars": COMPRESSION_MIN_CHARS})
+        assert _composite(self.suite, big, payload).graders["compression"] == 1.0
+        payload["overall_assessment"] = "x" * COMPRESSION_MIN_CHARS  # a copy of the code
+        assert _composite(self.suite, big, payload).graders["compression"] == 0.0
 
 
 class TestLevelband:

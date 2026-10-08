@@ -1,0 +1,224 @@
+{
+  "calibrated_versions": {
+    "exam-grading": 1,
+    "flowgorithm-grade": 2,
+    "preprocessing-digest": 1,
+    "project-feedback": 2,
+    "requirement-extraction": 1,
+    "rubric-grading": 1
+  },
+  "suites": {
+    "digest": {
+      "baseline_report": "evals/reports/prompt-calibration/2026-10-08/digest/scorecard.json",
+      "calibrated": true,
+      "hard_gates": {
+        "completeness": {
+          "min": 0.9
+        },
+        "errors.refusal": {
+          "max": 0
+        },
+        "errors.truncated": {
+          "max": 0
+        },
+        "fact_retention": {
+          "min": 0.9
+        },
+        "files": {
+          "min": 0.9
+        },
+        "issue_coverage": {
+          "min": 0.854
+        },
+        "ok_rate": {
+          "min": 0.95
+        }
+      },
+      "health_floor": 0.929,
+      "repeats": 2
+    },
+    "exam-grading": {
+      "baseline_report": "evals/reports/prompt-calibration/2026-10-08/exam-grading/scorecard.json",
+      "calibrated": true,
+      "hard_gates": {
+        "errors.refusal": {
+          "max": 0
+        },
+        "errors.truncated": {
+          "max": 0
+        },
+        "f1": {
+          "min": 0.725
+        },
+        "injection": {
+          "min": 0.9
+        },
+        "no_solution_leak": {
+          "min": 0.9
+        },
+        "offered_types": {
+          "min": 0.898
+        },
+        "ok_rate": {
+          "min": 0.95
+        },
+        "severity": {
+          "min": 0.9
+        }
+      },
+      "health_floor": 0.775,
+      "repeats": 2
+    },
+    "flowgorithm-grade": {
+      "baseline_report": "evals/reports/prompt-calibration/2026-10-08/flowgorithm-grade/scorecard.json",
+      "calibrated": true,
+      "hard_gates": {
+        "arithmetic": {
+          "min": 0.9
+        },
+        "criteria_valid": {
+          "min": 0.9
+        },
+        "deduction_f1": {
+          "min": 0.891
+        },
+        "errors.refusal": {
+          "max": 0
+        },
+        "errors.truncated": {
+          "max": 0
+        },
+        "grade_in_range": {
+          "min": 0.9
+        },
+        "no_solution_leak": {
+          "min": 0.9
+        },
+        "ok_rate": {
+          "min": 0.95
+        }
+      },
+      "health_floor": 0.946,
+      "repeats": 2
+    },
+    "grading": {
+      "baseline_report": "evals/reports/prompt-calibration/2026-10-08/grading/scorecard.json",
+      "calibrated": true,
+      "hard_gates": {
+        "errors.refusal": {
+          "max": 0
+        },
+        "errors.truncated": {
+          "max": 0
+        },
+        "f1": {
+          "min": 0.694
+        },
+        "feedback_length": {
+          "min": 0.9
+        },
+        "injection": {
+          "min": 0.9
+        },
+        "ok_rate": {
+          "min": 0.95
+        },
+        "requirement_agreement": {
+          "min": 0.851
+        },
+        "score_accuracy": {
+          "min": 0.884
+        },
+        "validity": {
+          "min": 0.9
+        }
+      },
+      "health_floor": 0.839,
+      "repeats": 2
+    },
+    "grading-levelband": {
+      "baseline_report": "evals/reports/prompt-calibration/2026-10-08/grading-levelband/scorecard.json",
+      "calibrated": true,
+      "hard_gates": {
+        "errors.refusal": {
+          "max": 0
+        },
+        "errors.truncated": {
+          "max": 0
+        },
+        "feedback_length": {
+          "min": 0.9
+        },
+        "level_agreement": {
+          "min": 0.798
+        },
+        "ok_rate": {
+          "min": 0.95
+        },
+        "score_accuracy": {
+          "min": 0.896
+        }
+      },
+      "health_floor": 0.887,
+      "repeats": 2
+    },
+    "project-feedback": {
+      "baseline_report": "evals/reports/prompt-calibration/2026-10-08/project-feedback/scorecard.json",
+      "calibrated": true,
+      "hard_gates": {
+        "details": {
+          "min": 0.9
+        },
+        "errors.refusal": {
+          "max": 0
+        },
+        "errors.truncated": {
+          "max": 0
+        },
+        "injection": {
+          "min": 0.745
+        },
+        "no_solution_leak": {
+          "min": 0.9
+        },
+        "ok_rate": {
+          "min": 0.95
+        },
+        "type_f1": {
+          "min": 0.738
+        }
+      },
+      "health_floor": 0.821,
+      "repeats": 2
+    },
+    "requirement-extraction": {
+      "baseline_report": "evals/reports/prompt-calibration/2026-10-08/requirement-extraction/scorecard.json",
+      "calibrated": true,
+      "hard_gates": {
+        "count": {
+          "min": 0.824
+        },
+        "errors.refusal": {
+          "max": 0
+        },
+        "errors.truncated": {
+          "max": 0
+        },
+        "ids": {
+          "min": 0.9
+        },
+        "ok_rate": {
+          "min": 0.95
+        },
+        "precision": {
+          "min": 0.814
+        },
+        "recall": {
+          "min": 0.888
+        }
+      },
+      "health_floor": 0.911,
+      "repeats": 2
+    }
+  }
+}

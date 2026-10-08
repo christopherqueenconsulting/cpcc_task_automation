@@ -1,0 +1,281 @@
+{
+  "budget_usd": 15.0,
+  "cases": 18,
+  "dataset": "grading-levelband/v1",
+  "models": {
+    "openai/gpt-6-luna@high": {
+      "comparative": false,
+      "composite": 0.9373333333333334,
+      "cost_per_call": 0.0009858725,
+      "cost_usd": 0.053237115,
+      "errors": {},
+      "graders": {
+        "feedback_length": 1.0,
+        "level_agreement": 0.8981481481481483,
+        "score_accuracy": 0.9961111111111111
+      },
+      "health": {
+        "calibrated": false,
+        "failures": [],
+        "needs_work": false
+      },
+      "judges": {},
+      "latency_p95_s": 27.223478289000013,
+      "model_mismatches": 0,
+      "ok_rate": 1.0,
+      "per_case": [
+        {
+          "calls": 3,
+          "case_id": "reflection__all_strong__0",
+          "composite": 0.95,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.9166666666666666,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__all_strong__1",
+          "composite": 0.9,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.8333333333333334,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__all_strong__2",
+          "composite": 0.884,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.8333333333333334,
+            "score_accuracy": 0.96
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__all_weak__0",
+          "composite": 1.0,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 1.0,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__all_weak__1",
+          "composite": 1.0,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 1.0,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__all_weak__2",
+          "composite": 1.0,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 1.0,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_tool__0",
+          "composite": 0.95,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.9166666666666666,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_tool__1",
+          "composite": 0.85,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.75,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_tool__2",
+          "composite": 1.0,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 1.0,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_analysis__0",
+          "composite": 0.8,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.6666666666666666,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_analysis__1",
+          "composite": 0.9,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.8333333333333334,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_analysis__2",
+          "composite": 0.95,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.9166666666666666,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_goals__0",
+          "composite": 0.788,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.6666666666666666,
+            "score_accuracy": 0.9700000000000001
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_goals__1",
+          "composite": 1.0,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 1.0,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__weak_goals__2",
+          "composite": 0.95,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.9166666666666666,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__too_long__0",
+          "composite": 1.0,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 1.0,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__too_long__1",
+          "composite": 1.0,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 1.0,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "reflection"
+        },
+        {
+          "calls": 3,
+          "case_id": "reflection__too_long__2",
+          "composite": 0.95,
+          "graders": {
+            "feedback_length": 1.0,
+            "level_agreement": 0.9166666666666666,
+            "score_accuracy": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "reflection"
+        }
+      ],
+      "per_stratum": {
+        "reflection": 0.9373333333333334
+      },
+      "prompt_versions": [
+        "rubric-grading@1"
+      ],
+      "retry_rate": 0.0,
+      "scorable_cases": 18,
+      "skipped_budget": 0
+    }
+  },
+  "prompt_id": "rubric-grading",
+  "repeats": 3,
+  "role": "grading",
+  "run_id": null,
+  "run_label": "2026-10-08",
+  "spent_usd": 0.053237,
+  "status": "complete",
+  "suite": "grading-levelband"
+}

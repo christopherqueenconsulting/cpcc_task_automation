@@ -2,6 +2,7 @@
 """Event-driven prompt evaluation: affected suites, A/B decisions, calibration, records."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -317,7 +318,10 @@ class TestCli:
 
         monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
         import asyncio
-        patch = asyncio.run(pa.calibrate(tmp_path / "cal", ["digest"], repeats=2))
+        patch = asyncio.run(pa.calibrate(tmp_path / "cal", ["digest"], repeats=2, report_dir=str(tmp_path / "rep")))
         assert patch["suites"]["digest"]["calibrated"] is True
+        baseline = patch["suites"]["digest"]["baseline_report"]
+        assert baseline == str(tmp_path / "rep" / "digest" / "scorecard.json")
+        assert json.loads(Path(baseline).read_text())["suite"] == "digest"  # the cited baseline exists
         assert "preprocessing-digest" in patch["calibrated_versions"]
         assert (tmp_path / "cal" / "policy_patch.json").exists()

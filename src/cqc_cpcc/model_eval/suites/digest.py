@@ -3,7 +3,9 @@
 
 The prompt is the same whatever the size (size only decides when it runs), so the cases
 are small multi-file programs with seeded defects and a list of facts the digest must
-keep. A digest that merely copies the code fails the compression grader.
+keep. A digest that merely copies a large program fails the compression grader; on
+programs under ``COMPRESSION_MIN_CHARS`` the digest's fixed structure is longer than the
+code, so compression is not applicable there.
 """
 
 from __future__ import annotations
@@ -60,7 +62,14 @@ def _completeness(case, payload) -> float:
     return 1.0 if not missing else 0.5  # nothing is missing: extra "missing" items are noise
 
 
-def _compression(case, payload) -> float:
+#: Below this the digest's per-file structure alone outweighs the code (seen live: ~2k-char
+#: programs give ~5k-char digests), so shortness says nothing about the prompt.
+COMPRESSION_MIN_CHARS = 8000
+
+
+def _compression(case, payload) -> Optional[float]:
+    if case.labels["code_chars"] < COMPRESSION_MIN_CHARS:
+        return None
     return 1.0 if len(json.dumps(payload)) <= 0.9 * case.labels["code_chars"] else 0.0
 
 
