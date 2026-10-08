@@ -550,6 +550,36 @@ def cmd_build_suite_datasets(args) -> int:
     return 0
 
 
+def cmd_build_judge_gold(args) -> int:
+    from cqc_cpcc.model_eval import judge_calibration
+
+    for judge_id, count in judge_calibration.write_gold().items():
+        print(f"{judge_id}: {count} gold items")
+    return 0
+
+
+def cmd_judge_label(args) -> int:
+    from cqc_cpcc.model_eval import judge_calibration
+
+    done = judge_calibration.label_interactively(args.judge, args.labeled_by)
+    print(f"labelled {done} item(s)")
+    return 0
+
+
+def cmd_judge_calibrate(args) -> int:
+    from cqc_cpcc.model_eval import judge_calibration, judges
+
+    model = args.judge_model or judges.pick_judge_model()
+    if not model:
+        raise SystemExit("no judge model: pin prompt_eval.judge.model in model_policy.json")
+    report = asyncio.run(judge_calibration.calibrate(args.judge, model, use_constructed=args.use_constructed))
+    path = judges.CALIBRATION_DIR / (f"{args.judge}.report.json" if not args.use_constructed
+                                     else f"{args.judge}.provisional.json")
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def cmd_prompts(args) -> int:
     """List prompts, check fingerprints and version bumps, or rewrite stale fingerprints."""
     from cqc_cpcc.model_eval import prompt_registry as pr
@@ -672,7 +702,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     st.add_argument("--label", default=None)
     st.add_argument("--run-id", default=None)
     st.add_argument("--dry-run", action="store_true")
+    st.add_argument("--judges", action="store_true", help="also run the suite's model graders")
+    st.add_argument("--judge-model", default=None, help="judge model (default: policy pin, else auto-pick)")
+    st.add_argument("--judge-cache", default=None, help="verdict cache directory")
+    st.add_argument("--judge-cache-read-only", action="store_true", help="read the cache, never write (PR runs)")
     st.set_defaults(func=cmd_suite)
+
+    bjg = sub.add_parser("build-judge-gold", help="regenerate the judge calibration gold sets")
+    bjg.set_defaults(func=cmd_build_judge_gold)
+    jl = sub.add_parser("judge-label", help="label judge gold items by hand (interactive)")
+    jl.add_argument("--judge", required=True, choices=["feedback-quality", "faithfulness"])
+    jl.add_argument("--labeled-by", required=True)
+    jl.set_defaults(func=cmd_judge_label)
+    jc = sub.add_parser("judge-calibrate", help="measure a judge against the human labels")
+    jc.add_argument("--judge", required=True, choices=["feedback-quality", "faithfulness"])
+    jc.add_argument("--judge-model", default=None)
+    jc.add_argument("--use-constructed", action="store_true",
+                    help="compare with the constructed scores (provisional report, never counts)")
+    jc.set_defaults(func=cmd_judge_calibrate)
 
     bsd = sub.add_parser("build-suite-datasets", help="regenerate the prompt-suite datasets")
     bsd.add_argument("--reviewed-by", default=None, help="record a human label review")

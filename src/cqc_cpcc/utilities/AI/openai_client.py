@@ -1606,6 +1606,15 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
             completeness_check=CompletenessCheck(required_components_present=[], missing_components=[]),
         )
 
+    # Prompt-evaluation judges (model graders)
+    elif model_name == "JudgeVerdict":
+        return schema_model.model_validate({"reasoning": "Test mode verdict.", "scores": [
+            {"criterion": c, "score": 3} for c in ("specific", "correct", "actionable", "tone", "no_solution",
+                                                     "supported", "no_invented_problems",
+                                                     "no_invented_requirements")]})
+    elif model_name == "PairwiseVerdict":
+        return schema_model.model_validate({"reasoning": "Test mode verdict.", "winner": "tie"})
+
     # Default: return empty instance
     else:
         logger.warning(f"No test mode response defined for {model_name}, returning empty instance")

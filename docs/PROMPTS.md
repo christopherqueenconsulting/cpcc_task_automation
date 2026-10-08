@@ -28,6 +28,17 @@ LangChain and free-text markdown in version 2; the page renders the same markdow
 the structured result, with the final grade computed by the backend.) Every gateway call records `prompt_id@version` on
 `llm_gateway.last_call().prompt`, and eval raw outputs carry it in `CallRecord.prompt`.
 
+### Model graders (judges)
+
+| id | What it does | Output |
+|---|---|---|
+| `judge-feedback-quality` | scores feedback 1-4: specific, correct, actionable, tone, no solution | `JudgeVerdict` |
+| `judge-faithfulness` | scores 1-4: claims supported, no invented problems or requirements | `JudgeVerdict` |
+| `judge-pairwise` | which of two outputs for the same case is better (both orders) | `PairwiseVerdict` |
+
+They live in `evals/judges/` and count only once calibrated against human labels
+(see [`evals/judges/README.md`](../evals/judges/README.md)).
+
 ## What the fingerprint covers
 
 `cqc_cpcc.model_eval.prompt_registry` calls each prompt's real builder with fixed

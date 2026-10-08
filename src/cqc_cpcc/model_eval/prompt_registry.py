@@ -261,6 +261,17 @@ def _render_structured_fallback() -> list[str]:
     return [_build_fallback_prompt("Extract the requirements.", RequirementChecklist)]
 
 
+def _render_judge(judge_id: str) -> Callable[[], list[str]]:
+    def render() -> list[str]:
+        from cqc_cpcc.model_eval.judges import build_judge_prompt
+
+        if judge_id == "pairwise":
+            return [build_judge_prompt("pairwise", task="Rubric grading", context=FIXTURE_INSTRUCTIONS,
+                                       output_a="Feedback A", output_b="Feedback B")]
+        return [build_judge_prompt(judge_id, context=FIXTURE_INSTRUCTIONS, output="Feedback to judge")]
+    return render
+
+
 RENDERERS: dict[str, Callable[[], list[str]]] = {
     "rubric-grading": _render_rubric_grading,
     "requirements-section": _render_requirements_section,
@@ -270,6 +281,9 @@ RENDERERS: dict[str, Callable[[], list[str]]] = {
     "project-feedback": _render_project_feedback,
     "flowgorithm-grade": _render_flowgorithm_grade,
     "structured-fallback": _render_structured_fallback,
+    "judge-feedback-quality": _render_judge("feedback-quality"),
+    "judge-faithfulness": _render_judge("faithfulness"),
+    "judge-pairwise": _render_judge("pairwise"),
 }
 
 

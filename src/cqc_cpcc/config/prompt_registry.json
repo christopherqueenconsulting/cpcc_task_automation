@@ -206,6 +206,75 @@
       "shared_files": [],
       "fingerprint": "sha256:5aca8a649fb60455bba8defd41efdec15ec81e352eca50a38cd380d11c6da1f0",
       "suites": []
+    },
+    "judge-feedback-quality": {
+      "version": 1,
+      "status": "judge",
+      "role": "feedback",
+      "description": "Model grader: scores feedback 1-4 on specific, correct, actionable, tone, no solution.",
+      "builder": "cqc_cpcc.model_eval.judges:build_judge_prompt",
+      "schema": "cqc_cpcc.model_eval.judges:JudgeVerdict",
+      "call_sites": [
+        "cqc_cpcc.model_eval.judges:_ask"
+      ],
+      "source_files": [
+        "evals/judges/feedback-quality.md",
+        "src/cqc_cpcc/model_eval/judges.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py"
+      ],
+      "suites": [],
+      "graders": [],
+      "fingerprint": "sha256:3c4f127cedbd7a689831b19fc84aeb4afdee398b4c1371fd01137f8fd10d8856"
+    },
+    "judge-faithfulness": {
+      "version": 1,
+      "status": "judge",
+      "role": "feedback",
+      "description": "Model grader: scores 1-4 whether every claim is supported (no invented problems or requirements).",
+      "builder": "cqc_cpcc.model_eval.judges:build_judge_prompt",
+      "schema": "cqc_cpcc.model_eval.judges:JudgeVerdict",
+      "call_sites": [
+        "cqc_cpcc.model_eval.judges:_ask"
+      ],
+      "source_files": [
+        "evals/judges/faithfulness.md",
+        "src/cqc_cpcc/model_eval/judges.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py"
+      ],
+      "suites": [],
+      "graders": [],
+      "fingerprint": "sha256:b1fb20e86388f3b1beec7a676096ce178361fb8195d4bf6b9190adcd71b3db40"
+    },
+    "judge-pairwise": {
+      "version": 1,
+      "status": "judge",
+      "role": "feedback",
+      "description": "Model grader: which of two outputs for the same case is better (run in both orders).",
+      "builder": "cqc_cpcc.model_eval.judges:build_judge_prompt",
+      "schema": "cqc_cpcc.model_eval.judges:PairwiseVerdict",
+      "call_sites": [
+        "cqc_cpcc.model_eval.judges:_ask"
+      ],
+      "source_files": [
+        "evals/judges/pairwise.md",
+        "src/cqc_cpcc/model_eval/judges.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py"
+      ],
+      "suites": [],
+      "graders": [],
+      "fingerprint": "sha256:907a71eee0302dd2cc92b06dcb0c8c786d10995c6164e67b2e6fe71db6526430"
     }
   }
 }

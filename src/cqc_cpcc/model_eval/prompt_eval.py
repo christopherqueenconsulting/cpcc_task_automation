@@ -84,7 +84,9 @@ def scorecard(suite, aggregates: dict, meta: dict) -> dict:
             **{k: agg.get(k) for k in ("composite", "ok_rate", "retry_rate", "errors", "graders",
                                        "scorable_cases", "comparative", "per_stratum", "cost_usd",
                                        "cost_per_call", "latency_p95_s", "prompt_versions",
-                                       "skipped_budget", "model_mismatches", "judges")},
+                                       "skipped_budget", "model_mismatches")},
+            "judges": {j: {k: v for k, v in info.items() if k != "per_case"}
+                       for j, info in (agg.get("judges") or {}).items()},
             "health": health(suite, agg, policy),
             "per_case": [{"case_id": cs.case_id, "split": cs.split, "stratum": cs.stratum,
                           "composite": cs.composite, "graders": cs.graders,
@@ -148,7 +150,8 @@ def read_records(path: Path) -> dict[str, list[SuiteRecord]]:
 async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: Optional[int] = None,
               limit: Optional[int] = None, budget_usd: Optional[float] = None, out: str = "evals/runs/suites",
               dry_run: bool = False, run_label: Optional[str] = None, run_id: Optional[str] = None,
-              case_ids: Optional[set] = None) -> dict:
+              case_ids: Optional[set] = None, judges: bool = False, judge_model: Optional[str] = None,
+              judge_cache: Optional[str] = None, judge_cache_read_only: bool = False) -> dict:
     """Evaluate ``suite_id`` on ``models`` (default: the role's incumbent)."""
     suite = get_suite(suite_id)
     policy = model_registry.load_policy().prompt_eval
@@ -182,10 +185,19 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
             raw.write(record.to_json() + "\n")
             raw.flush()
 
+        judge_scores = {}
+        if judges:
+            from cqc_cpcc.model_eval import judges as jm
+            judge_model = judge_model or jm.pick_judge_model()
+            cache = jm.VerdictCache(Path(judge_cache) if judge_cache else out_dir / "judge-cache",
+                                    read_only=judge_cache_read_only)
         for model, effort in models:
             records = await run_suite(suite, model, effort, cases, repeats, budget,
                                       profile=profiles[model], on_record=save)
-            aggregates[label_of(model, effort)] = aggregate(suite, cases, records)
+            if judges:
+                judge_scores = await jm.judge_records(suite, cases, records, judge_model, cache, budget,
+                                                      dataset_version=suite.dataset, evaluated_model=model)
+            aggregates[label_of(model, effort)] = aggregate(suite, cases, records, judge_scores)
             if any(r.error_kind == "budget" for r in records):
                 status = "incomplete_budget"
                 break
@@ -235,5 +247,7 @@ def cmd_suite(args) -> int:
     suite_ids = list(SUITE_MODULES) if args.suite == "all" else args.suite.split(",")
     for suite_id in suite_ids:
         asyncio.run(run(suite_id, models, args.repeats, args.limit, args.budget, args.out,
-                        args.dry_run, args.label, args.run_id))
+                        args.dry_run, args.label, args.run_id, judges=args.judges,
+                        judge_model=args.judge_model, judge_cache=args.judge_cache,
+                        judge_cache_read_only=args.judge_cache_read_only))
     return 0
