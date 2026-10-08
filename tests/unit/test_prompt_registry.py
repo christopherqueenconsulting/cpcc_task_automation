@@ -62,7 +62,10 @@ def test_listed_files_exist(prompt_id):
 def test_live_prompts_declare_a_suite_and_role():
     for prompt_id, entry in REGISTRY.prompts.items():
         if entry.status == "live":
-            assert entry.suite, f"{prompt_id} is live but has no evaluation suite"
+            assert entry.suites, f"{prompt_id} is live but has no evaluation suite"
+            from cqc_cpcc.model_eval.suites import SUITE_MODULES
+            missing = set(entry.suites) - set(SUITE_MODULES)
+            assert not missing, f"{prompt_id}: suites {missing} are not implemented"
             assert entry.role, f"{prompt_id} is live but has no model role"
             assert entry.call_sites, f"{prompt_id} is live but no call site sends it"
 
@@ -185,3 +188,14 @@ def test_cli_check_passes_on_the_committed_registry(capsys):
 
     assert main(["prompts", "check"]) == 0
     assert "prompt registry OK" in capsys.readouterr().out
+
+
+def test_older_registry_schema_still_parses_for_version_checks():
+    data = json.loads(pr.REGISTRY_PATH.read_text(encoding="utf-8"))
+    for entry in data["prompts"].values():  # phase-1 shape: a single "suite" field
+        suites = entry.pop("suites")
+        entry["suite"] = suites[0] if suites else None
+        entry["retired_field"] = "ignored"
+    old = pr._lenient(data)
+    assert old.prompts["rubric-grading"].suites == ["grading"]
+    assert pr.version_problems(REGISTRY, old) == []

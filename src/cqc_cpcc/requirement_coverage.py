@@ -108,12 +108,16 @@ def build_requirement_extraction_prompt(instructions: str) -> str:
 _CHECKLIST_CACHE: dict[str, RequirementChecklist] = {}
 
 
-async def extract_requirements(instructions: str, model_name: Optional[str] = None) -> RequirementChecklist:
-    """Extract (and cache by instructions hash) the requirement checklist."""
+async def extract_requirements(instructions: str, model_name: Optional[str] = None,
+                               use_cache: bool = True) -> RequirementChecklist:
+    """Extract (and cache by instructions hash) the requirement checklist.
+
+    ``use_cache=False`` always calls the model (the prompt evaluation repeats calls).
+    """
     from cqc_cpcc.utilities.AI import llm_gateway
 
     key = f"{instructions_hash(instructions)}:{model_name or ''}"
-    if key in _CHECKLIST_CACHE:
+    if use_cache and key in _CHECKLIST_CACHE:
         return _CHECKLIST_CACHE[key]
     checklist = await llm_gateway.structured(
         role="grading",

@@ -167,7 +167,7 @@ class TestPromptEvalCli:
         prompts = pr.load().prompts
         for suite_id in SUITE_MODULES:
             suite = get_suite(suite_id)
-            assert prompts[suite.prompt_id].suite == suite_id
+            assert suite_id in prompts[suite.prompt_id].suites
             assert prompts[suite.prompt_id].role == suite.role
 
     def test_health_is_report_only_until_calibrated(self):

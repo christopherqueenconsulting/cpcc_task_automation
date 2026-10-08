@@ -1566,10 +1566,7 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
 
     # ErrorDefinitions for exam review
     elif model_name == "ErrorDefinitions":
-        return ErrorDefinitions(
-            major_errors=[],
-            minor_errors=[]
-        )
+        return ErrorDefinitions(all_major_errors=[], all_minor_errors=[])
 
     # FeedbackGuide for project feedback
     elif model_name == "FeedbackGuide":

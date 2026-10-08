@@ -1,13 +1,19 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
-"""Prompt evaluation suites, one per registered prompt (see ``base.py``)."""
+"""Prompt evaluation suites (see ``base.py``); a prompt may have several suites."""
 
 from __future__ import annotations
 
 import importlib
 
-#: suite id -> module defining ``SUITE``. Ids match ``suite`` in prompt_registry.json.
+#: suite id -> module defining ``SUITE``. Ids match ``suites`` in prompt_registry.json.
 SUITE_MODULES = {
     "grading": "cqc_cpcc.model_eval.suites.grading",
+    "grading-levelband": "cqc_cpcc.model_eval.suites.levelband",
+    "requirement-extraction": "cqc_cpcc.model_eval.suites.requirements",
+    "exam-grading": "cqc_cpcc.model_eval.suites.exam",
+    "digest": "cqc_cpcc.model_eval.suites.digest",
+    "project-feedback": "cqc_cpcc.model_eval.suites.feedback",
+    "flowgorithm-grade": "cqc_cpcc.model_eval.suites.flowgorithm",
 }
 
 

@@ -50,7 +50,7 @@ class PromptEntry(BaseModel):
     call_sites: list[str] = Field(default_factory=list)  # "module:function" that send it
     source_files: list[str] = Field(default_factory=list)
     shared_files: list[str] = Field(default_factory=list)
-    suite: Optional[str] = None
+    suites: list[str] = Field(default_factory=list)  # evaluation suites (model_eval/suites)
     graders: list[str] = Field(default_factory=list)
     fingerprint: str
 
@@ -340,7 +340,19 @@ def load_at_ref(ref: str) -> Optional[PromptRegistry]:
         if "does not exist" in shown.stderr or "exists on disk, but not in" in shown.stderr:
             return None
         raise RuntimeError(f"git show {ref}:{REGISTRY_RELPATH} failed: {shown.stderr.strip()}")
-    return PromptRegistry.model_validate_json(shown.stdout)
+    return _lenient(json.loads(shown.stdout))
+
+
+def _lenient(data: dict) -> PromptRegistry:
+    """Parse an older registry: only versions and fingerprints are compared, so fields the
+    schema has since renamed or dropped are ignored (``suite`` became ``suites``)."""
+    allowed = set(PromptEntry.model_fields) | {"schema"}
+    for entry in data.get("prompts", {}).values():
+        if "suite" in entry and "suites" not in entry:
+            entry["suites"] = [entry["suite"]] if entry["suite"] else []
+        for key in [k for k in entry if k not in allowed]:
+            entry.pop(key)
+    return PromptRegistry.model_validate(data)
 
 
 def version_problems(head: PromptRegistry, base: Optional[PromptRegistry]) -> list[str]:

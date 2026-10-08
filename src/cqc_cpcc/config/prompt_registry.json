@@ -25,7 +25,6 @@
         "src/cqc_cpcc/utilities/zip_grading_utils.py",
         "src/cqc_cpcc/scoring/"
       ],
-      "suite": "grading",
       "graders": [
         "ok_rate",
         "f1",
@@ -35,7 +34,11 @@
         "requirement_agreement",
         "injection_pass_rate"
       ],
-      "fingerprint": "sha256:bab7c37b0b30661fb39a713de47e4d1b19500f2a5ca03a6a63297f0407a86a7a"
+      "fingerprint": "sha256:bab7c37b0b30661fb39a713de47e4d1b19500f2a5ca03a6a63297f0407a86a7a",
+      "suites": [
+        "grading",
+        "grading-levelband"
+      ]
     },
     "requirements-section": {
       "version": 1,
@@ -50,11 +53,13 @@
         "src/cqc_cpcc/requirement_coverage.py"
       ],
       "shared_files": [],
-      "suite": "grading",
       "graders": [
         "requirement_agreement"
       ],
-      "fingerprint": "sha256:0af1b7a6db0db837485915f7b86352ee85ec3734d9e611bbbd4bc9dcaabb7771"
+      "fingerprint": "sha256:0af1b7a6db0db837485915f7b86352ee85ec3734d9e611bbbd4bc9dcaabb7771",
+      "suites": [
+        "grading"
+      ]
     },
     "requirement-extraction": {
       "version": 1,
@@ -76,8 +81,10 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "suite": "requirement-extraction",
-      "fingerprint": "sha256:635bde730fcb44bf7a63d45324bc40b62f469e745d9218b2634cb7555985b01e"
+      "fingerprint": "sha256:635bde730fcb44bf7a63d45324bc40b62f469e745d9218b2634cb7555985b01e",
+      "suites": [
+        "requirement-extraction"
+      ]
     },
     "exam-grading": {
       "version": 1,
@@ -101,8 +108,10 @@
         "src/cqc_cpcc/exam_review.py",
         "src/cqc_cpcc/utilities/utils.py"
       ],
-      "suite": "exam-grading",
-      "fingerprint": "sha256:f25dd7073aa33a8cdffb2440cb1f1006a9071939cf2e95245387c4bb7c91131f"
+      "fingerprint": "sha256:f25dd7073aa33a8cdffb2440cb1f1006a9071939cf2e95245387c4bb7c91131f",
+      "suites": [
+        "exam-grading"
+      ]
     },
     "preprocessing-digest": {
       "version": 1,
@@ -124,8 +133,10 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "suite": "digest",
-      "fingerprint": "sha256:41852226b43ed8821f72fbb3ec0471164937a3c17818f607980684abd28bc5be"
+      "fingerprint": "sha256:41852226b43ed8821f72fbb3ec0471164937a3c17818f607980684abd28bc5be",
+      "suites": [
+        "digest"
+      ]
     },
     "project-feedback": {
       "version": 1,
@@ -148,8 +159,10 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "suite": "project-feedback",
-      "fingerprint": "sha256:ecfa0f09874c3f7f698006a1a279d8063f283726586472ae2a78bf8d5e7add8b"
+      "fingerprint": "sha256:ecfa0f09874c3f7f698006a1a279d8063f283726586472ae2a78bf8d5e7add8b",
+      "suites": [
+        "project-feedback"
+      ]
     },
     "flowgorithm-grade": {
       "version": 2,
@@ -172,8 +185,10 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "suite": "flowgorithm-grade",
-      "fingerprint": "sha256:4c3b63a218f1527c2e52c14c84edd5e10ea85d1dd30f17c02c4ed07cda773247"
+      "fingerprint": "sha256:4c3b63a218f1527c2e52c14c84edd5e10ea85d1dd30f17c02c4ed07cda773247",
+      "suites": [
+        "flowgorithm-grade"
+      ]
     },
     "structured-fallback": {
       "version": 1,
@@ -189,8 +204,8 @@
         "src/cqc_cpcc/utilities/AI/openai_client.py"
       ],
       "shared_files": [],
-      "suite": null,
-      "fingerprint": "sha256:5aca8a649fb60455bba8defd41efdec15ec81e352eca50a38cd380d11c6da1f0"
+      "fingerprint": "sha256:5aca8a649fb60455bba8defd41efdec15ec81e352eca50a38cd380d11c6da1f0",
+      "suites": []
     }
   }
 }

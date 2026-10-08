@@ -32,7 +32,14 @@ def normalize(text: str) -> str:
 
 
 def _stem(word: str) -> str:
-    for suffix in ("ing", "ed", "es", "s"):
+    """Tiny English stemmer: plural and -ing/-ed endings ("scores" -> "score", "guesses" -> "guess")."""
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if word.endswith(("sses", "shes", "ches", "xes", "zes")):
+        return word[:-2]
+    if word.endswith("s") and not word.endswith(("ss", "us", "is")) and len(word) > 3:
+        return word[:-1]
+    for suffix in ("ing", "ed"):
         if len(word) > len(suffix) + 2 and word.endswith(suffix):
             return word[: -len(suffix)]
     return word

@@ -540,17 +540,27 @@ def cmd_describe_change(args) -> int:
     return 0
 
 
+def cmd_build_suite_datasets(args) -> int:
+    """Regenerate every prompt-suite dataset (evals/datasets/<suite>/v1/cases.jsonl)."""
+    from cqc_cpcc.model_eval import suite_datasets
+
+    counts = suite_datasets.write_all(reviewed_by=args.reviewed_by)
+    for name, count in counts.items():
+        print(f"{name}: {count} cases")
+    return 0
+
+
 def cmd_prompts(args) -> int:
     """List prompts, check fingerprints and version bumps, or rewrite stale fingerprints."""
     from cqc_cpcc.model_eval import prompt_registry as pr
 
     registry = pr.load()
     if args.action == "list":
-        print("| id | version | status | role | suite | fingerprint |")
+        print("| id | version | status | role | suites | fingerprint |")
         print("|---|---|---|---|---|---|")
         for pid, entry in registry.prompts.items():
             print(f"| {pid} | {entry.version} | {entry.status} | {entry.role or '-'} | "
-                  f"{entry.suite or '-'} | {entry.fingerprint[:19]}… |")
+                  f"{', '.join(entry.suites) or '-'} | {entry.fingerprint[:19]}… |")
         return 0
 
     base = pr.load_at_ref(args.base_ref) if args.base_ref else None
@@ -663,6 +673,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     st.add_argument("--run-id", default=None)
     st.add_argument("--dry-run", action="store_true")
     st.set_defaults(func=cmd_suite)
+
+    bsd = sub.add_parser("build-suite-datasets", help="regenerate the prompt-suite datasets")
+    bsd.add_argument("--reviewed-by", default=None, help="record a human label review")
+    bsd.set_defaults(func=cmd_build_suite_datasets)
 
     pm = sub.add_parser("prompts", help="list / fingerprint / check the prompt registry")
     pm.add_argument("action", choices=["list", "fingerprint", "check"])
