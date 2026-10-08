@@ -191,3 +191,13 @@ class TestLevelband:
             words = case.labels["word_count"]
             strong = "Exemplary" in case.labels["allowed_levels"]["presentation_requirements"]
             assert (250 <= words <= 400) == strong, (case.case_id, words)
+
+
+def test_every_offered_feedback_type_is_answerable_by_the_schema():
+    """Give Feedback lists types the model must answer with: they must be FeedbackType values."""
+    from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackType, schema_feedback_types
+
+    offered = schema_feedback_types(DefaultFeedbackType.list())
+    assert len(offered) == len(DefaultFeedbackType.list())
+    assert set(offered) <= set(FeedbackType.list())
+    assert schema_feedback_types(["A custom type"]) == ["A custom type"]  # passes through

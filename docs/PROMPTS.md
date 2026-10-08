@@ -18,7 +18,7 @@ edits it. The evaluation workflow that grades these prompts is planned in
 | `requirement-extraction` | Instructions → 1–12 functional requirements | grading | `requirement_coverage.py:build_requirement_extraction_prompt` | `RequirementChecklist` | suite `requirement-extraction` (36) |
 | `exam-grading` | Grade Assignment, exam mode (`CodeGrader`): major/minor errors | grading | `utilities/AI/exam_grading_prompts.py` | `ErrorDefinitions` | suite `exam-grading` (74) |
 | `preprocessing-digest` | Compress a very large submission before exam grading | digest | `utilities/AI/openai_client.py:_build_preprocessing_prompt` | `PreprocessingDigest` | suite `digest` (16) |
-| `project-feedback` | Give Feedback page | feedback | `prompts/project_feedback.py` | `FeedbackGuide` | suite `project-feedback` (74) |
+| `project-feedback` | Give Feedback page (v2: offered types use the schema's wording) | feedback | `prompts/project_feedback.py` | `FeedbackGuide` | suite `project-feedback` (74) |
 | `flowgorithm-grade` | Flowgorithm grading: per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py`) | `FlowgorithmGrade` | suite `flowgorithm-grade` (24) |
 | `structured-fallback` | Retry suffix of `get_structured_completion`, which nothing calls (dead path) | – | `utilities/AI/openai_client.py:_build_fallback_prompt` | – | no |
 

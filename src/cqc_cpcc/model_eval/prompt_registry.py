@@ -129,8 +129,6 @@ FIXTURE_TOTAL_POINTS = "100"
 FIXTURE_MAJOR_TYPES = ["CSC_151_EXAM_1_SYNTAX_ERROR - code does not compile",
                        "CSC_151_EXAM_1_MISSING_REQUIREMENT - a required behavior is missing"]
 FIXTURE_MINOR_TYPES = ["CSC_151_EXAM_1_NAMING_CONVENTIONS - names do not follow Java conventions"]
-FIXTURE_FEEDBACK_TYPES = ["COMMENTS_MISSING - the code is not commented",
-                          "INPUT_VALIDATION - invalid input is not handled"]
 
 
 def _fixture_rubric(scoring_mode: str):
@@ -239,12 +237,14 @@ def _render_preprocessing_digest() -> list[str]:
 
 
 def _render_project_feedback() -> list[str]:
+    from cqc_cpcc.project_feedback import DefaultFeedbackType, schema_feedback_types
     from cqc_cpcc.prompts.project_feedback import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
 
-    # Mirrors FeedbackGiver.generate_feedback
+    # Mirrors FeedbackGiver.generate_feedback with the page's default feedback types.
     return [CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
         course_name=FIXTURE_COURSE, assignment=FIXTURE_INSTRUCTIONS, solution=FIXTURE_SOLUTION,
-        submission=FIXTURE_SUBMISSION, feedback_types="\n\t".join(FIXTURE_FEEDBACK_TYPES))]
+        submission=FIXTURE_SUBMISSION,
+        feedback_types="\n\t".join(schema_feedback_types(DefaultFeedbackType.list())))]
 
 
 def _render_flowgorithm_grade() -> list[str]:

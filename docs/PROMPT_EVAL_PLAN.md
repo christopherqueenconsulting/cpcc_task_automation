@@ -155,7 +155,7 @@ Prompt PRs are always merged by a human. The guard warns when a live prompt chan
 | 3 | done: datasets + code graders for every prompt (`suite_datasets.py`, 6 new datasets, 7 suites); drift and perfect-answer tests. The live calibration baseline needs an OpenRouter key: it is the `calibrate` workflow run (phase 5). |
 | 4 | done: judges `feedback-quality`, `faithfulness`, `pairwise` (registered prompts), verdict cache, order-swapped pairwise, auto-picked non-OpenAI judge model, 40-item gold sets per judge, `judge-label` / `judge-calibrate`. Judges stay report-only until Christopher labels the gold sets and a calibration report exists. |
 | 5 | done: `prompt-eval.yml` (detect → estimate / rescore / A/B → PR comment + `prompt-eval/ab` status; master record → history, `PROMPT_STATUS.md`, needs-work issues; dispatch modes suites/calibrate/ab), `model-eval.yml` (weekly free discovery, evaluation only with a candidate, failed attempts recorded, cross-suite gate before promotion, no weekly re-comment on expiry), `automerge-check` refuses stale prompt versions and a missing/failed cross-suite result, heartbeat 10 days, provisional `prompt_eval` policy. Needs Christopher's one-time setup (docs/PROMPTS.md). |
-| 6 | see below |
+| 6 | started: `flowgorithm-grade` v2 (structured output; it could not be scored at all) and `project-feedback` v2 (offered feedback types now match the output schema; three of six could not be answered before). Both found without a live run; their PR A/B measures them. Further rewrites wait for the first calibration run: any prompt whose current model fails its calibrated gates gets a "Prompt needs work" issue automatically, and its fix goes through the same A/B. |
 
 ## Phased PRs
 | # | PR | Live cost |
