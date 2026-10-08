@@ -1,0 +1,14 @@
+{
+  "exact": 0.725,
+  "judge_fingerprint": "sha256:3c4f127cedbd7a689831b19fc84aeb4afdee398b4c1371fd01137f8fd10d8856",
+  "judge_id": "feedback-quality",
+  "judge_model": "anthropic/claude-haiku-5.5",
+  "judge_version": 1,
+  "kappa": 0.8713450292397661,
+  "kappa_high": 0.937733499377335,
+  "kappa_low": 0.7764705882352941,
+  "labels": "human (Christopher Queen (reviewed Claude's recommended scores on the Judge Label Review page; accepted all 40))",
+  "n": 40,
+  "spent_usd": 0.015109,
+  "within_one": 1.0
+}

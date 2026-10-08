@@ -103,7 +103,11 @@ class TestJudgeModel:
         live = [self._model("openai/cheapest", 300, price="0.0000001"), self._model("anthropic/older", 100),
                 self._model("google/cheaper", 200, price="0.0000005"), self._model("mistral/x", 400),
                 self._model("google/too-pricey", 500, price="0.001")]
-        assert judges.pick_judge_model(live_models=live) == "google/cheaper"
+        from cqc_cpcc.utilities.AI import model_registry
+
+        unpinned = model_registry.load_policy().model_copy(deep=True)
+        unpinned.prompt_eval.judge.model = None
+        assert judges.pick_judge_model(unpinned, live_models=live) == "google/cheaper"
 
     def test_a_pinned_judge_wins(self):
         from cqc_cpcc.utilities.AI import model_registry

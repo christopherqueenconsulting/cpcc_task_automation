@@ -78,7 +78,7 @@
     "max_models": 3,
     "pinned_models": [],
     "judge": {
-      "model": null,
+      "model": "anthropic/claude-haiku-5.5",
       "reasoning_effort": null,
       "max_output_tokens": 4096,
       "min_kappa_lower": 0.4,
