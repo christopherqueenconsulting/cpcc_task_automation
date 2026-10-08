@@ -2,7 +2,7 @@
 name: model-eval
 description: Evaluate a candidate grading model, get it promoted through the bot PR, or roll a role back - by driving the existing Model Evaluation, Model Registry Guard and Model Rollback workflows and `python -m cqc_cpcc.model_eval`, with a cost estimate before any spend and the student-PII guard before anything is committed. Never edits model_registry.json or model_policy.json by hand and never merges.
 when_to_use: Use when asked to "try model X for grading", "is there a better or cheaper grading model", "re-baseline the current model", "check the promotion PR", "roll back the grading model", or when a Model Evaluation run, guard check or rollback PR needs attention. Not for prompt changes (that is the prompt-eval workflow and docs/PROMPTS.md).
-allowed-tools: Read, Bash(grep:*), Bash(git fetch:*), Bash(git switch:*), Bash(git status:*), Bash(git show:*), Bash(git diff:*), Bash(git restore:*), Bash(git add:*), Bash(git commit:*), Bash(mkdir -p evals/runs:*), Bash(poetry install:*), Bash(poetry run python -m cqc_cpcc.model_eval:*), Bash(poetry run python scripts/pii_guard.py:*), Bash(gh workflow run:*), Bash(gh run list:*), Bash(gh run watch:*), Bash(gh run view:*), Bash(gh run download:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr checks:*)
+allowed-tools: Read, Bash(grep:*), Bash(git fetch:*), Bash(git switch:*), Bash(git status:*), Bash(git show:*), Bash(git restore:*), Bash(git add:*), Bash(git commit:*), Bash(mkdir -p evals/runs:*), Bash(poetry install:*), Bash(poetry run python -m cqc_cpcc.model_eval:*), Bash(poetry run python scripts/pii_guard.py:*), Bash(gh workflow run:*), Bash(gh run list:*), Bash(gh run watch:*), Bash(gh run view:*), Bash(gh run download:*), Bash(gh pr list:*), Bash(gh pr checks:*)
 ---
 
 # Model eval, promote, rollback
@@ -45,7 +45,8 @@ the whole run:
 4. **Dispatch the evaluation (20 min, mostly waiting).** `gh workflow run
    model-eval.yml --ref master -f candidates=<id[,id]> -f dry_run=false`
    (secrets live in the `model-eval` environment, deployable from master
-   only). Get the run id from `gh run list --workflow model-eval.yml -L 1`
+   only). Get the run id from `gh run list --workflow model-eval.yml
+   --event workflow_dispatch -L 1`
    and follow it with `gh run watch <run-id>`. Verify: the `evaluate` job
    succeeds; `gh run view <run-id> --log | grep -i "status\|winner"` shows
    the scorecard status. `smoke` or `aborted_budget` never promotes.
@@ -54,10 +55,14 @@ the whole run:
    download <run-id> -n model-eval-<run-id> -D evals/runs/ci-<run-id>`.
    Read `scorecard.md`: hard-gate failures, composite and cost deltas, and
    whether the incumbent failed a gate (drift; nothing is promoted). Verify
-   against "How a candidate wins" in the doc: *better* is composite +0.03
-   with nothing else worse by more than 0.02 at cost up to 1.5x; *cheaper*
-   is nothing worse by more than 0.02 at cost up to 0.7x; ties keep the
-   current model.
+   against "How a candidate wins" in the doc and `gates.decide()`:
+   *better* is a composite at least 0.03 higher whose paired-bootstrap 95%
+   interval lies above zero, at cost up to 1.5x; *cheaper* is cost up to
+   0.7x. Both paths also need noninferiority at the 0.02 margin
+   (`p_noninferior` <= `alpha`) on every quality metric and on the
+   composite for every language, a primary p-value that survives Holm
+   correction across the candidates, and no hard-gate failure on the
+   candidate or the incumbent. Ties keep the current model.
 
 6. **Promotion PR (15 min).** If there is a winner, the `cross-suite` job
    must report `pass`, then `promote` opens `auto/model-promotion-*`.
@@ -78,7 +83,8 @@ the whole run:
 7. **Rollback (10 min).** Fastest, no PR: the owner sets
    `CQC_MODEL_GRADING=<previous model>` in `.env` (or the Settings page
    pin) and restarts. To record it in the repo, preview first:
-   `git show HEAD:src/cqc_cpcc/config/model_registry.json >
+   `mkdir -p evals/runs && git show
+   HEAD:src/cqc_cpcc/config/model_registry.json >
    evals/runs/base_registry.json`, `poetry run python -m
    cqc_cpcc.model_eval rollback --role <role>`, then `poetry run python -m
    cqc_cpcc.model_eval describe-change --base-registry
