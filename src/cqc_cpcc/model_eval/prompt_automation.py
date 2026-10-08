@@ -108,9 +108,13 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
         add(rescore, list(SUITE_MODULES), "shared grader code changed")
 
     if MODEL_REGISTRY_RELPATH in changed:
-        before, after = _registry_at(base_ref) or {}, model_registry.load_registry().model_dump(mode="json")
-        roles = {r for r in after.get("roles", {})
-                 if (before.get("roles") or {}).get(r) != after["roles"][r]}
+        before = (_registry_at(base_ref) or {}).get("roles") or {}
+        after = model_registry.load_registry().model_dump(mode="json")["roles"]
+
+        def role(cfg):  # validated on both sides, so defaults compare equal
+            return model_registry.RoleConfig.model_validate(cfg).model_dump(mode="json") if cfg else None
+
+        roles = {r for r in after if role(before.get(r)) != role(after[r])}
         for suite_id in SUITE_MODULES:
             if get_suite(suite_id).role in roles:
                 add(run, [suite_id], f"model registry role {get_suite(suite_id).role} changed")
@@ -122,11 +126,11 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
 
 # --- A/B: base prompt vs head prompt --------------------------------------------------------
 
-def _aggregates(suite, raw_path: Path) -> dict:
+def _aggregates(suite, raw_path: Path, case_ids: Optional[set] = None) -> dict:
     cases = suite.cases()
     by_model = prompt_eval.read_records(raw_path)
     seen = {r.case_id for recs in by_model.values() for r in recs}
-    cases = [c for c in cases if c.case_id in seen]
+    cases = [c for c in cases if c.case_id in seen and (case_ids is None or c.case_id in case_ids)]
     return {label: base.aggregate(suite, cases, recs) for label, recs in by_model.items()}
 
 
@@ -173,6 +177,22 @@ def ab_decision(suite, head: dict, base_aggs: dict, policy=None, pairwise_scores
     return {"suite": suite.id, "status": status, "reasons": reasons, "notes": notes, "models": per_model}
 
 
+def _unchanged_case_ids(suite, worktree: Path) -> Optional[set]:
+    """Case ids whose inputs and labels are the same in the base worktree (None = all)."""
+    base_dir = worktree / "evals" / "datasets" / suite.dataset
+    try:
+        base_cases = {c.case_id: c for c in suite.load_cases(base_dir)}
+    except Exception:  # noqa: BLE001 - a base without this dataset compares nothing
+        return set()
+    head_cases = {c.case_id: c for c in suite.cases()}
+
+    def key(c):
+        return json.dumps([c.inputs, c.labels], sort_keys=True, default=str)
+
+    same = {cid for cid, c in head_cases.items() if cid in base_cases and key(base_cases[cid]) == key(c)}
+    return None if len(same) == len(head_cases) else same
+
+
 def _base_worktree(base_ref: str, where: Path) -> Path:
     if where.exists():
         subprocess.run(["git", "worktree", "remove", "--force", str(where)], cwd=REPO_ROOT, capture_output=True)
@@ -180,12 +200,16 @@ def _base_worktree(base_ref: str, where: Path) -> Path:
     return where
 
 
-def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Path) -> Optional[Path]:
-    """Run the suite with the BASE code (prompt, schema, graders); None when the base has no such suite."""
-    if not (worktree / "src" / "cqc_cpcc" / "model_eval" / "suites" / "__init__.py").exists():
-        return None
+def _base_has_suite(worktree: Path, suite_id: str) -> bool:
+    init = worktree / "src" / "cqc_cpcc" / "model_eval" / "suites" / "__init__.py"
+    return init.exists() and f'"{suite_id}"' in init.read_text(encoding="utf-8")
+
+
+def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Path,
+              budget_usd: float) -> Optional[Path]:
+    """Run the suite with the BASE code (prompt, schema, graders). None when the run failed."""
     args = [sys.executable, "-m", "cqc_cpcc.model_eval", "suite", "run", "--suite", suite_id,
-            "--repeats", str(repeats), "--out", str(out)]
+            "--repeats", str(repeats), "--out", str(out.resolve()), "--budget", f"{max(budget_usd, 0.01):.4f}"]
     for m in models:
         args += ["--model", m]
     env = {**os.environ, "PYTHONPATH": str(worktree / "src")}
@@ -202,25 +226,44 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
     """Run each suite at the base and head code on the same models and compare."""
     from cqc_cpcc.model_eval.__main__ import parse_model
 
+    out = out.resolve()  # the base runs in another working directory
     out.mkdir(parents=True, exist_ok=True)
+    parsed = [parse_model(m) for m in models]
+    # One budget for the whole A/B: head + base for every suite, judges included.
+    budget = prompt_eval.shared_budget()
+    estimate = 2 * prompt_eval.estimate_suites(suite_ids, parsed, repeats)
+    print(f"A/B estimate ${estimate:.2f} (head + base); budget stops at ${budget.stop_at:.2f}")
+    if estimate > budget.stop_at:
+        raise SystemExit("the A/B estimate exceeds the prompt-eval budget; run fewer suites")
     worktree = _base_worktree(base_ref, out / "base-src")
     results = {}
     try:
         for suite_id in suite_ids:
             suite = get_suite(suite_id)
-            suite_models = [parse_model(m) for m in models] or [prompt_eval.incumbent_of(suite.role)]
+            suite_models = parsed or [prompt_eval.incumbent_of(suite.role)]
             labels = [prompt_eval.label_of(m, e) for m, e in suite_models]
             r = repeats or prompt_eval.suite_policy(suite_id).repeats
-            await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"))
-            head = _aggregates(suite, out / "head" / suite_id / "raw_outputs.jsonl")
-            base_raw = _run_base(worktree, suite_id, labels, r, out / "base")
-            if base_raw is None:
+            await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"), budget=budget)
+            if not _base_has_suite(worktree, suite_id):
+                head = _aggregates(suite, out / "head" / suite_id / "raw_outputs.jsonl")
                 results[suite_id] = {"suite": suite_id, "status": "no-base",
-                                     "reasons": [], "notes": ["the base ref has no runnable suite; absolute numbers only"],
+                                     "reasons": [], "notes": ["the base ref has no such suite; absolute numbers only"],
                                      "models": {k: {"composite_head": v.get("composite")} for k, v in head.items()}}
                 continue
-            # Both sides are scored with the HEAD graders, so only the prompt differs.
-            base_aggs = _aggregates(suite, base_raw)
+            base_estimate = prompt_eval.estimate_suites([suite_id], suite_models, r)
+            base_raw = _run_base(worktree, suite_id, labels, r, out / "base",
+                                 min(budget.remaining, base_estimate * 1.5))
+            if base_raw is None:
+                # Fail closed: a base run that crashed or ran out of budget proves nothing.
+                results[suite_id] = {"suite": suite_id, "status": "fail", "models": {}, "notes": [],
+                                     "reasons": ["the base run failed, so the change could not be compared"]}
+                continue
+            budget.add(sum(rec.cost_usd for recs in prompt_eval.read_records(base_raw).values() for rec in recs))
+            # Both sides are scored with the HEAD graders, so only the prompt differs. When the
+            # PR changed the dataset, only cases whose inputs are unchanged are compared.
+            same = _unchanged_case_ids(suite, worktree)
+            head = _aggregates(suite, out / "head" / suite_id / "raw_outputs.jsonl", same)
+            base_aggs = _aggregates(suite, base_raw, same)
             pairwise_scores, calibrated = {}, False
             if judges:
                 from cqc_cpcc.model_eval import judges as jm
@@ -238,8 +281,11 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                         for cid in sorted(set(h0) & set(b0)):
                             if cases.get(cid) is None or cases[cid].split != "holdout":
                                 continue
-                            score, _ = await jm.pairwise(suite, cases[cid], h0[cid].payload, b0[cid].payload,
-                                                         jmodel, cache)
+                            if budget.exhausted:
+                                break
+                            score, cost = await jm.pairwise(suite, cases[cid], h0[cid].payload, b0[cid].payload,
+                                                            jmodel, cache)
+                            budget.add(cost)
                             if score is not None:
                                 wins.append(score)
                         pairwise_scores[label] = sum(wins) / len(wins) if wins else None
@@ -409,11 +455,15 @@ async def suite_gate(incumbent: str, candidate: str, roles: list, out: Path, ski
     inc, cand = parse_model(incumbent), parse_model(candidate)
     inc_label, cand_label = prompt_eval.label_of(*inc), prompt_eval.label_of(*cand)
     results, failures = {}, []
+    budget = prompt_eval.shared_budget()
+    gated = [s for s in SUITE_MODULES if get_suite(s).role in roles and s not in skip]
+    if gated and prompt_eval.estimate_suites(gated, [inc, cand]) > budget.stop_at:
+        raise SystemExit("the cross-suite estimate exceeds the prompt-eval budget")
     for suite_id in SUITE_MODULES:
         suite = get_suite(suite_id)
         if suite.role not in roles or suite_id in skip:
             continue
-        sc = await prompt_eval.run(suite_id, [inc, cand], out=str(out))
+        sc = await prompt_eval.run(suite_id, [inc, cand], out=str(out), budget=budget)
         if sc.get("status") != "complete":
             failures.append(f"{suite_id}: run {sc.get('status')}")
             continue

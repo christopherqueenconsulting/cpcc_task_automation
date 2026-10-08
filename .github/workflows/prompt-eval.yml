@@ -285,7 +285,10 @@ jobs:
 
   report:
     needs: [detect, estimate, rescore, ab]
-    if: always() && github.event_name == 'pull_request' && needs.detect.result == 'success'
+    # Fork PRs get a read-only token: no comment or status there (the jobs above still run).
+    if: >-
+      always() && github.event_name == 'pull_request' && needs.detect.result == 'success' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -313,6 +316,7 @@ jobs:
           AB_RESULT: ${{ needs.ab.result }}
           AB_STATUS: ${{ needs.ab.outputs.ab_status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
           marker="<!-- prompt-eval -->"
@@ -336,6 +340,11 @@ jobs:
                   pass) state="success"; description="A/B: no regression";;
                   *) state="success"; description="A/B: no regression (suite thresholds not calibrated)";;
                 esac
+              elif [ "${AB_RESULT}" = "skipped" ] && [[ "${HEAD_REF}" == auto/model-* ]]; then
+                # Model promotion/rollback bot PRs: the Model Evaluation run and its cross-suite
+                # gate already evaluated the model change on every affected suite.
+                state="success"; description="Model change: evaluated by Model Evaluation"
+                echo; echo "Model registry bot PR: the model change was evaluated by the Model Evaluation run (incl. the cross-suite gate)."
               elif [ "${AB_RESULT}" = "skipped" ]; then
                 state="pending"; description="A/B needs a maintainer run"
                 echo
@@ -373,8 +382,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: model-eval
     timeout-minutes: 150
+    # Not the update-state group: GitHub keeps one pending job per group and cancels older
+    # ones. Both writers fetch, rebase and retry instead.
     concurrency:
-      group: model-eval-state
+      group: prompt-eval-record
       cancel-in-progress: false
     permissions:
       contents: read
@@ -435,6 +446,7 @@ jobs:
                   --raw-dir master-raw --out evals/runs/prompt-master 2>/dev/null || true
                 for s in ${RESCORE_SUITES//,/ }; do
                   if [ -f "master-raw/${s}/raw_outputs.jsonl" ] && [ ! -f "evals/runs/prompt-master/${s}/raw_outputs.jsonl" ]; then
+                    mkdir -p "evals/runs/prompt-master/${s}"
                     cp "master-raw/${s}/raw_outputs.jsonl" "evals/runs/prompt-master/${s}/"
                   fi
                 done
@@ -442,10 +454,13 @@ jobs:
               fi
             done
           fi
-          # Keep earlier outputs of suites that did not run this time, so the next re-score finds them.
+          # Keep earlier outputs of suites that did not run this time, so the next re-score finds
+          # them: the newest master run that saved any (most pushes run nothing).
           for id in $(gh run list --repo "${REPO}" --workflow prompt-eval.yml --branch master --event push \
-              --status success --limit 1 --json databaseId --jq '.[].databaseId'); do
-            gh run download "${id}" --repo "${REPO}" -n "prompt-eval-master-${id}" -D previous 2>/dev/null || true
+              --status success --limit 30 --json databaseId --jq '.[].databaseId'); do
+            if gh run download "${id}" --repo "${REPO}" -n "prompt-eval-master-${id}" -D previous 2>/dev/null; then
+              break
+            fi
           done
           if [ -d previous ]; then
             for d in previous/*/; do
@@ -453,7 +468,9 @@ jobs:
               if [ ! -d "evals/runs/prompt-master/${s}" ]; then cp -r "${d}" "evals/runs/prompt-master/${s}"; fi
             done
           fi
-          for f in evals/runs/prompt-master/*/scorecard.md; do [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"; done
+          for f in evals/runs/prompt-master/*/scorecard.md; do
+            if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
 
       - name: Record history and status
         shell: bash
@@ -668,7 +685,9 @@ jobs:
               poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${suites}" --base-ref "origin/${BASE}" \
                 "${models[@]}" "${judges[@]}" --out evals/runs/dispatch | tee run.log ;;
           esac
-          for f in evals/runs/dispatch/*/scorecard.md evals/runs/dispatch/ab.md; do [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"; done
+          for f in evals/runs/dispatch/*/scorecard.md evals/runs/dispatch/ab.md; do
+            if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
           exit 0
 
       - name: Upload results

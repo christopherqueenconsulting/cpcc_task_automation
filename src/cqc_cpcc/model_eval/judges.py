@@ -7,7 +7,8 @@ Three judges, each a registered prompt (``evals/judges/<id>.md``, status ``judge
 * ``feedback-quality``: specific, correct, actionable, tone, no solution handed out.
 * ``faithfulness``: every claim is supported; no invented problems or requirements.
 * ``pairwise``: which of two outputs for the same case is better (prompt A/Bs). It runs
-  twice with A and B swapped, so position bias cancels.
+  twice with A and B swapped, so position bias cancels. It has no gold set of its own, so
+  it is always report-only.
 
 Rules (docs/PROMPT_EVAL_PLAN.md): the judge model is pinned in ``model_policy.json``
 (``prompt_eval.judge.model``) or, when unset, picked per run from allowlisted non-OpenAI
@@ -167,8 +168,9 @@ def pick_judge_model(policy=None, live_models: Optional[list] = None, today=None
             continue
         prompt, completion = _per_mtok(m["pricing"]["prompt"]), _per_mtok(m["pricing"]["completion"])
         if 0 < prompt <= ceiling.prompt and 0 < completion <= ceiling.completion:
-            eligible.append((-(m.get("created") or 0), prompt + completion, m["id"]))
-    # Newest first, then cheapest.
+            eligible.append((prompt + completion, -(m.get("created") or 0), m["id"]))
+    # Cheapest first (stable from run to run), then newest. Pin the judge once calibrated:
+    # a different judge model makes the calibration report stale.
     return sorted(eligible)[0][2] if eligible else None
 
 
@@ -187,7 +189,9 @@ def is_calibrated(judge_id: str, judge_model: Optional[str], policy=None) -> boo
     from cqc_cpcc.model_eval import prompt_registry
     from cqc_cpcc.utilities.AI import model_registry
 
-    report = calibration_report("feedback-quality" if judge_id == "pairwise" else judge_id)
+    if judge_id == "pairwise":
+        return False  # no gold set of its own: pairwise verdicts stay report-only
+    report = calibration_report(judge_id)
     if not report or not judge_model or report.get("judge_model") != judge_model:
         return False
     entry = prompt_registry.load().prompts.get(f"judge-{report['judge_id']}")

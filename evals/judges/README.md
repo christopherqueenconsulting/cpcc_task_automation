@@ -26,7 +26,7 @@ scorecards as *report-only* and never gate anything (hard gates use code graders
    This writes `calibration/<judge>.report.json`. A judge counts when that report's judge model
    and prompt fingerprint match the current ones, the lower 95% bound of the weighted kappa is
    at least `prompt_eval.judge.min_kappa_lower` (0.4), and within-one agreement is at least
-   `min_within_one` (0.8). `pairwise` uses the `feedback-quality` calibration.
+   `min_within_one` (0.8). `pairwise` has no gold set and stays report-only.
 4. Commit the labels and the report.
 
 Changing the judge model or a judge prompt makes the report stale; recalibrate.

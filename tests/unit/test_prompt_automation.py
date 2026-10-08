@@ -192,3 +192,132 @@ async def test_suite_gate_runs_the_other_suites_of_the_roles(tmp_path, monkeypat
     assert set(ran) == {"grading-levelband", "requirement-extraction", "exam-grading"}
     assert report["status"] == "pass"  # same canned answers for both models
     assert json.loads((tmp_path / "cross_suite.json").read_text())["candidate"] == "openai/gpt-5-mini"
+
+
+class TestReviewRegressions:
+    def test_untouched_model_registry_is_not_a_role_change(self):
+        result = pa.affected("HEAD", changed=[pa.MODEL_REGISTRY_RELPATH])
+        assert result["run"] == []
+
+    async def test_relative_out_path_still_compares_against_the_base(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setenv("CQC_TEST_MODE", "true")
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        monkeypatch.chdir(tmp_path)
+        report = await pa.prompt_ab(["flowgorithm-grade"], "HEAD", [], pa.Path("rel-ab"), repeats=1)
+        r = report["suites"]["flowgorithm-grade"]
+        assert r["status"] in ("pass", "pass-provisional"), r
+        assert (tmp_path / "rel-ab" / "base" / "flowgorithm-grade" / "raw_outputs.jsonl").exists()
+
+    async def test_a_failed_base_run_fails_closed(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        monkeypatch.setattr(pa, "_run_base", lambda *a, **k: None)
+        report = await pa.prompt_ab(["flowgorithm-grade"], "HEAD", [], tmp_path, repeats=1)
+        assert report["status"] == "fail"
+        assert "base run failed" in report["suites"]["flowgorithm-grade"]["reasons"][0]
+
+    def test_unchanged_dataset_compares_every_case(self):
+        assert pa._unchanged_case_ids(get_suite("digest"), pa.REPO_ROOT) is None
+
+    def test_changed_cases_are_left_out_of_the_comparison(self, tmp_path):
+        suite = get_suite("requirement-extraction")
+        d = tmp_path / "evals" / "datasets" / suite.dataset
+        d.mkdir(parents=True)
+        lines = (suite.dataset_dir / "cases.jsonl").read_text().splitlines()
+        first = json.loads(lines[0])
+        first["inputs"]["instructions"] += " (edited)"
+        (d / "cases.jsonl").write_text("\n".join([json.dumps(first)] + lines[1:]) + "\n")
+        same = pa._unchanged_case_ids(suite, tmp_path)
+        assert first["case_id"] not in same and len(same) == len(lines) - 1
+
+    def test_suite_cli_refuses_a_total_over_budget(self, monkeypatch):
+        from cqc_cpcc.model_eval.__main__ import main
+
+        monkeypatch.setattr(prompt_eval, "estimate_suites", lambda *a, **k: 1000.0)
+        with pytest.raises(SystemExit, match="exceeds the budget"):
+            main(["suite", "run", "--suite", "digest"])
+
+    async def test_one_budget_is_shared_across_suites(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval.budget import Budget
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        budget = Budget(limit=1.0, stop_at=0.9)
+        budget.add(0.9)  # already spent by an earlier suite
+        with pytest.raises(SystemExit, match="left in the budget"):
+            await prompt_eval.run("digest", [], repeats=1, out=str(tmp_path), budget=budget)
+
+
+class TestAttemptBackoff:
+    def test_attempted_candidates_are_skipped_for_28_days_only(self, tmp_path):
+        import datetime as dt
+
+        from cqc_cpcc.model_eval.discover import load_history
+
+        path = tmp_path / "history.jsonl"
+        path.write_text("\n".join(json.dumps(r) for r in [
+            {"canonical_slug": "a/evaluated", "status": "complete"},
+            {"canonical_slug": "a/recent", "status": "attempted", "date": "2026-10-01"},
+            {"canonical_slug": "a/old", "status": "attempted", "date": "2026-08-01"},
+            {"canonical_slug": "a/undated", "status": "attempted"},
+        ]) + "\n")
+        assert load_history(path, today=dt.date(2026, 10, 8)) == {"a/evaluated", "a/recent"}
+
+
+class TestCli:
+    def _main(self, *argv):
+        from cqc_cpcc.model_eval.__main__ import main
+        return main(list(argv))
+
+    def test_prompts_affected(self, capsys):
+        assert self._main("prompts-affected", "--base-ref", "HEAD") == 0
+        assert '"run"' in capsys.readouterr().out
+
+    def test_suite_list_and_dry_run(self, capsys):
+        assert self._main("suite", "list") == 0
+        assert self._main("suite", "run", "--suite", "digest,flowgorithm-grade", "--dry-run") == 0
+        out = capsys.readouterr().out
+        assert "| digest |" in out and "[flowgorithm-grade]" in out
+
+    def test_record_and_rescore(self, tmp_path, monkeypatch, capsys):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        import asyncio
+        asyncio.run(prompt_eval.run("digest", [], repeats=2, out=str(tmp_path / "runs")))
+        assert self._main("prompt-rescore", "--suites", "digest,exam-grading", "--raw-dir", str(tmp_path / "runs"),
+                          "--out", str(tmp_path / "rescored")) == 0
+        assert (tmp_path / "rescored" / "digest" / "scorecard.json").exists()
+        assert "no saved outputs" in capsys.readouterr().out  # exam-grading never ran
+        assert self._main("prompt-record", "--scorecards", str(tmp_path / "runs"), "--history",
+                          str(tmp_path / "h.jsonl"), "--status", str(tmp_path / "S.md"), "--sha", "abc",
+                          "--run-url", "u", "--needs-work-out", str(tmp_path / "nw.json")) == 0
+        assert json.loads((tmp_path / "nw.json").read_text())["healthy"] == ["preprocessing-digest"]
+        assert self._main("suite", "score", "--suite", "digest", "--raw",
+                          str(tmp_path / "runs" / "digest" / "raw_outputs.jsonl")) == 0
+
+    def test_judge_calibrate_writes_a_provisional_report(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import judge_calibration as jc
+        from cqc_cpcc.model_eval import judges
+
+        async def fake(judge_id, model, use_constructed=False):
+            return {"judge_id": judge_id, "judge_model": model, "kappa_low": None}
+
+        monkeypatch.setattr(jc, "calibrate", fake)
+        monkeypatch.setattr(judges, "CALIBRATION_DIR", tmp_path)
+        assert self._main("judge-calibrate", "--judge", "faithfulness", "--judge-model", "anthropic/j",
+                          "--use-constructed") == 0
+        assert json.loads((tmp_path / "faithfulness.provisional.json").read_text())["judge_model"] == "anthropic/j"
+
+    def test_calibrate_proposes_thresholds(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        import asyncio
+        patch = asyncio.run(pa.calibrate(tmp_path / "cal", ["digest"], repeats=2))
+        assert patch["suites"]["digest"]["calibrated"] is True
+        assert "preprocessing-digest" in patch["calibrated_versions"]
+        assert (tmp_path / "cal" / "policy_patch.json").exists()

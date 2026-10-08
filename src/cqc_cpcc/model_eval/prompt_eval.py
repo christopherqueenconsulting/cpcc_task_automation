@@ -58,6 +58,25 @@ def estimate(suite, profile, cases: list, repeats: int) -> float:
                       + len(cases) * ASSUMED_OUTPUT_TOKENS * pricing.completion_per_mtok) / 1e6
 
 
+def shared_budget(budget_usd: Optional[float] = None) -> Budget:
+    """The prompt-eval budget for one command (never above model_policy.json's cap)."""
+    policy = model_registry.load_policy().prompt_eval
+    limit = min(budget_usd or policy.budget_usd, policy.budget_usd)
+    return Budget(limit=limit, stop_at=min(policy.stop_at_usd, limit * 0.9))
+
+
+def estimate_suites(suite_ids: list, models: list, repeats: Optional[int] = None) -> float:
+    """Worst-case-ish USD for running ``suite_ids`` on ``models`` (default: each role's incumbent)."""
+    total = 0.0
+    for suite_id in suite_ids:
+        suite = get_suite(suite_id)
+        runs = models or [incumbent_of(suite.role)]
+        profiles = profiles_for([m for m, _ in runs])
+        r = repeats or suite_policy(suite_id).repeats
+        total += sum(estimate(suite, profiles[m], suite.cases(), r) for m, _ in runs)
+    return total
+
+
 def suite_policy(suite_id: str):
     return model_registry.load_policy().prompt_eval.suites.get(suite_id) or model_registry.SuitePolicy()
 
@@ -151,7 +170,8 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
               limit: Optional[int] = None, budget_usd: Optional[float] = None, out: str = "evals/runs/suites",
               dry_run: bool = False, run_label: Optional[str] = None, run_id: Optional[str] = None,
               case_ids: Optional[set] = None, judges: bool = False, judge_model: Optional[str] = None,
-              judge_cache: Optional[str] = None, judge_cache_read_only: bool = False) -> dict:
+              judge_cache: Optional[str] = None, judge_cache_read_only: bool = False,
+              budget: Optional[Budget] = None) -> dict:
     """Evaluate ``suite_id`` on ``models`` (default: the role's incumbent)."""
     suite = get_suite(suite_id)
     policy = model_registry.load_policy().prompt_eval
@@ -163,21 +183,22 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
         cases = cases[:limit]
     models = models or [incumbent_of(suite.role)]
     profiles = profiles_for([m for m, _ in models])
-    budget_limit = min(budget_usd or policy.budget_usd, policy.budget_usd)
-    stop_at = min(policy.stop_at_usd, budget_limit * 0.9)
+    # One budget per command: callers running several suites pass a shared Budget.
+    budget = budget or shared_budget(budget_usd)
     estimates = {label_of(m, e): estimate(suite, profiles[m], cases, repeats) for m, e in models}
-    print(f"[{suite_id}] {len(cases)} cases x {repeats} repeats; budget ${budget_limit:.2f}")
+    print(f"[{suite_id}] {len(cases)} cases x {repeats} repeats; ${budget.remaining:.2f} of the budget left")
     for label, est in estimates.items():
         print(f"  estimate {label}: ${est:.4f}")
     if dry_run:
         return {"estimates": estimates, "status": "dry_run"}
-    if sum(estimates.values()) > stop_at:
+    if sum(estimates.values()) > budget.remaining:
         # Never start a run that cannot finish: a partial matrix is never published.
-        raise SystemExit(f"[{suite_id}] estimated ${sum(estimates.values()):.2f} exceeds ${stop_at:.2f}")
+        raise SystemExit(f"[{suite_id}] estimated ${sum(estimates.values()):.2f} exceeds the "
+                         f"${budget.remaining:.2f} left in the budget")
 
     out_dir = Path(out) / suite_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    budget = Budget(limit=budget_limit, stop_at=stop_at)
+    spent_before = budget.spent
     status = "complete" if repeats >= 2 and not limit else "smoke"
     aggregates = {}
     with (out_dir / "raw_outputs.jsonl").open("w", encoding="utf-8") as raw:
@@ -204,7 +225,7 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
     sc = scorecard(suite, aggregates, {
         "run_label": run_label or dt.date.today().isoformat(), "run_id": run_id,
         "cases": len(cases), "repeats": repeats, "status": status,
-        "spent_usd": round(budget.spent, 6), "budget_usd": budget_limit,
+        "spent_usd": round(budget.spent - spent_before, 6), "budget_usd": budget.limit,
     })
     json_path, md_path = write_scorecard(out_dir, sc)
     print(md_path.read_text(encoding="utf-8"))
@@ -245,9 +266,15 @@ def cmd_suite(args) -> int:
 
     models = [parse_model(m) for m in (args.model or [])]
     suite_ids = list(SUITE_MODULES) if args.suite == "all" else args.suite.split(",")
+    budget = shared_budget(args.budget)
+    if not args.dry_run and not args.limit:
+        total = estimate_suites(suite_ids, models, args.repeats)
+        print(f"estimated total ${total:.2f}; budget stops at ${budget.stop_at:.2f}")
+        if total > budget.stop_at:
+            raise SystemExit("the estimated total exceeds the budget: run fewer suites or models")
     for suite_id in suite_ids:
         asyncio.run(run(suite_id, models, args.repeats, args.limit, args.budget, args.out,
                         args.dry_run, args.label, args.run_id, judges=args.judges,
                         judge_model=args.judge_model, judge_cache=args.judge_cache,
-                        judge_cache_read_only=args.judge_cache_read_only))
+                        judge_cache_read_only=args.judge_cache_read_only, budget=budget))
     return 0

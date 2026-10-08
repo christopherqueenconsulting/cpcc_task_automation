@@ -171,6 +171,10 @@ jobs:
           fi
           candidates="${MANUAL:-$DISCOVERED}"
           echo "Candidates: ${candidates:-none (current default re-baselined only)}"
+          # The models this run actually received (update-state backs off on these only).
+          if [ "${DRY_RUN}" != "true" ]; then
+            tr ',' '\n' <<< "${candidates}" | xargs -r -n1 > evals/runs/ci/attempted.txt
+          fi
           args=(run --out evals/runs/ci --run-id "${RUN_ID}" --label "run-${RUN_ID}")
           IFS=',' read -ra models <<< "${candidates}"
           for m in "${models[@]}"; do
@@ -205,6 +209,7 @@ jobs:
             evals/runs/ci/raw_outputs.jsonl
             evals/runs/ci/candidates.json
             evals/runs/ci/snapshot.json
+            evals/runs/ci/attempted.txt
           if-no-files-found: ignore
           retention-days: 90
 
@@ -239,7 +244,6 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          EVALUATED: ${{ needs.evaluate.outputs.evaluated }}
         run: |
           set -euo pipefail
           git init -q state && cd state
@@ -258,9 +262,11 @@ jobs:
             cp ../artifact/snapshot.json snapshots/latest.json
           fi
           python3 - <<'PY'
-          import json, os, pathlib
+          import datetime, json, os, pathlib
           art = pathlib.Path("../artifact")
           sc_path, cand_path = art / "scorecard.json", art / "candidates.json"
+          attempted_path = art / "attempted.txt"
+          today = datetime.date.today().isoformat()
           slugs = {}
           if cand_path.exists():
               for c in json.loads(cand_path.read_text()).get("candidates", []):
@@ -277,13 +283,15 @@ jobs:
                           "canonical_slug": slugs.get(model, model), "composite": m.get("composite"),
                           "cost_per_submission": m.get("cost_per_submission"), "status": sc.get("status"),
                       }, sort_keys=True) + "\n")
-              if os.environ.get("EVALUATED") == "true":
-                  # Candidates the run attempted but did not score (failure, budget): recorded
-                  # so discovery does not pick them again every week.
-                  for model, slug in slugs.items():
+              if attempted_path.exists():
+                  # Models the run received but did not score (failure, budget): discovery
+                  # skips them for 28 days instead of retrying every week.
+                  for spec in attempted_path.read_text().split():
+                      model = spec.split("@")[0]
                       if model not in recorded:
-                          fh.write(json.dumps({"run_id": os.environ["RUN_ID"], "label": model,
-                                               "canonical_slug": slug, "status": "attempted"},
+                          fh.write(json.dumps({"run_id": os.environ["RUN_ID"], "label": spec,
+                                               "canonical_slug": slugs.get(model, model),
+                                               "status": "attempted", "date": today},
                                               sort_keys=True) + "\n")
           PY
           git add -A
