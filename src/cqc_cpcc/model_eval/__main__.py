@@ -648,6 +648,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     dc.add_argument("--head-registry", required=True)
     dc.set_defaults(func=cmd_describe_change)
 
+    from cqc_cpcc.model_eval.prompt_eval import cmd_suite
+
+    st = sub.add_parser("suite", help="prompt evaluation suites: list / run / score")
+    st.add_argument("action", choices=["list", "run", "score"])
+    st.add_argument("--suite", default="all", help="suite id, comma-separated ids, or 'all'")
+    st.add_argument("--model", action="append", help="model[@effort]; repeatable (default: incumbent)")
+    st.add_argument("--repeats", type=int, default=None)
+    st.add_argument("--limit", type=int, default=None, help="first N cases only (smoke)")
+    st.add_argument("--budget", type=float, default=None)
+    st.add_argument("--out", default="evals/runs/suites")
+    st.add_argument("--raw", default=None, help="score: raw_outputs.jsonl to re-score")
+    st.add_argument("--label", default=None)
+    st.add_argument("--run-id", default=None)
+    st.add_argument("--dry-run", action="store_true")
+    st.set_defaults(func=cmd_suite)
+
     pm = sub.add_parser("prompts", help="list / fingerprint / check the prompt registry")
     pm.add_argument("action", choices=["list", "fingerprint", "check"])
     pm.add_argument("--write", action="store_true", help="fingerprint: rewrite stale fingerprints")

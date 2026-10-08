@@ -151,7 +151,8 @@ Prompt PRs are always merged by a human. The guard warns when a live prompt chan
 |---|---|
 | 0 | done: `auto_promote_roles` is `["grading"]` |
 | 1 | done: registry, fingerprints, CI version check, legacy cleanup, `docs/PROMPTS.md` |
-| 2–6 | not started |
+| 2 | done: suite + grader framework (`model_eval/suites/`, `suite list/run/score`), `pinned_registry(roles=)`, `prompt_eval` policy block, Flowgorithm on `llm_gateway` (prompt v2). The recompute oracle was dropped: the v2 calibration's raw outputs were never committed (90-day artifact). |
+| 3–6 | not started |
 
 ## Phased PRs
 | # | PR | Live cost |

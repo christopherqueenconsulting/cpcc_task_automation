@@ -152,26 +152,28 @@
       "fingerprint": "sha256:ecfa0f09874c3f7f698006a1a279d8063f283726586472ae2a78bf8d5e7add8b"
     },
     "flowgorithm-grade": {
-      "version": 1,
+      "version": 2,
       "status": "live",
       "role": "flowgorithm",
-      "description": "Flowgorithm grading: markdown deductions + final grade (LangChain, free text; moves onto llm_gateway with a schema in phase 2).",
-      "builder": "cqc_cpcc.prompts.flowgorithm:GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE",
-      "schema": null,
+      "description": "Flowgorithm grading: per-criterion deductions + feedback (structured; backend computes the final grade).",
+      "builder": "cqc_cpcc.flowgorithm_grading:build_flowgorithm_prompt",
+      "schema": "cqc_cpcc.flowgorithm_grading:FlowgorithmGrade",
       "call_sites": [
-        "cqc_cpcc.utilities.AI.llm_deprecated.chains:generate_assignment_feedback_grade"
+        "cqc_cpcc.flowgorithm_grading:grade_flowgorithm"
       ],
       "source_files": [
         "src/cqc_cpcc/prompts/flowgorithm.py",
-        "src/cqc_cpcc/utilities/AI/llm_deprecated/chains.py"
+        "src/cqc_cpcc/flowgorithm_grading.py"
       ],
       "shared_files": [
-        "src/cqc_cpcc/utilities/AI/llm_deprecated/llms.py",
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
       "suite": "flowgorithm-grade",
-      "fingerprint": "sha256:f50b7fb5e393e39f21d110552c991c2d033b3b65a4c1cb93ecbd48a70244ab7e"
+      "fingerprint": "sha256:4c3b63a218f1527c2e52c14c84edd5e10ea85d1dd30f17c02c4ed07cda773247"
     },
     "structured-fallback": {
       "version": 1,

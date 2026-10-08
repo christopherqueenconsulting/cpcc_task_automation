@@ -248,19 +248,10 @@ def _render_project_feedback() -> list[str]:
 
 
 def _render_flowgorithm_grade() -> list[str]:
-    from langchain_core.prompts import PromptTemplate
+    from cqc_cpcc.flowgorithm_grading import build_flowgorithm_prompt
 
-    from cqc_cpcc.prompts.flowgorithm import GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE
-
-    # Mirrors chains.generate_assignment_feedback_grade
-    prompt = PromptTemplate(
-        input_variables=["submission", "submission_file_name"],
-        partial_variables={"assignment": FIXTURE_INSTRUCTIONS,
-                           "rubric_criteria_markdown_table": FIXTURE_RUBRIC_TABLE,
-                           "total_possible_points": FIXTURE_TOTAL_POINTS},
-        template=GRADE_ASSIGNMENT_WITH_FEEDBACK_PROMPT_BASE.strip(),
-    )
-    return [prompt.format(submission=FIXTURE_SUBMISSION, submission_file_name=FIXTURE_FILE_NAME)]
+    return [build_flowgorithm_prompt(FIXTURE_INSTRUCTIONS, FIXTURE_RUBRIC_TABLE, FIXTURE_SUBMISSION,
+                                     FIXTURE_FILE_NAME, FIXTURE_TOTAL_POINTS)]
 
 
 def _render_structured_fallback() -> list[str]:
@@ -376,7 +367,6 @@ LLM_CALL_ATTRS = ("structured", "completions.create")
 LLM_CALL_NAMES = ("PromptTemplate",)
 NON_PROMPT_SITES = frozenset({
     "cqc_cpcc.utilities.AI.openrouter_client:_get_openrouter_completion_impl",  # gateway transport
-    "cqc_cpcc.model_eval.prompt_registry:_render_flowgorithm_grade",  # renders, never sends
 })
 
 

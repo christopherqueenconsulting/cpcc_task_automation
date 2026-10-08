@@ -31,7 +31,7 @@ import warnings
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import ConfigDict, BaseModel, Field, field_validator, model_validator
 
 _CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 DEFAULT_REGISTRY_PATH = _CONFIG_DIR / "model_registry.json"
@@ -181,6 +181,46 @@ class DiscoveryPolicy(BaseModel):
     price_drop_pct: float = 20
 
 
+class SuitePolicy(BaseModel):
+    """Thresholds for one prompt suite (docs/PROMPT_EVAL_PLAN.md)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # False until a live calibration run sets the floors: the suite then reports but
+    # never raises "needs work".
+    calibrated: bool = False
+    repeats: int = Field(default=2, ge=1)
+    # metric -> {"min": x} or {"max": x}; metrics are aggregate keys or grader names.
+    hard_gates: dict[str, dict[str, float]] = Field(default_factory=dict)
+    health_floor: Optional[float] = None  # composite below this = needs work
+    baseline_report: Optional[str] = None
+
+
+class JudgePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: Optional[str] = None  # must not share a vendor with the model under test
+    reasoning_effort: Optional[str] = None
+    max_output_tokens: int = Field(default=4096, gt=0)
+    min_kappa_lower: float = 0.4  # lower 95% bound of weighted kappa vs human labels
+    min_within_one: float = 0.8
+
+
+class PromptEvalPolicy(BaseModel):
+    """Prompt evaluation: budget, judge and per-suite thresholds. Human-owned."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    budget_usd: float = Field(default=15.0, gt=0)
+    stop_at_usd: float = Field(default=13.5, gt=0)
+    max_models: int = Field(default=3, ge=1)
+    pinned_models: list[str] = Field(default_factory=list)
+    judge: JudgePolicy = Field(default_factory=JudgePolicy)
+    # Prompt versions the thresholds were calibrated on (a bump needs a recalibration).
+    calibrated_versions: dict[str, int] = Field(default_factory=dict)
+    suites: dict[str, SuitePolicy] = Field(default_factory=dict)
+
+
 class PolicyFile(BaseModel):
     schema_version: int
     vendor_allowlist: list[str]
@@ -193,6 +233,7 @@ class PolicyFile(BaseModel):
     # Roles a passing grading evaluation may move. Feedback and Flowgorithm are not
     # covered by dataset v1, so they change only by hand.
     auto_promote_roles: list[str] = Field(default_factory=lambda: ["grading"])
+    prompt_eval: PromptEvalPolicy = Field(default_factory=PromptEvalPolicy)
 
 
 class ResolvedModel(BaseModel):

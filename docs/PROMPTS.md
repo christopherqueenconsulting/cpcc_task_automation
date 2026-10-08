@@ -19,12 +19,13 @@ edits it. The evaluation workflow that grades these prompts is planned in
 | `exam-grading` | Grade Assignment, exam mode (`CodeGrader`): major/minor errors | grading | `utilities/AI/exam_grading_prompts.py` | `ErrorDefinitions` | not yet |
 | `preprocessing-digest` | Compress a very large submission before exam grading | digest | `utilities/AI/openai_client.py:_build_preprocessing_prompt` | `PreprocessingDigest` | not yet |
 | `project-feedback` | Give Feedback page | feedback | `prompts/project_feedback.py` | `FeedbackGuide` | not yet |
-| `flowgorithm-grade` | Flowgorithm grading (LangChain, free-text markdown) | flowgorithm | `prompts/flowgorithm.py` | markdown | not yet |
+| `flowgorithm-grade` | Flowgorithm grading: per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py`) | `FlowgorithmGrade` | not yet |
 | `structured-fallback` | Retry suffix of `get_structured_completion`, which nothing calls (dead path) | – | `utilities/AI/openai_client.py:_build_fallback_prompt` | – | no |
 
 Each prompt is sent as a single user message (no system prompt) through
-`llm_gateway.structured()`, except `flowgorithm-grade`, which still uses LangChain until
-phase 2 of the plan. Every gateway call records `prompt_id@version` on
+`llm_gateway.structured()` with a strict JSON schema. (`flowgorithm-grade` moved off
+LangChain and free-text markdown in version 2; the page renders the same markdown from
+the structured result, with the final grade computed by the backend.) Every gateway call records `prompt_id@version` on
 `llm_gateway.last_call().prompt`, and eval raw outputs carry it in `CallRecord.prompt`.
 
 ## What the fingerprint covers

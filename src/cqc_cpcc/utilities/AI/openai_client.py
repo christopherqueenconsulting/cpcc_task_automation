@@ -1589,6 +1589,26 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
             {"id": "R2", "text": "Compute and print the required result.", "weight": "core"},
         ]})
 
+    # Flowgorithm grade (structured since prompt v2)
+    elif model_name == "FlowgorithmGrade":
+        return schema_model.model_validate({
+            "requirements_summary": "Test mode: read the inputs and print the result.",
+            "deductions": [{"criterion": "Comments", "points": 5,
+                            "reason": "Test mode: the flowchart has no comments."}],
+            "final_grade": 45,
+            "overall_feedback": "Test mode: solid work; add comments to explain each step.",
+        })
+
+    # Preprocessing digest (very large submissions)
+    elif model_name == "PreprocessingDigest":
+        return PreprocessingDigest(
+            files=[FileDigest(filename="Main.java", purpose="Test mode digest", structure="One class",
+                              key_components=[], notable_logic="None", io_behavior="Reads input",
+                              detected_issues=[])],
+            overall_assessment="Test mode: submission digest.",
+            completeness_check=CompletenessCheck(required_components_present=[], missing_components=[]),
+        )
+
     # Default: return empty instance
     else:
         logger.warning(f"No test mode response defined for {model_name}, returning empty instance")

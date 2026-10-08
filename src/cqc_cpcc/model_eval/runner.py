@@ -60,8 +60,13 @@ GradeFn = Callable[..., Awaitable]
 
 
 @contextlib.contextmanager
-def pinned_registry(model: str, effort: Optional[str], profile=None, max_output_tokens: int = 32768):
-    """Temporarily point the registry's ``grading`` role at ``model`` with no fallback."""
+def pinned_registry(model: str, effort: Optional[str], profile=None, max_output_tokens: int = 32768,
+                    roles: tuple = ("grading",)):
+    """Temporarily point the registry's ``roles`` at ``model`` with no fallback.
+
+    Yields the resolved first role. The ``CQC_MODEL_<ROLE>`` pins are cleared for the
+    duration so a local override cannot replace the model under test.
+    """
     registry = model_registry.load_registry()
     data = json.loads(registry.model_dump_json())
     if profile is not None:
@@ -71,29 +76,33 @@ def pinned_registry(model: str, effort: Optional[str], profile=None, max_output_
         raise ValueError(f"No capability profile for {model}; pass one from /models")
     if effort and effort not in known.get("reasoning_efforts", []):
         raise ValueError(f"{model} does not support reasoning effort {effort!r}")
-    data["roles"]["grading"] = {
-        "model": model,
-        "reasoning_effort": effort,
-        "max_output_tokens": min(max_output_tokens, known["max_completion_tokens"]),
-        "seed": data["roles"]["grading"].get("seed"),
-        "fallback": None,
-    }
+    for role in roles:
+        data["roles"][role] = {
+            **{k: v for k, v in data["roles"][role].items()
+               if k not in ("model", "reasoning_effort", "max_output_tokens", "fallback")},
+            "model": model,
+            "reasoning_effort": effort,
+            "max_output_tokens": min(max_output_tokens, known["max_completion_tokens"]),
+            "seed": data["roles"][role].get("seed"),
+            "fallback": None,
+        }
     previous_path = os.environ.get("CQC_MODEL_REGISTRY_PATH")
-    previous_pin = os.environ.pop("CQC_MODEL_GRADING", None)
+    previous_pins = {role: os.environ.pop(f"CQC_MODEL_{role.upper()}", None) for role in roles}
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "model_registry.json"
         path.write_text(json.dumps(data), encoding="utf-8")
         os.environ["CQC_MODEL_REGISTRY_PATH"] = str(path)
         model_registry._cache.clear()
         try:
-            yield model_registry.resolve("grading")
+            yield model_registry.resolve(roles[0])
         finally:
             if previous_path is None:
                 os.environ.pop("CQC_MODEL_REGISTRY_PATH", None)
             else:
                 os.environ["CQC_MODEL_REGISTRY_PATH"] = previous_path
-            if previous_pin is not None:
-                os.environ["CQC_MODEL_GRADING"] = previous_pin
+            for role, pin in previous_pins.items():
+                if pin is not None:
+                    os.environ[f"CQC_MODEL_{role.upper()}"] = pin
             model_registry._cache.clear()
 
 
