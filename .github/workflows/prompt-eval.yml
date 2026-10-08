@@ -11,6 +11,10 @@ name: Prompt Evaluation
 #   push master  -> re-run the affected suites on master, append prompt-history.jsonl and
 #                   PROMPT_STATUS.md on the model-eval-state branch, open or close
 #                   "Prompt needs work: <id>" issues.
+#   merge_group  -> no model calls. `prompt-eval/ab` is a required status, and the merge
+#                   queue waits for it on the queue's own commit, which the pull_request
+#                   run never sees. The queue job copies the PR head's `prompt-eval/ab`
+#                   state onto the queue commit (success only if the PR's A/B passed).
 #   dispatch     -> mode=suites (consider a model for any suite), mode=calibrate (propose
 #                   thresholds), mode=ab (A/B a PR a maintainer has reviewed).
 # New models are considered by the Model Evaluation workflow (weekly free discovery +
@@ -29,6 +33,7 @@ on:
   pull_request:
     branches:
       - master
+  merge_group:
   push:
     branches:
       - master
@@ -76,7 +81,7 @@ env:
 
 jobs:
   detect:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.affected.outputs.run }}
@@ -373,6 +378,48 @@ jobs:
           fi
           gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="${state}" -f context="prompt-eval/ab" \
             -f description="${description}" -f target_url="${RUN_URL}" >/dev/null
+
+  merge-queue:
+    # The queue builds a temporary gh-readonly-queue/master/pr-<n>-<sha> commit and waits
+    # for every required check there. Without this job `prompt-eval/ab` never reports on it
+    # and each entry is dropped after the queue's check timeout. The A/B itself ran on the
+    # PR head; this mirrors that result (no checkout, no model calls, no secrets).
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Mirror the PR's prompt-eval/ab status onto the queue commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.event.merge_group.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # head_ref: refs/heads/gh-readonly-queue/<base>/pr-<number>-<base sha>
+          pr="$(sed -nE 's#^.*/pr-([0-9]+)-[0-9a-f]+$#\1#p' <<<"${QUEUE_REF}")"
+          if [ -z "${pr}" ]; then
+            echo "::error::Cannot read the PR number from ${QUEUE_REF}"; exit 1
+          fi
+          head_sha="$(gh api "repos/${REPO}/pulls/${pr}" --jq '.head.sha')"
+          # The combined status holds the latest state per context.
+          pr_state="$(gh api "repos/${REPO}/commits/${head_sha}/status" \
+            --jq '[.statuses[] | select(.context == "prompt-eval/ab")][0].state // "missing"')"
+          echo "PR #${pr} head ${head_sha}: prompt-eval/ab = ${pr_state}"
+          if [ "${pr_state}" = "success" ]; then
+            state="success"; description="Merge queue: A/B passed on PR #${pr}"
+          else
+            state="failure"; description="Merge queue: PR #${pr} prompt-eval/ab is ${pr_state}"
+          fi
+          gh api -X POST "repos/${REPO}/statuses/${QUEUE_SHA}" -f state="${state}" -f context="prompt-eval/ab" \
+            -f description="${description}" -f target_url="${RUN_URL}" >/dev/null
+          [ "${state}" = "success" ]
 
   record:
     # Master is the record: re-run what changed, append history, refresh the status page
