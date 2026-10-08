@@ -87,6 +87,9 @@ class DefaultFeedbackType(ExtendedEnum):
     """Evaluated the programming style for adherence to language standards."""
     CSC_151_PROJECT_ALL_PROGRAMMING_STYLE = "There are programming style issues that do not adhere to java language standards"
 
+    """Pointed out logic errors: wrong conditions, calculations or missing steps that change the program's results."""
+    CSC_151_PROJECT_ALL_LOGIC_ERROR = "There are logical errors in the code that affect the program's functionality"
+
     """Offered additional insights, knowledge, or tips."""
     CSC_151_PROJECT_ALL_ADDITIONAL_TIPS_PROVIDED = "Helpful insights regarding the submission to enhance learning"
 

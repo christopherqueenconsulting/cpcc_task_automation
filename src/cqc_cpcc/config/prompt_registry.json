@@ -139,7 +139,7 @@
       ]
     },
     "project-feedback": {
-      "version": 2,
+      "version": 3,
       "status": "live",
       "role": "feedback",
       "description": "Give Feedback page: typed feedback items (FeedbackType) on a project submission.",
@@ -159,7 +159,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:34b102dad37e7e267e6d7b042c9d601e8cac1c527b8ac6a74c67a09c3d434de3",
+      "fingerprint": "sha256:dcd0fac495bd26a9f7dd040d5ba36440b811b55a79ea372b308d4f854f881690",
       "suites": [
         "project-feedback"
       ]

@@ -154,9 +154,9 @@ FEEDBACK_LABELS = {
 }
 #: Always fair: the default feedback types ask for extra tips.
 FEEDBACK_ALWAYS_ACCEPTABLE = ("ADDITIONAL_TIPS_PROVIDED",)
-#: The page offers only the six default types and the prompt says "use only provided
-#: Feedback Types", so each specific label is expected as the offered type that covers it
-#: (correctness problems have none but the tips type). The specific type stays acceptable.
+#: The page offers only the default types and the prompt says "use only provided Feedback
+#: Types", so each specific label is expected as the offered type that covers it. The
+#: specific type stays acceptable.
 FEEDBACK_OFFERED_TYPE = {
     "COMMENTS_MISSING": "COMMENTS_MISSING",
     "SYNTAX_ERROR": "SYNTAX_ERROR", "CPP_SYNTAX_ERROR": "SYNTAX_ERROR", "DOES_NOT_COMPILE": "SYNTAX_ERROR",
@@ -166,8 +166,8 @@ FEEDBACK_OFFERED_TYPE = {
     "JAVA_NAMING_CONVENTION": "PROGRAMMING_STYLE", "CPP_NAMING_CONVENTION": "PROGRAMMING_STYLE",
     "VARIABLE_NAMING": "PROGRAMMING_STYLE", "JAVA_CONSTANTS_ERROR": "PROGRAMMING_STYLE",
     "CPP_CONSTANTS_ERROR": "PROGRAMMING_STYLE",
-    "LOGIC_ERROR": "ADDITIONAL_TIPS_PROVIDED", "MISSING_FUNCTIONALITY": "ADDITIONAL_TIPS_PROVIDED",
-    "INCORRECT_DATA_TYPE": "ADDITIONAL_TIPS_PROVIDED", "JAVA_INEFFICIENT_CODE": "ADDITIONAL_TIPS_PROVIDED",
+    "LOGIC_ERROR": "LOGIC_ERROR", "MISSING_FUNCTIONALITY": "LOGIC_ERROR", "INCORRECT_DATA_TYPE": "LOGIC_ERROR",
+    "JAVA_INEFFICIENT_CODE": "ADDITIONAL_TIPS_PROVIDED",
     "JAVA_SCANNER_CLASS_ERROR": "ADDITIONAL_TIPS_PROVIDED",
 }
 COURSE_NAMES = {"csc151_exam1_java": "CSC 151 Java Programming", "csc134_project_cpp": "CSC 134 C++ Programming"}
