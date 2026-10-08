@@ -1,0 +1,701 @@
+name: Prompt Evaluation
+
+# Evaluates LLM prompts ONLY when something that affects them changes (docs/PROMPTS.md,
+# docs/PROMPT_EVAL_PLAN.md). Nothing here runs on a timer.
+#
+#   pull_request -> detect which suites the change needs (prompt text or schema, shared
+#                   request code, datasets, graders, model-registry roles). No suite = $0.
+#                   Grader-only changes re-score master's saved outputs ($0). Prompt
+#                   changes get an A/B: base vs head prompt on the role's model(s).
+#                   Results: a PR comment and the commit status `prompt-eval/ab`.
+#   push master  -> re-run the affected suites on master, append prompt-history.jsonl and
+#                   PROMPT_STATUS.md on the model-eval-state branch, open or close
+#                   "Prompt needs work: <id>" issues.
+#   dispatch     -> mode=suites (consider a model for any suite), mode=calibrate (propose
+#                   thresholds), mode=ab (A/B a PR a maintainer has reviewed).
+# New models are considered by the Model Evaluation workflow (weekly free discovery +
+# cross-suite gate), not here.
+#
+# Security notes:
+# - Inputs and outputs reach shell steps only through env vars, never ${{ }} in run:.
+# - The A/B job runs PR code with an OpenRouter key, so it runs automatically only for
+#   same-repository PRs by authors listed in vars.PROMPT_EVAL_TRUSTED_AUTHORS and not on
+#   claude/* or auto/* branches (anything else waits for a maintainer dispatch). The key
+#   lives in the `prompt-eval` environment, is only in that step's env, and has a hard
+#   OpenRouter credit limit. No GitHub App key is present in that job.
+# - Only master runs write the state branch (history, status page, judge cache).
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "suites = run suites on models; calibrate = propose thresholds; ab = A/B a PR"
+        required: true
+        type: choice
+        options: [suites, calibrate, ab]
+        default: suites
+      suites:
+        description: "Comma-separated suite ids, or 'all' (suites/calibrate modes)"
+        required: false
+        type: string
+        default: "all"
+      models:
+        description: "Comma-separated model[@effort] ids (blank = each suite's current model)"
+        required: false
+        type: string
+        default: ""
+      pr_number:
+        description: "PR to A/B (ab mode)"
+        required: false
+        type: string
+        default: ""
+      judges:
+        description: "Also run the model graders (report-only until calibrated)"
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: "Print cost estimates only"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+  STATE_BRANCH: model-eval-state
+
+jobs:
+  detect:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.affected.outputs.run }}
+      rescore: ${{ steps.affected.outputs.rescore }}
+      any: ${{ steps.affected.outputs.any }}
+      judges_changed: ${{ steps.affected.outputs.judges_changed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Which prompt suites does this change need?
+        id: affected
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_BRANCH: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" = "pull_request" ]; then
+            git fetch -q origin "${BASE_BRANCH}"
+            base="origin/${BASE_BRANCH}"
+          elif [ -n "${BEFORE}" ] && [ "${BEFORE}" != "0000000000000000000000000000000000000000" ]; then
+            base="${BEFORE}"
+          else
+            base="HEAD~1"
+          fi
+          poetry run python -m cqc_cpcc.model_eval prompts-affected --base-ref "${base}" > affected.json
+          {
+            echo "### Prompt suites affected"
+            echo '```json'
+            cat affected.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload detection
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-detect-${{ github.run_id }}
+          path: affected.json
+          retention-days: 30
+
+  estimate:
+    needs: detect
+    if: github.event_name == 'pull_request' && needs.detect.outputs.run != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Cost estimate (no model calls)
+        shell: bash
+        env:
+          SUITES: ${{ needs.detect.outputs.run }}
+        run: |
+          set -euo pipefail
+          poetry run python -m cqc_cpcc.model_eval suite run --suite "${SUITES}" --dry-run 2>/dev/null \
+            | grep -E '^\[|estimate' > estimate.txt || true
+          cat estimate.txt
+
+      - name: Upload estimate
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-estimate-${{ github.run_id }}
+          path: estimate.txt
+          retention-days: 30
+
+  rescore:
+    # Grader-only changes: re-score master's last saved outputs with the PR's graders ($0).
+    needs: detect
+    if: github.event_name == 'pull_request' && needs.detect.outputs.rescore != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Re-score master's last outputs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SUITES: ${{ needs.detect.outputs.rescore }}
+        run: |
+          set -euo pipefail
+          mkdir -p evals/runs/prompt-rescore
+          last="$(gh run list --repo "${REPO}" --workflow prompt-eval.yml --branch master --event push \
+            --status success --limit 20 --json databaseId --jq '.[].databaseId' | head -n 20)"
+          found=""
+          for id in ${last}; do
+            if gh run download "${id}" --repo "${REPO}" -n "prompt-eval-master-${id}" -D master-raw 2>/dev/null; then
+              found="${id}"; break
+            fi
+          done
+          if [ -z "${found}" ]; then
+            echo "No saved master outputs yet: the re-score happens after the next master run." > evals/runs/prompt-rescore/rescore.md
+          else
+            poetry run python -m cqc_cpcc.model_eval prompt-rescore --suites "${SUITES}" \
+              --raw-dir master-raw --out evals/runs/prompt-rescore > evals/runs/prompt-rescore/rescore.md 2>/dev/null
+          fi
+          cat evals/runs/prompt-rescore/rescore.md
+
+      - name: Upload re-score
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-rescore-${{ github.run_id }}
+          path: evals/runs/prompt-rescore/
+          retention-days: 30
+
+  ab:
+    needs: detect
+    if: >-
+      github.event_name == 'pull_request' && needs.detect.outputs.run != '' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      !startsWith(github.head_ref, 'claude/') && !startsWith(github.head_ref, 'auto/') &&
+      contains(format(',{0},', vars.PROMPT_EVAL_TRUSTED_AUTHORS), format(',{0},', github.event.pull_request.user.login))
+    runs-on: ubuntu-latest
+    environment: prompt-eval
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    concurrency:
+      group: prompt-eval-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    outputs:
+      ab_status: ${{ steps.ab.outputs.ab_status }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java (compile gate)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: A/B base vs head prompts
+        id: ab
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_PROMPT_EVAL_API_KEY }}
+          SUITES: ${{ needs.detect.outputs.run }}
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY}" ]; then
+            echo "::error::OPENROUTER_PROMPT_EVAL_API_KEY is not set in the prompt-eval environment"; exit 1
+          fi
+          git fetch -q origin "${BASE_BRANCH}"
+          poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${SUITES}" --base-ref "origin/${BASE_BRANCH}" \
+            --out evals/runs/prompt-ab --judges > ab.log 2>&1 || { tail -n 80 ab.log; exit 1; }
+          tail -n 60 ab.log
+          cat evals/runs/prompt-ab/ab.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload A/B
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-ab-${{ github.run_id }}
+          path: |
+            evals/runs/prompt-ab/ab.json
+            evals/runs/prompt-ab/ab.md
+            evals/runs/prompt-ab/head/
+            evals/runs/prompt-ab/base/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  report:
+    needs: [detect, estimate, rescore, ab]
+    if: always() && github.event_name == 'pull_request' && needs.detect.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Download results
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: prompt-eval-*-${{ github.run_id }}
+          path: results
+
+      - name: Comment and set the prompt-eval/ab status
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_SUITES: ${{ needs.detect.outputs.run }}
+          RESCORE_SUITES: ${{ needs.detect.outputs.rescore }}
+          JUDGES_CHANGED: ${{ needs.detect.outputs.judges_changed }}
+          AB_RESULT: ${{ needs.ab.result }}
+          AB_STATUS: ${{ needs.ab.outputs.ab_status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          marker="<!-- prompt-eval -->"
+          state="success"; description="No prompt suites affected"
+          {
+            echo "${marker}"
+            echo "## Prompt evaluation"
+            echo
+            if [ -z "${RUN_SUITES}" ] && [ -z "${RESCORE_SUITES}" ]; then
+              echo "No prompt, schema, dataset, grader or model-role change: nothing to evaluate (\$0)."
+            fi
+            if [ -n "${RUN_SUITES}" ]; then
+              echo "Suites that need a model run: \`${RUN_SUITES}\`"
+              if [ -f results/prompt-eval-estimate-*/estimate.txt ]; then
+                echo; echo '```'; cat results/prompt-eval-estimate-*/estimate.txt; echo '```'
+              fi
+              if [ "${AB_RESULT}" = "success" ] && ls results/prompt-eval-ab-*/ab.md >/dev/null 2>&1; then
+                echo; cat results/prompt-eval-ab-*/ab.md
+                case "${AB_STATUS}" in
+                  fail) state="failure"; description="A/B: the change regresses a prompt suite";;
+                  pass) state="success"; description="A/B: no regression";;
+                  *) state="success"; description="A/B: no regression (suite thresholds not calibrated)";;
+                esac
+              elif [ "${AB_RESULT}" = "skipped" ]; then
+                state="pending"; description="A/B needs a maintainer run"
+                echo
+                echo "The A/B did not run automatically (fork, bot, \`claude/\` or \`auto/\` branch, or an author not in \`PROMPT_EVAL_TRUSTED_AUTHORS\`)."
+                echo "A maintainer can run it: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, dry run off."
+              else
+                state="failure"; description="A/B job ${AB_RESULT}"
+                echo; echo "The A/B job ended with **${AB_RESULT}**: ${RUN_URL}"
+              fi
+            fi
+            if [ -n "${RESCORE_SUITES}" ]; then
+              echo; echo "Grader-only change, re-scored on master's saved outputs (\$0): \`${RESCORE_SUITES}\`"
+              if ls results/prompt-eval-rescore-*/rescore.md >/dev/null 2>&1; then echo; cat results/prompt-eval-rescore-*/rescore.md; fi
+            fi
+            if [ -n "${JUDGES_CHANGED}" ]; then
+              echo; echo "Judge prompts changed (\`${JUDGES_CHANGED}\`): recalibrate them (evals/judges/README.md)."
+            fi
+            echo; echo "_Run: ${RUN_URL}_"
+          } > comment.md
+          existing="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"${marker}\"))][0].id // empty")"
+          if [ -n "${existing}" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -F body=@comment.md >/dev/null
+          else
+            gh pr comment "${PR}" --repo "${REPO}" --body-file comment.md
+          fi
+          gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="${state}" -f context="prompt-eval/ab" \
+            -f description="${description}" -f target_url="${RUN_URL}" >/dev/null
+
+  record:
+    # Master is the record: re-run what changed, append history, refresh the status page
+    # and the "needs work" issues. Only this job writes the state branch.
+    needs: detect
+    if: github.event_name == 'push' && needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    environment: model-eval
+    timeout-minutes: 150
+    concurrency:
+      group: model-eval-state
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java (compile gate)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Load prompt history and judge cache
+        shell: bash
+        run: |
+          mkdir -p state
+          if git fetch -q --depth=1 origin "${STATE_BRANCH}" 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C state
+          fi
+          mkdir -p state/judge-cache
+          touch state/prompt-history.jsonl
+
+      - name: Run the changed suites on master
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_SUITES: ${{ needs.detect.outputs.run }}
+          RESCORE_SUITES: ${{ needs.detect.outputs.rescore }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p evals/runs/prompt-master
+          if [ -n "${RUN_SUITES}" ]; then
+            poetry run python -m cqc_cpcc.model_eval suite run --suite "${RUN_SUITES}" --judges \
+              --judge-cache state/judge-cache --out evals/runs/prompt-master \
+              --label "master-${GITHUB_SHA::7}" --run-id "${RUN_ID}" > run.log 2>&1 || { tail -n 80 run.log; exit 1; }
+            tail -n 40 run.log
+          fi
+          if [ -n "${RESCORE_SUITES}" ]; then
+            last="$(gh run list --repo "${REPO}" --workflow prompt-eval.yml --branch master --event push \
+              --status success --limit 20 --json databaseId --jq '.[].databaseId')"
+            for id in ${last}; do
+              if gh run download "${id}" --repo "${REPO}" -n "prompt-eval-master-${id}" -D master-raw 2>/dev/null; then
+                poetry run python -m cqc_cpcc.model_eval prompt-rescore --suites "${RESCORE_SUITES}" \
+                  --raw-dir master-raw --out evals/runs/prompt-master 2>/dev/null || true
+                for s in ${RESCORE_SUITES//,/ }; do
+                  if [ -f "master-raw/${s}/raw_outputs.jsonl" ] && [ ! -f "evals/runs/prompt-master/${s}/raw_outputs.jsonl" ]; then
+                    cp "master-raw/${s}/raw_outputs.jsonl" "evals/runs/prompt-master/${s}/"
+                  fi
+                done
+                break
+              fi
+            done
+          fi
+          # Keep earlier outputs of suites that did not run this time, so the next re-score finds them.
+          for id in $(gh run list --repo "${REPO}" --workflow prompt-eval.yml --branch master --event push \
+              --status success --limit 1 --json databaseId --jq '.[].databaseId'); do
+            gh run download "${id}" --repo "${REPO}" -n "prompt-eval-master-${id}" -D previous 2>/dev/null || true
+          done
+          if [ -d previous ]; then
+            for d in previous/*/; do
+              s="$(basename "${d}")"
+              if [ ! -d "evals/runs/prompt-master/${s}" ]; then cp -r "${d}" "evals/runs/prompt-master/${s}"; fi
+            done
+          fi
+          for f in evals/runs/prompt-master/*/scorecard.md; do [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"; done
+
+      - name: Record history and status
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_SUITES: ${{ needs.detect.outputs.run }}
+          RESCORE_SUITES: ${{ needs.detect.outputs.rescore }}
+        run: |
+          set -euo pipefail
+          mkdir -p this-run
+          for s in ${RUN_SUITES//,/ } ${RESCORE_SUITES//,/ }; do
+            if [ -f "evals/runs/prompt-master/${s}/scorecard.json" ]; then
+              mkdir -p "this-run/${s}" && cp "evals/runs/prompt-master/${s}/scorecard.json" "this-run/${s}/"
+            fi
+          done
+          poetry run python -m cqc_cpcc.model_eval prompt-record --scorecards this-run \
+            --history state/prompt-history.jsonl --status state/PROMPT_STATUS.md \
+            --sha "${GITHUB_SHA}" --run-url "${RUN_URL}" --needs-work-out needs_work.json
+
+      - name: Upload master outputs
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-master-${{ github.run_id }}
+          path: evals/runs/prompt-master/
+          retention-days: 90
+
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.MODEL_BOT_APP_ID }}
+          private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
+
+      - name: Push history, status page and judge cache to the state branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git init -q push && cd push
+          git config user.name "cpcc-model-bot"
+          git config user.email "cpcc-model-bot@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          for attempt in 1 2 3 4; do
+            if git fetch -q --depth=1 origin "${STATE_BRANCH}" 2>/dev/null; then
+              git checkout -q -B "${STATE_BRANCH}" FETCH_HEAD
+            else
+              git checkout -q --orphan "${STATE_BRANCH}"
+            fi
+            # History is append-only: add this run's rows to whatever is there now.
+            touch prompt-history.jsonl
+            python3 - <<'PY'
+          import pathlib
+          ours = pathlib.Path("../state/prompt-history.jsonl").read_text().splitlines()
+          theirs_path = pathlib.Path("prompt-history.jsonl")
+          theirs = theirs_path.read_text().splitlines()
+          merged = theirs + [line for line in ours if line and line not in set(theirs)]
+          theirs_path.write_text("\n".join(merged) + ("\n" if merged else ""))
+          PY
+            cp ../state/PROMPT_STATUS.md PROMPT_STATUS.md
+            mkdir -p judge-cache && cp -n ../state/judge-cache/*.json judge-cache/ 2>/dev/null || true
+            git add -A
+            if git diff --cached --quiet; then echo "nothing to record"; exit 0; fi
+            git commit -q -m "prompt-eval state: ${GITHUB_SHA::7}"
+            if git push -q origin "HEAD:${STATE_BRANCH}"; then exit 0; fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not push the state branch"; exit 1
+
+      - name: Open or close "Prompt needs work" issues
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ASSIGNEE: ${{ vars.MODEL_BOT_ASSIGNEE }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create blocked-on-chris --force --color d93f0b >/dev/null 2>&1 || true
+          gh label create prompt-needs-work --force --color fbca04 >/dev/null 2>&1 || true
+          python3 - <<'PY'
+          import json, os, subprocess
+          data = json.load(open("needs_work.json"))
+          repo, run_url, assignee = os.environ["REPO"], os.environ["RUN_URL"], os.environ.get("ASSIGNEE", "")
+
+          def gh(*args):
+              return subprocess.run(["gh", *args, "--repo", repo], capture_output=True, text=True, check=True).stdout
+
+          def existing(prompt_id):
+              title = f"Prompt needs work: {prompt_id}"
+              out = gh("issue", "list", "--state", "open", "--search", f"{title} in:title", "--json", "number,title")
+              return next((i["number"] for i in json.loads(out) if i["title"] == title), None), title
+
+          for prompt_id, reasons in data["needs_work"].items():
+              number, title = existing(prompt_id)
+              body = (f"Run: {run_url}\n\nThe current model fails this prompt's evaluation gates:\n\n"
+                      + "\n".join(f"- {r}" for r in reasons)
+                      + "\n\nRevise the prompt (docs/PROMPTS.md), bump its version, and the PR's A/B shows "
+                        "whether the new version fixes it.\n\n_Opened by the Prompt Evaluation workflow._")
+              if number:
+                  gh("issue", "comment", str(number), "--body", body)
+              else:
+                  extra = ["--assignee", assignee] if assignee else []
+                  gh("issue", "create", "--title", title, "--body", body, "--label", "blocked-on-chris",
+                     "--label", "prompt-needs-work", *extra)
+          for prompt_id in data["healthy"]:
+              number, _ = existing(prompt_id)
+              if number:
+                  gh("issue", "close", str(number), "--comment", f"Passes again on master: {run_url}")
+          PY
+
+  dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # ab mode runs PR code with a key: only the prompt-eval environment's key, and only a
+    # maintainer can dispatch. Other modes run master's code with the model-eval key.
+    environment: ${{ inputs.mode == 'ab' && 'prompt-eval' || 'model-eval' }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    concurrency:
+      group: prompt-eval-dispatch-${{ inputs.mode }}-${{ inputs.pr_number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the PR (ab mode)
+        id: pr
+        if: inputs.mode == 'ab'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${PR}" =~ ^[0-9]+$ ]]; then echo "::error::pr_number must be a number"; exit 1; fi
+          info="$(gh pr view "${PR}" --repo "${REPO}" --json isCrossRepository,headRefOid,baseRefName)"
+          if [ "$(jq -r .isCrossRepository <<< "${info}")" = "true" ]; then
+            echo "::error::fork PRs are not run with a key; push the branch to this repository first"; exit 1
+          fi
+          echo "sha=$(jq -r .headRefOid <<< "${info}")" >> "$GITHUB_OUTPUT"
+          echo "base=$(jq -r .baseRefName <<< "${info}")" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the PR head (pinned SHA)
+        if: inputs.mode == 'ab'
+        shell: bash
+        env:
+          SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "${SHA}"
+          git checkout -q "${SHA}"
+
+      - name: Set up Java (compile gate)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Run
+        id: run
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ inputs.mode == 'ab' && secrets.OPENROUTER_PROMPT_EVAL_API_KEY || secrets.OPENROUTER_EVAL_API_KEY }}
+          MODE: ${{ inputs.mode }}
+          SUITES: ${{ inputs.suites }}
+          MODELS: ${{ inputs.models }}
+          JUDGES: ${{ inputs.judges }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BASE: ${{ steps.pr.outputs.base }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          models=()
+          IFS=',' read -ra list <<< "${MODELS}"
+          for m in "${list[@]}"; do m="$(echo "$m" | xargs)"; if [ -n "$m" ]; then models+=(--model "$m"); fi; done
+          judges=(); if [ "${JUDGES}" = "true" ]; then judges=(--judges); fi
+          mkdir -p evals/runs/dispatch
+          case "${MODE}" in
+            suites)
+              dry=(); if [ "${DRY_RUN}" = "true" ]; then dry=(--dry-run); fi
+              poetry run python -m cqc_cpcc.model_eval suite run --suite "${SUITES:-all}" "${models[@]}" "${judges[@]}" \
+                "${dry[@]}" --out evals/runs/dispatch --run-id "${RUN_ID}" | tee run.log ;;
+            calibrate)
+              if [ "${DRY_RUN}" = "true" ]; then
+                poetry run python -m cqc_cpcc.model_eval suite run --suite "${SUITES:-all}" --repeats 3 --dry-run | tee run.log
+              else
+                suites=(); if [ -n "${SUITES}" ] && [ "${SUITES}" != "all" ]; then suites=(--suites "${SUITES}"); fi
+                poetry run python -m cqc_cpcc.model_eval prompt-calibrate "${suites[@]}" --out evals/runs/dispatch | tee run.log
+                echo "Review evals/runs/dispatch/policy_patch.json in the artifact, then apply it to model_policy.json in a PR." >> "$GITHUB_STEP_SUMMARY"
+              fi ;;
+            ab)
+              git fetch -q origin "${BASE}"
+              suites="$(poetry run python -m cqc_cpcc.model_eval prompts-affected --base-ref "origin/${BASE}" 2>/dev/null \
+                | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["run"]))')"
+              if [ -z "${suites}" ]; then echo "No suites affected"; echo "ab_status=pass" >> "$GITHUB_OUTPUT"; exit 0; fi
+              poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${suites}" --base-ref "origin/${BASE}" \
+                "${models[@]}" "${judges[@]}" --out evals/runs/dispatch | tee run.log ;;
+          esac
+          for f in evals/runs/dispatch/*/scorecard.md evals/runs/dispatch/ab.md; do [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"; done
+          exit 0
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-dispatch-${{ github.run_id }}
+          path: evals/runs/dispatch/
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Report the A/B on the PR
+        if: inputs.mode == 'ab' && steps.run.outcome == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr_number }}
+          SHA: ${{ steps.pr.outputs.sha }}
+          AB_STATUS: ${{ steps.run.outputs.ab_status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          { echo "<!-- prompt-eval -->"; echo "## Prompt evaluation (maintainer run)"; echo
+            if [ -f evals/runs/dispatch/ab.md ]; then cat evals/runs/dispatch/ab.md; else echo "No prompt suites affected."; fi
+            echo; echo "_Run: ${RUN_URL}_"; } > comment.md
+          gh pr comment "${PR}" --repo "${REPO}" --body-file comment.md
+          case "${AB_STATUS}" in fail) state=failure;; *) state=success;; esac
+          gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="${state}" -f context="prompt-eval/ab" \
+            -f description="A/B (maintainer run): ${AB_STATUS:-pass}" -f target_url="${RUN_URL}" >/dev/null

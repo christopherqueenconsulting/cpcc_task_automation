@@ -209,8 +209,9 @@ class JudgePolicy(BaseModel):
 class PromptEvalPolicy(BaseModel):
     """Prompt evaluation: budget, judge and per-suite thresholds. Human-owned."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    note: Optional[str] = Field(default=None, alias="_note")
     budget_usd: float = Field(default=15.0, gt=0)
     stop_at_usd: float = Field(default=13.5, gt=0)
     max_models: int = Field(default=3, ge=1)

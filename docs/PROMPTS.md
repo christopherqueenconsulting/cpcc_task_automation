@@ -67,9 +67,8 @@ the plan uses it to decide which evaluations a change needs.
 
 CI enforces it: `test_prompt_registry.py` fails on a stale fingerprint, and the unit-test
 workflow runs `prompts check --base-ref <base branch>`, which fails when a fingerprint
-changed without a version bump. Once the evaluation workflow exists (phase 5), a prompt
-change also gets an automatic A/B evaluation on its PR. Prompt changes are always merged
-by a human.
+changed without a version bump. The **Prompt Evaluation** workflow then A/Bs the change
+(below). Prompt changes are always merged by a human.
 
 A pydantic or schema-normalizer upgrade that changes the schema JSON also changes
 fingerprints. That is intended, because the model then receives a different request. Bump
@@ -88,3 +87,57 @@ the affected versions in that PR.
 4. run `prompts fingerprint --write`.
 
 Never put real student work in a renderer or fixture.
+
+## Evaluation and automation
+
+Every prompt has one or more **suites** (`src/cqc_cpcc/model_eval/suites/`): a synthetic
+dataset (`evals/datasets/<suite>/`), deterministic **code graders**, and **model graders**
+(LLM judges, `evals/judges/`) that count only once calibrated. See
+[`evals/README.md`](../evals/README.md#prompt-suites) for what each suite seeds and checks.
+
+Evaluations are **event-driven only**, never on a timer:
+
+| When | What runs | Cost |
+|---|---|---|
+| A PR changes nothing a prompt depends on | `prompt-eval/ab` = success, "no suites affected" | $0 |
+| A PR changes only grader code | re-score master's saved outputs with the new graders | $0 |
+| A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, a model-registry role or the lockfile | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap on the holdout split (suites with ≥30 cases), absolute margin otherwise; pairwise judge (report-only until calibrated). PR comment + commit status `prompt-eval/ab` | ~$1-3 |
+| That PR is merged | the affected suites run on master; `prompt-history.jsonl` and `PROMPT_STATUS.md` are updated on the `model-eval-state` branch; "Prompt needs work: <id>" issues open (or close when passing again) | ~$1-3 |
+| A new model is considered (weekly free discovery finds a candidate, the current model changed, or a dispatch) | the Model Evaluation workflow grades it, then the **cross-suite gate** runs the winner on every other suite of the roles it would take; promotion needs both ([`MODEL_EVALUATION.md`](MODEL_EVALUATION.md)) | ≤ $10 + suites |
+
+Commands (all under `poetry run python -m cqc_cpcc.model_eval`):
+
+- `suite list` · `suite run --suite <id|all> [--model m@effort] [--judges] [--dry-run]` · `suite score --suite <id> --raw <raw_outputs.jsonl>`
+- `prompts-affected --base-ref origin/master` (what a change needs)
+- `prompt-ab --suites a,b --base-ref origin/master [--judges]`
+- `prompt-calibrate [--apply]` (run every suite on its current model and propose thresholds)
+- `prompt-record`, `prompt-rescore`, `suite-gate` (used by the workflows)
+
+`CQC_TEST_MODE=true` runs any of them with canned answers for free.
+
+**Thresholds start uncalibrated.** Until a live calibration, a suite reports its numbers
+and only blocks a PR on a *regression* against the base; it never raises "needs work".
+Calibrate once the setup below is done: Actions > Prompt Evaluation > Run workflow, mode
+`calibrate`, dry run off. Review `policy_patch.json` in the artifact (each floor = the current
+model's measured score minus 0.10, health floor = composite minus 0.05) and apply it with
+`prompt-calibrate --apply` locally or by copying it into `model_policy.json`.
+
+**Model graders** need about an hour of labelling once: [`evals/judges/README.md`](../evals/judges/README.md).
+
+### One-time setup (Christopher)
+
+1. **Environment `prompt-eval`** (Settings > Environments): deployment branches = all
+   (it serves PR runs); secret `OPENROUTER_PROMPT_EVAL_API_KEY`: a separate OpenRouter key
+   with a **$15/month credit limit**.
+2. **Repository variable** `PROMPT_EVAL_TRUSTED_AUTHORS` = your GitHub login(s),
+   comma-separated. PRs by these authors (not on `claude/` or `auto/` branches) get the A/B
+   automatically; any other PR shows a pending status until you dispatch mode `ab` with its
+   PR number.
+3. **`model-eval` environment**: the existing `OPENROUTER_EVAL_API_KEY` now also pays for
+   master runs, calibration and the cross-suite gate; raise its credit limit to $25/month.
+4. Optional: add `prompt-eval/ab` to the required checks on `master`.
+5. Run mode `calibrate` once, apply the proposal; label the judge gold sets; commit.
+
+**Accepted risk:** the automatic A/B runs a trusted author's PR code with the
+`prompt-eval` key in the environment. The key is credit-limited and only in that step;
+the job has no GitHub App key and read-only permissions.

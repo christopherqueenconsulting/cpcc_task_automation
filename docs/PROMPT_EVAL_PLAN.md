@@ -154,7 +154,8 @@ Prompt PRs are always merged by a human. The guard warns when a live prompt chan
 | 2 | done: suite + grader framework (`model_eval/suites/`, `suite list/run/score`), `pinned_registry(roles=)`, `prompt_eval` policy block, Flowgorithm on `llm_gateway` (prompt v2). The recompute oracle was dropped: the v2 calibration's raw outputs were never committed (90-day artifact). |
 | 3 | done: datasets + code graders for every prompt (`suite_datasets.py`, 6 new datasets, 7 suites); drift and perfect-answer tests. The live calibration baseline needs an OpenRouter key: it is the `calibrate` workflow run (phase 5). |
 | 4 | done: judges `feedback-quality`, `faithfulness`, `pairwise` (registered prompts), verdict cache, order-swapped pairwise, auto-picked non-OpenAI judge model, 40-item gold sets per judge, `judge-label` / `judge-calibrate`. Judges stay report-only until Christopher labels the gold sets and a calibration report exists. |
-| 5–6 | not started |
+| 5 | done: `prompt-eval.yml` (detect → estimate / rescore / A/B → PR comment + `prompt-eval/ab` status; master record → history, `PROMPT_STATUS.md`, needs-work issues; dispatch modes suites/calibrate/ab), `model-eval.yml` (weekly free discovery, evaluation only with a candidate, failed attempts recorded, cross-suite gate before promotion, no weekly re-comment on expiry), `automerge-check` refuses stale prompt versions and a missing/failed cross-suite result, heartbeat 10 days, provisional `prompt_eval` policy. Needs Christopher's one-time setup (docs/PROMPTS.md). |
+| 6 | see below |
 
 ## Phased PRs
 | # | PR | Live cost |

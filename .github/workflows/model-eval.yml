@@ -1,9 +1,12 @@
 name: Model Evaluation
 
-# Monthly: find new OpenRouter models (free catalogue data), grade the synthetic dataset
-# (evals/datasets) on up to three candidates and the current default, publish a
-# scorecard, and open a promotion PR when a candidate wins. The PR is merged by
-# model-registry-guard (when MODEL_AUTOMERGE_ENABLED is 'true') or by a human.
+# Weekly: find new OpenRouter models (free catalogue data, no model calls). Only when a new
+# model is being considered (a discovered or dispatched candidate, or the current model's
+# canonical slug changed) does it grade the synthetic dataset (evals/datasets) on up to
+# three candidates and the current default, check the winner on every other prompt suite
+# of the roles it would take (cross-suite gate), publish a scorecard, and open a promotion
+# PR. The PR is merged by model-registry-guard (when MODEL_AUTOMERGE_ENABLED is 'true') or
+# by a human. Weeks without a candidate cost nothing.
 #
 # Security notes:
 # - Inputs and step outputs reach shell steps only through env vars, never ${{ }} in run:.
@@ -14,7 +17,7 @@ name: Model Evaluation
 
 on:
   schedule:
-    - cron: "0 13 3 * *"   # 13:00 UTC on the 3rd of each month
+    - cron: "0 13 * * 1"   # Mondays 13:00 UTC: free discovery; evaluation only with a candidate
   workflow_dispatch:
     inputs:
       candidates:
@@ -68,6 +71,7 @@ jobs:
     outputs:
       winner: ${{ steps.run.outputs.winner }}
       status: ${{ steps.run.outputs.status }}
+      evaluated: ${{ steps.gate.outputs.run }}
       incumbent_failed: ${{ steps.run.outputs.incumbent_failed }}
       incumbent_expiring: ${{ steps.discover.outputs.incumbent_expiring }}
       incumbent_changed: ${{ steps.discover.outputs.incumbent_changed }}
@@ -130,8 +134,25 @@ jobs:
             --out evals/runs/ci/candidates.json > discover.log 2>&1 || { tail -n 40 discover.log; exit 1; }
           tail -n 3 discover.log
 
+      - name: Decide whether a model is being considered
+        id: gate
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          DISCOVERED: ${{ steps.discover.outputs.candidates }}
+          CHANGED: ${{ steps.discover.outputs.incumbent_changed }}
+        run: |
+          # A dispatch always runs (blank candidates = deliberately re-baseline the incumbent).
+          if [ "${EVENT}" = "workflow_dispatch" ] || [ -n "${DISCOVERED}" ] || [ "${CHANGED}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No candidate and the current model is unchanged: nothing to evaluate this week (\$0)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Run evaluation
         id: run
+        if: steps.gate.outputs.run == 'true'
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
@@ -189,9 +210,14 @@ jobs:
 
   update-state:
     needs: evaluate
-    if: needs.evaluate.result == 'success' && needs.evaluate.outputs.dry_run != 'true'
+    # Also after a failed evaluation: the snapshot and the attempted candidates are still
+    # recorded, so a candidate that keeps failing is not re-run every week.
+    if: always() && needs.evaluate.result != 'skipped' && needs.evaluate.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     environment: model-eval
+    concurrency:
+      group: model-eval-state
+      cancel-in-progress: false
     steps:
       - name: Mint GitHub App token
         id: app
@@ -202,6 +228,7 @@ jobs:
 
       - name: Download evaluation artifact
         uses: actions/download-artifact@v8
+        continue-on-error: true
         with:
           name: model-eval-${{ github.run_id }}
           path: artifact
@@ -212,6 +239,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          EVALUATED: ${{ needs.evaluate.outputs.evaluated }}
         run: |
           set -euo pipefail
           git init -q state && cd state
@@ -233,32 +261,97 @@ jobs:
           import json, os, pathlib
           art = pathlib.Path("../artifact")
           sc_path, cand_path = art / "scorecard.json", art / "candidates.json"
-          if sc_path.exists():
-              sc = json.loads(sc_path.read_text())
-              slugs = {}
-              if cand_path.exists():
-                  for c in json.loads(cand_path.read_text()).get("candidates", []):
-                      slugs[c["model_id"]] = c["canonical_slug"]
-              with open("history.jsonl", "a") as fh:
+          slugs = {}
+          if cand_path.exists():
+              for c in json.loads(cand_path.read_text()).get("candidates", []):
+                  slugs[c["model_id"]] = c["canonical_slug"]
+          recorded = set()
+          with open("history.jsonl", "a") as fh:
+              if sc_path.exists():
+                  sc = json.loads(sc_path.read_text())
                   for label, m in sc.get("models", {}).items():
                       model = label.split("@")[0]
+                      recorded.add(model)
                       fh.write(json.dumps({
                           "run_id": os.environ["RUN_ID"], "label": label,
                           "canonical_slug": slugs.get(model, model), "composite": m.get("composite"),
                           "cost_per_submission": m.get("cost_per_submission"), "status": sc.get("status"),
                       }, sort_keys=True) + "\n")
+              if os.environ.get("EVALUATED") == "true":
+                  # Candidates the run attempted but did not score (failure, budget): recorded
+                  # so discovery does not pick them again every week.
+                  for model, slug in slugs.items():
+                      if model not in recorded:
+                          fh.write(json.dumps({"run_id": os.environ["RUN_ID"], "label": model,
+                                               "canonical_slug": slug, "status": "attempted"},
+                                              sort_keys=True) + "\n")
           PY
           git add -A
           if git diff --cached --quiet; then echo "nothing to record"; exit 0; fi
           git commit -q -m "model-eval state: run ${RUN_ID}"
-          git push -q origin "HEAD:${STATE_BRANCH}"
+          # The prompt-eval workflow writes this branch too: rebase and retry on a race.
+          for attempt in 1 2 3 4; do
+            if git push -q origin "HEAD:${STATE_BRANCH}"; then exit 0; fi
+            sleep $((attempt * 5))
+            git fetch -q origin "${STATE_BRANCH}" && git rebase -q FETCH_HEAD
+          done
+          echo "::error::could not push the state branch"; exit 1
 
-  promote:
+  cross-suite:
+    # A promotion moves every role in auto_promote_roles, and with it every prompt on
+    # those roles. The winner must also pass those prompts' suites (requirement
+    # extraction, exam grading, level-band rubric grading, ...) against the incumbent.
     needs: evaluate
     if: >-
       needs.evaluate.result == 'success' && needs.evaluate.outputs.winner != '' &&
       needs.evaluate.outputs.status == 'complete' && needs.evaluate.outputs.dry_run != 'true' &&
       needs.evaluate.outputs.promote_allowed == 'true'
+    runs-on: ubuntu-latest
+    environment: model-eval
+    timeout-minutes: 120
+    outputs:
+      cross_suite: ${{ steps.gate.outputs.cross_suite }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Run the winner on the other prompt suites of its roles
+        id: gate
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          WINNER: ${{ needs.evaluate.outputs.winner }}
+        run: |
+          set -euo pipefail
+          incumbent="$(poetry run python -c "from cqc_cpcc.utilities.AI import model_registry as m; r=m.load_registry().roles['grading']; print(r.model + ('@' + r.reasoning_effort if r.reasoning_effort else ''))")"
+          roles="$(poetry run python -c "from cqc_cpcc.utilities.AI import model_registry as m; print(','.join(m.load_policy().auto_promote_roles))")"
+          poetry run python -m cqc_cpcc.model_eval suite-gate --incumbent "${incumbent}" --candidate "${WINNER}" \
+            --roles "${roles}" --out evals/runs/cross-suite > cross.log 2>&1 || { tail -n 60 cross.log; exit 1; }
+          tail -n 40 cross.log
+
+      - name: Upload cross-suite artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: model-eval-${{ github.run_id }}-cross-suite
+          path: evals/runs/cross-suite/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  promote:
+    needs: [evaluate, cross-suite]
+    if: >-
+      needs.evaluate.result == 'success' && needs.evaluate.outputs.winner != '' &&
+      needs.evaluate.outputs.status == 'complete' && needs.evaluate.outputs.dry_run != 'true' &&
+      needs.evaluate.outputs.promote_allowed == 'true' && needs.cross-suite.outputs.cross_suite == 'pass'
     runs-on: ubuntu-latest
     environment: model-eval
     steps:
@@ -323,10 +416,11 @@ jobs:
             --body-file pr-body.md --label model-promotion --label auto-merge-eligible
 
   report:
-    needs: [evaluate, update-state, promote]
+    needs: [evaluate, update-state, cross-suite, promote]
     if: >-
       always() && (needs.evaluate.result == 'failure' || needs.evaluate.result == 'cancelled' ||
       needs.update-state.result == 'failure' || needs.promote.result == 'failure' ||
+      needs.cross-suite.result == 'failure' || needs.cross-suite.outputs.cross_suite == 'fail' ||
       needs.evaluate.outputs.incumbent_failed == 'true' ||
       needs.evaluate.outputs.incumbent_expiring != '' || needs.evaluate.outputs.incumbent_changed == 'true')
     runs-on: ubuntu-latest
@@ -341,6 +435,8 @@ jobs:
           RESULT: ${{ needs.evaluate.result }}
           STATE_RESULT: ${{ needs.update-state.result }}
           PROMOTE_RESULT: ${{ needs.promote.result }}
+          CROSS_RESULT: ${{ needs.cross-suite.result }}
+          CROSS_SUITE: ${{ needs.cross-suite.outputs.cross_suite }}
           INCUMBENT_FAILED: ${{ needs.evaluate.outputs.incumbent_failed }}
           EXPIRING: ${{ needs.evaluate.outputs.incumbent_expiring }}
           CHANGED: ${{ needs.evaluate.outputs.incumbent_changed }}
@@ -356,6 +452,8 @@ jobs:
             if [ "${RESULT}" != "success" ]; then echo "- The evaluation job ended with **${RESULT}**."; fi
             if [ "${STATE_RESULT}" = "failure" ]; then echo "- Recording the snapshot/history on the state branch **failed** (next month may re-evaluate the same models)."; fi
             if [ "${PROMOTE_RESULT}" = "failure" ]; then echo "- Opening the promotion PR **failed** although a winner was found."; fi
+            if [ "${CROSS_SUITE}" = "fail" ]; then echo "- The winner **failed the cross-suite gate** (another prompt on its roles got worse); nothing is promoted. See the cross-suite artifact."; fi
+            if [ "${CROSS_RESULT}" = "failure" ]; then echo "- The cross-suite gate job **failed** to run."; fi
             if [ "${INCUMBENT_FAILED}" = "true" ]; then echo "- The current default model **failed a hard gate** (possible drift). Nothing is promoted until this is resolved."; fi
             if [ -n "${EXPIRING}" ]; then echo "- The current default model is expiring or missing (${EXPIRING//\`/}). Pick a replacement from the scorecard; this one needs a human merge."; fi
             if [ "${CHANGED}" = "true" ]; then echo "- OpenRouter changed the current model's \`canonical_slug\` (the model behind the id was updated). Review the scorecard."; fi
@@ -364,6 +462,15 @@ jobs:
           } > body.md
           gh label create blocked-on-chris --force --color d93f0b >/dev/null 2>&1 || true
           existing="$(gh issue list --repo "${REPO}" --state open --search "${title} in:title" --json number --jq '.[0].number // empty')"
+          only_expiring="false"
+          if [ "${RESULT}" = "success" ] && [ "${STATE_RESULT}" != "failure" ] && [ "${PROMOTE_RESULT}" != "failure" ] \
+             && [ "${INCUMBENT_FAILED}" != "true" ] && [ "${CHANGED}" != "true" ] && [ "${CROSS_SUITE}" != "fail" ] \
+             && [ "${CROSS_RESULT}" != "failure" ] && [ -n "${EXPIRING}" ]; then only_expiring="true"; fi
+          if [ -n "${existing}" ] && [ "${only_expiring}" = "true" ] && \
+             gh issue view "${existing}" --repo "${REPO}" --json body,comments --jq '[.body, .comments[].body] | join(" ")' \
+             | grep -qF -- "${EXPIRING//\`/}"; then
+            echo "Expiry already reported in #${existing}; not commenting again (weekly runs)."; exit 0
+          fi
           if [ -n "${existing}" ]; then
             gh issue comment "${existing}" --repo "${REPO}" --body-file body.md
           else

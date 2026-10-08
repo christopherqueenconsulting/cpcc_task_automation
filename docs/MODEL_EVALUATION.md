@@ -2,9 +2,12 @@
 
 Which LLM grades student work is set in one file,
 [`src/cqc_cpcc/config/model_registry.json`](../src/cqc_cpcc/config/model_registry.json).
-Once a month a GitHub workflow looks for newer OpenRouter models, grades a synthetic
-dataset with them and with the current default, and opens a pull request when a candidate
-is clearly better or clearly cheaper at the same quality. That PR is merged by a guard
+Every week a GitHub workflow looks for newer OpenRouter models (free catalogue data). Only
+when it finds one (or the current model changed, or you dispatch it) does it grade a
+synthetic dataset with them and with the current default, check the winner on every other
+prompt suite of the roles it would take (cross-suite gate, see [`PROMPTS.md`](PROMPTS.md)),
+and open a pull request when a candidate is clearly better or clearly cheaper at the same
+quality. Weeks without a candidate cost nothing. That PR is merged by a guard
 (when auto-merge is switched on) or by you.
 
 **The app runs on your computer, so a merged change does nothing until you `git pull` and
@@ -95,6 +98,7 @@ alone was unsafe. It goes back once the digest prompt suite passes (see
 | Evaluation job fails or is cancelled | issue "Model evaluation needs attention", labelled `blocked-on-chris` |
 | Current model fails a hard gate (drift) | same issue; nothing is promoted |
 | Current model expiring or silently changed by OpenRouter | same issue; a replacement needs your merge |
-| Monthly run did not happen (GitHub disabled the schedule) | weekly heartbeat opens an issue |
+| Weekly discovery did not happen (GitHub disabled the schedule) | the heartbeat opens an issue after 10 days |
+| The winner gets worse on another prompt of its roles | cross-suite gate fails; nothing is promoted; issue opened |
 | Model changed on master | issue "Model change on master: git pull + restart" (+ ClickUp task if configured) |
 | Auto-merge refused | comment on the PR explaining why, label switched to `blocked-on-chris` |

@@ -220,6 +220,9 @@ async def _run(args) -> int:
             "status": status,
             "notes": notes,
             "incumbent_hard_gate_failures": incumbent_failures,
+            # Prompts on the roles a promotion moves: a promotion evaluated on older prompt
+            # versions is stale and automerge-check refuses it.
+            "prompt_versions": _prompt_versions_for_promotion(),
         },
         aggregates, decisions, winner,
     )
@@ -228,6 +231,31 @@ async def _run(args) -> int:
     print(f"Scorecard: {json_path}")
     _github_outputs(winner=winner or "", status=status, incumbent_failed=str(bool(incumbent_failures)).lower())
     return 0
+
+
+def _prompt_versions_for_promotion() -> dict:
+    from cqc_cpcc.model_eval.prompt_automation import prompt_versions_for_roles
+
+    return prompt_versions_for_roles(model_registry.load_policy().auto_promote_roles)
+
+
+def promotion_prompt_problems(scorecard: dict, cross_suite: Optional[dict]) -> list[str]:
+    """Prompt-side reasons a promotion may not auto-merge (stale prompts, cross-suite gate)."""
+    problems = []
+    current = _prompt_versions_for_promotion()
+    recorded = scorecard.get("prompt_versions")
+    if recorded is None:
+        problems.append("scorecard has no prompt_versions (evaluated before prompt tracking)")
+    elif recorded != current:
+        stale = sorted(k for k in set(recorded) | set(current) if recorded.get(k) != current.get(k))
+        problems.append(f"evaluation is stale: prompt versions changed since the run ({', '.join(stale)})")
+    if cross_suite is None:
+        problems.append("no cross-suite result: the candidate was not checked on the other prompts of its roles")
+    elif cross_suite.get("status") != "pass":
+        problems.append("cross-suite gate failed: " + "; ".join(cross_suite.get("failures") or ["unknown"]))
+    elif cross_suite.get("candidate") != scorecard.get("winner"):
+        problems.append(f"cross-suite result is for {cross_suite.get('candidate')}, not {scorecard.get('winner')}")
+    return problems
 
 
 def _github_outputs(**values) -> None:
@@ -470,6 +498,9 @@ def cmd_automerge_check(args) -> int:
     if args.kind == "promotion":
         sc = json.loads(Path(args.scorecard).read_text(encoding="utf-8"))
         model, _ = parse_model(sc["winner"])
+        cross = Path(args.cross_suite) if args.cross_suite else None
+        problems += promotion_prompt_problems(
+            sc, json.loads(cross.read_text(encoding="utf-8")) if cross and cross.exists() else None)
         head = json.loads(Path(args.head_registry).read_text(encoding="utf-8"))
         recorded = head["models"][model]
         live = {m["id"]: m for m in fetch_models()}.get(model)
@@ -676,6 +707,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     am.add_argument("--raw", default=None)
     am.add_argument("--head-registry", default=str(model_registry.DEFAULT_REGISTRY_PATH))
     am.add_argument("--sample", type=int, default=5)
+    am.add_argument("--cross-suite", default=None, help="cross_suite.json from the suite-gate job")
     am.set_defaults(func=cmd_automerge_check)
 
     vr = sub.add_parser("verify-rollback", help="guard: a rollback PR only restores previous models")
@@ -707,6 +739,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     st.add_argument("--judge-cache", default=None, help="verdict cache directory")
     st.add_argument("--judge-cache-read-only", action="store_true", help="read the cache, never write (PR runs)")
     st.set_defaults(func=cmd_suite)
+
+    from cqc_cpcc.model_eval import prompt_automation
+
+    prompt_automation.add_parsers(sub)
 
     bjg = sub.add_parser("build-judge-gold", help="regenerate the judge calibration gold sets")
     bjg.set_defaults(func=cmd_build_judge_gold)

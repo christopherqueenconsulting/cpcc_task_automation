@@ -70,5 +70,127 @@
   },
   "auto_promote_roles": [
     "grading"
-  ]
+  ],
+  "prompt_eval": {
+    "_note": "Prompt evaluation (docs/PROMPT_EVAL_PLAN.md). Suites stay calibrated=false (report-only, never 'needs work') until a live `prompt-calibrate` run proposes floors from the incumbent's measured scores (measured - 0.10 per grader, composite - 0.05 health floor); review and apply that proposal here. Judges count only once calibrated against human labels (evals/judges/README.md).",
+    "budget_usd": 15.0,
+    "stop_at_usd": 13.5,
+    "max_models": 3,
+    "pinned_models": [],
+    "judge": {
+      "model": null,
+      "reasoning_effort": null,
+      "max_output_tokens": 4096,
+      "min_kappa_lower": 0.4,
+      "min_within_one": 0.8
+    },
+    "calibrated_versions": {},
+    "suites": {
+      "grading": {
+        "calibrated": false,
+        "repeats": 2,
+        "hard_gates": {
+          "ok_rate": {
+            "min": 0.95
+          },
+          "errors.refusal": {
+            "max": 0
+          },
+          "errors.truncated": {
+            "max": 0
+          }
+        }
+      },
+      "grading-levelband": {
+        "calibrated": false,
+        "repeats": 2,
+        "hard_gates": {
+          "ok_rate": {
+            "min": 0.95
+          },
+          "errors.refusal": {
+            "max": 0
+          },
+          "errors.truncated": {
+            "max": 0
+          }
+        }
+      },
+      "requirement-extraction": {
+        "calibrated": false,
+        "repeats": 2,
+        "hard_gates": {
+          "ok_rate": {
+            "min": 0.95
+          },
+          "errors.refusal": {
+            "max": 0
+          },
+          "errors.truncated": {
+            "max": 0
+          }
+        }
+      },
+      "exam-grading": {
+        "calibrated": false,
+        "repeats": 2,
+        "hard_gates": {
+          "ok_rate": {
+            "min": 0.95
+          },
+          "errors.refusal": {
+            "max": 0
+          },
+          "errors.truncated": {
+            "max": 0
+          }
+        }
+      },
+      "digest": {
+        "calibrated": false,
+        "repeats": 2,
+        "hard_gates": {
+          "ok_rate": {
+            "min": 0.95
+          },
+          "errors.refusal": {
+            "max": 0
+          },
+          "errors.truncated": {
+            "max": 0
+          }
+        }
+      },
+      "project-feedback": {
+        "calibrated": false,
+        "repeats": 2,
+        "hard_gates": {
+          "ok_rate": {
+            "min": 0.95
+          },
+          "errors.refusal": {
+            "max": 0
+          },
+          "errors.truncated": {
+            "max": 0
+          }
+        }
+      },
+      "flowgorithm-grade": {
+        "calibrated": false,
+        "repeats": 2,
+        "hard_gates": {
+          "ok_rate": {
+            "min": 0.95
+          },
+          "errors.refusal": {
+            "max": 0
+          },
+          "errors.truncated": {
+            "max": 0
+          }
+        }
+      }
+    }
+  }
 }
