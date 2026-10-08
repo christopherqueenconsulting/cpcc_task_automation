@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import datetime as dt
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -219,6 +220,9 @@ async def _run(args) -> int:
             "status": status,
             "notes": notes,
             "incumbent_hard_gate_failures": incumbent_failures,
+            # Prompts on the roles a promotion moves: a promotion evaluated on older prompt
+            # versions is stale and automerge-check refuses it.
+            "prompt_versions": _prompt_versions_for_promotion(),
         },
         aggregates, decisions, winner,
     )
@@ -227,6 +231,31 @@ async def _run(args) -> int:
     print(f"Scorecard: {json_path}")
     _github_outputs(winner=winner or "", status=status, incumbent_failed=str(bool(incumbent_failures)).lower())
     return 0
+
+
+def _prompt_versions_for_promotion() -> dict:
+    from cqc_cpcc.model_eval.prompt_automation import prompt_versions_for_roles
+
+    return prompt_versions_for_roles(model_registry.load_policy().auto_promote_roles)
+
+
+def promotion_prompt_problems(scorecard: dict, cross_suite: Optional[dict]) -> list[str]:
+    """Prompt-side reasons a promotion may not auto-merge (stale prompts, cross-suite gate)."""
+    problems = []
+    current = _prompt_versions_for_promotion()
+    recorded = scorecard.get("prompt_versions")
+    if recorded is None:
+        problems.append("scorecard has no prompt_versions (evaluated before prompt tracking)")
+    elif recorded != current:
+        stale = sorted(k for k in set(recorded) | set(current) if recorded.get(k) != current.get(k))
+        problems.append(f"evaluation is stale: prompt versions changed since the run ({', '.join(stale)})")
+    if cross_suite is None:
+        problems.append("no cross-suite result: the candidate was not checked on the other prompts of its roles")
+    elif cross_suite.get("status") != "pass":
+        problems.append("cross-suite gate failed: " + "; ".join(cross_suite.get("failures") or ["unknown"]))
+    elif cross_suite.get("candidate") != scorecard.get("winner"):
+        problems.append(f"cross-suite result is for {cross_suite.get('candidate')}, not {scorecard.get('winner')}")
+    return problems
 
 
 def _github_outputs(**values) -> None:
@@ -469,6 +498,9 @@ def cmd_automerge_check(args) -> int:
     if args.kind == "promotion":
         sc = json.loads(Path(args.scorecard).read_text(encoding="utf-8"))
         model, _ = parse_model(sc["winner"])
+        cross = Path(args.cross_suite) if args.cross_suite else None
+        problems += promotion_prompt_problems(
+            sc, json.loads(cross.read_text(encoding="utf-8")) if cross and cross.exists() else None)
         head = json.loads(Path(args.head_registry).read_text(encoding="utf-8"))
         recorded = head["models"][model]
         live = {m["id"]: m for m in fetch_models()}.get(model)
@@ -539,6 +571,86 @@ def cmd_describe_change(args) -> int:
     return 0
 
 
+def cmd_build_suite_datasets(args) -> int:
+    """Regenerate every prompt-suite dataset (evals/datasets/<suite>/v1/cases.jsonl)."""
+    from cqc_cpcc.model_eval import suite_datasets
+
+    counts = suite_datasets.write_all(reviewed_by=args.reviewed_by)
+    for name, count in counts.items():
+        print(f"{name}: {count} cases")
+    return 0
+
+
+def cmd_build_judge_gold(args) -> int:
+    from cqc_cpcc.model_eval import judge_calibration
+
+    for judge_id, count in judge_calibration.write_gold().items():
+        print(f"{judge_id}: {count} gold items")
+    return 0
+
+
+def cmd_judge_label(args) -> int:
+    from cqc_cpcc.model_eval import judge_calibration
+
+    done = judge_calibration.label_interactively(args.judge, args.labeled_by)
+    print(f"labelled {done} item(s)")
+    return 0
+
+
+def cmd_judge_calibrate(args) -> int:
+    from cqc_cpcc.model_eval import judge_calibration, judges
+
+    model = args.judge_model or judges.pick_judge_model()
+    if not model:
+        raise SystemExit("no judge model: pin prompt_eval.judge.model in model_policy.json")
+    report = asyncio.run(judge_calibration.calibrate(args.judge, model, use_constructed=args.use_constructed))
+    path = judges.CALIBRATION_DIR / (f"{args.judge}.report.json" if not args.use_constructed
+                                     else f"{args.judge}.provisional.json")
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_prompts(args) -> int:
+    """List prompts, check fingerprints and version bumps, or rewrite stale fingerprints."""
+    from cqc_cpcc.model_eval import prompt_registry as pr
+
+    registry = pr.load()
+    if args.action == "list":
+        print("| id | version | status | role | suites | fingerprint |")
+        print("|---|---|---|---|---|---|")
+        for pid, entry in registry.prompts.items():
+            print(f"| {pid} | {entry.version} | {entry.status} | {entry.role or '-'} | "
+                  f"{', '.join(entry.suites) or '-'} | {entry.fingerprint[:19]}… |")
+        return 0
+
+    base = pr.load_at_ref(args.base_ref) if args.base_ref else None
+    if args.action == "fingerprint":
+        stale = pr.mismatches(registry)
+        if not args.write:
+            for pid, (old, new) in stale.items():
+                print(f"{pid}: recorded {old[:19]}… computed {new[:19]}…")
+            print("all fingerprints current" if not stale else f"{len(stale)} stale fingerprint(s)")
+            return 1 if stale else 0
+        try:
+            changed = pr.write_fingerprints(bump=args.bump, base=base)
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 1
+        print("\n".join(f"updated {pid}" for pid in changed) or "nothing to update")
+        return 0
+
+    # check: fingerprints current + every change since --base-ref came with a version bump
+    problems = [f"{pid}: stale fingerprint (run `prompts fingerprint --write`)"
+                for pid in pr.mismatches(registry)]
+    problems += pr.version_problems(registry, base)
+    for problem in problems:
+        print(f"::error::{problem}" if os.environ.get("GITHUB_ACTIONS") else problem)
+    if not problems:
+        print("prompt registry OK" + (f" (vs {args.base_ref})" if args.base_ref else ""))
+    return 1 if problems else 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m cqc_cpcc.model_eval", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -595,6 +707,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     am.add_argument("--raw", default=None)
     am.add_argument("--head-registry", default=str(model_registry.DEFAULT_REGISTRY_PATH))
     am.add_argument("--sample", type=int, default=5)
+    am.add_argument("--cross-suite", default=None, help="cross_suite.json from the suite-gate job")
     am.set_defaults(func=cmd_automerge_check)
 
     vr = sub.add_parser("verify-rollback", help="guard: a rollback PR only restores previous models")
@@ -606,6 +719,55 @@ def main(argv: Optional[list[str]] = None) -> int:
     dc.add_argument("--base-registry", required=True)
     dc.add_argument("--head-registry", required=True)
     dc.set_defaults(func=cmd_describe_change)
+
+    from cqc_cpcc.model_eval.prompt_eval import cmd_suite
+
+    st = sub.add_parser("suite", help="prompt evaluation suites: list / run / score")
+    st.add_argument("action", choices=["list", "run", "score"])
+    st.add_argument("--suite", default="all", help="suite id, comma-separated ids, or 'all'")
+    st.add_argument("--model", action="append", help="model[@effort]; repeatable (default: incumbent)")
+    st.add_argument("--repeats", type=int, default=None)
+    st.add_argument("--limit", type=int, default=None, help="first N cases only (smoke)")
+    st.add_argument("--budget", type=float, default=None)
+    st.add_argument("--out", default="evals/runs/suites")
+    st.add_argument("--raw", default=None, help="score: raw_outputs.jsonl to re-score")
+    st.add_argument("--label", default=None)
+    st.add_argument("--run-id", default=None)
+    st.add_argument("--dry-run", action="store_true")
+    st.add_argument("--judges", action="store_true", help="also run the suite's model graders")
+    st.add_argument("--judge-model", default=None, help="judge model (default: policy pin, else auto-pick)")
+    st.add_argument("--judge-cache", default=None, help="verdict cache directory")
+    st.add_argument("--judge-cache-read-only", action="store_true", help="read the cache, never write (PR runs)")
+    st.set_defaults(func=cmd_suite)
+
+    from cqc_cpcc.model_eval import prompt_automation
+
+    prompt_automation.add_parsers(sub)
+
+    bjg = sub.add_parser("build-judge-gold", help="regenerate the judge calibration gold sets")
+    bjg.set_defaults(func=cmd_build_judge_gold)
+    jl = sub.add_parser("judge-label", help="label judge gold items by hand (interactive)")
+    jl.add_argument("--judge", required=True, choices=["feedback-quality", "faithfulness"])
+    jl.add_argument("--labeled-by", required=True)
+    jl.set_defaults(func=cmd_judge_label)
+    jc = sub.add_parser("judge-calibrate", help="measure a judge against the human labels")
+    jc.add_argument("--judge", required=True, choices=["feedback-quality", "faithfulness"])
+    jc.add_argument("--judge-model", default=None)
+    jc.add_argument("--use-constructed", action="store_true",
+                    help="compare with the constructed scores (provisional report, never counts)")
+    jc.set_defaults(func=cmd_judge_calibrate)
+
+    bsd = sub.add_parser("build-suite-datasets", help="regenerate the prompt-suite datasets")
+    bsd.add_argument("--reviewed-by", default=None, help="record a human label review")
+    bsd.set_defaults(func=cmd_build_suite_datasets)
+
+    pm = sub.add_parser("prompts", help="list / fingerprint / check the prompt registry")
+    pm.add_argument("action", choices=["list", "fingerprint", "check"])
+    pm.add_argument("--write", action="store_true", help="fingerprint: rewrite stale fingerprints")
+    pm.add_argument("--bump", action="store_true", help="fingerprint --write: bump versions as needed")
+    pm.add_argument("--base-ref", default=None,
+                    help="git ref to compare versions against (e.g. origin/master)")
+    pm.set_defaults(func=cmd_prompts)
 
     args = parser.parse_args(argv)
     return args.func(args)

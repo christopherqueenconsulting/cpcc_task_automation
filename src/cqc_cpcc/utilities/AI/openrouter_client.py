@@ -312,6 +312,27 @@ def get_openrouter_plugins() -> Optional[list]:
     ]
 
 
+def build_messages(prompt: str) -> list[dict]:
+    """The chat messages sent for ``prompt`` (one user message, no system prompt)."""
+    return [{"role": "user", "content": prompt}]
+
+
+def build_response_format(schema_model: Type[BaseModel]) -> dict:
+    """The strict ``json_schema`` response format sent for ``schema_model``.
+
+    Shared with ``cqc_cpcc.model_eval.prompt_registry`` so prompt fingerprints hash exactly
+    what is sent.
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_model.__name__,
+            "schema": normalize_json_schema_for_openai(schema_model.model_json_schema()),
+            "strict": True,
+        },
+    }
+
+
 async def get_openrouter_completion(
         prompt: str,
         schema_model: Type[T],
@@ -410,16 +431,7 @@ async def _get_openrouter_completion_impl(
     # Use auto-routing model ID if enabled
     effective_model = "openrouter/auto" if use_auto_route else model_name
 
-    # Generate and normalize schema
-    raw_schema = schema_model.model_json_schema()
-    normalized_schema = normalize_json_schema_for_openai(raw_schema)
-
-    # Build response format for OpenAI compatible API
-    json_schema = {
-        "name": schema_model.__name__,
-        "schema": normalized_schema,
-        "strict": True,
-    }
+    response_format = build_response_format(schema_model)
 
     client = _get_openrouter_client()
 
@@ -445,11 +457,8 @@ async def _get_openrouter_completion_impl(
             # Build API call parameters for OpenAI-compatible endpoint
             api_kwargs = {
                 "model": effective_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": json_schema,
-                },
+                "messages": build_messages(prompt),
+                "response_format": response_format,
             }
 
             # Add optional parameters

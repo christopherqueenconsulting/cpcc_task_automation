@@ -45,6 +45,16 @@ jobs:
           echo "Running unit tests with pytest..."
           poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml --junitxml=junit-unit.xml -o junit_family=legacy --durations=25
 
+      - name: Prompt registry (changed prompts bumped their version)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "${BASE_REF}"
+          poetry run python -m cqc_cpcc.model_eval prompts check --base-ref FETCH_HEAD
+
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
         # Skip Codecov upload for Dependabot PRs to reduce unnecessary uploads

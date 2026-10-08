@@ -834,7 +834,8 @@ async def generate_preprocessing_digest(
 
     from cqc_cpcc.utilities.AI import llm_gateway  # local import: gateway imports this module
     digest = await llm_gateway.structured(
-        role="digest", prompt=prompt, schema_model=PreprocessingDigest, override=model_name
+        role="digest", prompt=prompt, schema_model=PreprocessingDigest, override=model_name,
+        prompt_id="preprocessing-digest",
     )
 
     # Save digest to debug artifacts if debug enabled
@@ -1565,10 +1566,7 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
 
     # ErrorDefinitions for exam review
     elif model_name == "ErrorDefinitions":
-        return ErrorDefinitions(
-            major_errors=[],
-            minor_errors=[]
-        )
+        return ErrorDefinitions(all_major_errors=[], all_minor_errors=[])
 
     # FeedbackGuide for project feedback
     elif model_name == "FeedbackGuide":
@@ -1587,6 +1585,35 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
             {"id": "R1", "text": "Read the program's inputs.", "weight": "core"},
             {"id": "R2", "text": "Compute and print the required result.", "weight": "core"},
         ]})
+
+    # Flowgorithm grade (structured since prompt v2)
+    elif model_name == "FlowgorithmGrade":
+        return schema_model.model_validate({
+            "requirements_summary": "Test mode: read the inputs and print the result.",
+            "deductions": [{"criterion": "Comments", "points": 5,
+                            "reason": "Test mode: the flowchart has no comments."}],
+            "final_grade": 45,
+            "overall_feedback": "Test mode: solid work; add comments to explain each step.",
+        })
+
+    # Preprocessing digest (very large submissions)
+    elif model_name == "PreprocessingDigest":
+        return PreprocessingDigest(
+            files=[FileDigest(filename="Main.java", purpose="Test mode digest", structure="One class",
+                              key_components=[], notable_logic="None", io_behavior="Reads input",
+                              detected_issues=[])],
+            overall_assessment="Test mode: submission digest.",
+            completeness_check=CompletenessCheck(required_components_present=[], missing_components=[]),
+        )
+
+    # Prompt-evaluation judges (model graders)
+    elif model_name == "JudgeVerdict":
+        return schema_model.model_validate({"reasoning": "Test mode verdict.", "scores": [
+            {"criterion": c, "score": 3} for c in ("specific", "correct", "actionable", "tone", "no_solution",
+                                                     "supported", "no_invented_problems",
+                                                     "no_invented_requirements")]})
+    elif model_name == "PairwiseVerdict":
+        return schema_model.model_validate({"reasoning": "Test mode verdict.", "winner": "tie"})
 
     # Default: return empty instance
     else:

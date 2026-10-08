@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "_owner": "human. Every LLM prompt the app sends is listed here; see docs/PROMPTS.md. The model-promotion bot must never edit this file.",
+  "prompts": {
+    "rubric-grading": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Main rubric grading (Grade Assignment page, rubric mode): error detection, per-criterion levels/feedback, requirement marking.",
+      "builder": "cqc_cpcc.rubric_grading:build_rubric_grading_prompt",
+      "schema": "cqc_cpcc.rubric_models:RubricAssessmentResult",
+      "call_sites": [
+        "cqc_cpcc.rubric_grading:grade_with_rubric"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/rubric_grading.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock",
+        "src/cqc_cpcc/rubric_models.py",
+        "src/cqc_cpcc/utilities/zip_grading_utils.py",
+        "src/cqc_cpcc/scoring/"
+      ],
+      "graders": [
+        "ok_rate",
+        "f1",
+        "score_accuracy",
+        "validity_accuracy",
+        "ordering_violations",
+        "requirement_agreement",
+        "injection_pass_rate"
+      ],
+      "fingerprint": "sha256:bab7c37b0b30661fb39a713de47e4d1b19500f2a5ca03a6a63297f0407a86a7a",
+      "suites": [
+        "grading",
+        "grading-levelband"
+      ]
+    },
+    "requirements-section": {
+      "version": 1,
+      "status": "fragment",
+      "role": "grading",
+      "parent": "rubric-grading",
+      "description": "Requirement checklist section embedded in the rubric grading prompt (the model marks each R# met/partial/missing).",
+      "builder": "cqc_cpcc.requirement_coverage:requirements_prompt_section",
+      "schema": null,
+      "call_sites": [],
+      "source_files": [
+        "src/cqc_cpcc/requirement_coverage.py"
+      ],
+      "shared_files": [],
+      "graders": [
+        "requirement_agreement"
+      ],
+      "fingerprint": "sha256:0af1b7a6db0db837485915f7b86352ee85ec3734d9e611bbbd4bc9dcaabb7771",
+      "suites": [
+        "grading"
+      ]
+    },
+    "requirement-extraction": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Turns assignment instructions into a 1-12 item functional requirement checklist (cached per instructions).",
+      "builder": "cqc_cpcc.requirement_coverage:build_requirement_extraction_prompt",
+      "schema": "cqc_cpcc.requirement_coverage:RequirementChecklist",
+      "call_sites": [
+        "cqc_cpcc.requirement_coverage:extract_requirements"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/requirement_coverage.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "fingerprint": "sha256:635bde730fcb44bf7a63d45324bc40b62f469e745d9218b2634cb7555985b01e",
+      "suites": [
+        "requirement-extraction"
+      ]
+    },
+    "exam-grading": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Exam grading (Grade Assignment page, exam mode via CodeGrader): major/minor error detection against the course's error enums.",
+      "builder": "cqc_cpcc.utilities.AI.exam_grading_prompts:build_exam_grading_prompt",
+      "schema": "cqc_cpcc.exam_review:ErrorDefinitions",
+      "call_sites": [
+        "cqc_cpcc.utilities.AI.exam_grading_openai:grade_exam_submission"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/utilities/AI/exam_grading_prompts.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock",
+        "src/cqc_cpcc/exam_review.py",
+        "src/cqc_cpcc/utilities/utils.py"
+      ],
+      "fingerprint": "sha256:f25dd7073aa33a8cdffb2440cb1f1006a9071939cf2e95245387c4bb7c91131f",
+      "suites": [
+        "exam-grading"
+      ]
+    },
+    "preprocessing-digest": {
+      "version": 1,
+      "status": "live",
+      "role": "digest",
+      "description": "Compresses a very large submission into a per-file grading digest before exam grading.",
+      "builder": "cqc_cpcc.utilities.AI.openai_client:_build_preprocessing_prompt",
+      "schema": "cqc_cpcc.utilities.AI.openai_client:PreprocessingDigest",
+      "call_sites": [
+        "cqc_cpcc.utilities.AI.openai_client:generate_preprocessing_digest"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/utilities/AI/openai_client.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "fingerprint": "sha256:41852226b43ed8821f72fbb3ec0471164937a3c17818f607980684abd28bc5be",
+      "suites": [
+        "digest"
+      ]
+    },
+    "project-feedback": {
+      "version": 2,
+      "status": "live",
+      "role": "feedback",
+      "description": "Give Feedback page: typed feedback items (FeedbackType) on a project submission.",
+      "builder": "cqc_cpcc.prompts.project_feedback:CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI",
+      "schema": "cqc_cpcc.project_feedback:FeedbackGuide",
+      "call_sites": [
+        "cqc_cpcc.project_feedback:FeedbackGiver.generate_feedback"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/prompts/project_feedback.py",
+        "src/cqc_cpcc/project_feedback.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "fingerprint": "sha256:34b102dad37e7e267e6d7b042c9d601e8cac1c527b8ac6a74c67a09c3d434de3",
+      "suites": [
+        "project-feedback"
+      ]
+    },
+    "flowgorithm-grade": {
+      "version": 2,
+      "status": "live",
+      "role": "flowgorithm",
+      "description": "Flowgorithm grading: per-criterion deductions + feedback (structured; backend computes the final grade).",
+      "builder": "cqc_cpcc.flowgorithm_grading:build_flowgorithm_prompt",
+      "schema": "cqc_cpcc.flowgorithm_grading:FlowgorithmGrade",
+      "call_sites": [
+        "cqc_cpcc.flowgorithm_grading:grade_flowgorithm"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/prompts/flowgorithm.py",
+        "src/cqc_cpcc/flowgorithm_grading.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "fingerprint": "sha256:4c3b63a218f1527c2e52c14c84edd5e10ea85d1dd30f17c02c4ed07cda773247",
+      "suites": [
+        "flowgorithm-grade"
+      ]
+    },
+    "structured-fallback": {
+      "version": 1,
+      "status": "dead-path",
+      "role": null,
+      "description": "Plain-JSON retry suffix used only by openai_client.get_structured_completion, which no production code calls. Remove with that function.",
+      "builder": "cqc_cpcc.utilities.AI.openai_client:_build_fallback_prompt",
+      "schema": null,
+      "call_sites": [
+        "cqc_cpcc.utilities.AI.openai_client:_get_structured_completion_impl"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/utilities/AI/openai_client.py"
+      ],
+      "shared_files": [],
+      "fingerprint": "sha256:5aca8a649fb60455bba8defd41efdec15ec81e352eca50a38cd380d11c6da1f0",
+      "suites": []
+    },
+    "judge-feedback-quality": {
+      "version": 1,
+      "status": "judge",
+      "role": "feedback",
+      "description": "Model grader: scores feedback 1-4 on specific, correct, actionable, tone, no solution.",
+      "builder": "cqc_cpcc.model_eval.judges:build_judge_prompt",
+      "schema": "cqc_cpcc.model_eval.judges:JudgeVerdict",
+      "call_sites": [
+        "cqc_cpcc.model_eval.judges:_ask"
+      ],
+      "source_files": [
+        "evals/judges/feedback-quality.md",
+        "src/cqc_cpcc/model_eval/judges.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py"
+      ],
+      "suites": [],
+      "graders": [],
+      "fingerprint": "sha256:3c4f127cedbd7a689831b19fc84aeb4afdee398b4c1371fd01137f8fd10d8856"
+    },
+    "judge-faithfulness": {
+      "version": 1,
+      "status": "judge",
+      "role": "feedback",
+      "description": "Model grader: scores 1-4 whether every claim is supported (no invented problems or requirements).",
+      "builder": "cqc_cpcc.model_eval.judges:build_judge_prompt",
+      "schema": "cqc_cpcc.model_eval.judges:JudgeVerdict",
+      "call_sites": [
+        "cqc_cpcc.model_eval.judges:_ask"
+      ],
+      "source_files": [
+        "evals/judges/faithfulness.md",
+        "src/cqc_cpcc/model_eval/judges.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py"
+      ],
+      "suites": [],
+      "graders": [],
+      "fingerprint": "sha256:b1fb20e86388f3b1beec7a676096ce178361fb8195d4bf6b9190adcd71b3db40"
+    },
+    "judge-pairwise": {
+      "version": 1,
+      "status": "judge",
+      "role": "feedback",
+      "description": "Model grader: which of two outputs for the same case is better (run in both orders).",
+      "builder": "cqc_cpcc.model_eval.judges:build_judge_prompt",
+      "schema": "cqc_cpcc.model_eval.judges:PairwiseVerdict",
+      "call_sites": [
+        "cqc_cpcc.model_eval.judges:_ask"
+      ],
+      "source_files": [
+        "evals/judges/pairwise.md",
+        "src/cqc_cpcc/model_eval/judges.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py"
+      ],
+      "suites": [],
+      "graders": [],
+      "fingerprint": "sha256:907a71eee0302dd2cc92b06dcb0c8c786d10995c6164e67b2e6fe71db6526430"
+    }
+  }
+}
