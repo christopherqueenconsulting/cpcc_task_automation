@@ -102,6 +102,10 @@ class TestFeedback:
                                 {"type": "PROGRAMMING_STYLE", "details": "Use a named constant for the tax."}]}
         assert _composite(self.suite, case, payload).graders["type_f1"] == 1.0
 
+    def test_logic_errors_expect_the_logic_error_type(self):
+        assert self.cases["csc134_project_cpp__flipped_overtime"].labels["expected"] == ["LOGIC_ERROR"]
+        assert self.cases["csc134_project_cpp__no_validation"].labels["expected"] == ["LOGIC_ERROR"]
+
     def test_extra_tips_are_always_fair(self):
         case = self.cases["csc134_project_cpp__clean"]
         payload = {"feedback": [{"type": "ADDITIONAL_TIPS_PROVIDED", "details": "Consider a loop here."}]}
