@@ -2,6 +2,7 @@
 """Event-driven prompt evaluation: affected suites, A/B decisions, calibration, records."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,22 @@ from cqc_cpcc.model_eval import prompt_eval
 from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def uncalibrated_policy(tmp_path, monkeypatch):
+    """The policy as shipped before the first calibration: every suite report-only."""
+    from cqc_cpcc.utilities.AI import model_registry
+
+    data = json.loads(model_registry.DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))
+    for sp in data["prompt_eval"]["suites"].values():
+        sp.update(calibrated=False, health_floor=None, baseline_report=None,
+                  hard_gates={"ok_rate": {"min": 0.95}, "errors.refusal": {"max": 0}, "errors.truncated": {"max": 0}})
+    data["prompt_eval"]["calibrated_versions"] = {}
+    path = tmp_path / "uncalibrated_policy.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(model_registry, "DEFAULT_POLICY_PATH", path)
+    return path
 
 
 class TestAffected:
@@ -52,6 +69,7 @@ def _agg(suite, composites, cost=0.01):
             "ok_rate": 1.0, "errors": {}, "cost_per_call": cost, "per_case": per_case}
 
 
+@pytest.mark.usefixtures("uncalibrated_policy")
 class TestAbDecision:
     suite = get_suite("exam-grading")
 
@@ -90,7 +108,7 @@ class TestCalibration:
         assert proposal["hard_gates"]["f1"] == {"min": 0.72} and "recall" not in proposal["hard_gates"]
         assert proposal["hard_gates"]["errors.refusal"] == {"max": 0}
 
-    def test_apply_merges_into_the_policy_and_validates(self, tmp_path):
+    def test_apply_merges_into_the_policy_and_validates(self, tmp_path, uncalibrated_policy):
         from cqc_cpcc.utilities.AI import model_registry
 
         path = tmp_path / "model_policy.json"
@@ -176,7 +194,7 @@ async def test_prompt_ab_end_to_end_in_test_mode(tmp_path, monkeypatch):
         assert m["delta"] == pytest.approx(0.0)
 
 
-async def test_suite_gate_runs_the_other_suites_of_the_roles(tmp_path, monkeypatch):
+async def test_suite_gate_runs_the_other_suites_of_the_roles(tmp_path, monkeypatch, uncalibrated_policy):
     from cqc_cpcc.utilities.AI import llm_gateway
 
     monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
@@ -282,7 +300,7 @@ class TestCli:
         out = capsys.readouterr().out
         assert "| digest |" in out and "[flowgorithm-grade]" in out
 
-    def test_record_and_rescore(self, tmp_path, monkeypatch, capsys):
+    def test_record_and_rescore(self, tmp_path, monkeypatch, capsys, uncalibrated_policy):
         from cqc_cpcc.utilities.AI import llm_gateway
 
         monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
@@ -317,7 +335,10 @@ class TestCli:
 
         monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
         import asyncio
-        patch = asyncio.run(pa.calibrate(tmp_path / "cal", ["digest"], repeats=2))
+        patch = asyncio.run(pa.calibrate(tmp_path / "cal", ["digest"], repeats=2, report_dir=str(tmp_path / "rep")))
         assert patch["suites"]["digest"]["calibrated"] is True
+        baseline = patch["suites"]["digest"]["baseline_report"]
+        assert baseline == str(tmp_path / "rep" / "digest" / "scorecard.json")
+        assert json.loads(Path(baseline).read_text())["suite"] == "digest"  # the cited baseline exists
         assert "preprocessing-digest" in patch["calibrated_versions"]
         assert (tmp_path / "cal" / "policy_patch.json").exists()

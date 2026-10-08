@@ -1,0 +1,554 @@
+{
+  "budget_usd": 15.0,
+  "cases": 36,
+  "dataset": "requirement-extraction/v1",
+  "models": {
+    "openai/gpt-6-luna@high": {
+      "comparative": true,
+      "composite": 0.9607458847736626,
+      "cost_per_call": 0.00021920277777777778,
+      "cost_usd": 0.0236739,
+      "errors": {},
+      "graders": {
+        "count": 0.9243055555555556,
+        "ids": 1.0,
+        "precision": 0.9137345679012346,
+        "recall": 0.988425925925926
+      },
+      "health": {
+        "calibrated": false,
+        "failures": [],
+        "needs_work": false
+      },
+      "judges": {},
+      "latency_p95_s": 10.735318574000075,
+      "model_mismatches": 0,
+      "ok_rate": 1.0,
+      "per_case": [
+        {
+          "calls": 3,
+          "case_id": "order_total__numbered",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "order_total__bulleted",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "order_total__prose",
+          "composite": 1.0,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "payroll__numbered",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "payroll__bulleted",
+          "composite": 0.94,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 0.9333333333333332,
+            "recall": 0.9333333333333332
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "payroll__prose",
+          "composite": 1.0,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "grade_average__numbered",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "grade_average__bulleted",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "grade_average__prose",
+          "composite": 1.0,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "temperature__numbered",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "temperature__bulleted",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "temperature__prose",
+          "composite": 1.0,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "loan__numbered",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "loan__bulleted",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "loan__prose",
+          "composite": 0.9629629629629631,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 0.888888888888889,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "inventory__numbered",
+          "composite": 0.9433333333333334,
+          "graders": {
+            "count": 0.8333333333333334,
+            "ids": 1.0,
+            "precision": 0.8666666666666667,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "inventory__bulleted",
+          "composite": 0.915,
+          "graders": {
+            "count": 0.75,
+            "ids": 1.0,
+            "precision": 0.8000000000000002,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "inventory__prose",
+          "composite": 0.9333333333333335,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 0.8000000000000002,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "rock_paper_scissors__numbered",
+          "composite": 0.9299999999999999,
+          "graders": {
+            "count": 0.8000000000000002,
+            "ids": 1.0,
+            "precision": 0.8333333333333334,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "rock_paper_scissors__bulleted",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "rock_paper_scissors__prose",
+          "composite": 0.9444444444444445,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 0.8333333333333334,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "bank_account__numbered",
+          "composite": 0.8166666666666667,
+          "graders": {
+            "count": 0.8000000000000002,
+            "ids": 1.0,
+            "precision": 0.7222222222222222,
+            "recall": 0.8666666666666667
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "bank_account__bulleted",
+          "composite": 0.88,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 0.8666666666666667,
+            "recall": 0.8666666666666667
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "bank_account__prose",
+          "composite": 0.9444444444444445,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 0.8333333333333334,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "word_stats__numbered",
+          "composite": 0.915,
+          "graders": {
+            "count": 0.75,
+            "ids": 1.0,
+            "precision": 0.8000000000000002,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "word_stats__bulleted",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "word_stats__prose",
+          "composite": 0.9333333333333335,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 0.8000000000000002,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "shipping__numbered",
+          "composite": 0.9716666666666667,
+          "graders": {
+            "count": 0.9166666666666666,
+            "ids": 1.0,
+            "precision": 0.9333333333333332,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "shipping__bulleted",
+          "composite": 0.9433333333333334,
+          "graders": {
+            "count": 0.8333333333333334,
+            "ids": 1.0,
+            "precision": 0.8666666666666667,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "shipping__prose",
+          "composite": 0.9166666666666667,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 0.9166666666666666,
+            "recall": 0.9166666666666666
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "number_guess__numbered",
+          "composite": 0.9433333333333334,
+          "graders": {
+            "count": 0.8333333333333334,
+            "ids": 1.0,
+            "precision": 0.8666666666666667,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "number_guess__bulleted",
+          "composite": 0.9716666666666667,
+          "graders": {
+            "count": 0.9166666666666666,
+            "ids": 1.0,
+            "precision": 0.9333333333333332,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "number_guess__prose",
+          "composite": 0.9333333333333335,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 0.8000000000000002,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "prose"
+        },
+        {
+          "calls": 3,
+          "case_id": "seating_chart__numbered",
+          "composite": 0.915,
+          "graders": {
+            "count": 0.75,
+            "ids": 1.0,
+            "precision": 0.8000000000000002,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "numbered"
+        },
+        {
+          "calls": 3,
+          "case_id": "seating_chart__bulleted",
+          "composite": 1.0,
+          "graders": {
+            "count": 1.0,
+            "ids": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "bulleted"
+        },
+        {
+          "calls": 3,
+          "case_id": "seating_chart__prose",
+          "composite": 0.9333333333333335,
+          "graders": {
+            "count": null,
+            "ids": 1.0,
+            "precision": 0.8000000000000002,
+            "recall": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "prose"
+        }
+      ],
+      "per_stratum": {
+        "bulleted": 0.9708333333333333,
+        "numbered": 0.9529166666666667,
+        "prose": 0.9584876543209878
+      },
+      "prompt_versions": [
+        "requirement-extraction@1"
+      ],
+      "retry_rate": 0.0,
+      "scorable_cases": 36,
+      "skipped_budget": 0
+    }
+  },
+  "prompt_id": "requirement-extraction",
+  "repeats": 3,
+  "role": "grading",
+  "run_id": null,
+  "run_label": "2026-10-08",
+  "spent_usd": 0.023674,
+  "status": "complete",
+  "suite": "requirement-extraction"
+}
