@@ -108,6 +108,15 @@ class TestCalibration:
         assert proposal["hard_gates"]["f1"] == {"min": 0.72} and "recall" not in proposal["hard_gates"]
         assert proposal["hard_gates"]["errors.refusal"] == {"max": 0}
 
+    def test_calibrated_judges_get_a_floor_and_report_only_judges_do_not(self):
+        agg = {"graders": {"f1": 0.9}, "composite": 0.9,
+               "judges": {"feedback-quality": {"mean": 0.8, "calibrated": True},
+                          "faithfulness": {"mean": 0.9, "calibrated": False},
+                          "pairwise": {"mean": None, "calibrated": True}}}
+        gates = pa.propose_suite_policy(agg, "r.json")["hard_gates"]
+        assert gates["judge.feedback-quality"] == {"min": 0.7}
+        assert "judge.faithfulness" not in gates and "judge.pairwise" not in gates
+
     def test_apply_merges_into_the_policy_and_validates(self, tmp_path, uncalibrated_policy):
         from cqc_cpcc.utilities.AI import model_registry
 

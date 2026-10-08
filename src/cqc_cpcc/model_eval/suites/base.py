@@ -291,19 +291,29 @@ def aggregate(suite: Suite, cases: list, records: list[SuiteRecord],
 GENERIC_GATES = ("ok_rate", "retry_rate", "model_mismatches", "skipped_budget", "composite")
 
 
+JUDGE_GATE_PREFIX = "judge."
+
+
 def metric_value(agg: dict, name: str):
     if name in agg.get("graders", {}):
         return agg["graders"][name]
     if name.startswith("errors."):
         return agg.get("errors", {}).get(name.split(".", 1)[1], 0)
+    if name.startswith(JUDGE_GATE_PREFIX):
+        # A judge's mean counts only when that judge is calibrated for this run's judge model.
+        info = (agg.get("judges") or {}).get(name[len(JUDGE_GATE_PREFIX):]) or {}
+        return info.get("mean") if info.get("calibrated") else None
     return agg.get(name)
 
 
 def gate_failures(agg: dict, gates: dict) -> list[str]:
-    """``gates`` maps metric -> {"min": x} or {"max": x}; a missing metric fails a min gate."""
+    """``gates`` maps metric -> {"min": x} or {"max": x}; a missing metric fails a min gate,
+    except a judge gate, which applies only to runs that scored with a calibrated judge."""
     failures = []
     for name, bound in (gates or {}).items():
         value = metric_value(agg, name)
+        if value is None and name.startswith(JUDGE_GATE_PREFIX):
+            continue
         if "min" in bound and (value is None or value < bound["min"]):
             failures.append(f"{name} {value if value is None else round(value, 4)} < {bound['min']}")
         if "max" in bound and value is not None and value > bound["max"]:

@@ -338,6 +338,9 @@ def propose_suite_policy(agg: dict, report_path: str) -> dict:
     for name, value in (agg.get("graders") or {}).items():
         if value is not None:
             gates[name] = {"min": round(max(0.0, value - GRADER_TOLERANCE), 3)}
+    for judge_id, info in (agg.get("judges") or {}).items():  # calibrated judges only
+        if info.get("calibrated") and info.get("mean") is not None:
+            gates[f"judge.{judge_id}"] = {"min": round(max(0.0, info["mean"] - GRADER_TOLERANCE), 3)}
     composite = agg.get("composite")
     return {"calibrated": True, "repeats": 2, "hard_gates": gates,
             "health_floor": round(max(0.0, composite - HEALTH_TOLERANCE), 3) if composite is not None else None,
@@ -351,7 +354,7 @@ async def calibrate(out: Path, suite_ids: Optional[list] = None, repeats: int = 
     report_dir = report_dir or f"evals/reports/prompt-calibration/{dt.date.today().isoformat()}"
     proposal = {}
     for suite_id in suite_ids:
-        sc = await prompt_eval.run(suite_id, [], repeats=repeats, out=str(out))
+        sc = await prompt_eval.run(suite_id, [], repeats=repeats, out=str(out), judges=True)
         if sc.get("status") != "complete":
             raise SystemExit(f"{suite_id}: calibration run {sc.get('status')}; nothing proposed")
         (label, m), = sc["models"].items()

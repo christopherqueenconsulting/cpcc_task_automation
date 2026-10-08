@@ -121,6 +121,10 @@ Calibrate once the setup below is done: Actions > Prompt Evaluation > Run workfl
 `calibrate`, dry run off. Review `policy_patch.json` in the artifact (each floor = the current
 model's measured score minus 0.10, health floor = composite minus 0.05) and apply it with
 `prompt-calibrate --apply` locally or by copying it into `model_policy.json`.
+Calibration also runs the judges: each calibrated judge (feedback-quality, faithfulness) gets
+a `judge.<id>` floor at its measured mean minus 0.10. A judge floor applies only to runs that
+scored with that calibrated judge (the master record run and PR A/Bs do; runs without
+`--judges` skip it).
 
 **Model graders** need about an hour of labelling once: [`evals/judges/README.md`](../evals/judges/README.md).
 
