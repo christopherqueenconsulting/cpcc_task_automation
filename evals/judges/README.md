@@ -19,7 +19,11 @@ scorecards as *report-only* and never gate anything (hard gates use code graders
    ```
    Labels go to `calibration/<judge>.labels.json`. The `constructed_score` in the gold
    file is only the intended level; your label is what counts.
-3. Measure agreement (needs `OPENROUTER_API_KEY`, about $0.20 per judge):
+   Or score them on a review page that shows a recommended score and reason for each item;
+   Claude reads the scores back and commits them as the two `labels.json` files.
+3. Measure agreement (about $0.20 per judge): Actions > Prompt Evaluation > Run workflow,
+   mode `judges`, dry run off (the reports land in the artifact), or locally with
+   `OPENROUTER_API_KEY` set:
    ```bash
    poetry run python -m cqc_cpcc.model_eval judge-calibrate --judge feedback-quality
    ```

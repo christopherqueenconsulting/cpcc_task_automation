@@ -1,0 +1,411 @@
+{
+  "budget_usd": 15.0,
+  "cases": 24,
+  "dataset": "flowgorithm-grade/v1",
+  "models": {
+    "openai/gpt-6-luna@medium": {
+      "comparative": false,
+      "composite": 0.9962962962962963,
+      "cost_per_call": 0.00026868194444444447,
+      "cost_usd": 0.0193451,
+      "errors": {},
+      "graders": {
+        "arithmetic": 1.0,
+        "criteria_valid": 1.0,
+        "deduction_f1": 0.9907407407407408,
+        "grade_in_range": 1.0,
+        "no_solution_leak": 1.0
+      },
+      "health": {
+        "calibrated": false,
+        "failures": [],
+        "needs_work": false
+      },
+      "judges": {},
+      "latency_p95_s": 11.396670613999959,
+      "model_mismatches": 0,
+      "ok_rate": 1.0,
+      "per_case": [
+        {
+          "calls": 3,
+          "case_id": "rectangle__clean",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "rectangle"
+        },
+        {
+          "calls": 3,
+          "case_id": "rectangle__no_comments",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "rectangle"
+        },
+        {
+          "calls": 3,
+          "case_id": "rectangle__no_label",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "rectangle"
+        },
+        {
+          "calls": 3,
+          "case_id": "rectangle__wrong_calc",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "rectangle"
+        },
+        {
+          "calls": 3,
+          "case_id": "rectangle__cryptic_names",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "rectangle"
+        },
+        {
+          "calls": 3,
+          "case_id": "rectangle__missing_input",
+          "composite": 0.9555555555555556,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 0.8888888888888888,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "rectangle"
+        },
+        {
+          "calls": 3,
+          "case_id": "rectangle__no_comments+no_label",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "rectangle"
+        },
+        {
+          "calls": 3,
+          "case_id": "rectangle__wrong_calc+cryptic_names",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "rectangle"
+        },
+        {
+          "calls": 3,
+          "case_id": "average__clean",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "average"
+        },
+        {
+          "calls": 3,
+          "case_id": "average__no_comments",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "average"
+        },
+        {
+          "calls": 3,
+          "case_id": "average__no_label",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "average"
+        },
+        {
+          "calls": 3,
+          "case_id": "average__wrong_calc",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "average"
+        },
+        {
+          "calls": 3,
+          "case_id": "average__cryptic_names",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "average"
+        },
+        {
+          "calls": 3,
+          "case_id": "average__missing_input",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "average"
+        },
+        {
+          "calls": 3,
+          "case_id": "average__no_comments+no_label",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "average"
+        },
+        {
+          "calls": 3,
+          "case_id": "average__wrong_calc+cryptic_names",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "average"
+        },
+        {
+          "calls": 3,
+          "case_id": "pay__clean",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "pay"
+        },
+        {
+          "calls": 3,
+          "case_id": "pay__no_comments",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "pay"
+        },
+        {
+          "calls": 3,
+          "case_id": "pay__no_label",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "pay"
+        },
+        {
+          "calls": 3,
+          "case_id": "pay__wrong_calc",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "pay"
+        },
+        {
+          "calls": 3,
+          "case_id": "pay__cryptic_names",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "pay"
+        },
+        {
+          "calls": 3,
+          "case_id": "pay__missing_input",
+          "composite": 0.9555555555555556,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 0.8888888888888888,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "pay"
+        },
+        {
+          "calls": 3,
+          "case_id": "pay__no_comments+no_label",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "pay"
+        },
+        {
+          "calls": 3,
+          "case_id": "pay__wrong_calc+cryptic_names",
+          "composite": 1.0,
+          "graders": {
+            "arithmetic": 1.0,
+            "criteria_valid": 1.0,
+            "deduction_f1": 1.0,
+            "grade_in_range": 1.0,
+            "no_solution_leak": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "pay"
+        }
+      ],
+      "per_stratum": {
+        "average": 1.0,
+        "pay": 0.9944444444444445,
+        "rectangle": 0.9944444444444445
+      },
+      "prompt_versions": [
+        "flowgorithm-grade@2"
+      ],
+      "retry_rate": 0.0,
+      "scorable_cases": 24,
+      "skipped_budget": 0
+    }
+  },
+  "prompt_id": "flowgorithm-grade",
+  "repeats": 3,
+  "role": "flowgorithm",
+  "run_id": null,
+  "run_label": "2026-10-08",
+  "spent_usd": 0.019345,
+  "status": "complete",
+  "suite": "flowgorithm-grade"
+}

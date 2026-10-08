@@ -35,10 +35,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "suites = run suites on models; calibrate = propose thresholds; ab = A/B a PR"
+        description: "suites = run suites on models; calibrate = propose thresholds; ab = A/B a PR; judges = calibrate the LLM judges on the committed labels"
         required: true
         type: choice
-        options: [suites, calibrate, ab]
+        options: [suites, calibrate, ab, judges]
         default: suites
       suites:
         description: "Comma-separated suite ids, or 'all' (suites/calibrate modes)"
@@ -675,8 +675,22 @@ jobs:
               else
                 suites=(); if [ -n "${SUITES}" ] && [ "${SUITES}" != "all" ]; then suites=(--suites "${SUITES}"); fi
                 poetry run python -m cqc_cpcc.model_eval prompt-calibrate "${suites[@]}" --out evals/runs/dispatch | tee run.log
-                echo "Review evals/runs/dispatch/policy_patch.json in the artifact, then apply it to model_policy.json in a PR." >> "$GITHUB_STEP_SUMMARY"
+                # The baseline scorecards the patch cites (baseline_report), at their repo paths.
+                if [ -d evals/reports/prompt-calibration ]; then cp -r evals/reports evals/runs/dispatch/; fi
+                echo "Review policy_patch.json in the artifact. To apply it, commit the artifact's reports/ folder under evals/ and merge the patch into model_policy.json (prompt-calibrate --apply does the merge) in a PR." >> "$GITHUB_STEP_SUMMARY"
               fi ;;
+            judges)
+              # Live judge calls on the committed human labels (about $0.20 per judge).
+              # Judge model: the first entry of `models`, else the policy pin / auto-pick.
+              jm=(); if [ "${#models[@]}" -ge 2 ]; then jm=(--judge-model "${models[1]%@*}"); fi
+              for j in feedback-quality faithfulness; do
+                if [ "${DRY_RUN}" = "true" ]; then
+                  echo "[dry run] would calibrate judge ${j}" | tee -a run.log; continue
+                fi
+                poetry run python -m cqc_cpcc.model_eval judge-calibrate --judge "${j}" "${jm[@]}" | tee -a run.log
+                cp "evals/judges/calibration/${j}.report.json" evals/runs/dispatch/
+              done
+              echo "Commit the two report files from the artifact to evals/judges/calibration/ and pin prompt_eval.judge.model to the reports' judge_model." >> "$GITHUB_STEP_SUMMARY" ;;
             ab)
               git fetch -q origin "${BASE}"
               suites="$(poetry run python -m cqc_cpcc.model_eval prompts-affected --base-ref "origin/${BASE}" 2>/dev/null \

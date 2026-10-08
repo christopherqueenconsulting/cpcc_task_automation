@@ -355,6 +355,7 @@ async def calibrate(out: Path, suite_ids: Optional[list] = None, repeats: int = 
         if sc.get("status") != "complete":
             raise SystemExit(f"{suite_id}: calibration run {sc.get('status')}; nothing proposed")
         (label, m), = sc["models"].items()
+        prompt_eval.write_scorecard(Path(report_dir) / suite_id, sc)  # the baseline the patch cites
         proposal[suite_id] = propose_suite_policy(m, f"{report_dir}/{suite_id}/scorecard.json")
     versions = {pid: e.version for pid, e in prompt_registry.load().prompts.items() if e.status == "live"}
     patch = {"suites": proposal, "calibrated_versions": versions}
