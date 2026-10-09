@@ -1,8 +1,10 @@
-# Changes to CI and automation workflows request the owner's review.
+# Changes to CI and automation request the owner's review.
 #
-# These files decide what runs with the repository's secrets and what is allowed to merge, so a
-# change to them should never land unseen. On its own this file only REQUESTS a review: branch
-# protection has `require_code_owner_reviews` off, so nothing is blocked until a repo admin turns
-# that setting on. Turning it on also blocks Dependabot's action bumps until the owner approves.
+# Workflows and the composite actions they run decide what executes with the repository's secrets
+# and which checks gate a merge. On its own this file only REQUESTS a review, and GitHub never
+# requests one from a pull request's own author, so PRs opened under the owner's account get none.
+# Blocking needs the branch-protection setting "Require review from Code Owners", a separate
+# repository decision.
 /.github/workflows/ @gitchrisqueen
+/.github/actions/ @gitchrisqueen
 /.github/CODEOWNERS @gitchrisqueen
