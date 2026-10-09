@@ -8,3 +8,4 @@
 /.github/workflows/ @gitchrisqueen
 /.github/actions/ @gitchrisqueen
 /.github/CODEOWNERS @gitchrisqueen
+/.github/dependabot.yml @gitchrisqueen
