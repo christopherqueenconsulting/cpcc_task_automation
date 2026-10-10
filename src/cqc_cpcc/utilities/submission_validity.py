@@ -142,25 +142,55 @@ def expected_language_for_rubric(rubric) -> Optional[str]:
     return langs.pop() if len(langs) == 1 else None
 
 
-# An unterminated block comment runs to the end of the text, so the scan never restarts
-# at each later "/*" (which made many unterminated openers quadratic).
+# Every pattern that starts scanning also ends at the end of the text (or line, for a
+# string literal), so a match attempt never fails after a long scan and is never retried
+# from each later opener; that retry made many unterminated openers quadratic. A match
+# that reached the end without its closer is put back as code, as it was before.
 _C_COMMENT_OR_LITERAL = re.compile(
-    r"""("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|/\*.*?(?:\*/|\Z)|//[^\n]*""",
+    r"""("(?:[^"\\\n]|\\.?)*(?:"|(?=\n)|\Z)|'(?:[^'\\\n]|\\.?)*(?:'|(?=\n)|\Z))"""
+    r"""|/\*.*?(?:\*/|\Z)|//[^\n]*""",
     re.DOTALL,
 )
+_C_LINE_COMMENT_OR_LITERAL = re.compile(
+    r"""("(?:[^"\\\n]|\\.?)*(?:"|(?=\n)|\Z)|'(?:[^'\\\n]|\\.?)*(?:'|(?=\n)|\Z))|//[^\n]*""",
+    re.DOTALL,
+)
+
+
+def _strip_c_comment(m: re.Match) -> str:
+    if m.group(1) is not None:
+        return m.group(1)
+    text = m.group(0)
+    if text.startswith("//") or (len(text) >= 4 and text.endswith("*/")):
+        return ""
+    # Unterminated "/*": no "*/" follows, so the rest can only hold literals and "//".
+    return "/*" + _C_LINE_COMMENT_OR_LITERAL.sub(lambda n: n.group(1) or "", text[2:])
+
+
+def _strip_if_closed(closer: str, min_len: int):
+    def repl(m: re.Match) -> str:
+        text = m.group(0).strip(" \t")
+        return "" if len(text) >= min_len and text.endswith(closer) else m.group(0)
+    return repl
+
+
+def _strip_docstring(m: re.Match) -> str:
+    text = m.group(1)
+    return "" if len(text) >= 6 and text.endswith(text[:3]) else m.group(0)
 
 
 def strip_comments(code: str, language: str) -> str:
     """Remove comments from ``code`` (best effort, string-literal naive)."""
     if language in ("cpp", "java"):
         # Match string/char literals first so "/*" or "//" inside a string is kept.
-        code = _C_COMMENT_OR_LITERAL.sub(lambda m: m.group(1) or "", code)
+        code = _C_COMMENT_OR_LITERAL.sub(_strip_c_comment, code)
     elif language == "python":
-        code = re.sub(r'^[ \t]*(""".*?(?:"""|\Z)|\'\'\'.*?(?:\'\'\'|\Z))', "", code, flags=re.DOTALL | re.MULTILINE)
+        code = re.sub(r'^[ \t]*(""".*?(?:"""|\Z)|\'\'\'.*?(?:\'\'\'|\Z))', _strip_docstring, code,
+                      flags=re.DOTALL | re.MULTILINE)
         code = re.sub(r"#[^\n]*", "", code)
     elif language == "sas":
-        code = re.sub(r"/\*.*?(?:\*/|\Z)", "", code, flags=re.DOTALL)
-        code = re.sub(r"^[ \t]*\*[^;]*(?:;|\Z)", "", code, flags=re.MULTILINE)
+        code = re.sub(r"/\*.*?(?:\*/|\Z)", _strip_if_closed("*/", 4), code, flags=re.DOTALL)
+        code = re.sub(r"^[ \t]*\*[^;]*(?:;|\Z)", _strip_if_closed(";", 2), code, flags=re.MULTILINE)
     return code
 
 

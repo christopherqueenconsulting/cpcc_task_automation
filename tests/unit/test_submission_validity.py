@@ -458,6 +458,7 @@ def test_reference_threshold_counts_only_source_sections(tmp_path):
     assert "sample_output" not in source and "```" not in source and "Gross pay: $5.00" not in source
 
 
+
 @pytest.mark.unit
 def test_reference_source_header_regex_is_linear_on_long_space_runs():
     """A header followed by a long run of spaces must not backtrack polynomially."""
@@ -468,10 +469,14 @@ def test_reference_source_header_regex_is_linear_on_long_space_runs():
 @pytest.mark.parametrize("code, language", [
     ("class " + "a" * 50_000 + "{x", "cpp"),
     ("/* " * 50_000, "cpp"),
+    ('"' + '\\"' * 50_000, "cpp"),
+    ('"' + '\\"' * 50_000 + "\\", "cpp"),
+    ("'" + "\\'" * 50_000, "java"),
     ("/* " * 50_000, "sas"),
     ("\n" * 50_000, "sas"),
     ("*\n" * 50_000, "sas"),
     ("\n" * 50_000 + '"""', "python"),
+    ('"""\n' * 50_001, "python"),
 ])
 def test_line_counting_is_linear_on_hostile_submissions(code, language):
     """Student text must not make the comment or boilerplate regexes backtrack quadratically."""
@@ -498,3 +503,19 @@ def test_comment_and_class_header_handling_is_unchanged_for_normal_code():
     assert sv.count_meaningful_lines("int x = 1;\n/* unclosed\nint y = 2;\n", "cpp") == 1
     assert sv.count_meaningful_lines("* a comment;\ndata a; set b;\n/* c */\nrun;\n", "sas") == 2
     assert sv.count_meaningful_lines("data a;\n* unclosed comment\nrun;\n", "sas") == 1
+@pytest.mark.parametrize("code, language, expected", [
+    ("public class Payroll extends Base {\n", "java", 0),
+    ("class Account {\n", "cpp", 0),
+    ("int x = 1; /* note */\nint y = 2;\n", "cpp", 2),
+    ('char *s = "/* not a comment */";\n', "cpp", 1),
+    # An unclosed comment does not compile; its text still counts as code, as before.
+    ("int x = 1;\n/* unclosed\nint y = 2;\n// note\n", "cpp", 3),
+    ("* a comment;\ndata a; set b;\n/* c */\nrun;\n", "sas", 2),
+    ("data a;\n/* unclosed\nrun;\n", "sas", 3),
+    ("data a;\nset b;\n* unclosed statement\nrun\n", "sas", 4),
+    ('x = 1\n"""doc"""\ny = 2\n', "python", 2),
+    ('msg = """\ntext\n"""\ny = 2\n', "python", 4),
+])
+def test_comment_and_class_header_counts_match_master(code, language, expected):
+    """Line counts for these inputs are the same as before the regexes were made linear."""
+    assert sv.count_meaningful_lines(code, language) == expected
