@@ -7,9 +7,10 @@ name: Prompt Evaluation
 #                   request code, datasets, graders, model-registry roles). No suite = $0.
 #                   Grader-only changes re-score master's saved outputs ($0). Prompt
 #                   changes get an A/B: base vs head prompt on the role's model(s).
-#                   A dependency-only change (poetry.lock with no LLM request-stack package
-#                   changed, pyproject.toml, docs) runs no suites: the `dependency-smoke`
-#                   job imports every first-party module on the new lock instead ($0).
+#                   A dependency-only change (poetry.lock with no change inside the LLM
+#                   request stack's dependency closure, pyproject.toml, docs) runs no
+#                   suites: the `dependency-smoke` job syncs the environment to the head
+#                   lock and checks first-party imports instead ($0).
 #                   Results: a PR comment and the commit status `prompt-eval/ab`.
 #   push master  -> re-run the affected suites on master, append prompt-history.jsonl and
 #                   PROMPT_STATUS.md on the model-eval-state branch, open or close
@@ -139,7 +140,8 @@ jobs:
           retention-days: 30
 
   # Dependency-only change (lockfile / project file / docs, no suite affected): no model
-  # calls. Install the new lock and import every first-party module instead ($0).
+  # calls. Sync the environment to the head lock exactly, then check first-party imports
+  # instead ($0). A failure sets `prompt-eval/ab` to failure in the report job.
   dependency-smoke:
     needs: detect
     if: github.event_name == 'pull_request' && needs.detect.outputs.dependency_only == 'true'
@@ -148,6 +150,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
         uses: "./.github/actions/poetry_setup"
@@ -157,11 +161,31 @@ jobs:
           working-directory: "."
           install-args: "--with test"
 
-      - name: Import every first-party module on the new lock
+      # The restored virtualenv may come from an older lock (restore-keys drop the lock
+      # hash), and a plain `poetry install` never uninstalls. --sync removes anything the
+      # head lock does not list, so a removed package cannot hide in a cached venv.
+      - name: Sync the environment to the head lock
         shell: bash
+        run: poetry install --with test --sync --no-interaction --no-ansi
+
+      - name: Import and resolve first-party modules on the head lock
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          poetry run python scripts/import_smoke.py cqc_cpcc
+          git fetch -q origin "${BASE_BRANCH}"
+          poetry run python scripts/import_smoke.py --import cqc_cpcc --resolve cqc_streamlit_app \
+            --removed-since "origin/${BASE_BRANCH}" 2>&1 | tee import-smoke.txt
+
+      - name: Upload the smoke log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-dependency-smoke-${{ github.run_id }}
+          path: import-smoke.txt
+          retention-days: 30
+          if-no-files-found: warn
 
   estimate:
     needs: detect

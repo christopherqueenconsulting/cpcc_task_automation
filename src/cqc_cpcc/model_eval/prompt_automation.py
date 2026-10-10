@@ -13,6 +13,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,15 +36,14 @@ SHARED_GRADER_FILES = (
 
 
 #: ``poetry.lock`` is listed in prompts' ``shared_files`` because the LLM request stack
-#: (pydantic, openai, langchain and the openai client's HTTP transport) shapes every
-#: request and parse (docs/PROMPT_EVAL_PLAN.md, "the poetry.lock entries for
-#: pydantic/openai/langchain"). A lockfile change counts as a prompt change only when one
-#: of these packages is added, removed or changes version; any other lockfile change is a
-#: dependency-only change.
+#: (pydantic, openai, langchain, the OpenRouter client and their HTTP transport) shapes
+#: every request and parse (docs/PROMPT_EVAL_PLAN.md, "the poetry.lock entries for
+#: pydantic/openai/langchain"). The stack is the transitive dependency closure of these
+#: roots, read from the ``[package.dependencies]`` tables of both the base and the head
+#: lock. A lockfile change counts as a prompt change when any package inside either
+#: closure changes; any other lockfile change is a dependency-only change.
 LOCKFILE_RELPATH = "poetry.lock"
-LLM_REQUEST_LOCK_PACKAGES = frozenset({
-    "openai", "pydantic", "pydantic-core", "httpx", "httpcore", "anyio", "jiter", "tiktoken", "langsmith",
-})
+LLM_REQUEST_LOCK_ROOTS = frozenset({"openai", "pydantic", "httpx", "tiktoken", "langsmith", "openrouter"})
 LLM_REQUEST_LOCK_PREFIXES = ("langchain",)
 #: Paths a dependency-only change may touch besides docs: the lockfile, the project file
 #: and editor guidance. Prompt docs and any path a prompt lists stay triggers as before.
@@ -65,17 +65,66 @@ def _registry_at(ref: str) -> Optional[dict]:
     return json.loads(shown.stdout) if shown.returncode == 0 else None
 
 
-def _lock_versions(text: str) -> dict:
-    """``{normalised package name: version}`` from a poetry.lock document."""
+def _normalise(name: str) -> str:
+    """PEP 503 name normalisation."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _lock_packages(text: str) -> dict:
+    """``{normalised name: [lock entries]}`` from a poetry.lock document."""
     import tomllib
 
-    data = tomllib.loads(text)
-    return {p["name"].lower().replace("_", "-"): p.get("version", "")
-            for p in data.get("package", []) if "name" in p}
+    packages: dict[str, list] = {}
+    for p in tomllib.loads(text).get("package", []):
+        if "name" in p:
+            packages.setdefault(_normalise(p["name"]), []).append(p)
+    return packages
 
 
-def lock_changed_packages(base_ref: str, head_text: Optional[str] = None) -> Optional[set]:
-    """Package names added, removed or re-versioned in poetry.lock since ``base_ref``.
+def _canonical_entry(entry: dict) -> str:
+    """The whole lock entry except its description: version, source, file hashes,
+    dependencies, markers, optional, groups and extras. File lists are order-free."""
+    entry = {k: v for k, v in entry.items() if k != "description"}
+    entry["files"] = sorted((f.get("file", ""), f.get("hash", "")) for f in entry.get("files", []))
+    return json.dumps(entry, sort_keys=True, default=str)
+
+
+def _changed_lock_packages(before: dict, after: dict) -> set:
+    """Names whose entries differ in any field, plus every name that appears more than
+    once on either side (marker-split entries are treated as changed)."""
+    changed = set()
+    for name in set(before) | set(after):
+        old, new = before.get(name, []), after.get(name, [])
+        if len(old) > 1 or len(new) > 1:
+            changed.add(name)
+        elif sorted(map(_canonical_entry, old)) != sorted(map(_canonical_entry, new)):
+            changed.add(name)
+    return changed
+
+
+def _request_stack_closure(packages: dict) -> set:
+    """The request-stack roots present in ``packages`` and everything they depend on."""
+    graph = {name: {_normalise(d) for e in entries for d in (e.get("dependencies") or {})}
+             for name, entries in packages.items()}
+    stack = [n for n in graph if n in LLM_REQUEST_LOCK_ROOTS or n.startswith(LLM_REQUEST_LOCK_PREFIXES)]
+    closure: set = set()
+    while stack:
+        name = stack.pop()
+        if name not in closure:
+            closure.add(name)
+            stack.extend(graph.get(name, ()))
+    return closure
+
+
+def lock_request_stack_changes_between(base_text: str, head_text: str) -> set:
+    """Changed lock packages that sit inside the request-stack closure of either lock."""
+    before, after = _lock_packages(base_text), _lock_packages(head_text)
+    closure = _request_stack_closure(before) | _request_stack_closure(after)
+    return _changed_lock_packages(before, after) & closure
+
+
+def lock_request_stack_changes(base_ref: str, head_text: Optional[str] = None) -> Optional[set]:
+    """Request-stack packages changed in poetry.lock since ``base_ref``.
 
     ``None`` when either side cannot be read; callers then treat the lockfile change as
     affecting every prompt that lists it (the previous behaviour).
@@ -87,16 +136,9 @@ def lock_changed_packages(base_ref: str, head_text: Optional[str] = None) -> Opt
     try:
         if head_text is None:
             head_text = (REPO_ROOT / LOCKFILE_RELPATH).read_text(encoding="utf-8")
-        before, after = _lock_versions(shown.stdout), _lock_versions(head_text)
-    except (OSError, ValueError):
+        return lock_request_stack_changes_between(shown.stdout, head_text)
+    except (OSError, ValueError, TypeError, AttributeError):
         return None
-    return {n for n in set(before) | set(after) if before.get(n) != after.get(n)}
-
-
-def _touches_llm_request_stack(packages: Optional[set]) -> bool:
-    if packages is None:
-        return True
-    return any(p in LLM_REQUEST_LOCK_PACKAGES or p.startswith(LLM_REQUEST_LOCK_PREFIXES) for p in packages)
 
 
 def _matches(path: str, patterns) -> bool:
@@ -118,8 +160,9 @@ def affected(base_ref: str, changed: Optional[list] = None, lock_changes: Option
     dependency_paths_only = all(f in DEPENDENCY_ONLY_PATHS or f.endswith(".md") for f in changed)
     lock_affects_prompts = True
     if LOCKFILE_RELPATH in changed and dependency_paths_only:
-        packages = lock_changes if lock_changes is not None else lock_changed_packages(base_ref)
-        lock_affects_prompts = _touches_llm_request_stack(packages)
+        # ``lock_changes``: request-stack packages that changed (tests pass it directly).
+        stack_changes = lock_changes if lock_changes is not None else lock_request_stack_changes(base_ref)
+        lock_affects_prompts = stack_changes is None or bool(stack_changes)
     head = prompt_registry.load()
     base_reg = prompt_registry.load_at_ref(base_ref)
     run: dict[str, list] = {}

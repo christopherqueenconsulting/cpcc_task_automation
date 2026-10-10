@@ -58,50 +58,119 @@ class TestAffected:
         result = self._affected(["evals/judges/faithfulness.md"])
         assert result["judges_changed"] == ["judge-faithfulness"] and result["run"] == []
 
-    def test_lockfile_change_to_the_llm_request_stack_runs_suites(self):
-        for pkg in ("openai", "pydantic", "langchain-core", "httpx"):
-            result = pa.affected("HEAD", changed=["poetry.lock"], lock_changes={pkg})
-            assert result["run"] and not result["dependency_only"], pkg
+    def _lock_affected(self, monkeypatch, base_lock, head_lock, changed=("poetry.lock",)):
+        monkeypatch.setattr(pa, "lock_request_stack_changes",
+                            lambda base_ref: pa.lock_request_stack_changes_between(base_lock, head_lock))
+        return pa.affected("HEAD", changed=list(changed))
 
-    def test_lockfile_only_change_outside_the_request_stack_is_dependency_only(self):
-        result = pa.affected("HEAD", changed=["poetry.lock", "pyproject.toml", "README.md",
-                                               ".github/copilot-instructions.md"],
-                             lock_changes={"chromadb", "kubernetes", "grpcio"})
+    @pytest.mark.parametrize("root", ["openai", "pydantic", "httpx", "tiktoken", "langsmith", "openrouter",
+                                      "langchain-core", "langchain-openai"])
+    def test_lockfile_change_to_a_request_stack_root_runs_suites(self, monkeypatch, root):
+        result = self._lock_affected(monkeypatch, _lock(_pkg(root, "1.0")), _lock(_pkg(root, "1.1")))
+        assert result["run"] and not result["dependency_only"], root
+
+    @pytest.mark.parametrize("dep", ["typing-extensions", "h11", "certifi"])
+    def test_lockfile_change_to_a_transitive_request_dependency_runs_suites(self, monkeypatch, dep):
+        def lock(version):
+            return _lock(_pkg("openai", "1.0", deps={"httpx": "*", "typing_extensions": "*"}),
+                         _pkg("httpx", "0.28", deps={"httpcore": "*", "certifi": "*"}),
+                         _pkg("httpcore", "1.0", deps={"h11": "*"}),
+                         *[_pkg(n, version if n == dep else "1.0") for n in ("typing-extensions", "h11", "certifi")])
+        result = self._lock_affected(monkeypatch, lock("1.0"), lock("2.0"))
+        assert result["run"] and result["dependency_only"] is False, dep
+
+    def test_lockfile_change_outside_the_request_stack_is_dependency_only(self, monkeypatch):
+        def lock(version):
+            return _lock(_pkg("openai", "1.0", deps={"certifi": "*"}), _pkg("certifi", "1.0"),
+                         _pkg("selenium", "4.0", deps={"certifi": "*", "trio-websocket": "*"}),
+                         _pkg("trio-websocket", version))
+        result = self._lock_affected(monkeypatch, lock("0.11"), lock("0.12"),
+                                     changed=("poetry.lock", "pyproject.toml", "README.md",
+                                              ".github/copilot-instructions.md"))
         assert result["run"] == [] and result["rescore"] == [] and result["dependency_only"] is True
 
+    def test_same_version_source_change_runs_suites(self, monkeypatch):
+        before = _lock(_pkg("openai", "1.0"))
+        after = _lock(_pkg("openai", "1.0", source='[package.source]\ntype = "legacy"\nurl = "https://example.invalid/simple"\nreference = "mirror"\n'))
+        result = self._lock_affected(monkeypatch, before, after)
+        assert result["run"] and result["dependency_only"] is False
+
+    def test_same_version_file_hash_change_runs_suites(self, monkeypatch):
+        result = self._lock_affected(monkeypatch, _lock(_pkg("openai", "1.0", digest="a" * 64)),
+                                     _lock(_pkg("openai", "1.0", digest="b" * 64)))
+        assert result["run"] and result["dependency_only"] is False
+
+    def test_marker_split_duplicate_entry_runs_suites(self, monkeypatch):
+        before = _lock(_pkg("openai", "1.0"))
+        after = _lock(_pkg("openai", "1.0", markers='python_version < "3.13"'),
+                      _pkg("openai", "1.1", markers='python_version >= "3.13"'))
+        result = self._lock_affected(monkeypatch, before, after)
+        assert result["run"] and result["dependency_only"] is False
+
+    def test_closure_is_read_from_the_base_lock_too(self, monkeypatch):
+        # The head drops the edge openai -> certifi; certifi still counts because the base had it.
+        before = _lock(_pkg("openai", "1.0", deps={"certifi": "*"}), _pkg("certifi", "1.0"))
+        after = _lock(_pkg("openai", "1.0", deps={"certifi": "*"}), _pkg("certifi", "2.0"))
+        after = after.replace('[package.dependencies]\ncertifi = "*"\n', "")
+        assert pa.lock_request_stack_changes_between(before, after) == {"openai", "certifi"}
+
     def test_unreadable_lock_diff_keeps_the_previous_behaviour(self, monkeypatch):
-        monkeypatch.setattr(pa, "lock_changed_packages", lambda base_ref: None)
+        monkeypatch.setattr(pa, "lock_request_stack_changes", lambda base_ref: None)
         result = self._affected(["poetry.lock"])
         assert result["run"] and not result["dependency_only"]
 
     def test_lockfile_plus_prompt_source_keeps_the_previous_behaviour(self):
         before = pa.affected("HEAD", changed=["poetry.lock"], lock_changes={"openai"})
         result = pa.affected("HEAD", changed=["poetry.lock", "src/cqc_cpcc/rubric_grading.py"],
-                             lock_changes={"chromadb"})
+                             lock_changes=set())
         assert set(result["run"]) == set(before["run"]) | {"grading", "grading-levelband"}
         assert not result["dependency_only"]
 
     def test_lockfile_plus_python_change_keeps_the_previous_behaviour(self):
         before = pa.affected("HEAD", changed=["poetry.lock"], lock_changes={"openai"})
         result = pa.affected("HEAD", changed=["poetry.lock", "src/cqc_cpcc/utilities/date.py"],
-                             lock_changes={"chromadb"})
+                             lock_changes=set())
         assert result["run"] == before["run"] and result["run"] and result["dependency_only"] is False
 
     def test_lockfile_plus_judge_prompt_is_not_dependency_only(self):
         result = pa.affected("HEAD", changed=["poetry.lock", "evals/judges/faithfulness.md"],
-                             lock_changes={"chromadb"})
+                             lock_changes=set())
         assert result["judges_changed"] and result["dependency_only"] is False
 
     def test_docs_only_change_is_not_dependency_only(self):
         assert self._affected(["README.md"])["dependency_only"] is False
 
-    def test_lock_versions_normalises_names(self):
+    def test_lock_packages_normalises_names(self):
         text = '[[package]]\nname = "Pydantic_Core"\nversion = "2.1.0"\n'
-        assert pa._lock_versions(text) == {"pydantic-core": "2.1.0"}
+        assert list(pa._lock_packages(text)) == ["pydantic-core"]
+        assert pa._normalise("Zope.Interface__x") == "zope-interface-x"
 
-    def test_lock_changed_packages_against_head_is_empty(self):
+    def test_request_stack_changes_against_head_is_empty(self):
         head = (pa.REPO_ROOT / pa.LOCKFILE_RELPATH).read_text(encoding="utf-8")
-        assert pa.lock_changed_packages("HEAD", head_text=head) == set()
+        assert pa.lock_request_stack_changes("HEAD", head_text=head) == set()
+
+    def test_real_lock_closure_holds_the_transitive_request_path(self):
+        packages = pa._lock_packages((pa.REPO_ROOT / pa.LOCKFILE_RELPATH).read_text(encoding="utf-8"))
+        closure = pa._request_stack_closure(packages)
+        assert {"openai", "openrouter", "typing-extensions", "h11", "certifi", "pydantic-core"} <= closure
+        assert "trio-websocket" not in closure
+
+
+def _pkg(name, version, deps=None, markers=None, source=None, digest=None):
+    text = (f'[[package]]\nname = "{name}"\nversion = "{version}"\ndescription = ""\noptional = false\n'
+            f'python-versions = ">=3.9"\ngroups = ["main"]\n')
+    if markers:
+        text += f"markers = '{markers}'\n"
+    text += f'files = [\n    {{file = "{name}-{version}.tar.gz", hash = "sha256:{digest or "0" * 64}"}},\n]\n'
+    if deps:
+        text += "\n[package.dependencies]\n" + "".join(f'{d} = "{v}"\n' for d, v in deps.items())
+    if source:
+        text += "\n" + source
+    return text + "\n"
+
+
+def _lock(*packages):
+    return "".join(packages) + '[metadata]\nlock-version = "2.1"\npython-versions = ">=3.12"\ncontent-hash = "x"\n'
 
 
 def _agg(suite, composites, cost=0.01):
