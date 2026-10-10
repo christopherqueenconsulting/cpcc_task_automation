@@ -458,7 +458,6 @@ def test_reference_threshold_counts_only_source_sections(tmp_path):
     assert "sample_output" not in source and "```" not in source and "Gross pay: $5.00" not in source
 
 
-
 @pytest.mark.unit
 def test_reference_source_header_regex_is_linear_on_long_space_runs():
     """A header followed by a long run of spaces must not backtrack polynomially."""
@@ -466,12 +465,28 @@ def test_reference_source_header_regex_is_linear_on_long_space_runs():
     reference = "// File:" + " " * 50_000 + "\n" + "#" * 5_000 + " " * 50_000 + "x\n"
     start = time.perf_counter()
     sv.reference_source(reference, "cpp")
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.unit
+def test_reference_source_strips_header_names():
+    """Names keep working with spacing or tabs around them and a trailing CR."""
+    reference = ("//\tFile:   main.cpp  \r\nint main() { return 0; }\n"
+                 "## Submission File Name: notes.txt\nnot code\n")
+    source = sv.reference_source(reference, "cpp")
+    assert "int main()" in source and "not code" not in source
+
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("code, language", [
     ("class " + "a" * 50_000 + "{x", "cpp"),
     ("/* " * 50_000, "cpp"),
     ('"' + '\\"' * 50_000, "cpp"),
     ('"' + '\\"' * 50_000 + "\\", "cpp"),
     ("'" + "\\'" * 50_000, "java"),
+    ('"\\' + '!\\' * 50_000, "cpp"),
+    ("'\\" + "&\\" * 50_000, "java"),
     ("/* " * 50_000, "sas"),
     ("\n" * 50_000, "sas"),
     ("*\n" * 50_000, "sas"),
@@ -487,22 +502,6 @@ def test_line_counting_is_linear_on_hostile_submissions(code, language):
 
 
 @pytest.mark.unit
-def test_reference_source_strips_header_names():
-    """Names keep working with spacing or tabs around them and a trailing CR."""
-    reference = ("//\tFile:   main.cpp  \r\nint main() { return 0; }\n"
-                 "## Submission File Name: notes.txt\nnot code\n")
-    source = sv.reference_source(reference, "cpp")
-    assert "int main()" in source and "not code" not in source
-def test_comment_and_class_header_handling_is_unchanged_for_normal_code():
-    """Class headers stay boilerplate; closed comments strip as before; an unclosed one
-    now strips to the end of the text."""
-    assert sv.count_meaningful_lines("public class Payroll extends Base {\n", "java") == 0
-    assert sv.count_meaningful_lines("class Account {\n", "cpp") == 0
-    assert sv.count_meaningful_lines("int x = 1; /* note */\nint y = 2;\n", "cpp") == 2
-    assert sv.count_meaningful_lines('char *s = "/* not a comment */";\n', "cpp") == 1
-    assert sv.count_meaningful_lines("int x = 1;\n/* unclosed\nint y = 2;\n", "cpp") == 1
-    assert sv.count_meaningful_lines("* a comment;\ndata a; set b;\n/* c */\nrun;\n", "sas") == 2
-    assert sv.count_meaningful_lines("data a;\n* unclosed comment\nrun;\n", "sas") == 1
 @pytest.mark.parametrize("code, language, expected", [
     ("public class Payroll extends Base {\n", "java", 0),
     ("class Account {\n", "cpp", 0),

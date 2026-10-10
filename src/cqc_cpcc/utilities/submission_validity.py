@@ -147,12 +147,12 @@ def expected_language_for_rubric(rubric) -> Optional[str]:
 # from each later opener; that retry made many unterminated openers quadratic. A match
 # that reached the end without its closer is put back as code, as it was before.
 _C_COMMENT_OR_LITERAL = re.compile(
-    r"""("(?:[^"\\\n]|\\.?)*(?:"|(?=\n)|\Z)|'(?:[^'\\\n]|\\.?)*(?:'|(?=\n)|\Z))"""
+    r"""("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|\\?\Z)|'(?:[^'\\\n]|\\.)*(?:'|(?=\n)|\\?\Z))"""
     r"""|/\*.*?(?:\*/|\Z)|//[^\n]*""",
     re.DOTALL,
 )
 _C_LINE_COMMENT_OR_LITERAL = re.compile(
-    r"""("(?:[^"\\\n]|\\.?)*(?:"|(?=\n)|\Z)|'(?:[^'\\\n]|\\.?)*(?:'|(?=\n)|\Z))|//[^\n]*""",
+    r"""("(?:[^"\\\n]|\\.)*(?:"|(?=\n)|\\?\Z)|'(?:[^'\\\n]|\\.)*(?:'|(?=\n)|\\?\Z))|//[^\n]*""",
     re.DOTALL,
 )
 
