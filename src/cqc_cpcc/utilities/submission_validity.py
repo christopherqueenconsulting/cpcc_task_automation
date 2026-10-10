@@ -90,7 +90,7 @@ _BOILERPLATE_LINE = re.compile(
       | from\s+\S+\s+import\b.*                    # python from-imports
       | package\s+[\w.]+\s*;                       # java package
       | (public|private|protected)\s*:             # C++ access labels
-      | (public\s+)?(final\s+)?class\s+\w+[^{;]*\{?  # class header (a wrapper, not logic)
+      | (public\s+)?(final\s+)?class\s+\w+(?:[^\w{;][^{;]*)?\{?  # class header (a wrapper, not logic)
       | (public\s+)?static\s+void\s+main\s*\([^)]*\)\s*\{?  # Java main header
       | int\s+main\s*\([^)]*\)\s*\{?            # C++ main header
       | return\s+0\s*;                           # C++ main's default return
@@ -142,8 +142,10 @@ def expected_language_for_rubric(rubric) -> Optional[str]:
     return langs.pop() if len(langs) == 1 else None
 
 
+# An unterminated block comment runs to the end of the text, so the scan never restarts
+# at each later "/*" (which made many unterminated openers quadratic).
 _C_COMMENT_OR_LITERAL = re.compile(
-    r"""("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|/\*.*?\*/|//[^\n]*""",
+    r"""("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|/\*.*?(?:\*/|\Z)|//[^\n]*""",
     re.DOTALL,
 )
 
@@ -154,11 +156,11 @@ def strip_comments(code: str, language: str) -> str:
         # Match string/char literals first so "/*" or "//" inside a string is kept.
         code = _C_COMMENT_OR_LITERAL.sub(lambda m: m.group(1) or "", code)
     elif language == "python":
-        code = re.sub(r'^\s*(""".*?"""|\'\'\'.*?\'\'\')', "", code, flags=re.DOTALL | re.MULTILINE)
+        code = re.sub(r'^[ \t]*(""".*?(?:"""|\Z)|\'\'\'.*?(?:\'\'\'|\Z))', "", code, flags=re.DOTALL | re.MULTILINE)
         code = re.sub(r"#[^\n]*", "", code)
     elif language == "sas":
-        code = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
-        code = re.sub(r"^\s*\*[^;]*;", "", code, flags=re.MULTILINE)
+        code = re.sub(r"/\*.*?(?:\*/|\Z)", "", code, flags=re.DOTALL)
+        code = re.sub(r"^[ \t]*\*[^;]*(?:;|\Z)", "", code, flags=re.MULTILINE)
     return code
 
 
