@@ -41,7 +41,9 @@ SHARED_GRADER_FILES = (
 #: pydantic/openai/langchain"). The stack is the transitive dependency closure of these
 #: roots, read from the ``[package.dependencies]`` tables of both the base and the head
 #: lock. A lockfile change counts as a prompt change when any package inside either
-#: closure changes; any other lockfile change is a dependency-only change.
+#: closure changes; any other lockfile change is a dependency-only change. A closure
+#: package whose entry changes only in its environment marker, with the same install
+#: decision on the eval runner, does not count as a change.
 LOCKFILE_RELPATH = "poetry.lock"
 LLM_REQUEST_LOCK_ROOTS = frozenset({"openai", "pydantic", "httpx", "tiktoken", "langsmith", "openrouter"})
 LLM_REQUEST_LOCK_PREFIXES = ("langchain",)
@@ -102,6 +104,38 @@ def _changed_lock_packages(before: dict, after: dict) -> set:
     return changed
 
 
+def _marker_truth(entry: dict) -> Optional[tuple]:
+    """Whether the entry installs in this environment, per dependency group, as a sorted
+    tuple of ``(group, bool)``. ``None`` when a marker cannot be parsed or evaluated."""
+    from packaging.markers import InvalidMarker, Marker, UndefinedComparison, UndefinedEnvironmentName
+
+    markers = entry.get("markers")
+    groups = entry.get("groups") or ["main"]
+    try:
+        def holds(text):
+            return True if text is None else Marker(text).evaluate({"extra": ""})
+        if isinstance(markers, dict):
+            return tuple(sorted((g, holds(markers.get(g))) for g in groups))
+        return tuple(sorted((g, holds(markers)) for g in groups))
+    except (InvalidMarker, UndefinedComparison, UndefinedEnvironmentName, TypeError):
+        return None
+
+
+def _is_marker_only_change(old: list, new: list) -> bool:
+    """True when a package has one entry on each side, the entries are identical apart from
+    their environment ``markers`` (same version, source, files, dependencies and groups),
+    and both markers give the same install decision here. The detector runs on the same
+    runner image and Python as the eval jobs, so an unchanged decision here means the
+    request stack the suites would load is unchanged."""
+    if len(old) != 1 or len(new) != 1:
+        return False
+    strip = lambda e: _canonical_entry({k: v for k, v in e.items() if k != "markers"})
+    if strip(old[0]) != strip(new[0]):
+        return False
+    before, after = _marker_truth(old[0]), _marker_truth(new[0])
+    return before is not None and before == after
+
+
 def _request_stack_closure(packages: dict) -> set:
     """The request-stack roots present in ``packages`` and everything they depend on."""
     graph = {name: {_normalise(d) for e in entries for d in (e.get("dependencies") or {})}
@@ -117,10 +151,14 @@ def _request_stack_closure(packages: dict) -> set:
 
 
 def lock_request_stack_changes_between(base_text: str, head_text: str) -> set:
-    """Changed lock packages that sit inside the request-stack closure of either lock."""
+    """Changed lock packages that sit inside the request-stack closure of either lock.
+
+    A package whose only change is an environment marker that installs it here exactly as
+    before is not counted; see ``_is_marker_only_change``."""
     before, after = _lock_packages(base_text), _lock_packages(head_text)
     closure = _request_stack_closure(before) | _request_stack_closure(after)
-    return _changed_lock_packages(before, after) & closure
+    return {name for name in _changed_lock_packages(before, after) & closure
+            if not _is_marker_only_change(before.get(name, []), after.get(name, []))}
 
 
 def lock_request_stack_changes(base_ref: str, head_text: Optional[str] = None) -> Optional[set]:

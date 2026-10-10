@@ -112,7 +112,11 @@ closure of `openai`, `pydantic`, `httpx`, `tiktoken`, `langsmith`, `openrouter` 
 `langchain*` package, read from the `[package.dependencies]` tables of both the base and the
 head lock. A lock entry counts as changed when anything in it changes (version, source,
 file hashes, dependencies, markers, optional, groups or extras), and a package listed more
-than once on either side always counts as changed. If any changed package is inside either
+than once on either side always counts as changed. One exception: an entry whose only
+change is its environment `markers`, where the old and new markers give the same install
+decision for every group on the machine running the detector (the same `ubuntu-latest`
+runner and Python as the eval jobs), does not count; a marker that cannot be parsed does
+count. If any changed package is inside either
 closure, or either lock cannot be read, the affected suites run as before. Otherwise the
 change is dependency-only. This narrowing applies only when every changed path is the
 lockfile, `pyproject.toml`, `.github/copilot-instructions.md` or a non-prompt doc; any other

@@ -107,6 +107,51 @@ class TestAffected:
         result = self._lock_affected(monkeypatch, before, after)
         assert result["run"] and result["dependency_only"] is False
 
+    def test_marker_only_change_with_same_install_decision_is_dependency_only(self, monkeypatch):
+        # Real shape from the chromadb removal: orjson gains a PyPy exclusion, which still
+        # installs on the CPython eval runner.
+        before = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}), _pkg("orjson", "3.0"))
+        after = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}),
+                      _pkg("orjson", "3.0", markers='platform_python_implementation != "PyPy"'))
+        assert pa.lock_request_stack_changes_between(before, after) == set()
+        result = self._lock_affected(monkeypatch, before, after)
+        assert not result["run"] and result["dependency_only"] is True
+
+    def test_per_group_marker_only_change_with_same_decision_is_dependency_only(self):
+        # Real shape: colorama's main-group marker drops `or os_name == "nt"`; neither side
+        # installs it on the Linux eval runner.
+        def colorama(main_marker):
+            return ('[[package]]\nname = "colorama"\nversion = "0.4.6"\ndescription = ""\noptional = false\n'
+                    'python-versions = ">=3.9"\ngroups = ["main", "test"]\n'
+                    f"markers = {{main = '{main_marker}', test = 'sys_platform == \"win32\"'}}\n"
+                    'files = [\n    {file = "colorama-0.4.6.tar.gz", hash = "sha256:' + "0" * 64 + '"},\n]\n\n')
+        openai = _pkg("openai", "1.0", deps={"colorama": "*"})
+        before = _lock(openai, colorama('platform_system == "Windows" or os_name == "nt"'))
+        after = _lock(openai, colorama('platform_system == "Windows"'))
+        assert pa.lock_request_stack_changes_between(before, after) == set()
+
+    def test_marker_change_that_flips_the_install_decision_runs_suites(self, monkeypatch):
+        before = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}), _pkg("orjson", "3.0"))
+        after = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}),
+                      _pkg("orjson", "3.0", markers='platform_python_implementation == "PyPy"'))
+        assert pa.lock_request_stack_changes_between(before, after) == {"orjson"}
+        result = self._lock_affected(monkeypatch, before, after)
+        assert result["run"] and result["dependency_only"] is False
+
+    def test_marker_change_plus_any_other_field_change_runs_suites(self):
+        before = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}), _pkg("orjson", "3.0"))
+        version = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}),
+                        _pkg("orjson", "3.1", markers='platform_python_implementation != "PyPy"'))
+        digest = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}),
+                       _pkg("orjson", "3.0", markers='platform_python_implementation != "PyPy"', digest="b" * 64))
+        assert pa.lock_request_stack_changes_between(before, version) == {"orjson"}
+        assert pa.lock_request_stack_changes_between(before, digest) == {"orjson"}
+
+    def test_unparseable_marker_runs_suites(self):
+        before = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}), _pkg("orjson", "3.0"))
+        after = _lock(_pkg("openai", "1.0", deps={"orjson": "*"}), _pkg("orjson", "3.0", markers="not a marker"))
+        assert pa.lock_request_stack_changes_between(before, after) == {"orjson"}
+
     def test_closure_is_read_from_the_base_lock_too(self, monkeypatch):
         # The head drops the edge openai -> certifi; certifi still counts because the base had it.
         before = _lock(_pkg("openai", "1.0", deps={"certifi": "*"}), _pkg("certifi", "1.0"))
