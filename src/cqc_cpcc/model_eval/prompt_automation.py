@@ -34,6 +34,22 @@ SHARED_GRADER_FILES = (
 )
 
 
+#: ``poetry.lock`` is listed in prompts' ``shared_files`` because the LLM request stack
+#: (pydantic, openai, langchain and the openai client's HTTP transport) shapes every
+#: request and parse (docs/PROMPT_EVAL_PLAN.md, "the poetry.lock entries for
+#: pydantic/openai/langchain"). A lockfile change counts as a prompt change only when one
+#: of these packages is added, removed or changes version; any other lockfile change is a
+#: dependency-only change.
+LOCKFILE_RELPATH = "poetry.lock"
+LLM_REQUEST_LOCK_PACKAGES = frozenset({
+    "openai", "pydantic", "pydantic-core", "httpx", "httpcore", "anyio", "jiter", "tiktoken", "langsmith",
+})
+LLM_REQUEST_LOCK_PREFIXES = ("langchain",)
+#: Paths a dependency-only change may touch besides docs: the lockfile, the project file
+#: and editor guidance. Prompt docs and any path a prompt lists stay triggers as before.
+DEPENDENCY_ONLY_PATHS = frozenset({LOCKFILE_RELPATH, "pyproject.toml", ".github/copilot-instructions.md"})
+
+
 def _git(*args, cwd: Path = REPO_ROOT) -> str:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
@@ -49,12 +65,46 @@ def _registry_at(ref: str) -> Optional[dict]:
     return json.loads(shown.stdout) if shown.returncode == 0 else None
 
 
+def _lock_versions(text: str) -> dict:
+    """``{normalised package name: version}`` from a poetry.lock document."""
+    import tomllib
+
+    data = tomllib.loads(text)
+    return {p["name"].lower().replace("_", "-"): p.get("version", "")
+            for p in data.get("package", []) if "name" in p}
+
+
+def lock_changed_packages(base_ref: str, head_text: Optional[str] = None) -> Optional[set]:
+    """Package names added, removed or re-versioned in poetry.lock since ``base_ref``.
+
+    ``None`` when either side cannot be read; callers then treat the lockfile change as
+    affecting every prompt that lists it (the previous behaviour).
+    """
+    shown = subprocess.run(["git", "show", f"{base_ref}:{LOCKFILE_RELPATH}"], cwd=REPO_ROOT,
+                           capture_output=True, text=True)
+    if shown.returncode != 0:
+        return None
+    try:
+        if head_text is None:
+            head_text = (REPO_ROOT / LOCKFILE_RELPATH).read_text(encoding="utf-8")
+        before, after = _lock_versions(shown.stdout), _lock_versions(head_text)
+    except (OSError, ValueError):
+        return None
+    return {n for n in set(before) | set(after) if before.get(n) != after.get(n)}
+
+
+def _touches_llm_request_stack(packages: Optional[set]) -> bool:
+    if packages is None:
+        return True
+    return any(p in LLM_REQUEST_LOCK_PACKAGES or p.startswith(LLM_REQUEST_LOCK_PREFIXES) for p in packages)
+
+
 def _matches(path: str, patterns) -> bool:
     return any(path == p or (p.endswith("/") and path.startswith(p)) or path.startswith(p.rstrip("/") + "/")
                for p in patterns)
 
 
-def affected(base_ref: str, changed: Optional[list] = None) -> dict:
+def affected(base_ref: str, changed: Optional[list] = None, lock_changes: Optional[set] = None) -> dict:
     """Which suites a change needs: ``run`` (model calls) and ``rescore`` (graders only, $0).
 
     The union of: prompt fingerprints that differ from ``base_ref``; files listed in a
@@ -63,6 +113,10 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
     registry's role entries; and grader code.
     """
     changed = changed if changed is not None else changed_files(base_ref)
+    lock_affects_prompts = True
+    if LOCKFILE_RELPATH in changed:
+        packages = lock_changes if lock_changes is not None else lock_changed_packages(base_ref)
+        lock_affects_prompts = _touches_llm_request_stack(packages)
     head = prompt_registry.load()
     base_reg = prompt_registry.load_at_ref(base_ref)
     run: dict[str, list] = {}
@@ -84,7 +138,8 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
         paths = set(entry.source_files + entry.shared_files)
         if old:
             paths |= set(old.source_files + old.shared_files)
-        hits = [f for f in changed if _matches(f, paths)]
+        hits = [f for f in changed if _matches(f, paths)
+                and (f != LOCKFILE_RELPATH or lock_affects_prompts)]
         reason = None
         if hits:
             reason = f"{pid}: {', '.join(sorted(hits)[:3])} changed"
@@ -120,8 +175,18 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
                 add(run, [suite_id], f"model registry role {get_suite(suite_id).role} changed")
 
     rescore = {s: r for s, r in rescore.items() if s not in run}
+    # Dependency-only: no suite needs a model run or a re-score, and every changed path is
+    # the lockfile, the project file, editor guidance or a non-prompt doc. No .py file can be
+    # in this set. Whether an import still resolves is checked by the dependency smoke job
+    # (import every first-party module on the new lock), not by a model run.
+    dependency_only = bool(
+        not run and not rescore and not judges_changed
+        and any(f in (LOCKFILE_RELPATH, "pyproject.toml") for f in changed)
+        and all(f in DEPENDENCY_ONLY_PATHS or f.endswith(".md") for f in changed)
+    )
     return {"run": sorted(run), "rescore": sorted(rescore), "judges_changed": sorted(set(judges_changed)),
-            "reasons": {**{s: r for s, r in rescore.items()}, **run}, "changed_files": len(changed)}
+            "reasons": {**{s: r for s, r in rescore.items()}, **run}, "changed_files": len(changed),
+            "dependency_only": dependency_only}
 
 
 # --- A/B: base prompt vs head prompt --------------------------------------------------------
@@ -512,7 +577,8 @@ def cmd_affected(args) -> int:
     print(json.dumps(result, indent=2))
     github_output(run=",".join(result["run"]), rescore=",".join(result["rescore"]),
                   judges_changed=",".join(result["judges_changed"]),
-                  any="true" if result["run"] or result["rescore"] else "false")
+                  any="true" if result["run"] or result["rescore"] else "false",
+                  dependency_only="true" if result["dependency_only"] else "false")
     return 0
 
 

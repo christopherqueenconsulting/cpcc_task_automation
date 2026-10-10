@@ -58,8 +58,47 @@ class TestAffected:
         result = self._affected(["evals/judges/faithfulness.md"])
         assert result["judges_changed"] == ["judge-faithfulness"] and result["run"] == []
 
-    def test_lockfile_change_runs_suites(self):
-        assert self._affected(["poetry.lock"])["run"]
+    def test_lockfile_change_to_the_llm_request_stack_runs_suites(self):
+        for pkg in ("openai", "pydantic", "langchain-core", "httpx"):
+            result = pa.affected("HEAD", changed=["poetry.lock"], lock_changes={pkg})
+            assert result["run"] and not result["dependency_only"], pkg
+
+    def test_lockfile_only_change_outside_the_request_stack_is_dependency_only(self):
+        result = pa.affected("HEAD", changed=["poetry.lock", "pyproject.toml", "README.md",
+                                               ".github/copilot-instructions.md"],
+                             lock_changes={"chromadb", "kubernetes", "grpcio"})
+        assert result["run"] == [] and result["rescore"] == [] and result["dependency_only"] is True
+
+    def test_unreadable_lock_diff_keeps_the_previous_behaviour(self, monkeypatch):
+        monkeypatch.setattr(pa, "lock_changed_packages", lambda base_ref: None)
+        result = self._affected(["poetry.lock"])
+        assert result["run"] and not result["dependency_only"]
+
+    def test_lockfile_plus_prompt_source_still_runs_that_prompt(self):
+        result = pa.affected("HEAD", changed=["poetry.lock", "src/cqc_cpcc/rubric_grading.py"],
+                             lock_changes={"chromadb"})
+        assert result["run"] == ["grading", "grading-levelband"] and not result["dependency_only"]
+
+    def test_lockfile_plus_python_change_is_not_dependency_only(self):
+        result = pa.affected("HEAD", changed=["poetry.lock", "src/cqc_cpcc/utilities/date.py"],
+                             lock_changes={"chromadb"})
+        assert result["run"] == [] and result["dependency_only"] is False
+
+    def test_lockfile_plus_judge_prompt_is_not_dependency_only(self):
+        result = pa.affected("HEAD", changed=["poetry.lock", "evals/judges/faithfulness.md"],
+                             lock_changes={"chromadb"})
+        assert result["judges_changed"] and result["dependency_only"] is False
+
+    def test_docs_only_change_is_not_dependency_only(self):
+        assert self._affected(["README.md"])["dependency_only"] is False
+
+    def test_lock_versions_normalises_names(self):
+        text = '[[package]]\nname = "Pydantic_Core"\nversion = "2.1.0"\n'
+        assert pa._lock_versions(text) == {"pydantic-core": "2.1.0"}
+
+    def test_lock_changed_packages_against_head_is_empty(self):
+        head = (pa.REPO_ROOT / pa.LOCKFILE_RELPATH).read_text(encoding="utf-8")
+        assert pa.lock_changed_packages("HEAD", head_text=head) == set()
 
 
 def _agg(suite, composites, cost=0.01):
