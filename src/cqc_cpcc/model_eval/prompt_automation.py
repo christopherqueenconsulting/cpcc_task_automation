@@ -13,6 +13,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +35,21 @@ SHARED_GRADER_FILES = (
 )
 
 
+#: ``poetry.lock`` is listed in prompts' ``shared_files`` because the LLM request stack
+#: (pydantic, openai, langchain, the OpenRouter client and their HTTP transport) shapes
+#: every request and parse (docs/PROMPT_EVAL_PLAN.md, "the poetry.lock entries for
+#: pydantic/openai/langchain"). The stack is the transitive dependency closure of these
+#: roots, read from the ``[package.dependencies]`` tables of both the base and the head
+#: lock. A lockfile change counts as a prompt change when any package inside either
+#: closure changes; any other lockfile change is a dependency-only change.
+LOCKFILE_RELPATH = "poetry.lock"
+LLM_REQUEST_LOCK_ROOTS = frozenset({"openai", "pydantic", "httpx", "tiktoken", "langsmith", "openrouter"})
+LLM_REQUEST_LOCK_PREFIXES = ("langchain",)
+#: Paths a dependency-only change may touch besides docs: the lockfile, the project file
+#: and editor guidance. Prompt docs and any path a prompt lists stay triggers as before.
+DEPENDENCY_ONLY_PATHS = frozenset({LOCKFILE_RELPATH, "pyproject.toml", ".github/copilot-instructions.md"})
+
+
 def _git(*args, cwd: Path = REPO_ROOT) -> str:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
 
@@ -49,12 +65,88 @@ def _registry_at(ref: str) -> Optional[dict]:
     return json.loads(shown.stdout) if shown.returncode == 0 else None
 
 
+def _normalise(name: str) -> str:
+    """PEP 503 name normalisation."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _lock_packages(text: str) -> dict:
+    """``{normalised name: [lock entries]}`` from a poetry.lock document."""
+    import tomllib
+
+    packages: dict[str, list] = {}
+    for p in tomllib.loads(text).get("package", []):
+        if "name" in p:
+            packages.setdefault(_normalise(p["name"]), []).append(p)
+    return packages
+
+
+def _canonical_entry(entry: dict) -> str:
+    """The whole lock entry except its description: version, source, file hashes,
+    dependencies, markers, optional, groups and extras. File lists are order-free."""
+    entry = {k: v for k, v in entry.items() if k != "description"}
+    entry["files"] = sorted((f.get("file", ""), f.get("hash", "")) for f in entry.get("files", []))
+    return json.dumps(entry, sort_keys=True, default=str)
+
+
+def _changed_lock_packages(before: dict, after: dict) -> set:
+    """Names whose entries differ in any field, plus every name that appears more than
+    once on either side (marker-split entries are treated as changed)."""
+    changed = set()
+    for name in set(before) | set(after):
+        old, new = before.get(name, []), after.get(name, [])
+        if len(old) > 1 or len(new) > 1:
+            changed.add(name)
+        elif sorted(map(_canonical_entry, old)) != sorted(map(_canonical_entry, new)):
+            changed.add(name)
+    return changed
+
+
+def _request_stack_closure(packages: dict) -> set:
+    """The request-stack roots present in ``packages`` and everything they depend on."""
+    graph = {name: {_normalise(d) for e in entries for d in (e.get("dependencies") or {})}
+             for name, entries in packages.items()}
+    stack = [n for n in graph if n in LLM_REQUEST_LOCK_ROOTS or n.startswith(LLM_REQUEST_LOCK_PREFIXES)]
+    closure: set = set()
+    while stack:
+        name = stack.pop()
+        if name not in closure:
+            closure.add(name)
+            stack.extend(graph.get(name, ()))
+    return closure
+
+
+def lock_request_stack_changes_between(base_text: str, head_text: str) -> set:
+    """Changed lock packages that sit inside the request-stack closure of either lock."""
+    before, after = _lock_packages(base_text), _lock_packages(head_text)
+    closure = _request_stack_closure(before) | _request_stack_closure(after)
+    return _changed_lock_packages(before, after) & closure
+
+
+def lock_request_stack_changes(base_ref: str, head_text: Optional[str] = None) -> Optional[set]:
+    """Request-stack packages changed in poetry.lock since ``base_ref``.
+
+    ``None`` when either side cannot be read; callers then treat the lockfile change as
+    affecting every prompt that lists it (the previous behaviour).
+    """
+    shown = subprocess.run(["git", "show", f"{base_ref}:{LOCKFILE_RELPATH}"], cwd=REPO_ROOT,
+                           capture_output=True, text=True)
+    if shown.returncode != 0:
+        return None
+    try:
+        if head_text is None:
+            head_text = (REPO_ROOT / LOCKFILE_RELPATH).read_text(encoding="utf-8")
+        return lock_request_stack_changes_between(shown.stdout, head_text)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
 def _matches(path: str, patterns) -> bool:
     return any(path == p or (p.endswith("/") and path.startswith(p)) or path.startswith(p.rstrip("/") + "/")
                for p in patterns)
 
 
-def affected(base_ref: str, changed: Optional[list] = None) -> dict:
+def affected(base_ref: str, changed: Optional[list] = None, lock_changes: Optional[set] = None) -> dict:
     """Which suites a change needs: ``run`` (model calls) and ``rescore`` (graders only, $0).
 
     The union of: prompt fingerprints that differ from ``base_ref``; files listed in a
@@ -63,6 +155,14 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
     registry's role entries; and grader code.
     """
     changed = changed if changed is not None else changed_files(base_ref)
+    # The lockfile narrowing applies only when every changed path is in the dependency-only
+    # class; any other change set keeps the previous behaviour exactly.
+    dependency_paths_only = all(f in DEPENDENCY_ONLY_PATHS or f.endswith(".md") for f in changed)
+    lock_affects_prompts = True
+    if LOCKFILE_RELPATH in changed and dependency_paths_only:
+        # ``lock_changes``: request-stack packages that changed (tests pass it directly).
+        stack_changes = lock_changes if lock_changes is not None else lock_request_stack_changes(base_ref)
+        lock_affects_prompts = stack_changes is None or bool(stack_changes)
     head = prompt_registry.load()
     base_reg = prompt_registry.load_at_ref(base_ref)
     run: dict[str, list] = {}
@@ -84,7 +184,8 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
         paths = set(entry.source_files + entry.shared_files)
         if old:
             paths |= set(old.source_files + old.shared_files)
-        hits = [f for f in changed if _matches(f, paths)]
+        hits = [f for f in changed if _matches(f, paths)
+                and (f != LOCKFILE_RELPATH or lock_affects_prompts)]
         reason = None
         if hits:
             reason = f"{pid}: {', '.join(sorted(hits)[:3])} changed"
@@ -120,8 +221,18 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
                 add(run, [suite_id], f"model registry role {get_suite(suite_id).role} changed")
 
     rescore = {s: r for s, r in rescore.items() if s not in run}
+    # Dependency-only: no suite needs a model run or a re-score, and every changed path is
+    # the lockfile, the project file, editor guidance or a non-prompt doc. No .py file can be
+    # in this set. Whether an import still resolves is checked by the dependency smoke job
+    # (import every first-party module on the new lock), not by a model run.
+    dependency_only = bool(
+        not run and not rescore and not judges_changed
+        and any(f in (LOCKFILE_RELPATH, "pyproject.toml") for f in changed)
+        and dependency_paths_only
+    )
     return {"run": sorted(run), "rescore": sorted(rescore), "judges_changed": sorted(set(judges_changed)),
-            "reasons": {**{s: r for s, r in rescore.items()}, **run}, "changed_files": len(changed)}
+            "reasons": {**{s: r for s, r in rescore.items()}, **run}, "changed_files": len(changed),
+            "dependency_only": dependency_only}
 
 
 # --- A/B: base prompt vs head prompt --------------------------------------------------------
@@ -512,7 +623,8 @@ def cmd_affected(args) -> int:
     print(json.dumps(result, indent=2))
     github_output(run=",".join(result["run"]), rescore=",".join(result["rescore"]),
                   judges_changed=",".join(result["judges_changed"]),
-                  any="true" if result["run"] or result["rescore"] else "false")
+                  any="true" if result["run"] or result["rescore"] else "false",
+                  dependency_only="true" if result["dependency_only"] else "false")
     return 0
 
 

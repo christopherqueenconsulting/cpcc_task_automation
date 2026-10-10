@@ -100,10 +100,39 @@ Evaluations are **event-driven only**, never on a timer:
 | When | What runs | Cost |
 |---|---|---|
 | A PR changes nothing a prompt depends on | `prompt-eval/ab` = success, "no suites affected" | $0 |
+| A PR changes only `poetry.lock` (no change inside the LLM request stack, see below), `pyproject.toml` or docs | no model calls: the `dependency-smoke` job syncs the environment to the head lock (`poetry install --with test --sync`), imports every `cqc_cpcc` module, resolves every absolute import in `cqc_cpcc` and `cqc_streamlit_app` (function-level ones included), and checks that packages removed from the lock are gone; `prompt-eval/ab` = success, "dependency-only change; import smoke passed" (failure if any check fails) | $0 |
 | A PR changes only grader code | re-score master's saved outputs with the new graders | $0 |
-| A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, a model-registry role or the lockfile | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap on the holdout split (suites with ≥30 cases), absolute margin otherwise; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1-3 |
+| A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, a model-registry role or any lockfile package inside the LLM request stack (see below) | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap on the holdout split (suites with ≥30 cases), absolute margin otherwise; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1-3 |
 | That PR is merged | the affected suites run on master; `prompt-history.jsonl` and `PROMPT_STATUS.md` are updated on the `model-eval-state` branch; "Prompt needs work: <id>" issues open (or close when passing again) | ~$1-3 |
 | A new model is considered (weekly free discovery finds a candidate, the current model changed, or a dispatch) | the Model Evaluation workflow grades it, then the **cross-suite gate** runs the winner on every other suite of the roles it would take; promotion needs both ([`MODEL_EVALUATION.md`](MODEL_EVALUATION.md)) | ≤ $10 + suites |
+
+**Lockfile changes.** `poetry.lock` is in the `shared_files` of six of the eleven prompts because the
+LLM request stack shapes every request and parse. The stack is the transitive dependency
+closure of `openai`, `pydantic`, `httpx`, `tiktoken`, `langsmith`, `openrouter` and every
+`langchain*` package, read from the `[package.dependencies]` tables of both the base and the
+head lock. A lock entry counts as changed when anything in it changes (version, source,
+file hashes, dependencies, markers, optional, groups or extras), and a package listed more
+than once on either side always counts as changed. If any changed package is inside either
+closure, or either lock cannot be read, the affected suites run as before. Otherwise the
+change is dependency-only. This narrowing applies only when every changed path is the
+lockfile, `pyproject.toml`, `.github/copilot-instructions.md` or a non-prompt doc; any other
+path keeps the previous behaviour.
+
+- **Coverage of the smoke.** `cqc_cpcc` is imported module by module. `cqc_streamlit_app`
+  pages call `st.*` at import, so that package is checked by import resolution only (no
+  code runs); the Streamlit UI itself is exercised by the required `e2e-tests` check.
+- **Dependabot.** Dependabot auto-merge (`dependabot-auto-merge.yml`) waits for every
+  required status, `prompt-eval/ab` included, so a dependency-only Dependabot PR can merge
+  on the smoke alone. One that touches the request stack never gets an automatic A/B (the
+  `ab` job skips Dependabot), so it waits for a maintainer dispatch. Whether the `report`
+  job can write the status on a Dependabot PR has not been observed yet; if it cannot, the
+  PR waits for a maintainer as well.
+- **A failed smoke.** The PR author (for Dependabot PRs, the maintainer) reads the
+  `prompt-eval-dependency-smoke-<run id>` artifact or the job log, fixes the lock or the
+  import, and pushes; to re-run without a push, use "Re-run failed jobs" on the Prompt
+  Evaluation run, which re-runs `dependency-smoke` and `report`.
+- **Known limit.** `detect` runs the PR head's copy of the detector, as before this change.
+  Running the base branch's detector against the head tree is a follow-up.
 
 Commands (all under `poetry run python -m cqc_cpcc.model_eval`):
 
