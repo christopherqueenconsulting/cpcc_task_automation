@@ -183,7 +183,9 @@ def _read_text(ref: str) -> str:
     return ref if isinstance(ref, str) else ""
 
 
-_FILE_HEADER = re.compile(r"^(?://\s*File:|#+\s*Submission File Name:)\s*(.+?)\s*$", re.MULTILINE)
+# The name group runs to the end of the line and is stripped in Python: a lazy name
+# between two whitespace runs backtracks polynomially on long runs of spaces.
+_FILE_HEADER = re.compile(r"^(?://[ \t]*File:|#+[ \t]*Submission File Name:)([^\n]*)$", re.MULTILINE)
 
 
 def reference_source(reference: str, language: str) -> str:
@@ -195,7 +197,7 @@ def reference_source(reference: str, language: str) -> str:
     """
     parts = _FILE_HEADER.split(reference or "")
     # parts = [before_first_header, name1, body1, name2, body2, ...]
-    sections = [("", parts[0])] + list(zip(parts[1::2], parts[2::2]))
+    sections = [("", parts[0])] + [(name.strip(), body) for name, body in zip(parts[1::2], parts[2::2])]
     wanted = LANGUAGE_EXTENSIONS.get(language, ())
     kept = [body for name, body in sections
             if not name or os.path.splitext(name)[1].lower() in wanted]
