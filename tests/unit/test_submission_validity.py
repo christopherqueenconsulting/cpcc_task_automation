@@ -475,3 +475,46 @@ def test_reference_source_strips_header_names():
                  "## Submission File Name: notes.txt\nnot code\n")
     source = sv.reference_source(reference, "cpp")
     assert "int main()" in source and "not code" not in source
+
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("code, language", [
+    ("class " + "a" * 50_000 + "{x", "cpp"),
+    ("/* " * 50_000, "cpp"),
+    ('"' + '\\"' * 50_000, "cpp"),
+    ('"' + '\\"' * 50_000 + "\\", "cpp"),
+    ("'" + "\\'" * 50_000, "java"),
+    ('"\\' + '!\\' * 50_000, "cpp"),
+    ("'\\" + "&\\" * 50_000, "java"),
+    ("/* " * 50_000, "sas"),
+    ("\n" * 50_000, "sas"),
+    ("*\n" * 50_000, "sas"),
+    ("\n" * 50_000 + '"""', "python"),
+    ('"""\n' * 50_001, "python"),
+])
+def test_line_counting_is_linear_on_hostile_submissions(code, language):
+    """Student text must not make the comment or boilerplate regexes backtrack quadratically."""
+    import time
+    start = time.perf_counter()
+    sv.count_meaningful_lines(code, language)
+    assert time.perf_counter() - start < 1.0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("code, language, expected", [
+    ("public class Payroll extends Base {\n", "java", 0),
+    ("class Account {\n", "cpp", 0),
+    ("int x = 1; /* note */\nint y = 2;\n", "cpp", 2),
+    ('char *s = "/* not a comment */";\n', "cpp", 1),
+    # An unclosed comment does not compile; its text still counts as code, as before.
+    ("int x = 1;\n/* unclosed\nint y = 2;\n// note\n", "cpp", 3),
+    ("* a comment;\ndata a; set b;\n/* c */\nrun;\n", "sas", 2),
+    ("data a;\n/* unclosed\nrun;\n", "sas", 3),
+    ("data a;\nset b;\n* unclosed statement\nrun\n", "sas", 4),
+    ('x = 1\n"""doc"""\ny = 2\n', "python", 2),
+    ('msg = """\ntext\n"""\ny = 2\n', "python", 4),
+])
+def test_comment_and_class_header_counts_match_master(code, language, expected):
+    """Line counts for these inputs are the same as before the regexes were made linear."""
+    assert sv.count_meaningful_lines(code, language) == expected
