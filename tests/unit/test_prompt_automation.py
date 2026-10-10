@@ -74,15 +74,18 @@ class TestAffected:
         result = self._affected(["poetry.lock"])
         assert result["run"] and not result["dependency_only"]
 
-    def test_lockfile_plus_prompt_source_still_runs_that_prompt(self):
+    def test_lockfile_plus_prompt_source_keeps_the_previous_behaviour(self):
+        before = pa.affected("HEAD", changed=["poetry.lock"], lock_changes={"openai"})
         result = pa.affected("HEAD", changed=["poetry.lock", "src/cqc_cpcc/rubric_grading.py"],
                              lock_changes={"chromadb"})
-        assert result["run"] == ["grading", "grading-levelband"] and not result["dependency_only"]
+        assert set(result["run"]) == set(before["run"]) | {"grading", "grading-levelband"}
+        assert not result["dependency_only"]
 
-    def test_lockfile_plus_python_change_is_not_dependency_only(self):
+    def test_lockfile_plus_python_change_keeps_the_previous_behaviour(self):
+        before = pa.affected("HEAD", changed=["poetry.lock"], lock_changes={"openai"})
         result = pa.affected("HEAD", changed=["poetry.lock", "src/cqc_cpcc/utilities/date.py"],
                              lock_changes={"chromadb"})
-        assert result["run"] == [] and result["dependency_only"] is False
+        assert result["run"] == before["run"] and result["run"] and result["dependency_only"] is False
 
     def test_lockfile_plus_judge_prompt_is_not_dependency_only(self):
         result = pa.affected("HEAD", changed=["poetry.lock", "evals/judges/faithfulness.md"],

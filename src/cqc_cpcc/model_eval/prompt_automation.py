@@ -113,8 +113,11 @@ def affected(base_ref: str, changed: Optional[list] = None, lock_changes: Option
     registry's role entries; and grader code.
     """
     changed = changed if changed is not None else changed_files(base_ref)
+    # The lockfile narrowing applies only when every changed path is in the dependency-only
+    # class; any other change set keeps the previous behaviour exactly.
+    dependency_paths_only = all(f in DEPENDENCY_ONLY_PATHS or f.endswith(".md") for f in changed)
     lock_affects_prompts = True
-    if LOCKFILE_RELPATH in changed:
+    if LOCKFILE_RELPATH in changed and dependency_paths_only:
         packages = lock_changes if lock_changes is not None else lock_changed_packages(base_ref)
         lock_affects_prompts = _touches_llm_request_stack(packages)
     head = prompt_registry.load()
@@ -182,7 +185,7 @@ def affected(base_ref: str, changed: Optional[list] = None, lock_changes: Option
     dependency_only = bool(
         not run and not rescore and not judges_changed
         and any(f in (LOCKFILE_RELPATH, "pyproject.toml") for f in changed)
-        and all(f in DEPENDENCY_ONLY_PATHS or f.endswith(".md") for f in changed)
+        and dependency_paths_only
     )
     return {"run": sorted(run), "rescore": sorted(rescore), "judges_changed": sorted(set(judges_changed)),
             "reasons": {**{s: r for s, r in rescore.items()}, **run}, "changed_files": len(changed),
