@@ -1,0 +1,2 @@
+{"canonical_slug": "anthropic/claude-haiku-5.5-20261007", "composite": 0.9462345679012346, "cost_per_submission": 0.001709015925925926, "label": "anthropic/claude-haiku-5.5", "run_id": "38255844383", "status": "complete"}
+{"canonical_slug": "openai/gpt-6-luna", "composite": 0.8829100529100529, "cost_per_submission": 0.0011633427222222223, "label": "openai/gpt-6-luna@high", "run_id": "38255844383", "status": "complete"}

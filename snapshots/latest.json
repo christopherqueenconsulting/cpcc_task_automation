@@ -1,0 +1,1241 @@
+{
+  "anthropic/claude-fable-5": {
+    "canonical_slug": "anthropic/claude-5-fable-20260609",
+    "completion": "0.00005",
+    "created": 1781007515,
+    "expiration_date": null,
+    "prompt": "0.00001"
+  },
+  "anthropic/claude-fable-5.1": {
+    "canonical_slug": "anthropic/claude-fable-5.1-20260831",
+    "completion": "0.00005",
+    "created": 1788285838,
+    "expiration_date": null,
+    "prompt": "0.00001"
+  },
+  "anthropic/claude-fable-5.1:batch": {
+    "canonical_slug": "anthropic/claude-fable-5.1-20260831",
+    "completion": "0.000025",
+    "created": 1788285838,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "anthropic/claude-fable-5:batch": {
+    "canonical_slug": "anthropic/claude-5-fable-20260609",
+    "completion": "0.000025",
+    "created": 1781007515,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "anthropic/claude-haiku-4.5": {
+    "canonical_slug": "anthropic/claude-4.5-haiku-20251001",
+    "completion": "0.000005",
+    "created": 1760547638,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "anthropic/claude-haiku-4.5:batch": {
+    "canonical_slug": "anthropic/claude-4.5-haiku-20251001",
+    "completion": "0.0000025",
+    "created": 1760547638,
+    "expiration_date": null,
+    "prompt": "0.0000005"
+  },
+  "anthropic/claude-haiku-5.5": {
+    "canonical_slug": "anthropic/claude-haiku-5.5-20261007",
+    "completion": "0.0000005",
+    "created": 1791397883,
+    "expiration_date": null,
+    "prompt": "0.0000001"
+  },
+  "anthropic/claude-haiku-5.5:batch": {
+    "canonical_slug": "anthropic/claude-haiku-5.5-20261007",
+    "completion": "0.00000025",
+    "created": 1791397883,
+    "expiration_date": null,
+    "prompt": "0.00000005"
+  },
+  "anthropic/claude-opus-4.1": {
+    "canonical_slug": "anthropic/claude-4.1-opus-20250805",
+    "completion": "0.000075",
+    "created": 1754411591,
+    "expiration_date": null,
+    "prompt": "0.000015"
+  },
+  "anthropic/claude-opus-4.1:batch": {
+    "canonical_slug": "anthropic/claude-4.1-opus-20250805",
+    "completion": "0.0000375",
+    "created": 1754411591,
+    "expiration_date": null,
+    "prompt": "0.0000075"
+  },
+  "anthropic/claude-opus-4.5": {
+    "canonical_slug": "anthropic/claude-4.5-opus-20251124",
+    "completion": "0.000025",
+    "created": 1764010580,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "anthropic/claude-opus-4.5:batch": {
+    "canonical_slug": "anthropic/claude-4.5-opus-20251124",
+    "completion": "0.0000125",
+    "created": 1764010580,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "anthropic/claude-opus-4.6": {
+    "canonical_slug": "anthropic/claude-4.6-opus-20260205",
+    "completion": "0.000025",
+    "created": 1770219050,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "anthropic/claude-opus-4.6:batch": {
+    "canonical_slug": "anthropic/claude-4.6-opus-20260205",
+    "completion": "0.0000125",
+    "created": 1770219050,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "anthropic/claude-opus-4.7": {
+    "canonical_slug": "anthropic/claude-4.7-opus-20260416",
+    "completion": "0.000025",
+    "created": 1776351100,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "anthropic/claude-opus-4.7:batch": {
+    "canonical_slug": "anthropic/claude-4.7-opus-20260416",
+    "completion": "0.0000125",
+    "created": 1776351100,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "anthropic/claude-opus-4.8": {
+    "canonical_slug": "anthropic/claude-4.8-opus-20260528",
+    "completion": "0.000025",
+    "created": 1779905091,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "anthropic/claude-opus-4.8:batch": {
+    "canonical_slug": "anthropic/claude-4.8-opus-20260528",
+    "completion": "0.0000125",
+    "created": 1779905091,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "anthropic/claude-opus-5": {
+    "canonical_slug": "anthropic/claude-opus-5-20260723",
+    "completion": "0.000025",
+    "created": 1784912544,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "anthropic/claude-opus-5.5": {
+    "canonical_slug": "anthropic/claude-opus-5.5-20260921",
+    "completion": "0.00002",
+    "created": 1790094732,
+    "expiration_date": null,
+    "prompt": "0.000004"
+  },
+  "anthropic/claude-opus-5.5:batch": {
+    "canonical_slug": "anthropic/claude-opus-5.5-20260921",
+    "completion": "0.00001",
+    "created": 1790094732,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "anthropic/claude-opus-5:batch": {
+    "canonical_slug": "anthropic/claude-opus-5-20260723",
+    "completion": "0.0000125",
+    "created": 1784912544,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "anthropic/claude-sonnet-4": {
+    "canonical_slug": "anthropic/claude-4-sonnet-20250522",
+    "completion": "0.000015",
+    "created": 1747930371,
+    "expiration_date": null,
+    "prompt": "0.000003"
+  },
+  "anthropic/claude-sonnet-4.5": {
+    "canonical_slug": "anthropic/claude-4.5-sonnet-20250929",
+    "completion": "0.000015",
+    "created": 1759161676,
+    "expiration_date": null,
+    "prompt": "0.000003"
+  },
+  "anthropic/claude-sonnet-4.5:batch": {
+    "canonical_slug": "anthropic/claude-4.5-sonnet-20250929",
+    "completion": "0.0000075",
+    "created": 1759161676,
+    "expiration_date": null,
+    "prompt": "0.0000015"
+  },
+  "anthropic/claude-sonnet-4.6": {
+    "canonical_slug": "anthropic/claude-4.6-sonnet-20260217",
+    "completion": "0.000015",
+    "created": 1771342990,
+    "expiration_date": null,
+    "prompt": "0.000003"
+  },
+  "anthropic/claude-sonnet-4.6:batch": {
+    "canonical_slug": "anthropic/claude-4.6-sonnet-20260217",
+    "completion": "0.0000075",
+    "created": 1771342990,
+    "expiration_date": null,
+    "prompt": "0.0000015"
+  },
+  "anthropic/claude-sonnet-5": {
+    "canonical_slug": "anthropic/claude-sonnet-5-20260630",
+    "completion": "0.00001",
+    "created": 1782843083,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "anthropic/claude-sonnet-5.5": {
+    "canonical_slug": "anthropic/claude-sonnet-5.5-20260928",
+    "completion": "0.00001",
+    "created": 1790618686,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "anthropic/claude-sonnet-5.5:batch": {
+    "canonical_slug": "anthropic/claude-sonnet-5.5-20260928",
+    "completion": "0.000005",
+    "created": 1790618686,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "anthropic/claude-sonnet-5:batch": {
+    "canonical_slug": "anthropic/claude-sonnet-5-20260630",
+    "completion": "0.000005",
+    "created": 1782843083,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "google/gemini-2.5-flash": {
+    "canonical_slug": "google/gemini-2.5-flash",
+    "completion": "0.0000025",
+    "created": 1750172488,
+    "expiration_date": "2026-10-20",
+    "prompt": "0.0000003"
+  },
+  "google/gemini-2.5-flash-image": {
+    "canonical_slug": "google/gemini-2.5-flash-image",
+    "completion": "0.0000025",
+    "created": 1759870431,
+    "expiration_date": null,
+    "prompt": "0.0000003"
+  },
+  "google/gemini-2.5-flash-lite": {
+    "canonical_slug": "google/gemini-2.5-flash-lite",
+    "completion": "0.0000004",
+    "created": 1753200276,
+    "expiration_date": "2026-10-20",
+    "prompt": "0.0000001"
+  },
+  "google/gemini-2.5-flash-lite:batch": {
+    "canonical_slug": "google/gemini-2.5-flash-lite",
+    "completion": "0.0000002",
+    "created": 1753200276,
+    "expiration_date": null,
+    "prompt": "0.00000005"
+  },
+  "google/gemini-2.5-flash:batch": {
+    "canonical_slug": "google/gemini-2.5-flash",
+    "completion": "0.00000125",
+    "created": 1750172488,
+    "expiration_date": "2026-10-20",
+    "prompt": "0.00000015"
+  },
+  "google/gemini-2.5-pro": {
+    "canonical_slug": "google/gemini-2.5-pro",
+    "completion": "0.00001",
+    "created": 1750169544,
+    "expiration_date": "2026-10-20",
+    "prompt": "0.00000125"
+  },
+  "google/gemini-2.5-pro-preview": {
+    "canonical_slug": "google/gemini-2.5-pro-preview-06-05",
+    "completion": "0.00001",
+    "created": 1749137257,
+    "expiration_date": null,
+    "prompt": "0.00000125"
+  },
+  "google/gemini-2.5-pro:batch": {
+    "canonical_slug": "google/gemini-2.5-pro",
+    "completion": "0.000005",
+    "created": 1750169544,
+    "expiration_date": "2026-10-20",
+    "prompt": "0.000000625"
+  },
+  "google/gemini-3-flash-preview": {
+    "canonical_slug": "google/gemini-3-flash-preview-20251217",
+    "completion": "0.000003",
+    "created": 1765987078,
+    "expiration_date": null,
+    "prompt": "0.0000005"
+  },
+  "google/gemini-3-flash-preview:batch": {
+    "canonical_slug": "google/gemini-3-flash-preview-20251217",
+    "completion": "0.0000015",
+    "created": 1765987078,
+    "expiration_date": null,
+    "prompt": "0.00000025"
+  },
+  "google/gemini-3-pro-image": {
+    "canonical_slug": "google/gemini-3-pro-image-20260528",
+    "completion": "0.000012",
+    "created": 1781754054,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "google/gemini-3-pro-image-preview": {
+    "canonical_slug": "google/gemini-3-pro-image-preview-20251120",
+    "completion": "0.000012",
+    "created": 1763653797,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "google/gemini-3.1-flash-image": {
+    "canonical_slug": "google/gemini-3.1-flash-image-20260528",
+    "completion": "0.000003",
+    "created": 1781754065,
+    "expiration_date": null,
+    "prompt": "0.0000005"
+  },
+  "google/gemini-3.1-flash-image-preview": {
+    "canonical_slug": "google/gemini-3.1-flash-image-preview-20260226",
+    "completion": "0.000003",
+    "created": 1772119558,
+    "expiration_date": null,
+    "prompt": "0.0000005"
+  },
+  "google/gemini-3.1-flash-lite": {
+    "canonical_slug": "google/gemini-3.1-flash-lite-20260507",
+    "completion": "0.0000015",
+    "created": 1778168828,
+    "expiration_date": null,
+    "prompt": "0.00000025"
+  },
+  "google/gemini-3.1-flash-lite-image": {
+    "canonical_slug": "google/gemini-3.1-flash-lite-image-20260630",
+    "completion": "0.0000015",
+    "created": 1782837225,
+    "expiration_date": null,
+    "prompt": "0.00000025"
+  },
+  "google/gemini-3.1-flash-lite-preview": {
+    "canonical_slug": "google/gemini-3.1-flash-lite-preview-20260303",
+    "completion": "0.0000015",
+    "created": 1772512673,
+    "expiration_date": null,
+    "prompt": "0.00000025"
+  },
+  "google/gemini-3.1-flash-lite:batch": {
+    "canonical_slug": "google/gemini-3.1-flash-lite-20260507",
+    "completion": "0.00000075",
+    "created": 1778168828,
+    "expiration_date": null,
+    "prompt": "0.000000125"
+  },
+  "google/gemini-3.1-pro-preview": {
+    "canonical_slug": "google/gemini-3.1-pro-preview-20260219",
+    "completion": "0.000012",
+    "created": 1771509627,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "google/gemini-3.1-pro-preview-customtools": {
+    "canonical_slug": "google/gemini-3.1-pro-preview-customtools-20260219",
+    "completion": "0.000012",
+    "created": 1772045923,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "google/gemini-3.1-pro-preview:batch": {
+    "canonical_slug": "google/gemini-3.1-pro-preview-20260219",
+    "completion": "0.000006",
+    "created": 1771509627,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "google/gemini-3.5-flash": {
+    "canonical_slug": "google/gemini-3.5-flash-20260519",
+    "completion": "0.000009",
+    "created": 1779193800,
+    "expiration_date": null,
+    "prompt": "0.0000015"
+  },
+  "google/gemini-3.5-flash-lite": {
+    "canonical_slug": "google/gemini-3.5-flash-lite-20260721",
+    "completion": "0.0000025",
+    "created": 1784646726,
+    "expiration_date": null,
+    "prompt": "0.0000003"
+  },
+  "google/gemini-3.5-flash-lite:batch": {
+    "canonical_slug": "google/gemini-3.5-flash-lite-20260721",
+    "completion": "0.00000125",
+    "created": 1784646726,
+    "expiration_date": null,
+    "prompt": "0.00000015"
+  },
+  "google/gemini-3.5-flash:batch": {
+    "canonical_slug": "google/gemini-3.5-flash-20260519",
+    "completion": "0.0000045",
+    "created": 1779193800,
+    "expiration_date": null,
+    "prompt": "0.00000075"
+  },
+  "google/gemini-3.6-flash": {
+    "canonical_slug": "google/gemini-3.6-flash-20260721",
+    "completion": "0.00000375",
+    "created": 1784646733,
+    "expiration_date": null,
+    "prompt": "0.00000075"
+  },
+  "google/gemini-3.6-flash:batch": {
+    "canonical_slug": "google/gemini-3.6-flash-20260721",
+    "completion": "0.000001875",
+    "created": 1784646733,
+    "expiration_date": null,
+    "prompt": "0.000000375"
+  },
+  "google/gemini-3.7-flash": {
+    "canonical_slug": "google/gemini-3.7-flash-20260813",
+    "completion": "0.00000375",
+    "created": 1786640581,
+    "expiration_date": null,
+    "prompt": "0.00000075"
+  },
+  "google/gemini-3.7-flash:batch": {
+    "canonical_slug": "google/gemini-3.7-flash-20260813",
+    "completion": "0.000001875",
+    "created": 1786640581,
+    "expiration_date": null,
+    "prompt": "0.000000375"
+  },
+  "google/gemini-3.8-flash": {
+    "canonical_slug": "google/gemini-3.8-flash-20260902",
+    "completion": "0.00000375",
+    "created": 1788362056,
+    "expiration_date": null,
+    "prompt": "0.00000075"
+  },
+  "google/gemini-3.8-flash:batch": {
+    "canonical_slug": "google/gemini-3.8-flash-20260902",
+    "completion": "0.000001875",
+    "created": 1788362056,
+    "expiration_date": null,
+    "prompt": "0.000000375"
+  },
+  "google/gemini-nano-banana-2.1": {
+    "canonical_slug": "google/gemini-nano-banana-2.1-20261006",
+    "completion": "0.0000075",
+    "created": 1791300825,
+    "expiration_date": null,
+    "prompt": "0.0000015"
+  },
+  "google/gemma-2-27b-it": {
+    "canonical_slug": "google/gemma-2-27b-it",
+    "completion": "0.00000065",
+    "created": 1720828800,
+    "expiration_date": null,
+    "prompt": "0.00000065"
+  },
+  "google/gemma-3-12b-it": {
+    "canonical_slug": "google/gemma-3-12b-it",
+    "completion": "0.00000015",
+    "created": 1741902625,
+    "expiration_date": null,
+    "prompt": "0.00000005"
+  },
+  "google/gemma-3-27b-it": {
+    "canonical_slug": "google/gemma-3-27b-it",
+    "completion": "0.00000045",
+    "created": 1741756359,
+    "expiration_date": null,
+    "prompt": "0.00000008"
+  },
+  "google/gemma-3-4b-it": {
+    "canonical_slug": "google/gemma-3-4b-it",
+    "completion": "0.0000001",
+    "created": 1741905510,
+    "expiration_date": null,
+    "prompt": "0.00000005"
+  },
+  "google/gemma-4-26b-a4b-it": {
+    "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
+    "completion": "0.0000003",
+    "created": 1775227989,
+    "expiration_date": null,
+    "prompt": "0.00000009"
+  },
+  "google/gemma-4-26b-a4b-it:free": {
+    "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
+    "completion": "0",
+    "created": 1775227989,
+    "expiration_date": null,
+    "prompt": "0"
+  },
+  "google/gemma-4-31b-it": {
+    "canonical_slug": "google/gemma-4-31b-it-20260402",
+    "completion": "0.00000034",
+    "created": 1775148486,
+    "expiration_date": null,
+    "prompt": "0.00000009"
+  },
+  "google/gemma-4-31b-it:free": {
+    "canonical_slug": "google/gemma-4-31b-it-20260402",
+    "completion": "0",
+    "created": 1775148486,
+    "expiration_date": null,
+    "prompt": "0"
+  },
+  "google/lyria-3-clip-preview": {
+    "canonical_slug": "google/lyria-3-clip-preview-20260330",
+    "completion": "0",
+    "created": 1774907255,
+    "expiration_date": null,
+    "prompt": "0"
+  },
+  "google/lyria-3-pro-preview": {
+    "canonical_slug": "google/lyria-3-pro-preview-20260330",
+    "completion": "0",
+    "created": 1774907286,
+    "expiration_date": null,
+    "prompt": "0"
+  },
+  "openai/gpt-3.5-turbo": {
+    "canonical_slug": "openai/gpt-3.5-turbo",
+    "completion": "0.0000015",
+    "created": 1685232000,
+    "expiration_date": null,
+    "prompt": "0.0000005"
+  },
+  "openai/gpt-3.5-turbo-0613": {
+    "canonical_slug": "openai/gpt-3.5-turbo-0613",
+    "completion": "0.000002",
+    "created": 1706140800,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-3.5-turbo-16k": {
+    "canonical_slug": "openai/gpt-3.5-turbo-16k",
+    "completion": "0.000004",
+    "created": 1693180800,
+    "expiration_date": null,
+    "prompt": "0.000003"
+  },
+  "openai/gpt-3.5-turbo-instruct": {
+    "canonical_slug": "openai/gpt-3.5-turbo-instruct",
+    "completion": "0.000002",
+    "created": 1695859200,
+    "expiration_date": null,
+    "prompt": "0.0000015"
+  },
+  "openai/gpt-3.5-turbo:batch": {
+    "canonical_slug": "openai/gpt-3.5-turbo",
+    "completion": "0.00000075",
+    "created": 1685232000,
+    "expiration_date": null,
+    "prompt": "0.00000025"
+  },
+  "openai/gpt-4": {
+    "canonical_slug": "openai/gpt-4",
+    "completion": "0.00006",
+    "created": 1685232000,
+    "expiration_date": null,
+    "prompt": "0.00003"
+  },
+  "openai/gpt-4-turbo": {
+    "canonical_slug": "openai/gpt-4-turbo",
+    "completion": "0.00003",
+    "created": 1712620800,
+    "expiration_date": null,
+    "prompt": "0.00001"
+  },
+  "openai/gpt-4-turbo:batch": {
+    "canonical_slug": "openai/gpt-4-turbo",
+    "completion": "0.000015",
+    "created": 1712620800,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "openai/gpt-4.1": {
+    "canonical_slug": "openai/gpt-4.1-2025-04-14",
+    "completion": "0.000008",
+    "created": 1744651385,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-4.1-mini": {
+    "canonical_slug": "openai/gpt-4.1-mini-2025-04-14",
+    "completion": "0.0000016",
+    "created": 1744651381,
+    "expiration_date": null,
+    "prompt": "0.0000004"
+  },
+  "openai/gpt-4.1-mini:batch": {
+    "canonical_slug": "openai/gpt-4.1-mini-2025-04-14",
+    "completion": "0.0000008",
+    "created": 1744651381,
+    "expiration_date": null,
+    "prompt": "0.0000002"
+  },
+  "openai/gpt-4.1-nano": {
+    "canonical_slug": "openai/gpt-4.1-nano-2025-04-14",
+    "completion": "0.0000004",
+    "created": 1744651369,
+    "expiration_date": null,
+    "prompt": "0.0000001"
+  },
+  "openai/gpt-4.1-nano:batch": {
+    "canonical_slug": "openai/gpt-4.1-nano-2025-04-14",
+    "completion": "0.0000002",
+    "created": 1744651369,
+    "expiration_date": null,
+    "prompt": "0.00000005"
+  },
+  "openai/gpt-4.1:batch": {
+    "canonical_slug": "openai/gpt-4.1-2025-04-14",
+    "completion": "0.000004",
+    "created": 1744651385,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-4o": {
+    "canonical_slug": "openai/gpt-4o",
+    "completion": "0.00001",
+    "created": 1715558400,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "openai/gpt-4o-2024-05-13": {
+    "canonical_slug": "openai/gpt-4o-2024-05-13",
+    "completion": "0.000015",
+    "created": 1715558400,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "openai/gpt-4o-2024-08-06": {
+    "canonical_slug": "openai/gpt-4o-2024-08-06",
+    "completion": "0.00001",
+    "created": 1722902400,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "openai/gpt-4o-2024-11-20": {
+    "canonical_slug": "openai/gpt-4o-2024-11-20",
+    "completion": "0.00001",
+    "created": 1732127594,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "openai/gpt-4o-mini": {
+    "canonical_slug": "openai/gpt-4o-mini",
+    "completion": "0.0000006",
+    "created": 1721260800,
+    "expiration_date": null,
+    "prompt": "0.00000015"
+  },
+  "openai/gpt-4o-mini-2024-07-18": {
+    "canonical_slug": "openai/gpt-4o-mini-2024-07-18",
+    "completion": "0.0000006",
+    "created": 1721260800,
+    "expiration_date": null,
+    "prompt": "0.00000015"
+  },
+  "openai/gpt-4o-mini:batch": {
+    "canonical_slug": "openai/gpt-4o-mini",
+    "completion": "0.0000003",
+    "created": 1721260800,
+    "expiration_date": null,
+    "prompt": "0.000000075"
+  },
+  "openai/gpt-4o:batch": {
+    "canonical_slug": "openai/gpt-4o",
+    "completion": "0.000005",
+    "created": 1715558400,
+    "expiration_date": null,
+    "prompt": "0.00000125"
+  },
+  "openai/gpt-5": {
+    "canonical_slug": "openai/gpt-5-2025-08-07",
+    "completion": "0.00001",
+    "created": 1754587413,
+    "expiration_date": null,
+    "prompt": "0.00000125"
+  },
+  "openai/gpt-5-image": {
+    "canonical_slug": "openai/gpt-5-image",
+    "completion": "0.00001",
+    "created": 1760447986,
+    "expiration_date": null,
+    "prompt": "0.00001"
+  },
+  "openai/gpt-5-image-mini": {
+    "canonical_slug": "openai/gpt-5-image-mini",
+    "completion": "0.000002",
+    "created": 1760624583,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "openai/gpt-5-mini": {
+    "canonical_slug": "openai/gpt-5-mini-2025-08-07",
+    "completion": "0.000002",
+    "created": 1754587407,
+    "expiration_date": null,
+    "prompt": "0.00000025"
+  },
+  "openai/gpt-5-mini:batch": {
+    "canonical_slug": "openai/gpt-5-mini-2025-08-07",
+    "completion": "0.000001",
+    "created": 1754587407,
+    "expiration_date": null,
+    "prompt": "0.000000125"
+  },
+  "openai/gpt-5-nano": {
+    "canonical_slug": "openai/gpt-5-nano-2025-08-07",
+    "completion": "0.0000004",
+    "created": 1754587402,
+    "expiration_date": null,
+    "prompt": "0.00000005"
+  },
+  "openai/gpt-5-nano:batch": {
+    "canonical_slug": "openai/gpt-5-nano-2025-08-07",
+    "completion": "0.0000002",
+    "created": 1754587402,
+    "expiration_date": null,
+    "prompt": "0.000000025"
+  },
+  "openai/gpt-5-pro": {
+    "canonical_slug": "openai/gpt-5-pro-2025-10-06",
+    "completion": "0.00012",
+    "created": 1759776663,
+    "expiration_date": null,
+    "prompt": "0.000015"
+  },
+  "openai/gpt-5-pro:batch": {
+    "canonical_slug": "openai/gpt-5-pro-2025-10-06",
+    "completion": "0.00006",
+    "created": 1759776663,
+    "expiration_date": null,
+    "prompt": "0.0000075"
+  },
+  "openai/gpt-5.1": {
+    "canonical_slug": "openai/gpt-5.1-20251113",
+    "completion": "0.00001",
+    "created": 1763060305,
+    "expiration_date": null,
+    "prompt": "0.00000125"
+  },
+  "openai/gpt-5.1-codex": {
+    "canonical_slug": "openai/gpt-5.1-codex-20251113",
+    "completion": "0.00001",
+    "created": 1763060298,
+    "expiration_date": null,
+    "prompt": "0.00000125"
+  },
+  "openai/gpt-5.1-codex-max": {
+    "canonical_slug": "openai/gpt-5.1-codex-max-20251204",
+    "completion": "0.00001",
+    "created": 1764878934,
+    "expiration_date": null,
+    "prompt": "0.00000125"
+  },
+  "openai/gpt-5.1-codex-mini": {
+    "canonical_slug": "openai/gpt-5.1-codex-mini-20251113",
+    "completion": "0.000002",
+    "created": 1763057820,
+    "expiration_date": null,
+    "prompt": "0.00000025"
+  },
+  "openai/gpt-5.1:batch": {
+    "canonical_slug": "openai/gpt-5.1-20251113",
+    "completion": "0.000005",
+    "created": 1763060305,
+    "expiration_date": null,
+    "prompt": "0.000000625"
+  },
+  "openai/gpt-5.2": {
+    "canonical_slug": "openai/gpt-5.2-20251211",
+    "completion": "0.000014",
+    "created": 1765389775,
+    "expiration_date": null,
+    "prompt": "0.00000175"
+  },
+  "openai/gpt-5.2-chat": {
+    "canonical_slug": "openai/gpt-5.2-chat-20251211",
+    "completion": "0.000014",
+    "created": 1765389783,
+    "expiration_date": null,
+    "prompt": "0.00000175"
+  },
+  "openai/gpt-5.2-codex": {
+    "canonical_slug": "openai/gpt-5.2-codex-20260114",
+    "completion": "0.000014",
+    "created": 1768409315,
+    "expiration_date": null,
+    "prompt": "0.00000175"
+  },
+  "openai/gpt-5.2-pro": {
+    "canonical_slug": "openai/gpt-5.2-pro-20251211",
+    "completion": "0.000168",
+    "created": 1765389780,
+    "expiration_date": null,
+    "prompt": "0.000021"
+  },
+  "openai/gpt-5.2-pro:batch": {
+    "canonical_slug": "openai/gpt-5.2-pro-20251211",
+    "completion": "0.000084",
+    "created": 1765389780,
+    "expiration_date": null,
+    "prompt": "0.0000105"
+  },
+  "openai/gpt-5.2:batch": {
+    "canonical_slug": "openai/gpt-5.2-20251211",
+    "completion": "0.000007",
+    "created": 1765389775,
+    "expiration_date": null,
+    "prompt": "0.000000875"
+  },
+  "openai/gpt-5.3-codex": {
+    "canonical_slug": "openai/gpt-5.3-codex-20260224",
+    "completion": "0.000014",
+    "created": 1771959164,
+    "expiration_date": null,
+    "prompt": "0.00000175"
+  },
+  "openai/gpt-5.4": {
+    "canonical_slug": "openai/gpt-5.4-20260305",
+    "completion": "0.000015",
+    "created": 1772734352,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "openai/gpt-5.4-image-2": {
+    "canonical_slug": "openai/gpt-5.4-image-2-20260421",
+    "completion": "0.000015",
+    "created": 1776797528,
+    "expiration_date": null,
+    "prompt": "0.000008"
+  },
+  "openai/gpt-5.4-mini": {
+    "canonical_slug": "openai/gpt-5.4-mini-20260317",
+    "completion": "0.0000045",
+    "created": 1773748178,
+    "expiration_date": null,
+    "prompt": "0.00000075"
+  },
+  "openai/gpt-5.4-mini:batch": {
+    "canonical_slug": "openai/gpt-5.4-mini-20260317",
+    "completion": "0.00000225",
+    "created": 1773748178,
+    "expiration_date": null,
+    "prompt": "0.000000375"
+  },
+  "openai/gpt-5.4-nano": {
+    "canonical_slug": "openai/gpt-5.4-nano-20260317",
+    "completion": "0.00000125",
+    "created": 1773748187,
+    "expiration_date": null,
+    "prompt": "0.0000002"
+  },
+  "openai/gpt-5.4-nano:batch": {
+    "canonical_slug": "openai/gpt-5.4-nano-20260317",
+    "completion": "0.000000625",
+    "created": 1773748187,
+    "expiration_date": null,
+    "prompt": "0.0000001"
+  },
+  "openai/gpt-5.4-pro": {
+    "canonical_slug": "openai/gpt-5.4-pro-20260305",
+    "completion": "0.00018",
+    "created": 1772734366,
+    "expiration_date": null,
+    "prompt": "0.00003"
+  },
+  "openai/gpt-5.4-pro:batch": {
+    "canonical_slug": "openai/gpt-5.4-pro-20260305",
+    "completion": "0.00009",
+    "created": 1772734366,
+    "expiration_date": null,
+    "prompt": "0.000015"
+  },
+  "openai/gpt-5.4:batch": {
+    "canonical_slug": "openai/gpt-5.4-20260305",
+    "completion": "0.0000075",
+    "created": 1772734352,
+    "expiration_date": null,
+    "prompt": "0.00000125"
+  },
+  "openai/gpt-5.5": {
+    "canonical_slug": "openai/gpt-5.5-20260423",
+    "completion": "0.00003",
+    "created": 1777051893,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "openai/gpt-5.5-pro": {
+    "canonical_slug": "openai/gpt-5.5-pro-20260423",
+    "completion": "0.00018",
+    "created": 1777051896,
+    "expiration_date": null,
+    "prompt": "0.00003"
+  },
+  "openai/gpt-5.5-pro:batch": {
+    "canonical_slug": "openai/gpt-5.5-pro-20260423",
+    "completion": "0.00009",
+    "created": 1777051896,
+    "expiration_date": null,
+    "prompt": "0.000015"
+  },
+  "openai/gpt-5.5:batch": {
+    "canonical_slug": "openai/gpt-5.5-20260423",
+    "completion": "0.000015",
+    "created": 1777051893,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "openai/gpt-5.6-luna": {
+    "canonical_slug": "openai/gpt-5.6-luna-20260709",
+    "completion": "0.0000012",
+    "created": 1783590864,
+    "expiration_date": null,
+    "prompt": "0.0000002"
+  },
+  "openai/gpt-5.6-luna-pro": {
+    "canonical_slug": "openai/gpt-5.6-luna-pro-20260709",
+    "completion": "0.0000012",
+    "created": 1783590867,
+    "expiration_date": null,
+    "prompt": "0.0000002"
+  },
+  "openai/gpt-5.6-luna-pro:batch": {
+    "canonical_slug": "openai/gpt-5.6-luna-pro-20260709",
+    "completion": "0.0000006",
+    "created": 1783590867,
+    "expiration_date": null,
+    "prompt": "0.0000001"
+  },
+  "openai/gpt-5.6-luna:batch": {
+    "canonical_slug": "openai/gpt-5.6-luna-20260709",
+    "completion": "0.0000006",
+    "created": 1783590864,
+    "expiration_date": null,
+    "prompt": "0.0000001"
+  },
+  "openai/gpt-5.6-sol": {
+    "canonical_slug": "openai/gpt-5.6-sol-20260709",
+    "completion": "0.00001",
+    "created": 1783590850,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-5.6-sol-pro": {
+    "canonical_slug": "openai/gpt-5.6-sol-pro-20260709",
+    "completion": "0.00001",
+    "created": 1783590854,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-5.6-sol-pro:batch": {
+    "canonical_slug": "openai/gpt-5.6-sol-pro-20260709",
+    "completion": "0.000005",
+    "created": 1783590854,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-5.6-sol:batch": {
+    "canonical_slug": "openai/gpt-5.6-sol-20260709",
+    "completion": "0.000005",
+    "created": 1783590850,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-5.6-terra": {
+    "canonical_slug": "openai/gpt-5.6-terra-20260709",
+    "completion": "0.000012",
+    "created": 1783590857,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-5.6-terra-pro": {
+    "canonical_slug": "openai/gpt-5.6-terra-pro-20260709",
+    "completion": "0.000012",
+    "created": 1783590861,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-5.6-terra-pro:batch": {
+    "canonical_slug": "openai/gpt-5.6-terra-pro-20260709",
+    "completion": "0.000006",
+    "created": 1783590861,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-5.6-terra:batch": {
+    "canonical_slug": "openai/gpt-5.6-terra-20260709",
+    "completion": "0.000006",
+    "created": 1783590857,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-5:batch": {
+    "canonical_slug": "openai/gpt-5-2025-08-07",
+    "completion": "0.000005",
+    "created": 1754587413,
+    "expiration_date": null,
+    "prompt": "0.000000625"
+  },
+  "openai/gpt-6-astra": {
+    "canonical_slug": "openai/gpt-6-astra-20260903",
+    "completion": "0.00005",
+    "created": 1788552838,
+    "expiration_date": null,
+    "prompt": "0.00001"
+  },
+  "openai/gpt-6-astra-pro": {
+    "canonical_slug": "openai/gpt-6-astra-pro-20260903",
+    "completion": "0.00005",
+    "created": 1788552835,
+    "expiration_date": null,
+    "prompt": "0.00001"
+  },
+  "openai/gpt-6-astra-pro:batch": {
+    "canonical_slug": "openai/gpt-6-astra-pro-20260903",
+    "completion": "0.000025",
+    "created": 1788552835,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "openai/gpt-6-astra:batch": {
+    "canonical_slug": "openai/gpt-6-astra-20260903",
+    "completion": "0.000025",
+    "created": 1788552838,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "openai/gpt-6-luna": {
+    "canonical_slug": "openai/gpt-6-luna-20260922",
+    "completion": "0.0000005",
+    "created": 1790100786,
+    "expiration_date": null,
+    "prompt": "0.0000001"
+  },
+  "openai/gpt-6-luna-pro": {
+    "canonical_slug": "openai/gpt-6-luna-pro-20260922",
+    "completion": "0.0000005",
+    "created": 1790100791,
+    "expiration_date": null,
+    "prompt": "0.0000001"
+  },
+  "openai/gpt-6-luna-pro:batch": {
+    "canonical_slug": "openai/gpt-6-luna-pro-20260922",
+    "completion": "0.00000025",
+    "created": 1790100791,
+    "expiration_date": null,
+    "prompt": "0.00000005"
+  },
+  "openai/gpt-6-luna:batch": {
+    "canonical_slug": "openai/gpt-6-luna-20260922",
+    "completion": "0.00000025",
+    "created": 1790100786,
+    "expiration_date": null,
+    "prompt": "0.00000005"
+  },
+  "openai/gpt-6-sol": {
+    "canonical_slug": "openai/gpt-6-sol-20260922",
+    "completion": "0.00001",
+    "created": 1790100775,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-6-sol-pro": {
+    "canonical_slug": "openai/gpt-6-sol-pro-20260922",
+    "completion": "0.00001",
+    "created": 1790100781,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-6-sol-pro:batch": {
+    "canonical_slug": "openai/gpt-6-sol-pro-20260922",
+    "completion": "0.000005",
+    "created": 1790100781,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-6-sol:batch": {
+    "canonical_slug": "openai/gpt-6-sol-20260922",
+    "completion": "0.000005",
+    "created": 1790100775,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-6.1-sol": {
+    "canonical_slug": "openai/gpt-6.1-sol-20260929",
+    "completion": "0.00001",
+    "created": 1790702882,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-6.1-sol-pro": {
+    "canonical_slug": "openai/gpt-6.1-sol-pro-20260929",
+    "completion": "0.00001",
+    "created": 1790702886,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/gpt-6.1-sol-pro:batch": {
+    "canonical_slug": "openai/gpt-6.1-sol-pro-20260929",
+    "completion": "0.000005",
+    "created": 1790702886,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-6.1-sol:batch": {
+    "canonical_slug": "openai/gpt-6.1-sol-20260929",
+    "completion": "0.000005",
+    "created": 1790702882,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/gpt-audio": {
+    "canonical_slug": "openai/gpt-audio",
+    "completion": "0.00001",
+    "created": 1768862569,
+    "expiration_date": null,
+    "prompt": "0.0000025"
+  },
+  "openai/gpt-audio-mini": {
+    "canonical_slug": "openai/gpt-audio-mini",
+    "completion": "0.0000024",
+    "created": 1768859419,
+    "expiration_date": null,
+    "prompt": "0.0000006"
+  },
+  "openai/gpt-chat-latest": {
+    "canonical_slug": "openai/gpt-chat-latest-20260505",
+    "completion": "0.00003",
+    "created": 1778000212,
+    "expiration_date": null,
+    "prompt": "0.000005"
+  },
+  "openai/gpt-oss-120b": {
+    "canonical_slug": "openai/gpt-oss-120b",
+    "completion": "0.00000017",
+    "created": 1754414231,
+    "expiration_date": null,
+    "prompt": "0.000000037"
+  },
+  "openai/gpt-oss-120b:batch": {
+    "canonical_slug": "openai/gpt-oss-120b",
+    "completion": "0.000000136",
+    "created": 1754414231,
+    "expiration_date": null,
+    "prompt": "0.0000000296"
+  },
+  "openai/gpt-oss-20b": {
+    "canonical_slug": "openai/gpt-oss-20b",
+    "completion": "0.00000009",
+    "created": 1754414229,
+    "expiration_date": null,
+    "prompt": "0.000000018"
+  },
+  "openai/gpt-oss-20b:batch": {
+    "canonical_slug": "openai/gpt-oss-20b",
+    "completion": "0.000000112",
+    "created": 1754414229,
+    "expiration_date": null,
+    "prompt": "0.000000024"
+  },
+  "openai/gpt-oss-safeguard-20b": {
+    "canonical_slug": "openai/gpt-oss-safeguard-20b",
+    "completion": "0.0000003",
+    "created": 1761752836,
+    "expiration_date": null,
+    "prompt": "0.000000075"
+  },
+  "openai/o1": {
+    "canonical_slug": "openai/o1-2024-12-17",
+    "completion": "0.00006",
+    "created": 1734459999,
+    "expiration_date": null,
+    "prompt": "0.000015"
+  },
+  "openai/o1-pro": {
+    "canonical_slug": "openai/o1-pro",
+    "completion": "0.0006",
+    "created": 1742423211,
+    "expiration_date": null,
+    "prompt": "0.00015"
+  },
+  "openai/o3": {
+    "canonical_slug": "openai/o3-2025-04-16",
+    "completion": "0.000008",
+    "created": 1744823457,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "openai/o3-mini": {
+    "canonical_slug": "openai/o3-mini-2025-01-31",
+    "completion": "0.0000044",
+    "created": 1738351721,
+    "expiration_date": null,
+    "prompt": "0.0000011"
+  },
+  "openai/o3-mini-high": {
+    "canonical_slug": "openai/o3-mini-high-2025-01-31",
+    "completion": "0.0000044",
+    "created": 1739372611,
+    "expiration_date": null,
+    "prompt": "0.0000011"
+  },
+  "openai/o3-mini:batch": {
+    "canonical_slug": "openai/o3-mini-2025-01-31",
+    "completion": "0.0000022",
+    "created": 1738351721,
+    "expiration_date": null,
+    "prompt": "0.00000055"
+  },
+  "openai/o3-pro": {
+    "canonical_slug": "openai/o3-pro-2025-06-10",
+    "completion": "0.00008",
+    "created": 1749598352,
+    "expiration_date": null,
+    "prompt": "0.00002"
+  },
+  "openai/o3:batch": {
+    "canonical_slug": "openai/o3-2025-04-16",
+    "completion": "0.000004",
+    "created": 1744823457,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "openai/o4-mini": {
+    "canonical_slug": "openai/o4-mini-2025-04-16",
+    "completion": "0.0000044",
+    "created": 1744820942,
+    "expiration_date": null,
+    "prompt": "0.0000011"
+  },
+  "openai/o4-mini-high": {
+    "canonical_slug": "openai/o4-mini-high-2025-04-16",
+    "completion": "0.0000044",
+    "created": 1744824212,
+    "expiration_date": null,
+    "prompt": "0.0000011"
+  },
+  "openai/o4-mini:batch": {
+    "canonical_slug": "openai/o4-mini-2025-04-16",
+    "completion": "0.0000022",
+    "created": 1744820942,
+    "expiration_date": null,
+    "prompt": "0.00000055"
+  }
+}
