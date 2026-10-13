@@ -3,11 +3,13 @@
 """AppTest: the Code tab shows submitted files and runs them only on request."""
 
 import re
+from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
+import cqc_streamlit_app.code_viewer as viewer
 from cqc_streamlit_app.code_viewer import RUNNER_NOTICE
 
 MAIN_JAVA = "public class Main {\n    public static void main(String[] args) {}\n}\n"
@@ -88,3 +90,95 @@ def test_only_documents_are_named() -> None:
     at = _app({"Report.docx": "/tmp/x.docx"})
 
     assert "Not shown: Report.docx" in at.info[0].value
+
+
+# Direct calls with Streamlit mocked: AppTest runs the page in a script thread that the
+# CI coverage run does not trace, so these cover the same branches in-process.
+
+
+def _mock_st(choice=None, runner_open=False):
+    st = MagicMock()
+    st.session_state = {viewer._runner_key("S"): runner_open}
+    st.segmented_control.return_value = choice
+    return st
+
+
+@pytest.mark.unit
+class TestRenderDirect:
+    FILES = {"Shape.java": SHAPE_JAVA, "Main.java": MAIN_JAVA, "Report.docx": "/tmp/x.docx"}
+
+    def test_single_file_and_runner_closed(self):
+        st = _mock_st()
+        with patch.object(viewer, "st", st), patch.object(viewer, "components") as comp:
+            viewer.render_submission_code({"Main.java": MAIN_JAVA}, "S")
+
+        st.segmented_control.assert_not_called()
+        st.code.assert_called_once()
+        assert st.code.call_args.kwargs["height"] == "content"
+        comp.html.assert_not_called()
+        button = st.container.return_value.button
+        assert button.call_args.args[0] == "Run in OneCompiler"
+
+    def test_switcher_all_files_and_open_runner(self):
+        st = _mock_st(choice=viewer.ALL_FILES, runner_open=True)
+        with patch.object(viewer, "st", st), patch.object(viewer, "components") as comp:
+            viewer.render_submission_code(self.FILES, "S")
+
+        assert st.segmented_control.call_args.args[1] == ["Main.java", "Shape.java", viewer.ALL_FILES]
+        assert st.code.call_count == 2
+        st.caption.assert_any_call("Not shown: Report.docx")
+        st.caption.assert_any_call(viewer.RUNNER_NOTICE)
+        comp.html.assert_called_once()
+        assert '"Main.java"' in comp.html.call_args.args[0]
+        assert st.container.return_value.button.call_args.args[0] == "Close runner"
+
+    def test_one_file_chosen_and_a_cut_file_is_left_out_of_the_run(self):
+        from cqc_cpcc.utilities.code_preview import collect_code_files as real_collect
+
+        long_java = "public class Main {\n" + "    int x;\n" * 40 + "}\n"
+        st = _mock_st(choice="Main.java", runner_open=True)
+        with patch.object(viewer, "st", st), patch.object(viewer, "components"), \
+                patch.object(viewer, "collect_code_files",
+                             side_effect=lambda files: real_collect(files, max_chars=200)):
+            viewer.render_submission_code({"Main.java": long_java, "Shape.java": SHAPE_JAVA}, "S")
+
+        st.code.assert_called_once()
+        assert any("Showing the first" in str(c) for c in st.caption.call_args_list)
+        st.warning.assert_any_call("Files longer than the preview limit are left out of the run.",
+                                   icon=":material/warning:")
+
+    def test_scrolling_height_for_long_files(self):
+        long_java = "public class Main {\n" + "    int x;\n" * 40 + "}\n"
+        st = _mock_st()
+        with patch.object(viewer, "st", st), patch.object(viewer, "components"):
+            viewer.render_submission_code({"Main.java": long_java}, "S")
+
+        assert st.code.call_args.kwargs["height"] == viewer.CODE_HEIGHT
+
+    def test_nothing_runnable_is_reported(self):
+        st = _mock_st(runner_open=True)
+        with patch.object(viewer, "st", st), patch.object(viewer, "components") as comp, \
+                patch.object(viewer, "runnable_files", return_value=[]):
+            viewer.render_submission_code({"Main.java": MAIN_JAVA}, "S")
+
+        st.warning.assert_called_with("No runnable source file to send.", icon=":material/warning:")
+        comp.html.assert_not_called()
+
+    def test_no_run_for_sas_and_messages_for_empty(self):
+        st = _mock_st()
+        with patch.object(viewer, "st", st):
+            viewer.render_submission_code({"a.sas": "data x; run;"}, "S")
+            viewer.render_submission_code(None, "S")
+            viewer.render_submission_code({"Report.docx": "/tmp/x.docx"}, "S")
+
+        st.container.return_value.button.assert_not_called()
+        st.info.assert_any_call(viewer.NO_FILES_MESSAGE)
+        st.info.assert_any_call("No previewable source files in this submission. Not shown: Report.docx.")
+
+    def test_toggle_flips_the_flag(self):
+        st = _mock_st()
+        with patch.object(viewer, "st", st):
+            viewer._toggle_runner("S")
+            assert st.session_state[viewer._runner_key("S")] is True
+            viewer._toggle_runner("S")
+            assert st.session_state[viewer._runner_key("S")] is False
