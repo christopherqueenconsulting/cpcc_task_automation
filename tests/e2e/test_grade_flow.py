@@ -10,6 +10,7 @@ import re
 import zipfile
 
 import pytest
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, expect
 
 from cqc_cpcc.model_eval.dataset_builder import CPP_CLEAN, CPP_INSTRUCTIONS
@@ -32,9 +33,15 @@ class Actions:
         a slow CI runner) can drop it, so set it again, up to three times. That is still
         one action for the user, who would simply see the file and carry on."""
         for attempt in range(3):
-            # Right after a stage change the previous tabs can linger in the DOM for a moment.
+            # Right after a stage change the previous tabs can linger in the DOM for a moment,
+            # and a rerun can briefly render a second uploader even after the count read 1.
             await expect(locator).to_have_count(1, timeout=20000)
-            await locator.set_input_files(str(path))
+            try:
+                await locator.set_input_files(str(path))
+            except PlaywrightError as error:
+                if "strict mode violation" not in str(error) or attempt == 2:
+                    raise
+                continue
             if shown_in is None:
                 break
             try:
