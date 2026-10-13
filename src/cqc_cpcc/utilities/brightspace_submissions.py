@@ -472,3 +472,45 @@ def build_submissions_zip_from_brightspace_url(
                 driver.quit()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def fetch_instructions_from_brightspace_url(
+        url: str,
+        driver=None,
+        wait=None,
+        progress: Optional[ProgressCallback] = None,
+        mfa_handler=None,
+) -> Optional[str]:
+    """Log into BrightSpace and scrape only the instructions for ``url``.
+
+    The assignment description (via the Edit Assignment editor) or the quiz
+    question prompt, without downloading any submissions. Returns ``None`` when
+    nothing could be read.
+    """
+    progress = progress or _noop_progress
+    route = detect_route(url)
+    progress(f"Detected BrightSpace {route} URL")
+
+    # Lazy import: keep the pure core importable without the browser stack.
+    from cqc_cpcc.utilities.brightspace_fetch import (
+        fetch_assignment_instructions,
+        fetch_quiz_instructions,
+    )
+
+    own_driver = False
+    if driver is None or wait is None:
+        from cqc_cpcc.utilities.selenium_util import get_session_driver
+        driver, wait = get_session_driver()
+        own_driver = True
+
+    try:
+        fetch = fetch_assignment_instructions if route == ROUTE_ASSIGNMENT else fetch_quiz_instructions
+        instructions = fetch(driver, wait, url, progress, mfa_handler)
+        progress("Instructions captured" if instructions else "No instructions found")
+        return instructions
+    finally:
+        if own_driver and driver is not None:
+            try:
+                driver.quit()
+            except Exception:  # noqa: BLE001
+                pass

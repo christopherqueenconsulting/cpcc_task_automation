@@ -1450,12 +1450,15 @@ class _BrightSpaceJob:
     script polls those on rerun.
     """
 
-    def __init__(self, url: str, accepted_file_types: list[str], bridge):
+    def __init__(self, url: str, accepted_file_types: list[str], bridge,
+                 mode: str = "submissions"):
         import threading
         self.url = url
         self.accepted_file_types = accepted_file_types
         self.bridge = bridge
+        self.mode = mode  # "submissions" (ZIP only) | "instructions" (text only)
         self.result = None  # BrightSpaceFetchResult
+        self.instructions: Optional[str] = None
         self.error: Optional[str] = None
         self.done = threading.Event()
         self._progress: list[str] = []
@@ -1476,14 +1479,23 @@ class _BrightSpaceJob:
     def _run(self):
         from cqc_cpcc.utilities.brightspace_submissions import (
             build_submissions_zip_from_brightspace_url,
+            fetch_instructions_from_brightspace_url,
         )
         try:
-            self.result = build_submissions_zip_from_brightspace_url(
-                self.url,
-                self.accepted_file_types,
-                progress=self._record,
-                mfa_handler=self.bridge,
-            )
+            if self.mode == "instructions":
+                self.instructions = fetch_instructions_from_brightspace_url(
+                    self.url,
+                    progress=self._record,
+                    mfa_handler=self.bridge,
+                )
+            else:
+                self.result = build_submissions_zip_from_brightspace_url(
+                    self.url,
+                    self.accepted_file_types,
+                    progress=self._record,
+                    mfa_handler=self.bridge,
+                    fetch_instructions=False,
+                )
         except Exception as e:  # noqa: BLE001 - surfaced to the UI
             self.error = str(e)
             logger.exception("BrightSpace fetch failed")
@@ -1582,16 +1594,16 @@ def add_brightspace_submission_element(
         accepted_file_types: list[str],
         key_prefix: str = "",
         success_message: bool = True,
+        default_url: str = "",
 ) -> Optional[dict]:
     """Render the "From BrightSpace URL" input + preview/edit, returning results.
 
-    A single fetch yields both the student submissions ZIP and the scraped
-    instructions (assignment description or first quiz question). Returns a dict
+    Fetches the student submissions ZIP only (instructions have their own fetch,
+    ``add_brightspace_instructions_element``). ``default_url`` pre-fills the URL
+    field until the user types their own. Returns a dict
     ``{"name", "path", "instructions", "route"}`` once the user confirms via the
     preview/edit panel, otherwise ``None``.
     """
-    import time
-
     job_key = key_prefix + "job"
     fetch_result_key = key_prefix + "fetch_result"
     confirmed_key = key_prefix + "confirmed"
@@ -1600,8 +1612,6 @@ def add_brightspace_submission_element(
     if st.session_state.get(confirmed_key):
         confirmed = st.session_state[confirmed_key]
         st.success(f"✅ Using generated file: {confirmed['name']}")
-        if confirmed.get("instructions"):
-            st.caption("📝 Instructions captured from this URL will be used below.")
 
         # Persisted review: let the instructor re-open the file picker and
         # select/de-select student folders/files after confirming, without
@@ -1636,6 +1646,7 @@ def add_brightspace_submission_element(
         "Assignments use BrightSpace's native download; quizzes collect each "
         "student's file-upload answers. Only the last attempt is kept (review below)."
     )
+    _sync_default_url(key_prefix + "url", default_url)
     url = st.text_input(
         "BrightSpace URL",
         key=key_prefix + "url",
@@ -1650,9 +1661,10 @@ def add_brightspace_submission_element(
     if fetch_clicked and url:
         from cqc_cpcc.utilities.selenium_util import MfaBridge
         bridge = MfaBridge()
-        job = _BrightSpaceJob(url, accepted_file_types, bridge)
+        job = _BrightSpaceJob(url, accepted_file_types, bridge, mode="submissions")
         job.start()
         st.session_state[job_key] = job
+        st.session_state[key_prefix + "source_url"] = url
         st.session_state.pop(fetch_result_key, None)
         st.rerun()
 
@@ -1674,7 +1686,7 @@ def add_brightspace_submission_element(
 
     fetch_result = st.session_state.get(fetch_result_key)
     if fetch_result is not None:
-        confirmed = render_zip_preview_editor(fetch_result, key_prefix)
+        confirmed = render_zip_preview_editor(fetch_result, key_prefix, show_instructions=False)
         if confirmed:
             st.session_state[confirmed_key] = confirmed
             st.session_state.pop(job_key, None)
@@ -1682,24 +1694,75 @@ def add_brightspace_submission_element(
     return None
 
 
-def add_brightspace_source_element(
-        accepted_file_types: list[str],
-        key_prefix: str = "",
-        success_message: bool = True,
-) -> Optional[dict]:
-    """Top-level BrightSpace fetch: one URL yields BOTH submissions + instructions.
+def _sync_default_url(url_key: str, default_url: str) -> None:
+    """Pre-fill a URL widget from ``default_url`` without clobbering user input.
 
-    Thin wrapper over ``add_brightspace_submission_element`` intended to be placed
-    near the top of a grading flow so the confirmed result can auto-fill both the
-    Assignment Instructions and Student Submissions steps. Returns the confirmed
-    dict ``{"name", "path", "instructions", "route"}`` once the user clicks
-    "Use the generated file", otherwise ``None``.
+    Must run before the widget renders. Updates the field while it is empty or
+    still holds the last value synced in; a URL the user typed is kept.
     """
-    return add_brightspace_submission_element(
-        accepted_file_types=accepted_file_types,
-        key_prefix=key_prefix,
-        success_message=success_message,
+    synced_key = url_key + "_synced"
+    current = st.session_state.get(url_key, "")
+    if default_url and (not current or current == st.session_state.get(synced_key)):
+        st.session_state[url_key] = default_url
+        st.session_state[synced_key] = default_url
+
+
+def add_brightspace_instructions_element(key_prefix: str = "") -> Optional[str]:
+    """Render a BrightSpace URL input that fetches only the instructions.
+
+    The assignment description or the quiz question prompt; no submissions are
+    downloaded. Returns the fetched text (``None`` until fetched or when nothing
+    was captured).
+    """
+    job_key = key_prefix + "job"
+    instructions_key = key_prefix + "instructions"
+
+    if instructions_key in st.session_state:
+        fetched = st.session_state[instructions_key]
+        source_url = st.session_state.get(key_prefix + "source_url")
+        if source_url:
+            st.caption(f"Fetched from {source_url}")
+        if not fetched:
+            st.warning("No instructions were captured from this URL. Switch to "
+                       "\"File or link\" to add them.", icon=":material/warning:")
+        if st.button("🔄 Start over", key=key_prefix + "startover"):
+            for k in (job_key, instructions_key):
+                st.session_state.pop(k, None)
+            st.rerun()
+        return fetched or None
+
+    url = st.text_input(
+        "BrightSpace Assignment or Quiz URL",
+        key=key_prefix + "url",
+        placeholder="https://brightspace.cpcc.edu/d2l/lms/dropbox/...",
     )
+    job = st.session_state.get(job_key)
+    if st.button("📥 Fetch instructions", key=key_prefix + "fetch",
+                 disabled=not url or (job is not None and not job.done.is_set())):
+        from cqc_cpcc.utilities.selenium_util import MfaBridge
+        job = _BrightSpaceJob(url, [], MfaBridge(), mode="instructions")
+        job.start()
+        st.session_state[job_key] = job
+        # The URL widget is not rendered once fetched (Streamlit then drops its
+        # state), so keep the URL under a plain key for the submissions step.
+        st.session_state[key_prefix + "source_url"] = url
+        st.rerun()
+
+    if job is not None and not job.done.is_set():
+        _render_job_progress(job, job_key, key_prefix)
+        return None
+
+    if job is not None and job.done.is_set():
+        if job.error:
+            st.error(f"❌ Fetch failed: {job.error}")
+            if st.button("Try again", key=key_prefix + "retry"):
+                st.session_state.pop(job_key, None)
+                st.rerun()
+            return None
+        st.session_state[instructions_key] = job.instructions
+        st.session_state.pop(job_key, None)
+        st.rerun()
+    return None
 
 
 def _render_writeback_report(report) -> None:
@@ -2013,7 +2076,8 @@ def _validate_submissions_zip(zip_path: str, keep_arcs: set) -> tuple[bool, str]
         return False, str(e)
 
 
-def render_zip_preview_editor(fetch_result, key_prefix: str) -> Optional[dict]:
+def render_zip_preview_editor(fetch_result, key_prefix: str,
+                              show_instructions: bool = True) -> Optional[dict]:
     """Preview a generated submissions ZIP and let the user prune folders/files.
 
     Also previews the scraped instructions (editable) so one BrightSpace fetch
@@ -2033,7 +2097,9 @@ def render_zip_preview_editor(fetch_result, key_prefix: str) -> Optional[dict]:
     # quiz question). Editable so the instructor can correct/trim before grading.
     scraped_instructions = getattr(fetch_result, "instructions", None)
     instructions_key = key_prefix + "instructions_text"
-    if scraped_instructions:
+    if not show_instructions:
+        edited_instructions = None
+    elif scraped_instructions:
         st.markdown("**Captured instructions** (edit if needed):")
         edited_instructions = st.text_area(
             "Assignment instructions",

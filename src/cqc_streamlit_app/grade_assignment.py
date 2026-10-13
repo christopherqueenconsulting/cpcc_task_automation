@@ -67,7 +67,8 @@ from cqc_cpcc.utilities.zip_grading_utils import (
 from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.utils import (
     estimated_ai_cost,
-    add_brightspace_source_element,
+    add_brightspace_instructions_element,
+    add_brightspace_submission_element,
     add_brightspace_writeback_element,
     add_file_to_zip,
     add_flexible_upload_element,
@@ -2233,9 +2234,19 @@ def restore_saved_results() -> None:
         st.session_state.last_grading_run_key = runs[0]["run_key"]
 
 
+_BS_INSTRUCTIONS_PREFIX = "rubric_exam_bs_instr_"
+_BS_SUBMISSIONS_PREFIX = "rubric_exam_bs_subs_"
+
+
+def _brightspace_instructions_url() -> str:
+    """The BrightSpace URL given for the instructions (fetched or just typed), if any."""
+    return (st.session_state.get(_BS_INSTRUCTIONS_PREFIX + "source_url")
+            or st.session_state.get(_BS_INSTRUCTIONS_PREFIX + "url") or "")
+
+
 def _render_instructions_source() -> tuple:
-    """Instructions from a BrightSpace fetch (which also brings the submissions) or a
-    file/link. Returns (instructions_text, source_id, bs_submission)."""
+    """Instructions from a BrightSpace fetch (instructions only) or a file/link.
+    Returns (instructions_text, source_id)."""
     source = st.segmented_control(
         "Instructions from",
         ["BrightSpace", "File or link"],
@@ -2243,16 +2254,11 @@ def _render_instructions_source() -> tuple:
         required=True,
         default="File or link",
     )
-    instructions, source_id, bs_submission = None, None, None
+    instructions, source_id = None, None
     if source == "BrightSpace":
-        st.caption("One BrightSpace fetch brings the instructions and the student submissions.")
-        brightspace_source = add_brightspace_source_element(
-            accepted_file_types=SUBMISSION_FILE_TYPES,
-            key_prefix="rubric_exam_bs_source_",
-        )
-        fetched = (brightspace_source or {}).get("instructions")
-        if brightspace_source and brightspace_source.get("path"):
-            bs_submission = (brightspace_source["name"], brightspace_source["path"])
+        st.caption("Fetches the assignment instructions (or the quiz question) only. "
+                   "Submissions are fetched in Submissions & run.")
+        fetched = add_brightspace_instructions_element(key_prefix=_BS_INSTRUCTIONS_PREFIX)
         if fetched:
             instructions = st.text_area(
                 "Instructions (from BrightSpace; edit if needed)",
@@ -2275,7 +2281,40 @@ def _render_instructions_source() -> tuple:
             source_id = f"file:{_orig_file_name}:{instructions}"
             with st.expander("Preview instructions", icon=":material/description:"):
                 st.markdown(instructions, unsafe_allow_html=True)  # instructor's own document
-    return instructions, source_id, bs_submission
+    return instructions, source_id
+
+
+def _render_submissions_source() -> list:
+    """Submissions from a BrightSpace fetch (URL pre-filled from the instructions URL)
+    or uploaded files/ZIP/link. Returns a list of (original_name, path) tuples.
+
+    Each source keeps its own state, so switching back and forth never drops a fetch
+    or an upload; only the selected source is graded.
+    """
+    instructions_url = _brightspace_instructions_url()
+    source = st.segmented_control(
+        "Submissions from",
+        ["BrightSpace", "Files or link"],
+        key="submissions_source",
+        required=True,
+        default="BrightSpace" if instructions_url else "Files or link",
+    )
+    if source == "BrightSpace":
+        confirmed = add_brightspace_submission_element(
+            accepted_file_types=SUBMISSION_FILE_TYPES,
+            key_prefix=_BS_SUBMISSIONS_PREFIX,
+            default_url=instructions_url,
+        )
+        if confirmed and confirmed.get("path"):
+            return [(confirmed["name"], confirmed["path"])]
+        return []
+    return add_flexible_upload_element(
+        "Student submissions (files or a ZIP)",
+        SUBMISSION_FILE_TYPES,
+        accept_multiple_files=True,
+        key_prefix="rubric_exam_",
+        allow_url=True,
+    )
 
 
 @st.cache_data(ttl=3600, max_entries=8, show_spinner="Checking the submissions...")
@@ -2405,7 +2444,7 @@ async def get_rubric_based_exam_grading():
             selected_assignment_id = sanitize_filename(assignment_label) if assignment_label else "RubricOnly"
 
         st.subheader("Instructions", anchor=False)
-        assignment_instructions_content, instructions_source_id, bs_submission = _render_instructions_source()
+        assignment_instructions_content, instructions_source_id = _render_instructions_source()
 
         requirements_checklist = None
         needs_checklist = (grading_mode != "errors_only" and selected_rubric is not None
@@ -2488,19 +2527,7 @@ async def get_rubric_based_exam_grading():
     with run_tab:
         if not assignment_instructions_content:
             st.info("Finish Setup first: the instructions are missing.", icon=":material/arrow_back:")
-        if bs_submission:
-            st.success(f"Using the submissions fetched from BrightSpace: {bs_submission[0]}",
-                       icon=":material/cloud_download:")
-            st.caption("To review or change the selected files, open the BrightSpace fetch in Setup.")
-            student_submission_file_paths = [bs_submission]
-        else:
-            student_submission_file_paths = add_flexible_upload_element(
-                "Student submissions (files or a ZIP)",
-                SUBMISSION_FILE_TYPES,
-                accept_multiple_files=True,
-                key_prefix="rubric_exam_",
-                allow_url=True,
-            )
+        student_submission_file_paths = _render_submissions_source()
 
     if not all([assignment_instructions_content, student_submission_file_paths]):
         with results_tab:
@@ -3077,7 +3104,8 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         add_brightspace_writeback_element(
             results=all_results,
             key_prefix=f"rubric_exam_wb_{run_key}_",
-            default_url=st.session_state.get("rubric_exam_bs_source_url", ""),
+            default_url=(st.session_state.get(_BS_SUBMISSIONS_PREFIX + "source_url")
+                         or _brightspace_instructions_url()),
             feedback_docs=st.session_state.get("feedback_doc_paths_by_key", {}).get(run_key),
         )
 
@@ -3089,7 +3117,9 @@ def _get_brightspace_submissions_zip() -> tuple[Optional[str], Optional[str]]:
     confirmed source dict still points at a real ``.zip`` on disk; otherwise
     ``(None, None)`` so manually-uploaded submissions are never bundled.
     """
-    confirmed = st.session_state.get("rubric_exam_bs_source_confirmed")
+    if st.session_state.get("submissions_source") != "BrightSpace":
+        return None, None
+    confirmed = st.session_state.get(_BS_SUBMISSIONS_PREFIX + "confirmed")
     if not isinstance(confirmed, dict):
         return None, None
     path = confirmed.get("path")
