@@ -89,7 +89,7 @@ How model graders work:
 - **`src/cqc_cpcc/config/prompt_registry.json`** (human-owned) records each prompt and judge: `id, version, status, role, builder, schema, call_sites, source_files, shared_files, suite, graders, fingerprint`.
 - **Fingerprints** (`model_eval/prompt_registry.py`):
   - **Request fingerprint:** render each prompt with a canonical synthetic fixture, then hash the **final request** the gateway would send: messages, schema after `schema_normalizer`, and `build_request_params` minus the model id.
-  - **Suite fingerprint:** request fingerprint + dataset `VERSION` + grader code hash + judge fingerprints + hashes of the trusted path list `shared_files`. That list covers `llm_gateway.py`, `openrouter_client.py`, `schema_normalizer.py`, `rubric_models.py`, `zip_grading_utils.py`, backend scoring, and the `poetry.lock` entries for pydantic/openai/langchain.
+  - **Suite fingerprint:** request fingerprint + dataset `VERSION` + grader code hash + judge fingerprints + hashes of the trusted path list `shared_files`. That list covers `llm_gateway.py`, `openrouter_client.py`, `schema_normalizer.py`, `rubric_models.py`, `zip_grading_utils.py` and backend scoring. A `poetry.lock` change (a dependency version bump) never counts on its own; a bump that changes the rendered request still shows up as a request-fingerprint change.
 - **Unit tests (free, every PR):**
   - a fingerprint change without a version bump fails;
   - an AST scan requires every `llm_gateway.structured(` / `PromptTemplate(` call site to be registered;
