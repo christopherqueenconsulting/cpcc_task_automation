@@ -26,6 +26,7 @@ from cqc_cpcc.utilities.brightspace_submissions import (
     build_zip_from_folders,
     collect_student_folders,
     detect_route,
+    fetch_instructions_from_brightspace_url,
     normalize_and_prune_to_last_attempt,
     parse_attempt_date_from_folder,
     parse_student_id_from_folder,
@@ -280,3 +281,50 @@ def test_build_from_url_skips_instructions_when_disabled(tmp_path, monkeypatch):
     )
     assert result.instructions is None
     assert called["instr"] is False
+
+
+ASSIGNMENT_URL = "https://brightspace.cpcc.edu/d2l/lms/dropbox/admin/folders_manage.d2l?ou=1"
+QUIZ_URL = "https://brightspace.cpcc.edu/d2l/lms/quizzing/admin/modify/quizzes_edit.d2l?qi=678&ou=1"
+
+
+def _forbid_submissions(monkeypatch):
+    def _boom(*a, **k):
+        raise AssertionError("an instructions-only fetch must not download submissions")
+    monkeypatch.setattr(bf, "fetch_assignment_submissions", _boom)
+    monkeypatch.setattr(bf, "fetch_quiz_file_uploads", _boom)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("url, fetcher, other", [
+    (ASSIGNMENT_URL, "fetch_assignment_instructions", "fetch_quiz_instructions"),
+    (QUIZ_URL, "fetch_quiz_instructions", "fetch_assignment_instructions"),
+])
+def test_fetch_instructions_only_uses_route_fetcher(monkeypatch, url, fetcher, other):
+    _forbid_submissions(monkeypatch)
+    monkeypatch.setattr(bf, fetcher, lambda *a, **k: "The instructions.")
+    monkeypatch.setattr(bf, other, lambda *a, **k: pytest.fail("wrong route fetcher"))
+
+    assert fetch_instructions_from_brightspace_url(
+        url, driver=MagicMock(), wait=MagicMock()) == "The instructions."
+
+
+@pytest.mark.integration
+def test_fetch_instructions_only_quits_its_own_driver(monkeypatch):
+    import cqc_cpcc.utilities.selenium_util as su
+    _forbid_submissions(monkeypatch)
+    driver = MagicMock()
+    monkeypatch.setattr(su, "get_session_driver", lambda: (driver, MagicMock()))
+    monkeypatch.setattr(bf, "fetch_assignment_instructions", lambda *a, **k: None)
+
+    assert fetch_instructions_from_brightspace_url(ASSIGNMENT_URL) is None
+    driver.quit.assert_called_once()
+
+
+@pytest.mark.integration
+def test_fetch_instructions_only_leaves_callers_driver_open(monkeypatch):
+    _forbid_submissions(monkeypatch)
+    driver = MagicMock()
+    monkeypatch.setattr(bf, "fetch_assignment_instructions", lambda *a, **k: "x")
+
+    fetch_instructions_from_brightspace_url(ASSIGNMENT_URL, driver=driver, wait=MagicMock())
+    driver.quit.assert_not_called()

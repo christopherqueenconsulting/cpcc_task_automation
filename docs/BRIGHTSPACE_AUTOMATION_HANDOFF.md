@@ -100,11 +100,18 @@ background-thread fetch from hanging on `input()`).
 Files: `env_constants.py`, `selenium_util.py` (`_enum_from_env`, `which_browser`,
 `which_docker`), `.env.example`.
 
-### 2. One BrightSpace fetch → submissions ZIP **and** instructions — ✅ unit-tested / ❌ not live
-`BrightSpaceFetchResult.instructions`; `build_submissions_zip_from_brightspace_url(..., fetch_instructions=True)`;
-new top-level `add_brightspace_source_element` auto-fills Step 4 (Instructions) and
-Step 8 (Submissions) on the Grade Assignment page (the nested `allow_brightspace`
-uploader was removed).
+### 2. Separate BrightSpace fetches for instructions and submissions — ✅ unit/AppTest-tested / ❌ not live
+(Changed 2026-10-13. One combined fetch used to fill both steps, so switching
+Instructions to "File or link" dropped the fetched submissions.) Each step now owns
+its source on the Grade Assignment page:
+- **Setup → Instructions from: BrightSpace** → `add_brightspace_instructions_element`
+  → `fetch_instructions_from_brightspace_url` (instructions only, no download).
+- **Submissions & run → Submissions from: BrightSpace | Files or link** →
+  `add_brightspace_submission_element(default_url=...)` →
+  `build_submissions_zip_from_brightspace_url(..., fetch_instructions=False)`. The URL is
+  pre-filled from the instructions URL until the user types their own; BrightSpace is the
+  default source when an instructions URL was given. Only the selected source is graded
+  or bundled into the hand-back ZIP.
 Files: `brightspace_submissions.py`, `cqc_streamlit_app/utils.py`,
 `grade_assignment.py` (was `pages/4_Grade_Assignment.py`), `brightspace_fetch.py`.
 

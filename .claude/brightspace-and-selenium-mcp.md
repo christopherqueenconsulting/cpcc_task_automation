@@ -34,8 +34,9 @@ Full details: [`docs/SELENIUM_MCP.md`](../docs/SELENIUM_MCP.md).
 
 ## BrightSpace feature status (in progress)
 
-One BrightSpace URL fetch yields submissions ZIP + instructions; auto-fills the
-Rubric grading steps; MFA number is surfaced on the Streamlit page.
+Grade Assignment has separate BrightSpace fetches: Setup fetches the instructions only;
+Submissions & run fetches the submissions ZIP (URL pre-filled from the instructions URL)
+or takes uploads. MFA number is surfaced on the Streamlit page.
 
 **Assignment-instructions extraction — FIXED (verified live 2026-06-29).** The
 `_READ_EDITOR_INSTRUCTIONS_JS` editor read was always correct (returns the 9.3k-char
