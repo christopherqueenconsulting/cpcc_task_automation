@@ -204,3 +204,83 @@ class TestCheckTrackerAgainstAttendance:
             )
 
         sync.assert_not_called()
+
+
+@pytest.mark.unit
+class TestReadingTrackerRows:
+    URL = "https://example.sharepoint.com/:x:/r/sites/x/tracker.xlsx"
+
+    def _driver(self, handles=("main", "tracker")):
+        driver = MagicMock()
+        driver.current_window_handle = "main"
+        driver.window_handles = list(handles)
+        return driver
+
+    def test_an_adapter_without_a_reader_says_so(self):
+        from cqc_cpcc.attendance_tracker import TrackerAdapter
+
+        class AppendOnly(TrackerAdapter):
+            def read_existing_keys(self, driver, wait):
+                return set()
+
+            def append_records(self, driver, wait, records):
+                return 0
+
+        with pytest.raises(TrackerSyncError, match="AppendOnly cannot read tracker rows"):
+            AppendOnly().read_rows(MagicMock(), MagicMock())
+
+    def test_sharepoint_reads_the_downloaded_workbook(self):
+        from cqc_cpcc.attendance_tracker import SharePointExcelAdapter
+
+        adapter = SharePointExcelAdapter().bind(self.URL)
+        with patch.object(adapter, "fetch_workbook", return_value=b"xlsx") as fetch, \
+                patch.object(adapter, "load_sheet", return_value=(HEADER, [sheet_row("1")])) as load:
+            assert adapter.read_rows(MagicMock(), MagicMock()) == (HEADER, [sheet_row("1")])
+        fetch.assert_called_once_with(fetch.call_args.args[0], self.URL)
+        load.assert_called_once_with(b"xlsx")
+
+    def test_read_tracker_records_needs_a_url(self):
+        from cqc_cpcc.attendance_tracker import read_tracker_records
+
+        with pytest.raises(TrackerSyncError, match="No Attendance Tracker URL"):
+            read_tracker_records(MagicMock(), MagicMock(), "")
+
+    def test_read_tracker_records_reads_in_its_own_tab_and_closes_it(self):
+        from cqc_cpcc import attendance_tracker as at
+
+        driver, adapter = self._driver(), MagicMock()
+        adapter.read_rows.return_value = (HEADER, [sheet_row("1000001")])
+        with patch.object(at, "open_attendance_tracker", return_value="tracker") as opened, \
+                patch.object(at, "close_tab") as closed:
+            (record,) = at.read_tracker_records(driver, MagicMock(), self.URL, adapter=adapter)
+
+        assert record.student_id == "1000001"
+        adapter.bind.assert_called_once_with(self.URL)
+        opened.assert_called_once()
+        closed.assert_called_once_with(driver)
+        assert driver.switch_to.window.call_args_list[-1].args == ("main",)
+
+    def test_read_tracker_records_closes_the_tab_when_the_read_fails(self):
+        from cqc_cpcc import attendance_tracker as at
+
+        driver, adapter = self._driver(), MagicMock()
+        adapter.read_rows.side_effect = TrackerSyncError("download failed")
+        with patch.object(at, "open_attendance_tracker", return_value="tracker"), \
+                patch.object(at, "close_tab") as closed:
+            with pytest.raises(TrackerSyncError, match="download failed"):
+                at.read_tracker_records(driver, MagicMock(), self.URL, adapter=adapter)
+
+        closed.assert_called_once_with(driver)
+        assert driver.switch_to.window.call_args_list[-1].args == ("main",)
+
+    def test_read_tracker_records_builds_the_adapter_from_the_url(self):
+        from cqc_cpcc import attendance_tracker as at
+
+        built = MagicMock()
+        built.read_rows.return_value = (HEADER, [])
+        with patch.object(at, "build_adapter", return_value=built) as build, \
+                patch.object(at, "open_attendance_tracker", return_value=None), \
+                patch.object(at, "close_tab") as closed:
+            assert at.read_tracker_records(self._driver(("main",)), MagicMock(), self.URL) == []
+        build.assert_called_once_with(self.URL)
+        closed.assert_not_called()  # no tracker tab was opened
