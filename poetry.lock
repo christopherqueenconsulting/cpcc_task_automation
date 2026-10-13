@@ -3954,14 +3954,14 @@ et-xmlfile = "*"
 
 [[package]]
 name = "openrouter"
-version = "0.11.46"
+version = "1.3.41"
 description = "Official Python Client SDK for OpenRouter."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "openrouter-0.11.46-py3-none-any.whl", hash = "sha256:9acbb9922bcae46239ef4364c8ec095284773494fac40c92c61a24e1a1d239b4"},
-    {file = "openrouter-0.11.46.tar.gz", hash = "sha256:5470af3e7bf25ad84cd410b43bbd4aba3052642d7a5033e5767b35c0ee5608db"},
+    {file = "openrouter-1.3.41-py3-none-any.whl", hash = "sha256:2ad0ff363caf2140e6b7c38c63330a67b0876d4f799eb5c2d99f47389ebe6fe9"},
+    {file = "openrouter-1.3.41.tar.gz", hash = "sha256:4615c43fe16ea91fa359c702a2676768d563b629d14d3be0fcd57628e24d4d62"},
 ]
 
 [package.dependencies]
@@ -7931,4 +7931,4 @@ telemetry = ["posthog"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "c39c701e94b390cd247c54e038a6011ec7c79256c12326ee39aeda51d015e507"
+content-hash = "811e9b795d1c2a17742d0c47f8c3eb64af28fd1898753cb3d78c13187c013459"
