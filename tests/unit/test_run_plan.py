@@ -173,12 +173,30 @@ class TestBuildInteractively:
         assert plan.process_withdrawals is True
 
     def test_confirming_a_real_write_clears_dry_run(self):
-        with patch("builtins.input", side_effect=["all", "y", "y"]):
+        with patch("builtins.input", side_effect=["all", "y", "y", ""]):
             plan = RunPlan.build_interactively(
                 COURSES, action=ACTION_WITHDRAWALS, tracker_url="https://x.sharepoint.com"
             )
 
         assert plan.dry_run is False
+        # Removing re-enrolled students is its own question, and defaults to no.
+        assert plan.remove_reenrolled is False
+
+    def test_removal_is_asked_only_after_a_real_write_is_confirmed(self):
+        url = "https://x.sharepoint.com"
+        with patch("builtins.input", side_effect=["all", "y", "y", "y"]):
+            plan = RunPlan.build_interactively(
+                COURSES, action=ACTION_WITHDRAWALS, tracker_url=url)
+        assert plan.remove_reenrolled is True
+
+        # A dry run never reaches the removal question (a fourth answer would be
+        # left unused, and input would not be called for it).
+        with patch("builtins.input", side_effect=["all", "y", "n"]) as answers:
+            plan = RunPlan.build_interactively(
+                COURSES, action=ACTION_WITHDRAWALS, tracker_url=url)
+        assert plan.dry_run is True
+        assert plan.remove_reenrolled is False
+        assert answers.call_count == 3
 
 
 @pytest.mark.unit
@@ -408,6 +426,21 @@ class TestFormSelections:
         )
         assert plan.dry_run is True
         assert plan.sync_to_tracker is (process and sync and bool(url) and True)
+
+    def test_removal_needs_a_real_tracker_write(self):
+        def plan(write):
+            return RunPlan.from_selections(
+                COURSES, course_urls=["url-active"], process_withdrawals=True,
+                sync_to_tracker=True, write_to_tracker=write,
+                remove_reenrolled=True, tracker_url="https://tracker",
+            )
+
+        assert plan(write=True).remove_reenrolled is True
+        assert plan(write=False).remove_reenrolled is False
+        assert RunPlan.from_selections(
+            COURSES, course_urls=["url-active"], sync_to_tracker=True,
+            write_to_tracker=True, tracker_url="https://tracker",
+        ).remove_reenrolled is False
 
     def test_unknown_course_is_rejected(self):
         with pytest.raises(ValueError):

@@ -12,9 +12,11 @@ import pytest
 
 from cqc_cpcc.attendance_tracker import (
     SharePointExcelAdapter,
+    TrackerAdapter,
     TrackerSyncError,
     build_adapter,
     records_needing_sync,
+    remove_tracker_rows,
     sync_records_to_tracker,
 )
 from cqc_cpcc.withdrawals import WithdrawalRecord, record_key
@@ -766,3 +768,194 @@ class TestSyncLogging:
 
         assert result.skipped_existing == 1
         assert "already on the tracker" in caplog.text
+
+
+@pytest.mark.unit
+class TestRowRemoval:
+    """Deleting re-enrolled students' rows: located exactly, checked live, bottom-up."""
+
+    SECTION = "CSC-151-N855"
+    URL = ("https://x.sharepoint.com/personal/u/_layouts/15/Doc.aspx"
+           "?sourcedoc=%7B00000000-1111-2222-3333-444444444444%7D")
+
+    def row(self, student_id, status="W", section=None):
+        return ("Prof", "Doe", "John", student_id, "j@example.edu",
+                section or self.SECTION, "Full Session", "Online", status,
+                "Week 2 of 16", "reason", None)
+
+    def sheet(self, *rows):
+        return TestSharePointRead.workbook_bytes([TestSharePointRead.HEADER, *rows])
+
+    def adapter(self, *snapshots, grid=None):
+        """An adapter whose downloads return ``snapshots`` in turn (the last repeats)
+        and whose live grid reads cells from ``grid`` ({address: text})."""
+        adapter = SharePointExcelAdapter().bind(self.URL)
+        downloads = list(snapshots)
+        adapter.fetch_workbook = lambda driver, url: (
+            downloads.pop(0) if len(downloads) > 1 else downloads[0])
+        adapter._enter_grid_frame = lambda driver: None
+        adapter.selected = []
+        adapter._goto_cell = lambda driver, address: adapter.selected.append(address)
+        adapter._read_formula_bar = (
+            lambda driver: (grid or {}).get(adapter.selected[-1], ""))
+        return adapter
+
+    def test_locates_only_matching_w_and_s_rows_bottom_up(self):
+        workbook = self.sheet(
+            self.row("1"),                          # row 2
+            self.row("2"),                          # row 3: not requested
+            (None,) * 12,                           # row 4: blank spacer
+            self.row("1", status="N/A"),            # row 5: not W/S
+            self.row(1.0, status="s"),              # row 6: numeric id, lower-case S
+            self.row("1", section="CSC-134-N801"),  # row 7: other section
+        )
+
+        found = SharePointExcelAdapter().locate_rows(
+            workbook, [(self.SECTION.lower(), "1")])
+
+        assert found == [(6, (self.SECTION, "1")), (2, (self.SECTION, "1"))]
+
+    def test_missing_columns_refuse_the_removal(self):
+        workbook = TestSharePointRead.workbook_bytes([["Course and Section"], ["X"]])
+        with pytest.raises(TrackerSyncError, match="Refusing to remove"):
+            SharePointExcelAdapter().locate_rows(workbook, [("X", "1")])
+
+    def test_column_letters(self):
+        letter = SharePointExcelAdapter._column_letter
+        assert [letter(0), letter(5), letter(25), letter(26)] == ["A", "F", "Z", "AA"]
+
+    def test_each_row_is_checked_live_then_deleted_bottom_up(self):
+        before = self.sheet(self.row("1"), self.row("2"), self.row("1", status="S"))
+        after = self.sheet(self.row("2"))
+        grid = {"F2": self.SECTION, "D2": "1", "F4": self.SECTION, "D4": "'1"}
+        adapter = self.adapter(before, after, grid=grid)
+
+        with patch("cqc_cpcc.attendance_tracker.ActionChains") as chains, \
+                patch("cqc_cpcc.attendance_tracker.time.sleep"):
+            deleted = adapter.delete_rows(make_driver(), MagicMock(),
+                                          [(self.SECTION, "1")])
+
+        assert deleted == 2
+        assert adapter.selected == ["F4", "D4", "4:4", "F2", "D2", "2:2"]
+        assert chains.return_value.key_down.call_count == 2
+
+    def test_a_row_that_changed_since_the_read_stops_the_removal(self):
+        before = self.sheet(self.row("1"), self.row("1", status="S"))
+        # Row 3 now holds someone else: the snapshot was stale.
+        grid = {"F3": self.SECTION, "D3": "9999999", "F2": self.SECTION, "D2": "1"}
+        adapter = self.adapter(before, grid=grid)
+        driver = make_driver()
+
+        with patch("cqc_cpcc.attendance_tracker.ActionChains") as chains, \
+                patch("cqc_cpcc.attendance_tracker.time.sleep"), \
+                pytest.raises(TrackerSyncError, match="Row 3 no longer matches"):
+            adapter.delete_rows(driver, MagicMock(), [(self.SECTION, "1")])
+
+        chains.assert_not_called()
+        assert "3:3" not in adapter.selected and "2:2" not in adapter.selected
+        driver.switch_to.default_content.assert_called()
+
+    def test_without_a_formula_bar_nothing_is_deleted(self):
+        adapter = self.adapter(self.sheet(self.row("1")))
+        del adapter._read_formula_bar
+        driver = make_driver()
+        driver.find_elements.return_value = []
+
+        with patch("cqc_cpcc.attendance_tracker.ActionChains") as chains, \
+                patch("cqc_cpcc.attendance_tracker.time.sleep"), \
+                pytest.raises(TrackerSyncError, match="formula bar"):
+            adapter.delete_rows(driver, MagicMock(), [(self.SECTION, "1")])
+
+        chains.assert_not_called()
+
+    def test_the_formula_bar_text_is_read(self):
+        driver = make_driver()
+        bar = MagicMock(text=" CSC-151-N855 ")
+        driver.find_elements.side_effect = lambda by, selector: (
+            [bar] if selector == "#formulaBarTextDivId_textElement" else [])
+
+        assert SharePointExcelAdapter()._read_formula_bar(driver) == "CSC-151-N855"
+
+    def test_no_matching_rows_touches_nothing(self):
+        adapter = self.adapter(self.sheet(self.row("2")))
+        with patch("cqc_cpcc.attendance_tracker.ActionChains") as chains:
+            assert adapter.delete_rows(make_driver(), MagicMock(),
+                                       [(self.SECTION, "1")]) == 0
+        chains.assert_not_called()
+        assert adapter.selected == []
+
+    def test_rows_still_present_after_every_retry_is_an_error(self):
+        stale = self.sheet(self.row("1"))
+        adapter = self.adapter(stale, grid={"F2": self.SECTION, "D2": "1"})
+
+        with patch("cqc_cpcc.attendance_tracker.ActionChains"), \
+                patch("cqc_cpcc.attendance_tracker.time.sleep"), \
+                pytest.raises(TrackerSyncError, match="still reports 1"):
+            adapter.delete_rows(make_driver(), MagicMock(), [(self.SECTION, "1")])
+
+    def test_a_failed_confirmation_read_is_retried(self):
+        adapter = self.adapter(self.sheet())
+        reads = iter([TrackerSyncError("lag"), self.sheet()])
+
+        def fetch(driver, url):
+            result = next(reads)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        adapter.fetch_workbook = fetch
+        with patch("cqc_cpcc.attendance_tracker.time.sleep"):
+            adapter._confirm_rows_removed(make_driver(), [(self.SECTION, "1")])
+
+    def test_an_adapter_without_removal_says_so(self):
+        class AppendOnly(TrackerAdapter):
+            def read_existing_keys(self, driver, wait):
+                return set()
+
+            def append_records(self, driver, wait, records):
+                return 0
+
+        with pytest.raises(TrackerSyncError, match="cannot remove"):
+            AppendOnly().delete_rows(make_driver(), MagicMock(), [("X", "1")])
+
+
+@pytest.mark.unit
+class TestRemoveTrackerRows:
+    URL = "https://example.sharepoint.com/:x:/r/sites/x/tracker.xlsx"
+    KEYS = [("CSC-151-N855", "1")]
+
+    def test_a_dry_run_never_opens_the_tracker(self):
+        adapter = MagicMock()
+        with patch("cqc_cpcc.attendance_tracker.open_attendance_tracker") as open_tab:
+            result = remove_tracker_rows(make_driver(), MagicMock(), self.URL,
+                                         self.KEYS, adapter=adapter)
+
+        open_tab.assert_not_called()
+        adapter.delete_rows.assert_not_called()
+        assert result.dry_run and result.removed == 0
+        assert "would remove" in result.describe()
+
+    def test_a_live_run_deletes_in_its_own_tab_and_closes_it(self):
+        driver = make_driver()
+        driver.current_window_handle = "main"
+        driver.window_handles = ["main", "tracker"]
+        adapter = MagicMock()
+        adapter.delete_rows.return_value = 1
+
+        with patch("cqc_cpcc.attendance_tracker.open_attendance_tracker",
+                   return_value="tracker"), \
+                patch("cqc_cpcc.attendance_tracker.close_tab") as close:
+            result = remove_tracker_rows(driver, MagicMock(), self.URL, self.KEYS,
+                                         dry_run=False, adapter=adapter)
+
+        adapter.bind.assert_called_once_with(self.URL)
+        adapter.delete_rows.assert_called_once()
+        close.assert_called_once()
+        assert result.removed == 1
+        assert "removed 1 row(s)" in result.describe()
+
+    def test_needs_a_url_and_skips_empty_requests(self):
+        with pytest.raises(TrackerSyncError, match="No Attendance Tracker URL"):
+            remove_tracker_rows(make_driver(), MagicMock(), "", self.KEYS)
+        assert remove_tracker_rows(make_driver(), MagicMock(), self.URL, [],
+                                   dry_run=False).removed == 0
