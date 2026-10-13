@@ -7,8 +7,8 @@ name: Prompt Evaluation
 #                   request code, datasets, graders, model-registry roles). No suite = $0.
 #                   Grader-only changes re-score master's saved outputs ($0). Prompt
 #                   changes get an A/B: base vs head prompt on the role's model(s).
-#                   A dependency-only change (poetry.lock with no change inside the LLM
-#                   request stack's dependency closure, pyproject.toml, docs) runs no
+#                   A dependency version bump never triggers model runs. A
+#                   dependency-only change (poetry.lock, pyproject.toml, docs) runs no
 #                   suites: the `dependency-smoke` job syncs the environment to the head
 #                   lock and checks first-party imports instead ($0).
 #                   Results: a PR comment and the commit status `prompt-eval/ab`.
@@ -390,7 +390,7 @@ jobs:
               if [ "${DEPENDENCY_ONLY}" = "true" ]; then
                 if [ "${SMOKE_RESULT}" = "success" ]; then
                   description="No prompt suites affected (dependency-only change; import smoke passed)"
-                  echo; echo "Dependency-only change (no LLM request-stack package changed in \`poetry.lock\`): every \`cqc_cpcc\` module imports on the new lock."
+                  echo; echo "Dependency-only change (version bumps are not prompt changes): every \`cqc_cpcc\` module imports on the new lock."
                 else
                   state="failure"; description="Dependency-only change: import smoke ${SMOKE_RESULT}"
                   echo; echo "Dependency-only change, but the import smoke job ended with **${SMOKE_RESULT}**: ${RUN_URL}"
