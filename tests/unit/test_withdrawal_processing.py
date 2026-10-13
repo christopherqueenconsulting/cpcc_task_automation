@@ -28,6 +28,13 @@ CSV_DIR_TARGET = "cqc_cpcc.withdrawals.resolve_csv_dir"
 MY_COLLEGES_TARGET = "cqc_cpcc.withdrawal_processing.MyColleges"
 
 
+@pytest.fixture(autouse=True)
+def _no_live_tracker_read():
+    """The post-sync attendance check reads the tracker; these tests never do."""
+    with patch("cqc_cpcc.withdrawal_processing.read_tracker_records", return_value=[]):
+        yield
+
+
 def fake_course(withdrawals, term=("Fall", "2026")):
     course = MagicMock()
     course.get_withdrawal_records.return_value = withdrawals
@@ -173,6 +180,20 @@ class TestProcessWithdrawalsForCourses:
         # Second run added only "222" locally, but syncs both rows.
         synced = mock_sync.call_args.args[3]
         assert sorted(record.student_id for record in synced) == ["111", "222"]
+
+
+    def test_checks_the_tracker_against_attendance_after_the_sync(self, tmp_path):
+        plan = RunPlan(sync_to_tracker=True, tracker_url="https://x.sharepoint.com")
+        calls = []
+
+        with patch(CSV_DIR_TARGET, return_value=str(tmp_path)), \
+                patch(SYNC_TARGET, side_effect=lambda *a, **k: calls.append("sync")), \
+                patch("cqc_cpcc.withdrawal_processing.check_tracker_against_attendance",
+                      side_effect=lambda *a, **k: calls.append("check")):
+            process_withdrawals_for_courses(
+                MagicMock(), MagicMock(), [fake_course({"A,_A": [entry("111")]})], plan)
+
+        assert calls == ["sync", "check"]
 
 
 @pytest.mark.unit

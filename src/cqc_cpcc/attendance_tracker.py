@@ -132,6 +132,12 @@ class TrackerAdapter(ABC):
     def append_records(self, driver, wait, records: list) -> int:
         """Append records to the tracker and return how many were written."""
 
+    def read_rows(self, driver, wait) -> tuple[list, list]:
+        """Return (header, data rows). Adapters that cannot read rows say so."""
+        raise TrackerSyncError(
+            "%s cannot read tracker rows." % type(self).__name__
+        )
+
 
 class SharePointExcelAdapter(TrackerAdapter):
     """Excel Online (SharePoint / OneDrive for Business).
@@ -247,8 +253,12 @@ class SharePointExcelAdapter(TrackerAdapter):
         data = [row for row in rows[1:] if any(cell not in (None, "") for cell in row)]
         return header, data
 
+    def read_rows(self, driver, wait) -> tuple[list, list]:
+        """The sheet's header and data rows, read without touching the grid."""
+        return self.load_sheet(self.fetch_workbook(driver, self._tracker_url))
+
     def read_existing_keys(self, driver, wait) -> set:
-        header, data = self.load_sheet(self.fetch_workbook(driver, self._tracker_url))
+        header, data = self.read_rows(driver, wait)
 
         try:
             course_index = header.index(self.COURSE_HEADER)
@@ -498,6 +508,40 @@ def sync_records_to_tracker(
             driver.switch_to.window(original_tab)
 
 
+def read_tracker_records(
+        driver,
+        wait,
+        tracker_url: str,
+        adapter: TrackerAdapter = None,
+) -> list:
+    """Every row on the tracker as a ``WithdrawalRecord``. Read-only.
+
+    Opens the tracker in its own tab and closes it again, like the sync does.
+    """
+    from cqc_cpcc.tracker_reconcile import tracker_records
+
+    if not tracker_url:
+        raise TrackerSyncError("No Attendance Tracker URL configured.")
+
+    adapter = (adapter or build_adapter(tracker_url))
+    if hasattr(adapter, 'bind'):
+        adapter.bind(tracker_url)
+
+    original_tab = driver.current_window_handle
+    tracker_tab = None
+    try:
+        tracker_tab = open_attendance_tracker(driver, wait, tracker_url)
+        header, rows = adapter.read_rows(driver, wait)
+        return tracker_records(header, rows)
+    finally:
+        driver.switch_to.default_content()
+        if tracker_tab and tracker_tab in driver.window_handles:
+            driver.switch_to.window(tracker_tab)
+            close_tab(driver)
+        if original_tab in driver.window_handles:
+            driver.switch_to.window(original_tab)
+
+
 _IDENTIFYING_COLUMNS = (
     "Student Lastname", "Student Firstname", "Student ID", "Student Email",
 )
@@ -536,6 +580,7 @@ __all__ = [
     "WithdrawalRecord",
     "build_adapter",
     "open_attendance_tracker",
+    "read_tracker_records",
     "records_needing_sync",
     "sync_records_to_tracker",
 ]

@@ -382,6 +382,30 @@ class AttendanceLedger:
                 owed[entry.student_id] = owed.get(entry.student_id, 0) + 1
         return owed
 
+    def activity_dates_by_student(
+            self, term: str, course_section: str, *,
+            since: DT.date | None = None, through: DT.date | None = None,
+    ) -> dict[str, list[DT.date]]:
+        """Dates each student showed BrightSpace activity, whatever their write status.
+
+        Every ledger row is activity matched to a MyColleges roster student, so this
+        answers "who is still attending", not "whose attendance is recorded".
+        """
+        query = ("SELECT DISTINCT student_id, attend_date FROM attendance"
+                 " WHERE term=? AND course_section=?")
+        params: list = [term, course_section]
+        if since is not None:
+            query += " AND attend_date >= ?"
+            params.append(_iso(since))
+        if through is not None:
+            query += " AND attend_date <= ?"
+            params.append(_iso(through))
+        dates: dict[str, list[DT.date]] = {}
+        for r in self._conn.execute(query + " ORDER BY attend_date", params).fetchall():
+            day = DT.date.fromisoformat(r["attend_date"])
+            dates.setdefault(r["student_id"], []).append(day)
+        return dates
+
     # ------------------------------------------------------------------
     # Reporting
     # ------------------------------------------------------------------
