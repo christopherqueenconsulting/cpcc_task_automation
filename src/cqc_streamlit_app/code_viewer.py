@@ -28,6 +28,7 @@ CODE_HEIGHT = 480
 #: Files longer than this scroll inside a fixed-height block; shorter ones fit their content.
 SCROLL_AFTER_LINES = 22
 RUNNER_HEIGHT = 560
+RUNNER_NOTICE = "Running sends this student's code to onecompiler.com to compile and run it."
 NO_FILES_MESSAGE = ("Submitted files for this run are no longer available — re-run grading "
                     "to view code.")
 
@@ -100,7 +101,7 @@ def render_submission_code(source_files: Optional[dict], widget_key: str) -> Non
                                 "code block and paste it there.")
     if not is_open:
         return
-    st.caption("Running sends this student's code to onecompiler.com to compile and run it.")
+    st.caption(RUNNER_NOTICE)
     if any(f.truncated for f in code_files):
         st.warning("Files longer than the preview limit are left out of the run.",
                    icon=":material/warning:")

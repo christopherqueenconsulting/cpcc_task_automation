@@ -2,8 +2,13 @@
 
 """AppTest: the Code tab shows submitted files and runs them only on request."""
 
+import re
+from urllib.parse import urlparse
+
 import pytest
 from streamlit.testing.v1 import AppTest
+
+from cqc_streamlit_app.code_viewer import RUNNER_NOTICE
 
 MAIN_JAVA = "public class Main {\n    public static void main(String[] args) {}\n}\n"
 SHAPE_JAVA = "public class Shape {}\n"
@@ -23,7 +28,13 @@ def _app(files) -> AppTest:
 
 
 def _runner_frames(at) -> int:
-    return sum(1 for node in at.get("iframe") if "onecompiler.com" in str(getattr(node.proto, "srcdoc", "")))
+    """How many runner frames embed the OneCompiler editor (host compared exactly)."""
+    hosts = []
+    for node in at.get("iframe"):
+        match = re.search(r'<iframe id="oc" src="([^"]+)"', str(getattr(node.proto, "srcdoc", "")))
+        if match:
+            hosts.append(urlparse(match.group(1)).hostname)
+    return hosts.count("onecompiler.com")
 
 
 @pytest.mark.unit
@@ -49,7 +60,7 @@ def test_the_runner_loads_only_after_run_is_clicked() -> None:
     at.button(key="code_run_Student A").click().run()
     assert not at.exception
     assert _runner_frames(at) == 1
-    assert any("onecompiler.com" in c.value for c in at.caption)
+    assert RUNNER_NOTICE in [c.value for c in at.caption]
 
     at.button(key="code_run_Student A").click().run()
     assert _runner_frames(at) == 0
