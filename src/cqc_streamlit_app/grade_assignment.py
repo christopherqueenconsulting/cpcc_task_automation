@@ -1441,7 +1441,8 @@ async def grade_single_rubric_student(
 
             # Display results with debug information
             display_rubric_assessment_result(result, student_id, correlation_id=grading_correlation_id,
-                                             greeting_name=student_submission.student_name or None)
+                                             greeting_name=student_submission.student_name or None,
+                                             source_files=student_submission.files)
 
             band_or_level = _get_band_or_level_label(result)
             score_str = f"{result.total_points_earned}/{result.total_points_possible}"
@@ -2718,9 +2719,13 @@ def _get_band_or_level_label(result) -> Optional[str]:
 
 
 def display_rubric_assessment_result(result, student_name: str, correlation_id: Optional[str] = None,
-                                     greeting_name: Optional[str] = ...):
-    """One student's result in tabs: Feedback, Criteria, Errors, Requirements (and Debug
-    only in debug mode). Tables instead of nested expanders (UX goals §2.2, §3)."""
+                                     greeting_name: Optional[str] = ...,
+                                     source_files: Optional[dict] = None):
+    """One student's result in tabs: Feedback, Criteria, Errors, Requirements, Code (and
+    Debug only in debug mode). Tables instead of nested expanders (UX goals §2.2, §3).
+
+    ``source_files`` is the submission's ``{name: path}``; without it the Code tab says
+    the files are no longer available."""
     from cqc_cpcc.student_feedback_builder import build_student_feedback
     from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
 
@@ -2734,7 +2739,7 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
     if getattr(result, "needs_review", False):
         st.warning(f"{_review_status_label(result)}: {result.validity_reason}", icon=":material/flag:")
 
-    labels = ["Feedback", "Criteria", "Errors", "Requirements"] + (["Debug"] if CQC_OPENAI_DEBUG else [])
+    labels = ["Feedback", "Criteria", "Errors", "Requirements", "Code"] + (["Debug"] if CQC_OPENAI_DEBUG else [])
     tabs = st.tabs(labels)
     with tabs[0]:
         st.caption("For the student: no numeric scores. Copy it or use the feedback document.")
@@ -2778,8 +2783,11 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
             )
         else:
             st.caption("No requirement checklist was used for this result.")
+    with tabs[4]:
+        from cqc_streamlit_app.code_viewer import render_submission_code
+        render_submission_code(source_files, widget_key=student_name)
     if CQC_OPENAI_DEBUG:
-        with tabs[4]:
+        with tabs[5]:
             from cqc_streamlit_app.utils import render_openai_debug_panel
             if correlation_id:
                 st.markdown(f"**Correlation ID:** `{correlation_id}`")
@@ -2788,10 +2796,15 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                 st.caption("Debug mode is on; request and response details are in the logs directory.")
 
 
+def _submission_for(run_key: str, student_id: str):
+    """The student's ``StudentSubmission`` for this run, or ``None`` after a restart."""
+    return (st.session_state.get("grading_inputs_by_key", {}).get(run_key, {})
+            .get("submissions", {}).get(student_id))
+
+
 def _greeting_name(run_key: str, student_id: str) -> Optional[str]:
     """The name to greet the student by: none for a loose file (its name is a file name)."""
-    submission = (st.session_state.get("grading_inputs_by_key", {}).get(run_key, {})
-                  .get("submissions", {}).get(student_id))
+    submission = _submission_for(run_key, student_id)
     if submission is not None:
         return submission.student_name or None
     # After a restart the inputs are gone; the saved run keeps the greeting names.
@@ -2831,7 +2844,9 @@ def _render_result_card_export(student_id: str, result, greeting_name: Optional[
 def _student_drawer(student_id: str, result, run_key: str = "") -> None:
     st.subheader(student_id, anchor=False)
     greeting = _greeting_name(run_key, student_id)
-    display_rubric_assessment_result(result, student_id, greeting_name=greeting)
+    display_rubric_assessment_result(
+        result, student_id, greeting_name=greeting,
+        source_files=getattr(_submission_for(run_key, student_id), "files", None))
     _render_result_card_export(student_id, result, greeting)
 
 

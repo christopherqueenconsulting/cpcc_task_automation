@@ -42,6 +42,7 @@ from cqc_cpcc.rubric_models import (
     RubricAssessmentResult,
 )
 from cqc_cpcc.utilities.AI import llm_gateway
+from cqc_cpcc.utilities.code_preview import read_source_files as _read_source_files
 from cqc_cpcc.utilities.logger import logger
 from langchain_core.callbacks import BaseCallbackHandler
 
@@ -741,28 +742,6 @@ def _find_compile_error_def(error_definitions):
         if getattr(d, "enabled", True):
             return d
     return candidates[0] if candidates else None
-
-
-def _read_source_files(source_files: dict):
-    """Normalize ``{filename: path_or_code}`` into ``[(filename, code), ...]``.
-
-    Each value may be a path on disk (``StudentSubmission.files`` maps name -> temp path)
-    or the raw source text; paths that exist are read, everything else is used verbatim.
-    """
-    import os
-    out = []
-    for name, ref in (source_files or {}).items():
-        code = ref
-        try:
-            if isinstance(ref, str) and os.path.exists(ref):
-                with open(ref, "r", encoding="utf-8", errors="replace") as f:
-                    code = f.read()
-        except Exception as e:  # noqa: BLE001
-            logger.info("Compile gate: could not read %s: %s", name, e)
-            continue
-        if isinstance(code, str) and code.strip():
-            out.append((name, code))
-    return out
 
 
 def apply_compile_gate(
