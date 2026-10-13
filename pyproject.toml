@@ -26,7 +26,6 @@ openai = "^2"
 openrouter = ">=0,<1"
 httpx = "^0"
 ordered-set = "^4"
-chromadb = "^1"
 protobuf = ">=6,<8"
 python-docx = "^1"
 #simplify_docx= { git = "https://github.com/gitchrisqueen/Simplify-Docx.git"}

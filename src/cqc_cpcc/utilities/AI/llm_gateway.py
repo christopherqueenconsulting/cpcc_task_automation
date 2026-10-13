@@ -15,7 +15,10 @@ calls OpenRouter, and on failure retries once on the role's fallback model.
 from __future__ import annotations
 
 import contextvars
+import json
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional, Type, TypeVar
 
 from pydantic import BaseModel
@@ -43,6 +46,27 @@ class GatewayCall:
     config_hash: str
     registry_revision: str
     completion: Optional[openrouter_client.CompletionMetadata]
+    prompt: Optional[str] = None  # "prompt_id@version" from config/prompt_registry.json
+
+
+_PROMPT_REGISTRY = Path(__file__).resolve().parents[2] / "config" / "prompt_registry.json"
+
+
+@lru_cache(maxsize=1)
+def _prompt_versions() -> dict:
+    try:
+        data = json.loads(_PROMPT_REGISTRY.read_text(encoding="utf-8"))
+        return {pid: entry.get("version") for pid, entry in data.get("prompts", {}).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+def prompt_tag(prompt_id: Optional[str]) -> Optional[str]:
+    """``"prompt_id@version"`` for a registered prompt (``"prompt_id@?"`` if unknown)."""
+    if not prompt_id:
+        return None
+    version = _prompt_versions().get(prompt_id)
+    return f"{prompt_id}@{version if version is not None else '?'}"
 
 
 _last_call: contextvars.ContextVar[Optional[GatewayCall]] = contextvars.ContextVar(
@@ -66,6 +90,7 @@ async def structured(
         *,
         override: Optional[str] = None,
         use_auto_route: bool = False,
+        prompt_id: Optional[str] = None,
 ) -> T:
     """Return a ``schema_model`` instance for ``prompt`` using ``role``'s model.
 
@@ -77,23 +102,26 @@ async def structured(
             (Settings-page pin, eval harness).
         use_auto_route: Let OpenRouter's auto-router pick the model
             (``OPENROUTER_ALLOWED_MODELS`` constrains it). No fallback applies.
+        prompt_id: Id of the prompt in ``config/prompt_registry.json``; recorded as
+            ``prompt_id@version`` on :func:`last_call` so every output names its prompt.
     """
     _last_call.set(None)
     resolved = model_registry.resolve(role, override=override)
+    tag = prompt_tag(prompt_id)
 
     if _is_test_mode():
         from cqc_cpcc.utilities.AI.openai_client import _get_test_mode_response
         result = _get_test_mode_response(schema_model)
-        _last_call.set(_call_record(resolved, resolved.model, False, None))
+        _last_call.set(_call_record(resolved, resolved.model, False, None, prompt=tag))
         return result
 
     try:
         result = await _complete(resolved, prompt, schema_model, use_auto_route)
-        _last_call.set(_call_record(resolved, resolved.model, False))
+        _last_call.set(_call_record(resolved, resolved.model, False, prompt=tag))
         return result
     except (OpenAISchemaValidationError, OpenAITransportError) as primary_error:
         # Record what the failed call spent, so callers (the eval budget) can charge it.
-        _last_call.set(_call_record(resolved, resolved.model, False))
+        _last_call.set(_call_record(resolved, resolved.model, False, prompt=tag))
         if use_auto_route or not resolved.fallback:
             raise
         logger.warning(
@@ -108,7 +136,7 @@ async def structured(
         )
         fallback = model_registry.resolve(role, override=resolved.fallback)
         result = await _complete(fallback, prompt, schema_model, False)
-        _last_call.set(_call_record(resolved, fallback.model, True))
+        _last_call.set(_call_record(resolved, fallback.model, True, prompt=tag))
         return result
 
 
@@ -133,7 +161,7 @@ async def _complete(resolved, prompt, schema_model, use_auto_route):
 _UNSET = object()
 
 
-def _call_record(resolved, model_used, fallback_used, completion=_UNSET) -> GatewayCall:
+def _call_record(resolved, model_used, fallback_used, completion=_UNSET, prompt=None) -> GatewayCall:
     if completion is _UNSET:
         completion = openrouter_client.last_completion_metadata()
     return GatewayCall(
@@ -144,4 +172,5 @@ def _call_record(resolved, model_used, fallback_used, completion=_UNSET) -> Gate
         config_hash=resolved.config_hash,
         registry_revision=resolved.registry_revision,
         completion=completion,
+        prompt=prompt,
     )

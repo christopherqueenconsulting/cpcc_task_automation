@@ -87,6 +87,9 @@ class DefaultFeedbackType(ExtendedEnum):
     """Evaluated the programming style for adherence to language standards."""
     CSC_151_PROJECT_ALL_PROGRAMMING_STYLE = "There are programming style issues that do not adhere to java language standards"
 
+    """Pointed out logic errors: wrong conditions, calculations or missing steps that change the program's results."""
+    CSC_151_PROJECT_ALL_LOGIC_ERROR = "There are logical errors in the code that affect the program's functionality"
+
     """Offered additional insights, knowledge, or tips."""
     CSC_151_PROJECT_ALL_ADDITIONAL_TIPS_PROVIDED = "Helpful insights regarding the submission to enhance learning"
 
@@ -99,6 +102,23 @@ class DefaultFeedbackType(ExtendedEnum):
     # EXPECTED_OUTPUT = "The Output column fails to show the desired outputs or maintain proper formatting for the desired outputs"
     # """Feedback to share additional insight regarding their submission as related to the instructions and example solution"""
     # FINAL_THOUGHTS = "Additional insight regarding possible improvements"
+
+
+def schema_feedback_types(offered: list) -> list[str]:
+    """The offered feedback types as the schema's ``FeedbackType`` values.
+
+    The page offers ``DefaultFeedbackType`` descriptions, but the model can only answer
+    with ``FeedbackType`` values, and three descriptions differ ("... affect exam grades"
+    vs "... affect grades"). Listing the schema's own wording lets the model pick them
+    (prompt project-feedback v2). Types with no schema counterpart pass through unchanged.
+    """
+    by_value = {d.value: d.name for d in DefaultFeedbackType}
+    out = []
+    for text in offered or []:
+        name = by_value.get(text, "")
+        member = FeedbackType.__members__.get(name.split("_ALL_", 1)[-1]) if name else None
+        out.append(member.value if member else text)
+    return list(dict.fromkeys(out))
 
 
 class Feedback(CodeError):
@@ -315,10 +335,11 @@ class FeedbackGiver:
         Returns:
             None (sets self.feedback_list)
         """
-        from cqc_cpcc.utilities.AI.llm_deprecated.prompts import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
+        from cqc_cpcc.prompts.project_feedback import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
 
         # Build the prompt with all parameters
-        feedback_types_str = "\n\t".join(self.feedback_type_list) if self.feedback_type_list else "N/A"
+        feedback_types_str = ("\n\t".join(schema_feedback_types(self.feedback_type_list))
+                              if self.feedback_type_list else "N/A")
 
         prompt = CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
             course_name=self.course_name,
@@ -333,6 +354,7 @@ class FeedbackGiver:
             prompt=prompt,
             schema_model=FeedbackGuide,
             override=self.model_name,
+            prompt_id="project-feedback",
         )
 
         unique_feedback = feedback_guide.get_feedback_unique()

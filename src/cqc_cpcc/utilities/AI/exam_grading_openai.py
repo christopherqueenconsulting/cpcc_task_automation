@@ -162,6 +162,7 @@ async def grade_exam_submission(
             schema_model=ErrorDefinitions,
             override=None if use_auto_route else model_name,
             use_auto_route=use_auto_route,
+            prompt_id="exam-grading",
         )
 
         logger.info(

@@ -180,12 +180,29 @@ def discover(models: list[dict], previous: dict, evaluated_slugs: set, registry:
     return result
 
 
-def load_history(path: Path) -> set:
-    """canonical slugs already evaluated (one JSON object per line)."""
+ATTEMPT_BACKOFF_DAYS = 28
+
+
+def load_history(path: Path, today: Optional[dt.date] = None) -> set:
+    """Canonical slugs already evaluated (one JSON object per line).
+
+    A row with ``status: attempted`` (the run received the model but did not score it)
+    counts for ``ATTEMPT_BACKOFF_DAYS`` only, so a failed candidate is retried later.
+    """
     if not path.exists():
         return set()
+    today = today or dt.date.today()
     slugs = set()
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            slugs.add(json.loads(line).get("canonical_slug"))
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if row.get("status") == "attempted":
+            try:
+                when = dt.date.fromisoformat(str(row.get("date")))
+            except ValueError:
+                continue
+            if (today - when).days >= ATTEMPT_BACKOFF_DAYS:
+                continue
+        slugs.add(row.get("canonical_slug"))
     return slugs

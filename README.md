@@ -110,7 +110,6 @@ DOCKER_TYPE = ""                        # LOCAL | REMOTE (unset = prompt)
 - **Date/Time**: dateparser, datetime
 - **Environment**: `os.environ` via `env_constants.py`; `os-env` is declared in `pyproject.toml` but unused
 - **Display**: pyvirtualdisplay (for headless browser automation)
-- **Declared but unused in `src/`**: ChromaDB is in `pyproject.toml` but nothing imports it yet
 
 ## Project Structure
 

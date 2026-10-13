@@ -1,0 +1,287 @@
+{
+  "cases": 16,
+  "dataset": "digest/v1",
+  "models": {
+    "openai/gpt-6-luna@medium": {
+      "comparative": false,
+      "composite": 0.9791666666666666,
+      "cost_per_call": 0.0009436465624999999,
+      "cost_usd": 0.045295035,
+      "errors": {},
+      "graders": {
+        "completeness": 1.0,
+        "compression": null,
+        "fact_retention": 1.0,
+        "files": 1.0,
+        "issue_coverage": 0.9537037037037037
+      },
+      "health": {
+        "calibrated": false,
+        "failures": [],
+        "needs_work": false
+      },
+      "judges": {},
+      "latency_p95_s": 12.81724214399992,
+      "model_mismatches": 0,
+      "ok_rate": 1.0,
+      "per_case": [
+        {
+          "calls": 3,
+          "case_id": "library__clean",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": null
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "library"
+        },
+        {
+          "calls": 3,
+          "case_id": "library__available_inverted",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "library"
+        },
+        {
+          "calls": 3,
+          "case_id": "library__isbn_equals",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "library"
+        },
+        {
+          "calls": 3,
+          "case_id": "library__null_checkout",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "library"
+        },
+        {
+          "calls": 3,
+          "case_id": "library__available_inverted+isbn_equals",
+          "composite": 0.7999999999999999,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 0.6666666666666666
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "library"
+        },
+        {
+          "calls": 3,
+          "case_id": "library__available_inverted+isbn_equals+null_checkout",
+          "composite": 0.8666666666666666,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 0.7777777777777777
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "library"
+        },
+        {
+          "calls": 3,
+          "case_id": "library__available_inverted__missing",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "library"
+        },
+        {
+          "calls": 3,
+          "case_id": "library__clean__missing",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": null
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "library"
+        },
+        {
+          "calls": 3,
+          "case_id": "grades__clean",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": null
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "grades"
+        },
+        {
+          "calls": 3,
+          "case_id": "grades__integer_division",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "grades"
+        },
+        {
+          "calls": 3,
+          "case_id": "grades__passing_strict",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "grades"
+        },
+        {
+          "calls": 3,
+          "case_id": "grades__no_range_check",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "grades"
+        },
+        {
+          "calls": 3,
+          "case_id": "grades__integer_division+passing_strict",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "grades"
+        },
+        {
+          "calls": 3,
+          "case_id": "grades__integer_division+passing_strict+no_range_check",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "grades"
+        },
+        {
+          "calls": 3,
+          "case_id": "grades__integer_division__missing",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": 1.0
+          },
+          "ok_calls": 3,
+          "split": "dev",
+          "stratum": "grades"
+        },
+        {
+          "calls": 3,
+          "case_id": "grades__clean__missing",
+          "composite": 1.0,
+          "graders": {
+            "completeness": 1.0,
+            "compression": null,
+            "fact_retention": 1.0,
+            "files": 1.0,
+            "issue_coverage": null
+          },
+          "ok_calls": 3,
+          "split": "holdout",
+          "stratum": "grades"
+        }
+      ],
+      "per_stratum": {
+        "grades": 1.0,
+        "library": 0.9583333333333333
+      },
+      "prompt_versions": [
+        "preprocessing-digest@1"
+      ],
+      "retry_rate": 0.0,
+      "scorable_cases": 16,
+      "skipped_budget": 0
+    }
+  },
+  "prompt_id": "preprocessing-digest",
+  "repeats": null,
+  "role": "digest",
+  "run_label": "rescore",
+  "status": "rescored",
+  "suite": "digest"
+}

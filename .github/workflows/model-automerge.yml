@@ -8,7 +8,8 @@ name: Model Auto-Merge
 #   - promotions: the eval run is a master Model Evaluation run; the committed scorecard
 #     equals its artifact; the winner re-derives from raw outputs; the registry equals
 #     exactly what the registry writer produces; live catalogue and OpenRouter
-#     /generation records agree
+#     /generation records agree; the scorecard's prompt versions are master's (not stale)
+#     and the winner passed the cross-suite gate on every other prompt of its roles
 #   - rollbacks: the registry equals exactly what the rollback writer produces
 # Then it enables GitHub auto-merge, which still waits for every required check.
 #
@@ -183,10 +184,12 @@ jobs:
             if [ -z "${committed}" ] || ! git show "${HEAD}:${committed}" | cmp -s - artifact/scorecard.json; then
               refuse "- the committed scorecard is not byte-identical to the evaluation artifact"; exit 0
             fi
+            # The winner must also have passed every other prompt suite of its roles.
+            gh run download "${RUN_ID}" --repo "${REPO}" -n "model-eval-${RUN_ID}-cross-suite" -D cross || true
             run_check verify-promotion --scorecard artifact/scorecard.json --raw artifact/raw_outputs.jsonl \
               --base-registry base_registry.json --head-registry head_registry.json
             run_check automerge-check --kind promotion --scorecard artifact/scorecard.json \
-              --raw artifact/raw_outputs.jsonl --head-registry head_registry.json
+              --raw artifact/raw_outputs.jsonl --head-registry head_registry.json --cross-suite cross/cross_suite.json
           fi
 
           if ! gh pr merge "${NUMBER}" --repo "${REPO}" --auto --squash --match-head-commit "${HEAD}"; then

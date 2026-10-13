@@ -14,7 +14,6 @@ from cqc_cpcc.utilities.file_url_utils import (
 )
 from cqc_cpcc.utilities.language_utils import get_language_from_file_path
 from cqc_cpcc.utilities.logger import logger
-from langchain_openai import ChatOpenAI
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -870,25 +869,6 @@ def secret_text_input(label: str, value: str = "", *, key: str, help: str | None
     st.markdown(_SECRET_INPUT_CSS, unsafe_allow_html=True)
     return st.text_input(label, value=value, key=_SECRET_KEY_PREFIX + key, help=help,
                          autocomplete="off")
-
-
-@st.cache_resource(hash_funcs={ChatOpenAI: id})
-def get_custom_llm(temperature: float, model: str, service_tier: str = "default",
-                   openrouter_api_key: str | None = None, config_hash: str | None = None) -> ChatOpenAI:
-    """Cached LangChain chat model on OpenRouter for the Flowgorithm grader.
-
-    ``model`` overrides the registry's "flowgorithm" role. ``service_tier`` is
-    accepted for compatibility and ignored. ``config_hash`` is part of the cache key
-    so a registry change (model, effort, budget) builds a fresh client.
-    """
-    from cqc_cpcc.utilities.AI.llm_deprecated.llms import get_openrouter_chat_model
-
-    return get_openrouter_chat_model(
-        "flowgorithm",
-        override=model or None,
-        temperature=temperature,
-        api_key=openrouter_api_key or st.session_state.get("openrouter_api_key"),
-    )
 
 
 def get_file_extension_from_filepath(file_path: str, remove_leading_dot: bool = False) -> str:

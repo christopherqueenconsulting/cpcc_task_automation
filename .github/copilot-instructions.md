@@ -28,7 +28,6 @@
 ### Key Libraries
 - **Data Processing**: pandas, BeautifulSoup4, python-docx, mammoth
 - **Date/Time**: dateparser, datetime
-- **Vector Store**: ChromaDB
 - **Environment**: os-env for configuration
 - **Display**: pyvirtualdisplay (for headless browser automation)
 

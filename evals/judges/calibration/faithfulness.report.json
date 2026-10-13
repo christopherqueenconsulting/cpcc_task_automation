@@ -1,0 +1,14 @@
+{
+  "exact": 0.825,
+  "judge_fingerprint": "sha256:b1fb20e86388f3b1beec7a676096ce178361fb8195d4bf6b9190adcd71b3db40",
+  "judge_id": "faithfulness",
+  "judge_model": "anthropic/claude-haiku-5.5",
+  "judge_version": 1,
+  "kappa": 0.9459459459459459,
+  "kappa_high": 0.979381443298969,
+  "kappa_low": 0.8891129032258065,
+  "labels": "human (Christopher Queen (reviewed Claude's recommended scores on the Judge Label Review page; accepted all 40))",
+  "n": 40,
+  "spent_usd": 0.015462,
+  "within_one": 1.0
+}

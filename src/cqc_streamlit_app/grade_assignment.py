@@ -48,9 +48,7 @@ from cqc_cpcc.rubric_overrides import (
 )
 from cqc_cpcc.utilities.AI import model_registry
 from cqc_cpcc.utilities.AI.model_registry import resolve as resolve_model
-from cqc_cpcc.utilities.AI.llm_deprecated.chains import (
-    generate_assignment_feedback_grade,
-)
+from cqc_cpcc.flowgorithm_grading import grade_flowgorithm, render_markdown as render_flowgorithm
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
@@ -79,7 +77,6 @@ from cqc_streamlit_app.utils import (
     define_chatGPTModel,
     define_openrouter_model,
     export_grading_summary_to_excel,
-    get_custom_llm,
     run_coroutine_blocking,
     get_file_extension_from_filepath,
     get_language_from_file_path,
@@ -239,8 +236,6 @@ def get_flowgorithm_content():
         grading_rubric = define_grading_rubric()
         model_cfg = define_chatGPTModel("flowgorithm_assignment", default_temp_value=.5, role="flowgorithm")
     selected_model = model_cfg.get("model", "openrouter/auto")
-    selected_temperature = float(model_cfg.get("temperature", .5))
-    selected_service_tier = model_cfg.get("langchain_service_tier", "default")
     rubric_table = (dict_to_markdown_table(grading_rubric.to_dict('records'), grading_rubric.columns.tolist())
                     if not grading_rubric.empty else "")
 
@@ -266,18 +261,15 @@ def get_flowgorithm_content():
         st.caption(f"Estimated {estimated_ai_cost('flowgorithm', selected_model, sizes)}. "
                    "No AI call is made until you press the button.")
     if start:
-        custom_llm = get_custom_llm(temperature=selected_temperature, model=selected_model,
-                                    service_tier=selected_service_tier,
-                                    openrouter_api_key=st.session_state.openrouter_api_key,
-                                    config_hash=resolve_model("flowgorithm", selected_model).config_hash)
         results = []
         for orig_path, temp_path in submissions:
             name = os.path.splitext(os.path.basename(orig_path))[0]
             with st.spinner(f"Grading {name}..."):
                 try:
-                    feedback = generate_assignment_feedback_grade(
-                        custom_llm, instructions, rubric_table, read_file(temp_path), name,
-                        str(total_points_possible))
+                    grade = run_async_in_streamlit(grade_flowgorithm(
+                        instructions, rubric_table, read_file(temp_path), name,
+                        str(total_points_possible), model_name=selected_model))
+                    feedback = render_flowgorithm(grade, total_points_possible)
                 except Exception as e:  # noqa: BLE001 - one failure must not lose the others
                     logger.error(f"Flowgorithm grading failed for {alias(name)}: {e}", exc_info=True)
                     feedback = f"Grading failed: {e}"
@@ -1064,10 +1056,6 @@ async def get_grade_exam_content():
         # Perform other operations with the uploaded files
         # After processing, the temporary files will be automatically deleted
 
-        # Note: custom_llm is still needed for legacy LangChain compatibility
-        # but the actual grading will use OpenRouter
-        custom_llm = None  # Not used with OpenRouter
-
         # Start status wheel and display with updates from the coder
 
         code_grader = CodeGrader(
@@ -1078,7 +1066,6 @@ async def get_grade_exam_content():
             deduction_per_minor_error=int(deduction_per_minor_error),
             major_error_type_list=major_error_type_list,
             minor_error_type_list=minor_error_type_list,
-            grader_llm=custom_llm,
             model_name=selected_model,
             temperature=0.0,  # Temperature not used with OpenRouter
             use_openrouter=use_openrouter,

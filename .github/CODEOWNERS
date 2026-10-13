@@ -1,0 +1,11 @@
+# Changes to CI and automation request the owner's review.
+#
+# Workflows and the composite actions they run decide what executes with the repository's secrets
+# and which checks gate a merge. On its own this file only REQUESTS a review, and GitHub never
+# requests one from a pull request's own author, so PRs opened under the owner's account get none.
+# Blocking needs the branch-protection setting "Require review from Code Owners", a separate
+# repository decision.
+/.github/workflows/ @gitchrisqueen
+/.github/actions/ @gitchrisqueen
+/.github/CODEOWNERS @gitchrisqueen
+/.github/dependabot.yml @gitchrisqueen
