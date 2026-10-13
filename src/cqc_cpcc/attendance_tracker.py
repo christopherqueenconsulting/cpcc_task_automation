@@ -11,6 +11,10 @@ Two rules govern everything here:
 2. **Never append after a failed read.** De-duplication depends on knowing what
    the sheet already contains. If that read fails, the sync aborts rather than
    appending blind and duplicating the tracker.
+
+Removing rows (re-enrolled students) follows the same rules, and one more: each
+row is checked against the live grid, cell by cell, immediately before it is
+deleted. A mismatch stops the removal.
 """
 
 import base64
@@ -96,6 +100,28 @@ class SyncResult:
         )
 
 
+@dataclass
+class RemovalResult:
+    """What a removal did, or would have done."""
+
+    tracker_url: str = ""
+    dry_run: bool = True
+    # (course and section, student id) keys asked for.
+    requested: list = field(default_factory=list)
+    removed: int = 0
+
+    def describe(self) -> str:
+        if self.dry_run:
+            return (
+                "Tracker removal (dry run): would remove the row(s) of %s "
+                "re-enrolled student(s)." % len(self.requested)
+            )
+        return (
+            "Tracker removal (live): removed %s row(s) for %s re-enrolled "
+            "student(s)." % (self.removed, len(self.requested))
+        )
+
+
 def open_attendance_tracker(driver, wait, attendance_tracker_url: str) -> str:
     """Open the tracker in a new tab and complete login. Returns the tab handle."""
     handles = set(driver.window_handles)
@@ -136,6 +162,12 @@ class TrackerAdapter(ABC):
         """Return (header, data rows). Adapters that cannot read rows say so."""
         raise TrackerSyncError(
             "%s cannot read tracker rows." % type(self).__name__
+        )
+
+    def delete_rows(self, driver, wait, keys: list) -> int:
+        """Delete the W/S rows for these ``(course, student id)`` keys."""
+        raise TrackerSyncError(
+            "%s cannot remove tracker rows." % type(self).__name__
         )
 
 
@@ -432,6 +464,175 @@ class SharePointExcelAdapter(TrackerAdapter):
             % (expected_data_rows, WORKBOOK_PROPAGATION_ATTEMPTS)
         )
 
+    # Status values a removal may touch. Anything else on a matching row is left.
+    REMOVABLE_STATUSES = ("W", "S")
+    STATUS_HEADER = "Status (N/A, S, W)"
+
+    # The formula bar shows the selected cell's exact content. It is the only way
+    # to read the canvas grid itself, and is used to check a row before deleting.
+    FORMULA_BAR_SELECTORS = (
+        "#formulaBarTextDivId_textElement",
+        "[id^='formulaBarTextDivId'][contenteditable]",
+        "div[role='textbox'][aria-label*='formula' i]",
+        "[aria-label*='Formula Bar' i][contenteditable]",
+    )
+
+    @staticmethod
+    def _normalize_id(value) -> str:
+        text = "" if value is None else str(value).strip().lstrip("'")
+        return text[:-2] if text.endswith(".0") else text
+
+    @staticmethod
+    def _column_letter(index: int) -> str:
+        """Zero-based column index to its letter (0 -> A, 26 -> AA)."""
+        letters = ""
+        index += 1
+        while index:
+            index, remainder = divmod(index - 1, 26)
+            letters = chr(ord("A") + remainder) + letters
+        return letters
+
+    def locate_rows(self, workbook_bytes: bytes, keys: list) -> list:
+        """Sheet rows to delete for ``keys``, bottom-up: ``[(row, key), ...]``.
+
+        Row numbers are the sheet's own (1-based, header on row 1), counted with
+        blank rows included, so they address the live grid exactly. Only rows whose
+        status is W or S match; a key with no such row is simply absent.
+        """
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(io.BytesIO(workbook_bytes), data_only=True)
+        sheet_name = (
+            self.SHEET_NAME
+            if self.SHEET_NAME in workbook.sheetnames
+            else workbook.sheetnames[0]
+        )
+        sheet = workbook[sheet_name]
+        header = [
+            "" if cell.value is None else str(cell.value).strip()
+            for cell in sheet[1]
+        ]
+        try:
+            course_index = header.index(self.COURSE_HEADER)
+            student_index = header.index(self.STUDENT_ID_HEADER)
+            status_index = header.index(self.STATUS_HEADER)
+        except ValueError:
+            raise TrackerSyncError(
+                "Could not find the %r, %r and %r columns in the tracker header: %r. "
+                "Refusing to remove rows without them."
+                % (self.COURSE_HEADER, self.STUDENT_ID_HEADER, self.STATUS_HEADER,
+                   header)
+            ) from None
+        self._removal_columns = (course_index, student_index)
+
+        wanted = {
+            (str(course).strip().upper(), self._normalize_id(student_id))
+            for course, student_id in keys
+        }
+        found = []
+        for row in sheet.iter_rows(min_row=2):
+            values = [cell.value for cell in row]
+            if len(values) <= max(course_index, student_index, status_index):
+                continue
+            key = (
+                str(values[course_index] or "").strip().upper(),
+                self._normalize_id(values[student_index]),
+            )
+            status = str(values[status_index] or "").strip().upper()
+            if key in wanted and status in self.REMOVABLE_STATUSES:
+                found.append((row[0].row, key))
+        return sorted(found, reverse=True)
+
+    def _read_formula_bar(self, driver) -> str:
+        for selector in self.FORMULA_BAR_SELECTORS:
+            elements = driver.find_elements(By.CSS_SELECTOR, selector)
+            if elements:
+                return (elements[0].text or elements[0].get_attribute("textContent")
+                        or "").strip()
+        raise TrackerSyncError(
+            "Could not find the Excel formula bar, so a row cannot be checked "
+            "before it is deleted. Refusing to delete blind."
+        )
+
+    def _verify_row(self, driver, row_number: int, key: tuple) -> None:
+        """Check the live grid still holds ``key`` on ``row_number``."""
+        course_index, student_index = self._removal_columns
+        checks = (
+            (course_index, key[0], lambda text: text.strip().upper()),
+            (student_index, key[1], self._normalize_id),
+        )
+        for column, expected, normalize in checks:
+            address = "%s%d" % (self._column_letter(column), row_number)
+            self._goto_cell(driver, address)
+            actual = normalize(self._read_formula_bar(driver))
+            if actual != expected:
+                raise TrackerSyncError(
+                    "Row %d no longer matches the student to remove (cell %s "
+                    "differs from the downloaded workbook). The sheet changed since "
+                    "it was read; nothing further was deleted." % (row_number, address)
+                )
+
+    def delete_rows(self, driver, wait, keys: list) -> int:
+        """Delete the W/S rows for these keys, bottom-up so row numbers hold.
+
+        Each row is re-checked in the live grid (course and student id, through
+        the formula bar) right before it is deleted, because the downloaded
+        workbook can lag behind the sheet. Then the whole row is selected through
+        the Name Box and deleted with Ctrl+-.
+        """
+        targets = self.locate_rows(
+            self.fetch_workbook(driver, self._tracker_url), keys)
+        if not targets:
+            logger.info("No matching W/S rows on the tracker. Nothing to remove.")
+            return 0
+
+        self._enter_grid_frame(driver)
+        deleted = 0
+        try:
+            for row_number, key in targets:
+                self._verify_row(driver, row_number, key)
+                self._goto_cell(driver, "%d:%d" % (row_number, row_number))
+                ActionChains(driver).key_down(Keys.CONTROL).send_keys("-").key_up(
+                    Keys.CONTROL).perform()
+                time.sleep(CELL_ENTRY_PAUSE_SECONDS)
+                deleted += 1
+                logger.info("Deleted tracker row %s: %s / %s",
+                            row_number, key[0], alias(key[1]))
+        finally:
+            driver.switch_to.default_content()
+
+        time.sleep(AUTOSAVE_SETTLE_SECONDS)
+        self._confirm_rows_removed(driver, keys)
+        return deleted
+
+    def _confirm_rows_removed(self, driver, keys: list) -> None:
+        """Re-read the workbook until no W/S row for these keys remains."""
+        remaining = None
+        for attempt in range(1, WORKBOOK_PROPAGATION_ATTEMPTS + 1):
+            try:
+                remaining = self.locate_rows(
+                    self.fetch_workbook(driver, self._tracker_url), keys)
+            except TrackerSyncError as read_error:
+                logger.warning(
+                    "Could not re-read the tracker to confirm the removal "
+                    "(attempt %s/%s): %s",
+                    attempt, WORKBOOK_PROPAGATION_ATTEMPTS, read_error)
+            else:
+                if not remaining:
+                    logger.info("Confirmed the removed rows are gone (attempt %s/%s).",
+                                attempt, WORKBOOK_PROPAGATION_ATTEMPTS)
+                    return
+            if attempt < WORKBOOK_PROPAGATION_ATTEMPTS:
+                time.sleep(WORKBOOK_PROPAGATION_PAUSE_SECONDS)
+
+        raise TrackerSyncError(
+            "Removed the rows, but the tracker still reports %s of them after %s "
+            "attempt(s). SharePoint's download endpoint lags behind a save, so they "
+            "may be gone already; check the workbook before running again."
+            % (len(remaining) if remaining is not None else "some",
+               WORKBOOK_PROPAGATION_ATTEMPTS)
+        )
+
 
 def build_adapter(tracker_url: str) -> TrackerAdapter:
     """Pick the adapter for a tracker URL based on its host."""
@@ -542,6 +743,54 @@ def read_tracker_records(
             driver.switch_to.window(original_tab)
 
 
+def remove_tracker_rows(
+        driver,
+        wait,
+        tracker_url: str,
+        keys: list,
+        dry_run: bool = True,
+        adapter: TrackerAdapter = None,
+) -> RemovalResult:
+    """Remove the W/S rows for ``(course, student id)`` keys from the tracker.
+
+    A dry run only reports and never opens the tracker. A live run opens it in its
+    own tab, deletes, confirms, and closes the tab again.
+    """
+    result = RemovalResult(tracker_url=tracker_url, dry_run=dry_run,
+                           requested=list(keys))
+    if not tracker_url:
+        raise TrackerSyncError("No Attendance Tracker URL configured.")
+    if not keys:
+        return result
+
+    for course, student_id in keys:
+        logger.info("%s tracker row: %s / %s",
+                    "Would remove" if dry_run else "Removing",
+                    course, alias(student_id))
+    if dry_run:
+        logger.info(result.describe())
+        return result
+
+    adapter = (adapter or build_adapter(tracker_url))
+    if hasattr(adapter, 'bind'):
+        adapter.bind(tracker_url)
+
+    original_tab = driver.current_window_handle
+    tracker_tab = None
+    try:
+        tracker_tab = open_attendance_tracker(driver, wait, tracker_url)
+        result.removed = adapter.delete_rows(driver, wait, list(keys))
+        logger.info(result.describe())
+        return result
+    finally:
+        driver.switch_to.default_content()
+        if tracker_tab and tracker_tab in driver.window_handles:
+            driver.switch_to.window(tracker_tab)
+            close_tab(driver)
+        if original_tab in driver.window_handles:
+            driver.switch_to.window(original_tab)
+
+
 _IDENTIFYING_COLUMNS = (
     "Student Lastname", "Student Firstname", "Student ID", "Student Email",
 )
@@ -573,6 +822,7 @@ def records_needing_sync(records: list, existing_keys: set) -> list:
 
 
 __all__ = [
+    "RemovalResult",
     "SharePointExcelAdapter",
     "SyncResult",
     "TrackerAdapter",
@@ -582,5 +832,6 @@ __all__ = [
     "open_attendance_tracker",
     "read_tracker_records",
     "records_needing_sync",
+    "remove_tracker_rows",
     "sync_records_to_tracker",
 ]

@@ -159,6 +159,27 @@ class TestTakeAttendancePage:
         assert plan.process_withdrawals is True
         assert "Attendance finished for 1 course(s)" in app.success[0].value
 
+    def test_removing_reenrolled_students_needs_a_real_tracker_write(self):
+        job = FakeJob(PHASE_AWAITING_PLAN)
+        app = _app(job)
+        app.run()
+
+        def box(key):
+            return next(c for c in app.checkbox if c.key == key)
+
+        remove = box("attendance_remove_reenrolled")
+        assert remove.value is False
+        if not box("attendance_write_tracker").value:
+            assert remove.disabled
+            box("attendance_write_tracker").check().run()
+        assert not box("attendance_remove_reenrolled").disabled
+
+        box("attendance_remove_reenrolled").check().run()
+        _button(app, "Continue").click().run()
+        assert not app.exception, app.exception
+        assert job.plan.dry_run is False
+        assert job.plan.remove_reenrolled is True
+
     def test_ledger_section_shows_counts_without_names(self):
         from cqc_cpcc.attendance_ledger import STATUS_VERIFIED, AttendanceLedger
 

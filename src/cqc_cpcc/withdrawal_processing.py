@@ -13,11 +13,12 @@ from cqc_cpcc.attendance_ledger import open_default_ledger
 from cqc_cpcc.attendance_tracker import (
     TrackerSyncError,
     read_tracker_records,
+    remove_tracker_rows,
     sync_records_to_tracker,
 )
 from cqc_cpcc.my_colleges import MyColleges
 from cqc_cpcc.run_plan import ACTION_WITHDRAWALS, MODE_PUSH_ONLY, RunPlan
-from cqc_cpcc.tracker_reconcile import find_active_students
+from cqc_cpcc.tracker_reconcile import find_active_students, select_reenrolled
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.env_constants import (
     ATTENDANCE_TRACKER_URL,
@@ -179,18 +180,64 @@ def check_tracker_against_attendance(driver, wait, plan: RunPlan, bs_courses: li
     return flags
 
 
+def remove_reenrolled_from_tracker(driver, wait, plan: RunPlan, flags: list,
+                                   bs_courses: list):
+    """Take re-enrolled students off the tracker, as the college requires.
+
+    Only flags whose student attended AFTER the week their row records as the last
+    activity count (see ``select_reenrolled``); the rest stay as warnings. Rows are
+    deleted only when the plan writes to the tracker for real AND the instructor
+    opted in to removal; otherwise this reports what it would remove.
+    """
+    if not flags or not plan.tracker_url:
+        return None
+
+    starts = {
+        bs_course.get_course_and_section().strip():
+            getattr(bs_course, "course_start_date", None)
+        for bs_course in bs_courses
+    }
+    reenrolled, unconfirmed = select_reenrolled(flags, starts)
+    if unconfirmed:
+        logger.info(
+            "%d flagged row(s) show no attendance after their recorded last-activity "
+            "week, or the week is unknown. They are left for you to review.",
+            len(unconfirmed),
+        )
+    if not reenrolled:
+        return None
+
+    remove = plan.remove_reenrolled and not plan.dry_run
+    if not remove:
+        logger.info(
+            "%d re-enrolled student(s) would be removed from the tracker. Turn on "
+            "removal (with real tracker writes) to remove them.", len(reenrolled),
+        )
+    keys = [(flag.course_section, flag.student_id) for flag in reenrolled]
+    try:
+        return remove_tracker_rows(
+            driver, wait, plan.tracker_url, keys, dry_run=not remove,
+        )
+    except TrackerSyncError as removal_error:
+        logger.error("Removing re-enrolled students did not complete: %s",
+                     removal_error)
+        return None
+
+
 def process_withdrawals_for_courses(
         driver, wait, bs_courses: list, plan: RunPlan
 ) -> dict:
     """Store withdrawals locally, sync them online, then check the tracker's
-    existing rows against attendance. Used by both entry points."""
+    existing rows against attendance and take re-enrolled students off it (only
+    when the plan opts in). Used by both entry points."""
     results = store_withdrawals_for_courses(bs_courses)
 
     records = [
         record for merge_result in results.values() for record in merge_result.merged
     ]
     sync_withdrawals(driver, wait, plan, records)
-    check_tracker_against_attendance(driver, wait, plan, bs_courses)
+    flags = check_tracker_against_attendance(driver, wait, plan, bs_courses)
+    remove_reenrolled_from_tracker(driver, wait, plan, flags, bs_courses)
 
     return results
 

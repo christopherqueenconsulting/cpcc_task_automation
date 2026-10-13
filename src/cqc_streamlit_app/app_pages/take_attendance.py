@@ -106,6 +106,15 @@ def plan_form(job: AttendanceJob) -> None:
         disabled=not (process_withdrawals and sync_to_tracker and has_tracker),
         key="attendance_write_tracker",
     )
+    remove_reenrolled = options.checkbox(
+        "Remove re-enrolled students from the tracker",
+        value=False,
+        disabled=not (process_withdrawals and sync_to_tracker and has_tracker
+                      and write_to_tracker),
+        key="attendance_remove_reenrolled",
+        help="Deletes the W/S row of a student who attended after the week the row "
+             "gives as their last activity. Needs real tracker writes.",
+    )
 
     actions = st.container(horizontal=True)
     if actions.button("Continue", type="primary", disabled=not selected, icon=":material/play_arrow:",
@@ -119,6 +128,7 @@ def plan_form(job: AttendanceJob) -> None:
                 process_withdrawals=process_withdrawals,
                 sync_to_tracker=sync_to_tracker,
                 write_to_tracker=write_to_tracker,
+                remove_reenrolled=remove_reenrolled,
                 tracker_url=job.tracker_url,
             )
         except ValueError as error:

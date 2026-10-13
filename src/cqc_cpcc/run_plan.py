@@ -144,6 +144,9 @@ class RunPlan:
     tracker_url: str | None = None
     sync_to_tracker: bool = False
     dry_run: bool = True
+    # Take re-enrolled students (attending after their recorded last-activity
+    # week) off the tracker. Acts only on a real write (dry_run False).
+    remove_reenrolled: bool = False
     # Push-only runs sync these already-written CSV files instead of scraping.
     csv_paths: list[str] = field(default_factory=list)
 
@@ -190,6 +193,7 @@ class RunPlan:
             process_withdrawals: bool = True,
             sync_to_tracker: bool = False,
             write_to_tracker: bool = False,
+            remove_reenrolled: bool = False,
             tracker_url: str | None = None,
     ) -> "RunPlan":
         """Build an attendance plan from answers given in a form (the web app).
@@ -197,7 +201,8 @@ class RunPlan:
         Same questions and meaning as :meth:`build_interactively`: courses, whether
         to re-check every course from its start date, whether to write attendance
         or only report what is missing, whether to process withdrawals, whether to sync them to the tracker,
-        and whether that sync writes for real (otherwise a dry run).
+        whether that sync writes for real (otherwise a dry run), and whether a real
+        write also removes re-enrolled students from the tracker.
         """
         unknown = [url for url in course_urls if url not in course_information]
         if unknown:
@@ -213,6 +218,7 @@ class RunPlan:
             tracker_url=tracker_url,
             sync_to_tracker=sync,
             dry_run=not (sync and write_to_tracker),
+            remove_reenrolled=bool(sync and write_to_tracker and remove_reenrolled),
         )
 
     @staticmethod
@@ -315,6 +321,12 @@ class RunPlan:
             )
             if plan.sync_to_tracker:
                 plan.dry_run = cls._prompt_dry_run(dry_run_default)
+                if not plan.dry_run:
+                    plan.remove_reenrolled = prompt_yes_no(
+                        "Remove re-enrolled students (attending after their recorded "
+                        "last-activity week) from the tracker?",
+                        default=False,
+                    )
 
         return plan
 
