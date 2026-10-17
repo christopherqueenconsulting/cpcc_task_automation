@@ -139,12 +139,12 @@
       ]
     },
     "project-feedback": {
-      "version": 4,
+      "version": 5,
       "status": "live",
       "role": "feedback",
-      "description": "Give Feedback page: typed feedback items (FeedbackType) on a project submission.",
+      "description": "Give Feedback page: student-facing FeedbackReport (found / why / fix / approach / learn more) on a project submission.",
       "builder": "cqc_cpcc.prompts.project_feedback:CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI",
-      "schema": "cqc_cpcc.project_feedback:FeedbackGuide",
+      "schema": "cqc_cpcc.project_feedback:FeedbackReport",
       "call_sites": [
         "cqc_cpcc.project_feedback:FeedbackGiver.generate_feedback"
       ],
@@ -159,7 +159,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:c0bc2eafcb2810732c548d99d34948ca541ac37cbf12c770ae7e9f2fdc7ee43e",
+      "fingerprint": "sha256:25c6faa7a2a98dcf55f6a63c0753403e62b6e204f86710fd4d235b3eea901856",
       "suites": [
         "project-feedback"
       ]

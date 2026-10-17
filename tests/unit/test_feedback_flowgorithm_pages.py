@@ -96,6 +96,21 @@ def test_guidance_template_prefills_the_editable_box(monkeypatch):
 
 
 @pytest.mark.unit
+def test_feedback_categories_follow_the_course_error_definitions(monkeypatch):
+    app = _feedback_page_app(monkeypatch)
+    assert not app.exception, [e.value for e in app.exception]
+    app.selectbox(key="feedback_course").select("CSC 251").run()
+    source = app.selectbox(key="feedback_category_source_CSC 251")
+    assert source.options[-1] == "General intro set" and source.value == source.options[0]
+    names = list(app.dataframe[0].value["Name"])  # the editable categories table
+    assert "ArrayList Errors" in names and names[-2:] == ["Requirements Not Met", "General Advice"]
+
+    source.select("General intro set").run()
+    general = list(app.dataframe[0].value["Name"])
+    assert "ArrayList Errors" not in general and "Insufficient Documentation" in general
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_feedback_status_extender_builds_prompt_and_saves_docx(mocker):
     # Regression: the page called the removed FeedbackGiver.feedback_prompt and crashed.
@@ -109,7 +124,8 @@ async def test_feedback_status_extender_builds_prompt_and_saves_docx(mocker):
     build = mocker.spy(giver, "build_prompt")
 
     async def _fake_generate(submission, callback=None):
-        return []
+        from cqc_cpcc.project_feedback import FeedbackReport
+        return FeedbackReport(summary="Your program compiles.", items=[], next_steps=["Add input."])
 
     mocker.patch.object(giver, "generate_feedback", side_effect=_fake_generate)
     import tempfile

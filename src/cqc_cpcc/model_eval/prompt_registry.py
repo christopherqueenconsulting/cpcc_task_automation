@@ -237,15 +237,12 @@ def _render_preprocessing_digest() -> list[str]:
 
 
 def _render_project_feedback() -> list[str]:
-    from cqc_cpcc.project_feedback import DefaultFeedbackType, schema_feedback_types
-    from cqc_cpcc.prompts.project_feedback import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
+    from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackGiver
 
-    # Mirrors FeedbackGiver.generate_feedback with the page's default feedback types.
-    return [CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
-        course_name=FIXTURE_COURSE, assignment=FIXTURE_INSTRUCTIONS, solution=FIXTURE_SOLUTION,
-        submission=FIXTURE_SUBMISSION,
-        feedback_types="\n\t".join(schema_feedback_types(DefaultFeedbackType.list())),
-        extra_guidance="None")]
+    # The production builder with the eval dataset's legacy feedback types.
+    giver = FeedbackGiver(course_name=FIXTURE_COURSE, assignment_instructions=FIXTURE_INSTRUCTIONS,
+                          assignment_solution=FIXTURE_SOLUTION, feedback_type_list=DefaultFeedbackType.list())
+    return [giver.build_prompt(FIXTURE_SUBMISSION)]
 
 
 def _render_flowgorithm_grade() -> list[str]:

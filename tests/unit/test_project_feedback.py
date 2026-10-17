@@ -17,11 +17,22 @@ from unittest.mock import AsyncMock
 import pytest
 
 from cqc_cpcc.project_feedback import (
-    Feedback,
     FeedbackGiver,
-    FeedbackGuide,
-    FeedbackType,
+    FeedbackItem,
+    FeedbackReport,
 )
+
+
+def _item(category_id="SYNTAX_ERROR", text="Missing semicolon on line 5", **kwargs):
+    fields = dict(category_id=category_id, title=text, would_lose_points="minor", what_we_found=text,
+                  why_it_matters="It does not compile.", how_to_fix="Check the end of each statement.",
+                  how_to_approach="Read the first compiler error.", learn_more="Java statements")
+    fields.update(kwargs)
+    return FeedbackItem(**fields)
+
+
+def _report(*items):
+    return FeedbackReport(summary="Your program reads input.", items=list(items), next_steps=["Fix it."])
 from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
     OpenAITransportError,
@@ -36,18 +47,7 @@ class TestFeedbackGiverSuccess:
     async def test_generate_feedback_success(self, mocker):
         """Should successfully generate feedback using OpenAI wrapper."""
         # Mock get_structured_completion
-        mock_feedback_guide = FeedbackGuide(
-            all_feedback=[
-                Feedback(
-                    error_type=FeedbackType.SYNTAX_ERROR,
-                    error_details="Missing semicolon on line 5"
-                ),
-                Feedback(
-                    error_type=FeedbackType.COMMENTS_MISSING,
-                    error_details="Code lacks documentation"
-                )
-            ]
-        )
+        mock_feedback_guide = _report(_item("SYNTAX_ERROR"), _item("COMMENTS_MISSING", "Code lacks documentation"))
         
         mock_get_structured = mocker.patch(
             'cqc_cpcc.project_feedback.llm_gateway.structured',
@@ -67,7 +67,8 @@ class TestFeedbackGiverSuccess:
                 "public static void main(String[] args) { "
                 'System.out.println("Hello World"); } }'
             ),
-            feedback_type_list=["Syntax errors in the code", "Missing comments"],
+            feedback_type_list=["There are syntax errors in the code",
+                                "The code does not include sufficient commenting throughout"],
         )
 
         # Generate feedback
@@ -81,21 +82,21 @@ class TestFeedbackGiverSuccess:
         # Verify get_structured_completion was called
         assert mock_get_structured.called
         call_kwargs = mock_get_structured.call_args.kwargs
-        assert call_kwargs['schema_model'] == FeedbackGuide
+        assert call_kwargs['schema_model'] == FeedbackReport
         assert call_kwargs['role'] == "feedback"
         assert call_kwargs['override'] is None
         assert 'CSC 151' in call_kwargs['prompt']
         assert student_code in call_kwargs['prompt']
         
         # Verify feedback was generated
-        assert feedback is not None
-        assert len(feedback) >= 0  # May be filtered by JavaCode logic
+        assert isinstance(feedback, FeedbackReport)
+        assert [i.category_id for i in feedback.items][0] == "SYNTAX_ERROR"
         assert not hasattr(giver, "feedback_list")  # nothing is stored on the shared instance
     
     async def test_generate_feedback_with_empty_feedback_list(self, mocker):
         """Should handle empty feedback gracefully."""
         # Mock empty feedback
-        mock_feedback_guide = FeedbackGuide(all_feedback=None)
+        mock_feedback_guide = _report()
         
         mocker.patch(
             'cqc_cpcc.project_feedback.llm_gateway.structured',
@@ -114,12 +115,12 @@ class TestFeedbackGiverSuccess:
         
         feedback = await giver.generate_feedback("test code")
         
-        # Should have empty feedback list
-        assert feedback == []
+        # Should have empty feedback items
+        assert feedback.items == []
     
     async def test_generate_feedback_with_custom_model(self, mocker):
         """Should use custom model when provided."""
-        mock_feedback_guide = FeedbackGuide(all_feedback=[])
+        mock_feedback_guide = _report()
         
         mock_get_structured = mocker.patch(
             'cqc_cpcc.project_feedback.llm_gateway.structured',
@@ -249,15 +250,7 @@ class TestFeedbackGiverConcurrency:
     async def test_concurrent_feedback_generation(self, mocker):
         """Should handle multiple concurrent feedback generations."""
         # Mock different responses for each call
-        feedback_guides = [
-            FeedbackGuide(all_feedback=[
-                Feedback(
-                    error_type=FeedbackType.SYNTAX_ERROR,
-                    error_details=f"Error {i}"
-                )
-            ])
-            for i in range(3)
-        ]
+        feedback_guides = [_report(_item(text=f"Error {i}")) for i in range(3)]
         
         mock_get_structured = mocker.patch(
             'cqc_cpcc.project_feedback.llm_gateway.structured',
@@ -295,15 +288,7 @@ class TestFeedbackGiverConcurrency:
     async def test_concurrent_with_same_giver_instance(self, mocker):
         """Should handle concurrent calls on same FeedbackGiver instance."""
         # Mock responses
-        feedback_guides = [
-            FeedbackGuide(all_feedback=[
-                Feedback(
-                    error_type=FeedbackType.SYNTAX_ERROR,
-                    error_details=f"Submission {i}"
-                )
-            ])
-            for i in range(3)
-        ]
+        feedback_guides = [_report(_item(text=f"Submission {i}")) for i in range(3)]
         
         mocker.patch(
             'cqc_cpcc.project_feedback.llm_gateway.structured',
@@ -330,7 +315,7 @@ class TestFeedbackGiverConcurrency:
         results = await asyncio.gather(*tasks)
         
         # All tasks should complete, each with its own feedback
-        assert [[f.error_details for f in feedback] for feedback in results] == [
+        assert [[f.what_we_found for f in feedback.items] for feedback in results] == [
             ["Submission 0"], ["Submission 1"], ["Submission 2"]]
 
     async def test_shared_giver_never_crosses_students_when_calls_finish_out_of_order(self, mocker):
@@ -338,8 +323,7 @@ class TestFeedbackGiverConcurrency:
         async def _structured(**kwargs):
             student = "Student A" if "code from A" in kwargs["prompt"] else "Student B"
             await asyncio.sleep(0.05 if student == "Student A" else 0)
-            return FeedbackGuide(all_feedback=[
-                Feedback(error_type=FeedbackType.SYNTAX_ERROR, error_details=f"for {student}")])
+            return _report(_item(text=f"for {student}"))
 
         mocker.patch('cqc_cpcc.project_feedback.llm_gateway.structured', side_effect=_structured)
         mocker.patch('cqc_cpcc.project_feedback.JavaCode')
@@ -349,20 +333,25 @@ class TestFeedbackGiverConcurrency:
         a, b = await asyncio.gather(giver.generate_feedback("code from A"),
                                     giver.generate_feedback("code from B"))
 
-        assert [f.error_details for f in a] == ["for Student A"]
-        assert [f.error_details for f in b] == ["for Student B"]
+        assert [f.what_we_found for f in a.items] == ["for Student A"]
+        assert [f.what_we_found for f in b.items] == ["for Student B"]
 
-    async def test_save_feedback_to_docx_writes_the_list_it_is_given(self, tmp_path):
+    async def test_save_feedback_to_docx_writes_the_report_it_is_given(self, tmp_path):
         from docx import Document
 
         giver = FeedbackGiver(course_name="CSC 151", assignment_instructions="Test",
-                              assignment_solution="Test")
+                              assignment_solution="Test", feedback_type_list=["There are syntax errors in the code"])
         path = tmp_path / "feedback.docx"
-        giver.save_feedback_to_docx(str(path), [
-            Feedback(error_type=FeedbackType.SYNTAX_ERROR, error_details="Missing semicolon")])
+        giver.save_feedback_to_docx(str(path), _report(_item(text="Missing semicolon", line_numbers=[5])))
 
         text = "\n".join(p.text for p in Document(str(path)).paragraphs)
-        assert "Missing semicolon" in text
+        for expected in ("Summary", "Your program reads input.", "1. Missing semicolon", "Syntax Error",
+                         "Would cost minor points on a graded submission", "Line(s) 5",
+                         "What we found: Missing semicolon", "Why it matters: It does not compile.",
+                         "How to fix it: Check the end of each statement.",
+                         "How to approach it: Read the first compiler error.", "Learn more: Java statements",
+                         "Next steps", "Fix it."):
+            assert expected in text, expected
 
 
 @pytest.mark.unit
@@ -453,7 +442,7 @@ class TestGiveProjectFeedbackRun:
 
 @pytest.mark.unit
 class TestExtraGuidance:
-    """Give Feedback's "Extra prompt guidance" reaches the prompt (project-feedback v4)."""
+    """Give Feedback's "Extra prompt guidance" reaches the prompt (project-feedback v5)."""
 
     def _giver(self, **kwargs):
         return FeedbackGiver(course_name="CSC 151", assignment_instructions="Print Hello",
@@ -461,17 +450,17 @@ class TestExtraGuidance:
 
     def test_build_prompt_includes_guidance(self):
         prompt = self._giver(extra_guidance="  Give hints, not fixes.  ").build_prompt("class A {}")
-        assert "## Instructor Guidance (non-graded feedback)\nGive hints, not fixes.\n" in prompt
+        assert "## Instructor Guidance\nGive hints, not fixes.\n" in prompt
         assert "class A {}" in prompt
 
     def test_blank_guidance_renders_none(self):
         prompt = self._giver().build_prompt("class A {}")
-        assert "## Instructor Guidance (non-graded feedback)\nNone\n" in prompt
+        assert "## Instructor Guidance\nNone\n" in prompt
 
     @pytest.mark.asyncio
     async def test_generate_feedback_sends_build_prompt(self, mocker):
         structured = mocker.patch('cqc_cpcc.project_feedback.llm_gateway.structured',
-                                  new_callable=AsyncMock, return_value=FeedbackGuide(all_feedback=[]))
+                                  new_callable=AsyncMock, return_value=_report())
         mocker.patch('cqc_cpcc.project_feedback.JavaCode')
         giver = self._giver(extra_guidance="Top 3 issues only.")
         await giver.generate_feedback("class A {}")
@@ -510,3 +499,89 @@ class TestFeedbackGuidanceTemplates:
             {"id": "a", "label": "A", "text": "do A"}, {"id": "b", "label": "", "text": "x"},
             {"id": "c", "label": "C", "text": "  "}, "junk"]}))
         assert [t["id"] for t in load_feedback_guidance_templates(path)] == ["a"]
+
+
+@pytest.mark.unit
+class TestFeedbackCategories:
+    """Categories come from Grade Assignment's error definitions (project-feedback v5)."""
+
+    def test_course_assignment_uses_its_error_definitions(self):
+        from cqc_cpcc.project_feedback import feedback_categories_for
+
+        ids = [c.id for c in feedback_categories_for("CSC 151", "Exam1")]
+        assert {"INSUFFICIENT_DOCUMENTATION", "SCANNER_CLASS_ERROR", "SYNTAX_ERROR"} <= set(ids)
+        assert ids[-2:] == ["REQUIREMENTS", "GENERAL"]
+
+    def test_cpp_course_gets_its_own_definitions(self):
+        from cqc_cpcc.project_feedback import feedback_categories_for
+
+        by_id = {c.id: c for c in feedback_categories_for("CSC134", "Project")}
+        assert "FUNCTION_PROTOTYPE_ERROR" in by_id and "SCANNER_CLASS_ERROR" not in by_id
+        assert by_id["INSUFFICIENT_DOCUMENTATION"].severity == "major"
+
+    def test_unknown_course_gets_the_general_intro_set(self):
+        from cqc_cpcc.project_feedback import feedback_categories_for
+
+        ids = {c.id for c in feedback_categories_for("CSC 113")}
+        assert {"INSUFFICIENT_DOCUMENTATION", "SEQUENCE_AND_SELECTION_ERROR", "REQUIREMENTS", "GENERAL"} <= ids
+        # Definitions used by only one course are left out.
+        assert not ids & {"SCANNER_CLASS_ERROR", "ARRAYLIST_ERRORS", "SECURITY_HOLES", "INCORRECT_FILENAME"}
+
+    def test_sources_list_course_assignments_then_general(self):
+        from cqc_cpcc.project_feedback import feedback_category_sources
+
+        assert feedback_category_sources("CSC 251")[-1] == (None, "General intro set")
+        assert [a for a, _ in feedback_category_sources("CSC 251")][:-1] == ["Exam1", "Exam2"]
+        assert feedback_category_sources("CSC 113") == [(None, "General intro set")]
+
+    def test_legacy_feedback_types_map_to_feedback_type_names(self):
+        from cqc_cpcc.project_feedback import DefaultFeedbackType
+
+        giver = FeedbackGiver("CSC 151", "Test", "Test", feedback_type_list=DefaultFeedbackType.list())
+        ids = [c.id for c in giver.categories]
+        assert ids[0] == "COMMENTS_MISSING" and "LOGIC_ERROR" in ids
+        assert giver.general_category_id == "ADDITIONAL_TIPS_PROVIDED"
+
+    def test_prompt_lists_categories_with_severity(self):
+        from cqc_cpcc.project_feedback import FeedbackCategory
+
+        giver = FeedbackGiver("CSC 151", "Test", "Test", categories=[
+            FeedbackCategory(id="SYNTAX_ERROR", name="Syntax Error", description="Syntax errors", severity="minor")])
+        assert "- SYNTAX_ERROR | Syntax Error | minor | Syntax errors" in giver.build_prompt("class A {}")
+
+
+@pytest.mark.unit
+class TestFeedbackPostprocess:
+    def _giver(self):
+        from cqc_cpcc.project_feedback import feedback_categories_for
+
+        return FeedbackGiver("CSC 151", "Test", "Test", categories=feedback_categories_for("CSC 151", "Exam1"))
+
+    def test_unknown_category_falls_back_to_general(self, mocker):
+        jc = mocker.patch('cqc_cpcc.project_feedback.JavaCode').return_value
+        jc.sufficient_amount_of_comments = True
+        report = self._giver()._postprocess(_report(_item("MADE_UP")), "code")
+        assert [i.category_id for i in report.items] == ["GENERAL"]
+
+    def test_documentation_item_dropped_when_comments_are_sufficient(self, mocker):
+        jc = mocker.patch('cqc_cpcc.project_feedback.JavaCode').return_value
+        jc.sufficient_amount_of_comments = True
+        report = self._giver()._postprocess(
+            _report(_item("INSUFFICIENT_DOCUMENTATION"), _item("SYNTAX_ERROR")), "code")
+        assert [i.category_id for i in report.items] == ["SYNTAX_ERROR"]
+
+    def test_documentation_item_added_when_comments_are_missing(self, mocker):
+        jc = mocker.patch('cqc_cpcc.project_feedback.JavaCode').return_value
+        jc.sufficient_amount_of_comments = False
+        jc.get_line_number.return_value = [3]
+        report = self._giver()._postprocess(_report(_item("SYNTAX_ERROR", code_error_lines=["int x"])), "code")
+        first = report.items[0]
+        assert first.category_id == "INSUFFICIENT_DOCUMENTATION" and first.would_lose_points == "major"
+        assert first.how_to_fix and first.learn_more
+        assert report.items[1].line_numbers == [3]
+
+    def test_file_header_is_not_counted_as_a_comment(self):
+        # Real JavaCode: the page's "// File:" header must not make uncommented code look documented.
+        code = "// File: Hello.java\n" + "\n".join(f"int v{i} = {i};" for i in range(30))
+        report = self._giver()._postprocess(_report(_item("SYNTAX_ERROR")), code)
+        assert report.items[0].category_id == "INSUFFICIENT_DOCUMENTATION"

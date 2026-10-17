@@ -1579,6 +1579,21 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
             ]
         )
 
+    # FeedbackReport for the Give Feedback page (project-feedback v5)
+    elif model_name == "FeedbackReport":
+        return schema_model.model_validate({
+            "summary": "Test mode: The program runs and reads its input.",
+            "items": [{
+                "category_id": "GENERAL", "title": "Test mode item", "would_lose_points": "suggestion",
+                "what_we_found": "Test mode: the output label differs from the instructions.",
+                "why_it_matters": "Test mode: output that differs from the instructions loses points.",
+                "how_to_fix": "Test mode: compare each printed label with the instructions.",
+                "how_to_approach": "Test mode: run the program with the sample input and compare.",
+                "learn_more": "Test mode: course module on formatted output.",
+            }],
+            "next_steps": ["Test mode: fix the output label.", "Test mode: run again."],
+        })
+
     # Requirement checklist (requirement coverage), deterministic for E2E tests
     elif model_name == "RequirementChecklist":
         return schema_model.model_validate({"requirements": [
