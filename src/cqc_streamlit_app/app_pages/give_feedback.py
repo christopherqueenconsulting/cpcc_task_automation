@@ -6,8 +6,8 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
-from cqc_cpcc.exam_review import parse_error_type_enum_name
-from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackGiver
+from cqc_cpcc.project_feedback import (FeedbackCategory, FeedbackGiver, category_slug, feedback_categories_for,
+                                       feedback_category_sources, load_feedback_guidance_templates)
 from cqc_cpcc.utilities.utils import read_file, extract_and_read_zip, wrap_code_in_markdown_backticks
 from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.initi_pages import init_session_state
@@ -19,46 +19,41 @@ from streamlit.runtime.scriptrunner_utils.script_run_context import ScriptRunCon
 # Initialize session state variables
 init_session_state()
 
-COURSE = "Course"
-PROJECT = "Project"
-NAME = "Name"
-DESCRIPTION = "Description"
+CATEGORY_SEVERITIES = ["major", "minor", "suggestion"]
 
 
-def define_feedback_types():
-    # Preload the table with default rows and values
-    default_data = [
-        {"Name": "COMMENTS_MISSING", "Description": "The code does not include sufficient commenting throughout"},
-        {"Name": "SYNTAX_ERROR", "Description": "There are syntax errors in the code"},
-        {"Name": "SPELLING_ERROR", "Description": "There are spelling mistakes in the code"},
-        {"Name": "OUTPUT_ALIGNMENT_ERROR",
-         "Description": "There are output alignment issues in the code that will affect exam grades"},
-        {"Name": "PROGRAMMING_STYLE",
-         "Description": "There are programming style issues that do not adhere to java language standards"},
-        {"Name": "ADDITIONAL_TIPS_PROVIDED", "Description": "Additional insights regarding the code and learning"},
-    ]
-
-    # Convert the enum class to a list of dictionaries
-    default_data = [
-        {**dict(zip((COURSE, PROJECT, NAME), parse_error_type_enum_name(enum_name))), **{DESCRIPTION: enum_value}}
-        for enum_name, enum_value in DefaultFeedbackType.__dict__.items() if not enum_name.startswith('_')]
-
-    feedback_types_df = pd.DataFrame(default_data)
-
-    # Allow users to edit the table
-    edited_df = st.data_editor(feedback_types_df, key='feedback_types', hide_index=True,
-                               num_rows="dynamic",
-                               column_config={
-                                   COURSE: st.column_config.TextColumn(COURSE),
-                                   PROJECT: st.column_config.TextColumn(PROJECT),
-                                   NAME: st.column_config.TextColumn(NAME,
-                                                                     help='Uppercase and Underscores only',
-                                                                     validate="^[A-Z_]+$"),
-                                   DESCRIPTION: st.column_config.TextColumn(DESCRIPTION + ' (required)', required=True)
-                               }
-                               )  # 👈 An editable dataframe
-
-    return edited_df
+def define_feedback_categories(course_name: str | None) -> tuple[list[FeedbackCategory], dict]:
+    """Where the feedback categories come from (Grade Assignment's error definitions for the
+    course, or the general intro set) plus an editable table of them."""
+    sources = feedback_category_sources(course_name)
+    labels = [label for _, label in sources]
+    label = st.selectbox("Feedback categories from", labels, key=f"feedback_category_source_{course_name}",
+                         help="The problems the feedback checks for, taken from the error definitions "
+                              "used to grade this course. Edit them under Advanced options.")
+    assignment_id = dict((lbl, aid) for aid, lbl in sources).get(label)
+    seeded = feedback_categories_for(course_name, assignment_id)
+    table = pd.DataFrame([{"Enabled": True, "Name": c.name, "Severity": c.severity if c.severity in
+                           CATEGORY_SEVERITIES else "minor", "Description": c.description} for c in seeded])
+    with st.expander("Advanced options", icon=":material/tune:"):
+        st.markdown(f"**Feedback categories** · {label}")
+        edited = st.data_editor(
+            table, key=f"feedback_categories_{course_name}_{assignment_id}", hide_index=True, num_rows="dynamic",
+            column_config={
+                "Enabled": st.column_config.CheckboxColumn("Enabled"),
+                "Name": st.column_config.TextColumn("Name", required=True),
+                "Severity": st.column_config.SelectboxColumn("Severity", options=CATEGORY_SEVERITIES, required=True),
+                "Description": st.column_config.TextColumn("What to check for", required=True),
+            })
+        model_cfg = define_chatGPTModel("give_feedback", default_temp_value=.3)
+    categories = {}
+    for row in edited.to_dict("records"):
+        name, description = str(row.get("Name") or "").strip(), str(row.get("Description") or "").strip()
+        if row.get("Enabled") is False or not name or not description:
+            continue
+        cid = category_slug(name)
+        categories.setdefault(cid, FeedbackCategory(id=cid, name=name, description=description,
+                                                    severity=row.get("Severity") or "minor"))
+    return list(categories.values()), model_cfg
 
 
 def _course_options() -> list[str]:
@@ -85,6 +80,30 @@ def _count_submissions(paths) -> int:
         else:
             total += 1
     return total
+
+
+GUIDANCE_NONE = "(none)"
+
+
+def _apply_guidance_template(templates: dict[str, str]) -> None:
+    """Pre-fill the guidance box from the chosen template; "(none)" leaves the text alone."""
+    text = templates.get(st.session_state.get("feedback_guidance_template"))
+    if text:
+        st.session_state["feedback_extra_guidance"] = text
+
+
+def add_extra_guidance_element() -> str:
+    """Template dropdown + editable "Extra prompt guidance" box; returns the guidance text."""
+    templates = {t["label"]: t["text"] for t in load_feedback_guidance_templates()}
+    st.markdown("**Extra prompt guidance**")
+    st.selectbox("Guidance template", [GUIDANCE_NONE] + list(templates), key="feedback_guidance_template",
+                 on_change=_apply_guidance_template, args=(templates,),
+                 help="Pre-fills the box below. Edit the text before you run. "
+                      "Templates live in src/cqc_cpcc/config/feedback_guidance_templates.json.")
+    return st.text_area("Extra prompt guidance", key="feedback_extra_guidance", height=160,
+                        label_visibility="collapsed",
+                        placeholder="Optional: how the feedback should be written, e.g. give hints "
+                                    "instead of fixes, focus on debugging, keep it to the top 3 issues.")
 
 
 def _run_key(*parts) -> str:
@@ -125,11 +144,8 @@ async def get_feedback_content():
             parts.append(wrap_code_in_markdown_backticks(content, language) if language else content)
         solution = "\n\n".join(parts)
 
-    with st.expander("Advanced options", icon=":material/tune:"):
-        st.markdown("**Feedback types**")
-        feedback_types = define_feedback_types()
-        model_cfg = define_chatGPTModel("give_feedback", default_temp_value=.3)
-    feedback_types_list = feedback_types[DESCRIPTION].to_list() if not feedback_types.empty else []
+    categories, model_cfg = define_feedback_categories(course_name)
+    extra_guidance = (add_extra_guidance_element() or "").strip()
     selected_model = model_cfg.get("model")
     selected_temperature = float(model_cfg.get("temperature", .3))
 
@@ -138,9 +154,10 @@ async def get_feedback_content():
         "Student submissions (files or a ZIP)", accepted, accept_multiple_files=True,
         key_prefix="feedback_") or []
 
-    ready = all([course_name, instructions, solution, submission_paths])
+    ready = all([course_name, instructions, solution, submission_paths, categories])
     count = _count_submissions(submission_paths)
-    key = _run_key(course_name, instructions, solution, feedback_types_list, selected_model,
+    key = _run_key(course_name, instructions, solution, [c.model_dump_json() for c in categories], selected_model,
+                   extra_guidance,
                    [(os.path.basename(o), os.path.getsize(t)) for o, t in submission_paths])
     store = st.session_state.setdefault("feedback_runs", {})
 
@@ -155,11 +172,13 @@ async def get_feedback_content():
         st.caption(f"Estimated {estimated_ai_cost('feedback', selected_model, sizes)}. "
                    "No AI call is made until you press the button.")
     if not ready:
-        st.caption("Choose a course and add the instructions, a solution and the submissions.")
+        st.caption("Choose a course and add the instructions, a solution and the submissions. "
+                   "Keep at least one feedback category enabled.")
 
     if start:
-        store[key] = await _run_feedback(course_name, instructions, solution, feedback_types_list,
-                                         selected_model, selected_temperature, submission_paths, accepted)
+        store[key] = await _run_feedback(course_name, instructions, solution, categories,
+                                         selected_model, selected_temperature, submission_paths, accepted,
+                                         extra_guidance)
         st.session_state["feedback_last_key"] = key
         st.rerun()
 
@@ -173,16 +192,17 @@ async def get_feedback_content():
         _show_feedback_results(run)
 
 
-async def _run_feedback(course_name, instructions, solution, feedback_types_list, selected_model,
-                        selected_temperature, submission_paths, accepted) -> dict:
+async def _run_feedback(course_name, instructions, solution, categories, selected_model,
+                        selected_temperature, submission_paths, accepted, extra_guidance="") -> dict:
     """Generate feedback for every submission; returns the run for the session cache."""
     feedback_giver = FeedbackGiver(
         course_name=course_name,
         assignment_instructions=instructions,
         assignment_solution=str(solution),
-        feedback_type_list=feedback_types_list,
+        categories=categories,
         feedback_llm=selected_model,
         temperature=selected_temperature,
+        extra_guidance=extra_guidance,
     )
     ctx = get_script_run_ctx()
     tasks = []
@@ -200,10 +220,17 @@ async def _run_feedback(course_name, instructions, solution, feedback_types_list
                     ctx=ctx, base_student_filename=base, filename_file_path_map={base: temp},
                     feedback_giver=feedback_giver, course_name=course_name,
                     selected_model=selected_model, selected_temperature=selected_temperature)))
-    files = [task.result() for task in tasks]
+    return _build_feedback_run(course_name, [task.result() for task in tasks])
+
+
+def _build_feedback_run(course_name: str, results: list[tuple[str, str | None]]) -> dict:
+    """Split per-student results into finished files and failed names; only finished files go
+    in the ZIP. A failed student comes back from add_feedback_status_extender with path None."""
+    files = [(name, path) for name, path in results if path]
+    failed = [name for name, path in results if not path]
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     zip_name = f"{course_name}_Feedback_{time_stamp}".replace(" ", "_") + ".zip"
-    return {"files": files, "zip_path": create_zip_file(files), "zip_name": zip_name}
+    return {"files": files, "failed": failed, "zip_path": create_zip_file(files), "zip_name": zip_name}
 
 
 @st.dialog("Student feedback", width="large")
@@ -216,7 +243,13 @@ def _feedback_drawer(name: str, path: str) -> None:
 
 def _show_feedback_results(run: dict) -> None:
     files = run["files"]
+    failed = run.get("failed", [])
     st.subheader(f"Feedback ready for {len(files)} student(s)", anchor=False)
+    if failed:
+        st.warning(f"No feedback for {len(failed)} student(s); they are not in the ZIP: "
+                   + ", ".join(failed) + ". Run them again with a new upload.", icon=":material/error:")
+    if not files:
+        return
     with open(run["zip_path"], "rb") as f:
         st.download_button("Download all feedback (.zip)", f.read(), file_name=run["zip_name"],
                            icon=":material/download:", key="feedback_zip_download")
@@ -293,26 +326,21 @@ async def add_feedback_status_extender(
 
         student_submission_file_path_contents_all = "\n\n".join(student_submission_file_path_contents_all)
 
-        prompt_value = feedback_giver.feedback_prompt.format_prompt(
-            submission=student_submission_file_path_contents_all)
+        graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
+                                                                suffix=graded_feedback_file_extension)
 
-        with st.expander("Prompt sent to the model", icon=":material/code:"):
-            st.code(getattr(prompt_value, 'text', ''))
-
+        prompt_expander = st.container()
         feedback_placeholder = st.empty()
         download_button_placeholder = st.empty()
 
         try:
+            prompt_text = feedback_giver.build_prompt(student_submission_file_path_contents_all)
+            with prompt_expander.expander("Prompt sent to the model", icon=":material/code:"):
+                st.code(prompt_text, language=None)
 
-            status.update(label=status_prefix_label + " | Creating Temp Feedback File")
-            graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
-                                                                    # prefix=file_name_prefix,
-                                                                    suffix=graded_feedback_file_extension)
-            status.update(label=status_prefix_label + " | Temp Feedback File Created")
-
-            await feedback_giver.generate_feedback(student_submission_file_path_contents_all,
-                                                   callback=
-                                                   ChatGPTStatusCallbackHandler(status, status_prefix_label))
+            report = await feedback_giver.generate_feedback(
+                student_submission_file_path_contents_all,
+                callback=ChatGPTStatusCallbackHandler(status, status_prefix_label))
 
             # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
@@ -325,7 +353,7 @@ async def add_feedback_status_extender(
             download_filename = file_name_prefix + graded_feedback_file_extension
 
             # Style the feedback and save to .docx file
-            feedback_giver.save_feedback_to_docx(graded_feedback_temp_file.name)
+            feedback_giver.save_feedback_to_docx(graded_feedback_temp_file.name, report)
             status.update(label=status_prefix_label + " | Feedback Saved to File")
 
             status.update(label=status_prefix_label + " | Reading Feedback File For Display")
@@ -344,6 +372,10 @@ async def add_feedback_status_extender(
 
         except Exception as e:
             status.update(label=status_prefix_label + " | Error: " + str(e), state="error", expanded=True)
+            graded_feedback_temp_file.close()
+            os.unlink(graded_feedback_temp_file.name)
+            # Path None marks the failure: the student is listed as failed and left out of the ZIP.
+            return (base_feedback_file_name + graded_feedback_file_extension), None
 
         return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
 
