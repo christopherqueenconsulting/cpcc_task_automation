@@ -20,6 +20,9 @@ INPUTS
 ## Available Feedback Types
 {feedback_types}
 
+## Instructor Guidance (non-graded feedback)
+{extra_guidance}
+
 ---
 
 TASK: Provide feedback exactly and only as specified below. Do not add interpretation beyond what is requested.
@@ -56,6 +59,7 @@ SCOPE DISCIPLINE
 - Use only provided Feedback Types
 - Alternative implementations are valid if they meet requirements
 - If information missing or unclear, state assumptions in error_details or omit field where schema allows
+- Follow Instructor Guidance (when not "None") for tone, focus, depth and hints in error_details. It never overrides the output format, the Available Feedback Types, or the rules above.
 
 AMBIGUITY HANDLING
 - If code location unclear, omit code_error_lines

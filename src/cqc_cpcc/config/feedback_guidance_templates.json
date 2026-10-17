@@ -1,0 +1,50 @@
+{
+  "_comment": "Templates for the Give Feedback page's 'Extra prompt guidance' box. Picking one pre-fills the box; the instructor can edit it before running. Add or change entries here, no code change needed. Each entry needs a unique id, a label (shown in the dropdown) and text (sent to the model). Grounded in Keuning et al. 2018 (feedback on mistakes, how to proceed, task constraints, concepts, metacognition), Hattie & Timperley 2007 (task, process, self-regulation) and Shute 2008 (specific, actionable, not overwhelming).",
+  "templates": [
+    {
+      "id": "hints_not_solutions",
+      "label": "Hints, not solutions",
+      "text": "This is practice feedback, not a grade. Guide the student to fix issues themselves.\n- Point to where the problem is (method, line, or symptom) and describe what goes wrong.\n- Ask one guiding question that leads toward the fix.\n- Suggest one small next step to try.\n- Do not write corrected code or the full answer. A one-line generic syntax example is acceptable only when the concept is new."
+    },
+    {
+      "id": "approach_errors",
+      "label": "How to approach errors",
+      "text": "Help the student learn how to deal with errors.\n- Explain each compiler or runtime error in plain language: what it means and what usually causes it.\n- Remind them to fix the first error first, because later errors are often caused by it.\n- Recommend fixing one thing at a time, then compiling and running again.\n- Show how to read an error message: file, line number, and error text."
+    },
+    {
+      "id": "debugging_strategy",
+      "label": "Debugging strategy",
+      "text": "Teach a debugging process, not just the fix.\n- For each problem, state the expected behavior and what the code actually does.\n- Suggest a specific test input that shows the problem.\n- Suggest where to add a print statement or breakpoint to see variable values, and what to look for.\n- Encourage forming one hypothesis at a time and testing it before changing more code."
+    },
+    {
+      "id": "prioritize_top_issues",
+      "label": "Prioritize the top issues",
+      "text": "Keep the feedback short and focused.\n- Report at most 3 feedback items, most important first.\n- Priority order: code that does not compile or run, missing required functionality, wrong results or logic, then output format, then style.\n- Skip minor style or spelling notes while bigger issues remain."
+    },
+    {
+      "id": "requirements_check",
+      "label": "Requirements check",
+      "text": "Focus on whether the submission meets the assignment instructions.\n- For each feedback item, name the instruction or requirement it relates to.\n- Call out missing required features, required constructs not used, and input/output that does not match the stated format.\n- Do not raise requirements that are not in the instructions."
+    },
+    {
+      "id": "concept_review",
+      "label": "Concept review and where to read more",
+      "text": "Connect each issue to the programming concept behind it.\n- Name the concept (for example: loops, conditionals, variable scope, data types, methods and parameters, Scanner input, arrays).\n- Explain the concept briefly in the context of this code.\n- Suggest what to review: the textbook topic or course module on that concept, or the official language documentation for the class or method involved. Do not invent URLs or page numbers."
+    },
+    {
+      "id": "style_readability",
+      "label": "Style and readability",
+      "text": "Focus on code quality and readability.\n- Comment on naming, comments, indentation, use of constants instead of magic numbers, and method length.\n- For each item, explain why the change helps someone reading or maintaining the code.\n- Reference the language's common style conventions."
+    },
+    {
+      "id": "growth_mindset",
+      "label": "Encouraging, growth-mindset tone",
+      "text": "Use a supportive, encouraging tone.\n- Start the first item by naming one specific thing the code does well.\n- Frame each issue as a next step for improvement, not a failure.\n- Comment on the code and the approach, never on the student's ability.\n- Keep it honest: do not call incorrect code correct."
+    },
+    {
+      "id": "reflection_prompts",
+      "label": "Reflection prompts",
+      "text": "Build self-checking habits.\n- End each feedback item with one short reflection question the student can answer by running or tracing the code (for example: 'What value does this variable hold after the last loop pass?').\n- Encourage the student to test with their own inputs, including edge cases such as zero, negative numbers, or empty input."
+    }
+  ]
+}

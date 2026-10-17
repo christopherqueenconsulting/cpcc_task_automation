@@ -1,4 +1,6 @@
 import datetime as DT
+import json
+from pathlib import Path
 from typing import Optional, Annotated, List, TypeVar
 
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
@@ -119,6 +121,26 @@ def schema_feedback_types(offered: list) -> list[str]:
         member = FeedbackType.__members__.get(name.split("_ALL_", 1)[-1]) if name else None
         out.append(member.value if member else text)
     return list(dict.fromkeys(out))
+
+
+FEEDBACK_GUIDANCE_TEMPLATES_PATH = Path(__file__).parent / "config" / "feedback_guidance_templates.json"
+
+
+def load_feedback_guidance_templates(path: Path = FEEDBACK_GUIDANCE_TEMPLATES_PATH) -> list[dict]:
+    """Templates that pre-fill the Give Feedback page's "Extra prompt guidance" box.
+
+    Each entry is ``{"id", "label", "text"}``. Edit the JSON file to add or change one.
+    A missing or malformed file returns ``[]`` so the page still works without templates.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        logger.warning("Feedback guidance templates not loaded: %s", e)
+        return []
+    entries = data.get("templates", []) if isinstance(data, dict) else []
+    return [t for t in entries
+            if isinstance(t, dict) and str(t.get("label", "")).strip() and str(t.get("text", "")).strip()]
 
 
 class Feedback(CodeError):
@@ -314,7 +336,7 @@ class FeedbackGiver:
                  feedback_llm: str = None,
                  feedback_type_list: list = None,
                  temperature: float = 0.2,
-
+                 extra_guidance: str = "",
                  ):
         # Store configuration for generating feedback
         # None means the registry's "feedback" role decides the model.
@@ -324,30 +346,35 @@ class FeedbackGiver:
         self.assignment_instructions = assignment_instructions
         self.assignment_solution = assignment_solution
         self.feedback_type_list = feedback_type_list if feedback_type_list else []
+        self.extra_guidance = (extra_guidance or "").strip()
 
-    async def generate_feedback(self, student_submission: str, callback=None):
-        """Generate feedback using OpenAI structured completion.
-        
-        Args:
-            student_submission: The student's code or submission text
-            callback: (Deprecated) Callback handler for compatibility, not used
-            
-        Returns:
-            None (sets self.feedback_list)
-        """
+    def build_prompt(self, student_submission: str) -> str:
+        """The exact prompt ``generate_feedback`` sends for this submission."""
         from cqc_cpcc.prompts.project_feedback import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
 
-        # Build the prompt with all parameters
         feedback_types_str = ("\n\t".join(schema_feedback_types(self.feedback_type_list))
                               if self.feedback_type_list else "N/A")
 
-        prompt = CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
+        return CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
             course_name=self.course_name,
             assignment=self.assignment_instructions,
             solution=self.assignment_solution,
             submission=student_submission,
-            feedback_types=feedback_types_str
+            feedback_types=feedback_types_str,
+            extra_guidance=self.extra_guidance or "None",
         )
+
+    async def generate_feedback(self, student_submission: str, callback=None):
+        """Generate feedback using OpenAI structured completion.
+
+        Args:
+            student_submission: The student's code or submission text
+            callback: (Deprecated) Callback handler for compatibility, not used
+
+        Returns:
+            None (sets self.feedback_list)
+        """
+        prompt = self.build_prompt(student_submission)
 
         feedback_guide = await llm_gateway.structured(
             role="feedback",

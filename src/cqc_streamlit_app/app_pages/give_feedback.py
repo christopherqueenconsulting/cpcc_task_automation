@@ -7,7 +7,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 from cqc_cpcc.exam_review import parse_error_type_enum_name
-from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackGiver
+from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackGiver, load_feedback_guidance_templates
 from cqc_cpcc.utilities.utils import read_file, extract_and_read_zip, wrap_code_in_markdown_backticks
 from cqc_streamlit_app.chatgpt_status_callback_handler import ChatGPTStatusCallbackHandler
 from cqc_streamlit_app.initi_pages import init_session_state
@@ -87,6 +87,30 @@ def _count_submissions(paths) -> int:
     return total
 
 
+GUIDANCE_NONE = "(none)"
+
+
+def _apply_guidance_template(templates: dict[str, str]) -> None:
+    """Pre-fill the guidance box from the chosen template; "(none)" leaves the text alone."""
+    text = templates.get(st.session_state.get("feedback_guidance_template"))
+    if text:
+        st.session_state["feedback_extra_guidance"] = text
+
+
+def add_extra_guidance_element() -> str:
+    """Template dropdown + editable "Extra prompt guidance" box; returns the guidance text."""
+    templates = {t["label"]: t["text"] for t in load_feedback_guidance_templates()}
+    st.markdown("**Extra prompt guidance**")
+    st.selectbox("Guidance template", [GUIDANCE_NONE] + list(templates), key="feedback_guidance_template",
+                 on_change=_apply_guidance_template, args=(templates,),
+                 help="Pre-fills the box below. Edit the text before you run. "
+                      "Templates live in src/cqc_cpcc/config/feedback_guidance_templates.json.")
+    return st.text_area("Extra prompt guidance", key="feedback_extra_guidance", height=160,
+                        label_visibility="collapsed",
+                        placeholder="Optional: how the feedback should be written, e.g. give hints "
+                                    "instead of fixes, focus on debugging, keep it to the top 3 issues.")
+
+
 def _run_key(*parts) -> str:
     import hashlib
     return hashlib.sha256("\x00".join(str(p) for p in parts).encode()).hexdigest()[:16]
@@ -125,6 +149,8 @@ async def get_feedback_content():
             parts.append(wrap_code_in_markdown_backticks(content, language) if language else content)
         solution = "\n\n".join(parts)
 
+    extra_guidance = (add_extra_guidance_element() or "").strip()
+
     with st.expander("Advanced options", icon=":material/tune:"):
         st.markdown("**Feedback types**")
         feedback_types = define_feedback_types()
@@ -140,7 +166,7 @@ async def get_feedback_content():
 
     ready = all([course_name, instructions, solution, submission_paths])
     count = _count_submissions(submission_paths)
-    key = _run_key(course_name, instructions, solution, feedback_types_list, selected_model,
+    key = _run_key(course_name, instructions, solution, feedback_types_list, selected_model, extra_guidance,
                    [(os.path.basename(o), os.path.getsize(t)) for o, t in submission_paths])
     store = st.session_state.setdefault("feedback_runs", {})
 
@@ -159,7 +185,8 @@ async def get_feedback_content():
 
     if start:
         store[key] = await _run_feedback(course_name, instructions, solution, feedback_types_list,
-                                         selected_model, selected_temperature, submission_paths, accepted)
+                                         selected_model, selected_temperature, submission_paths, accepted,
+                                         extra_guidance)
         st.session_state["feedback_last_key"] = key
         st.rerun()
 
@@ -174,7 +201,7 @@ async def get_feedback_content():
 
 
 async def _run_feedback(course_name, instructions, solution, feedback_types_list, selected_model,
-                        selected_temperature, submission_paths, accepted) -> dict:
+                        selected_temperature, submission_paths, accepted, extra_guidance="") -> dict:
     """Generate feedback for every submission; returns the run for the session cache."""
     feedback_giver = FeedbackGiver(
         course_name=course_name,
@@ -183,6 +210,7 @@ async def _run_feedback(course_name, instructions, solution, feedback_types_list
         feedback_type_list=feedback_types_list,
         feedback_llm=selected_model,
         temperature=selected_temperature,
+        extra_guidance=extra_guidance,
     )
     ctx = get_script_run_ctx()
     tasks = []
@@ -293,22 +321,18 @@ async def add_feedback_status_extender(
 
         student_submission_file_path_contents_all = "\n\n".join(student_submission_file_path_contents_all)
 
-        prompt_value = feedback_giver.feedback_prompt.format_prompt(
-            submission=student_submission_file_path_contents_all)
+        # Created before the try so the return below always has a path, even on error.
+        graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
+                                                                suffix=graded_feedback_file_extension)
 
-        with st.expander("Prompt sent to the model", icon=":material/code:"):
-            st.code(getattr(prompt_value, 'text', ''))
-
+        prompt_expander = st.container()
         feedback_placeholder = st.empty()
         download_button_placeholder = st.empty()
 
         try:
-
-            status.update(label=status_prefix_label + " | Creating Temp Feedback File")
-            graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
-                                                                    # prefix=file_name_prefix,
-                                                                    suffix=graded_feedback_file_extension)
-            status.update(label=status_prefix_label + " | Temp Feedback File Created")
+            prompt_text = feedback_giver.build_prompt(student_submission_file_path_contents_all)
+            with prompt_expander.expander("Prompt sent to the model", icon=":material/code:"):
+                st.code(prompt_text, language=None)
 
             await feedback_giver.generate_feedback(student_submission_file_path_contents_all,
                                                    callback=

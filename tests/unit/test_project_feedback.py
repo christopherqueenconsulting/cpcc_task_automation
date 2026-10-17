@@ -421,3 +421,64 @@ class TestGiveProjectFeedbackRun:
         assert properties["cqc_feature"] == "project_feedback"
         assert properties["cqc_courses"] == 2
         assert properties["cqc_status"] == "succeeded"
+
+
+@pytest.mark.unit
+class TestExtraGuidance:
+    """Give Feedback's "Extra prompt guidance" reaches the prompt (project-feedback v4)."""
+
+    def _giver(self, **kwargs):
+        return FeedbackGiver(course_name="CSC 151", assignment_instructions="Print Hello",
+                             assignment_solution="class Hello {}", **kwargs)
+
+    def test_build_prompt_includes_guidance(self):
+        prompt = self._giver(extra_guidance="  Give hints, not fixes.  ").build_prompt("class A {}")
+        assert "## Instructor Guidance (non-graded feedback)\nGive hints, not fixes.\n" in prompt
+        assert "class A {}" in prompt
+
+    def test_blank_guidance_renders_none(self):
+        prompt = self._giver().build_prompt("class A {}")
+        assert "## Instructor Guidance (non-graded feedback)\nNone\n" in prompt
+
+    @pytest.mark.asyncio
+    async def test_generate_feedback_sends_build_prompt(self, mocker):
+        structured = mocker.patch('cqc_cpcc.project_feedback.llm_gateway.structured',
+                                  new_callable=AsyncMock, return_value=FeedbackGuide(all_feedback=[]))
+        mocker.patch('cqc_cpcc.project_feedback.JavaCode')
+        giver = self._giver(extra_guidance="Top 3 issues only.")
+        await giver.generate_feedback("class A {}")
+        assert structured.call_args.kwargs["prompt"] == giver.build_prompt("class A {}")
+
+
+@pytest.mark.unit
+class TestFeedbackGuidanceTemplates:
+    def test_shipped_templates_are_valid(self):
+        import json
+
+        from cqc_cpcc.project_feedback import (FEEDBACK_GUIDANCE_TEMPLATES_PATH,
+                                               load_feedback_guidance_templates)
+
+        raw = json.loads(FEEDBACK_GUIDANCE_TEMPLATES_PATH.read_text(encoding="utf-8"))["templates"]
+        templates = load_feedback_guidance_templates()
+        assert len(templates) == len(raw) >= 5  # nothing dropped as malformed
+        assert len({t["id"] for t in templates}) == len(templates)
+        assert len({t["label"] for t in templates}) == len(templates)
+
+    def test_missing_or_bad_file_returns_empty(self, tmp_path):
+        from cqc_cpcc.project_feedback import load_feedback_guidance_templates
+
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        assert load_feedback_guidance_templates(tmp_path / "missing.json") == []
+        assert load_feedback_guidance_templates(bad) == []
+
+    def test_entries_without_label_or_text_are_skipped(self, tmp_path):
+        import json
+
+        from cqc_cpcc.project_feedback import load_feedback_guidance_templates
+
+        path = tmp_path / "t.json"
+        path.write_text(json.dumps({"templates": [
+            {"id": "a", "label": "A", "text": "do A"}, {"id": "b", "label": "", "text": "x"},
+            {"id": "c", "label": "C", "text": "  "}, "junk"]}))
+        assert [t["id"] for t in load_feedback_guidance_templates(path)] == ["a"]

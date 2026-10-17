@@ -244,7 +244,8 @@ def _render_project_feedback() -> list[str]:
     return [CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
         course_name=FIXTURE_COURSE, assignment=FIXTURE_INSTRUCTIONS, solution=FIXTURE_SOLUTION,
         submission=FIXTURE_SUBMISSION,
-        feedback_types="\n\t".join(schema_feedback_types(DefaultFeedbackType.list())))]
+        feedback_types="\n\t".join(schema_feedback_types(DefaultFeedbackType.list())),
+        extra_guidance="None")]
 
 
 def _render_flowgorithm_grade() -> list[str]:
