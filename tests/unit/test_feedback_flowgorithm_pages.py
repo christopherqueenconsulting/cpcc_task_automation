@@ -109,7 +109,7 @@ async def test_feedback_status_extender_builds_prompt_and_saves_docx(mocker):
     build = mocker.spy(giver, "build_prompt")
 
     async def _fake_generate(submission, callback=None):
-        giver.feedback_list = []
+        return []
 
     mocker.patch.object(giver, "generate_feedback", side_effect=_fake_generate)
     import tempfile
@@ -123,6 +123,64 @@ async def test_feedback_status_extender_builds_prompt_and_saves_docx(mocker):
     assert name == "Student_A.docx"
     assert Path(path).stat().st_size > 0  # a real .docx was written
     assert "Hints only." in build.spy_return
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_feedback_status_extender_marks_a_failed_student(mocker):
+    from cqc_cpcc.project_feedback import FeedbackGiver
+
+    page = _page()
+    mocker.patch.object(page, "st")
+    giver = FeedbackGiver(course_name="CSC 151", assignment_instructions="Print Hello",
+                          assignment_solution="class Hello {}")
+    mocker.patch.object(giver, "generate_feedback", side_effect=RuntimeError("model down"))
+    save = mocker.spy(giver, "save_feedback_to_docx")
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".java", delete=False) as f:
+        f.write("public class Hello {}")
+    name, path = await page.add_feedback_status_extender(
+        ctx=None, base_student_filename="Student B", filename_file_path_map={"Hello.java": f.name},
+        feedback_giver=giver, course_name="CSC 151", selected_model="m", selected_temperature=0.3)
+    assert name == "Student_B.docx"
+    assert path is None  # the failure marker: no empty .docx is handed back
+    assert save.call_count == 0
+
+
+@pytest.mark.unit
+def test_feedback_run_leaves_failed_students_out_of_the_zip(tmp_path):
+    page = _page()
+    doc = tmp_path / "a.docx"
+    doc.write_bytes(b"feedback for A")
+    run = page._build_feedback_run("CSC 151", [("Student_A.docx", str(doc)), ("Student_B.docx", None)])
+    assert run["files"] == [("Student_A.docx", str(doc))]
+    assert run["failed"] == ["Student_B.docx"]
+    with zipfile.ZipFile(run["zip_path"]) as z:
+        assert z.namelist() == ["Student_A.docx"]
+
+
+@pytest.mark.unit
+def test_feedback_results_name_the_failed_students(mocker, tmp_path):
+    page = _page()
+    st = mocker.patch.object(page, "st")
+    st.dataframe.return_value.selection.rows = []
+    doc = tmp_path / "a.docx"
+    doc.write_bytes(b"feedback for A")
+    page._show_feedback_results({"files": [("Student_A.docx", str(doc))], "failed": ["Student_B.docx"],
+                                 "zip_path": str(doc), "zip_name": "x.zip"})
+    warning = st.warning.call_args.args[0]
+    assert "Student_B.docx" in warning and "Student_A.docx" not in warning
+    assert [row["Student"] for row in st.dataframe.call_args.args[0]] == ["Student_A.docx"]
+
+
+@pytest.mark.unit
+def test_feedback_results_with_every_student_failed_offer_no_zip(mocker):
+    page = _page()
+    st = mocker.patch.object(page, "st")
+    page._show_feedback_results({"files": [], "failed": ["Student_B.docx"], "zip_path": "unused",
+                                 "zip_name": "x.zip"})
+    assert "Student_B.docx" in st.warning.call_args.args[0]
+    st.download_button.assert_not_called()
 
 
 @pytest.mark.unit

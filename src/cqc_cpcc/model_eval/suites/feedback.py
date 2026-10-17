@@ -22,8 +22,7 @@ async def invoke(case):
     giver = FeedbackGiver(course_name=i["course_name"], assignment_instructions=i["assignment_instructions"],
                           assignment_solution=i["assignment_solution"],
                           feedback_type_list=i["feedback_type_list"])
-    await giver.generate_feedback(i["student_submission"])
-    return giver.feedback_list or []
+    return await giver.generate_feedback(i["student_submission"]) or []
 
 
 def to_payload(output) -> dict:

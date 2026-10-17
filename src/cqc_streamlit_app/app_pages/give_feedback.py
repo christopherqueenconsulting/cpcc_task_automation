@@ -228,10 +228,17 @@ async def _run_feedback(course_name, instructions, solution, feedback_types_list
                     ctx=ctx, base_student_filename=base, filename_file_path_map={base: temp},
                     feedback_giver=feedback_giver, course_name=course_name,
                     selected_model=selected_model, selected_temperature=selected_temperature)))
-    files = [task.result() for task in tasks]
+    return _build_feedback_run(course_name, [task.result() for task in tasks])
+
+
+def _build_feedback_run(course_name: str, results: list[tuple[str, str | None]]) -> dict:
+    """Split per-student results into finished files and failed names; only finished files go
+    in the ZIP. A failed student comes back from add_feedback_status_extender with path None."""
+    files = [(name, path) for name, path in results if path]
+    failed = [name for name, path in results if not path]
     time_stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     zip_name = f"{course_name}_Feedback_{time_stamp}".replace(" ", "_") + ".zip"
-    return {"files": files, "zip_path": create_zip_file(files), "zip_name": zip_name}
+    return {"files": files, "failed": failed, "zip_path": create_zip_file(files), "zip_name": zip_name}
 
 
 @st.dialog("Student feedback", width="large")
@@ -244,7 +251,13 @@ def _feedback_drawer(name: str, path: str) -> None:
 
 def _show_feedback_results(run: dict) -> None:
     files = run["files"]
+    failed = run.get("failed", [])
     st.subheader(f"Feedback ready for {len(files)} student(s)", anchor=False)
+    if failed:
+        st.warning(f"No feedback for {len(failed)} student(s); they are not in the ZIP: "
+                   + ", ".join(failed) + ". Run them again with a new upload.", icon=":material/error:")
+    if not files:
+        return
     with open(run["zip_path"], "rb") as f:
         st.download_button("Download all feedback (.zip)", f.read(), file_name=run["zip_name"],
                            icon=":material/download:", key="feedback_zip_download")
@@ -321,7 +334,6 @@ async def add_feedback_status_extender(
 
         student_submission_file_path_contents_all = "\n\n".join(student_submission_file_path_contents_all)
 
-        # Created before the try so the return below always has a path, even on error.
         graded_feedback_temp_file = tempfile.NamedTemporaryFile(delete=False,
                                                                 suffix=graded_feedback_file_extension)
 
@@ -334,9 +346,9 @@ async def add_feedback_status_extender(
             with prompt_expander.expander("Prompt sent to the model", icon=":material/code:"):
                 st.code(prompt_text, language=None)
 
-            await feedback_giver.generate_feedback(student_submission_file_path_contents_all,
-                                                   callback=
-                                                   ChatGPTStatusCallbackHandler(status, status_prefix_label))
+            feedback_list = await feedback_giver.generate_feedback(
+                student_submission_file_path_contents_all,
+                callback=ChatGPTStatusCallbackHandler(status, status_prefix_label))
 
             # print("\n\nGrade Feedback:\n%s" % code_grader.get_text_feedback())
 
@@ -349,7 +361,7 @@ async def add_feedback_status_extender(
             download_filename = file_name_prefix + graded_feedback_file_extension
 
             # Style the feedback and save to .docx file
-            feedback_giver.save_feedback_to_docx(graded_feedback_temp_file.name)
+            feedback_giver.save_feedback_to_docx(graded_feedback_temp_file.name, feedback_list)
             status.update(label=status_prefix_label + " | Feedback Saved to File")
 
             status.update(label=status_prefix_label + " | Reading Feedback File For Display")
@@ -368,6 +380,10 @@ async def add_feedback_status_extender(
 
         except Exception as e:
             status.update(label=status_prefix_label + " | Error: " + str(e), state="error", expanded=True)
+            graded_feedback_temp_file.close()
+            os.unlink(graded_feedback_temp_file.name)
+            # Path None marks the failure: the student is listed as failed and left out of the ZIP.
+            return (base_feedback_file_name + graded_feedback_file_extension), None
 
         return (base_feedback_file_name + graded_feedback_file_extension), graded_feedback_temp_file.name
 

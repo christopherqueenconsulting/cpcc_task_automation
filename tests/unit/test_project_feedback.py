@@ -76,7 +76,7 @@ class TestFeedbackGiverSuccess:
             "public static void main(String[] args) { "
             'System.out.println("Hello World") } }'
         )
-        await giver.generate_feedback(student_code)
+        feedback = await giver.generate_feedback(student_code)
         
         # Verify get_structured_completion was called
         assert mock_get_structured.called
@@ -88,8 +88,9 @@ class TestFeedbackGiverSuccess:
         assert student_code in call_kwargs['prompt']
         
         # Verify feedback was generated
-        assert giver.feedback_list is not None
-        assert len(giver.feedback_list) >= 0  # May be filtered by JavaCode logic
+        assert feedback is not None
+        assert len(feedback) >= 0  # May be filtered by JavaCode logic
+        assert not hasattr(giver, "feedback_list")  # nothing is stored on the shared instance
     
     async def test_generate_feedback_with_empty_feedback_list(self, mocker):
         """Should handle empty feedback gracefully."""
@@ -111,10 +112,10 @@ class TestFeedbackGiverSuccess:
             feedback_type_list=[]
         )
         
-        await giver.generate_feedback("test code")
+        feedback = await giver.generate_feedback("test code")
         
         # Should have empty feedback list
-        assert giver.feedback_list == []
+        assert feedback == []
     
     async def test_generate_feedback_with_custom_model(self, mocker):
         """Should use custom model when provided."""
@@ -283,11 +284,10 @@ class TestFeedbackGiverConcurrency:
             for i, giver in enumerate(givers)
         ]
         
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks)
         
         # All should have generated feedback
-        for i, giver in enumerate(givers):
-            assert giver.feedback_list is not None
+        assert all(feedback is not None for feedback in results)
         
         # Should have been called 3 times
         assert mock_get_structured.call_count == 3
@@ -329,12 +329,40 @@ class TestFeedbackGiverConcurrency:
         
         results = await asyncio.gather(*tasks)
         
-        # All tasks should complete
-        assert len(results) == 3
-        
-        # Note: feedback_list will be from last completion due to shared
-        # state. This is expected behavior - in real usage, each submission
-        # is processed sequentially
+        # All tasks should complete, each with its own feedback
+        assert [[f.error_details for f in feedback] for feedback in results] == [
+            ["Submission 0"], ["Submission 1"], ["Submission 2"]]
+
+    async def test_shared_giver_never_crosses_students_when_calls_finish_out_of_order(self, mocker):
+        """The page shares one giver across concurrent students; the first to start finishes last."""
+        async def _structured(**kwargs):
+            student = "Student A" if "code from A" in kwargs["prompt"] else "Student B"
+            await asyncio.sleep(0.05 if student == "Student A" else 0)
+            return FeedbackGuide(all_feedback=[
+                Feedback(error_type=FeedbackType.SYNTAX_ERROR, error_details=f"for {student}")])
+
+        mocker.patch('cqc_cpcc.project_feedback.llm_gateway.structured', side_effect=_structured)
+        mocker.patch('cqc_cpcc.project_feedback.JavaCode')
+        giver = FeedbackGiver(course_name="CSC 151", assignment_instructions="Test",
+                              assignment_solution="Test", feedback_type_list=[])
+
+        a, b = await asyncio.gather(giver.generate_feedback("code from A"),
+                                    giver.generate_feedback("code from B"))
+
+        assert [f.error_details for f in a] == ["for Student A"]
+        assert [f.error_details for f in b] == ["for Student B"]
+
+    async def test_save_feedback_to_docx_writes_the_list_it_is_given(self, tmp_path):
+        from docx import Document
+
+        giver = FeedbackGiver(course_name="CSC 151", assignment_instructions="Test",
+                              assignment_solution="Test")
+        path = tmp_path / "feedback.docx"
+        giver.save_feedback_to_docx(str(path), [
+            Feedback(error_type=FeedbackType.SYNTAX_ERROR, error_details="Missing semicolon")])
+
+        text = "\n".join(p.text for p in Document(str(path)).paragraphs)
+        assert "Missing semicolon" in text
 
 
 @pytest.mark.unit

@@ -318,7 +318,6 @@ def process_submission_from_link(driver: WebDriver, wait: WebDriverWait, url: st
 
 
 class FeedbackGiver:
-    feedback_list: List[Feedback] = None
     feedback_guide: FeedbackGuide = None
 
     # Configuration for OpenAI structured completion
@@ -364,7 +363,7 @@ class FeedbackGiver:
             extra_guidance=self.extra_guidance or "None",
         )
 
-    async def generate_feedback(self, student_submission: str, callback=None):
+    async def generate_feedback(self, student_submission: str, callback=None) -> List[Feedback]:
         """Generate feedback using OpenAI structured completion.
 
         Args:
@@ -372,7 +371,8 @@ class FeedbackGiver:
             callback: (Deprecated) Callback handler for compatibility, not used
 
         Returns:
-            None (sets self.feedback_list)
+            The feedback items for this submission. Nothing is stored on the instance,
+            so one giver can serve concurrent students without their feedback crossing.
         """
         prompt = self.build_prompt(student_submission)
 
@@ -424,8 +424,7 @@ class FeedbackGiver:
                     # Insufficient comments but error type doesnt exist
                     unique_feedback.insert(0, insufficient_comment_error)
 
-        # Append the feedback back to the instance variables
-        self.feedback_list = unique_feedback
+        return unique_feedback
 
     def set_document_style(self, document: Document):
         style = document.styles['Heading 3']
@@ -452,14 +451,12 @@ class FeedbackGiver:
                 details_paragraph = d.add_paragraph("", style='List Bullet 3')
                 details_paragraph.add_run(details)
 
-    def save_feedback_to_docx(self, file_path: str, pre_text: str = "", post_text: str = "",
-                              pre_post_heading_size: int = 3):
+    def save_feedback_to_docx(self, file_path: str, feedback_list: List[Feedback], pre_text: str = "",
+                              post_text: str = "", pre_post_heading_size: int = 3):
         document = Document()
 
         # Set the styles for the document
         self.set_document_style(document)
-
-        feedback_list = self.feedback_list
 
         # Add the pre-text to the document
         if len(pre_text) > 0:
