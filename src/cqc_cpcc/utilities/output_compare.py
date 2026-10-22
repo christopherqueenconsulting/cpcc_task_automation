@@ -50,7 +50,7 @@ import difflib
 import re
 from collections import Counter
 from dataclasses import dataclass
-from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, localcontext
 from enum import StrEnum
 from typing import Iterable, Optional, Sequence
 
@@ -214,9 +214,13 @@ def _number_kind(expected: str, actual: str) -> Optional[str]:
     if pe >= 1 and pa >= 1 and pe != pa and not student_int_as_double:
         more, fewer = (e, a) if pe > pa else (a, e)
         quantum = Decimal(1).scaleb(-min(pe, pa))
-        # Accept half-up (printf) and half-even (DecimalFormat) rounding of a tie.
-        if any(more.quantize(quantum, rounding=r) == fewer for r in (ROUND_HALF_UP, ROUND_HALF_EVEN)):
-            return DECIMAL_SCALE
+        # Student output is untrusted: size the precision to the operands so a very long
+        # number cannot make quantize raise InvalidOperation.
+        with localcontext() as ctx:
+            ctx.prec = max(len(e.as_tuple().digits), len(a.as_tuple().digits)) + 2
+            # Accept half-up (printf) and half-even (DecimalFormat) rounding of a tie.
+            if any(more.quantize(quantum, rounding=r) == fewer for r in (ROUND_HALF_UP, ROUND_HALF_EVEN)):
+                return DECIMAL_SCALE
     return "value"
 
 

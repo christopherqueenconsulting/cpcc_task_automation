@@ -129,6 +129,13 @@ def test_rung7c_values_differ(expected, actual):
 
 
 @pytest.mark.unit
+def test_rung7_very_long_numbers_do_not_raise():
+    assert _verdict("Avg: 3.5\n", "Avg: 1234567890123456789012345678901.25\n") == (Verdict.VALUES_DIFFER, "")
+    long_more = "3." + "4" * 60
+    assert _verdict("Avg: 3.4\n", f"Avg: {long_more}\n") == (Verdict.FORMAT_ONLY, oc.DECIMAL_SCALE)
+
+
+@pytest.mark.unit
 def test_rung7_plan_examples():
     assert _verdict("10", "10.47")[0] is Verdict.VALUES_DIFFER
     assert _verdict("3.5", "3.50") == (Verdict.FORMAT_ONLY, oc.NUMBER_FORMAT)
