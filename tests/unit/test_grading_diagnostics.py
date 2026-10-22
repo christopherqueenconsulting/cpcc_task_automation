@@ -237,3 +237,33 @@ def test_output_is_owner_only_and_never_follows_a_symlink(tmp_path):
     with pytest.raises(OSError):
         module.main(["--output", str(link)])
     assert not (tmp_path / "elsewhere.txt").exists()
+
+
+@pytest.mark.unit
+def test_unmarked_requirements_are_graded_not_floored(capsys):
+    _seed(NAMES)
+    result, _ = _scored(_error("CSC_151_EXAM_1_OUTPUT_FORMATTING", "minor"))
+    result = result.model_copy(update={"needs_review": True, "validity_status": "requirements_unmarked"})
+    results_store.save_run("runkeyunmarked", "rubric", [("Pat Kim", result)])
+    rubric = find_rubric("csc_java_exam_rubric")
+    empty = build_invalid_submission_result(rubric, SimpleNamespace(status="empty", reason="no files"))
+    assert attribute(empty, rubric)["floored"] is True and attribute(result, rubric)["floored"] is False
+
+    _report().main(["--json"])
+    [entry] = json.loads(capsys.readouterr().out)["rubrics"]
+    assert entry["graded_students"] == 6 and entry["floored_students"] == 0
+    assert entry["requirements_unmarked_count"] == 1
+
+
+@pytest.mark.unit
+def test_a_brightspace_resubmission_counts_as_the_same_student(capsys):
+    module = _report()
+    assert module.student_key("10001-10002 - Ada Example") == module.student_key("10001-10003 - Ada Example")
+    assert module.student_key("Ada Example") == "Ada Example"
+    for sub in ("10002", "10003", "10004", "10005"):
+        result, _ = _scored(_error("CSC_151_EXAM_1_OUTPUT_FORMATTING", "minor"))
+        results_store.save_run(f"runkeyresub{sub}", "rubric", [(f"10001-{sub} - Ada Example", result)])  # pii-guard:allow
+    result, _ = _scored()
+    results_store.save_run("runkeyresubother", "rubric", [("Ben Sample", result)])
+    module.main(["--json"])
+    assert json.loads(capsys.readouterr().out)["withheld_rubrics"] == 1   # 2 students, not 5

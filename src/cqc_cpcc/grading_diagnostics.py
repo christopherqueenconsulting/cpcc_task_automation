@@ -19,8 +19,10 @@ These four add up to the points lost. Gains are measured from ``base`` too:
 counting each error type once, and (an upper bound) dropping requirement errors that sit
 next to a model error of an output, sequence or calculation kind.
 
-A result floored by the validity gate or the no-code rule (``validity_status`` set) scored
-0 by policy, not by grading; it is marked ``floored`` so reports keep it out of means.
+A result floored by the validity gate or the no-code rule (``validity_status`` in
+``NO_WORK_STATUSES``) scored 0 by policy, not by grading; it is marked ``floored`` so
+reports keep it out of means. ``requirements_unmarked`` results were scored normally and
+are only flagged.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from typing import Callable, Optional
 from cqc_cpcc.requirement_coverage import is_requirement_error
 from cqc_cpcc.rubric_config import load_rubrics_from_config
 from cqc_cpcc.rubric_models import DetectedError, Rubric, RubricAssessmentResult
+from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES
 
 # Model error codes whose issue a requirement verdict may also have been penalised for.
 OVERLAP_HINTS = ("OUTPUT", "SEQUENCE", "CALCULATION", "FORMATTING", "SELECTION")
@@ -116,7 +119,8 @@ def attribute(result: RubricAssessmentResult, rubric: Rubric) -> dict:
             (result.effective_major_errors or 0) - (result.original_major_errors or 0), 0),
         "possible_overlaps": overlaps,
         "needs_review": bool(result.needs_review),
-        "floored": result.validity_status is not None,
+        "floored": result.validity_status in NO_WORK_STATUSES,
+        "requirements_unmarked": result.validity_status == "requirements_unmarked",
         "rescore_mismatch": abs(base - earned) > 1e-6,
         "rubric_version_changed": str(result.rubric_version) != str(rubric.rubric_version),
     }

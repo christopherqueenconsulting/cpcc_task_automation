@@ -11,7 +11,8 @@ No LLM call, nothing leaves the machine.
     poetry run python scripts/grading_harshness_report.py --per-student --output ~/harshness.txt
 
 The default output is aggregates per rubric over distinct students (a student graded in
-several runs counts once, from the newest run). Rubrics with fewer than 5 distinct
+several runs counts once, from the newest run, even after a BrightSpace resubmission;
+a student floored in the newest run is reported as floored). Rubrics with fewer than 5 distinct
 students are withheld, and no name, feedback, note or error description is printed, so
 the default output can be pasted into chat. Share one report per term, not successive ones:
 the difference between two reports can single out the students added in between.
@@ -27,6 +28,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -49,7 +51,15 @@ MEANS = ("points_possible", "points_lost", "lost_not_error_driven", "lost_to_mod
          "lost_to_requirements", "rescore_gap", "gain_if_distinct", "gain_if_no_overlap_upper_bound",
          "model_major_types", "model_minor_types", "requirement_errors", "minor_occurrence_inflation",
          "minor_to_major_conversions", "possible_overlaps")
-COUNTED = ("needs_review", "rescore_mismatch", "rubric_version_changed")
+COUNTED = ("needs_review", "rescore_mismatch", "rubric_version_changed", "requirements_unmarked")
+# A BrightSpace submission folder is "<userid>-<submissionid> - Name"; a resubmission gets a
+# new submission id, so the student is keyed by the user id alone.
+_SUBMISSION_FOLDER = re.compile(r"^(\d+)-\d+\s+-\s+")
+
+
+def student_key(student_id: str) -> str:
+    match = _SUBMISSION_FOLDER.match(student_id)
+    return match.group(1) if match else student_id
 
 
 def collect(runs: list[dict]) -> tuple[list[dict], dict]:
@@ -62,9 +72,10 @@ def collect(runs: list[dict]) -> tuple[list[dict], dict]:
             continue
         meta = run.get("meta") or {}
         for student_id, result in run["results"]:
-            if (result.rubric_id, student_id) in seen:
+            key = (result.rubric_id, student_key(student_id))
+            if key in seen:
                 continue
-            seen.add((result.rubric_id, student_id))
+            seen.add(key)
             if result.rubric_id not in rubrics:
                 rubrics[result.rubric_id] = find_rubric(result.rubric_id)
             rubric = rubrics[result.rubric_id]
@@ -139,9 +150,9 @@ def render_text(report: dict) -> str:
             f"types, {e['mean_requirement_errors']} requirement errors, {e['mean_minor_occurrence_inflation']} "
             f"repeated minor occurrences, {e['mean_minor_to_major_conversions']} minor-to-major conversions, "
             f"{e['mean_possible_overlaps']} possible overlaps",
-            f"  needs review: {e['needs_review_count']}; total not reproduced by today's rules: "
-            f"{e['rescore_mismatch_count']}; graded under an older rubric version: "
-            f"{e['rubric_version_changed_count']}",
+            f"  needs review: {e['needs_review_count']} ({e['requirements_unmarked_count']} with unmarked "
+            f"requirements); total not reproduced by today's rules: {e['rescore_mismatch_count']} of "
+            f"{e['graded_students']}; graded under an older rubric version: {e['rubric_version_changed_count']}",
             "",
         ]
     if report["withheld_rubrics"]:
