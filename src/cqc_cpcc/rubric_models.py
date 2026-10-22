@@ -307,6 +307,10 @@ class DetectedError(BaseModel):
     description: Annotated[str, Field(description="Detailed error description")]
     occurrences: Annotated[Optional[int], Field(default=None, description="Number of occurrences")]
     notes: Annotated[Optional[str], Field(default=None, description="Additional notes")]
+    # Set by the compile gate, never by the model, and never shown to the student: raw
+    # diagnostics can quote any file the compiler opened. SkipJsonSchema keeps it out of
+    # the structured-output schema sent to the LLM.
+    compiler_diagnostics: SkipJsonSchema[Optional[str]] = None
 
 
 class RequirementResult(BaseModel):

@@ -74,6 +74,7 @@ def normalize_detected_errors_for_scoring(
                 "name": error.name or code,
                 "descriptions": [],
                 "notes": [],
+                "diagnostics": [],
                 "occurrences": 0,
             },
         )
@@ -82,6 +83,8 @@ def normalize_detected_errors_for_scoring(
             entry["descriptions"].append(error.description)
         if error.notes and error.notes not in entry["notes"]:
             entry["notes"].append(error.notes)
+        if error.compiler_diagnostics and error.compiler_diagnostics not in entry["diagnostics"]:
+            entry["diagnostics"].append(error.compiler_diagnostics)
 
         occurrences = error.occurrences if (error.occurrences is not None and error.occurrences > 0) else 1
         entry["occurrences"] += occurrences
@@ -107,6 +110,7 @@ def normalize_detected_errors_for_scoring(
                 description=combined_description,
                 occurrences=entry["occurrences"],
                 notes=combined_notes,
+                compiler_diagnostics="\n\n".join(entry["diagnostics"]) or None,
             )
         )
 
@@ -812,7 +816,10 @@ def apply_compile_gate(
                     severity=getattr(cdef, "severity_category", "major"),
                     description=getattr(cdef, "description", "The program does not compile"),
                     occurrences=1,
-                    notes=f"Verified by {cr.tool}: the submission does not compile.\n{diag}",
+                    # Raw diagnostics go only to the instructor-only field: they can quote
+                    # any file the compiler opened, so they never reach student feedback.
+                    notes=f"Verified by {cr.tool}: the submission does not compile.",
+                    compiler_diagnostics=diag,
                 ))
                 info["action"] = "added"
                 changed = True

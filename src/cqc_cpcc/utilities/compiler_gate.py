@@ -25,6 +25,8 @@ Python uses the builtin ``compile()`` which parses/byte-compiles WITHOUT executi
 
 from __future__ import annotations
 
+import bisect
+import functools
 import os
 import re
 import shutil
@@ -125,9 +127,19 @@ def is_compile_error(*labels: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Per-language compile checks (NEVER execute student code)
 # --------------------------------------------------------------------------- #
+# Environment variables that make gcc/clang search more include dirs or read extra
+# options, past what the include guard assumes. They are dropped for the compile.
+_COMPILER_ENV_VARS = (
+    "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH",
+    "OBJCPLUS_INCLUDE_PATH", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH",
+    "DEPENDENCIES_OUTPUT", "SUNPRO_DEPENDENCIES", "CCC_OVERRIDE_OPTIONS",
+)
+
+
 def _run(cmd: list, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if k not in _COMPILER_ENV_VARS}
     return subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, timeout=COMPILE_TIMEOUT_SECONDS,
+        cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=COMPILE_TIMEOUT_SECONDS,
     )
 
 
@@ -158,8 +170,134 @@ def _write_all(d: str, files: list) -> list:
     return paths
 
 
+# A directive that pulls another file into the compile: an introducer ("#", the "%:"
+# digraph or the "??=" trigraph), optional whitespace and comments, then the keyword.
+# Introducers are searched ANYWHERE in the text, not only at line starts, so a
+# directive the scanner would wrongly think is inside a comment or string is still
+# caught (fail closed).
+_DIRECTIVE_INTRODUCER = re.compile(r"#|%:|\?\?=")
+_FILE_KEYWORD = re.compile(r"(include_next|include|import|embed)\b")
+_HAS_FILE = re.compile(r"__has_(?:include_next|include|embed)\b|\b(?:GCC|clang)\s+dependency\b")
+_ABSOLUTE_PATH = re.compile(r"^(?:[/\\]|[A-Za-z]:)")
+
+
+_LINE_KEYWORD = re.compile(r"line\b")
+_DIGITS = re.compile(r"\d+")
+
+
+def _names_a_line_map_file(text: str, j: int, skip_blank) -> bool:
+    """True for ``#line N "file"`` or the GNU marker ``# N "file"`` at ``j``.
+
+    GCC prints the source line under a diagnostic by opening the file the line map
+    names, so either form could quote a host file.
+    """
+    kw = _LINE_KEYWORD.match(text, j)
+    k = skip_blank(kw.end()) if kw else j
+    num = _DIGITS.match(text, k) if k >= 0 else None
+    if not num:
+        return False
+    k = skip_blank(num.end())
+    return 0 <= k < len(text) and text[k] == '"'
+
+
+def _positions(text: str, token: str) -> list:
+    return [m.start() for m in re.finditer(re.escape(token), text)]
+
+
+def _next_at(positions: list, i: int) -> int:
+    """First position >= i, or -1. Bisect keeps the scan linear on hostile input."""
+    k = bisect.bisect_left(positions, i)
+    return positions[k] if k < len(positions) else -1
+
+
+def _unsafe_include(files: list) -> str:
+    """Return why a C/C++ submission's includes could read host files, or "" if safe.
+
+    The compile runs on the host, and its diagnostics can echo the text of any file the
+    preprocessor opens. So only standard headers (``<...>``) and the submission's own
+    files (``"name.h"``, by basename) are allowed. Absolute paths, ``..``, other quoted
+    headers, ``#include_next`` and macro includes (``#include NAME``) make the result
+    not definitive. ``#embed`` is checked the same way, and ``__has_include`` /
+    ``__has_embed`` / ``#pragma GCC dependency`` (which probe whether a host file
+    exists) are refused outright. So is a file name starting with ``-`` or ``@``, and a
+    ``#line`` or GNU line marker that names a file (GCC prints source lines from it).
+    """
+    names = {os.path.basename(n) for n, _ in files}
+    for base in names:
+        # A name like "@opts.cpp" or "-include.cpp" would be read by the compiler as a
+        # response file or an option, not as a source.
+        if base.startswith(("-", "@")):
+            return f"{base}: file name starts with '-' or '@'"
+    for name, code in files:
+        # Undo line splices first: "#inc\<newline>lude" is still a directive.
+        text = re.sub(r"(?:\\|\?\?/)[ \t]*\r?\n", "", code or "")
+        if _HAS_FILE.search(text):
+            return f"{name}: __has_include, __has_embed or #pragma GCC dependency"
+        n = len(text)
+        closes = _positions(text, "*/")
+        enders = {'"': _positions(text, '"'), "<": _positions(text, ">")}  # by opener
+        newlines = _positions(text, "\n")
+
+        def skip_blank(i: int) -> int:
+            """Skip whitespace and /* */ comments; -1 if a comment never closes."""
+            while True:
+                while i < n and text[i].isspace():
+                    i += 1
+                if not text.startswith("/*", i):
+                    return i
+                close = _next_at(closes, i + 2)
+                if close < 0:
+                    return -1  # rest of the file is a comment: no directive follows
+                i = close + 2
+
+        for intro in _DIRECTIVE_INTRODUCER.finditer(text):
+            j = skip_blank(intro.end())
+            if j >= 0 and _names_a_line_map_file(text, j, skip_blank):
+                return f"{name}: #line or line marker naming a file"
+            kw = _FILE_KEYWORD.match(text, j) if j >= 0 else None
+            if not kw:
+                continue
+            keyword = kw.group(1)
+            if keyword == "include_next":
+                return f"{name}: #include_next"
+            j = skip_blank(kw.end())
+            opener = text[j] if 0 <= j < n else ""
+            if opener not in enders:
+                return f"{name}: #{keyword} with a macro or malformed operand"
+            end = _next_at(enders[opener], j + 1)
+            line_end = _next_at(newlines, j + 1)
+            if end < 0 or 0 <= line_end < end:
+                return f"{name}: #{keyword} with a malformed operand"
+            target = text[j + 1:end]
+            if _ABSOLUTE_PATH.match(target.strip()):
+                return f"{name}: #{keyword} of an absolute path"
+            if ".." in target:
+                return f"{name}: #{keyword} of a path containing '..'"
+            if opener == '"' and target not in names:
+                return f"{name}: #{keyword} of a file that is not part of the submission"
+    return ""
+
+
+@functools.lru_cache(maxsize=None)
+def _no_caret_flag(compiler: str) -> str:
+    """The flag that stops source lines under diagnostics: GCC and clang spell it apart.
+
+    An unknown flag would fail every compile, so the compiler is asked which it is.
+    """
+    try:
+        out = subprocess.run([compiler, "--version"], capture_output=True, text=True,
+                             timeout=COMPILE_TIMEOUT_SECONDS).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    return "-fno-caret-diagnostics" if "clang" in out.lower() else "-fno-diagnostics-show-caret"
+
+
 def _check_cpp_group(files: list) -> CompileResult:
     """Syntax-check ALL C++ sources together in one dir so cross-file #includes resolve."""
+    unsafe = _unsafe_include(files)
+    if unsafe:
+        return CompileResult("cpp", supported=False,
+                             skipped_reason=f"include not allowed on the host compile ({unsafe})")
     compiler = shutil.which("g++") or shutil.which("clang++")
     if not compiler:
         return CompileResult("cpp", supported=False, skipped_reason="no C++ compiler (g++/clang++) on PATH")
@@ -170,7 +308,12 @@ def _check_cpp_group(files: list) -> CompileResult:
             srcs = [os.path.basename(n) for n, _ in files if n.lower().endswith(_CPP_HEADER_EXTS)]
         try:
             # -fsyntax-only: compiler front-end only (no assembly, no link, no run).
-            proc = _run([compiler, f"-std={CPP_STD}", "-fsyntax-only", f"-I{d}", *srcs], cwd=d)
+            # "./name" so no argument can start with "-" or "@" (an option or response file).
+            # Never print source lines under a diagnostic, so a guard miss can leak at
+            # most the tokens a message quotes.
+            proc = _run([compiler, f"-std={CPP_STD}", "-fsyntax-only",
+                         _no_caret_flag(compiler), f"-I{d}",
+                         *[f"./{s}" for s in srcs]], cwd=d)
         except subprocess.TimeoutExpired:
             return CompileResult("cpp", supported=True, compiles=None,
                                  skipped_reason="C++ compile timed out", tool=os.path.basename(compiler))
