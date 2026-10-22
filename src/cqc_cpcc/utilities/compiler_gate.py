@@ -25,6 +25,7 @@ Python uses the builtin ``compile()`` which parses/byte-compiles WITHOUT executi
 
 from __future__ import annotations
 
+import bisect
 import os
 import re
 import shutil
@@ -158,8 +159,92 @@ def _write_all(d: str, files: list) -> list:
     return paths
 
 
+# A directive that pulls another file into the compile: an introducer ("#", the "%:"
+# digraph or the "??=" trigraph), optional whitespace and comments, then the keyword.
+# Introducers are searched ANYWHERE in the text, not only at line starts, so a
+# directive the scanner would wrongly think is inside a comment or string is still
+# caught (fail closed).
+_DIRECTIVE_INTRODUCER = re.compile(r"#|%:|\?\?=")
+_FILE_KEYWORD = re.compile(r"(include_next|include|import|embed)\b")
+_HAS_FILE = re.compile(r"__has_(?:include_next|include|embed)\b")
+_ABSOLUTE_PATH = re.compile(r"^(?:[/\\]|[A-Za-z]:)")
+
+
+def _positions(text: str, token: str) -> list:
+    return [m.start() for m in re.finditer(re.escape(token), text)]
+
+
+def _next_at(positions: list, i: int) -> int:
+    """First position >= i, or -1. Bisect keeps the scan linear on hostile input."""
+    k = bisect.bisect_left(positions, i)
+    return positions[k] if k < len(positions) else -1
+
+
+def _unsafe_include(files: list) -> str:
+    """Return why a C/C++ submission's includes could read host files, or "" if safe.
+
+    The compile runs on the host, and its diagnostics can echo the text of any file the
+    preprocessor opens. So only standard headers (``<...>``) and the submission's own
+    files (``"name.h"``, by basename) are allowed. Absolute paths, ``..``, other quoted
+    headers, ``#include_next`` and macro includes (``#include NAME``) make the result
+    not definitive. ``#embed`` is checked the same way, and ``__has_include`` /
+    ``__has_embed`` (which probe whether a host file exists) are refused outright.
+    """
+    names = {os.path.basename(n) for n, _ in files}
+    for name, code in files:
+        # Undo line splices first: "#inc\<newline>lude" is still a directive.
+        text = re.sub(r"(?:\\|\?\?/)[ \t]*\r?\n", "", code or "")
+        if _HAS_FILE.search(text):
+            return f"{name}: __has_include or __has_embed"
+        n = len(text)
+        closes = _positions(text, "*/")
+        enders = {'"': _positions(text, '"'), "<": _positions(text, ">")}  # by opener
+        newlines = _positions(text, "\n")
+
+        def skip_blank(i: int) -> int:
+            """Skip whitespace and /* */ comments; -1 if a comment never closes."""
+            while True:
+                while i < n and text[i].isspace():
+                    i += 1
+                if not text.startswith("/*", i):
+                    return i
+                close = _next_at(closes, i + 2)
+                if close < 0:
+                    return -1  # rest of the file is a comment: no directive follows
+                i = close + 2
+
+        for intro in _DIRECTIVE_INTRODUCER.finditer(text):
+            j = skip_blank(intro.end())
+            kw = _FILE_KEYWORD.match(text, j) if j >= 0 else None
+            if not kw:
+                continue
+            keyword = kw.group(1)
+            if keyword == "include_next":
+                return f"{name}: #include_next"
+            j = skip_blank(kw.end())
+            opener = text[j] if 0 <= j < n else ""
+            if opener not in enders:
+                return f"{name}: #{keyword} with a macro or malformed operand"
+            end = _next_at(enders[opener], j + 1)
+            line_end = _next_at(newlines, j + 1)
+            if end < 0 or 0 <= line_end < end:
+                return f"{name}: #{keyword} with a malformed operand"
+            target = text[j + 1:end]
+            if _ABSOLUTE_PATH.match(target.strip()):
+                return f"{name}: #{keyword} of an absolute path"
+            if ".." in target:
+                return f"{name}: #{keyword} of a path containing '..'"
+            if opener == '"' and target not in names:
+                return f"{name}: #{keyword} of a file that is not part of the submission"
+    return ""
+
+
 def _check_cpp_group(files: list) -> CompileResult:
     """Syntax-check ALL C++ sources together in one dir so cross-file #includes resolve."""
+    unsafe = _unsafe_include(files)
+    if unsafe:
+        return CompileResult("cpp", supported=False,
+                             skipped_reason=f"include not allowed on the host compile ({unsafe})")
     compiler = shutil.which("g++") or shutil.which("clang++")
     if not compiler:
         return CompileResult("cpp", supported=False, skipped_reason="no C++ compiler (g++/clang++) on PATH")

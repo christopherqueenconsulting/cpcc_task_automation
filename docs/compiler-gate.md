@@ -22,8 +22,8 @@ and the score and band are computed from that list.
 |---|---|---|
 | Compiles | "Does Not Compile" | **Removes** the error (false positive) |
 | Compiles | nothing | no change |
-| Does not compile | "Does Not Compile" | **Confirms**, attaches the real diagnostics |
-| Does not compile | nothing | **Adds** the rubric's compile error, with diagnostics |
+| Does not compile | "Does Not Compile" | **Confirms** (the error stays as the model wrote it) |
+| Does not compile | nothing | **Adds** the rubric's compile error, with instructor-only diagnostics |
 | Cannot verify | anything | **Nothing** — the model's judgment stands |
 
 When the error list changes, the cached `error_counts_by_*` are reset to `None` so
@@ -46,6 +46,7 @@ Non-definitive outcomes, all of which leave the model's judgment alone:
 - the compile timed out (`COMPILE_TIMEOUT_SECONDS`)
 - an unsupported language (SAS has no local compiler)
 - an empty submission, or no compilable source files at all
+- a C/C++ include that could read a file outside the submission (see below)
 
 In a mixed-language submission, one unverifiable language makes the whole submission
 unverifiable. There is no half-verdict.
@@ -61,10 +62,23 @@ unverifiable. There is no half-verdict.
 Every invocation is time-bounded, passes list arguments (never `shell=True`), and
 works inside a `TemporaryDirectory` that is removed afterwards.
 
-Two residual gaps, neither currently exploited by the tool but worth knowing:
-`javac` runs annotation processors by default (`-proc:none` would close that), and
-`g++ -fsyntax-only` still resolves `#include`, so a crafted include path can echo
-file contents into a diagnostic string.
+`g++ -fsyntax-only` still resolves `#include`, and its diagnostics quote the lines of
+any file it opens. A submission that includes a host file (for example the app's
+`.env`) would read it back in the error text. So before compiling, the gate refuses a
+verdict (`supported=False`) when any C/C++ file has:
+
+- an `#include`, `#import` or `#embed` of an absolute path, or of a path containing `..`;
+- a quoted include (`"name.h"`) that is not one of the submitted files, by basename;
+- `#include_next`, or a macro include (`#include NAME`);
+- `__has_include` or `__has_embed`, which can test whether a host file exists.
+
+Standard headers (`<iostream>`) and the submission's own headers still compile. The
+scan also catches the `%:` digraph, the `??=` trigraph, comments before the keyword
+and backslash line splices. It matches anywhere in the text, so a directive-like
+string or comment can make a submission unverifiable; that is the safe direction.
+
+One residual gap, not currently exploited by the tool but worth knowing: `javac` runs
+annotation processors by default (`-proc:none` would close that).
 
 ## Multi-file submissions
 
@@ -77,7 +91,10 @@ headers rather than skipped.
 
 Compiler diagnostics have the throwaway temp path replaced with the student's real
 filename before they reach a report, and are truncated at 1500 characters — g++ can
-emit thousands of lines for one mistake.
+emit thousands of lines for one mistake. They are kept in the instructor-only
+`DetectedError.compiler_diagnostics` field, which is outside the model's schema. The
+student-facing `notes` get only a generic "Verified by g++: the submission does not
+compile." line, so student feedback never shows raw diagnostics.
 
 ## Configuration
 

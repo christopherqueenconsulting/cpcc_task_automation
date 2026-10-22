@@ -926,7 +926,11 @@ class TestCompileGateAddsAMissingCompileError:
         assert [e.code for e in gated.detected_errors] == ["CSC151_DOES_NOT_COMPILE"]
 
     def test_the_real_compiler_diagnostics_are_attached(self):
-        """Without them the instructor cannot see why the gate disagreed."""
+        """Without them the instructor cannot see why the gate disagreed.
+
+        They go in the instructor-only field; the student-facing notes get only the
+        generic line, because diagnostics can quote any file the compiler opened.
+        """
         from cqc_cpcc.rubric_grading import apply_compile_gate
 
         gated, _ = apply_compile_gate(
@@ -934,9 +938,10 @@ class TestCompileGateAddsAMissingCompileError:
             [self._compile_definition()],
         )
 
-        notes = gated.detected_errors[0].notes or ""
-        assert "SyntaxError" in notes
-        assert "does not compile" in notes
+        error = gated.detected_errors[0]
+        assert "SyntaxError" in (error.compiler_diagnostics or "")
+        assert "does not compile" in (error.notes or "")
+        assert "SyntaxError" not in (error.notes or "")
 
     def test_a_very_long_diagnostic_is_truncated(self, mocker):
         """g++ can emit thousands of lines; the report has to stay readable.
@@ -963,9 +968,9 @@ class TestCompileGateAddsAMissingCompileError:
         )
 
         assert info["compiles"] is False
-        notes = gated.detected_errors[0].notes or ""
-        assert "truncated" in notes
-        assert len(notes) < 2000
+        diagnostics = gated.detected_errors[0].compiler_diagnostics or ""
+        assert "truncated" in diagnostics
+        assert len(diagnostics) < 2000
 
     def test_a_failure_with_no_compile_definition_leaves_errors_alone(self):
         """Inventing an error id the rubric does not define would corrupt scoring."""
