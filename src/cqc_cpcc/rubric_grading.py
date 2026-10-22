@@ -961,28 +961,12 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         has_error_counts = scoring_counts_by_severity is not None
 
         if not has_error_counts:
-            logger.warning(
-                f"Rubric has error-based criteria but no error_counts_by_severity in result."
-            )
-
-            # Try to compute error counts from detected_errors if present
-            if normalized_detected_errors:
-                logger.info(
-                    f"Computing error_counts_by_severity from {len(normalized_detected_errors)} detected_errors")
-                error_counts = {}
-                for error in normalized_detected_errors:  # one per distinct type, never occurrences
-                    severity = error.severity.lower() if error.severity else "unknown"
-                    error_counts[severity] = error_counts.get(severity, 0) + 1
-
-                logger.info(f"Computed error_counts_by_severity: {error_counts}")
-                # Use the computed counts
-                original_major = error_counts.get("major", 0)
-                original_minor = error_counts.get("minor", 0)
-            else:
-                logger.warning("No detected_errors either. Using 0 errors for scoring.")
-                # Default to 0 errors
-                original_major = 0
-                original_minor = 0
+            # Counts are missing only when no errors were listed either (listed errors always
+            # produce counts above), so this scores as no errors.
+            logger.warning("Rubric has error-based criteria but the result lists no errors and "
+                           "no error counts. Using 0 errors for scoring.")
+            original_major = 0
+            original_minor = 0
         else:
             # Extract error counts by severity
             original_major = get_error_count_for_severity(scoring_counts_by_severity, "major")
