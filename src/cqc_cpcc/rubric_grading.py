@@ -51,33 +51,39 @@ from langchain_core.callbacks import BaseCallbackHandler
 AUTO_ROUTE_MODEL = "openrouter/auto"
 
 
+_SEVERITY_RANK = {"major": 2, "minor": 1}
+
+
 def normalize_detected_errors_for_scoring(
         detected_errors: Optional[list[DetectedError]],
 ) -> tuple[list[DetectedError], dict[str, int], dict[str, int]]:
     """Collapse duplicate error types for scoring while preserving occurrence details.
 
-    Scoring should count each error type once per severity bucket. If the same
-    error code appears multiple times, descriptions/notes are combined and
-    occurrences are summed for display transparency.
+    Each error type counts once (Christopher, 2026-10-22). A type is its code, compared
+    case-insensitively; if the model labels one code with more than one severity, the
+    more severe label wins (major over minor). Descriptions and notes are combined and
+    occurrences are summed for display only.
     """
     if not detected_errors:
         return [], {}, {}
 
-    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    grouped: dict[str, dict[str, object]] = {}
     for error in detected_errors:
         severity = (error.severity or "unknown").strip().lower() or "unknown"
-        code = (error.code or "UNKNOWN_ERROR").strip() or "UNKNOWN_ERROR"
-        key = (severity, code)
+        code = (error.code or "UNKNOWN_ERROR").strip().upper() or "UNKNOWN_ERROR"
         entry = grouped.setdefault(
-            key,
+            code,
             {
                 "name": error.name or code,
+                "severity": severity,
                 "descriptions": [],
                 "notes": [],
                 "diagnostics": [],
                 "occurrences": 0,
             },
         )
+        if _SEVERITY_RANK.get(severity, 0) > _SEVERITY_RANK.get(entry["severity"], 0):
+            entry["severity"] = severity
 
         if error.description and error.description not in entry["descriptions"]:
             entry["descriptions"].append(error.description)
@@ -93,7 +99,8 @@ def normalize_detected_errors_for_scoring(
     counts_by_severity: dict[str, int] = {}
     counts_by_id: dict[str, int] = {}
 
-    for (severity, code), entry in grouped.items():
+    for code, entry in grouped.items():
+        severity = entry["severity"]
         descriptions = entry["descriptions"]
         combined_description = "\n".join(descriptions) if descriptions else f"Detected {code}"
 
@@ -947,6 +954,9 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         scoring_counts_by_severity = normalized_counts_by_severity
         if has_program_performance:
             scoring_counts_by_severity = normalized_counts_by_severity if result.detected_errors else {}
+            if not result.detected_errors and any((result.error_counts_by_severity or {}).values()):
+                logger.warning("The model reported error counts but listed no errors; "
+                               "only listed errors are scored, so this scores as no errors.")
 
         has_error_counts = scoring_counts_by_severity is not None
 
@@ -960,9 +970,9 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
                 logger.info(
                     f"Computing error_counts_by_severity from {len(normalized_detected_errors)} detected_errors")
                 error_counts = {}
-                for error in normalized_detected_errors:
+                for error in normalized_detected_errors:  # one per distinct type, never occurrences
                     severity = error.severity.lower() if error.severity else "unknown"
-                    error_counts[severity] = error_counts.get(severity, 0) + (error.occurrences or 1)
+                    error_counts[severity] = error_counts.get(severity, 0) + 1
 
                 logger.info(f"Computed error_counts_by_severity: {error_counts}")
                 # Use the computed counts

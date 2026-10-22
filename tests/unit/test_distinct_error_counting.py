@@ -78,3 +78,25 @@ def test_every_ratio_4_rubric_counts_types_once_and_says_so(rubric_key):
     for text in (rubric.description, rubric.criteria[0].description):
         assert "once, however often it occurs" in text and "4 different minor error types" in text
         assert "every 4 minor errors" not in text.lower()
+
+
+@pytest.mark.unit
+def test_codes_are_compared_case_insensitively():
+    scored = _score([_error("CSC_151_EXAM_1_X", "minor"), _error("csc_151_exam_1_x ", "minor"),
+                     _error(" Csc_151_Exam_1_X", "minor")])
+    assert (scored.effective_major_errors, scored.effective_minor_errors) == (0, 1)
+
+
+@pytest.mark.unit
+def test_one_code_at_two_severities_counts_once_as_major():
+    scored = _score([_error("CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR", "minor"),
+                     _error("CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR", "major")])
+    assert (scored.effective_major_errors, scored.effective_minor_errors) == (1, 0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rubric_key", ["csc134_cpp_exam_rubric", "csc134_cpp_final_exam_rubric"])
+def test_csc134_text_names_no_level_conversion_rules_out(rubric_key):
+    text = get_rubric_by_id(rubric_key).criteria[0].description
+    assert "level table below" in text
+    assert not any(phrase in text for phrase in ("3-4 minor", "5 minor", ">5 minor", "Below Average"))

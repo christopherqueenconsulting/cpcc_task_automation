@@ -494,13 +494,16 @@ class TestCSC134Rubric:
         assert "error" in rubric.description.lower()
 
     def test_csc134_criterion_description_mentions_error_levels(self):
-        """Test that CSC134 program_performance criterion mentions key performance levels."""
+        """The CSC134 criterion points to its level table, and the table holds the key levels.
+
+        The description no longer restates the levels in raw error counts, which contradicted
+        the 4:1 conversion and named a level ("Below Average") this rubric does not have."""
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
         criterion = rubric.criteria[0]
 
-        assert "Outstanding" in criterion.description
-        assert "Superior" in criterion.description
-        assert "Below Average" in criterion.description
+        assert "level table below" in criterion.description
+        labels = [level.label for level in criterion.levels]
+        assert "Outstanding" in labels and "Superior" in labels and "Above Average" in labels
 
     def test_csc134_error_count_scoring_mode(self):
         """Test that CSC134 criterion uses error_count scoring mode."""
