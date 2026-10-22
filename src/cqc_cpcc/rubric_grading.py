@@ -888,7 +888,7 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         Updated RubricAssessmentResult with backend-computed scores
     """
     from cqc_cpcc.error_scoring import normalize_errors, select_program_performance_level, \
-        select_csc134_program_performance_level, get_error_count_for_severity, aggregate_error_counts
+        select_csc134_program_performance_level, get_error_count_for_severity
     from cqc_cpcc.scoring import score_level_band_criterion, aggregate_rubric_result
 
     logger.info(f"=== Backend Scoring Start ===")
@@ -941,15 +941,12 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     effective_minor = 0
 
     if error_count_criteria or has_program_performance:
-        # Scoring source differs by criterion type:
-        # - program_performance should use occurrence totals (authoritative LLM counts if provided)
-        # - generic error_count criteria use normalized unique error-type counts
+        # Each distinct error type counts once, for minors and majors, however many times it
+        # occurs (Christopher, 2026-10-22). program_performance counts only the errors listed:
+        # counts the model reports without listing the errors cost nothing.
         scoring_counts_by_severity = normalized_counts_by_severity
         if has_program_performance:
-            if result.error_counts_by_severity is not None:
-                scoring_counts_by_severity = result.error_counts_by_severity
-            elif normalized_detected_errors:
-                scoring_counts_by_severity, _ = aggregate_error_counts(normalized_detected_errors)
+            scoring_counts_by_severity = normalized_counts_by_severity if result.detected_errors else {}
 
         has_error_counts = scoring_counts_by_severity is not None
 

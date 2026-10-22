@@ -121,6 +121,24 @@ class ErrorConversionRules(BaseModel):
 
 **Backwards Compatibility**: `apply_error_based_scoring()` wrapper maintained for legacy code.
 
+### Counting errors
+
+Ruled by Christopher on 2026-10-22 (rubric versions: `csc_java_exam_rubric` 3.2, `csc134_cpp_exam_rubric` 3.2,
+`csc134_cpp_final_exam_rubric` 3.3):
+
+- **Each distinct error type counts once.** An error type is its severity plus its code. One type reported
+  with `occurrences: 4` counts as one error, for minors and majors alike. Occurrences still show in the
+  Errors table ("Times") and on the result card; they no longer move the score.
+- **Only listed errors count.** `program_performance` takes its counts from `detected_errors`. Counts the
+  model reports in `error_counts_by_severity` without listing the errors are ignored (they cost nothing).
+- **Conversion is unchanged:** every 4 distinct minor types count as 1 major (remainder stays minor), then
+  the level band is chosen from the effective counts.
+- `error_scoring.aggregate_error_counts` (which sums occurrences) is display-only; scoring never calls it.
+
+Before this change one minor slip seen four times (`occurrences: 4`) became 1 major, a B- (160/200) on the
+CSC151 rubric; it is now 1 minor, an A (190/200). To measure the effect on saved runs, run
+`scripts/grading_harshness_report.py` before and after.
+
 ## Testing
 
 ### New Tests (37 total)

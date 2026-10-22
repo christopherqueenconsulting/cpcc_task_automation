@@ -317,7 +317,7 @@ class TestCSC151V2Rubric:
         rubric = get_rubric_by_id("csc151_java_exam_rubric")
         
         # Rubric can be loaded by key "csc151_java_exam_rubric"
-        assert rubric.rubric_version in ("2.0", "3.0", "3.1")  # Version may vary
+        assert rubric.rubric_version in ("2.0", "3.0", "3.1", "3.2")  # 3.2: each distinct error type counts once
         assert "CSC" in rubric.title  # Title contains CSC reference
         assert "Exam" in rubric.title  # Title mentions Exam
         assert "CSC_151" in rubric.course_ids
@@ -390,11 +390,12 @@ class TestCSC151V2Rubric:
         assert rubric.total_points_possible == 200
 
     def test_csc151_v2_description_mentions_conversion(self):
-        """Test that CSC151 v2.0 description mentions error conversion rule."""
+        """Test that CSC151 description states the distinct-type rule and the 4:1 conversion."""
         rubric = get_rubric_by_id("csc151_java_exam_rubric")
         
-        # Description should mention the 4:1 conversion rule
-        assert "4 Minor Errors" in rubric.description
+        # Each distinct error type counts once, then 4 distinct minor types = 1 major
+        assert "once, however often it occurs" in rubric.description
+        assert "4 different minor error types" in rubric.description
         assert "1 Major Error" in rubric.description
     
     def test_csc151_v2_criterion_description_mentions_conversion(self):
@@ -402,8 +403,10 @@ class TestCSC151V2Rubric:
         rubric = get_rubric_by_id("csc151_java_exam_rubric")
         criterion = rubric.criteria[0]
         
-        # Criterion description should mention conversion
-        assert "Minor→Major conversion" in criterion.description or "4 Minor Errors" in criterion.description
+        # Criterion description should state the distinct-type rule and the conversion
+        assert "once, however often it occurs" in criterion.description
+        assert "4 different minor error types" in criterion.description
+        assert "1 Major Error" in criterion.description
 
 
 
@@ -416,7 +419,7 @@ class TestCSC134Rubric:
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
 
         assert rubric.rubric_id == "csc134_cpp_exam_rubric"
-        assert rubric.rubric_version == "3.1"
+        assert rubric.rubric_version == "3.2"
         assert rubric.title == "CSC 134 C++ Program Performance Rubric"
         assert "CSC_134" in rubric.course_ids
 
