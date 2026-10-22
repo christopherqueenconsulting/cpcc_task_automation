@@ -139,8 +139,9 @@ Ruled by Christopher on 2026-10-22 (rubric versions: `csc_java_exam_rubric` 3.2,
 - `error_scoring.aggregate_error_counts` (which sums occurrences) is display-only; scoring never calls it.
 
 Before this change one minor slip seen four times (`occurrences: 4`) became 1 major, a B- (160/200) on the
-CSC151 rubric; it is now 1 minor, an A (190/200). For the shipped rubrics the change can only keep a score
-or raise it.
+CSC151 rubric; it is now 1 minor, an A (190/200). Most scores stay the same or rise. A score can drop when
+the model's own counts were lower than the errors it listed (the old code trusted the counts): those runs now
+score from the list.
 
 **Rollback:** revert the commit that made this change. That restores the earlier `rubric_version`s, so the
 run keys change back and session caches re-grade on their own. A revert does not touch grades already
