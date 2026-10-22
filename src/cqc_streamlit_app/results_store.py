@@ -36,8 +36,12 @@ def _path(run_key: str) -> Path:
 
 
 def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = None,
-             greeting_names: Optional[dict] = None) -> None:
-    """Write one run's results atomically (0600 file in a 0700 folder) and prune old runs."""
+             greeting_names: Optional[dict] = None, meta: Optional[dict] = None) -> None:
+    """Write one run's results atomically (0600 file in a 0700 folder) and prune old runs.
+
+    ``meta`` holds PII-free facts about how the run was graded (solution given, checklist
+    size and hash, prompt version, model). Omitted, the saved file's existing meta is kept.
+    """
     directory = results_dir()
     directory.mkdir(parents=True, exist_ok=True)
     os.chmod(directory, 0o700)
@@ -45,10 +49,12 @@ def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = 
         payload_results = [[sid, summary] for sid, summary in results]
     else:
         payload_results = [[sid, r.model_dump(mode="json")] for sid, r in results]
+    if meta is None:
+        meta = _saved_meta(run_key)
     payload = {"run_key": run_key, "mode": mode, "saved_at": time.time(),
                "results": payload_results, "failures": list(failures or []),
                # Name to greet each student by ("" for a loose file named after nothing).
-               "greeting_names": greeting_names}
+               "greeting_names": greeting_names, "meta": meta}
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".run.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -60,6 +66,13 @@ def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = 
             os.unlink(tmp)
         raise
     _prune(directory)
+
+
+def _saved_meta(run_key: str) -> Optional[dict]:
+    try:
+        return json.loads(_path(run_key).read_text(encoding="utf-8")).get("meta")
+    except (OSError, ValueError):
+        return None
 
 
 def _prune(directory: Path) -> None:
