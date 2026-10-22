@@ -6,7 +6,10 @@ import pytest
 
 from cqc_cpcc.rubric_config import get_rubric_by_id
 from cqc_cpcc.rubric_grading import apply_backend_scoring
-from cqc_cpcc.rubric_models import CriterionResult, DetectedError, RubricAssessmentResult
+from cqc_cpcc.rubric_models import (
+    Criterion, CriterionResult, DetectedError, ErrorConversionRules, ErrorCountScoringRules, Rubric,
+    RubricAssessmentResult,
+)
 
 RATIO_4_RUBRICS = ("csc151_java_exam_rubric", "csc134_cpp_exam_rubric", "csc134_cpp_final_exam_rubric")
 
@@ -100,3 +103,19 @@ def test_csc134_text_names_no_level_conversion_rules_out(rubric_key):
     text = get_rubric_by_id(rubric_key).criteria[0].description
     assert "level table below" in text
     assert not any(phrase in text for phrase in ("3-4 minor", "5 minor", ">5 minor", "Below Average"))
+
+
+@pytest.mark.unit
+def test_plain_error_count_rubric_with_no_errors_and_no_counts_scores_zero_errors():
+    rubric = Rubric(rubric_id="plain", rubric_version="1.0", title="Plain", criteria=[Criterion(
+        criterion_id="quality", name="Quality", max_points=100, scoring_mode="error_count",
+        error_rules=ErrorCountScoringRules(major_weight=40, minor_weight=10, floor_score=0,
+                                           error_conversion=ErrorConversionRules(minor_to_major_ratio=4)))])
+    result = RubricAssessmentResult(
+        rubric_id="plain", rubric_version="1.0", total_points_possible=100, total_points_earned=0,
+        overall_feedback="x", detected_errors=[], error_counts_by_severity=None,
+        criteria_results=[CriterionResult(criterion_id="quality", criterion_name="Quality",
+                                          points_possible=100, points_earned=0, feedback="x")])
+    scored = apply_backend_scoring(rubric, result)
+    assert (scored.original_major_errors, scored.original_minor_errors) == (0, 0)
+    assert scored.total_points_earned == 100
