@@ -218,13 +218,19 @@ class _DropSdkChatter(logging.Filter):
         return not (record.name.split(".")[0] in self._NAMES and record.levelno < logging.WARNING)
 
 
-openai_sdk_logger = logging.getLogger("openai")
-openai_sdk_logger.setLevel(logging.WARNING)
-if not any(isinstance(h, _WarningsToAppLog) for h in openai_sdk_logger.handlers):
-    openai_sdk_logger.addHandler(_WarningsToAppLog(level=logging.WARNING))
-for _handler in logging.getLogger().handlers:
-    if not any(isinstance(f, _DropSdkChatter) for f in _handler.filters):
-        _handler.addFilter(_DropSdkChatter())
+def install_sdk_log_guards() -> None:
+    """Hold the ``openai`` SDK logger at WARNING, copy its warnings into the app log and
+    filter SDK chatter from the root handlers. Safe to call again."""
+    sdk_logger = logging.getLogger("openai")
+    sdk_logger.setLevel(logging.WARNING)
+    if not any(isinstance(h, _WarningsToAppLog) for h in sdk_logger.handlers):
+        sdk_logger.addHandler(_WarningsToAppLog(level=logging.WARNING))
+    for handler in logging.getLogger().handlers:
+        if not any(isinstance(f, _DropSdkChatter) for f in handler.filters):
+            handler.addFilter(_DropSdkChatter())
+
+
+install_sdk_log_guards()
 
 # Setup OpenAI debug logger (separate channel)
 openai_debug_logger = logging.getLogger("openai.debug")

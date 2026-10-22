@@ -322,3 +322,72 @@ def test_retry_failed_stops_after_the_first_timeout():
     assert len(calls) == 1
     assert at.session_state["grading_failures_by_key"]["rk"] == ["Ada Example", "Ben Sample", "Cy Test"]
     assert any("Stopped retrying" in e.value for e in at.error)
+
+
+@pytest.mark.unit
+def test_sdk_log_guards_install_once():
+    sdk = logging.getLogger("openai")
+    logger_module.install_sdk_log_guards()  # pytest adds root handlers after import
+    before = (len(sdk.handlers), [len(h.filters) for h in logging.getLogger().handlers])
+    logger_module.install_sdk_log_guards()
+    assert (len(sdk.handlers), [len(h.filters) for h in logging.getLogger().handlers]) == before
+    handled = []
+    with patch.object(logger_module.file_handler, "handle", handled.append):
+        logger_module._WarningsToAppLog().emit(
+            logging.LogRecord("openai", logging.INFO, __file__, 1, "quiet", None, None))
+    assert handled == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_invalid_json_is_retried_and_schema_mismatch_is_not(fast, events):
+    client = _client(_response("not json"), _response('{"answer": "4"}'))
+    with patch.object(openrouter_client, "_get_openrouter_client", return_value=client):
+        assert (await _complete(request_timeout=5)).answer == "4"
+    assert events[1].error == "invalid JSON" and events[1].will_retry is True
+
+    events.clear()
+    client = _client(_response('{"wrong": 1}'))
+    with patch.object(openrouter_client, "_get_openrouter_client", return_value=client):
+        with pytest.raises(Exception):
+            await _complete(request_timeout=5)
+    assert events[-1].error == "schema mismatch" and events[-1].will_retry is False
+
+
+@pytest.mark.unit
+def test_describe_covers_every_event_kind():
+    assert "fallback" in llm_progress.describe(llm_progress.LLMEvent("fallback", "m"))
+    assert "answered on attempt 2" in llm_progress.describe(llm_progress.LLMEvent("succeeded", "m", attempt=2))
+    # No attempt has started in this fresh context: the wait shows as 0 s.
+    import contextvars
+    label = contextvars.Context().run(
+        llm_progress.describe, llm_progress.LLMEvent("attempt_failed", "m", 1, 3, error="RateLimitError"))
+    assert label == "m: attempt 1/3, 0 s (last: RateLimitError)"
+    llm_progress.emit("attempt_started", "m", attempt=1, max_attempts=1)  # no sink: a no-op
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_with_deadline_returns_or_times_out():
+    from cqc_streamlit_app.utils import with_deadline
+
+    async def value():
+        return 4
+
+    assert await with_deadline(value(), 1) == 4
+    with pytest.raises(TimeoutError):
+        await with_deadline(_hang(), 0.01)
+
+
+@pytest.mark.unit
+def test_short_deadline_warns_once_and_concurrency_reads_env(monkeypatch):
+    monkeypatch.setenv("CQC_GRADING_STUDENT_DEADLINE_S", "60")
+    llm_limits._warned.discard("deadline_short")
+    with patch.object(llm_limits.logger, "warning") as warning:
+        llm_limits.student_deadline()
+        llm_limits.student_deadline()
+    assert warning.call_count == 1
+    monkeypatch.setenv("CQC_GRADING_STUDENT_DEADLINE_S", "100000")
+    assert llm_limits.student_deadline() == 100000
+    monkeypatch.setenv("CQC_GRADING_CONCURRENCY", "8")
+    assert llm_limits.grading_concurrency() == 8

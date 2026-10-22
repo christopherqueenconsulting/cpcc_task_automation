@@ -174,6 +174,10 @@ The per-student deadline also covers the compile check (`COMPILE_TIMEOUT_SECONDS
 "Retry failed" re-grades one student at a time; it stops at the first student that times out
 and leaves the rest failed, so a model that is down cannot hold the page for hours.
 
+Extracting the requirement checklist at Setup has no student deadline but the same per-request
+rules, so a hung model can hold that spinner for up to about 12 minutes before its fallback answers
+or fails.
+
 Cost: with SDK retries off, one student can be billed for at most 3 attempts on the model and
 3 on its fallback (rate-limit or server errors); a timed-out request may still be billed.
 
