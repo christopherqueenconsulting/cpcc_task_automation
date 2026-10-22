@@ -92,8 +92,14 @@ def result_card_text(student: str, result: RubricAssessmentResult,
 
 
 def result_card_json(student: str, result: RubricAssessmentResult) -> str:
-    """The full result as JSON, with the student it belongs to."""
-    payload = {"student": student, "result": result.model_dump(mode="json")}
+    """The full result as JSON, with the student it belongs to.
+
+    Raw compiler diagnostics are left out: the card is meant to be pasted into outside
+    tools, and the diagnostics are instructor-only.
+    """
+    data = result.model_dump(mode="json", exclude={
+        "detected_errors": {"__all__": {"compiler_diagnostics"}}})
+    payload = {"student": student, "result": data}
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 

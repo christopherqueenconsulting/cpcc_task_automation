@@ -149,6 +149,8 @@ def test_diagnostics_survive_error_type_merging():
     '#inc\\\nlude "/etc/hosts"',      # backslash line splice
     'int x; /* a\n*/ #include "/etc/hosts"',
     '#if __has_include("/etc/hosts")\n#endif',
+    '#pragma GCC dependency "/etc/hosts"',
+    '_Pragma("GCC dependency \\"/etc/hosts\\"")',
 ])
 def test_an_unsafe_include_is_not_definitive(line, mocker):
     run = mocker.patch.object(cg, "_run")
@@ -214,3 +216,57 @@ def test_the_include_scan_stays_fast_on_hostile_input():
         start = time.monotonic()
         cg._unsafe_include([("main.cpp", junk)])
         assert time.monotonic() - start < 2
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bad_name", ["@opts.cpp", "-include.cpp", "-fsyntax-only.h"])
+def test_a_file_name_that_reads_as_an_option_is_refused(bad_name, fake_env, mocker):
+    """"@opts.cpp" would make g++ read options (e.g. -include <host file>) from opts.cpp."""
+    run = mocker.patch.object(cg, "_run")
+    files = [(bad_name, ""), ("opts.cpp", f"-include {fake_env}"),
+             ("main.cpp", "int main() { return 0; }\n")]
+
+    result = cg.check_submission(files)
+
+    assert result.is_definitive is False
+    run.assert_not_called()
+
+
+@pytest.mark.unit
+def test_no_compiler_argument_comes_from_a_bare_student_file_name(mocker):
+    mocker.patch.object(cg.shutil, "which", return_value="/usr/bin/g++")
+    run = mocker.patch.object(cg, "_run", return_value=mocker.Mock(returncode=0, stderr="", stdout=""))
+
+    cg.check_submission([("main.cpp", "int main() { return 0; }\n"), ("util.cpp", "int f();\n")])
+
+    argv = run.call_args.args[0]
+    assert all(not a.startswith("@") for a in argv)
+    assert [a for a in argv if a.endswith(".cpp")] == ["./main.cpp", "./util.cpp"]
+
+
+@pytest.mark.unit
+def test_the_compile_drops_env_vars_that_widen_the_include_search(monkeypatch, mocker):
+    monkeypatch.setenv("CPATH", "/somewhere")
+    monkeypatch.setenv("CCC_OVERRIDE_OPTIONS", "#^-include/etc/hosts")
+    run = mocker.patch.object(cg.subprocess, "run")
+
+    cg._run(["g++", "--version"])
+
+    env = run.call_args.kwargs["env"]
+    assert "CPATH" not in env and "CCC_OVERRIDE_OPTIONS" not in env
+    assert env.get("PATH") == cg.os.environ.get("PATH")
+
+
+@pytest.mark.unit
+def test_the_result_card_json_leaves_out_compiler_diagnostics():
+    """The card is meant to be pasted into outside tools; diagnostics are instructor-only."""
+    from cqc_cpcc.result_card_export import result_card_json
+
+    result = _result().model_copy(update={"detected_errors": [DetectedError(
+        code="X", name="Does Not Compile", severity="major", description="d",
+        notes="n", compiler_diagnostics=f"FAKE_KEY={SENTINEL}")]})
+
+    card = result_card_json("Student A", result)
+
+    assert SENTINEL not in card
+    assert '"notes": "n"' in card

@@ -70,12 +70,39 @@ verdict (`supported=False`) when any C/C++ file has:
 - an `#include`, `#import` or `#embed` of an absolute path, or of a path containing `..`;
 - a quoted include (`"name.h"`) that is not one of the submitted files, by basename;
 - `#include_next`, or a macro include (`#include NAME`);
-- `__has_include` or `__has_embed`, which can test whether a host file exists.
+- `__has_include`, `__has_embed` or `#pragma GCC dependency`, which can test whether a
+  host file exists;
+- a submitted file name starting with `-` or `@`, which the compiler would read as an
+  option or a response file (`@opts.cpp` reads options such as `-include <file>` from
+  `opts.cpp`).
+
+Sources are also passed as `./name`, so no argument can start with `-` or `@`, and the
+compile drops environment variables that widen the include search or add options
+(`CPATH`, `CPLUS_INCLUDE_PATH`, `CCC_OVERRIDE_OPTIONS` and the like; see
+`_COMPILER_ENV_VARS`).
 
 Standard headers (`<iostream>`) and the submission's own headers still compile. The
 scan also catches the `%:` digraph, the `??=` trigraph, comments before the keyword
 and backslash line splices. It matches anywhere in the text, so a directive-like
 string or comment can make a submission unverifiable; that is the safe direction.
+
+### If a host file may have leaked
+
+Before this guard (PR #395), raw diagnostics went into `notes`, which student feedback
+renders. To check for exposure:
+
+1. Search saved runs (`~/.cqc_cpcc/grading_results/`, or `CQC_GRADING_RESULTS_DIR`) for
+   a "Does Not Compile" error whose `notes` hold more than the one line
+   "Verified by ...: the submission does not compile." Delete or re-grade any such run
+   before downloading feedback from it again.
+2. If one of those notes quotes a host file, rotate every key in `.env` (by name:
+   `OPENROUTER_API_KEY`, `OPENAI_API_KEY` and the rest). Christopher does the rotation;
+   creating secrets is his.
+
+Hand-backs already sent to students cannot be checked this way.
+
+Rollback is `git revert`, but a revert puts the host-file echo back into student
+feedback. Prefer a forward fix unless the gate is breaking grading.
 
 One residual gap, not currently exploited by the tool but worth knowing: `javac` runs
 annotation processors by default (`-proc:none` would close that).

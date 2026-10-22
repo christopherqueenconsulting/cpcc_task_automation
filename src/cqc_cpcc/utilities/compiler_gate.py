@@ -126,9 +126,19 @@ def is_compile_error(*labels: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Per-language compile checks (NEVER execute student code)
 # --------------------------------------------------------------------------- #
+# Environment variables that make gcc/clang search more include dirs or read extra
+# options, past what the include guard assumes. They are dropped for the compile.
+_COMPILER_ENV_VARS = (
+    "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH",
+    "OBJCPLUS_INCLUDE_PATH", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH",
+    "DEPENDENCIES_OUTPUT", "SUNPRO_DEPENDENCIES", "CCC_OVERRIDE_OPTIONS",
+)
+
+
 def _run(cmd: list, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if k not in _COMPILER_ENV_VARS}
     return subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, timeout=COMPILE_TIMEOUT_SECONDS,
+        cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=COMPILE_TIMEOUT_SECONDS,
     )
 
 
@@ -166,7 +176,7 @@ def _write_all(d: str, files: list) -> list:
 # caught (fail closed).
 _DIRECTIVE_INTRODUCER = re.compile(r"#|%:|\?\?=")
 _FILE_KEYWORD = re.compile(r"(include_next|include|import|embed)\b")
-_HAS_FILE = re.compile(r"__has_(?:include_next|include|embed)\b")
+_HAS_FILE = re.compile(r"__has_(?:include_next|include|embed)\b|\b(?:GCC|clang)\s+dependency\b")
 _ABSOLUTE_PATH = re.compile(r"^(?:[/\\]|[A-Za-z]:)")
 
 
@@ -188,14 +198,20 @@ def _unsafe_include(files: list) -> str:
     files (``"name.h"``, by basename) are allowed. Absolute paths, ``..``, other quoted
     headers, ``#include_next`` and macro includes (``#include NAME``) make the result
     not definitive. ``#embed`` is checked the same way, and ``__has_include`` /
-    ``__has_embed`` (which probe whether a host file exists) are refused outright.
+    ``__has_embed`` / ``#pragma GCC dependency`` (which probe whether a host file
+    exists) are refused outright. So is a file name starting with ``-`` or ``@``.
     """
     names = {os.path.basename(n) for n, _ in files}
+    for base in names:
+        # A name like "@opts.cpp" or "-include.cpp" would be read by the compiler as a
+        # response file or an option, not as a source.
+        if base.startswith(("-", "@")):
+            return f"{base}: file name starts with '-' or '@'"
     for name, code in files:
         # Undo line splices first: "#inc\<newline>lude" is still a directive.
         text = re.sub(r"(?:\\|\?\?/)[ \t]*\r?\n", "", code or "")
         if _HAS_FILE.search(text):
-            return f"{name}: __has_include or __has_embed"
+            return f"{name}: __has_include, __has_embed or #pragma GCC dependency"
         n = len(text)
         closes = _positions(text, "*/")
         enders = {'"': _positions(text, '"'), "<": _positions(text, ">")}  # by opener
@@ -255,7 +271,9 @@ def _check_cpp_group(files: list) -> CompileResult:
             srcs = [os.path.basename(n) for n, _ in files if n.lower().endswith(_CPP_HEADER_EXTS)]
         try:
             # -fsyntax-only: compiler front-end only (no assembly, no link, no run).
-            proc = _run([compiler, f"-std={CPP_STD}", "-fsyntax-only", f"-I{d}", *srcs], cwd=d)
+            # "./name" so no argument can start with "-" or "@" (an option or response file).
+            proc = _run([compiler, f"-std={CPP_STD}", "-fsyntax-only", f"-I{d}",
+                         *[f"./{s}" for s in srcs]], cwd=d)
         except subprocess.TimeoutExpired:
             return CompileResult("cpp", supported=True, compiles=None,
                                  skipped_reason="C++ compile timed out", tool=os.path.basename(compiler))
