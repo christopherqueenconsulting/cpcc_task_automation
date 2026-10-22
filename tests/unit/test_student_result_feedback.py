@@ -3,6 +3,7 @@
 """AppTest: the Student result Feedback tab renders Markdown and can show the source."""
 
 import re
+import string
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -85,54 +86,75 @@ def test_links_and_images_are_inert() -> None:
 
     notes = next(m.value for m in at.markdown if "example.invalid" in m.value)
     assert not re.search(r"(?<!\\)[\[\]]", notes)
-    assert "`http://example.invalid/p.png`" in notes and "`http://example.invalid/a`" in notes
+    assert "` http://example.invalid/p.png `" in notes and "` http://example.invalid/a `" in notes
 
 
 @pytest.mark.unit
-def test_code_is_left_as_written() -> None:
-    assert render_safe_markdown("pay `printf(\"$%.2f\")` costs $5") == "pay `printf(\"$%.2f\")` costs \\$5"
+def test_code_keeps_its_formatting_and_text() -> None:
+    assert render_safe_markdown('pay `printf("$%.2f")` costs $5') == 'pay  ` printf("$%.2f") `  costs \\$5'
     for fence in ("```", "~~~"):
-        fenced = f"{fence}java\nSystem.out.printf(\"$%.2f\");\n{fence}"
-        assert render_safe_markdown(fenced) == fenced
+        safe = render_safe_markdown(f'{fence}java\nSystem.out.printf("$%.2f");\n{fence}')
+        assert safe == '```java\nSystem.out.printf("$%.2f");\n```'
+    # A fence whose content holds a longer backtick run gets a longer fence.
+    assert render_safe_markdown("```\nx ```` y\n```") == "`````\nx ```` y\n`````"
 
 
 BYPASSES = [
-    "\\`![x](https://e.invalid/p.png)`",          # escaped backtick hiding an image
+    "\\`![x](https://e.invalid/p.png)`",            # escaped backtick hiding an image
     "```[x](//e.invalid)`",                          # mismatched backtick runs
-    "[c][1]\n\n[1]: //e.invalid",                 # reference link
-    "[e]\n\n[e]: //e.invalid",                    # shortcut reference link
+    "[c][1]\n\n[1]: //e.invalid",                   # reference link
+    "[e]\n\n[e]: //e.invalid",                      # shortcut reference link
     "HTTPS://e.invalid and WWW.e.invalid.",          # uppercase autolinks
     "<ftp://e.invalid> <http:/e.invalid> <javascript:alert(1)>",
-    "- item\n  ```\n  x\n[a](//e.invalid)",       # indented fence closed early by the list
-    "```x`\n[a](//e.invalid)",                      # backtick in a fence info string: not a fence
+    "- item\n  ```\n  x\n[a](//e.invalid)",         # indented fence closed early by the list
+    "```x`\n[a](//e.invalid)",                       # backtick in a fence info string: not a fence
     "www.e.invalid``[b](//e.invalid)`` and `www.f.invalid`[c](//e.invalid)",
+    "| a | b | c |\n|---|---|---|\n| `x | [l](//e.invalid) | y` |",   # table cell splits a code span
+    "| a | b |\n|---|---|\n| `x | ![i](https://e.invalid/p.png) | y` |",
+    "\\https://e.invalid \\mailto:x@e.invalid \\a@e.invalid",           # backslash before a letter
+    " ~~~\n~~~\n[x](//e.invalid)\n~~~",                                  # indented tilde fence
+    "  ~~~\n~~~\n[x](//e.invalid)\n~~~",
+    "   ~~~\n~~~\n[x](//e.invalid)\n~~~",
 ]
+
+_PUNCT = re.escape(string.punctuation)
 
 
 def _prose(md: str) -> str:
-    """What Markdown reads as prose: escaped characters and code spans removed."""
-    md = re.sub(r"\\.", "", md)
-    return re.sub(r"(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", "", md)
+    """What CommonMark reads as prose, outside fences: escaped punctuation and code spans
+    removed. A backtick run with no same-length closer is literal text, so what follows it
+    stays prose. Fenced blocks are removed whole."""
+    md = re.sub(r"(?ms)^ {0,3}(`{3,}|~{3,}).*?^ {0,3}\1[`~]*\s*$", "", md)
+    md = re.sub(rf"\\[{_PUNCT}]", "", md)
+    out, i = [], 0
+    while i < len(md):
+        if md[i] != "`":
+            out.append(md[i])
+            i += 1
+            continue
+        run = len(md[i:]) - len(md[i:].lstrip("`"))
+        close = re.compile(rf"(?<!`)`{{{run}}}(?!`)").search(md, i + run)
+        i = close.end() if close else i + run
+    return "".join(out)
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("payload", BYPASSES)
 def test_link_bypasses_are_neutralised(payload: str) -> None:
     prose = _prose(render_safe_markdown(payload))
-    assert not re.search(r"[\[\]<]", prose), prose
+    assert not re.search(r"[\[\]<|~`]", prose), prose
     assert not re.search(r"(?i)https?://|www\.", prose), prose
 
 
 @pytest.mark.unit
 def test_an_escaped_dollar_stays_escaped() -> None:
-    assert render_safe_markdown("\\$5 and $10") == "\\$5 and \\$10"
+    assert "$" not in _prose(render_safe_markdown("\\$5 and $10"))
 
 
 @pytest.mark.unit
 def test_www_and_email_autolinks_are_inert() -> None:
     safe = render_safe_markdown("Visit www.example.invalid or mail ada@example.invalid.")
-    assert "`www.example.invalid`" in safe and "`ada@example.invalid.`" not in safe
-    assert "`ada@example.invalid`" in safe
+    assert "` www.example.invalid `" in safe and "` ada@example.invalid `" in safe
 
 
 @pytest.mark.unit

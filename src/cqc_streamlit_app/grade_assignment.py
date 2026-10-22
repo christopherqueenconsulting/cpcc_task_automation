@@ -2720,79 +2720,72 @@ def _get_band_or_level_label(result) -> Optional[str]:
 
 FEEDBACK_SOURCE_PREF = "feedback_view_source"
 # GFM literal autolinks (any case) and bare email addresses; trailing sentence punctuation stays outside.
-_AUTOLINK_RE = re.compile(r"(?i)(?:https?://|www\.|mailto:|xmpp:)[^\s<>`\[\]()]*[^\s<>`\[\]().,;:!?'\"]"
+_AUTOLINK_RE = re.compile(r"(?i)(?:https?://|www\.|mailto:|xmpp:)[^\s<>`\[\]()|\\]*[^\s<>`\[\]()|\\.,;:!?'\"]"
                           r"|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-# A fence opener counts only at column 0 (an indented one may belong to a list item that
-# closes it early); a backtick fence's info string may not contain a backtick.
-_FENCE_OPEN_RE = re.compile(r"^(`{3,})[^`]*$|^(~{3,})")
+# CommonMark fence opener: up to 3 spaces, then 3+ backticks (info without backticks) or tildes.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,})[^`]*$|^ {0,3}(~{3,})")
+_PROSE_SPECIALS_RE = re.compile(r"([\\`\[\]<$|~])")
+
+
+def _code_span(content: str) -> str:
+    """A code span we write ourselves: its backtick run is longer than any run inside, and
+    padding spaces keep it from touching another span's backticks."""
+    ticks = "`" * (max((len(r) for r in re.findall(r"`+", content)), default=0) + 1)
+    return f" {ticks} {content} {ticks} "
 
 
 def _escape_prose(text: str) -> str:
-    """Prose with every link, image and HTML trigger escaped: ``[``, ``]``, ``<`` and ``$``
-    get a backslash (so reference links, angle autolinks and LaTeX can't form) and literal
-    autolinks become code spans."""
+    """Prose with every link, image, table, fence, HTML and math trigger escaped, and
+    literal autolinks turned into code spans."""
     out, last = [], 0
     for m in _AUTOLINK_RE.finditer(text):
-        out.append(re.sub(r"([\[\]<$])", r"\\\1", text[last:m.start()]))
-        # A space keeps this span's backticks from merging with a code span next to it.
-        pad_l = " " if m.start() == 0 else ""
-        pad_r = " " if m.end() == len(text) else ""
-        out.append(f"{pad_l}`{m.group(0)}`{pad_r}")
+        out.append(_PROSE_SPECIALS_RE.sub(r"\\\1", text[last:m.start()]))
+        out.append(_code_span(m.group(0)))
         last = m.end()
-    out.append(re.sub(r"([\[\]<$])", r"\\\1", text[last:]))
+    out.append(_PROSE_SPECIALS_RE.sub(r"\\\1", text[last:]))
     return "".join(out)
 
 
 def _safe_inline(line: str) -> str:
-    """One line outside fences, scanned like CommonMark: a backslash escapes the next
-    character, and a backtick run opens a code span only if the same-length run closes it
-    on this line. Code spans pass through; everything else is escaped as prose."""
-    out, prose, i = [], [], 0
-    while i < len(line):
-        ch = line[i]
-        if ch == "\\" and i + 1 < len(line):
-            # Already escaped: Markdown shows the next character literally.
-            out.append(_escape_prose("".join(prose)))
-            prose = []
-            out.append(line[i:i + 2])
-            i += 2
+    """One line: code spans (a backtick run closed by a same-length run on this line) are
+    rewritten as spans we write ourselves; everything else is escaped as prose. A wrong
+    guess about what is code costs formatting, never safety: nothing passes through raw."""
+    out, i, last = [], 0, 0
+    for m in re.finditer(r"`+", line):
+        if m.start() < i:
             continue
-        if ch == "`":
-            run = len(line[i:]) - len(line[i:].lstrip("`"))
-            close = re.compile(rf"(?<!`)`{{{run}}}(?!`)").search(line, i + run)
-            out.append(_escape_prose("".join(prose)))
-            prose = []
-            if close:
-                out.append(line[i:close.end()])
-                i = close.end()
-            else:
-                out.append("\\`" * run)
-                i += run
+        close = re.compile(rf"(?<!`){m.group(0)}(?!`)").search(line, m.end())
+        if not close:
             continue
-        prose.append(ch)
-        i += 1
-    out.append(_escape_prose("".join(prose)))
+        out.append(_escape_prose(line[last:m.start()]))
+        out.append(_code_span(line[m.end():close.start()].strip(" ") or " "))
+        i = last = close.end()
+    out.append(_escape_prose(line[last:]))
     return "".join(out)
 
 
 def render_safe_markdown(text: str) -> str:
     """Text that may carry student- or model-influenced content, made safe for ``st.markdown``.
 
-    Fenced code blocks and code spans are left as written. In prose, ``$`` is escaped so
-    amounts don't render as LaTeX, ``[``, ``]`` and ``<`` are escaped so no inline,
-    reference or angle-bracket link or image can form, and literal autolinks become code
-    spans. For display only; copy the original text."""
+    Code spans and fenced blocks keep their formatting but are rewritten with delimiters we
+    choose, so their content can never reach Markdown as anything but code. In all other
+    text, backslashes, backticks, ``[``, ``]``, ``<``, ``$``, ``|`` and ``~`` are escaped, so no
+    link, image, table, fence, HTML or math can form, and literal autolinks become code
+    spans. Emphasis, lists and headings still render. For display only; copy the original."""
     lines, out, i = text.split("\n"), [], 0
     while i < len(lines):
         opened = _FENCE_OPEN_RE.match(lines[i])
         if opened:
-            fence = opened.group(1) or opened.group(2)
-            closer = re.compile(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*$")
-            end = next((j for j in range(i + 1, len(lines)) if closer.match(lines[j])), None)
-            if end is not None:  # an unclosed fence is treated as prose
-                out.extend(lines[i:end + 1])
-                i = end + 1
-                continue
+            mark = opened.group(1) or opened.group(2)
+            closer = re.compile(rf"^ {{0,3}}{re.escape(mark[0])}{{{len(mark)},}}\s*$")
+            end = next((j for j in range(i + 1, len(lines)) if closer.match(lines[j])), len(lines))
+            body = lines[i + 1:end]
+            longest = max((len(r) for line in body for r in re.findall(r"`+", line)), default=0)
+            fence = "`" * max(3, longest + 1)
+            info = re.sub(r"[^\w+-]", "", lines[i].strip().lstrip(mark[0]))
+            out.extend([fence + info, *body, fence])
+            i = end + 1
+            continue
         out.append(_safe_inline(lines[i]))
         i += 1
     return "\n".join(out)
