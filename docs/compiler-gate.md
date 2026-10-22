@@ -72,11 +72,16 @@ verdict (`supported=False`) when any C/C++ file has:
 - `#include_next`, or a macro include (`#include NAME`);
 - `__has_include`, `__has_embed` or `#pragma GCC dependency`, which can test whether a
   host file exists;
+- a `#line` directive or GNU line marker (`# 1 "file"`) that names a file: GCC prints
+  the source line under a diagnostic by opening that file;
 - a submitted file name starting with `-` or `@`, which the compiler would read as an
   option or a response file (`@opts.cpp` reads options such as `-include <file>` from
   `opts.cpp`).
 
-Sources are also passed as `./name`, so no argument can start with `-` or `@`, and the
+The compile also runs with `-fno-diagnostics-show-caret` (GCC) or
+`-fno-caret-diagnostics` (clang), so it never prints source
+lines under a diagnostic. If a guard rule is ever missed, at most the tokens a message
+quotes can leak, not whole lines of a file. Sources are also passed as `./name`, so no argument can start with `-` or `@`, and the
 compile drops environment variables that widen the include search or add options
 (`CPATH`, `CPLUS_INCLUDE_PATH`, `CCC_OVERRIDE_OPTIONS` and the like; see
 `_COMPILER_ENV_VARS`).
@@ -89,17 +94,29 @@ string or comment can make a submission unverifiable; that is the safe direction
 ### If a host file may have leaked
 
 Before this guard (PR #395), raw diagnostics went into `notes`, which student feedback
-renders. To check for exposure:
+renders. Only the synthetic `fake.env` test has reproduced the echo; no real grading
+run is known to have included a host file.
 
-1. Search saved runs (`~/.cqc_cpcc/grading_results/`, or `CQC_GRADING_RESULTS_DIR`) for
-   a "Does Not Compile" error whose `notes` hold more than the one line
-   "Verified by ...: the submission does not compile." Delete or re-grade any such run
-   before downloading feedback from it again.
-2. If one of those notes quotes a host file, rotate every key in `.env` (by name:
+**Before merging, and again if a leak is ever suspected,** whoever runs the app on the
+Mac (Christopher, or an agent working there) searches the saved runs. Results live in
+`~/.cqc_cpcc/grading_results/` (or `CQC_GRADING_RESULTS_DIR`). The check below prints
+only counts, never note text:
+
+```bash
+python3 -c "import glob,json,os;d=os.environ.get('CQC_GRADING_RESULTS_DIR') or os.path.expanduser('~/.cqc_cpcc/grading_results');n=[f for f in glob.glob(d+'/*.json') if any('Verified by' in (e.get('notes') or '') and '\n' in (e.get('notes') or '').strip() or e.get('compiler_diagnostics') for r in json.load(open(f)).get('results',[]) if isinstance(r,list) and isinstance(r[-1],dict) for e in r[-1].get('detected_errors') or [])];print(len(glob.glob(d+'/*.json')),'runs,',len(n),'to review:',[os.path.basename(f) for f in n])"
+```
+
+1. A run is listed when a gate note holds more than the one line "Verified by ...: the
+   submission does not compile.", or when it carries `compiler_diagnostics`. Open each
+   one and look for text that is not from the student's own files. Delete or re-grade
+   any run that has such text before downloading feedback from it again.
+2. If any note quotes a host file, rotate every key in `.env` (by name:
    `OPENROUTER_API_KEY`, `OPENAI_API_KEY` and the rest). Christopher does the rotation;
    creating secrets is his.
 
-Hand-backs already sent to students cannot be checked this way.
+Result on 2026-10-22, before merge, on the Mac: 9 saved runs, 0 gate-added compile
+errors, so nothing to review. Hand-backs already sent to students cannot be checked
+this way.
 
 Rollback is `git revert`, but a revert puts the host-file echo back into student
 feedback. Prefer a forward fix unless the gate is breaking grading.
