@@ -2719,25 +2719,83 @@ def _get_band_or_level_label(result) -> Optional[str]:
 
 
 FEEDBACK_SOURCE_PREF = "feedback_view_source"
-# http(s) URLs, GFM "www." autolinks and bare email addresses.
-_URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>`()\[\]]+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-_CODE_RE = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)")
+# GFM literal autolinks (any case) and bare email addresses; trailing sentence punctuation stays outside.
+_AUTOLINK_RE = re.compile(r"(?i)(?:https?://|www\.|mailto:|xmpp:)[^\s<>`\[\]()]*[^\s<>`\[\]().,;:!?'\"]"
+                          r"|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# A fence opener counts only at column 0 (an indented one may belong to a list item that
+# closes it early); a backtick fence's info string may not contain a backtick.
+_FENCE_OPEN_RE = re.compile(r"^(`{3,})[^`]*$|^(~{3,})")
 
 
 def _escape_prose(text: str) -> str:
-    text = text.replace("$", r"\$")
-    text = _URL_RE.sub(lambda m: f"`{m.group(0)}`", text)
-    return text.replace("![", r"!\[").replace("](", r"]\(")
+    """Prose with every link, image and HTML trigger escaped: ``[``, ``]``, ``<`` and ``$``
+    get a backslash (so reference links, angle autolinks and LaTeX can't form) and literal
+    autolinks become code spans."""
+    out, last = [], 0
+    for m in _AUTOLINK_RE.finditer(text):
+        out.append(re.sub(r"([\[\]<$])", r"\\\1", text[last:m.start()]))
+        # A space keeps this span's backticks from merging with a code span next to it.
+        pad_l = " " if m.start() == 0 else ""
+        pad_r = " " if m.end() == len(text) else ""
+        out.append(f"{pad_l}`{m.group(0)}`{pad_r}")
+        last = m.end()
+    out.append(re.sub(r"([\[\]<$])", r"\\\1", text[last:]))
+    return "".join(out)
+
+
+def _safe_inline(line: str) -> str:
+    """One line outside fences, scanned like CommonMark: a backslash escapes the next
+    character, and a backtick run opens a code span only if the same-length run closes it
+    on this line. Code spans pass through; everything else is escaped as prose."""
+    out, prose, i = [], [], 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and i + 1 < len(line):
+            # Already escaped: Markdown shows the next character literally.
+            out.append(_escape_prose("".join(prose)))
+            prose = []
+            out.append(line[i:i + 2])
+            i += 2
+            continue
+        if ch == "`":
+            run = len(line[i:]) - len(line[i:].lstrip("`"))
+            close = re.compile(rf"(?<!`)`{{{run}}}(?!`)").search(line, i + run)
+            out.append(_escape_prose("".join(prose)))
+            prose = []
+            if close:
+                out.append(line[i:close.end()])
+                i = close.end()
+            else:
+                out.append("\\`" * run)
+                i += run
+            continue
+        prose.append(ch)
+        i += 1
+    out.append(_escape_prose("".join(prose)))
+    return "".join(out)
 
 
 def render_safe_markdown(text: str) -> str:
     """Text that may carry student- or model-influenced content, made safe for ``st.markdown``.
 
-    Outside code spans and fences: ``$`` is escaped so amounts don't render as LaTeX, URLs
-    become code spans, and image and link syntax is escaped, so nothing loads a remote image
-    or offers a live link. Code is left as written. For display only; copy the original."""
-    parts = _CODE_RE.split(text)
-    return "".join(part if i % 2 else _escape_prose(part) for i, part in enumerate(parts))
+    Fenced code blocks and code spans are left as written. In prose, ``$`` is escaped so
+    amounts don't render as LaTeX, ``[``, ``]`` and ``<`` are escaped so no inline,
+    reference or angle-bracket link or image can form, and literal autolinks become code
+    spans. For display only; copy the original text."""
+    lines, out, i = text.split("\n"), [], 0
+    while i < len(lines):
+        opened = _FENCE_OPEN_RE.match(lines[i])
+        if opened:
+            fence = opened.group(1) or opened.group(2)
+            closer = re.compile(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}\s*$")
+            end = next((j for j in range(i + 1, len(lines)) if closer.match(lines[j])), None)
+            if end is not None:  # an unclosed fence is treated as prose
+                out.extend(lines[i:end + 1])
+                i = end + 1
+                continue
+        out.append(_safe_inline(lines[i]))
+        i += 1
+    return "\n".join(out)
 
 
 def _remember_feedback_view(widget_key: str) -> None:
@@ -2770,19 +2828,24 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
     with tabs[0]:
         feedback = build_student_feedback(
             result, student_name=student_name if greeting_name is ... else greeting_name)
-        st.caption("For the student: no numeric scores. Copy it or use the feedback document.")
+        st.caption("For the student, with no scores. To paste it into BrightSpace, turn on "
+                   "**Show Markdown source** and use the copy icon on the block. Edit the wording "
+                   "after pasting. Feedback documents are on the Hand back tab.")
         view_key = f"student_feedback_show_source_{student_name}"
-        if st.session_state.get(view_key, st.session_state.get(FEEDBACK_SOURCE_PREF, False)):
+        # One toggle per student (a batch renders many on one page); the shared preference
+        # carries the choice from one student to the next.
+        show_source = st.toggle(
+            "Show Markdown source", value=st.session_state.get(FEEDBACK_SOURCE_PREF, False),
+            key=view_key, on_change=_remember_feedback_view, args=(view_key,),
+            help="Shows the raw Markdown in a block with a copy icon. Applies to every student.")
+        if show_source:
             st.code(feedback, language="markdown", wrap_lines=True)
         else:
             with st.container(border=True):
                 st.markdown(render_safe_markdown(feedback))
-        # One toggle per student (a batch renders many on one page); the shared preference
-        # carries the choice from one student to the next.
-        st.toggle("Show Markdown source", value=st.session_state.get(FEEDBACK_SOURCE_PREF, False),
-                  key=view_key, on_change=_remember_feedback_view, args=(view_key,),
-                  help="Raw Markdown with a copy button, for BrightSpace or AI tools.")
+        st.divider()
         st.markdown("**Instructor notes**")
+        st.caption("Not for the student.")
         st.markdown(render_safe_markdown(result.overall_feedback or ""))
     with tabs[1]:
         st.dataframe(

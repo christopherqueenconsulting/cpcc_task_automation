@@ -2,6 +2,8 @@
 
 """AppTest: the Student result Feedback tab renders Markdown and can show the source."""
 
+import re
+
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -82,7 +84,7 @@ def test_links_and_images_are_inert() -> None:
     at = _app(_result(note=note))
 
     notes = next(m.value for m in at.markdown if "example.invalid" in m.value)
-    assert "![" not in notes and "](" not in notes
+    assert not re.search(r"(?<!\\)[\[\]]", notes)
     assert "`http://example.invalid/p.png`" in notes and "`http://example.invalid/a`" in notes
 
 
@@ -92,6 +94,38 @@ def test_code_is_left_as_written() -> None:
     for fence in ("```", "~~~"):
         fenced = f"{fence}java\nSystem.out.printf(\"$%.2f\");\n{fence}"
         assert render_safe_markdown(fenced) == fenced
+
+
+BYPASSES = [
+    "\\`![x](https://e.invalid/p.png)`",          # escaped backtick hiding an image
+    "```[x](//e.invalid)`",                          # mismatched backtick runs
+    "[c][1]\n\n[1]: //e.invalid",                 # reference link
+    "[e]\n\n[e]: //e.invalid",                    # shortcut reference link
+    "HTTPS://e.invalid and WWW.e.invalid.",          # uppercase autolinks
+    "<ftp://e.invalid> <http:/e.invalid> <javascript:alert(1)>",
+    "- item\n  ```\n  x\n[a](//e.invalid)",       # indented fence closed early by the list
+    "```x`\n[a](//e.invalid)",                      # backtick in a fence info string: not a fence
+    "www.e.invalid``[b](//e.invalid)`` and `www.f.invalid`[c](//e.invalid)",
+]
+
+
+def _prose(md: str) -> str:
+    """What Markdown reads as prose: escaped characters and code spans removed."""
+    md = re.sub(r"\\.", "", md)
+    return re.sub(r"(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", "", md)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("payload", BYPASSES)
+def test_link_bypasses_are_neutralised(payload: str) -> None:
+    prose = _prose(render_safe_markdown(payload))
+    assert not re.search(r"[\[\]<]", prose), prose
+    assert not re.search(r"(?i)https?://|www\.", prose), prose
+
+
+@pytest.mark.unit
+def test_an_escaped_dollar_stays_escaped() -> None:
+    assert render_safe_markdown("\\$5 and $10") == "\\$5 and \\$10"
 
 
 @pytest.mark.unit
