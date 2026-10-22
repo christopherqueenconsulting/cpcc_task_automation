@@ -2772,7 +2772,8 @@ def render_safe_markdown(text: str) -> str:
     text, backslashes, backticks, ``[``, ``]``, ``<``, ``$``, ``|`` and ``~`` are escaped, so no
     link, image, table, fence, HTML or math can form, and literal autolinks become code
     spans. Emphasis, lists and headings still render. For display only; copy the original."""
-    lines, out, i = text.split("\n"), [], 0
+    # Markdown also ends lines at a lone \r; split where it does.
+    lines, out, i = text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), [], 0
     while i < len(lines):
         opened = _FENCE_OPEN_RE.match(lines[i])
         if opened:

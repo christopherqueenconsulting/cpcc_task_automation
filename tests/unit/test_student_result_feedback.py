@@ -115,6 +115,9 @@ BYPASSES = [
     " ~~~\n~~~\n[x](//e.invalid)\n~~~",                                  # indented tilde fence
     "  ~~~\n~~~\n[x](//e.invalid)\n~~~",
     "   ~~~\n~~~\n[x](//e.invalid)\n~~~",
+    "`a\r\r[x](//e.invalid)\r\r`",                                     # CR line endings
+    "`a\r> [x](//e.invalid)`",
+    "`a\r- [x](//e.invalid)`",
 ]
 
 _PUNCT = re.escape(string.punctuation)
@@ -122,26 +125,33 @@ _PUNCT = re.escape(string.punctuation)
 
 def _prose(md: str) -> str:
     """What CommonMark reads as prose, outside fences: escaped punctuation and code spans
-    removed. A backtick run with no same-length closer is literal text, so what follows it
-    stays prose. Fenced blocks are removed whole."""
+    removed. Lines end at LF, CRLF or a lone CR, and a code span is matched within one line
+    (stricter than Markdown, which never joins spans across a block boundary). A backtick
+    run with no same-length closer is literal text. Fenced blocks are removed whole."""
+    md = md.replace("\r\n", "\n").replace("\r", "\n")
     md = re.sub(r"(?ms)^ {0,3}(`{3,}|~{3,}).*?^ {0,3}\1[`~]*\s*$", "", md)
     md = re.sub(rf"\\[{_PUNCT}]", "", md)
-    out, i = [], 0
-    while i < len(md):
-        if md[i] != "`":
-            out.append(md[i])
-            i += 1
-            continue
-        run = len(md[i:]) - len(md[i:].lstrip("`"))
-        close = re.compile(rf"(?<!`)`{{{run}}}(?!`)").search(md, i + run)
-        i = close.end() if close else i + run
+    out = []
+    for line in md.split("\n"):
+        i = 0
+        while i < len(line):
+            if line[i] != "`":
+                out.append(line[i])
+                i += 1
+                continue
+            run = len(line[i:]) - len(line[i:].lstrip("`"))
+            close = re.compile(rf"(?<!`)`{{{run}}}(?!`)").search(line, i + run)
+            i = close.end() if close else i + run
+        out.append("\n")
     return "".join(out)
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("payload", BYPASSES)
 def test_link_bypasses_are_neutralised(payload: str) -> None:
-    prose = _prose(render_safe_markdown(payload))
+    safe = render_safe_markdown(payload)
+    assert "\r" not in safe
+    prose = _prose(safe)
     assert not re.search(r"[\[\]<|~`]", prose), prose
     assert not re.search(r"(?i)https?://|www\.", prose), prose
 
