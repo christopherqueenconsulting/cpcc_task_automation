@@ -2718,6 +2718,84 @@ def _get_band_or_level_label(result) -> Optional[str]:
     return next((cr.selected_level_label for cr in criteria if cr.selected_level_label), None)
 
 
+FEEDBACK_SOURCE_PREF = "feedback_view_source"
+# GFM literal autolinks (any case) and bare email addresses; trailing sentence punctuation stays outside.
+_AUTOLINK_RE = re.compile(r"(?i)(?:https?://|www\.|mailto:|xmpp:)[^\s<>`\[\]()|\\]*[^\s<>`\[\]()|\\.,;:!?'\"]"
+                          r"|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# CommonMark fence opener: up to 3 spaces, then 3+ backticks (info without backticks) or tildes.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,})[^`]*$|^ {0,3}(~{3,})")
+_PROSE_SPECIALS_RE = re.compile(r"([\\`\[\]<$|~])")
+
+
+def _code_span(content: str) -> str:
+    """A code span we write ourselves: its backtick run is longer than any run inside, and
+    padding spaces keep it from touching another span's backticks."""
+    ticks = "`" * (max((len(r) for r in re.findall(r"`+", content)), default=0) + 1)
+    return f" {ticks} {content} {ticks} "
+
+
+def _escape_prose(text: str) -> str:
+    """Prose with every link, image, table, fence, HTML and math trigger escaped, and
+    literal autolinks turned into code spans."""
+    out, last = [], 0
+    for m in _AUTOLINK_RE.finditer(text):
+        out.append(_PROSE_SPECIALS_RE.sub(r"\\\1", text[last:m.start()]))
+        out.append(_code_span(m.group(0)))
+        last = m.end()
+    out.append(_PROSE_SPECIALS_RE.sub(r"\\\1", text[last:]))
+    return "".join(out)
+
+
+def _safe_inline(line: str) -> str:
+    """One line: code spans (a backtick run closed by a same-length run on this line) are
+    rewritten as spans we write ourselves; everything else is escaped as prose. A wrong
+    guess about what is code costs formatting, never safety: nothing passes through raw."""
+    out, i, last = [], 0, 0
+    for m in re.finditer(r"`+", line):
+        if m.start() < i:
+            continue
+        close = re.compile(rf"(?<!`){m.group(0)}(?!`)").search(line, m.end())
+        if not close:
+            continue
+        out.append(_escape_prose(line[last:m.start()]))
+        out.append(_code_span(line[m.end():close.start()].strip(" ") or " "))
+        i = last = close.end()
+    out.append(_escape_prose(line[last:]))
+    return "".join(out)
+
+
+def render_safe_markdown(text: str) -> str:
+    """Text that may carry student- or model-influenced content, made safe for ``st.markdown``.
+
+    Code spans and fenced blocks keep their formatting but are rewritten with delimiters we
+    choose, so their content can never reach Markdown as anything but code. In all other
+    text, backslashes, backticks, ``[``, ``]``, ``<``, ``$``, ``|`` and ``~`` are escaped, so no
+    link, image, table, fence, HTML or math can form, and literal autolinks become code
+    spans. Emphasis, lists and headings still render. For display only; copy the original."""
+    # Markdown also ends lines at a lone \r; split where it does.
+    lines, out, i = text.replace("\r\n", "\n").replace("\r", "\n").split("\n"), [], 0
+    while i < len(lines):
+        opened = _FENCE_OPEN_RE.match(lines[i])
+        if opened:
+            mark = opened.group(1) or opened.group(2)
+            closer = re.compile(rf"^ {{0,3}}{re.escape(mark[0])}{{{len(mark)},}}\s*$")
+            end = next((j for j in range(i + 1, len(lines)) if closer.match(lines[j])), len(lines))
+            body = lines[i + 1:end]
+            longest = max((len(r) for line in body for r in re.findall(r"`+", line)), default=0)
+            fence = "`" * max(3, longest + 1)
+            info = re.sub(r"[^\w+-]", "", lines[i].strip().lstrip(mark[0]))
+            out.extend([fence + info, *body, fence])
+            i = end + 1
+            continue
+        out.append(_safe_inline(lines[i]))
+        i += 1
+    return "\n".join(out)
+
+
+def _remember_feedback_view(widget_key: str) -> None:
+    st.session_state[FEEDBACK_SOURCE_PREF] = st.session_state[widget_key]
+
+
 def display_rubric_assessment_result(result, student_name: str, correlation_id: Optional[str] = None,
                                      greeting_name: Optional[str] = ...,
                                      source_files: Optional[dict] = None):
@@ -2742,12 +2820,27 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
     labels = ["Feedback", "Criteria", "Errors", "Requirements", "Code"] + (["Debug"] if CQC_OPENAI_DEBUG else [])
     tabs = st.tabs(labels)
     with tabs[0]:
-        st.caption("For the student: no numeric scores. Copy it or use the feedback document.")
-        st.text_area("Student feedback", value=build_student_feedback(
-                         result, student_name=student_name if greeting_name is ... else greeting_name),
-                     height=280, key=f"student_feedback_{student_name}", label_visibility="collapsed")
+        feedback = build_student_feedback(
+            result, student_name=student_name if greeting_name is ... else greeting_name)
+        st.caption("For the student, with no scores. To paste it into BrightSpace, turn on "
+                   "**Show Markdown source** and use the copy icon on the block. Edit the wording "
+                   "after pasting. Feedback documents are on the Hand back tab.")
+        view_key = f"student_feedback_show_source_{student_name}"
+        # One toggle per student (a batch renders many on one page); the shared preference
+        # carries the choice from one student to the next.
+        show_source = st.toggle(
+            "Show Markdown source", value=st.session_state.get(FEEDBACK_SOURCE_PREF, False),
+            key=view_key, on_change=_remember_feedback_view, args=(view_key,),
+            help="Shows the raw Markdown in a block with a copy icon. Applies to every student.")
+        if show_source:
+            st.code(feedback, language="markdown", wrap_lines=True)
+        else:
+            with st.container(border=True):
+                st.markdown(render_safe_markdown(feedback))
+        st.divider()
         st.markdown("**Instructor notes**")
-        st.markdown(result.overall_feedback)
+        st.caption("Not for the student.")
+        st.markdown(render_safe_markdown(result.overall_feedback or ""))
     with tabs[1]:
         st.dataframe(
             [{"Criterion": c.criterion_name, "Points": f"{c.points_earned:g}/{c.points_possible}"
