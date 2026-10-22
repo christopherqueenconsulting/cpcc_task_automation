@@ -38,6 +38,7 @@ Example usage:
 import asyncio
 import contextvars
 import json
+import math
 import os
 from dataclasses import dataclass
 from typing import Optional, Type, TypeVar
@@ -740,9 +741,11 @@ async def _get_openrouter_completion_impl(
             raise OpenAITransportError(f"OpenRouter rate limit: {e}") from e
 
         except _NO_RETRY_ERRORS as e:
-            logger.error(f"Attempt {attempt + 1}/{max_retries}: {type(e).__name__} (not retrying): {e}")
+            # The provider's error body can quote the request; keep only its start.
+            detail = f"{type(e).__name__} {getattr(e, 'status_code', '')}: {str(e)[:200]}"
+            logger.error(f"Attempt {attempt + 1}/{max_retries}: {detail} (not retrying)")
             _emit_failed(effective_model, attempt, max_retries, type(e).__name__, False)
-            raise OpenAITransportError(f"OpenRouter API error: {e}") from e
+            raise OpenAITransportError(f"OpenRouter API error: {detail}") from e
 
         except Exception as e:
             last_error = e
@@ -772,9 +775,10 @@ def _retry_after_seconds(error: Exception, default: float) -> float:
     response = getattr(error, "response", None)
     raw = response.headers.get("retry-after") if response is not None else None
     try:
-        return min(max(float(raw), 0.0), MAX_RETRY_AFTER_S)
+        seconds = float(raw)
     except (TypeError, ValueError):
         return default
+    return min(max(seconds, 0.0), MAX_RETRY_AFTER_S) if math.isfinite(seconds) else default
 
 
 # Convenience function for sync contexts

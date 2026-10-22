@@ -1398,7 +1398,7 @@ async def grade_single_rubric_student(
                 st.info("🔄 Large submission detected - preprocessing will be used automatically")
 
             # Grade with rubric
-            status.update(label=f"{status_label} | Calling OpenAI...")
+            status.update(label=f"{status_label} | Calling the model...")
 
             # Create correlation ID for tracking (will be used by OpenAI debug if enabled)
             from cqc_cpcc.utilities.AI.openai_debug import (
@@ -3044,10 +3044,10 @@ def _retry_failed(run_key: str) -> None:
         st.error("The original files for this run are no longer available (the app restarted). "
                  "Use Clear results, then grade the batch again.")
         return
-    still_failed, added = [], []
+    still_failed, added, timed_out = [], [], False
     for student_id in failed:
         submission = inputs["submissions"].get(student_id)
-        if submission is None:
+        if submission is None or timed_out:
             still_failed.append(student_id)
             continue
         deadline = llm_limits.student_deadline()
@@ -3060,6 +3060,14 @@ def _retry_failed(run_key: str) -> None:
                     **inputs["kwargs"],
                 ), deadline))
                 added.append((student_id, result))
+            except TimeoutError:
+                # The model is not answering: waiting the full deadline again for every
+                # remaining student would block the page for hours.
+                timed_out = True
+                still_failed.append(student_id)
+                st.session_state[f"retry_notice_{run_key}"] = (
+                    f"No result from {_run_model(inputs)} within {deadline / 60:.0f} min for "
+                    f"{student_id}. Stopped retrying; the rest stay failed. Try another model.")
             except Exception as e:  # noqa: BLE001 - one failure must not lose the others
                 logger.error(f"Retry failed for {alias(student_id)}: {e}", exc_info=True)
                 still_failed.append(student_id)
@@ -3076,6 +3084,9 @@ def _retry_failed(run_key: str) -> None:
 def render_failed(run_key: str) -> None:
     """Offer to grade only the failed students again (UX goals: Failed can be retried)."""
     failed = st.session_state.grading_failures_by_key.get(run_key, [])
+    notice = st.session_state.pop(f"retry_notice_{run_key}", None)
+    if notice:
+        st.error(notice, icon=":material/timer_off:")
     if not failed:
         return
     with st.container(border=True, horizontal=True, vertical_alignment="center"):

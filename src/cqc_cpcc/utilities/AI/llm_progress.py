@@ -71,7 +71,8 @@ def emit(kind: EventKind, model: str, **fields) -> None:
 
 def describe(event: LLMEvent, now: Optional[float] = None) -> str:
     """One short line for a status label, e.g.
-    ``openai/gpt-6-luna: attempt 2/3, 45 s (last: timed out after 180 s)``."""
+    ``openai/gpt-6-luna: attempt 1/3, 185 s (last: timed out after 180 s; retrying)``,
+    then ``openai/gpt-6-luna: attempt 2/3, 0 s`` when the next attempt starts."""
     now = time.monotonic() if now is None else now
     if event.kind == "fallback":
         return f"{event.model} failed; trying the fallback model"

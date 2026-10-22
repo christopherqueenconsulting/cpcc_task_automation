@@ -264,3 +264,61 @@ def test_a_broken_sink_never_breaks_the_call():
 
     with llm_progress.progress_scope(boom):
         llm_progress.emit("attempt_started", "openai/primary", attempt=1, max_attempts=3)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("header", ["nan", "inf", "-inf"])
+def test_retry_after_ignores_non_finite_values(header):
+    error = SimpleNamespace(response=SimpleNamespace(headers={"retry-after": header}))
+    assert openrouter_client._retry_after_seconds(error, default=1.5) == 1.5
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["httpx", "httpcore.http11", "httpx2._client", "openai._base_client"])
+def test_http_client_debug_is_dropped_from_the_console(name):
+    record = logging.LogRecord(name, logging.DEBUG, __file__, 1, "headers", None, None)
+    assert logger_module._DropSdkChatter().filter(record) is False
+    other = logging.LogRecord("cpcc_logger", logging.DEBUG, __file__, 1, "x", None, None)
+    assert logger_module._DropSdkChatter().filter(other) is True
+
+
+def _retry_page():
+    import streamlit as st
+
+    from cqc_streamlit_app.grade_assignment import _retry_failed, render_failed
+    if not st.session_state.get("retried"):
+        st.session_state["retried"] = True
+        _retry_failed("rk")
+    render_failed("rk")
+
+
+@pytest.mark.unit
+def test_retry_failed_stops_after_the_first_timeout():
+    from streamlit.testing.v1 import AppTest
+
+    from cqc_streamlit_app import grade_assignment
+
+    sub = SimpleNamespace(files={"Main.java": "/tmp/x"}, rejected_files=[])
+    at = AppTest.from_function(_retry_page, default_timeout=30)
+    at.session_state["grading_inputs_by_key"] = {
+        "rk": {"kwargs": {"model_name": "stub/slow"},
+               "submissions": {"Ada Example": sub, "Ben Sample": sub, "Cy Test": sub}}}
+    at.session_state["grading_results_by_key"] = {"rk": []}
+    at.session_state["grading_failures_by_key"] = {"rk": ["Ada Example", "Ben Sample", "Cy Test"]}
+    at.session_state["feedback_zip_bytes_by_key"] = {}
+    calls = []
+
+    def hang(coro):
+        coro.close()
+        calls.append(1)
+        raise TimeoutError
+
+    with patch.object(grade_assignment, "run_coroutine_blocking", hang), \
+            patch.object(grade_assignment, "build_submission_text_with_token_limit", return_value="code"), \
+            patch.object(grade_assignment, "grade_with_rubric", AsyncMock()), \
+            patch.object(grade_assignment, "remember_results"):
+        at.run()
+
+    assert len(calls) == 1
+    assert at.session_state["grading_failures_by_key"]["rk"] == ["Ada Example", "Ben Sample", "Cy Test"]
+    assert any("Stopped retrying" in e.value for e in at.error)

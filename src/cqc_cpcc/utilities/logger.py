@@ -209,11 +209,13 @@ class _WarningsToAppLog(logging.Handler):
 # The SDK logs request options (student code) at DEBUG; never let that reach any log,
 # whatever the base level is.
 class _DropSdkChatter(logging.Filter):
-    """Drops ``openai`` SDK records below WARNING (``OPENAI_LOG=debug`` can raise the SDK's
-    own level at import, after ours)."""
+    """Drops ``openai`` SDK and HTTP-client records below WARNING (``OPENAI_LOG=debug`` can
+    raise their levels at import, after ours)."""
+
+    _NAMES = {"openai", "httpx", "httpx2", "httpcore"}
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return not (record.name.split(".")[0] == "openai" and record.levelno < logging.WARNING)
+        return not (record.name.split(".")[0] in self._NAMES and record.levelno < logging.WARNING)
 
 
 openai_sdk_logger = logging.getLogger("openai")

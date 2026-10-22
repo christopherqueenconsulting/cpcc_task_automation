@@ -28,6 +28,7 @@ Usage:
     >>> print(result.overall_feedback)
 """
 
+import asyncio
 import re
 from typing import Optional
 
@@ -508,7 +509,9 @@ async def grade_with_rubric(
         # local toolchain and correct detected_errors BEFORE scoring, so the score/band
         # reflect the truth (a false "Does Not Compile" otherwise floors the grade).
         if source_files:
-            result, gate_info = apply_compile_gate(result, source_files, error_definitions)
+            # The compiler runs in a subprocess; a worker thread keeps the event loop free so
+            # other students' deadlines and progress labels keep moving meanwhile.
+            result, gate_info = await asyncio.to_thread(apply_compile_gate, result, source_files, error_definitions)
             if gate_report is not None:
                 gate_report.update(gate_info)
             if gate_info.get("action") in ("removed", "added"):
