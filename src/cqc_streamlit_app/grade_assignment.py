@@ -2718,6 +2718,32 @@ def _get_band_or_level_label(result) -> Optional[str]:
     return next((cr.selected_level_label for cr in criteria if cr.selected_level_label), None)
 
 
+FEEDBACK_SOURCE_PREF = "feedback_view_source"
+# http(s) URLs, GFM "www." autolinks and bare email addresses.
+_URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>`()\[\]]+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_CODE_RE = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)")
+
+
+def _escape_prose(text: str) -> str:
+    text = text.replace("$", r"\$")
+    text = _URL_RE.sub(lambda m: f"`{m.group(0)}`", text)
+    return text.replace("![", r"!\[").replace("](", r"]\(")
+
+
+def render_safe_markdown(text: str) -> str:
+    """Text that may carry student- or model-influenced content, made safe for ``st.markdown``.
+
+    Outside code spans and fences: ``$`` is escaped so amounts don't render as LaTeX, URLs
+    become code spans, and image and link syntax is escaped, so nothing loads a remote image
+    or offers a live link. Code is left as written. For display only; copy the original."""
+    parts = _CODE_RE.split(text)
+    return "".join(part if i % 2 else _escape_prose(part) for i, part in enumerate(parts))
+
+
+def _remember_feedback_view(widget_key: str) -> None:
+    st.session_state[FEEDBACK_SOURCE_PREF] = st.session_state[widget_key]
+
+
 def display_rubric_assessment_result(result, student_name: str, correlation_id: Optional[str] = None,
                                      greeting_name: Optional[str] = ...,
                                      source_files: Optional[dict] = None):
@@ -2742,12 +2768,22 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
     labels = ["Feedback", "Criteria", "Errors", "Requirements", "Code"] + (["Debug"] if CQC_OPENAI_DEBUG else [])
     tabs = st.tabs(labels)
     with tabs[0]:
+        feedback = build_student_feedback(
+            result, student_name=student_name if greeting_name is ... else greeting_name)
         st.caption("For the student: no numeric scores. Copy it or use the feedback document.")
-        st.text_area("Student feedback", value=build_student_feedback(
-                         result, student_name=student_name if greeting_name is ... else greeting_name),
-                     height=280, key=f"student_feedback_{student_name}", label_visibility="collapsed")
+        view_key = f"student_feedback_show_source_{student_name}"
+        if st.session_state.get(view_key, st.session_state.get(FEEDBACK_SOURCE_PREF, False)):
+            st.code(feedback, language="markdown", wrap_lines=True)
+        else:
+            with st.container(border=True):
+                st.markdown(render_safe_markdown(feedback))
+        # One toggle per student (a batch renders many on one page); the shared preference
+        # carries the choice from one student to the next.
+        st.toggle("Show Markdown source", value=st.session_state.get(FEEDBACK_SOURCE_PREF, False),
+                  key=view_key, on_change=_remember_feedback_view, args=(view_key,),
+                  help="Raw Markdown with a copy button, for BrightSpace or AI tools.")
         st.markdown("**Instructor notes**")
-        st.markdown(result.overall_feedback)
+        st.markdown(render_safe_markdown(result.overall_feedback or ""))
     with tabs[1]:
         st.dataframe(
             [{"Criterion": c.criterion_name, "Points": f"{c.points_earned:g}/{c.points_possible}"
