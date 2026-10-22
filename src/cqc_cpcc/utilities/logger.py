@@ -197,6 +197,33 @@ _restrict_permissions(LOGGING_FILENAME)
 # handler installed by basicConfig above, which every propagating logger reaches).
 install_log_redaction(file_handler, *logging.getLogger().handlers)
 
+class _WarningsToAppLog(logging.Handler):
+    """Copies WARNING+ records from the ``openai`` SDK logger into the app log file, so a
+    failing model shows up there and not only on the console."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno >= logging.WARNING:
+            file_handler.handle(record)  # the file handler's redaction filters apply
+
+
+# The SDK logs request options (student code) at DEBUG; never let that reach any log,
+# whatever the base level is.
+class _DropSdkChatter(logging.Filter):
+    """Drops ``openai`` SDK records below WARNING (``OPENAI_LOG=debug`` can raise the SDK's
+    own level at import, after ours)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (record.name.split(".")[0] == "openai" and record.levelno < logging.WARNING)
+
+
+openai_sdk_logger = logging.getLogger("openai")
+openai_sdk_logger.setLevel(logging.WARNING)
+if not any(isinstance(h, _WarningsToAppLog) for h in openai_sdk_logger.handlers):
+    openai_sdk_logger.addHandler(_WarningsToAppLog(level=logging.WARNING))
+for _handler in logging.getLogger().handlers:
+    if not any(isinstance(f, _DropSdkChatter) for f in _handler.filters):
+        _handler.addFilter(_DropSdkChatter())
+
 # Setup OpenAI debug logger (separate channel)
 openai_debug_logger = logging.getLogger("openai.debug")
 openai_debug_logger.setLevel(_resolve_openai_debug_log_level())

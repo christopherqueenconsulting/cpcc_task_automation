@@ -153,6 +153,29 @@ OPENROUTER_API_KEY=sk-or-v1-...
 OPENAI_API_KEY=sk-...
 ```
 
+### Timeouts and retries
+
+Every OpenRouter request is bounded (`src/cqc_cpcc/utilities/AI/llm_limits.py`):
+
+- **Per request:** `CQC_LLM_TIMEOUT_<ROLE>`, then `CQC_LLM_TIMEOUT`, then the default (grading 180 s,
+  digest 300 s, feedback and flowgorithm 120 s). A hard limit of the timeout plus 5 s backs up the
+  client's read timeout, which only bounds the gap between bytes.
+- **One retry counter:** the OpenAI SDK's own retries are off (`max_retries=0`). The client tries up
+  to 3 times and logs `Attempt n/3`. Two timeouts on one model end the call, so the gateway moves to
+  the role's fallback model, which gets the same rules.
+- **Not retried:** 400, 401, 403 and 404 answers. A 429 waits for its `Retry-After` header, up to 30 s.
+- **Per student:** `CQC_GRADING_STUDENT_DEADLINE_S`, default `2 models x 2 timeouts x (timeout + 5 s) + 60 s`
+  = 800 s for grading. The worst case before a student is reported "Timed out" is therefore about
+  13 minutes with the defaults, instead of about 3 hours (600 s x 3 SDK tries x 3 attempts x 2 models)
+  before this limit existed.
+
+While a student grades, the status label shows the model, the attempt (`attempt 2/3`) and the last
+failure (`timed out after 180 s`). The `openai` SDK logger is held at WARNING, and its warnings are
+copied into the app log with student names redacted.
+
+To watch this without a real model, run the stub in `tests/fixtures/stub_openrouter.py` and point
+`OPENROUTER_BASE_URL` at it (instructions in the file).
+
 ### .streamlit/secrets.toml
 ```toml
 OPENROUTER_API_KEY = "sk-or-v1-..."

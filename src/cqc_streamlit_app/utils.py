@@ -2659,6 +2659,13 @@ def run_coroutine_blocking(coro):
         return pool.submit(asyncio.run, coro).result()
 
 
+async def with_deadline(coro, seconds: float):
+    """Await ``coro``, raising ``TimeoutError`` if it takes longer than ``seconds``."""
+    import asyncio
+    async with asyncio.timeout(seconds):
+        return await coro
+
+
 def page_header(title: str, icon: str, caption: str) -> None:
     """Every page starts the same way: a title matching its nav label, then one caption."""
     st.title(title, icon=icon, anchor=False)
