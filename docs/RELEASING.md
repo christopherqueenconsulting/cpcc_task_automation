@@ -129,32 +129,36 @@ A superseded or bad release is replaced by a later one, not edited.
 
 ## Deployment
 
-The app at https://cpcc-task-automation.streamlit.app/ is on Streamlit Community Cloud. The
-repository has a push webhook to `https://share.streamlit.io/hook`, so a push to the app's
-branch redeploys it. The branch is set in the Streamlit dashboard, not visible from the
-repository, and has not been confirmed. Work as if it is `master`: **every merge to `master`
-reaches the instructor, so an rc is a label on a commit that is already live.** Risky changes
-(write-back, scoring, models, sandbox) are live when they merge. Run the rc checklist from the
-tag before the final version PR merges, and merge risky changes only when ready for that.
+The app is meant to build from the **`release` branch**, not from `master`. Christopher reported
+in chat on 2026-10-23 that the Streamlit deployment was updated; confirm the branch in the
+Streamlit dashboard before relying on it. The previous app URL was
+https://cpcc-task-automation.streamlit.app/; the URL of the app that builds from `release` is not
+recorded in this repository, so ask Christopher for it. The repository's push webhook to
+`https://share.streamlit.io/hook` redeploys the app when the branch it builds moves. Once the app
+builds from `release`, a merge to `master` does **not** reach the instructor; a release does, when
+`release` is moved to it.
+
+To put a tagged release in front of the instructor, after the Release run for the tag is green:
 
 ```bash
-git fetch --tags && git checkout v0.2.0-rc1 && ./run.sh
+git fetch origin --tags
+git push origin vX.Y.Z:refs/heads/release     # a fast-forward when the tag is newer than release
 ```
 
-If Streamlit is moved to a `release` branch that only moves when a release is cut, an rc is
-no longer live on merge. Christopher's decision on that is tracked in the PR that added this
-file (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/419). Deploying a
-release then is `git push origin vX.Y.Z:refs/heads/release`.
+An rc is live from that push, so move `release` to an rc only when Christopher has said to; the rc
+checklist above is then run against the live build. `master` carries whatever has merged and is not
+what the instructor grades with.
+
+To try a tag on a computer: `git fetch --tags && git checkout v0.2.0-rc1 && ./run.sh`.
 
 ## Roll back
 
 1. Find the last good tag: `git tag --sort=-v:refname` or the GitHub releases page.
-2. Roll the code back. While Streamlit deploys from `master`: open a revert PR
-   for the bad change (do not rewrite `master`). In the same PR bump the patch version and add
-   a CHANGELOG entry, so new grades are not stamped with the bad version; merge it and cut a
-   release as above. If Streamlit has been moved to a `release` branch: redeploy the last good tag
-   with `git push --force origin <tag>:refs/heads/release`. Only Christopher force-pushes
-   `release`.
+2. Roll the code back. Redeploy the last good tag at once with
+   `git push --force origin <tag>:refs/heads/release` (only Christopher force-pushes `release`).
+   Then fix forward on `master`: open a revert PR for the bad change (do not rewrite `master`),
+   bump the version and add a CHANGELOG entry in the same PR so new grades are not stamped with
+   the bad version, merge it and cut a release as above.
 3. Mark the bad release and name the new one, keeping its generated notes:
    `gh release edit <bad-tag> --prerelease --notes "Rolled back in <new-tag>: <reason>
 

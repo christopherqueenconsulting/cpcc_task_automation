@@ -19,7 +19,7 @@ from typing import Optional
 
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.suites import SUITE_MODULES, get_suite
-from cqc_cpcc.model_eval.suites.base import SuiteRecord, aggregate, gate_failures, run_suite
+from cqc_cpcc.model_eval.suites.base import SuiteRecord, aggregate, gate_failures, retry_stats, run_suite
 from cqc_cpcc.utilities.AI import model_registry
 
 ASSUMED_OUTPUT_TOKENS = 4000  # incl. reasoning; dry-run estimate only
@@ -171,7 +171,7 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
               dry_run: bool = False, run_label: Optional[str] = None, run_id: Optional[str] = None,
               case_ids: Optional[set] = None, judges: bool = False, judge_model: Optional[str] = None,
               judge_cache: Optional[str] = None, judge_cache_read_only: bool = False,
-              budget: Optional[Budget] = None) -> dict:
+              budget: Optional[Budget] = None, concurrency: Optional[int] = None) -> dict:
     """Evaluate ``suite_id`` on ``models`` (default: the role's incumbent)."""
     suite = get_suite(suite_id)
     policy = model_registry.load_policy().prompt_eval
@@ -214,7 +214,10 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
                                     read_only=judge_cache_read_only)
         for model, effort in models:
             records = await run_suite(suite, model, effort, cases, repeats, budget,
-                                      profile=profiles[model], on_record=save)
+                                      concurrency=concurrency, profile=profiles[model], on_record=save)
+            stats = retry_stats(records)
+            print(f"[{suite_id}] {label_of(model, effort)}: {stats['calls']} calls, {stats['retried']} retried "
+                  f"({stats['extra_attempts']} extra attempts)")
             if judges:
                 judge_scores = await jm.judge_records(suite, cases, records, judge_model, cache, budget,
                                                       dataset_version=suite.dataset, evaluated_model=model)
@@ -276,5 +279,6 @@ def cmd_suite(args) -> int:
         asyncio.run(run(suite_id, models, args.repeats, args.limit, args.budget, args.out,
                         args.dry_run, args.label, args.run_id, judges=args.judges,
                         judge_model=args.judge_model, judge_cache=args.judge_cache,
-                        judge_cache_read_only=args.judge_cache_read_only, budget=budget))
+                        judge_cache_read_only=args.judge_cache_read_only, budget=budget,
+                        concurrency=args.concurrency))
     return 0

@@ -212,6 +212,49 @@ capture, runs the full paid A/B as before.
 - **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
   (issue #406) is the follow-up for that.
 
+**How fast the A/B runs.** A paid A/B used to take 67 to 82 minutes for three or four suites (the
+dispatch job's duration in runs 39966026743, 39978967241 and 39988799201 on 2026-10-23: 67, 68 and
+82 minutes) because every call waited its turn: four calls in flight, the head run first, then the
+base run, then the pairwise judge one case at a time. Over five runs the
+artifacts hold 5,808 records, 5,520 of them model calls (288 `grading` cases, the empty, skeleton, whitespace and
+wrong-file-type submissions, are answered by the validity gate before any call); `grading` alone made 2,592 timed calls at a mean of 17.5 s, and not one record needed a retry. Now:
+
+- **Head and base run at the same time**, each from its own half of the remaining budget
+  (`Budget.split`), and each half is charged back to the whole when its run ends, so the total cap
+  (`budget_usd` 15, stopping at `stop_at_usd` 13.5) is the one it always was. The base is still a
+  separate process on the base's own code, started from the environment as it was before the head
+  pinned its temporary registry.
+- **12 calls in flight per side** (24 at once) instead of 4. Set `--concurrency N` on `prompt-ab`
+  or `suite run`, or `CQC_EVAL_CONCURRENCY=N` (whole numbers 1 to 32; anything else is ignored with
+  a warning). Every other run (`suite run`, the model-eval runner) keeps its default of 4. The base
+  receives the number through the environment, so a base that predates the setting runs at its own
+  default instead of failing on an unknown flag.
+- **The pairwise judge calls run in parallel** with the same limit. The scores are collected in case
+  order, so the mean is the one the sequential loop computed.
+- **Nothing that decides changed:** the same cases, repeats, models and effort, both sides scored with
+  the head graders, the same paired tests and pass rules. Records arrive in a different order, and
+  scoring does not depend on it (a test shuffles them).
+- **A stuck or cancelled A/B no longer leaves the base running.** The base runs in its own process
+  group with a hard limit of 120 minutes (`BASE_TIMEOUT_S`; the job limit is 240); on a timeout, a
+  cancelled job, Ctrl-C or a failing head the group is stopped before the base worktree is removed.
+  Whatever a base run recorded before it failed or was stopped is charged to the budget. Its output is
+  kept in `base/<suite>/run.log` in the artifact.
+- **Retries are logged.** A rate limit (429) or timeout goes through the same client retry as before;
+  one summary line per suite at the end of the log (`A/B <suite>: head N calls, R retried; base ...`;
+  the workflow shows only the last 60 lines) and `ab.json` (`run_stats`: calls, calls that needed a
+  retry, extra attempts, seconds) show how many. If a run shows many retried calls, lower the number.
+  The retry has no jitter, so 24 calls that hit a limit together retry together; this change does not
+  touch the client.
+- **Budget overshoot:** calls already in flight when a side reaches its stop can still finish. The
+  gap between `stop_at_usd` and `budget_usd` ($1.50) has to cover every call in flight. The dearest
+  single call in those five runs cost $0.0033, so 24 in flight is about $0.08 and even the largest
+  setting (32 per side, 64 at once) is about $0.21.
+- **Who gets it:** the dispatch runs `prompt-ab` from the PR's own checkout, so the speed-up applies
+  to A/Bs of PRs that contain this change (merge `master` into an older branch first). The base side
+  only speeds up once the base branch has it too.
+- **Rollback:** `git revert`; or set `CQC_EVAL_CONCURRENCY=4` in the workflow's environment (a
+  workflow edit, Christopher's) to keep the code and slow the A/B down.
+
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.
 A second job, `ab-base-rule` (and `dispatch-report` for a maintainer `ab` run), re-checks it:
