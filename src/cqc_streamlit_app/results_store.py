@@ -76,6 +76,23 @@ def _saved_meta(run_key: str) -> Optional[dict]:
         return None
 
 
+def remembered_effort(instructions_hash: str) -> Optional[str]:
+    """The reasoning effort most students were graded at the last time these instructions
+    were graded (``meta["instructions_hash"]`` and ``meta["effort"]``), newest run first.
+    ``None`` when no saved run matches or it ran at the default effort."""
+    directory = results_dir()
+    if not instructions_hash or not directory.is_dir():
+        return None
+    for path in sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8")).get("meta") or {}
+        except (OSError, ValueError):
+            continue
+        if meta.get("instructions_hash") == instructions_hash:
+            return meta.get("effort") or None
+    return None
+
+
 def _prune(directory: Path) -> None:
     runs = sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in runs[MAX_RUNS:]:

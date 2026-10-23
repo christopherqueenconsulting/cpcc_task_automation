@@ -19,12 +19,14 @@ SETTINGS_PAGE = str(APP_DIR / "app_pages" / "settings.py")
 def clean_pins(monkeypatch):
     for role in model_registry.ROLES:
         monkeypatch.delenv(f"CQC_MODEL_{role.upper()}", raising=False)
+        monkeypatch.delenv(f"CQC_REASONING_EFFORT_{role.upper()}", raising=False)
     monkeypatch.delenv("CQC_MODEL_REGISTRY_PATH", raising=False)
     model_registry._cache.clear()
     yield
     # The page writes os.environ directly, outside monkeypatch's bookkeeping.
     for role in model_registry.ROLES:
         os.environ.pop(f"CQC_MODEL_{role.upper()}", None)
+        os.environ.pop(f"CQC_REASONING_EFFORT_{role.upper()}", None)
 
 
 @pytest.mark.unit
@@ -54,6 +56,42 @@ class TestModelSettings:
         next(b for b in app.button if b.label == "Save model pins").click()
         app.run()
         assert "CQC_MODEL_GRADING" not in os.environ
+
+
+@pytest.mark.unit
+class TestEffortPins:
+    def _save(self, app):
+        next(b for b in app.button if b.label == "Save model pins").click()
+        app.run()
+        assert not app.exception, app.exception
+
+    def test_an_effort_pin_is_written_to_the_process_env_only(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)  # a stray write to .env would land here
+        app = AppTest.from_file(SETTINGS_PAGE, default_timeout=30)
+        app.run()
+        pin = next(s for s in app.selectbox if s.label == "Pin reasoning effort for grading")
+        assert pin.options == ["Use registry default", *model_registry.KNOWN_EFFORTS]
+        pin.select("low")
+        self._save(app)
+        assert os.environ["CQC_REASONING_EFFORT_GRADING"] == "low"
+        assert model_registry.resolve("grading").reasoning_effort == "low"
+        assert not list(tmp_path.iterdir()), "the pin must not be written to .env or any file"
+        # The message says it applies to the whole app process.
+        assert any("whole app process" in t.value for t in app.toast)
+        assert any("whole app process" in c.value for c in app.caption)
+
+        pin = next(s for s in app.selectbox if s.label == "Pin reasoning effort for grading")
+        pin.select("Use registry default")
+        self._save(app)
+        assert "CQC_REASONING_EFFORT_GRADING" not in os.environ
+
+    def test_a_pin_the_model_lacks_shows_in_the_table_and_sends_no_effort(self, monkeypatch):
+        monkeypatch.setenv("CQC_REASONING_EFFORT_GRADING", "minimal")  # not in the luna profile
+        app = AppTest.from_file(SETTINGS_PAGE, default_timeout=30)
+        app.run()
+        assert not app.exception, app.exception
+        row = app.dataframe[0].value.set_index("Feature").loc["grading"]
+        assert "not supported" in row["Reasoning effort"]
 
 
 @pytest.mark.unit
