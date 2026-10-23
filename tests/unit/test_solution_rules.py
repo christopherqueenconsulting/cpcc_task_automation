@@ -75,3 +75,13 @@ def test_the_exam_prompt_carries_the_same_rules_once_above_the_solution():
     assert prompt.index("## Reference Solution (authoritative)") < prompt.index(solution_rules_text()) < prompt.index(
         SOLUTION)
     assert "Example Solution (Reference Only)" not in prompt
+
+
+def test_the_exam_prompt_asks_for_the_offered_type_by_its_exact_name():
+    prompt = build_exam_grading_prompt(exam_instructions="Do it.", exam_solution=SOLUTION,
+                                       student_submission="class Main {}",
+                                       major_error_types=["Errors that impact the output"], minor_error_types=["b"])
+    rule = "write that type exactly as it appears in the list, word for word; never invent or reword a type"
+    assert prompt.count(rule) == 1
+    assert "specific Major or Minor error type" not in prompt
+

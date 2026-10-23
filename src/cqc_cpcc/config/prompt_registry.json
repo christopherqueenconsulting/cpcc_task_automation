@@ -109,7 +109,7 @@
         "src/cqc_cpcc/exam_review.py",
         "src/cqc_cpcc/utilities/utils.py"
       ],
-      "fingerprint": "sha256:d6b44ce0741b73afe76e9bc35f0e522873a75d107f0c29c6ecabdfeff3dfa82f",
+      "fingerprint": "sha256:f8ec5d378510b97b4fb1aad93e1c3a24318fb9d5a9baf6cb4723d2a785b3f2a5",
       "suites": [
         "exam-grading"
       ]

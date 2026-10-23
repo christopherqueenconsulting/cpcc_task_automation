@@ -95,7 +95,7 @@ PROCESS (internal reasoning only; do not output):
    Base judgments on Exam Instructions and submission only. When uncertain, state assumptions explicitly in justification fields. Do not speculate.
 
 4. Classify errors for requirements marked Partially Meets or Fails:
-   - Match to a specific Major or Minor error type from provided lists
+   - Match to the closest Major or Minor error type from the provided lists, and write that type exactly as it appears in the list, word for word; never invent or reword a type
    - Identify line numbers or ranges (use "not_applicable" if missing code or ambiguous location)
    - Extract minimal code snippets (trimmed to necessary lines only)
 
