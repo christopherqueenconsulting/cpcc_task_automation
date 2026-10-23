@@ -39,8 +39,22 @@ def test_every_case_carries_its_solution_and_the_v2_cases_none(cases):
         meta = json.loads((ROOT / "cases" / c.case_id / "case.json").read_text(encoding="utf-8"))
         assert (ROOT / "cases" / c.case_id / meta["reference_solution_file"]).read_text(
             encoding="utf-8") == c.reference_solution
-        assert db.SOLUTION_AUTHOR not in "\n".join(c.files.values()) or "equivalent" not in c.tags or True
+        # The submission is always by another synthetic author than the solution.
+        assert f"Author: {db.SOLUTION_AUTHOR}" not in "\n".join(c.files.values()), c.case_id
     assert all(c.reference_solution is None for c in ds.load_cases(ds.DEFAULT_DATASET))
+
+
+@pytest.mark.parametrize("solution_file", ["../../outside.txt", "/etc/passwd", "link"])
+def test_a_solution_path_outside_the_case_directory_is_refused(tmp_path, solution_file):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("SECRET", encoding="utf-8")
+    case_dir = tmp_path / "cases" / "c1"
+    case_dir.mkdir(parents=True)
+    (case_dir / "link").symlink_to(outside)
+    meta = json.loads((ROOT / "cases" / "csc151_exam1_java__solution_format" / "case.json").read_text(encoding="utf-8"))
+    files = {name: (ROOT / "cases" / meta["case_id"] / name).read_text(encoding="utf-8") for name in meta["files"]}
+    with pytest.raises(ValueError, match="reference_solution_file"):
+        ds._build({**meta, "reference_solution_file": solution_file}, files, case_dir)
 
 
 def test_coverage_three_courses_twenty_bug_twins_and_equivalents(cases):
