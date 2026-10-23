@@ -29,6 +29,12 @@ def uncalibrated_policy(tmp_path, monkeypatch):
     return path
 
 
+def _registry_version(prompt_id: str) -> int:
+    """The prompt's version in the committed registry (tests must not pin it)."""
+    from cqc_cpcc.model_eval.prompt_registry import load
+    return load().prompts[prompt_id].version
+
+
 class TestAffected:
     def _affected(self, changed):
         return pa.affected("HEAD", changed=changed)
@@ -368,7 +374,7 @@ class TestRecords:
         assert result["healthy"] == []
         assert len(history.read_text().splitlines()) == 1
         text = status.read_text()
-        assert "| `exam-grading` | 1 | `exam-grading` | `openai/x@high` |" in text and "needs work" in text
+        assert f"| `exam-grading` | {_registry_version('exam-grading')} | `exam-grading` | `openai/x@high` |" in text and "needs work" in text
         assert "Never evaluated on master yet" in text
 
     def test_a_passing_run_marks_the_prompt_healthy(self, tmp_path):
