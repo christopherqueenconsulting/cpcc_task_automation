@@ -5,6 +5,36 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc2 - 2026-10-23
+
+Prerelease, on top of 0.2.0-rc1. The reasoning effort can now differ per run, which changes the student
+time limit and the model label on saved results; the compile check runs in a Docker sandbox when one is
+available. Check both with the rc checklist in [docs/RELEASING.md](docs/RELEASING.md).
+
+What to check, in plain terms:
+
+- A new reasoning-effort box sits next to the model on the Grade Assignment page. Leave it on its default
+  and grading is exactly as in rc1, and results saved in rc1 still match.
+- Docker is optional. Without it, and on Streamlit Community Cloud where there is no Docker, the compile
+  check uses the compiler on the host as before and nothing changes for you.
+- Nothing in this release runs a student's program. The sandbox is only used to compile, for now.
+
+- Reasoning effort per grading run: a selectbox next to the model (options come from the model's profile),
+  a banner when the students in one run were graded at different efforts, "Re-grade this student at another
+  effort" with a cost estimate, a neutral side-by-side result and a Keep button that replaces the stored
+  result, and a pin per role on the Settings page. With the default choice the grading run key is
+  unchanged, so saved results from rc1 still match. The built-in model timeouts now scale with effort
+  (low x1, medium x1.25, high x1.5) and the per-student time limit is the sum over the primary and fallback
+  model: 1180 s at the registry's current high effort, 820 s at low (it was 800 s). #425
+- Docker sandbox for student programs (`docker/exec-runner`, `cqc_cpcc.utilities.program_runner`): no
+  network, read-only root, memory, process and output limits, results read through hard caps. Nothing in
+  grading runs a student program yet. The compile check uses the sandbox when Docker and the image are
+  available and falls back to the host `g++` or `javac` (with the include guard) when they are not. A
+  sandbox failure is "cannot verify", never "does not compile". To use it, build the image once
+  (optional; rebuild it if you built one before 2026-10-23):
+  `docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner`. The Dependabot and CI edits for
+  the image are a separate pull request and are not part of this release. #424
+
 ## 0.2.0-rc1 - 2026-10-23
 
 Prerelease. Everything here can change a score or a grading decision for the same input, so this build is checked
