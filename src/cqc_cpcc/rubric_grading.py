@@ -34,6 +34,8 @@ from typing import Optional
 
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
+from cqc_cpcc.prompts.markers import UNTRUSTED_NOTE, neutralize_markers
+from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES
 from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUIREMENT, note, note_added,
                                      note_kept, note_removed, tag_source)
 from cqc_cpcc.requirement_coverage import (apply_requirement_coverage, is_requirement_error,
@@ -170,13 +172,17 @@ def build_rubric_grading_prompt(
 
     # Assignment instructions
     prompt_parts.append("## Assignment Instructions")
-    prompt_parts.append(assignment_instructions)
+    prompt_parts.append(neutralize_markers(assignment_instructions))
     prompt_parts.append("")
 
     # Reference solution if provided
     if reference_solution:
-        prompt_parts.append("## Reference Solution")
-        prompt_parts.append(reference_solution)
+        prompt_parts.append("## Reference Solution (authoritative)")
+        prompt_parts.extend(SOLUTION_RULES)
+        prompt_parts.append("")
+        prompt_parts.append("<!--BEGIN_REFERENCE_SOLUTION-->")
+        prompt_parts.append(neutralize_markers(reference_solution))
+        prompt_parts.append("<!--END_REFERENCE_SOLUTION-->")
         prompt_parts.append("")
 
     # Rubric details
@@ -278,7 +284,16 @@ def build_rubric_grading_prompt(
     prompt_parts.append("## Student Submission to Grade")
     # Note Need to wrap code in backticks. It is expected that the student submission is preprocessed to be safely included in a markdown code block with File Name included ahead of it.
     # If the submission is very long, it should be truncated with an indication that it was truncated.
-    prompt_parts.append(student_submission)
+    if reference_solution:
+        # The one thing a submission can borrow is the solution's authority, so the fence and the
+        # untrusted-data note exist only when there is a solution. Without one the prompt is exactly
+        # what it was before PR 7 (the A/B on grading-levelband showed the extra text moved levels).
+        prompt_parts.append(UNTRUSTED_NOTE)
+        prompt_parts.append("<!--BEGIN_STUDENT_SUBMISSION-->")
+        prompt_parts.append(neutralize_markers(student_submission))
+        prompt_parts.append("<!--END_STUDENT_SUBMISSION-->")
+    else:
+        prompt_parts.append(student_submission)
     prompt_parts.append("")
 
     # Grading instructions - GPT-5.2 methodology
@@ -314,7 +329,11 @@ def build_rubric_grading_prompt(
     prompt_parts.append("For all criteria:")
     prompt_parts.append("- Evaluate submission against criterion")
     prompt_parts.append("- Provide specific, actionable feedback with evidence from submission")
-    prompt_parts.append("- Base assessment solely on assignment instructions and rubric criteria")
+    if reference_solution:
+        prompt_parts.append("- Base assessment on the assignment instructions and rubric criteria, and on the reference "
+                            "solution when one is given: it defines what is required and the required output")
+    else:
+        prompt_parts.append("- Base assessment solely on assignment instructions and rubric criteria")
     prompt_parts.append("")
 
     prompt_parts.append("### Output Requirements")

@@ -3,7 +3,7 @@
   "_owner": "human. Every LLM prompt the app sends is listed here; see docs/PROMPTS.md. The model-promotion bot must never edit this file.",
   "prompts": {
     "rubric-grading": {
-      "version": 1,
+      "version": 2,
       "status": "live",
       "role": "grading",
       "description": "Main rubric grading (Grade Assignment page, rubric mode): error detection, per-criterion levels/feedback, requirement marking.",
@@ -34,7 +34,7 @@
         "requirement_agreement",
         "injection_pass_rate"
       ],
-      "fingerprint": "sha256:bab7c37b0b30661fb39a713de47e4d1b19500f2a5ca03a6a63297f0407a86a7a",
+      "fingerprint": "sha256:d7a9889859242e70e15dd31186e637ecbe18a533f4b3be247742d9307e59c0e4",
       "suites": [
         "grading",
         "grading-levelband",
