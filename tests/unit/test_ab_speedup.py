@@ -408,6 +408,7 @@ class TestTheBaseRunsBesideTheHead:
         from cqc_cpcc.model_eval import judges as jm
         from cqc_cpcc.utilities.AI import llm_gateway
 
+        monkeypatch.setenv("CQC_TEST_MODE", "true")  # the base runs in another process: it reads the environment
         monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
         monkeypatch.setattr(jm, "pick_judge_model", lambda: "judge/x")
         monkeypatch.setattr(jm, "is_calibrated", lambda *a: False)
