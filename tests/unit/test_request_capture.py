@@ -97,13 +97,70 @@ class TestCapture:
         after = rc.capture(["requirement-extraction"])
         assert "different gateway calls" in rc.compare(after, before, ["requirement-extraction"])["requirement-extraction"]
 
-    def test_the_capturing_client_ignores_client_factory_arguments(self):
+    def test_the_capturing_client_ignores_client_factory_arguments(self, monkeypatch):
         """A client factory that takes arguments (a timeout, say) must still be replaced, or every
         case would raise before its request and the suite would read as 'no request captured'."""
         from cqc_cpcc.utilities.AI import openrouter_client
 
-        with rc._patched([], test_mode=False):
+        real = openrouter_client._get_openrouter_client
+        monkeypatch.setattr(openrouter_client, "_get_openrouter_client",
+                            lambda timeout=None, retries=None: real())
+        sink = []
+        with rc._patched(sink, test_mode=False):
             assert isinstance(openrouter_client._get_openrouter_client(30.0, retries=0), rc._CapturingClient)
+        assert openrouter_client._get_openrouter_client is not rc._CapturingClient and len(sink) == 1
+
+    def test_a_factory_argument_that_changes_the_client_is_caught(self, monkeypatch):
+        from openai import AsyncOpenAI
+
+        from cqc_cpcc.utilities.AI import openrouter_client
+
+        def factory(timeout=None, headers=None):
+            return AsyncOpenAI(api_key=openrouter_client._get_openrouter_api_key(),
+                               base_url="https://openrouter.ai/api/v1", default_headers=headers or {},
+                               timeout=timeout)
+
+        monkeypatch.setattr(openrouter_client, "_get_openrouter_client", factory)
+        recorded = []
+        for args in ((30.0,), (90.0,), (30.0, {"X-Extra": "1"})):
+            sink = []
+            with rc._patched(sink, test_mode=False):
+                openrouter_client._get_openrouter_client(*args)
+            recorded.append(sink)
+        assert recorded[0] == recorded[1]  # a timeout does not change what the model receives
+        assert recorded[0] != recorded[2]  # a header does
+        assert openrouter_client._get_openrouter_client is factory
+
+    def test_the_test_mode_stand_in_ignores_arguments(self):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        with rc._patched([], test_mode=False):
+            assert llm_gateway._is_test_mode(1, x=2) is False
+
+    def test_a_new_gateway_keyword_is_forwarded_and_recorded(self, monkeypatch):
+        import asyncio
+
+        from pydantic import BaseModel
+
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        class Probe(BaseModel):
+            x: int = 0
+
+        seen = []
+
+        async def structured(role, prompt, schema_model, *, override=None, use_auto_route=False, prompt_id=None,
+                             new_option=None):
+            seen.append(new_option)
+
+        monkeypatch.setattr(llm_gateway, "structured", structured)
+        hashes = []
+        for value in ("a", "b"):
+            calls = []
+            with rc._patched([], test_mode=True, calls=calls):
+                asyncio.run(llm_gateway.structured("grading", "p", Probe, new_option=value))
+            hashes.append(calls[0])
+        assert seen == ["a", "b"] and hashes[0] != hashes[1]
 
     def test_a_changed_request_body_is_caught(self, monkeypatch):
         from cqc_cpcc.utilities.AI import openrouter_client
