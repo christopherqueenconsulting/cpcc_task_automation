@@ -72,8 +72,9 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     """
     import os
 
-    from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client
+    from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client, untrusted_fence
 
+    saved_nonce = untrusted_fence.new_nonce
     saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
              llm_gateway.structured)
     saved_analytics = os.environ.get("POSTHOG_LLM_ANALYTICS")
@@ -115,6 +116,8 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     openrouter_client._get_openrouter_client = capturing_factory
     asyncio.sleep = no_wait
     llm_gateway._is_test_mode = lambda *args, **kwargs: test_mode
+    # A fence nonce is random per prompt; a fixed one keeps two captures of the same code identical.
+    untrusted_fence.new_nonce = lambda: "capture0nonce0000"
     if calls is not None:
         llm_gateway.structured = recording
     os.environ["POSTHOG_LLM_ANALYTICS"] = "false"
