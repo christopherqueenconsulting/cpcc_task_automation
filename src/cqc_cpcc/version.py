@@ -12,6 +12,7 @@ key caches results, and a release would invalidate every cached result.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from functools import lru_cache
 from importlib import metadata
@@ -19,6 +20,7 @@ from pathlib import Path
 
 PACKAGE_NAME = "cpcc-task-automation"
 UNKNOWN = "unknown"
+_SEMVER = re.compile(r"\d+\.\d+\.\d+(-rc\d+)?")
 _PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
 
 
@@ -45,4 +47,9 @@ def get_version() -> str:
     The checkout's ``pyproject.toml`` wins over installed metadata: after a ``git pull`` on an
     editable install the metadata is stale until the next ``poetry install``.
     """
-    return _from_pyproject() or _from_metadata() or UNKNOWN
+    for found in (_from_pyproject(), _from_metadata()):
+        # Installed metadata normalises 0.2.0-rc1 to 0.2.0rc1 (PEP 440); report the tag's form.
+        found = re.sub(r"(\d)rc(\d)", r"\1-rc\2", found) if found else found
+        if found and _SEMVER.fullmatch(found):
+            return found
+    return UNKNOWN

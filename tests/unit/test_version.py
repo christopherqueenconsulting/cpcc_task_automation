@@ -59,3 +59,19 @@ def test_malformed_pyproject_falls_through(monkeypatch, tmp_path):
     monkeypatch.setattr(version, "_PYPROJECT", bad)
     monkeypatch.setattr(metadata, "version", lambda name: "9.9.9")
     assert version.get_version() == "9.9.9"
+
+
+@pytest.mark.unit
+def test_a_value_that_is_not_a_version_is_never_stamped(monkeypatch, tmp_path):
+    odd = tmp_path / "pyproject.toml"
+    odd.write_text('[tool.poetry]\nname = "cpcc-task-automation"\nversion = "/Users/x/secret"\n')
+    monkeypatch.setattr(version, "_PYPROJECT", odd)
+    monkeypatch.setattr(metadata, "version", lambda name: "also not one")
+    assert version.get_version() == version.UNKNOWN
+
+
+@pytest.mark.unit
+def test_rc_metadata_form_matches_the_tag_form(monkeypatch, tmp_path):
+    monkeypatch.setattr(version, "_PYPROJECT", tmp_path / "missing.toml")
+    monkeypatch.setattr(metadata, "version", lambda name: "0.2.0rc1")
+    assert version.get_version() == "0.2.0-rc1"

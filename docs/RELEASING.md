@@ -74,30 +74,51 @@ Copy this into the PR or the release notes of the rc and tick each line with its
       student work in any of this.
 - [ ] `poetry run pytest -m unit --ignore=tests/e2e` and `python scripts/pii_guard.py` are green.
 
-An rc that fails is fixed on master and re-tagged `-rc2`. Never move a tag.
+An rc that fails is fixed on master and re-tagged `-rc2`. Never move a tag that has a release.
 
 ## Cut a release
 
+Every tag, final or rc, must be on `master`: `release.yml` rejects any other.
+
 1. Open a PR that sets `version` in `pyproject.toml` (`0.2.0-rc1` for an rc, `0.2.0` for the
-   final), moves the `CHANGELOG.md` "Unreleased" entries under the new heading, and nothing
-   else. CI must be green. Merge it.
-2. Tag the merge commit on `master` and push the tag:
+   final), moves the `CHANGELOG.md` "Unreleased" entries under a new `## 0.2.0 - YYYY-MM-DD`
+   heading (leave an empty `## Unreleased` above it), and nothing else. CI must be green.
+   Merge it and note the merge commit SHA.
+2. Tag that exact SHA, check the version it carries, then push the tag:
 
    ```bash
-   git fetch origin && git checkout master && git pull --ff-only
-   git tag -a v0.2.0-rc1 -m "v0.2.0-rc1"
+   git fetch origin
+   git show <merge-sha>:pyproject.toml | grep '^version'     # must read the tag's version
+   git tag -a v0.2.0-rc1 <merge-sha> -m "v0.2.0-rc1"
    git push origin v0.2.0-rc1
    ```
 
 3. `release.yml` runs on the pushed tag. It fails unless the tag is `vX.Y.Z` or `vX.Y.Z-rcN`,
-   equals `v` + the `pyproject.toml` version, and (for a final release) is on `master`. It
-   then creates the GitHub release with generated notes; `-rcN` is flagged as a prerelease.
+   equals `v` + the `pyproject.toml` version, and points at a commit on `master`. It then
+   creates the GitHub release with generated notes; `-rcN` is flagged as a prerelease. The
+   run's failure email goes to whoever pushed the tag.
 4. Check the release page, add anything the generated notes miss (a prompt, rubric or model
    change, a rollback warning), and for an rc run the checklist above.
 5. For the final release repeat steps 1 to 3 with the final version.
 
-Every rc is followed by the final release or by a newer rc. Delete nothing: a bad release
-is superseded by a later one.
+Poetry accepts `0.2.0-rc1` and reports `0.2.0rc1` in installed metadata (PEP 440).
+`get_version()` converts that back to the tag's form; a unit test covers it. I did not run
+`poetry check` on an rc version with the CI-pinned Poetry 1.7.1: try it in the first rc PR.
+
+Anyone with write access can push a `v*` tag, and the workflow runs from the tagged commit.
+The checks inside `release.yml` guard against mistakes; they are not a boundary. The boundary
+is a repository tag ruleset on `v*` that limits who can create tags (a repository setting, not
+part of this change).
+
+A superseded or bad release is replaced by a later one, not edited.
+
+### The release workflow failed
+
+- Transient error (the tag is right): re-run the failed run from the Actions tab.
+- Wrong tag (version mismatch, wrong commit, not on master): if no GitHub release exists for it
+  (`gh release view vX.Y.Z` says not found), delete the tag with
+  `git push origin :refs/tags/vX.Y.Z` and `git tag -d vX.Y.Z`, then tag the right SHA. Only
+  Christopher may delete a tag that has a release; in that case cut the next patch or rc number.
 
 ## Deployment
 
@@ -114,7 +135,8 @@ deploy from a `release` branch that only moves when a release is cut:
 git push origin vX.Y.Z:refs/heads/release      # deploy a release (use --force to roll back)
 ```
 
-Until then, run an rc locally from its tag and keep it off the instructor's sessions:
+Until then, an rc tag is a label on a commit already on `master`, which is probably live. Run
+the rc checklist locally from the tag before the final version PR merges:
 
 ```bash
 git fetch --tags && git checkout v0.2.0-rc1 && ./run.sh
@@ -123,18 +145,23 @@ git fetch --tags && git checkout v0.2.0-rc1 && ./run.sh
 ## Roll back
 
 1. Find the last good tag: `git tag --sort=-v:refname` or the GitHub releases page.
-2. Redeploy it. With a `release` branch: `git push --force origin <tag>:refs/heads/release`.
-   While Streamlit deploys from `master`: open a revert PR for the bad change (do not
-   rewrite `master`) and merge it.
-3. Know what stays behind. Saved runs on the instructor's computer (`~/.cqc_cpcc/grading_results`)
-   keep the scores and the `code_version` stamp of the code that graded them. The run key does
-   not include the code version, so after a code rollback the same inputs hit the same key and
-   the app shows the old result instead of regrading. To regrade with the rolled-back code,
-   delete the run from the app (or the saved file) or regrade the student. A prompt, rubric or
-   model that was also rolled back changes the key, so those regrade by themselves.
-4. A model rollback does not need a code rollback: run the Model Rollback workflow
+2. Roll the code back. Today (Streamlit deploys from `master`, unconfirmed): open a revert PR
+   for the bad change (do not rewrite `master`). In the same PR bump the patch version and add
+   a CHANGELOG entry, so new grades are not stamped with the bad version; merge it and cut a
+   release as above. If a `release` branch exists (pending decision): redeploy the last good tag
+   with `git push --force origin <tag>:refs/heads/release`. Only Christopher force-pushes
+   `release`.
+3. Name the bad tag in its GitHub release notes:
+   `gh release edit <bad-tag> --notes "Rolled back in <new-tag>: <reason>"`.
+4. Know what stays behind. Saved runs on the instructor's computer (`~/.cqc_cpcc/grading_results`,
+   or `CQC_GRADING_RESULTS_DIR`) keep the scores and the `code_version` stamp of the code that
+   graded them. The run key does not include the code version, so after a code rollback the
+   same inputs hit the same key and the app shows the old result instead of regrading. To
+   regrade with the rolled-back code, use "Re-grade this student" on the result, or remove the
+   run's `<run_key>.json` file from that folder. A prompt, rubric or model that was also rolled
+   back changes the key, so those regrade by themselves. A cloud deploy has no persistent
+   `~/.cqc_cpcc`; this applies to the instructor's own machine.
+5. A model rollback does not need a code rollback: run the Model Rollback workflow
    (`model-rollback.yml`), or set `CQC_MODEL_GRADING=<previous model>` and restart.
-5. Older code ignores the new optional fields in saved runs, so a rollback does not break
+6. Older code ignores the new optional fields in saved runs, so a rollback does not break
    loading them.
-6. Write the rollback in `CHANGELOG.md` under the next version, and name the bad tag in its
-   GitHub release notes.
