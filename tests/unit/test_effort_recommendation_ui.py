@@ -49,6 +49,11 @@ def registry(tmp_path, monkeypatch):
     mr._cache.clear()
     er._RECOMMENDATION_CACHE.clear()
     yield
+    # A job left running by a test (Skip) must finish before the cache is cleared, or its late
+    # answer would leak into the next test.
+    for thread in threading.enumerate():
+        if thread.name == "effort-recommendation":
+            thread.join(10)
     mr._cache.clear()
     er._RECOMMENDATION_CACHE.clear()
 
