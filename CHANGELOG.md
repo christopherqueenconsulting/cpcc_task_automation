@@ -11,6 +11,14 @@ Prerelease, on top of 0.2.0-rc1. The reasoning effort can now differ per run, wh
 time limit and the model label on saved results; the compile check runs in a Docker sandbox when one is
 available. Check both with the rc checklist in [docs/RELEASING.md](docs/RELEASING.md).
 
+What to check, in plain terms:
+
+- A new reasoning-effort box sits next to the model on the Grade Assignment page. Leave it on its default
+  and grading is exactly as in rc1, and results saved in rc1 still match.
+- Docker is optional. Without it, and on Streamlit Community Cloud where there is no Docker, the compile
+  check uses the compiler on the host as before and nothing changes for you.
+- Nothing in this release runs a student's program. The sandbox is only used to compile, for now.
+
 - Reasoning effort per grading run: a selectbox next to the model (options come from the model's profile),
   a banner when the students in one run were graded at different efforts, "Re-grade this student at another
   effort" with a cost estimate, a neutral side-by-side result and a Keep button that replaces the stored
@@ -22,7 +30,8 @@ available. Check both with the rc checklist in [docs/RELEASING.md](docs/RELEASIN
   network, read-only root, memory, process and output limits, results read through hard caps. Nothing in
   grading runs a student program yet. The compile check uses the sandbox when Docker and the image are
   available and falls back to the host `g++` or `javac` (with the include guard) when they are not. A
-  sandbox failure is "cannot verify", never "does not compile". Build the image once:
+  sandbox failure is "cannot verify", never "does not compile". To use it, build the image once
+  (optional; rebuild it if you built one before 2026-10-23):
   `docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner`. The Dependabot and CI edits for
   the image are a separate pull request and are not part of this release. #424
 
