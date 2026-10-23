@@ -321,6 +321,35 @@ class TestCalibration:
         assert data["prompt_eval"]["calibrated_versions"] == {"preprocessing-digest": 1}
 
 
+    def test_apply_keeps_each_suites_repeats(self, tmp_path, uncalibrated_policy):
+        """A calibration re-sets floors, never how many repeats a suite runs (ruling 168 sets 4 via #404)."""
+        from cqc_cpcc.utilities.AI import model_registry
+
+        path = tmp_path / "model_policy.json"
+        data = json.loads(model_registry.DEFAULT_POLICY_PATH.read_text())
+        data["prompt_eval"]["suites"]["grading"]["repeats"] = 4
+        path.write_text(json.dumps(data))
+        patch = {"suites": {"grading": pa.propose_suite_policy({"graders": {"f1": 0.9}, "composite": 0.9}, "x")},
+                 "calibrated_versions": {}}
+        pa.apply_policy_patch(patch, path)
+        assert json.loads(path.read_text())["prompt_eval"]["suites"]["grading"]["repeats"] == 4
+
+    def test_apply_gives_a_suite_new_to_the_policy_the_proposed_repeats(self, tmp_path, uncalibrated_policy):
+        from cqc_cpcc.utilities.AI import model_registry
+
+        path = tmp_path / "model_policy.json"
+        data = json.loads(model_registry.DEFAULT_POLICY_PATH.read_text())
+        del data["prompt_eval"]["suites"]["digest"]
+        path.write_text(json.dumps(data))
+        patch = {"suites": {"digest": pa.propose_suite_policy({"graders": {}, "composite": 0.9}, "x")},
+                 "calibrated_versions": {}}
+        pa.apply_policy_patch(patch, path)
+        assert json.loads(path.read_text())["prompt_eval"]["suites"]["digest"]["repeats"] == 2
+
+    def test_proposal_carries_the_given_repeats(self):
+        assert pa.propose_suite_policy({"graders": {}, "composite": 0.9}, "x", repeats=4)["repeats"] == 4
+
+
 class TestRecords:
     def _scorecard(self, tmp_path, needs_work):
         d = tmp_path / "cards" / "exam-grading"
@@ -533,9 +562,18 @@ class TestCli:
         from cqc_cpcc.utilities.AI import llm_gateway
 
         monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        from cqc_cpcc.utilities.AI import model_registry
+
+        policy = json.loads(model_registry.DEFAULT_POLICY_PATH.read_text())
+        policy["prompt_eval"]["suites"]["digest"]["repeats"] = 3  # a hand-set value the patch must carry
+        path = tmp_path / "policy.json"
+        path.write_text(json.dumps(policy))
+        monkeypatch.setattr(model_registry, "DEFAULT_POLICY_PATH", path)
         import asyncio
         patch = asyncio.run(pa.calibrate(tmp_path / "cal", ["digest"], repeats=2, report_dir=str(tmp_path / "rep")))
         assert patch["suites"]["digest"]["calibrated"] is True
+        assert patch["suites"]["digest"]["repeats"] == 3
+        assert json.loads((tmp_path / "cal" / "policy_patch.json").read_text())["suites"]["digest"]["repeats"] == 3
         baseline = patch["suites"]["digest"]["baseline_report"]
         assert baseline == str(tmp_path / "rep" / "digest" / "scorecard.json")
         assert json.loads(Path(baseline).read_text())["suite"] == "digest"  # the cited baseline exists
