@@ -2227,12 +2227,14 @@ def _run_meta(run_key: str, grading_mode: str) -> Optional[dict]:
         return None
     from cqc_cpcc.requirement_coverage import checklist_hash
     from cqc_cpcc.utilities.AI.llm_gateway import prompt_tag
+    from cqc_cpcc.version import get_version
     checklist = kwargs.get("requirements")
     return {"solution_provided": bool(kwargs.get("reference_solution")),
             "requirements_count": len(checklist.requirements) if checklist else 0,
             "checklist_hash": checklist_hash(checklist),
             "prompt": prompt_tag("rubric-grading"),
-            "model": kwargs.get("model_name")}
+            "model": kwargs.get("model_name"),
+            "code_version": get_version()}
 
 
 def remember_results(run_key: str, grading_mode: str) -> None:

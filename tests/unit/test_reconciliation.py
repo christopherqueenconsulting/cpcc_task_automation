@@ -260,3 +260,19 @@ def test_the_run_key_changes_with_the_solution_and_the_prompt_version():
     assert generate_grading_run_key(**base, prompt_version="rubric-grading@3") != \
         generate_grading_run_key(**base, prompt_version="rubric-grading@4")
     assert hash_solution(None) is None and hash_solution("") is None
+
+
+@pytest.mark.unit
+def test_result_card_names_the_code_version_when_stamped():
+    import json
+
+    from cqc_cpcc.rubric_models import RubricAssessmentResult
+    result = RubricAssessmentResult(
+        rubric_id="r", rubric_version="1", total_points_possible=10, total_points_earned=5,
+        criteria_results=[{"criterion_id": "c", "criterion_name": "C", "points_possible": 10,
+                           "points_earned": 5, "feedback": "ok"}],
+        overall_feedback="ok", code_version="0.1.2")
+    assert "**Graded with:** code v0.1.2" in result_card_markdown("Student A", result)
+    assert json.loads(result_card_json("Student A", result))["result"]["code_version"] == "0.1.2"
+    result.code_version = None
+    assert "Graded with" not in result_card_markdown("Student A", result)

@@ -50,6 +50,7 @@ from cqc_cpcc.rubric_models import (
 from cqc_cpcc.utilities.AI import llm_gateway
 from cqc_cpcc.utilities.code_preview import read_source_files as _read_source_files
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.version import get_version
 from langchain_core.callbacks import BaseCallbackHandler
 
 # Model, reasoning effort and output budget come from config/model_registry.json
@@ -554,6 +555,7 @@ async def grade_with_rubric(
             "reconciliation": [], "execution_report": None,
             "detected_errors": tag_source(result.detected_errors, SOURCE_MODEL, only_untagged=False),
             "graded_with_model": _graded_with(model_name, use_auto_route),
+            "code_version": get_version(),
             # The exact request, for the LLM Prompt tab; never persisted.
             "llm_request": llm_gateway.last_request_record("rubric-grading", "grading"),
         })

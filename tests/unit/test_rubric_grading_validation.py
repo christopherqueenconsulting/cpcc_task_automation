@@ -93,7 +93,7 @@ def _without_backend_stamps(result):
     errors = result.detected_errors
     if errors is not None:
         errors = [e.model_copy(update={"source": None}) for e in errors]
-    return result.model_copy(update={"graded_with_model": None, "detected_errors": errors})
+    return result.model_copy(update={"graded_with_model": None, "code_version": None, "detected_errors": errors})
 
 
 @pytest.mark.unit

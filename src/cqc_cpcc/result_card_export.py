@@ -50,6 +50,8 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
         f"({_percent(result):.1f}%)",
         f"- **Level:** {_level(result)}",
     ]
+    if getattr(result, "code_version", None):
+        lines.append(f"- **Graded with:** code v{result.code_version}")
     counts = result.error_counts_by_severity or {}
     if counts:
         lines.append(f"- **Errors:** {counts.get('major', 0)} major, {counts.get('minor', 0)} minor")
