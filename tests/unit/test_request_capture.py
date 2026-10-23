@@ -18,8 +18,9 @@ def _cap(suites, settings=SETTINGS, fmt=rc.FORMAT):
     return {"format": fmt, "settings": settings, "suites": suites}
 
 
-def _suite(requests, outputs=None):
-    return {"requests": requests, "outputs": outputs if outputs is not None else {c: "o" for c in requests}}
+def _suite(requests, outputs=None, calls=None):
+    return {"requests": requests, "outputs": outputs if outputs is not None else {c: "o" for c in requests},
+            "calls": calls if calls is not None else {c: ["k"] for c in requests}}
 
 
 class TestCompare:
@@ -31,6 +32,10 @@ class TestCompare:
         (_cap({"s": _suite({"c1": ["h1"]})}), _cap({"s": _suite({"c1": ["h2"]})}), "send different requests"),
         (_cap({"s": _suite({"c1": ["h1"]}, {"c1": "x"})}), _cap({"s": _suite({"c1": ["h1"]}, {"c1": "y"})}),
          "handle the fixed test answer differently"),
+        (_cap({"s": _suite({"c1": ["h1"]}, calls={"c1": ["k1"]})}),
+         _cap({"s": _suite({"c1": ["h1"]}, calls={"c1": ["k1", "k2"]})}), "make different gateway calls"),
+        (_cap({"s": _suite({"c1": ["h1"]}, {"c1": rc.ERROR + "ValueError"})}),
+         _cap({"s": _suite({"c1": ["h1"]}, {"c1": rc.ERROR + "ValueError"})}), "no answer handled"),
         (_cap({"s": _suite({"c1": ["h1"]})}), _cap({"s": _suite({"c1": ["h1"], "c2": ["h3"]})}), "different cases"),
         (_cap({"s": _suite({"c1": []})}), _cap({"s": _suite({"c1": []})}), "no request captured"),
         (_cap({}), _cap({"s": _suite({"c1": ["h1"]})}), "no capture"),
@@ -59,6 +64,38 @@ class TestCapture:
         ids, a, b = two_captures
         requests = a["suites"][suite_id]["requests"]
         assert any(requests.values()) and rc.compare(a, b, [suite_id]) == {suite_id: None}
+
+    @pytest.mark.parametrize("suite_id", list(SUITE_MODULES))
+    def test_every_suite_handles_the_fixed_answer_in_some_case(self, two_captures, suite_id):
+        ids, a, b = two_captures
+        outputs = a["suites"][suite_id]["outputs"]
+        assert any(not v.startswith(rc.ERROR) for v in outputs.values())
+        assert any(a["suites"][suite_id]["calls"].values())
+
+    @staticmethod
+    def _with_a_second_call(monkeypatch, prompt):
+        from cqc_cpcc.model_eval.suites import get_suite
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        suite = get_suite("requirement-extraction")
+        real = suite.invoke
+
+        async def invoke(case):
+            out = await real(case)
+            try:
+                await llm_gateway.structured("digest", prompt, type(out))
+            except Exception:  # noqa: BLE001 - only the recorded call matters here
+                pass
+            return out
+
+        monkeypatch.setattr(type(suite), "invoke", property(lambda self: invoke), raising=False)
+
+    def test_a_changed_later_call_is_caught(self, monkeypatch):
+        self._with_a_second_call(monkeypatch, "second call, version 1")
+        before = rc.capture(["requirement-extraction"])
+        self._with_a_second_call(monkeypatch, "second call, version 2")
+        after = rc.capture(["requirement-extraction"])
+        assert "different gateway calls" in rc.compare(after, before, ["requirement-extraction"])["requirement-extraction"]
 
     def test_a_changed_request_body_is_caught(self, monkeypatch):
         from cqc_cpcc.utilities.AI import openrouter_client
@@ -100,9 +137,33 @@ class TestCapture:
 
         from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client
 
-        saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode)
+        saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
+                 llm_gateway.structured)
         rc.capture(["digest"])
-        assert (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode) == saved
+        assert (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
+                llm_gateway.structured) == saved
+
+    def test_everything_is_restored_when_the_capture_is_interrupted(self, monkeypatch):
+        import asyncio
+        import os
+
+        from cqc_cpcc.model_eval.suites import get_suite
+        from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client
+
+        monkeypatch.setenv("POSTHOG_LLM_ANALYTICS", "true")
+        saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
+                 llm_gateway.structured)
+        suite = get_suite("digest")
+
+        async def interrupted(case):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(type(suite), "invoke", property(lambda self: interrupted), raising=False)
+        with pytest.raises(KeyboardInterrupt):
+            rc.capture(["digest"])
+        assert (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
+                llm_gateway.structured) == saved
+        assert os.environ["POSTHOG_LLM_ANALYTICS"] == "true"
 
 
 class TestRequestsIdentical:

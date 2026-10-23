@@ -102,7 +102,7 @@ Evaluations are **event-driven only**, never on a timer:
 | A PR changes nothing a prompt depends on | `prompt-eval/ab` = success, "no suites affected" | $0 |
 | A PR changes only `poetry.lock`, `pyproject.toml` or docs (a dependency version bump, see below) | no model calls: the `dependency-smoke` job syncs the environment to the head lock (`poetry install --with test --sync`), imports every `cqc_cpcc` module, resolves every absolute import in `cqc_cpcc` and `cqc_streamlit_app` (function-level ones included), and checks that packages removed from the lock are gone; `prompt-eval/ab` = success, "dependency-only change; import smoke passed" (failure if any check fails) | $0 |
 | A PR changes only grader code | re-score master's saved outputs with the new graders | $0 |
-| A PR's affected suites send byte-identical requests and handle a fixed test answer identically | no model A/B; `ab-base-rule` re-checks with the base's code; report-only re-score | $0 |
+| A PR's affected suites send byte-identical requests and handle a fixed test answer identically | no model A/B; `ab-base-rule` re-checks with the base's code; a re-score for information (a failed re-score job fails the check) | $0 |
 | A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, or a model-registry role | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap for suites with ≥30 cases (the composite must be non-inferior; a grader fails it only on a clear drop, see below), on the holdout split, or on all cases when the suite's prompts render the same request as the base; absolute margin otherwise; then re-decided by the `ab-base-rule` job with the base branch's detection, graders and rule, and both must pass; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1.6 projected on one model (from #398's $0.89 at repeats 2; PR #404), up to ~$5.3 worst case |
 | That PR is merged | the affected suites run on master; `prompt-history.jsonl` and `PROMPT_STATUS.md` are updated on the `model-eval-state` branch; "Prompt needs work: <id>" issues open (or close when passing again) | ~$0.9 (one side; PR #404) |
 | A new model is considered (weekly free discovery finds a candidate, the current model changed, or a dispatch) | the Model Evaluation workflow grades it, then the **cross-suite gate** runs the winner on every other suite of the roles it would take; promotion needs both ([`MODEL_EVALUATION.md`](MODEL_EVALUATION.md)) | ≤ $10 + suites |
@@ -137,13 +137,14 @@ in `model_policy.json`.
 timeouts, logging) leave everything the model receives unchanged, and a paid A/B of them only
 measures run noise: #398 failed two A/Bs that way. So before any model call, the `detect` job
 runs `prompt-requests-identical` on every suite that needs a run, at the head and at the base,
-with no API key and no model call ($0, about a minute per side):
+with no API key and no model call ($0):
 
 - **Requests:** the exact request body each case sends first (messages, response schema and
   every model parameter), with the OpenRouter client replaced by one that records and
   refuses to send.
-- **Later calls of a case:** not captured, so every registry prompt the suite uses must also
-  keep its fingerprint.
+- **Later calls of a case:** with the fixed test-mode answer, every gateway call each case
+  makes (role, prompt text, response schema, model override). Every registry prompt the suite
+  uses must also keep its fingerprint.
 - **Settings:** the whole model registry (roles, fallbacks, token limits) and the client's base
   URL and headers. Timeouts and retries are left out on purpose: they do not change what the
   model receives (the unit suite and the stub-transport tests check them).
@@ -151,12 +152,16 @@ with no API key and no model call ($0, about a minute per side):
   which runs the parsing, compile gate, requirement coverage and scoring code
   (`src/cqc_cpcc/scoring/` included) on both sides. A fixed answer is a coarse probe: most
   suites produce one output for it, so this catches a change in how an answer is handled, not
-  every change in how a real, varied answer would be.
+  every change in how a real, varied answer would be. A suite whose cases all raise on the
+  fixed answer handled nothing, so it never takes the fast path. Captures from a different
+  capture format never match, so the first run after a format change is a full A/B.
 
 When everything matches, the paid A/B is skipped. `ab-base-rule` then re-captures the base
 side with the base's own code and accepts only an exact match (`request-identical`). The
-suites are also re-scored on master's saved outputs; that re-score is report-only and does
-not run this PR's scoring code. Anything else, including a failure or a timeout of the
+suites are also re-scored: the PR's graders run on master's saved outputs, and the code that
+produced those outputs is not re-run. The re-score's numbers are shown for information only and
+do not decide the result, but if the re-score job itself fails, `prompt-eval/ab` fails and the
+report names the `full_ab` dispatch. Anything else, including a failure or a timeout of the
 capture, runs the full paid A/B as before.
 
 - **Who can pass this way:** any same-repository PR, including `claude/` and `auto/` branches
@@ -165,8 +170,10 @@ capture, runs the full paid A/B as before.
   author.
 - **Per-PR override:** a maintainer dispatch with mode `ab` and `full_ab: true` runs the paid
   A/B. The report names this whenever the base does not confirm the fast path.
-- **Global off switch:** the repository variable `PROMPT_EVAL_FAST_PATH=off`. Christopher owns
-  that decision. Reverting the PR also turns it off.
+- **Global off switch:** set the repository variable `PROMPT_EVAL_FAST_PATH` to `off`
+  (lowercase). It takes effect on the next run. Christopher owns that decision. To remove the
+  fast path entirely, revert both #407 and the PR that added this switch; reverting only the
+  latter leaves #407's fast path running without a switch.
 - **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
   (issue #406) is the follow-up for that.
 

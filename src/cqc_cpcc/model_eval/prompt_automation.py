@@ -376,7 +376,7 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
         head_capture = json.loads(requests_path.read_text(encoding="utf-8")).get("head") or {}
         reasons = request_capture.compare(head_capture, request_capture.capture(sorted(required)), sorted(required))
         fingerprints = {p: e.fingerprint for p, e in head_reg.prompts.items()}
-        for suite_id in reasons:  # later calls of a case are not captured: every prompt must be unchanged
+        for suite_id in reasons:  # the capture sees fixed-answer calls only: every prompt must also be unchanged
             if reasons[suite_id] is None and not same_prompts(head_reg, base_reg, fingerprints, suite_id):
                 reasons[suite_id] = "a prompt this suite uses changed in the registry"
         for suite_id, reason in reasons.items():
@@ -848,7 +848,7 @@ def requests_identical(suite_ids: list, base_ref: str, out: Path) -> dict:
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
     reasons = request_capture.compare(head, base, suite_ids)
-    for suite_id in suite_ids:  # later calls of a case are not captured: every prompt must be unchanged
+    for suite_id in suite_ids:  # the capture sees fixed-answer calls only: every prompt must also be unchanged
         if reasons[suite_id] is None and not prompts_unchanged(suite_id, base_ref):
             reasons[suite_id] = "a prompt this suite uses changed in the registry"
     report = {"base_ref": base_ref, "suites": reasons,

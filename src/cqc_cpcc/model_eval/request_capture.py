@@ -6,11 +6,15 @@ so a paid A/B of it only measures run noise. ``capture`` records, per suite:
 
 - **requests**: the request body each case sends first (messages, response schema and every
   model parameter), with the OpenRouter client replaced by one that records and refuses to
-  send. Only the first call of a case is reached; later calls are covered by requiring every
-  registry prompt of the suite to keep its fingerprint (``prompts_unchanged``).
-- **outputs**: the suite's payload for each case when the model gateway returns its fixed
-  test-mode answer. This runs the code that handles an answer (parsing, the compile gate,
-  requirement coverage, scoring), so a change there shows as a difference.
+  send. Only the first call of a case is reached here, because the refused send ends the case.
+- **calls**: every gateway call each case makes when the model gateway returns its fixed
+  test-mode answer (role, prompt text, response schema, model override, auto-route), so a
+  change to a later call's prompt shows as a difference. Every registry prompt of the suite
+  must also keep its fingerprint (``prompts_unchanged``).
+- **outputs**: the suite's payload for each case in that same run. This runs the code that
+  handles an answer (parsing, the compile gate, requirement coverage, scoring), so a change
+  there shows as a difference. A case that raises is recorded as ``error:<type>``; a suite
+  whose cases all raise on either side is a difference, since it handled no answer.
 - **settings**: the whole model registry (roles, fallbacks, token limits, profiles) and the
   client's base URL and headers. Transport settings such as timeouts and retries are left
   out on purpose: they do not change what the model receives.
@@ -29,7 +33,9 @@ from contextlib import contextmanager
 from typing import Optional
 
 #: Bumped when the capture format changes, so captures from two versions never compare equal.
-FORMAT = 2
+FORMAT = 3
+
+ERROR = "error:"
 
 
 def _hash(value) -> str:
@@ -56,23 +62,45 @@ class _CapturingClient:
 
 
 @contextmanager
-def _patched(sink: list, test_mode: bool):
-    """Replace the OpenRouter client, skip retry back-off sleeps and set test mode; restore after."""
+def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
+    """Replace the OpenRouter client, skip retry back-off sleeps and set test mode; restore after.
+
+    With ``calls``, every ``llm_gateway.structured`` call is also recorded there. PostHog LLM
+    analytics is turned off, so refused sends are never reported as errors.
+    """
+    import os
+
     from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client
 
-    saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode)
+    saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
+             llm_gateway.structured)
+    saved_analytics = os.environ.get("POSTHOG_LLM_ANALYTICS")
     real_sleep = asyncio.sleep
+    real_structured = llm_gateway.structured
 
     async def no_wait(delay, result=None):
         return await real_sleep(0, result)
 
+    async def recording(role, prompt, schema_model, *, override=None, use_auto_route=False, prompt_id=None):
+        calls.append(_hash([role, prompt, schema_model.model_json_schema(), override, use_auto_route]))
+        return await real_structured(role, prompt, schema_model, override=override,
+                                     use_auto_route=use_auto_route, prompt_id=prompt_id)
+
     openrouter_client._get_openrouter_client = lambda: _CapturingClient(sink)
     asyncio.sleep = no_wait
     llm_gateway._is_test_mode = lambda: test_mode
+    if calls is not None:
+        llm_gateway.structured = recording
+    os.environ["POSTHOG_LLM_ANALYTICS"] = "false"
     try:
         yield
     finally:
-        openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode = saved
+        (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
+         llm_gateway.structured) = saved
+        if saved_analytics is None:
+            os.environ.pop("POSTHOG_LLM_ANALYTICS", None)
+        else:
+            os.environ["POSTHOG_LLM_ANALYTICS"] = saved_analytics
 
 
 def settings() -> dict:
@@ -85,7 +113,7 @@ def settings() -> dict:
 
 
 async def capture_suite(suite_id: str) -> dict:
-    """``{"requests": {case: [hashes]}, "outputs": {case: hash}}`` for every case of ``suite_id``."""
+    """``{"requests": {case: [hashes]}, "calls": {case: [hashes]}, "outputs": {case: hash}}`` per case."""
     from cqc_cpcc.model_eval import prompt_eval
     from cqc_cpcc.model_eval.runner import pinned_registry
     from cqc_cpcc.model_eval.suites import get_suite
@@ -95,6 +123,7 @@ async def capture_suite(suite_id: str) -> dict:
     profile = prompt_eval.profiles_for([model]).get(model)
     requests: dict = {}
     outputs: dict = {}
+    calls: dict = {}
     sink: list = []
     with pinned_registry(model, effort, profile, roles=(suite.role,)):
         with _patched(sink, test_mode=False):
@@ -105,13 +134,16 @@ async def capture_suite(suite_id: str) -> dict:
                 except Exception:  # noqa: BLE001 - the refused send (or anything after it) ends the case
                     pass
                 requests[case.case_id] = sorted(set(sink))
-        with _patched(sink, test_mode=True):
+        made: list = []
+        with _patched(sink, test_mode=True, calls=made):
             for case in suite.cases():
+                made.clear()
                 try:
                     outputs[case.case_id] = _hash(suite.to_payload(await suite.invoke(case)))
                 except Exception as e:  # noqa: BLE001 - a failure is an output too
-                    outputs[case.case_id] = _hash(["error", type(e).__name__])
-    return {"requests": requests, "outputs": outputs}
+                    outputs[case.case_id] = ERROR + type(e).__name__
+                calls[case.case_id] = list(made)
+    return {"requests": requests, "calls": calls, "outputs": outputs}
 
 
 def capture(suite_ids: list) -> dict:
@@ -123,8 +155,8 @@ def compare(head: dict, base: dict, suite_ids: list) -> dict:
     """``{suite_id: reason or None}``: None when the suite is the same on both sides.
 
     Fails closed: a different format, registry or client settings, a missing suite, a
-    different case set, a suite with no request at all, or any changed request or output is
-    a difference. A case that sends no request on both sides (a submission the validity gate
+    different case set, a suite with no request at all, a suite whose cases all raise, or any
+    changed request, call or output is a difference. A case that sends no request on both sides (a submission the validity gate
     rejects) is the same on both sides.
     """
     out: dict = {}
@@ -142,12 +174,17 @@ def compare(head: dict, base: dict, suite_ids: list) -> dict:
             out[suite_id] = "no capture"
             continue
         hr, br, ho, bo = h.get("requests", {}), b.get("requests", {}), h.get("outputs", {}), b.get("outputs", {})
-        if set(hr) != set(br) or set(ho) != set(bo):
+        hc, bc = h.get("calls", {}), b.get("calls", {})
+        if set(hr) != set(br) or set(ho) != set(bo) or set(hc) != set(bc) or set(hr) != set(ho):
             out[suite_id] = "different cases"
         elif not any(hr.values()) or not any(br.values()):
             out[suite_id] = "no request captured"
+        elif all(str(v).startswith(ERROR) for v in ho.values()) or all(str(v).startswith(ERROR) for v in bo.values()):
+            out[suite_id] = "no answer handled (every case raised)"
         elif changed := sorted(c for c in hr if hr[c] != br[c]):
             out[suite_id] = f"{len(changed)} case(s) send different requests (e.g. {changed[0]})"
+        elif changed := sorted(c for c in hc if hc[c] != bc[c]):
+            out[suite_id] = f"{len(changed)} case(s) make different gateway calls (e.g. {changed[0]})"
         elif changed := sorted(c for c in ho if ho[c] != bo[c]):
             out[suite_id] = f"{len(changed)} case(s) handle the fixed test answer differently (e.g. {changed[0]})"
         else:
