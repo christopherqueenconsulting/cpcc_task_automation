@@ -419,7 +419,7 @@ class TestCSC134Rubric:
         rubric = get_rubric_by_id("csc134_cpp_exam_rubric")
 
         assert rubric.rubric_id == "csc134_cpp_exam_rubric"
-        assert rubric.rubric_version == "3.2"
+        assert rubric.rubric_version == "3.3"
         assert rubric.title == "CSC 134 C++ Program Performance Rubric"
         assert "CSC_134" in rubric.course_ids
 
