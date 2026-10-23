@@ -40,7 +40,7 @@ def _clean_status_cache(_no_docker_sandbox_unless_asked, monkeypatch):
 # --------------------------------------------------------------------------- #
 EXPECTED_COMMAND = [
     "docker", "run",
-    "--rm", "-i", "--init", "--pull", "never",
+    "--rm", "-i", "--pull", "never",
     "--name", "cqc-exec-fixed",
     "--label", "cqc.exec=1", "--label", "cqc.owner=job-abc", "--label", "cqc.started=1700000000",
     "--network", "none", "--ipc", "none", "--read-only", "--log-driver", "none",
@@ -63,7 +63,7 @@ def test_the_run_command_is_exactly_the_planned_flag_list():
 
 
 @pytest.mark.parametrize("flag,value", [
-    ("--rm", None), ("-i", None), ("--init", None), ("--read-only", None),
+    ("--rm", None), ("-i", None), ("--read-only", None),
     ("--network", "none"), ("--ipc", "none"), ("--log-driver", "none"),
     ("--memory", "512m"), ("--memory-swap", "512m"), ("--cpus", "1"), ("--pids-limit", "128"),
     ("--cap-drop", "ALL"), ("--security-opt", "no-new-privileges"), ("--user", "10001:10001"),
@@ -141,7 +141,7 @@ def test_the_student_file_names_never_appear_in_the_docker_command(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(pr, "runner_status", lambda: pr.RunnerStatus(True))
-    monkeypatch.setattr(pr.subprocess, "run", fake_run)
+    monkeypatch.setattr(pr, "_run_docker_capped", fake_run)
     pr.run_program("python", [pr.SandboxFile("jane_doe_12345.py", "print(1)")],
                    [pr.SandboxCase("c1", "")], owner="job-xyz")
     assert not any("jane" in part or "12345" in part for part in seen["cmd"])
@@ -272,7 +272,7 @@ def test_cqc_execution_off_forces_the_runner_off_without_asking_docker(monkeypat
 
 def test_run_program_without_a_sandbox_runs_nothing(monkeypatch):
     monkeypatch.setenv("CQC_EXECUTION", "off")
-    monkeypatch.setattr(pr.subprocess, "run", lambda *a, **k: pytest.fail("nothing may start"))
+    monkeypatch.setattr(pr, "_run_docker_capped", lambda *a, **k: pytest.fail("nothing may start"))
     outcome = pr.run_program("python", [pr.SandboxFile("main.py", "print(1)")], [pr.SandboxCase("c", "")])
     assert outcome.status == "runner_error" and outcome.reason == "unavailable"
     assert not outcome.verified and outcome.cases == ()
@@ -308,7 +308,7 @@ def _run(monkeypatch, behaviour):
     def fake_run(cmd, **kw):
         return behaviour(cmd, kw["input"])
 
-    monkeypatch.setattr(pr.subprocess, "run", fake_run)
+    monkeypatch.setattr(pr, "_run_docker_capped", fake_run)
     return pr.run_program("python", [pr.SandboxFile("main.py", "print(1)")], [pr.SandboxCase("c1", "")],
                           owner="job-t")
 
@@ -428,7 +428,7 @@ def test_a_cli_error_is_runner_error(monkeypatch, sandbox_on):
 
 
 def test_an_oversized_job_never_starts_a_container(monkeypatch, sandbox_on):
-    monkeypatch.setattr(pr.subprocess, "run", lambda *a, **k: pytest.fail("must not start"))
+    monkeypatch.setattr(pr, "_run_docker_capped", lambda *a, **k: pytest.fail("must not start"))
     big = pr.SandboxFile("main.py", "#" * (pr.MAX_JOB_BYTES + 1))
     outcome = pr.run_program("python", [big], [pr.SandboxCase("c", "")])
     assert outcome.reason == "job_too_large"
@@ -436,7 +436,7 @@ def test_an_oversized_job_never_starts_a_container(monkeypatch, sandbox_on):
 
 @pytest.mark.parametrize("kw", [{"language": "ruby"}, {"mode": "exec"}, {"repeat": 3}])
 def test_bad_input_never_starts_a_container(monkeypatch, sandbox_on, kw):
-    monkeypatch.setattr(pr.subprocess, "run", lambda *a, **k: pytest.fail("must not start"))
+    monkeypatch.setattr(pr, "_run_docker_capped", lambda *a, **k: pytest.fail("must not start"))
     args = {"language": "python", "mode": "run", "repeat": 1, **kw}
     outcome = pr.run_program(args["language"], [pr.SandboxFile("main.py", "1")], [pr.SandboxCase("c", "")],
                              mode=args["mode"], repeat=args["repeat"])
@@ -482,7 +482,7 @@ def test_a_sentinel_in_program_output_never_reaches_logs_or_the_docker_command(m
 
     with caplog.at_level(logging.DEBUG):
         # the job carries the sentinel as program input; it must never be logged either
-        monkeypatch.setattr(pr.subprocess, "run", lambda cmd, **kw: spy(cmd, kw["input"]))
+        monkeypatch.setattr(pr, "_run_docker_capped", lambda cmd, **kw: spy(cmd, kw["input"]))
         outcome = pr.run_program("python", [pr.SandboxFile("main.py", f"print('{SENTINEL}')")],
                                  [pr.SandboxCase("c1", SENTINEL)], owner="job-t")
     assert SENTINEL not in caplog.text
@@ -615,3 +615,164 @@ def test_the_host_path_is_the_fallback_only_when_the_sandbox_is_unavailable(monk
 def test_python_is_still_checked_in_process_never_in_the_sandbox(monkeypatch):
     monkeypatch.setattr(pr, "runner_status", lambda: pytest.fail("python does not need the sandbox"))
     assert compiler_gate.check_code("print(1)\n", "main.py").compiles is True
+
+
+# --------------------------------------------------------------------------- #
+# Gauntlet H fixes
+# --------------------------------------------------------------------------- #
+def test_the_driver_is_pid_1_so_there_is_no_init_process_a_student_could_write_through():
+    assert "--init" not in _cmd()
+
+
+def test_output_over_the_cap_is_runner_error_result_too_large_and_kills_the_container(monkeypatch, sandbox_on):
+    def behave(cmd, **kw):
+        raise pr._OutputTooLarge()
+
+    monkeypatch.setattr(pr, "_run_docker_capped", behave)
+    outcome = pr.run_program("python", [pr.SandboxFile("main.py", "1")], [pr.SandboxCase("c", "")])
+    assert outcome.status == "runner_error" and outcome.reason == "result_too_large"
+    assert [c for c in sandbox_on if c and c[0] == "kill"]
+
+
+def test_the_docker_client_output_is_read_with_hard_caps():
+    import sys
+    code = "import sys; sys.stdout.write('x' * 5000)"
+    with pytest.raises(pr._OutputTooLarge):
+        pr._run_docker_capped([sys.executable, "-c", code], input=b"", timeout=20, stdout_cap=1000)
+    code = "import sys; sys.stderr.write('x' * 5000)"
+    with pytest.raises(pr._OutputTooLarge):
+        pr._run_docker_capped([sys.executable, "-c", code], input=b"", timeout=20, stderr_cap=1000)
+    ok = pr._run_docker_capped([sys.executable, "-c", "print('hi')"], input=b"", timeout=20)
+    assert ok.returncode == 0 and ok.stdout.strip() == b"hi"
+    assert pr.MAX_STDERR_BYTES <= 64 * 1024
+
+
+def test_the_container_label_is_stamped_after_the_slot_wait(monkeypatch, sandbox_on):
+    clock = [1_000_000.0]
+    monkeypatch.setattr(pr.time, "time", lambda: clock[0])
+    seen = {}
+
+    class SlowSlots:
+        def acquire(self, timeout=None):
+            clock[0] += 590  # a long wait for a free slot
+            return True
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(pr, "_slots", SlowSlots())
+
+    def behave(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(pr, "_run_docker_capped", behave)
+    pr.run_program("python", [pr.SandboxFile("main.py", "1")], [pr.SandboxCase("c", "")], owner="job-w")
+    label = [a for a in seen["cmd"] if a.startswith("cqc.started=")][0]
+    assert label == "cqc.started=1000590"
+
+
+# --------------------------------------------------------------------------- #
+# Coverage of the remaining thin branches (no Docker)
+# --------------------------------------------------------------------------- #
+def test_docker_cli_helper_returns_none_without_docker_or_on_error(monkeypatch):
+    monkeypatch.setattr(pr.shutil, "which", lambda n: None)
+    assert pr._docker(["info"]) is None
+    monkeypatch.setattr(pr.shutil, "which", lambda n: "/usr/bin/docker")
+
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired("docker", 1)
+
+    monkeypatch.setattr(pr.subprocess, "run", boom)
+    assert pr._docker(["info"]) is None
+    monkeypatch.setattr(pr.subprocess, "run",
+                        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr=""))
+    assert pr._docker(["info"]) == (0, "ok\n")
+
+
+def test_the_docker_client_that_never_finishes_times_out_and_is_killed():
+    import sys
+    with pytest.raises(subprocess.TimeoutExpired):
+        pr._run_docker_capped([sys.executable, "-c", "import time; time.sleep(30)"], input=b"", timeout=0.5)
+
+
+def test_the_docker_client_gets_the_job_on_stdin():
+    import sys
+    code = "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"
+    done = pr._run_docker_capped([sys.executable, "-c", code], input=b"job-bytes", timeout=20)
+    assert done.stdout == b"job-bytes"
+
+
+def test_a_bad_concurrency_setting_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("CQC_EXEC_CONCURRENCY", "many")
+    assert pr._max_concurrency() == pr.DEFAULT_CONCURRENCY
+    monkeypatch.setenv("CQC_EXEC_CONCURRENCY", "99")
+    assert pr._max_concurrency() == 8
+
+
+def test_no_free_slot_is_runner_error_busy(monkeypatch, sandbox_on):
+    class Full:
+        def acquire(self, timeout=None):
+            return False
+
+    monkeypatch.setattr(pr, "_slots", Full())
+    outcome = pr.run_program("python", [pr.SandboxFile("main.py", "1")], [pr.SandboxCase("c", "")])
+    assert outcome.reason == "busy"
+
+
+def test_wrong_case_count_and_non_dict_results_are_runner_error():
+    nonce = "n"
+    good = _good_result(nonce)
+    assert pr.parse_driver_output(json.dumps(good).encode(), nonce, 2, "run").reason == "bad_result"
+    assert pr.parse_driver_output(json.dumps({**good, "compile": {"ok": "yes"}}).encode(), nonce, 1, "run").reason == "bad_result"
+    assert pr.parse_driver_output(json.dumps({**good, "cases": ["x"]}).encode(), nonce, 1, "run").reason == "bad_result"
+    assert pr.parse_driver_output(json.dumps({**good, "cases": [{**good["cases"][0], "stdin_reads": "x"}]}).encode(),
+                                  nonce, 1, "run").reason == "bad_result"
+    assert pr.parse_driver_output(json.dumps({"ok": False, "nonce": nonce, "error": "x y"}).encode(),
+                                  nonce, 1, "run").reason == "driver_unknown"
+
+
+def test_a_compile_only_result_with_a_compile_error_has_no_cases_and_is_ok():
+    nonce = "n"
+    data = _good_result(nonce, cases=[])
+    data["compile"] = {"ok": False, "timed_out": False, "stderr": "err", "truncated": False, "tool": "javac"}
+    outcome = pr.parse_driver_output(json.dumps(data).encode(), nonce, 3, "run")
+    assert outcome.verified and outcome.compile.ok is False and outcome.cases == ()
+
+
+def test_kill_orphans_with_nothing_to_kill_does_not_call_kill(monkeypatch):
+    calls = []
+
+    def fake(args, timeout=8.0):
+        calls.append(args[0])
+        return (0, "") if args[0] == "ps" else (0, "")
+
+    monkeypatch.setattr(pr, "_docker", fake)
+    assert pr.kill_orphans("job-a") == 0 and calls == ["ps"]
+
+
+def test_a_bad_ps_line_is_ignored(monkeypatch):
+    monkeypatch.setattr(pr, "_docker", lambda args, timeout=8.0: (0, "garbage line\n"))
+    assert pr.kill_orphans("job-a") == 0
+
+
+def test_the_gate_runs_the_host_compiler_when_the_sandbox_is_unavailable_and_files_are_safe(monkeypatch):
+    monkeypatch.setattr(pr, "runner_status", lambda: pr.RunnerStatus(False, "docker not found on PATH"))
+    monkeypatch.setattr(pr, "run_program", lambda *a, **k: pytest.fail("sandbox must not be used"))
+    result = compiler_gate.check_code("int main() { return 0 }\n", "main.cpp")
+    assert result.tool.startswith("exec-runner") is False
+    java = compiler_gate.check_code("public class Main {}", "Main.java")
+    assert java.tool.startswith("exec-runner") is False
+
+
+def test_check_submission_prefers_the_sandbox_for_cpp_and_java(monkeypatch):
+    monkeypatch.setattr(pr, "runner_status", lambda: pr.RunnerStatus(True))
+    langs = []
+
+    def fake(language, files, cases=(), **kw):
+        langs.append(language)
+        return _compile_outcome(ok=True)
+
+    monkeypatch.setattr(pr, "run_program", fake)
+    res = compiler_gate.check_submission([("main.cpp", "int main(){}"), ("Main.java", "public class Main {}")])
+    assert res.compiles is True and sorted(langs) == ["cpp", "java"]

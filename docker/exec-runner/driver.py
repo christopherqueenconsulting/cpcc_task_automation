@@ -72,6 +72,7 @@ QUIET_SECONDS = 0.03
 FIRST_READ_GRACE_SECONDS = 0.2
 
 PR_SET_DUMPABLE = 4
+PR_GET_DUMPABLE = 3
 
 # read, pread64 and readv syscall numbers by CPU. A thread blocked in one of these on fd 0
 # is waiting for stdin.
@@ -229,6 +230,36 @@ def detect_eof_error(language: str, exit_code, stderr: str, stdin_all_delivered:
     return any(marker in stderr for marker in _EOF_STDERR)
 
 
+def classify_compile(rc, output: str, timed_out: bool) -> str:
+    """"ok", "errors", "timeout" or "unverifiable" for one compiler run. Pure.
+
+    gcc, g++ and javac exit 1 for source errors (javac 2 to 4 are usage, system and
+    abnormal errors; gcc 4 is an internal error). A signal death (rc < 0), a missing
+    status, or a failure with no output is not a statement about the student's code.
+    """
+    if timed_out:
+        return "timeout"
+    if rc == 0:
+        return "ok"
+    if rc is None or rc < 0 or rc >= 3:
+        return "unverifiable"
+    if not (output or "").strip():
+        return "unverifiable"
+    return "errors"
+
+
+def reap_zombies() -> None:
+    """The driver is PID 1: collect orphans that student processes left behind. Only called
+    when no tracked child is running, so it cannot steal a wait status."""
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+
+
 def find_java_main(files: list):
     """Class name (file stem) of the first Java file that declares main, else None."""
     for name, content in files:
@@ -325,6 +356,7 @@ def run_capped(argv: list, cwd: str, timeout: float, cap: int) -> dict:
     except subprocess.TimeoutExpired:
         pass
     proc.stdout.close()
+    reap_zombies()
     truncated = total > cap
     return {
         "rc": proc.returncode, "output": bytes(buf).decode("utf-8", "replace"),
@@ -388,8 +420,12 @@ def compile_job(job: dict, workdir: str) -> dict:
             argv.append("-lm")
         tool = "gcc"
     res = run_capped(argv, workdir, COMPILE_LIMIT_SECONDS, COMPILER_STDERR_CAP)
+    verdict = classify_compile(res["rc"], res["output"], res["timed_out"])
+    if verdict == "unverifiable":
+        # Killed by a signal, internal error or no output: cannot verify, never "does not compile".
+        raise JobError("compile_killed")
     return {
-        "ok": (not res["timed_out"]) and res["rc"] == 0, "timed_out": res["timed_out"],
+        "ok": verdict == "ok", "timed_out": verdict == "timeout",
         "stderr": res["output"], "truncated": res["truncated"], "tool": tool,
     }
 
@@ -406,7 +442,7 @@ def _run_argv(job: dict, workdir: str) -> tuple:
             raise JobError("no_main_class")
         return ["java", *JAVA_FLAGS, "-cp", "out", main], 0
     if language == "python":
-        return ["python3", "-I", "-B", pick_python_main(job["files"], job["main"])], ADDRESS_SPACE_BYTES
+        return ["python3", "-E", "-s", "-B", pick_python_main(job["files"], job["main"])], ADDRESS_SPACE_BYTES
     return ["./prog"], ADDRESS_SPACE_BYTES
 
 
@@ -580,6 +616,7 @@ def run_case(language: str, argv: list, workdir: str, stdin_text: str, wall: flo
             pass
     proc.stdout.close()
     proc.stderr.close()
+    reap_zombies()
     wall_ms = int((time.monotonic() - started) * 1000)
     returncode = proc.returncode
     status, reason = classify_exit(returncode, timed_out, state["killed"])
@@ -618,14 +655,18 @@ def run_all_cases(job: dict, workdir: str) -> list:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-def _harden_self() -> None:
+def _harden_self() -> bool:
     """Make this process non-dumpable so a student program (same uid) cannot read its
-    memory or open /proc/<driver pid>/fd/1 to forge the result. exec resets the flag
-    in the children."""
+    memory or open /proc/<driver pid>/fd/* (the driver is PID 1, so that includes the
+    stdout and stderr pipes). exec resets the flag in the children. Returns True only
+    when prctl succeeded and the flag reads back as 0."""
     try:
-        ctypes.CDLL(None, use_errno=True).prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+            return False
+        return libc.prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 0
     except (OSError, AttributeError):
-        pass
+        return False
 
 
 def _emit(obj: dict) -> None:
@@ -634,7 +675,9 @@ def _emit(obj: dict) -> None:
 
 
 def main() -> int:
-    _harden_self()
+    if not _harden_self():
+        _emit({"ok": False, "nonce": None, "error": "hardening_failed"})
+        return 0
     nonce = None
     workdir = None
     try:

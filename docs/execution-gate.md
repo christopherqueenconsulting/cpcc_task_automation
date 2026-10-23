@@ -57,7 +57,7 @@ runs each test case. Every sandbox flag is listed here and asserted in
 `test_the_run_command_is_exactly_the_planned_flag_list`:
 
 ```
---rm -i --init --pull never --name cqc-exec-<uuid4>
+--rm -i --pull never --name cqc-exec-<uuid4>
 --label cqc.exec=1 --label cqc.owner=<opaque job id> --label cqc.started=<epoch>
 --network none --ipc none --read-only --log-driver none
 --tmpfs /work:rw,exec,nosuid,nodev,size=128m,mode=1777
@@ -138,8 +138,8 @@ work, and the grade itself.
 | Output flood | 64 KB and 16 KB caps, kill on overflow | `test_an_output_flood_is_capped_and_stops_the_program` |
 | Fork bomb | `--pids-limit 128`, wall limit, `--rm` | `test_a_fork_bomb_is_contained_and_leaves_nothing_running` |
 | Memory bomb | `--memory 512m --memory-swap 512m`, `RLIMIT_AS`, `-Xmx256m` | none in the suite; tried by hand (see PR body) |
-| Forge the result | The driver is non-dumpable, so a same-uid program cannot open its stdout; the result also carries a per-job random nonce | `test_a_program_cannot_open_the_drivers_stdout_to_forge_a_result` |
-| Kill the driver | No JSON, so `runner_error` | `test_a_program_that_kills_the_driver_is_runner_error_not_a_verdict` |
+| Forge the result, or flood the driver's stdout or stderr through `/proc/1/fd/*` | The driver is PID 1 (no `--init`: tini would run as the student's uid and stay dumpable) and makes itself non-dumpable, so a same-uid program cannot open its fds; it refuses to start if that cannot be set and read back. The result carries a per-job random nonce. The host reads the docker client's stdout and stderr with hard caps (4 MB and 64 KB), kills the container and returns `runner_error` (`result_too_large`) if exceeded | `test_a_program_cannot_open_the_drivers_stdout_to_forge_a_result`, `test_writing_gigabytes_into_pid_1s_pipes_is_denied_or_bounded`, `test_the_docker_client_output_is_read_with_hard_caps` |
+| Kill the driver | The driver is PID 1, so signals from inside the container are ignored; if it died anyway there would be no JSON, so `runner_error` | `test_a_program_cannot_kill_the_driver_because_it_is_pid_1` |
 | Leftover containers after a crash | Owner label, minimum age, and a reap of anything older than the longest possible run | `test_two_concurrent_young_runs_of_other_jobs_are_not_killed`, `test_any_container_older_than_the_longest_possible_run_is_reaped_whatever_its_owner` |
 | Swapped image | `--pull never`, tag checked by version label | `test_each_sandbox_flag_is_present` |
 
@@ -199,3 +199,16 @@ One container per student. Java about 3 s per student, C++ about 12 s and Python
 for 30 students at concurrency 4, with each student's execution overlapping other students'
 LLM calls. These come from the plan. On the machine this was built on, a Java sum program
 with two cases and `repeat: 2` took 8 to 9 s for the whole job including container start (two smoke runs).
+
+## Notes on the driver as PID 1
+
+- Orphans left by a student process (a fork bomb) are re-parented to the driver, which reaps
+  them after each compile and each case.
+- Python programs run with `python3 -E -s -B`, not `-I`, so a sibling module in the submission
+  can be imported (`-I` drops the script directory from `sys.path`). The environment is
+  already minimal.
+- A compiler that is killed or exits with an unexpected status (a signal, a status of 3 or
+  more, or a failure with no output) is "cannot verify" (`runner_error`, `driver_compile_killed`),
+  never "does not compile". Exit status 1 with diagnostics is a real compile error.
+- The `cqc.started` label is taken after the job gets a concurrency slot, so a long wait cannot
+  make a live job look old enough to reap.

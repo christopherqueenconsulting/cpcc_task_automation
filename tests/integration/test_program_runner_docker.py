@@ -220,9 +220,10 @@ def test_no_host_files_and_no_secrets_are_visible():
     assert lines[1] == "False False 10001"
 
 
-def test_a_program_that_kills_the_driver_is_runner_error_not_a_verdict():
-    outcome = _py("import os, signal\nos.kill(os.getppid(), signal.SIGKILL)\nprint('done')\n")
-    assert outcome.status == "runner_error"
+def test_a_program_cannot_kill_the_driver_because_it_is_pid_1():
+    # Signals from inside a PID namespace to its init are ignored unless init handles them.
+    case = _only_case(_py("import os, signal\nos.kill(os.getppid(), signal.SIGKILL)\nprint('done', os.getppid())\n"))
+    assert case.stdout.strip() == "done 1"
 
 
 def test_a_program_cannot_open_the_drivers_stdout_to_forge_a_result():
@@ -282,3 +283,53 @@ def test_the_gate_compiles_good_java_and_cpp_in_the_sandbox():
     cpp = compiler_gate.check_code(SUM_PROGRAMS["cpp"][0].content, "main.cpp")
     for result in (java, cpp):
         assert result.tool.startswith("exec-runner") and result.compiles is True
+
+
+def test_writing_gigabytes_into_pid_1s_pipes_is_denied_or_bounded():
+    started = time.monotonic()
+    outcome = _py("""\
+        import os
+        for fd in (1, 2):
+            try:
+                with open(f"/proc/1/fd/{fd}", "wb") as handle:
+                    handle.write(b"x" * 10**9)
+                print("wrote", fd)
+            except OSError:
+                print("denied", fd)
+        """)
+    # The driver is PID 1 and non-dumpable: the open is refused. If it ever were not, the
+    # host reader's hard caps turn the flood into runner_error instead of host memory use.
+    if outcome.status == "ok":
+        assert "wrote" not in outcome.cases[0].stdout
+        assert outcome.cases[0].stdout.count("denied") == 2
+    else:
+        assert outcome.reason in ("result_too_large", "timeout", "nonzero_exit", "exit_137")
+    assert time.monotonic() - started < 40
+    assert _live_containers() == []
+
+
+def test_a_two_file_python_submission_can_import_its_sibling_module():
+    outcome = pr.run_program(
+        "python",
+        [F("main.py", "import helper\nprint(helper.double(int(input())))\n"),
+         F("helper.py", "def double(x):\n    return 2 * x\n")],
+        [C("c1", "21\n")])
+    case = _only_case(outcome)
+    assert case.status == "OK" and case.stdout.strip() == "42"
+
+
+def test_a_java_syntax_error_is_exit_1_with_diagnostics_so_it_stays_does_not_compile():
+    result = compiler_gate.check_code("public class Main { void f( }", "Main.java")
+    assert result.tool.startswith("exec-runner") and result.compiles is False and result.errors
+
+
+def test_a_compiler_killed_by_the_memory_limit_is_cannot_verify_not_does_not_compile():
+    # A template bomb that makes g++ exhaust the 512 MB container: either g++ reports an
+    # error (exit 1, a real verdict) or it is killed (cannot verify). Never a killed run as ok=False.
+    code = ("template<int N> struct B { char a[1 << 20]; B<N-1> b; };\n"
+            "template<> struct B<0> {};\nB<4000> x;\nint main() {}\n")
+    outcome = pr.run_program("cpp", [F("main.cpp", code)], mode="compile")
+    if outcome.status == "ok":
+        assert outcome.compile.stderr.strip() != ""
+    else:
+        assert outcome.status == "runner_error"

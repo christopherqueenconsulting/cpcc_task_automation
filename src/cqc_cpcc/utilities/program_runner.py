@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import secrets
+import selectors
 import shutil
 import subprocess
 import threading
@@ -44,13 +45,14 @@ RUNNER_VERSION_LABEL = "org.cqc.exec-runner.version"
 # sha256 over the bytes of docker/exec-runner/driver.py followed by docker/exec-runner/Dockerfile.
 # Editing either file changes this; bump RUNNER_VERSION (and the tag, label and compose
 # image) and update the hash. tests/unit/test_program_runner.py fails otherwise.
-RUNNER_SOURCE_SHA256 = "74b049330be4938588396104aada142a590870e5e8fe54d54bdf30a5810049f1"
+RUNNER_SOURCE_SHA256 = "e1099e73162526fe53a11b2ce3396a72fb30bc7fbd39bea650edc045544b2124"
 
 # --------------------------------------------------------------------------- #
 # Limits. The driver enforces the same numbers; keep them in step with driver.py.
 # --------------------------------------------------------------------------- #
 MAX_JOB_BYTES = 1_000_000
 MAX_RESULT_BYTES = 4_000_000
+MAX_STDERR_BYTES = 64 * 1024
 MAX_CASES = 20
 WALL_LIMIT_SECONDS = 5.0
 COMPILE_LIMIT_SECONDS = 30.0
@@ -245,7 +247,7 @@ def build_run_command(owner: str, *, container_name: Optional[str] = None,
     epoch = int(time.time()) if started is None else int(started)
     return [
         "docker", "run",
-        "--rm", "-i", "--init", "--pull", "never",
+        "--rm", "-i", "--pull", "never",
         "--name", name,
         "--label", "cqc.exec=1",
         "--label", f"cqc.owner={owner}",
@@ -429,6 +431,63 @@ def parse_driver_output(stdout: bytes, nonce: str, n_cases_expected: int, mode: 
     return RunOutcome(status="ok", compile=compile_outcome, cases=tuple(cases))
 
 
+class _OutputTooLarge(Exception):
+    """The docker client wrote more than its cap to stdout or stderr."""
+
+
+def _run_docker_capped(cmd: list, *, input: bytes, timeout: float,
+                       stdout_cap: int = MAX_RESULT_BYTES,
+                       stderr_cap: int = MAX_STDERR_BYTES) -> subprocess.CompletedProcess:
+    """``subprocess.run`` with hard output caps, so a hostile program that gets bytes into
+    the driver's pipes cannot fill this process's memory. Raises TimeoutExpired or
+    _OutputTooLarge after killing the docker client; the caller kills the container."""
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+
+    def feed():
+        try:
+            proc.stdin.write(input)
+        except OSError:
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    threading.Thread(target=feed, daemon=True).start()
+    sel = selectors.DefaultSelector()
+    for stream, tag in ((proc.stdout, "out"), (proc.stderr, "err")):
+        os.set_blocking(stream.fileno(), False)
+        sel.register(stream, selectors.EVENT_READ, tag)
+    bufs = {"out": bytearray(), "err": bytearray()}
+    caps = {"out": stdout_cap, "err": stderr_cap}
+    deadline = time.monotonic() + timeout
+    try:
+        while sel.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            for key, _ in sel.select(min(remaining, 0.5)):
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    sel.unregister(key.fileobj)
+                    continue
+                buf = bufs[key.data]
+                buf += chunk
+                if len(buf) > caps[key.data]:
+                    raise _OutputTooLarge()
+        proc.wait(timeout=max(deadline - time.monotonic(), 0.1))
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        proc.stdout.close()
+        proc.stderr.close()
+    return subprocess.CompletedProcess(cmd, proc.returncode, bytes(bufs["out"]), bytes(bufs["err"]))
+
+
 def run_program(language: str, files: Sequence[SandboxFile], cases: Sequence[SandboxCase] = (),
                 *, mode: str = "run", main: Optional[str] = None, repeat: int = 1,
                 owner: Optional[str] = None) -> RunOutcome:
@@ -449,20 +508,24 @@ def run_program(language: str, files: Sequence[SandboxFile], cases: Sequence[San
                              nonce=nonce, wall_seconds=WALL_LIMIT_SECONDS)
     if len(payload) > MAX_JOB_BYTES:
         return _runner_error("job_too_large")
-    name = new_container_name()
-    cmd = build_run_command(owner, container_name=name)
     timeout = max_run_seconds(len(cases) if mode == "run" else 0, repeat)
 
     if not _slots.acquire(timeout=SLOT_WAIT_SECONDS):
         return _runner_error("busy")
     started = time.monotonic()
     try:
+        # Name and cqc.started label are taken only now, after any wait for a slot. A label
+        # stamped before a long wait would look stale and be reaped by another job's sweep.
+        name = new_container_name()
+        cmd = build_run_command(owner, container_name=name)
         try:
-            proc = subprocess.run(cmd, input=payload, capture_output=True, timeout=timeout,
-                                  check=False)
+            proc = _run_docker_capped(cmd, input=payload, timeout=timeout)
         except subprocess.TimeoutExpired:
             _docker(["kill", name], timeout=15.0)
             outcome = _runner_error("timeout")
+        except _OutputTooLarge:
+            _docker(["kill", name], timeout=15.0)
+            outcome = _runner_error("result_too_large")
         except (OSError, subprocess.SubprocessError) as exc:
             logger.warning("exec docker run failed: %s", exc.__class__.__name__)
             outcome = _runner_error("docker_error")
@@ -471,8 +534,6 @@ def run_program(language: str, files: Sequence[SandboxFile], cases: Sequence[San
                 outcome = _runner_error("exit_137")
             elif proc.returncode != 0:
                 outcome = _runner_error("nonzero_exit")
-            elif len(proc.stdout) > MAX_RESULT_BYTES:
-                outcome = _runner_error("result_too_large")
             else:
                 outcome = parse_driver_output(proc.stdout, nonce, len(cases), mode)
             logger.info("exec job=%s lang=%s mode=%s rc=%s stdout_bytes=%d stderr_bytes=%d",

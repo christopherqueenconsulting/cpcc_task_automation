@@ -201,3 +201,63 @@ def test_the_driver_limits_match_the_documented_ones(drv):
                for lang in ("c", "cpp", "java")}
     assert sources == {"c": ["a.c"], "cpp": ["b.cpp"], "java": ["D.java"]}
     assert drv._sources("cpp", [("only.h", "")]) == ["only.h"]  # header-only is syntax-checked
+
+
+# --- gauntlet H fixes ---------------------------------------------------------------------------
+@pytest.mark.parametrize("rc,output,timed_out,expected", [
+    (0, "", False, "ok"),
+    (1, "Main.java:1: error: ';' expected", False, "errors"),
+    (2, "x", False, "errors"),
+    (-9, "", False, "unverifiable"),                      # killed (out of memory)
+    (-24, "partial", False, "unverifiable"),              # SIGXCPU
+    (3, "x", False, "unverifiable"),
+    (4, "internal compiler error", False, "unverifiable"),
+    (1, "", False, "unverifiable"),                       # failure with no output
+    (None, "x", False, "unverifiable"),
+    (-9, "", True, "timeout"),
+])
+def test_compile_classification_never_calls_a_killed_compiler_a_compile_error(drv, rc, output, timed_out, expected):
+    assert drv.classify_compile(rc, output, timed_out) == expected
+
+
+@pytest.mark.parametrize("rc", [-9, -24])
+def test_a_compiler_killed_by_a_signal_is_a_driver_error_not_ok_false(drv, monkeypatch, tmp_path, rc):
+    monkeypatch.setattr(drv, "run_capped", lambda *a, **k: {"rc": rc, "output": "", "truncated": False, "timed_out": False})
+    job = {"language": "cpp", "mode": "compile", "files": [("main.cpp", "int main(){}")]}
+    with pytest.raises(drv.JobError) as err:
+        drv.compile_job(job, str(tmp_path))
+    assert err.value.code == "compile_killed"
+
+
+def test_a_real_source_error_is_still_ok_false(drv, monkeypatch, tmp_path):
+    monkeypatch.setattr(drv, "run_capped", lambda *a, **k: {"rc": 1, "output": "main.cpp:1: error", "truncated": False, "timed_out": False})
+    job = {"language": "cpp", "mode": "compile", "files": [("main.cpp", "int main(")]}
+    assert drv.compile_job(job, str(tmp_path))["ok"] is False
+
+
+def test_a_job_is_not_parsed_when_hardening_fails(drv, monkeypatch, capsys):
+    class FakeLibc:
+        def prctl(self, *args):
+            return -1
+
+    monkeypatch.setattr(drv.ctypes, "CDLL", lambda *a, **k: FakeLibc())
+    monkeypatch.setattr(drv, "parse_job", lambda raw: pytest.fail("job must not be parsed"))
+    assert drv._harden_self() is False
+    assert drv.main() == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "nonce": None, "error": "hardening_failed"}
+
+
+def test_hardening_must_read_back_as_non_dumpable(drv, monkeypatch):
+    class Libc:
+        def prctl(self, option, *args):
+            return 0 if option == drv.PR_SET_DUMPABLE else 1  # GET says still dumpable
+
+    monkeypatch.setattr(drv.ctypes, "CDLL", lambda *a, **k: Libc())
+    assert drv._harden_self() is False
+    monkeypatch.setattr(drv.ctypes, "CDLL", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    assert drv._harden_self() is False
+
+
+def test_python_runs_with_the_work_dir_importable(drv):
+    argv, _ = drv._run_argv({"language": "python", "files": [("main.py", "")], "main": None}, "/work")
+    assert "-I" not in argv and "-E" in argv
