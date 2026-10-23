@@ -760,6 +760,31 @@ class TestDecideWithTheBaseRule:
         (finished_ab / "ab.json").write_text(json.dumps(report))
         assert self._decide(finished_ab)["combined_status"] == "fail"
 
+    def test_identical_requests_pass_without_an_a_b(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import request_capture
+
+        monkeypatch.setattr(pa, "suites_from_data", lambda *a, **k: {"digest": "test"})
+        out = tmp_path / "artifact"
+        out.mkdir()
+        head = request_capture.capture(["digest"])
+        (out / "requests.json").write_text(json.dumps({"head": head, "identical": True}))
+        decided = self._decide(out)
+        assert decided["status"] == "request-identical" and decided["combined_status"] == "request-identical"
+        assert "byte-identical" in (out / "base-rule.md").read_text()
+
+    def test_a_requests_claim_the_base_does_not_reproduce_is_not_run(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import request_capture
+
+        monkeypatch.setattr(pa, "suites_from_data", lambda *a, **k: {"digest": "test"})
+        out = tmp_path / "artifact"
+        out.mkdir()
+        head = request_capture.capture(["digest"])
+        first = next(iter(head["suites"]["digest"]))
+        head["suites"]["digest"][first] = ["forged"]
+        (out / "requests.json").write_text(json.dumps({"head": head, "identical": True}))
+        decided = self._decide(out)
+        assert decided["combined_status"] == "not-run" and "requests differ" in str(decided["suites"])
+
     async def test_a_case_the_pr_changed_is_left_out_not_failed(self, finished_ab, tmp_path):
         import shutil
 
@@ -877,6 +902,13 @@ class TestWorkflowWiring:
         run = next(s for s in jobs["dispatch"]["steps"] if s.get("id") == "run")["run"]
         assert 'printf \'%s,%s\' "${suites}" "${SUITES}"' in run
 
+    def test_the_paid_a_b_is_skipped_only_on_identical_requests_and_dispatch_can_force_it(self, jobs):
+        assert "needs.detect.outputs.request_identical != 'true'" in jobs["ab"]["if"]
+        run = next(s for s in jobs["dispatch"]["steps"] if s.get("id") == "run")["run"]
+        assert '"${FULL_AB}" != "true"' in run and "prompt-requests-identical" in run
+        report = next(s for s in jobs["dispatch-report"]["steps"] if s.get("name", "").startswith("Report"))["run"]
+        assert "pass|pass-provisional|request-identical) state=success" in report
+
     def test_the_setup_action_saves_caches_only_on_push_to_master(self):
         action = (pa.REPO_ROOT / ".github" / "actions" / "poetry_setup" / "action.yml").read_text()
         saves = action.count("actions/cache/save@")
@@ -889,7 +921,8 @@ class TestReportStateMachine:
     BASE_ENV = {"GH_TOKEN": "x", "REPO": "o/r", "PR": "7", "SHA": "abc", "RUN_SUITES": "", "RESCORE_SUITES": "",
                 "JUDGES_CHANGED": "", "DEPENDENCY_ONLY": "false", "SMOKE_RESULT": "skipped",
                 "AB_RESULT": "skipped", "AB_STATUS": "", "AUTHOR_TYPE": "User", "BASE_RESULT": "success",
-                "BASE_STATUS": "pass", "BASE_REQUIRED": "", "RUN_URL": "https://run", "HEAD_REF": "claude/x"}
+                "BASE_STATUS": "pass", "BASE_REQUIRED": "", "RUN_URL": "https://run", "HEAD_REF": "claude/x",
+                "RESCORE_RESULT": "skipped"}
 
     @pytest.fixture(scope="class")
     @classmethod
@@ -941,6 +974,12 @@ class TestReportStateMachine:
         assert self._post(script, tmp_path, AUTHOR_TYPE="Bot", **bot)[0] == "success"
         (tmp_path / "u").mkdir()
         assert self._post(script, tmp_path / "u", AUTHOR_TYPE="User", **bot)[0] == "pending"
+
+    @pytest.mark.parametrize("rescore, state", [("success", "success"), ("failure", "failure")])
+    def test_identical_requests_pass_only_with_a_clean_rescore(self, script, tmp_path, rescore, state):
+        posted, _ = self._post(script, tmp_path, RUN_SUITES="x", BASE_REQUIRED="x", AB_RESULT="skipped",
+                               BASE_STATUS="request-identical", RESCORE_RESULT=rescore)
+        assert posted == state
 
     def test_an_a_b_that_did_not_finish_fails_and_says_so(self, script, tmp_path):
         state, comment = self._post(script, tmp_path, RUN_SUITES="x", AB_RESULT="cancelled", BASE_STATUS="pass")
