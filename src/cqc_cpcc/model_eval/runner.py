@@ -136,6 +136,12 @@ def classify_error(error: Exception) -> str:
     return "transport"
 
 
+def output_fingerprint(result) -> str:
+    """SHA-256 of the graded result without ``llm_request``: the request record carries the
+    correlation id and cached-token count, which differ between identical gradings."""
+    return hashlib.sha256(result.model_dump_json(exclude={"llm_request"}).encode()).hexdigest()
+
+
 async def _grade_once(case: EvalCase, files: dict, grade_fn: GradeFn) -> tuple:
     from cqc_cpcc.utilities.zip_grading_utils import build_submission_text_with_token_limit
 
@@ -193,7 +199,7 @@ async def run_model(
                 record.ok = True
                 record.detected = sorted({e.code for e in (result.detected_errors or [])})
                 record.total = float(result.total_points_earned)
-                record.output_sha256 = hashlib.sha256(result.model_dump_json().encode()).hexdigest()
+                record.output_sha256 = output_fingerprint(result)
                 record.compile_gate = gate.get("action")
                 record.validity = (gate.get("validity") or {}).get("status", "ok")
                 record.requirements = {

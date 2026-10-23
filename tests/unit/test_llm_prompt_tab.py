@@ -50,6 +50,24 @@ def test_the_tab_shows_each_message_as_code_with_the_privacy_caption():
     assert any("corr-1" in c.value for c in at.caption)
 
 
+def test_a_model_name_from_the_provider_is_not_live_markdown_in_the_header():
+    import re
+
+    # An unbalanced backtick plus a link and an image: every bracket and backtick is escaped.
+    steered = {**REQUEST, "model": "x` [click](http://evil) ![i](http://evil/p.png)"}
+    at = _app(_result(steered))
+    assert not at.exception
+    [header] = [c.value for c in at.caption if "correlation id" in c.value]
+    # No unescaped bracket survives, so no link or image can form; the bare URLs are code spans.
+    assert re.search(r"(?<!\\)[\[\]]", header) is None
+    assert "\\[click\\]" in header and "` http://evil `" in header
+    # Balanced backticks become a code span, whose content is never a link.
+    at = _app(_result({**REQUEST, "model": "x` [click](http://evil) `"}))
+    [header] = [c.value for c in at.caption if "correlation id" in c.value]
+    before, inside, after = header.partition("[click](http://evil)")
+    assert before.count("`") % 2 == 1 and inside and after.count("`") % 2 == 1
+
+
 def test_a_restored_result_says_the_prompt_was_not_kept():
     at = _app(_result(None))
     assert not at.exception

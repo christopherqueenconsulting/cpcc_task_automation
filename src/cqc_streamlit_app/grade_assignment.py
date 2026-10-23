@@ -2932,7 +2932,7 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
         from cqc_streamlit_app.code_viewer import render_submission_code
         render_submission_code(source_files, widget_key=student_name)
     with tabs[5]:
-        _render_llm_prompt_tab(result, student_name)
+        _render_llm_prompt_tab(result, student_name, f"{run_key}_{student_name}" if run_key else student_name)
     if CQC_OPENAI_DEBUG:
         with tabs[6]:
             from cqc_streamlit_app.utils import render_openai_debug_panel
@@ -2949,28 +2949,30 @@ PROMPT_PRIVACY_CAPTION = ("Contains this student's full submission and any name 
                           "tools your college has approved for student records.")
 
 
-def _render_llm_prompt_tab(result, student_name: str) -> None:
+def _render_llm_prompt_tab(result, student_name: str, widget_key: str) -> None:
     """The exact messages the grading call sent, one code block per message (never rendered as
     Markdown), with copy and download. Restored results have no prompt: it is never saved."""
-    from cqc_cpcc.prompt_export import has_hidden_characters, prompt_markdown
+    from cqc_cpcc.prompt_export import has_hidden_characters, header_value, prompt_markdown
 
     request = getattr(result, "llm_request", None)
     if not request:
         st.info("Prompt not kept for restored runs. Re-grade this student to see it.", icon=":material/info:")
         return
-    effort = request.get("effort") or "default"
-    st.caption(f"`{request.get('prompt') or request.get('prompt_id')}` · model `{request.get('model')}` · "
-               f"effort {effort} · timeout {request.get('timeout_s')} s · "
-               f"correlation id `{request.get('correlation_id') or 'none'}`")
+    # The model name comes back from the provider: never live Markdown.
+    header = (f"{header_value(request.get('prompt') or request.get('prompt_id'))} · "
+              f"model {header_value(request.get('model'))} · effort {header_value(request.get('effort') or 'default')} · "
+              f"timeout {header_value(request.get('timeout_s'))} s · "
+              f"correlation id {header_value(request.get('correlation_id') or 'none')}")
+    st.caption(render_safe_markdown(header))
     document = prompt_markdown(request, student_name)
     if has_hidden_characters(document):
         st.caption("Contains hidden characters (zero-width or bidi controls).", help="They are in the "
                    "submission or the instructions; look at the raw text before trusting what you see.")
     stem = sanitize_filename(student_name) or "student"
     with st.container(horizontal=True):
-        copy_to_clipboard_button(document, "Copy prompt as Markdown", key=f"copy_prompt_{student_name}")
+        copy_to_clipboard_button(document, "Copy prompt as Markdown", key=f"copy_prompt_{widget_key}")
         st.download_button("Download prompt (.md)", document, file_name=f"{stem}_prompt.md",
-                           mime="text/markdown", icon=":material/download:", key=f"prompt_md_{student_name}")
+                           mime="text/markdown", icon=":material/download:", key=f"prompt_md_{widget_key}")
     st.caption(PROMPT_PRIVACY_CAPTION)
     for i, message in enumerate(request.get("messages") or []):
         st.markdown(f"**{message.get('role', 'user')}**")

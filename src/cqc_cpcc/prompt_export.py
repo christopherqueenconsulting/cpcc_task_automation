@@ -26,6 +26,18 @@ COPY_BLOCKED = "Copy blocked here. Use the copy icon on each message, or Downloa
 _HIDDEN = re.compile("[​‌‍⁠﻿‎‏‪-‮⁦-⁩]")
 
 
+#: Line breaks of every kind and C0/C1 control characters: none may sit in a header line.
+_BREAKS = re.compile("[\r\n  \u0085\x00-\x1f\x7f-\x9f]")
+
+
+def header_value(value, limit: int = 120) -> str:
+    """One header field on one line: the model name comes from the provider's response and
+    the student label from a folder name, so neither may add a line, let alone a heading."""
+    text = _BREAKS.sub(" ", str(value if value is not None else ""))
+    text = " ".join(text.split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
 def fence_for(text: str) -> str:
     """A backtick fence one longer than the longest backtick run in ``text`` (at least 3)."""
     longest = max((len(m) for m in re.findall(r"`+", text or "")), default=0)
@@ -38,19 +50,20 @@ def has_hidden_characters(text: str) -> bool:
 
 def prompt_markdown(request: dict, student: Optional[str] = None) -> str:
     """The copied document: warning, header, then every message fenced under its role."""
-    model = request.get("model") or "unknown"
-    effort = request.get("effort")
+    model = header_value(request.get("model") or "unknown")
+    effort = header_value(request.get("effort") or "")
+    tag = header_value(request.get("prompt") or request.get("prompt_id") or "grading")
     lines = [WARNING, "",
-             f"# LLM prompt: {request.get('prompt') or request.get('prompt_id') or 'grading'}"
-             + (f" for {student}" if student else ""),
+             f"# LLM prompt: {tag}" + (f" for {header_value(student)}" if student else ""),
              f"- Model: {model}" + (f"@{effort}" if effort else ""),
-             f"- Timeout: {request.get('timeout_s')} s" if request.get("timeout_s") is not None else "- Timeout: default",
-             f"- Correlation id: {request.get('correlation_id') or 'none'}",
+             f"- Timeout: {header_value(request.get('timeout_s'))} s" if request.get("timeout_s") is not None
+             else "- Timeout: default",
+             f"- Correlation id: {header_value(request.get('correlation_id') or 'none')}",
              ""]
     for message in request.get("messages") or []:
         content = str(message.get("content") or "")
         fence = fence_for(content)
-        lines += [f"## {message.get('role') or 'user'}", "", fence, content, fence, ""]
+        lines += [f"## {header_value(message.get('role') or 'user', 40)}", "", fence, content, fence, ""]
     return "\n".join(lines).rstrip() + "\n"
 
 

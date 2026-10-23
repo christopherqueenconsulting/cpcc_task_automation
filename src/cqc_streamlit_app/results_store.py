@@ -99,7 +99,8 @@ def load_runs() -> list[dict]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if data.get("mode") != "errors_only":
-                data["results"] = [(sid, RubricAssessmentResult.model_validate(r))
+                # A saved file never holds the prompt; one that claims to is not trusted.
+                data["results"] = [(sid, RubricAssessmentResult.model_validate({**r, "llm_request": None}))
                                    for sid, r in data["results"]]
             else:
                 data["results"] = [(sid, summary) for sid, summary in data["results"]]
