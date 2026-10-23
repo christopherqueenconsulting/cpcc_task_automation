@@ -185,6 +185,9 @@ async def run_model(
             if budget.exhausted:
                 record.error_kind = "budget"
                 return record
+            # A task inherits the context it was created in, so last_call() can still hold a
+            # call made before this case. Only a new one is ours.
+            before = llm_gateway.last_call()
             try:
                 result, gate = await _grade_once(case, perturb(case, seed), grade_fn)
                 record.ok = True
@@ -199,10 +202,12 @@ async def run_model(
                 record.error_kind = classify_error(e)
                 logger.warning(f"[eval] {model} {case.case_id}#{repeat}: {record.error_kind}: {str(e)[:200]}")
             call = llm_gateway.last_call()
+            if call is before:
+                call = None
             completion = call.completion if call else None
             if call is not None:
                 record.prompt = call.prompt
-            if record.ok and record.validity not in (None, "ok"):
+            if record.ok and record.validity not in (None, "ok") and call is None:
                 # Rejected by the validity gate: no model call was made, nothing to charge.
                 completion = None
                 record.cost_usd = 0.0
