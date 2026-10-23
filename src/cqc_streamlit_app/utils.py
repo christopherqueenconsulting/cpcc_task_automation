@@ -1078,6 +1078,7 @@ def define_openrouter_model(
         default_use_auto_route: bool = False,
         default_model: str | None = None,
         role: str = "grading",
+        default_effort: str | None = None,
 ) -> Dict[str, Any]:
     """
     Presents OpenRouter model configuration with auto-routing option.
@@ -1086,6 +1087,7 @@ def define_openrouter_model(
         "use_auto_route": bool,
         "model": str,  # "openrouter/auto" or specific model ID
         "use_openrouter": True,
+        "effort": str | None,  # reasoning effort chosen for this run; None = the default
       }
 
     Defaults to the registry model for ``role`` (NOT the Auto Router). Grading is
@@ -1100,6 +1102,8 @@ def define_openrouter_model(
         default_model: Model pre-selected when auto-routing is off. None means the
             registry model for ``role`` (config/model_registry.json).
         role: Registry role whose model is the default ("grading", "feedback", ...)
+        default_effort: Effort pre-selected when the model supports it (for example the
+            effort the last section of the same assignment was graded at).
 
     Returns:
         Configuration dictionary for OpenRouter
@@ -1128,6 +1132,7 @@ def define_openrouter_model(
         )
 
     selected_model = "openrouter/auto"
+    discovery_entry: dict | None = None
 
     if not use_auto_route:
         # Fetch available models from OpenRouter
@@ -1206,6 +1211,7 @@ def define_openrouter_model(
                     (m for m in models if m.get("id") == selected_model),
                     None
                 )
+                discovery_entry = selected_model_info
                 if selected_model_info:
                     context_length = selected_model_info.get("context_length")
                     pricing = selected_model_info.get("pricing", {})
@@ -1226,11 +1232,94 @@ def define_openrouter_model(
     else:
         st.info("**Auto Router:** OpenRouter will automatically select the best model for your request.")
 
+    effort = _reasoning_effort_selectbox(
+        uk, role, selected_model, use_auto_route, discovery_entry, default_effort)
+
     return {
         "use_auto_route": use_auto_route,
         "model": selected_model,
         "use_openrouter": True,
+        "effort": effort,
     }
+
+
+def effort_options(model_id: str, discovery_entry: dict | None = None) -> list[str]:
+    """Reasoning efforts to offer for ``model_id``: its registry profile's list, else the
+    efforts OpenRouter's model data names, else none (only "Default" shows)."""
+    from cqc_cpcc.utilities.AI import model_registry
+
+    try:
+        profiled = model_registry.supported_efforts(model_id)
+    except Exception:  # noqa: BLE001 - a missing registry only hides the choices
+        profiled = []
+    if profiled:
+        return profiled
+    reasoning = (discovery_entry or {}).get("reasoning") or {}
+    listed = reasoning.get("supported_efforts") if isinstance(reasoning, dict) else None
+    known = set(model_registry.KNOWN_EFFORTS)
+    return [e for e in (listed or []) if isinstance(e, str) and e in known]
+
+
+def _default_effort_label(role: str, model_id: str) -> str:
+    """"Default (registry: high)" for the selectbox: what runs when nothing is chosen."""
+    from cqc_cpcc.utilities.AI import model_registry
+
+    try:
+        resolved = model_registry.resolve(role, override=model_id)  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001
+        return "Default"
+    where = "set in Settings" if os.environ.get(f"CQC_REASONING_EFFORT_{role.upper()}") else "app default"
+    return f"Default ({where}: {resolved.reasoning_effort or 'provider default'})"
+
+
+def _reasoning_effort_selectbox(uk: str, role: str, model_id: str, use_auto_route: bool,
+                                discovery_entry: dict | None, default_effort: str | None) -> str | None:
+    """The "Reasoning effort" selectbox. Returns the chosen effort, or ``None`` for Default.
+
+    Disabled under the Auto Router, which takes no effort. The key includes the model, so
+    changing the model offers that model's own efforts instead of a stale choice."""
+    if use_auto_route:
+        st.selectbox("Reasoning effort", ["Default"], key=f"openrouter_effort_{uk}_auto", disabled=True)
+        st.caption("Auto Router does not take an effort setting.")
+        return None
+    default_label = _default_effort_label(role, model_id)
+    options = [default_label] + effort_options(model_id, discovery_entry)
+    index = options.index(default_effort) if default_effort in options[1:] else 0
+    choice = st.selectbox(
+        "Reasoning effort", options, index=index, key=f"openrouter_effort_{uk}_{model_id}",
+        help="How long the model thinks before it answers. Low: fastest and cheapest, fine for "
+             "simple work. Medium: a balance. High: slower and costs more, more careful. Max: "
+             "slowest and costliest, use only for hard cases. Grade every student in a run at the "
+             "same effort so grades are comparable.")
+    if len(options) == 1:
+        st.caption("This model has no effort setting; the provider default applies.")
+        return None
+    if choice == default_label:
+        return None
+    if _effort_would_be_dropped(role, model_id, choice):
+        st.caption("This model is not on the app's list of known models, or the list gives it no effort "
+                   f"setting, so the app cannot send an effort for it: {choice} is not applied and the "
+                   "provider default runs.")
+    return choice
+
+
+def _effort_would_be_dropped(role: str, model_id: str, effort: str) -> bool:
+    """True when the model resolves ``effort`` to nothing (it is not sent)."""
+    from cqc_cpcc.utilities.AI import model_registry
+
+    try:
+        return model_registry.resolve(role, override=model_id, effort_override=effort).reasoning_effort_dropped  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001 - a caption never blocks the page
+        return False
+
+
+def model_id_has_profile(model_id: str) -> bool:
+    from cqc_cpcc.utilities.AI import model_registry
+
+    try:
+        return model_registry.normalize_model_id(model_id) in model_registry.load_registry().models
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def reset_session_key_value(key: str):

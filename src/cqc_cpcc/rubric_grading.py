@@ -423,6 +423,7 @@ async def grade_with_rubric(
         requirements=None,
         correlation_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        effort: Optional[str] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -445,6 +446,9 @@ async def grade_with_rubric(
         model_name: OpenRouter model id overriding the registry's grading model;
             "openrouter/auto" enables auto-routing. None uses the registry.
         temperature: Deprecated and ignored; sampling is set per model in the registry.
+        effort: Reasoning effort for this call, replacing the registry's effort when the
+            model supports it (otherwise none is sent). Ignored under auto-routing. The
+            effort that ran is stamped on the result as ``graded_with_model`` (``model@effort``).
         callback: Optional LangChain callback for compatibility
         source_files: ``{filename: temp_path}`` of the student's real files, used by the
             validity gate and the compile gate.
@@ -521,7 +525,9 @@ async def grade_with_rubric(
             prompt_id="rubric-grading",
             # Only when set: an unset id must leave the call exactly as before, so the
             # request-identical fast path of the prompt A/B still matches the base.
-            **{k: v for k, v in (("correlation_id", correlation_id), ("session_id", session_id)) if v},
+            **{k: v for k, v in (("correlation_id", correlation_id), ("session_id", session_id),
+                                 # Auto Router takes no effort: the control is disabled there.
+                                 ("effort_override", None if use_auto_route else effort)) if v},
         )
 
         # Log raw OpenAI response for debugging
@@ -555,7 +561,7 @@ async def grade_with_rubric(
             "validity_status": None, "validity_reason": None,
             "reconciliation": [], "execution_report": None,
             "detected_errors": tag_source(result.detected_errors, SOURCE_MODEL, only_untagged=False),
-            "graded_with_model": _graded_with(model_name, use_auto_route),
+            "graded_with_model": _graded_with(model_name, use_auto_route, effort),
             "code_version": get_version(),
             # The exact request, for the LLM Prompt tab; never persisted.
             "llm_request": llm_gateway.last_request_record("rubric-grading", "grading"),
@@ -788,23 +794,29 @@ def _find_compile_error_def(error_definitions):
     return candidates[0] if candidates else None
 
 
-def _graded_with(model_name: str, use_auto_route: bool) -> str:
-    """``model@effort`` for the result: the model that answered and the effort it ran at."""
+def _graded_with(model_name: str, use_auto_route: bool, effort: Optional[str] = None) -> str:
+    """``model@effort`` for the result: the model that answered and the effort it ran at.
+
+    The effort is the one the request carried (so a fallback model's own effort shows);
+    without a recorded request it is the effort the primary model resolves to."""
     from cqc_cpcc.utilities.AI import model_registry
 
     call = llm_gateway.last_call()
     model = call.model_used if call is not None else None
-    effort = None
+    used = None
     if use_auto_route:
         model = model or AUTO_ROUTE_MODEL
     else:
         try:
-            resolved = model_registry.resolve("grading", override=model_name or None)
+            resolved = model_registry.resolve("grading", override=model_name or None, effort_override=effort)
             model = model or resolved.model
-            effort = resolved.reasoning_effort
+            used = resolved.reasoning_effort
         except Exception:  # noqa: BLE001 - a label must never fail the grade
             model = model or model_name or "unknown"
-    return f"{model}@{effort}" if effort else str(model)
+        if call is not None and call.params is not None:
+            reasoning = call.params.get("reasoning")
+            used = reasoning.get("effort") if isinstance(reasoning, dict) else None
+    return f"{model}@{used}" if used else str(model)
 
 
 async def _reconcile(
