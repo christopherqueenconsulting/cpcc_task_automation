@@ -74,6 +74,11 @@ on:
         required: false
         type: boolean
         default: true
+      full_ab:
+        description: "ab mode: run the paid A/B even when every request is identical to the base's"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -93,6 +98,7 @@ jobs:
       any: ${{ steps.affected.outputs.any }}
       judges_changed: ${{ steps.affected.outputs.judges_changed }}
       dependency_only: ${{ steps.affected.outputs.dependency_only }}
+      request_identical: ${{ steps.requests.outputs.request_identical }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -132,11 +138,38 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # $0: capture the exact requests every suite that needs a run would send, at the head and
+      # at the base, with no model call. When all are byte-identical (messages, schema and model
+      # parameters), the paid A/B only measures run noise, so it is skipped and the ab-base-rule
+      # job re-checks the claim with the base's code. Anything else runs the full A/B.
+      - name: Are the requests identical to the base's? ($0)
+        id: requests
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          suites="$(python3 -c 'import json; print(",".join(json.load(open("affected.json"))["run"]))')"
+          if [ -z "${suites}" ]; then echo "request_identical=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if ! poetry run python -m cqc_cpcc.model_eval prompt-requests-identical --suites "${suites}" \
+              --base-ref "origin/${BASE_BRANCH}" --out evals/runs/requests; then
+            echo "request_identical=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload detection
         uses: actions/upload-artifact@v7
         with:
           name: prompt-eval-detect-${{ github.run_id }}
           path: affected.json
+          retention-days: 30
+
+      - name: Upload the request capture
+        if: steps.requests.outputs.request_identical == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-requests-${{ github.run_id }}
+          path: evals/runs/requests/requests.json
           retention-days: 30
 
   # Dependency-only change (lockfile / project file / docs, no suite affected): no model
@@ -223,7 +256,9 @@ jobs:
   rescore:
     # Grader-only changes: re-score master's last saved outputs with the PR's graders ($0).
     needs: detect
-    if: github.event_name == 'pull_request' && needs.detect.outputs.rescore != ''
+    if: >-
+      github.event_name == 'pull_request' &&
+      (needs.detect.outputs.rescore != '' || needs.detect.outputs.request_identical == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -245,7 +280,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SUITES: ${{ needs.detect.outputs.rescore }}
+          # On the request-identical fast path the suites that needed a run are re-scored too.
+          SUITES: ${{ needs.detect.outputs.request_identical == 'true' && format('{0},{1}', needs.detect.outputs.rescore, needs.detect.outputs.run) || needs.detect.outputs.rescore }}
         run: |
           set -euo pipefail
           mkdir -p evals/runs/prompt-rescore
@@ -276,6 +312,7 @@ jobs:
     needs: detect
     if: >-
       github.event_name == 'pull_request' && needs.detect.outputs.run != '' &&
+      needs.detect.outputs.request_identical != 'true' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]' &&
       !startsWith(github.head_ref, 'claude/') && !startsWith(github.head_ref, 'auto/') &&
@@ -418,6 +455,13 @@ jobs:
           name: prompt-eval-ab-${{ github.run_id }}
           path: ab-artifact
 
+      - name: Download the request capture (data)
+        if: needs.detect.outputs.request_identical == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: prompt-eval-requests-${{ github.run_id }}
+          path: ab-artifact
+
       - name: Re-decide with the base branch's detection, graders and rule
         id: decide
         shell: bash
@@ -485,6 +529,7 @@ jobs:
           SMOKE_RESULT: ${{ needs.dependency-smoke.result }}
           AB_RESULT: ${{ needs.ab.result }}
           AB_STATUS: ${{ needs.ab.outputs.ab_status }}
+          RESCORE_RESULT: ${{ needs.rescore.result }}
           AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           BASE_RESULT: ${{ needs.ab-base-rule.result }}
           BASE_STATUS: ${{ needs.ab-base-rule.outputs.ab_status }}
@@ -519,7 +564,16 @@ jobs:
               if [ -f results/prompt-eval-estimate-*/estimate.txt ]; then
                 echo; echo '```'; cat results/prompt-eval-estimate-*/estimate.txt; echo '```'
               fi
-              if [ "${AB_RESULT}" = "skipped" ] && [[ "${HEAD_REF}" == auto/model-* ]] && [ "${AUTHOR_TYPE}" = "Bot" ]; then
+              if [ "${BASE_STATUS}" = "request-identical" ]; then
+                # The base re-captured its own requests and they match the PR's byte for byte.
+                if ls results/prompt-eval-baserule-*/base-rule.md >/dev/null 2>&1; then echo; cat results/prompt-eval-baserule-*/base-rule.md; fi
+                if [ "${RESCORE_RESULT}" = "success" ]; then
+                  state="success"; description="Requests identical to the base: no model A/B needed (\$0)"
+                else
+                  state="failure"; description="Requests identical, but the re-score ended ${RESCORE_RESULT}"
+                  echo; echo "The re-score job ended with **${RESCORE_RESULT}**: ${RUN_URL}"
+                fi
+              elif [ "${AB_RESULT}" = "skipped" ] && [[ "${HEAD_REF}" == auto/model-* ]] && [ "${AUTHOR_TYPE}" = "Bot" ]; then
                 # Model promotion/rollback bot PRs: the Model Evaluation run and its cross-suite
                 # gate already evaluated the model change on every affected suite.
                 state="success"; description="Model change: evaluated by Model Evaluation"
@@ -905,6 +959,7 @@ jobs:
           MODELS: ${{ inputs.models }}
           JUDGES: ${{ inputs.judges }}
           DRY_RUN: ${{ inputs.dry_run }}
+          FULL_AB: ${{ inputs.full_ab }}
           BASE: ${{ steps.pr.outputs.base }}
           RUN_ID: ${{ github.run_id }}
         run: |
@@ -950,6 +1005,14 @@ jobs:
               if [ -n "${SUITES}" ] && [ "${SUITES}" != "all" ]; then suites="$(printf '%s,%s' "${suites}" "${SUITES}" \
                 | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)"; fi
               if [ -z "${suites}" ]; then echo "No suites affected (this PR's detection)"; exit 0; fi
+              # $0 first: when every request is identical to the base's, skip the paid A/B
+              # (dispatch-report re-checks the claim with the base's code). full_ab forces the run.
+              if [ "${FULL_AB}" != "true" ] && poetry run python -m cqc_cpcc.model_eval prompt-requests-identical \
+                  --suites "${suites}" --base-ref "origin/${BASE}" --out ../evals/runs/dispatch \
+                  && python3 -c 'import json,sys; sys.exit(0 if json.load(open("../evals/runs/dispatch/requests.json"))["identical"] else 1)'; then
+                echo "Requests identical to the base's: no model A/B"; cd ..; exit 0
+              fi
+              rm -f ../evals/runs/dispatch/requests.json
               poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${suites}" --base-ref "origin/${BASE}" \
                 "${models[@]}" "${judges[@]}" --out ../evals/runs/dispatch | tee ../run.log
               cd .. ;;
@@ -1079,7 +1142,7 @@ jobs:
             state=failure; description="A/B (maintainer run): run ${RUN_RESULT}, base-branch check ${DECIDE_OUTCOME}"
           else
             case "${AB_STATUS}" in
-              pass|pass-provisional) state=success;;
+              pass|pass-provisional|request-identical) state=success;;
               *) state=failure;;
             esac
             description="A/B (maintainer run): ${AB_STATUS:-unknown}"

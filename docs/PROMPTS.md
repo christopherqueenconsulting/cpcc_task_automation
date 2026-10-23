@@ -102,6 +102,7 @@ Evaluations are **event-driven only**, never on a timer:
 | A PR changes nothing a prompt depends on | `prompt-eval/ab` = success, "no suites affected" | $0 |
 | A PR changes only `poetry.lock`, `pyproject.toml` or docs (a dependency version bump, see below) | no model calls: the `dependency-smoke` job syncs the environment to the head lock (`poetry install --with test --sync`), imports every `cqc_cpcc` module, resolves every absolute import in `cqc_cpcc` and `cqc_streamlit_app` (function-level ones included), and checks that packages removed from the lock are gone; `prompt-eval/ab` = success, "dependency-only change; import smoke passed" (failure if any check fails) | $0 |
 | A PR changes only grader code | re-score master's saved outputs with the new graders | $0 |
+| A PR's affected suites send byte-identical requests (messages, schema, model parameters) | no model A/B: re-score master's saved outputs; `ab-base-rule` re-checks the requests with the base's code | $0 |
 | A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, or a model-registry role | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap for suites with ≥30 cases (the composite must be non-inferior; a grader fails it only on a clear drop, see below), on the holdout split, or on all cases when the suite's prompts render the same request as the base; absolute margin otherwise; then re-decided by the `ab-base-rule` job with the base branch's detection, graders and rule, and both must pass; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1.6 projected on one model (from #398's $0.89 at repeats 2; PR #404), up to ~$5.3 worst case |
 | That PR is merged | the affected suites run on master; `prompt-history.jsonl` and `PROMPT_STATUS.md` are updated on the `model-eval-state` branch; "Prompt needs work: <id>" issues open (or close when passing again) | ~$0.9 (one side; PR #404) |
 | A new model is considered (weekly free discovery finds a candidate, the current model changed, or a dispatch) | the Model Evaluation workflow grades it, then the **cross-suite gate** runs the winner on every other suite of the roles it would take; promotion needs both ([`MODEL_EVALUATION.md`](MODEL_EVALUATION.md)) | ≤ $10 + suites |
@@ -131,6 +132,26 @@ in `model_policy.json`.
   least 30). Known limit: response-side code (scoring engine, compile gate, validity and
   requirement coverage, parsers) can still be tuned on dev cases, and the all-cases split
   does not guard against that.
+
+**Request-identical changes skip the paid A/B.** Many shared-file changes (transport,
+timeouts, logging) send byte-identical requests, and a paid A/B of them only measures run
+noise: #398 failed two A/Bs that way. So before any model call:
+
+- The `detect` job runs `prompt-requests-identical`. For every suite that needs a run, it
+  captures the exact request body each case would send (messages, response schema and every
+  model parameter) at the head and at the base. It replaces the OpenRouter client with one
+  that records and refuses to send, so there are no model calls and the cost is $0.
+- If every suite's requests match, the paid A/B is skipped. The suites are re-scored on
+  master's saved outputs instead ($0). `ab-base-rule` then re-captures the base's requests
+  with the base's own code and compares them with the PR's capture. Only an exact match
+  passes (`request-identical`).
+- Any difference, error or missing capture runs the full paid A/B, as before. A maintainer
+  dispatch can force it with `full_ab`.
+
+What the fast path does not cover: code that handles the model's answer (parsing, scoring)
+on live output. The re-score runs the PR's graders on saved outputs, and the unit suite
+(including the stub-transport tests) runs as its own required check. Neither replays a live
+answer through the PR's parsing code. A record-and-replay A/B is the follow-up for that.
 
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.
@@ -207,6 +228,7 @@ Commands (all under `poetry run python -m cqc_cpcc.model_eval`):
 - `suite list` · `suite run --suite <id|all> [--model m@effort] [--judges] [--dry-run]` · `suite score --suite <id> --raw <raw_outputs.jsonl>`
 - `prompts-affected --base-ref origin/master` (what a change needs)
 - `prompt-ab --suites a,b --base-ref origin/master [--judges]`
+- `prompt-requests --suites a,b --out <file>` and `prompt-requests-identical --suites a,b --base-ref <ref> --out <dir>` (capture and compare the exact requests; $0)
 - `prompt-ab-decide --dir <A/B artifact> --head-root <PR tree> --base-sha <sha> --head-sha <sha>` (run from a base-branch checkout; the CI's base-branch check)
 - `prompt-calibrate [--apply]` (run every suite on its current model and propose thresholds)
 - `prompt-record`, `prompt-rescore`, `suite-gate` (used by the workflows)

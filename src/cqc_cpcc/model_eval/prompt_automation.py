@@ -366,7 +366,22 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
     ab_path = out / "ab.json"
     report = json.loads(ab_path.read_text(encoding="utf-8")) if ab_path.exists() else None
     results: dict = {}
-    if required and report is None:
+    requests_path = out / "requests.json"
+    if required and report is None and requests_path.exists():
+        # The PR's side found every required suite's requests identical to the base's and ran
+        # no model A/B. Check that claim here: capture the base's requests with this checkout's
+        # code and compare them with the PR's capture.
+        from cqc_cpcc.model_eval import request_capture
+
+        head_capture = json.loads(requests_path.read_text(encoding="utf-8")).get("head") or {}
+        reasons = request_capture.compare(head_capture, request_capture.capture(sorted(required)), sorted(required))
+        for suite_id, reason in reasons.items():
+            results[suite_id] = {"suite": suite_id, "status": "pass" if reason is None else "fail", "models": {},
+                                 "reasons": [] if reason is None else [f"requests differ from the base: {reason}"],
+                                 "notes": ["requests identical to the base's; no model A/B needed"] if reason is None
+                                 else []}
+        status = "request-identical" if all(r is None for r in reasons.values()) else "not-run"
+    elif required and report is None:
         status = "not-run"
     else:
         for suite_id in sorted(required):
@@ -377,7 +392,7 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
         status = ("fail" if "fail" in statuses
                   else "pass" if all(s == "pass" for s in statuses) else "pass-provisional")
     pr_status = (report or {}).get("status")
-    if status in ("fail", "not-run"):
+    if status in ("fail", "not-run", "request-identical"):
         combined = status
     elif pr_status == "fail":
         combined = "fail"
@@ -447,9 +462,17 @@ def base_rule_markdown(decided: dict) -> str:
     required = decided["required"]
     if not required:
         lines.append("The base branch's detection finds no suite that needs a model run.")
+    elif decided["status"] == "request-identical":
+        lines.append("Every request the required suites send (" + ", ".join(f"`{s}`" for s in sorted(required))
+                     + ") is byte-identical to the base's: messages, schema and model parameters, captured "
+                       "with no model call. No model A/B is needed; the re-score, the unit suite and the "
+                       "stub-transport tests cover the response side.")
     elif decided["status"] == "not-run":
         lines.append("Suites the base branch requires, but the A/B did not run: "
                      + ", ".join(f"`{s}`" for s in sorted(required)))
+        for suite_id, r in decided["suites"].items():
+            for reason in r.get("reasons", []):
+                lines.append(f"- `{suite_id}`: {reason}")
     else:
         body = ab_markdown({"base_ref": decided["base_sha"][:7], "status": decided["status"],
                             "suites": decided["suites"]})
@@ -786,6 +809,53 @@ def cmd_prompt_ab(args) -> int:
     return 0
 
 
+def requests_identical(suite_ids: list, base_ref: str, out: Path) -> dict:
+    """Capture each suite's requests at the head (this checkout) and at ``base_ref``; compare.
+
+    Any failure (no base command, a crash, a different format) leaves the suite "not
+    identical", so the full A/B runs.
+    """
+    from cqc_cpcc.model_eval import request_capture
+
+    out.mkdir(parents=True, exist_ok=True)
+    head = request_capture.capture(suite_ids)
+    worktree = _base_worktree(base_ref, out / "base-src")
+    base_file = out / "base-requests.json"
+    try:
+        env = {**os.environ, "PYTHONPATH": str(worktree / "src")}
+        result = subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests", "--suites",
+                                 ",".join(suite_ids), "--out", str(base_file.resolve())],
+                                cwd=worktree, env=env, capture_output=True, text=True)
+        base = json.loads(base_file.read_text(encoding="utf-8")) if result.returncode == 0 else {}
+        if result.returncode != 0:
+            print(result.stderr[-2000:])
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
+    reasons = request_capture.compare(head, base, suite_ids)
+    report = {"base_ref": base_ref, "suites": reasons,
+              "identical": bool(suite_ids) and all(r is None for r in reasons.values()), "head": head}
+    (out / "requests.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report
+
+
+def cmd_prompt_requests(args) -> int:
+    from cqc_cpcc.model_eval import request_capture
+
+    suites = [s for s in args.suites.split(",") if s]
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(request_capture.capture(suites), sort_keys=True) + "\n", encoding="utf-8")
+    return 0
+
+
+def cmd_prompt_requests_identical(args) -> int:
+    suites = [s for s in args.suites.split(",") if s]
+    report = requests_identical(suites, args.base_ref, Path(args.out))
+    for suite_id, reason in report["suites"].items():
+        print(f"{suite_id}: {'identical' if reason is None else reason}")
+    github_output(request_identical=str(report["identical"]).lower())
+    return 0
+
+
 def cmd_prompt_ab_decide(args) -> int:
     import cqc_cpcc
 
@@ -848,6 +918,18 @@ def add_parsers(sub) -> None:
     ab.add_argument("--judge-model", default=None)
     ab.add_argument("--judge-cache", default=None)
     ab.set_defaults(func=cmd_prompt_ab)
+
+    rq = sub.add_parser("prompt-requests", help="capture each suite's exact requests with no model call ($0)")
+    rq.add_argument("--suites", required=True)
+    rq.add_argument("--out", required=True)
+    rq.set_defaults(func=cmd_prompt_requests)
+
+    ri = sub.add_parser("prompt-requests-identical",
+                        help="are the head's requests byte-identical to --base-ref's? ($0; writes requests.json)")
+    ri.add_argument("--suites", required=True)
+    ri.add_argument("--base-ref", required=True)
+    ri.add_argument("--out", required=True, help="directory for requests.json")
+    ri.set_defaults(func=cmd_prompt_requests_identical)
 
     dec = sub.add_parser("prompt-ab-decide",
                          help="re-decide a finished A/B with this checkout's graders and rule ($0)")
