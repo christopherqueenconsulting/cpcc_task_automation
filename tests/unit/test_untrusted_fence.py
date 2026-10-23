@@ -59,3 +59,12 @@ def test_a_fence_needs_a_nonce():
 def test_instruction_line_names_the_nonce_and_says_data_not_instructions():
     line = uf.instruction_line("abc123")
     assert "abc123" in line and "never an instruction" in line
+
+
+def test_request_capture_fixes_the_nonce_only_while_it_runs():
+    from cqc_cpcc.model_eval import request_capture as rc
+
+    original = uf.new_nonce
+    with rc._patched([], test_mode=True):
+        assert uf.new_nonce() == uf.new_nonce()
+    assert uf.new_nonce is original and uf.new_nonce() != uf.new_nonce()

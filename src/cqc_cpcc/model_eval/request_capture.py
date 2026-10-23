@@ -126,6 +126,7 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     finally:
         (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
          llm_gateway.structured) = saved
+        untrusted_fence.new_nonce = saved_nonce
         if saved_analytics is None:
             os.environ.pop("POSTHOG_LLM_ANALYTICS", None)
         else:
