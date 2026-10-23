@@ -847,7 +847,7 @@
   },
   "csc113_week4_reflection_rubric": {
     "rubric_id": "csc113_week4_reflection_rubric",
-    "rubric_version": "1.0",
+    "rubric_version": "1.1",
     "title": "CSC-113 Week 4 Reflection Rubric",
     "description": "Week 4 reflection rubric for CSC-113 (Artificial Intelligence Fundamentals).",
     "course_ids": [
@@ -1012,19 +1012,19 @@
           {
             "label": "Proficient",
             "score_min": 3,
-            "score_max": 4,
+            "score_max": 3,
             "description": "Meets basic requirements with minor issues. Generally clear and organized."
           },
           {
             "label": "Developing",
             "score_min": 2,
-            "score_max": 3,
+            "score_max": 2,
             "description": "Partially meets requirements. Some organization or clarity issues."
           },
           {
             "label": "Beginning",
             "score_min": 0,
-            "score_max": 2,
+            "score_max": 1,
             "description": "Does not meet format requirements. Significantly unclear or disorganized."
           }
         ]
@@ -1055,7 +1055,7 @@
   },
   "csc113_week5_reflection_rubric": {
     "rubric_id": "csc113_week5_reflection_rubric",
-    "rubric_version": "1.0",
+    "rubric_version": "1.1",
     "title": "CSC-113 Week 5 Reflection Rubric",
     "description": "Week 5 reflection rubric for CSC-113 (Artificial Intelligence Fundamentals).",
     "course_ids": [
@@ -1220,19 +1220,19 @@
           {
             "label": "Proficient",
             "score_min": 3,
-            "score_max": 4,
+            "score_max": 3,
             "description": "Meets basic requirements with minor issues. Generally clear and organized."
           },
           {
             "label": "Developing",
             "score_min": 2,
-            "score_max": 3,
+            "score_max": 2,
             "description": "Partially meets requirements. Some organization or clarity issues."
           },
           {
             "label": "Beginning",
             "score_min": 0,
-            "score_max": 2,
+            "score_max": 1,
             "description": "Does not meet format requirements. Significantly unclear or disorganized."
           }
         ]
@@ -1263,7 +1263,7 @@
   },
   "csc113_week6_reflection_rubric": {
     "rubric_id": "csc113_week6_reflection_rubric",
-    "rubric_version": "1.0",
+    "rubric_version": "1.1",
     "title": "CSC-113 Week 6 Reflection Rubric",
     "description": "Week 6 reflection rubric for CSC-113 (Artificial Intelligence Fundamentals). Focus: recurring task selection, prompt design, testing, trade-offs, and presentation requirements.",
     "course_ids": [
@@ -1463,19 +1463,19 @@
           {
             "label": "Proficient",
             "score_min": 3,
-            "score_max": 4,
+            "score_max": 3,
             "description": "Meets basic requirements with minor issues. Generally clear and complete."
           },
           {
             "label": "Developing",
             "score_min": 2,
-            "score_max": 3,
+            "score_max": 2,
             "description": "Partially meets requirements. May be missing elements or fall short/exceed length significantly. Organization issues present."
           },
           {
             "label": "Beginning",
             "score_min": 0,
-            "score_max": 2,
+            "score_max": 1,
             "description": "Does not meet format requirements. Missing multiple required elements. Significantly unclear or disorganized."
           }
         ]
@@ -1506,7 +1506,7 @@
   },
   "csc113_week7_reflection_rubric": {
     "rubric_id": "csc113_week7_reflection_rubric",
-    "rubric_version": "1.0",
+    "rubric_version": "1.1",
     "title": "CSC-113 Week 7 Reflection Rubric",
     "description": "Week 7 reflection rubric for CSC-113 (Artificial Intelligence Fundamentals).",
     "course_ids": [
@@ -1671,19 +1671,19 @@
           {
             "label": "Proficient",
             "score_min": 3,
-            "score_max": 4,
+            "score_max": 3,
             "description": "Meets basic requirements with minor issues. Generally clear and complete."
           },
           {
             "label": "Developing",
             "score_min": 2,
-            "score_max": 3,
+            "score_max": 2,
             "description": "Partially meets requirements. May be missing elements or fall short/exceed length. Organization issues present."
           },
           {
             "label": "Beginning",
             "score_min": 0,
-            "score_max": 2,
+            "score_max": 1,
             "description": "Does not meet format requirements. Missing multiple required elements. Significantly unclear or disorganized."
           }
         ]
@@ -1714,7 +1714,7 @@
   },
   "csc113_week8_reflection_rubric": {
     "rubric_id": "csc113_week8_reflection_rubric",
-    "rubric_version": "1.0",
+    "rubric_version": "1.1",
     "title": "CSC-113 Week 8 Reflection Rubric",
     "description": "Week 8 reflection rubric for CSC-113 (Artificial Intelligence Fundamentals).",
     "course_ids": [
@@ -1879,19 +1879,19 @@
           {
             "label": "Proficient",
             "score_min": 3,
-            "score_max": 4,
+            "score_max": 3,
             "description": "Meets basic requirements with minor issues. Generally clear and complete."
           },
           {
             "label": "Developing",
             "score_min": 2,
-            "score_max": 3,
+            "score_max": 2,
             "description": "Partially meets requirements. May be missing elements or fall short/exceed length. Organization issues present."
           },
           {
             "label": "Beginning",
             "score_min": 0,
-            "score_max": 2,
+            "score_max": 1,
             "description": "Does not meet format requirements. Missing multiple required elements. Significantly unclear or disorganized."
           }
         ]
@@ -1922,7 +1922,7 @@
   },
   "csc113_final_reflection_rubric": {
     "rubric_id": "csc113_final_reflection_rubric",
-    "rubric_version": "1.0",
+    "rubric_version": "1.1",
     "title": "CSC-113 Final Reflection Rubric",
     "description": "Final reflection rubric for CSC-113 (Artificial Intelligence Fundamentals).",
     "course_ids": [
@@ -2087,19 +2087,19 @@
           {
             "label": "Proficient",
             "score_min": 3,
-            "score_max": 4,
+            "score_max": 3,
             "description": "Meets basic requirements with minor issues. Addresses all elements, though integration could be stronger. Generally clear and organized."
           },
           {
             "label": "Developing",
             "score_min": 2,
-            "score_max": 3,
+            "score_max": 2,
             "description": "Partially meets requirements. May be missing depth in one or more elements, fall short/exceed length significantly, or have organizational issues that affect clarity."
           },
           {
             "label": "Beginning",
             "score_min": 0,
-            "score_max": 2,
+            "score_max": 1,
             "description": "Does not meet format requirements. Missing required elements or addresses them superficially. Significantly unclear, disorganized, or incomplete."
           }
         ]
@@ -2130,7 +2130,7 @@
   },
   "csc134_cpp_exam_rubric": {
     "rubric_id": "csc134_cpp_exam_rubric",
-    "rubric_version": "3.2",
+    "rubric_version": "3.3",
     "title": "CSC 134 C++ Program Performance Rubric",
     "description": "Aligned to the official BrightSpace Program Performance Rubric for CSC134 (C++). Program Performance is scored using detected error counts. Identify all major and minor errors first, then select the performance level based on error counts. Report every major and minor error exactly as you find it; never convert minor errors into major errors yourself. The scoring step does that automatically afterwards: each different error type counts once, however often it occurs, and every 4 different minor error types count as 1 Major Error.",
     "course_ids": [
@@ -2236,7 +2236,7 @@
       },
       {
         "label": "Unsatisfactory",
-        "score_min": 0,
+        "score_min": 1,
         "score_max": 8.24
       },
       {
