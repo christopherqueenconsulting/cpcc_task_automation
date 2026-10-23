@@ -394,6 +394,7 @@ class TestCachedErrorOnlyDisplay:
                 pytest.fail(f"display_cached_error_only_results raised unexpected exception: {e}")
 
 
+@pytest.mark.unit
 def test_similarity_label_ignores_a_missing_or_non_numeric_ratio():
     """The results-table cell: "" without a ratio or on a stand-in result object; the
     label only when the saved float is at or above the threshold."""
