@@ -72,6 +72,34 @@ class TestCoverage:
         assert plan.uncovered_conditions() == ["C1"]
 
 
+class TestIndependentEvidence:
+    def _plan(self, source):
+        return _plan(cases=[ec.TestCase(id="X1", stdin="40\n", source=source, boundary_of=["C1"],
+                                        expected_output="x\n", validated=True)],
+                     condition_map={"C1": ["X1"]})
+
+    def test_sample_only_plan_has_no_independent_cases(self):
+        plan = self._plan("sample")
+        assert plan.independent_cases() == [] and plan.sample_only
+        assert plan.covered_by_independent("C1") is False
+
+    @pytest.mark.parametrize("source", ["llm", "manual"])
+    def test_llm_and_manual_cases_are_independent(self, source):
+        plan = self._plan(source)
+        assert [c.id for c in plan.independent_cases()] == ["X1"] and not plan.sample_only
+        assert plan.covered_by_independent("C1") is True and plan.covered_by_independent("C9") is False
+
+    def test_a_plan_with_no_conditions_is_not_covered_by_a_sample(self):
+        plan = _plan(cases=[ec.TestCase(id="S1", stdin="1\n", source="sample", expected_output="x\n",
+                                        validated=True)], conditions=[], condition_map={})
+        assert plan.uncovered_conditions() == [] and plan.sample_only
+
+    def test_disagreeing_sample_and_unvalidated_case_are_not_independent_or_usable(self):
+        plan = self._plan("llm")
+        plan.cases[0].disagrees_with_instructions = True
+        assert plan.usable_cases() == [] and plan.independent_cases() == []
+
+
 def _zip(entries: dict) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
@@ -156,6 +184,21 @@ class TestLoadSolutionSources:
     def test_unsafe_names_refused(self, name):
         with pytest.raises(ec.SolutionLoadError, match="unsafe"):
             ec.load_solution_sources(b"class A {}", name)
+
+    def test_symlinks_are_skipped_and_big_files_refused_before_reading(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "Secret.java").write_text("class Secret {}")
+        folder = tmp_path / "sol"
+        folder.mkdir()
+        (folder / "Main.java").write_text("class Main {}")
+        (folder / "Link.java").symlink_to(outside / "Secret.java")
+        assert [f.name for f in ec.load_solution_sources(folder).files] == ["Main.java"]
+        with pytest.raises(ec.SolutionLoadError, match="cannot read"):
+            ec.load_solution_sources(folder / "Link.java")
+        (folder / "Big.java").write_text("x" * (ec.MAX_SOLUTION_FILE_BYTES + 1))
+        with pytest.raises(ec.SolutionLoadError, match="too large"):
+            ec.load_solution_sources(folder / "Big.java")
 
     def test_missing_file(self, tmp_path):
         with pytest.raises(ec.SolutionLoadError, match="cannot read"):

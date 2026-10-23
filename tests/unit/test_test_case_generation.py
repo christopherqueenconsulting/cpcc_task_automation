@@ -67,6 +67,12 @@ class TestParseSampleRuns:
         [run] = tcg.parse_sample_runs(text)
         assert "Print the result" not in run.expected_output
 
+    def test_a_printed_list_or_labelled_result_is_not_input(self):
+        [run] = tcg.parse_sample_runs("Sample Output:\nArray: [1, 2, 3]\nYour grade: B\n")
+        assert run.stdin == ""
+        [run] = tcg.parse_sample_runs("Sample Run:\nEnter a number: 4\nArray: [1, 2, 3]\nYour grade: B\n")
+        assert run.stdin == "4\n"
+
     def test_no_sample_means_no_runs(self):
         assert tcg.parse_sample_runs("Write a program that adds two numbers.") == []
         assert tcg.parse_sample_runs("") == []
@@ -169,7 +175,7 @@ def _raw(conditions, cases):
 
 class TestNormalize:
     def test_caps_at_six_and_keeps_boundary_coverage_first(self):
-        conditions = [(f"C{i}", f"cond {i}", "selection") for i in range(1, 5)]
+        conditions = [(f"C{i}", f"condition {name}", "selection") for i, name in enumerate("abcd", 1)]
         cases = [(f"T{i}", f"filler {i}", [str(i)], []) for i in range(1, 8)]
         cases.append(("T8", "edge", ["40", "10"], ["C1", "C2", "C3", "C4"]))
         out = tcg.normalize_suggestion(_raw(conditions, cases))
@@ -183,6 +189,20 @@ class TestNormalize:
             [("x", "edge", ["40"], ["C7", "C99"])]))
         assert out.conditions[0].id == "C1"
         assert out.cases[0].id == "T1" and out.cases[0].boundary_of == ["C1"]
+
+    def test_a_claim_with_the_wrong_value_is_reported_uncovered(self):
+        out = tcg.normalize_suggestion(_raw(
+            [("C1", "overtime after 40 hours", "selection")],
+            [("T1", "typical", ["10", "20"], ["C1"]), ("T2", "edge", ["41", "20"], ["C1"])]))
+        assert [c.boundary_of for c in out.cases] == [[], ["C1"]]  # 41 is within 1 of 40
+        wrong = tcg.normalize_suggestion(_raw(
+            [("C1", "overtime after 40 hours", "selection")], [("T1", "typical", ["10", "20"], ["C1"])]))
+        assert wrong.cases[0].boundary_of == [] and tcg.uncovered_conditions(wrong) == ["C1"]
+
+    def test_a_condition_without_a_number_keeps_its_claim(self):
+        out = tcg.normalize_suggestion(_raw(
+            [("C1", "repeat until the input is valid", "loop")], [("T1", "bad then good", ["x", "5"], ["C1"])]))
+        assert out.cases[0].boundary_of == ["C1"]
 
     def test_uncovered_conditions_are_reported(self):
         out = tcg.normalize_suggestion(_raw(
@@ -224,6 +244,14 @@ class TestSuggestTestCases:
         a = await tcg.suggest_test_cases("Pay overtime over 40 hours.", "print(1)", "python")
         b = await tcg.suggest_test_cases(" Pay overtime over 40 hours. ", "print(1)", "python")
         assert a is b and len(gateway) == 1
+
+    async def test_cache_is_bounded(self, gateway, monkeypatch):
+        monkeypatch.setattr(tcg, "_SUGGESTION_CACHE_MAX", 3)
+        for i in range(5):
+            await tcg.suggest_test_cases(f"i{i}", "s", "python")
+        assert len(tcg._SUGGESTION_CACHE) == 3
+        await tcg.suggest_test_cases("i4", "s", "python")
+        assert len(gateway) == 5  # the newest is still cached
 
     async def test_cache_key_covers_solution_language_and_model(self, gateway):
         await tcg.suggest_test_cases("i", "s1", "python")
@@ -323,7 +351,7 @@ class TestValidate:
         assert result.ok
         assert [(d.case_id, d.reason) for d in result.dropped] == [("T1", reason)]
         assert [c.id for c in result.cases] == ["T2"]
-        assert any("T1 was dropped" in w for w in result.warnings)
+        assert any(w.startswith('Dropped "T1": the solution') for w in result.warnings)
 
     def test_solution_compile_failure_turns_the_feature_off(self):
         runner = _fake_runner([], compile_ok=False)
@@ -362,7 +390,7 @@ class TestValidate:
         result = tcg.validate_cases_on_solution(SOLUTION, cases, conditions=conditions,
                                                 runner=_fake_runner(outcomes))
         assert result.condition_map == {"C1": []}
-        assert any("No usable boundary case for: C1" in w for w in result.warnings)
+        assert "No test covers the exact edge of: over 40." in result.warnings
         plan = tcg.build_plan(SOLUTION, result, conditions)
         assert plan.uncovered_conditions() == ["C1"]
 
@@ -374,13 +402,41 @@ class TestValidate:
         assert result.condition_map == {"C1": ["T1"], "C2": ["T1", "T2"]}
         assert tcg.build_plan(SOLUTION, result, conditions).uncovered_conditions() == []
 
-    def test_sample_that_disagrees_warns_but_stays(self):
+    def test_sample_that_disagrees_is_visible_but_not_usable(self):
         case = ec.TestCase(id="S1", label="Sample run 1", stdin="4\n", source="sample")
         runner = _fake_runner(lambda cs: [_case_outcome("S1", "Square: 17\n")])
         result = tcg.validate_cases_on_solution(SOLUTION, [case], runner=runner,
                                                 sample_outputs={"S1": "Square: 16"})
-        assert [c.id for c in result.cases] == ["S1"]
-        assert any("may disagree" in w for w in result.warnings)
+        assert [c.id for c in result.cases] == ["S1"] and result.cases[0].disagrees_with_instructions
+        assert ('Sample run 1 shows "Square: 16" but the solution prints "Square: 17". Fix the '
+                'instructions or the solution, or delete this sample.') in result.warnings
+        plan = tcg.build_plan(SOLUTION, result)
+        assert plan.cases and "S1" not in {c.id for c in plan.usable_cases()}
+        assert plan.sample_only
+        agreeing = plan.model_copy(deep=True)
+        agreeing.cases[0].disagrees_with_instructions = False
+        assert agreeing.plan_hash != plan.plan_hash and [c.id for c in agreeing.usable_cases()] == ["S1"]
+
+    def test_duplicate_case_ids_are_refused(self):
+        def runner(*a, **k):
+            raise AssertionError("not called")
+
+        dup = [ec.TestCase(id="T1", stdin="1\n"), ec.TestCase(id="T1", stdin="2\n")]
+        result = tcg.validate_cases_on_solution(SOLUTION, dup, runner=runner)
+        assert result.status == "no_valid_cases" and "duplicate" in result.reason
+
+    def test_cpp_read_past_the_end_is_flagged_for_review(self):
+        cpp = ec.SolutionSources("cpp", (ec.SourceFile("main.cpp", "int main(){}"),))
+        # Two reads recorded for a one-line input: the second cin failed unseen.
+        runner = _fake_runner(lambda cs: [_case_outcome("T1", reads=[(1, 0, 4), (2, 2, 9)]),
+                                          _case_outcome("T2", reads=[(1, 0, 4)])])
+        result = tcg.validate_cases_on_solution(cpp, _cases("40\n", "40\n"), runner=runner)
+        assert [c.needs_review for c in result.cases] == [True, False]
+        assert any("cannot detect reading past the end of input in C/C++".lower() in w.lower()
+                   for w in result.warnings)
+        assert not any(c.needs_review for c in tcg.validate_cases_on_solution(
+            SOLUTION, _cases("40\n"), runner=_fake_runner(
+                lambda cs: [_case_outcome("T1", reads=[(1, 0, 4), (2, 2, 9)])])).cases)
 
     def test_sample_that_agrees_modulo_format_is_silent(self):
         case = ec.TestCase(id="S1", label="Sample run 1", stdin="4\n", source="sample")
@@ -531,6 +587,15 @@ class TestRegistryAndSuite:
         assert graders["condition_recall"](case, {"conditions": [], "cases": []}) == 0.0
         seven = {**perfect, "cases": perfect["cases"] * 4}
         assert graders["case_limit"](case, seven) == 0.0
+
+    def test_right_value_claimed_for_the_wrong_condition_scores_zero(self):
+        case = {c.case_id: c for c in self.suite.cases()}["payroll__numbered"]
+        boundary_hit = {g.name: g.fn for g in self.suite.graders}["boundary_hit"]
+        payload = {
+            "conditions": [{"id": "C1", "text": "the program prints a total", "kind": "selection"}],
+            "cases": [{"id": "T1", "inputs": ["40", "0", "80"], "boundary_of": ["C1"]}],
+        }
+        assert boundary_hit(case, payload) == 0.0
 
     def test_gold_boundary_values_are_numerically_compared(self):
         from cqc_cpcc.model_eval.suites import stdin_cases

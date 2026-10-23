@@ -5,7 +5,7 @@ reference solution in, stdin test cases out. **No case derives from a real submi
 assignment export or any student work.** The six assignments (Payroll and OrderTotal in Java,
 grades and guess in Python, shipping and temperature in C++) are written in
 `src/cqc_cpcc/model_eval/suite_datasets.py` (`TESTCASE_SPECS`), each in a numbered and a prose
-wording, 12 cases in all. Every program carries the allowlisted synthetic author name from
+wording, so the 12 items are 6 programs x 2 wordings. Every program carries the allowlisted synthetic author name from
 `scripts/pii_guard.py`.
 
 Regenerate with:
@@ -17,8 +17,8 @@ poetry run python -m cqc_cpcc.model_eval build-suite-datasets
 `cases.jsonl` is generated; a unit test fails when it differs from the builder. Do not edit it
 by hand.
 
-Labels (`labels.conditions`) come from construction, so they are drafts until a human reviews
-them (`labels_reviewed_by` is null). Each names a selection or loop condition the instructions
+Labels (`labels.conditions`) come from construction. `labels_reviewed_by` is null, so the labels
+are unreviewed: an instructor must review them before they count as gold. Each names a selection or loop condition the instructions
 state, keyword groups that recognise it in the model's list, and the input values that sit on
 its boundary (for example `40` and `41` for "over 40 hours", `0` and `81` for a range check).
 

@@ -7,8 +7,9 @@ graders are deterministic; the suite never runs a program (the sandbox is not ne
 prompt evaluation).
 
 - ``condition_recall``: share of the named conditions the model listed.
-- ``boundary_hit``: share of the named conditions with a case that both contains a boundary
-  value on one of its input lines and claims a boundary (``boundary_of``).
+- ``boundary_hit``: share of the named conditions with a case that contains a boundary value
+  on one of its input lines and claims a condition that matches that gold condition. It
+  measures that the value was typed, not that the program reached the branch.
 - ``map_complete``: every condition the model listed has a case that claims its boundary.
 - ``case_limit``: one to six cases.
 """
@@ -60,10 +61,14 @@ def _boundary_hit(case, payload) -> Optional[float]:
     gold = case.labels["conditions"]
     if not gold:
         return None
+    texts = {c["id"]: c["text"] for c in payload["conditions"]}
     hits = 0
     for g in gold:
         for c in payload["cases"]:
-            if c["boundary_of"] and any(_same(line, v) for line in c["inputs"] for v in g["boundary_values"]):
+            # The case must claim a condition that is this gold condition, not just any condition.
+            claims_it = any(common.matches_keyword_groups(texts.get(ref, ""), g["keyword_groups"])
+                            for ref in c["boundary_of"])
+            if claims_it and any(_same(line, v) for line in c["inputs"] for v in g["boundary_values"]):
                 hits += 1
                 break
     return hits / len(gold)
@@ -93,5 +98,6 @@ SUITE = Suite(
     ),
     weights={"condition_recall": 0.3, "boundary_hit": 0.5, "map_complete": 0.1, "case_limit": 0.1},
     estimate_prompt_tokens=lambda c: chars_to_tokens(c.inputs["instructions"], c.inputs["solution"]),
-    description="Stdin test cases with a boundary case for every named condition.",
+    description="Stdin test cases with a boundary case for every named condition "
+                "(boundary_hit measures that a value was typed, not that the program reached the branch).",
 )

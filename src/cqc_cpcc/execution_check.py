@@ -66,6 +66,12 @@ class TestCase(BaseModel):
     #: True once the solution ran the case twice with the same, non-empty output.
     validated: bool = False
     enabled: bool = True
+    #: A sample run whose shown output differs from what the solution prints. Kept visible
+    #: for the instructor, never used (``usable_cases`` leaves it out).
+    disagrees_with_instructions: bool = False
+    #: The expected output needs a human look (C and C++ cannot be checked for reading past
+    #: the end of the input).
+    needs_review: bool = False
 
 
 class Condition(BaseModel):
@@ -108,7 +114,8 @@ class ExecutionPlan(BaseModel):
             "cases": [
                 {"id": c.id, "stdin": c.stdin, "source": c.source, "boundary_of": sorted(c.boundary_of),
                  "expected": c.expected_output, "reads": c.expected_reads, "validated": c.validated,
-                 "enabled": c.enabled}
+                 "enabled": c.enabled,
+                 "disagrees": c.disagrees_with_instructions, "review": c.needs_review}
                 for c in self.cases
             ],
             "conditions": [(c.id, c.text, c.kind) for c in self.conditions],
@@ -119,11 +126,35 @@ class ExecutionPlan(BaseModel):
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     def usable_cases(self) -> list[TestCase]:
-        """Cases the gate may run: enabled and validated on the solution."""
-        return [c for c in self.cases if c.enabled and c.validated]
+        """Cases the gate may run: enabled, validated on the solution, and not contradicted by
+        the instructions' own sample."""
+        return [c for c in self.cases
+                if c.enabled and c.validated and not c.disagrees_with_instructions]
+
+    def independent_cases(self) -> list[TestCase]:
+        """Usable cases that are not copied from the instructions (source ``llm`` or ``manual``).
+
+        PR 14 contract: a ``sample`` case is the very output a student can copy from the
+        assignment text, so sample cases must never be the only evidence for removing a
+        deduction. The gate needs at least one independent case that covers the condition.
+        """
+        return [c for c in self.usable_cases() if c.source in ("llm", "manual")]
+
+    @property
+    def sample_only(self) -> bool:
+        """True when no independent (llm or manual) case is usable, whatever the conditions."""
+        return not self.independent_cases()
+
+    def covered_by_independent(self, condition_id: str) -> bool:
+        """An independent usable case sits on this condition's exact edge, per the stored map."""
+        independent = {c.id for c in self.independent_cases()}
+        return any(case_id in independent for case_id in self.condition_map.get(condition_id, []))
 
     def uncovered_conditions(self) -> list[str]:
-        """Condition ids with no usable boundary case. Computed from the map, never assumed."""
+        """Condition ids with no usable boundary case. Computed from the map, never assumed.
+
+        A plan with no conditions at all is not thereby covered: check ``sample_only`` too.
+        """
         usable = {c.id for c in self.usable_cases()}
         return [c.id for c in self.conditions
                 if not any(case_id in usable for case_id in self.condition_map.get(c.id, []))]
@@ -257,10 +288,11 @@ def load_solution_sources(source: Union[str, os.PathLike, bytes], filename: Opti
         name = filename or path.name
         try:
             if path.is_dir():
-                return _build(
-                    (p.name, p.read_bytes()) for p in sorted(path.iterdir())
-                    if p.is_file() and language_of_filename(p.name) and not p.name.startswith(".")
-                )
+                return _build(_dir_entries(path))
+            if path.is_symlink():
+                raise SolutionLoadError("cannot read the solution")
+            if path.stat().st_size > MAX_SOLUTION_FILE_BYTES and not path.name.lower().endswith(".zip"):
+                raise SolutionLoadError("a solution file is too large")
             data = path.read_bytes()
         except OSError:
             raise SolutionLoadError("cannot read the solution") from None
@@ -269,6 +301,19 @@ def load_solution_sources(source: Union[str, os.PathLike, bytes], filename: Opti
     if not language_of_filename(name):
         raise SolutionLoadError("unsupported solution file type")
     return _build([(name, data)])
+
+
+def _dir_entries(path: Path) -> list:
+    """Regular source files directly in ``path``. Symlinks are skipped (a link must not pull in
+    a file from elsewhere on the host) and the size is checked before anything is read."""
+    entries = []
+    for p in sorted(path.iterdir()):
+        if p.is_symlink() or not p.is_file() or p.name.startswith(".") or not language_of_filename(p.name):
+            continue
+        if p.stat().st_size > MAX_SOLUTION_FILE_BYTES:
+            raise SolutionLoadError("a solution file is too large")
+        entries.append((p.name, p.read_bytes()))
+    return entries
 
 
 def _zip_entries(data: bytes) -> list:

@@ -191,7 +191,7 @@ test prints. Rebuild the image. The app refuses a stale image ("image out of dat
 
 The base image is pinned by digest. A new base is a reviewed change. Dependabot updates to
 `/docker/exec-runner` must not auto-merge. The Dependabot entry, the auto-merge exclusion and
-the CI image build step are in a separate pull request (branch `claude/pr12-workflow-edits`)
+the CI image build step are in a separate pull request, PR 426 (branch `claude/pr12-workflow-edits`),
 that the repository owner merges; until it is merged, the Docker integration tests skip in CI
 and a Dependabot base-image bump is not held back by a workflow rule. The hash test in
 `tests/unit/test_program_runner.py` still fails if `driver.py` or the `Dockerfile` change
@@ -226,19 +226,42 @@ it); `CQC_EXECUTION=off` makes validation report `unavailable` without starting 
 1. `parse_sample_runs(instructions)`: no model. Reads "Sample Run" blocks.
 2. `suggest_test_cases(...)`: one cached model call per assignment (prompt `test-case-generation`),
    at most 6 cases, a boundary case for every selection or loop condition the instructions
-   name, and a condition-to-case map that is stored in `ExecutionPlan.condition_map`. The gate
-   (PR 14) checks that map against the validated cases; it is never assumed. The instructions
-   and the solution go into the prompt inside a per-call random-nonce fence. Instructor-typed
-   cases (`manual_case`) need no model call.
+   name, and a condition-to-case map stored in `ExecutionPlan.condition_map`. Only the exact
+   edge value is requested, so a compound range needs both of its edges. When there are more
+   conditions than cases they share cases, which gives weaker coverage. A boundary claim is
+   kept only if one of the case's input values is a number in the condition text or that
+   number plus or minus one; otherwise the claim is removed and the condition shows as
+   uncovered. The gate (PR 14) checks the map against the validated cases and never assumes it.
+   The instructions and the solution go into the prompt inside a nonce fence, and any fence
+   marker already in them is stripped. The nonce is a keyed hash (HMAC-SHA256) of the
+   assignment text under a per-process secret: unguessable from outside, stable for one
+   assignment within a process, and not random per call.
 3. `validate_cases_on_solution(...)`: one sandbox job runs every case twice on the solution.
    A case is dropped for a timeout, a crash, reading past the end of input, empty output,
    output that changes between the two runs, or output cut at the cap. A solution that does
    not compile turns the feature off (`ExecutionPlan.enabled` is false); a runner error means
-   "cannot verify" and also leaves the plan disabled.
+   "cannot verify" and also leaves the plan disabled. A sample run whose shown output differs
+   from what the solution prints is kept but not usable (`disagrees_with_instructions`), with
+   a warning to fix the instructions or the solution, or delete the sample. In C and C++ the
+   driver cannot see a failed `cin`, so a case where the solution read more often than the
+   input has lines is marked `needs_review` and the instructor should check its expected output.
+   Duplicate case ids are refused.
 4. `scan_solution_risks(...)`: warns about randomness, the clock, files and command-line
    arguments in the solution.
 
-`ExecutionPlan.plan_hash` covers the solution hash, the cases with their expected output, the
-conditions and map, and the ignore patterns, so any change gets a new hash. The plan stores
-the solution's file hashes, never its text. `load_solution_sources` reads a source file, a
-folder or a `.zip` in memory (base names only, size and count caps, no extraction to disk).
+**Entering a case by hand.** There is no instructor-facing way to enter a manual case yet:
+`manual_case(...)` is a Python function only. The entry form comes in PR 15 (Output-check UI).
+
+**Contract for PR 14.**
+- A `sample` case is the output a student can copy from the assignment text, so it must never be
+  the only evidence for removing a deduction. Use `ExecutionPlan.independent_cases()` (source
+  `llm` or `manual`, usable) and `covered_by_independent(condition_id)`. `sample_only` is true
+  when there is no independent case, even if the plan lists no conditions.
+- `suggest_test_cases` has no `CQC_EXECUTION=off` switch: it would still send the solution to the
+  model provider. The caller must check `program_runner.runner_status()` first.
+
+`ExecutionPlan.plan_hash` covers the solution hash, the cases with their expected output and
+flags, the conditions and map, and the ignore patterns, so any change gets a new hash. The plan
+stores the solution's file hashes, never its text. `load_solution_sources` reads a source file,
+a folder (symlinks skipped) or a `.zip` in memory (base names only, size and count caps, sizes
+checked before reading, no extraction to disk).

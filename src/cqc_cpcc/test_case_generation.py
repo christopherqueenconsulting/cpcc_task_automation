@@ -19,10 +19,16 @@ Nothing here grades and nothing calls this module yet (PR 14 wires it). With
 ``CQC_EXECUTION=off`` (or no Docker) validation reports the feature as unavailable and no
 program runs.
 
-Untrusted text: the instructions and the solution go into the prompt inside a per-call
-random-nonce fence, with any fence marker already in them stripped. (PR 19 owns the shared
-helper ``utilities/AI/untrusted_fence.py``; this module has a minimal local equivalent
-until it lands.)
+Untrusted text: the instructions and the solution go into the prompt inside a nonce fence,
+with any fence marker already in them stripped. The nonce is a keyed hash (HMAC-SHA256) of
+the assignment text under a per-process secret: unguessable from outside, stable for one
+assignment within a process, not random per call. (PR 19 owns the shared helper
+``utilities/AI/untrusted_fence.py``; this module has a minimal local equivalent until it
+lands.)
+
+PR 14 contract: ``suggest_test_cases`` has no ``CQC_EXECUTION=off`` switch. It would still
+send the solution to the model provider, so the caller must check
+``program_runner.runner_status()`` first and not call it when the output check is off.
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ import hashlib
 import hmac
 import re
 import secrets
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Annotated, Callable, Iterable, Literal, Mapping, Optional, Sequence, Union
 
@@ -75,7 +82,7 @@ _HEADING = re.compile(
 _ITEM_START = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+\S")
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 _PROMPT_WORD = re.compile(
-    r"\b(enter|input|type|please|what|how|choose|select|guess|press|your|give|provide|number of)\b",
+    r"\b(enter|input|type|please|what|how|choose|select|guess|press|give|provide|number of)\b",
     re.IGNORECASE,
 )
 _PROMPT_VALUE = re.compile(r"^(?P<prompt>.*[:?>])[ \t]+(?P<value>\S.*)$")
@@ -128,10 +135,14 @@ def _split_prompt_style(block: list) -> tuple:
     stdin, shown = [], []
     for line in block:
         match = _PROMPT_VALUE.match(line.rstrip())
-        wrapped = _WRAPPED.match(match.group("value").strip()) if match else None
-        # A value in <angle> or [square] brackets is marked as typed input on its own.
-        if match and (wrapped or _PROMPT_WORD.search(match.group("prompt"))):
-            value = match.group("value").strip()
+        value = match.group("value").strip() if match else ""
+        wrapped = _WRAPPED.match(value) if match else None
+        has_word = bool(match and _PROMPT_WORD.search(match.group("prompt")))
+        # A value in <angle> or [square] brackets is marked as typed input only when it is one
+        # token (not a printed list such as "Array: [1, 2, 3]") or the line also reads like a
+        # prompt. A labelled result ("Your grade: B") has no prompt word and stays output.
+        single = bool(wrapped) and not re.search(r"[\s,]", wrapped.group(1))
+        if match and (has_word or single):
             stdin.append(wrapped.group(1) if wrapped else value)
             shown.append(match.group("prompt"))
         else:
@@ -297,8 +308,9 @@ def new_fence_nonce(*parts: str) -> str:
 
 
 def fence_untrusted(label: str, text: str, nonce: str) -> str:
-    """``text`` between random-nonce markers. Any marker already in it is removed first, so
-    the text cannot close the fence early or forge a second one."""
+    """``text`` between nonce markers. The nonce is a keyed hash (HMAC) of the assignment text
+    under a per-process secret (see ``new_fence_nonce``), not random per call. Any marker already
+    in the text is removed first, so it cannot close the fence early or forge a second one."""
     body = _FENCE_MARKER.sub("", text or "")
     return f"<<<UNTRUSTED-{nonce} {label}\n{body}\nUNTRUSTED-{nonce}>>>"
 
@@ -332,7 +344,8 @@ def build_test_case_prompt(instructions: str, solution: str, language: str, nonc
         "so that a program using `>` where `>=` is required (or the reverse) prints something "
         "different. List the condition ids that the case sits on the boundary of in `boundary_of`. "
         "One case may be the boundary of several conditions. If there are more conditions than "
-        f"cases, combine them; never exceed {MAX_LLM_CASES} cases.",
+        f"cases, combine them; never exceed {MAX_LLM_CASES} cases. Request only the exact edge "
+        "value: a range with two ends needs both edges, as separate values.",
         "- Every case must give enough lines for the program to finish: one line for every read, "
         "including a re-prompt after an invalid value when the case is meant to trigger one. "
         "Do not choose inputs that make the reference solution crash, loop forever, or end the "
@@ -348,7 +361,8 @@ def build_test_case_prompt(instructions: str, solution: str, language: str, nonc
     ])
 
 
-_SUGGESTION_CACHE: dict = {}
+_SUGGESTION_CACHE: "OrderedDict[str, TestCaseSuggestion]" = OrderedDict()
+_SUGGESTION_CACHE_MAX = 64
 
 
 def clear_suggestion_cache() -> None:
@@ -374,9 +388,35 @@ def _inputs_to_stdin(inputs: Sequence) -> str:
     return normalize_stdin("\n".join(lines))
 
 
+_NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
+
+
+def _claim_is_plausible(condition_text: str, inputs: Sequence) -> bool:
+    """A case may claim a condition's boundary only if one of its input values is a number
+    named in the condition, or that number plus or minus one. A condition that names no number
+    (for example "until the input is valid") cannot be checked and the claim stands."""
+    named = [float(m) for m in _NUMBER.findall(condition_text or "")]
+    if not named:
+        return True
+    allowed = {n + d for n in named for d in (-1.0, 0.0, 1.0)}
+    for line in inputs or []:
+        for token in str(line).replace(",", " ").split():
+            try:
+                if float(token) in allowed:
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
 def normalize_suggestion(raw: TestCaseSuggestion) -> TestCaseSuggestion:
     """Cap and clean the model's answer: unique ids, known condition ids only, at most six
-    cases (those that cover the most uncovered conditions are kept first)."""
+    cases (those that cover the most uncovered conditions are kept first).
+
+    A boundary claim whose input values do not include a number from the condition (or that
+    number +-1) is removed, so the condition shows as uncovered instead of trusted. Merged
+    conditions (more conditions than cases) give weaker coverage; only the exact edge is
+    requested, so a compound range needs both of its edges."""
     conditions, cond_ids = [], {}
     for item in raw.conditions or []:
         text = " ".join((item.text or "").split())[:200]
@@ -386,12 +426,13 @@ def normalize_suggestion(raw: TestCaseSuggestion) -> TestCaseSuggestion:
         cond_ids[(item.id or "").strip().upper()] = new_id
         conditions.append(SuggestedCondition(id=new_id, text=text, kind=item.kind))
 
+    cond_text = {c.id: c.text for c in conditions}
     candidates = []
     for item in raw.cases or []:
         boundary = []
         for ref in item.boundary_of or []:
             mapped = cond_ids.get((ref or "").strip().upper())
-            if mapped and mapped not in boundary:
+            if mapped and mapped not in boundary and _claim_is_plausible(cond_text[mapped], item.inputs):
                 boundary.append(mapped)
         candidates.append((item, boundary))
 
@@ -446,6 +487,7 @@ async def suggest_test_cases(instructions: str, solution: Union[str, SolutionSou
         raise ValueError("language is required")
     key = _cache_key(instructions, solution_text, language, model_name)
     if use_cache and key in _SUGGESTION_CACHE:
+        _SUGGESTION_CACHE.move_to_end(key)
         return _SUGGESTION_CACHE[key]
     raw = await llm_gateway.structured(
         role="grading",
@@ -457,6 +499,8 @@ async def suggest_test_cases(instructions: str, solution: Union[str, SolutionSou
     )
     suggestion = normalize_suggestion(raw)
     _SUGGESTION_CACHE[key] = suggestion
+    while len(_SUGGESTION_CACHE) > _SUGGESTION_CACHE_MAX:
+        _SUGGESTION_CACHE.popitem(last=False)
     return suggestion
 
 
@@ -475,6 +519,7 @@ def suggestion_to_plan_parts(suggestion: TestCaseSuggestion) -> tuple:
 class DroppedCase:
     case_id: str
     reason: str  # timeout | crash | eof | empty_output | nondeterministic | output_truncated
+    label: str = ""
 
 
 @dataclass
@@ -534,8 +579,11 @@ def validate_cases_on_solution(
     A case is dropped for a timeout, a crash, reading past the end of input, empty output,
     output that differs between its two runs, or output cut at the cap. The kept cases carry
     the solution's stdout as ``expected_output``. A sample case whose shown output (from the
-    instructions) differs from the solution's beyond formatting only warns that the solution
-    and the instructions disagree; the case stays.
+    instructions) differs from the solution's beyond formatting is kept but marked
+    ``disagrees_with_instructions``: it is not usable, and a warning tells the instructor to fix
+    the instructions or the solution, or delete the sample. In C and C++ a failed ``cin`` cannot
+    be seen by the driver, so a case where the solution read more times than the input has lines
+    is marked ``needs_review``. Duplicate case ids are refused (``no_valid_cases``).
 
     ``status`` is not ``ok`` when nothing could be verified: ``unavailable`` (no Docker, or
     ``CQC_EXECUTION=off``), ``runner_error`` (cannot verify), ``solution_compile_failed``
@@ -551,6 +599,9 @@ def validate_cases_on_solution(
         pool = pool[:pr.MAX_CASES]
     if not pool:
         result.status, result.reason = "no_valid_cases", "no cases to validate"
+        return result
+    if len({c.id for c in pool}) != len(pool):
+        result.status, result.reason = "no_valid_cases", "duplicate case ids"
         return result
     run = runner or pr.run_program
     sandbox_files = [pr.SandboxFile(f.name, f.content) for f in solution.files]
@@ -569,30 +620,39 @@ def validate_cases_on_solution(
 
     by_id = {c.id: c for c in outcome.cases}
     kept = []
+    review_cpp = False
     for case in pool:
         got = by_id.get(case.id)
         reason = "crash" if got is None else _drop_reason(got)
         if reason:
-            result.dropped.append(DroppedCase(case.id, reason))
+            result.dropped.append(DroppedCase(case.id, reason, case.label))
             continue
         reads = [int(r[2]) for r in got.stdin_reads] if got.segmented else []
-        kept.append(case.model_copy(update={"expected_output": got.stdout, "expected_reads": reads,
-                                            "validated": True}))
+        update = {"expected_output": got.stdout, "expected_reads": reads, "validated": True}
+        if solution.language in ("cpp", "c") and got.segmented and len(got.stdin_reads) > len(case.stdin.splitlines()):
+            update["needs_review"] = True
+            review_cpp = True
         shown = (sample_outputs or {}).get(case.id)
-        if case.source == "sample" and shown:
-            if _sample_disagrees(shown, got.stdout, ignore_patterns):
-                result.warnings.append(
-                    f"The solution's output for {case.label} differs from the sample run in the "
-                    "instructions. The solution and the instructions may disagree.")
+        if case.source == "sample" and shown and _sample_disagrees(shown, got.stdout, ignore_patterns):
+            update["disagrees_with_instructions"] = True
+            result.warnings.append(
+                f'{case.label or case.id} shows "{_brief(shown)}" but the solution prints '
+                f'"{_brief(got.stdout)}". Fix the instructions or the solution, or delete this sample.')
+        kept.append(case.model_copy(update=update))
+    if review_cpp:
+        result.warnings.append("Cannot detect reading past the end of input in C/C++; check each expected "
+                               "output (cases marked for review).")
     result.cases = kept
     result.condition_map = condition_map_for(kept, conditions)
     if not kept:
         result.status, result.reason = "no_valid_cases", "every case was dropped"
     for dropped in result.dropped:
-        result.warnings.append(f"Case {dropped.case_id} was dropped: {_DROP_TEXT[dropped.reason]}.")
-    missing = [c.id for c in conditions if not result.condition_map.get(c.id)]
-    if kept and missing:
-        result.warnings.append("No usable boundary case for: " + ", ".join(missing) + ".")
+        result.warnings.append(f'Dropped "{_brief(dropped.label or dropped.case_id, 40)}": '
+                               f'{_DROP_TEXT[dropped.reason]}.')
+    if kept:
+        for c in conditions:
+            if not result.condition_map.get(c.id):
+                result.warnings.append(f"No test covers the exact edge of: {c.text}.")
     logger.info("test-case validation: status=%s kept=%d dropped=%d", result.status, len(kept), len(result.dropped))
     return result
 
@@ -605,6 +665,11 @@ _DROP_TEXT = {
     "nondeterministic": "the solution printed different output on two runs",
     "output_truncated": "the solution's output was cut at the size limit",
 }
+
+
+def _brief(text: str, limit: int = 60) -> str:
+    one_line = " ".join((text or "").split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 3] + "..."
 
 
 def _sample_disagrees(shown: str, actual: str, ignore_patterns: Sequence[str]) -> bool:
