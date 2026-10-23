@@ -86,7 +86,7 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
         return await real_structured(role, prompt, schema_model, override=override,
                                      use_auto_route=use_auto_route, prompt_id=prompt_id)
 
-    openrouter_client._get_openrouter_client = lambda: _CapturingClient(sink)
+    openrouter_client._get_openrouter_client = lambda *args, **kwargs: _CapturingClient(sink)
     asyncio.sleep = no_wait
     llm_gateway._is_test_mode = lambda: test_mode
     if calls is not None:

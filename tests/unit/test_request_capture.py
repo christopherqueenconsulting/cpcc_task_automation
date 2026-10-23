@@ -97,6 +97,14 @@ class TestCapture:
         after = rc.capture(["requirement-extraction"])
         assert "different gateway calls" in rc.compare(after, before, ["requirement-extraction"])["requirement-extraction"]
 
+    def test_the_capturing_client_ignores_client_factory_arguments(self):
+        """A client factory that takes arguments (a timeout, say) must still be replaced, or every
+        case would raise before its request and the suite would read as 'no request captured'."""
+        from cqc_cpcc.utilities.AI import openrouter_client
+
+        with rc._patched([], test_mode=False):
+            assert isinstance(openrouter_client._get_openrouter_client(30.0, retries=0), rc._CapturingClient)
+
     def test_a_changed_request_body_is_caught(self, monkeypatch):
         from cqc_cpcc.utilities.AI import openrouter_client
 
