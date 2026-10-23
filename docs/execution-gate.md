@@ -212,3 +212,29 @@ with two cases and `repeat: 2` took 8 to 9 s for the whole job including contain
   never "does not compile". Exit status 1 with diagnostics is a real compile error.
 - The `cqc.started` label is taken after the job gets a concurrency slot, so a long wait cannot
   make a live job look old enough to reap.
+
+## Test cases for the output check (PR 13)
+
+`src/cqc_cpcc/test_case_generation.py` builds the stdin cases that the output check will run
+on the solution and on each student's program. Nothing in grading calls it yet (PR 14 wires
+it); `CQC_EXECUTION=off` makes validation report `unavailable` without starting a process.
+
+1. `parse_sample_runs(instructions)`: no model. Reads "Sample Run" blocks.
+2. `suggest_test_cases(...)`: one cached model call per assignment (prompt `test-case-generation`),
+   at most 6 cases, a boundary case for every selection or loop condition the instructions
+   name, and a condition-to-case map that is stored in `ExecutionPlan.condition_map`. The gate
+   (PR 14) checks that map against the validated cases; it is never assumed. The instructions
+   and the solution go into the prompt inside a per-call random-nonce fence. Instructor-typed
+   cases (`manual_case`) need no model call.
+3. `validate_cases_on_solution(...)`: one sandbox job runs every case twice on the solution.
+   A case is dropped for a timeout, a crash, reading past the end of input, empty output,
+   output that changes between the two runs, or output cut at the cap. A solution that does
+   not compile turns the feature off (`ExecutionPlan.enabled` is false); a runner error means
+   "cannot verify" and also leaves the plan disabled.
+4. `scan_solution_risks(...)`: warns about randomness, the clock, files and command-line
+   arguments in the solution.
+
+`ExecutionPlan.plan_hash` covers the solution hash, the cases with their expected output, the
+conditions and map, and the ignore patterns, so any change gets a new hash. The plan stores
+the solution's file hashes, never its text. `load_solution_sources` reads a source file, a
+folder or a `.zip` in memory (base names only, size and count caps, no extraction to disk).
