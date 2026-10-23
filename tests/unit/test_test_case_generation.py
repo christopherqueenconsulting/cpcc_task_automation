@@ -148,8 +148,17 @@ class TestFence:
         prompt = tcg.build_test_case_prompt(evil, "x", "java", "n0nce")
         assert prompt.count("UNTRUSTED-n0nce>>>") == 2  # one closing marker per fence, none forged
 
-    def test_each_call_draws_a_new_nonce(self):
+    def test_nonce_is_random_without_input_and_keyed_with_input(self):
         assert tcg.new_fence_nonce() != tcg.new_fence_nonce()
+        a = tcg.new_fence_nonce("instructions", "solution")
+        assert a == tcg.new_fence_nonce("instructions", "solution")
+        assert a != tcg.new_fence_nonce("instructions", "other") and re.fullmatch(r"[0-9a-f]{16}", a)
+        assert "instructions" not in a
+
+    async def test_prompt_is_stable_for_the_same_assignment(self, gateway):
+        await tcg.suggest_test_cases("i", "s", "python", use_cache=False)
+        await tcg.suggest_test_cases("i", "s", "python", use_cache=False)
+        assert gateway[0]["prompt"] == gateway[1]["prompt"]
 
 
 def _raw(conditions, cases):

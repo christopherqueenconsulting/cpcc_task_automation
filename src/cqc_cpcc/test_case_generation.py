@@ -28,6 +28,7 @@ until it lands.)
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import secrets
 from dataclasses import dataclass, field
@@ -279,8 +280,20 @@ class TestCaseSuggestion(BaseModel):
 _FENCE_MARKER = re.compile(r"[<>]*UNTRUSTED-[0-9A-Za-z]*[<>]*")
 
 
-def new_fence_nonce() -> str:
-    return secrets.token_hex(8)
+#: Random per process, never logged. The nonce for an assignment is a keyed hash of its text,
+#: so it cannot be guessed from outside, differs between processes, and is the same for the
+#: same assignment within one (the prompt evaluation's request capture needs a stable prompt).
+_PROCESS_KEY = secrets.token_bytes(32)
+
+
+def new_fence_nonce(*parts: str) -> str:
+    """A fence nonce: random when no ``parts`` are given, else keyed by the process secret."""
+    if not parts:
+        return secrets.token_hex(8)
+    mac = hmac.new(_PROCESS_KEY, digestmod=hashlib.sha256)
+    for part in parts:
+        mac.update((part or "").encode("utf-8") + b"\0")
+    return mac.hexdigest()[:16]
 
 
 def fence_untrusted(label: str, text: str, nonce: str) -> str:
@@ -436,7 +449,8 @@ async def suggest_test_cases(instructions: str, solution: Union[str, SolutionSou
         return _SUGGESTION_CACHE[key]
     raw = await llm_gateway.structured(
         role="grading",
-        prompt=build_test_case_prompt(instructions, solution_text, language, new_fence_nonce()),
+        prompt=build_test_case_prompt(instructions, solution_text, language,
+                                       new_fence_nonce(instructions, solution_text, language)),
         schema_model=TestCaseSuggestion,
         override=model_name,
         prompt_id="test-case-generation",
