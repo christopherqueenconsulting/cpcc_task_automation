@@ -280,15 +280,63 @@ def prompts_unchanged(suite_id: str, base_ref: str) -> bool:
     if base_reg is None:
         return False
     head = prompt_registry.load()
-    computed = prompt_registry.compute_all(head)
+    return same_prompts(head, base_reg, prompt_registry.compute_all(head), suite_id)
+
+
+def same_prompts(head, base_reg, head_fingerprints: dict, suite_id: str) -> bool:
+    """The suite exercises the same non-judge prompts in both registries, each rendering the
+    same request (``head_fingerprints``: pid -> fingerprint of the head's requests)."""
     in_head = {pid for pid, e in head.prompts.items() if suite_id in e.suites and e.status != "judge"}
     in_base = {pid for pid, e in base_reg.prompts.items() if suite_id in e.suites and e.status != "judge"}
     if not in_head or in_head != in_base:  # a prompt added, removed or moved to another suite
         return False
-    for pid in in_head:
-        if base_reg.prompts[pid].fingerprint != computed.get(pid, head.prompts[pid].fingerprint):
-            return False
-    return True
+    return all(base_reg.prompts[pid].fingerprint == head_fingerprints.get(pid, head.prompts[pid].fingerprint)
+               for pid in in_head)
+
+
+def decide_with_this_rule(out: Path, head_registry: Path) -> dict:
+    """Re-decide a finished A/B with THIS checkout's graders and decision rule.
+
+    The workflow runs this from a checkout of the base branch, so a PR cannot relax the rule
+    that judges it: the PR's own rule (``ab.json``, written by ``prompt_ab``) and the base's
+    rule must both pass. Only saved outputs are read (no model calls, $0). The PR's registry
+    is read as JSON; its stored fingerprints are kept current by the required ``prompts check``.
+    Writes ``ab-base-rule.json`` and appends a section to ``ab.md``.
+    """
+    report = json.loads((out / "ab.json").read_text(encoding="utf-8"))
+    head_reg = prompt_registry.load(head_registry)
+    this_reg = prompt_registry.load()
+    fingerprints = {pid: e.fingerprint for pid, e in head_reg.prompts.items()}
+    results = {}
+    for suite_id, head_result in report["suites"].items():
+        head_raw, base_raw = (out / side / suite_id / "raw_outputs.jsonl" for side in ("head", "base"))
+        if suite_id not in SUITE_MODULES:
+            results[suite_id] = {"suite": suite_id, "status": "fail", "models": {}, "notes": [],
+                                 "reasons": ["the base branch has no such suite, so its rule cannot judge it"]}
+            continue
+        if head_result.get("status") == "no-base" or not (head_raw.exists() and base_raw.exists()):
+            results[suite_id] = {"suite": suite_id, "status": head_result.get("status", "fail"), "models": {},
+                                 "reasons": [], "notes": ["no base run to re-decide; the PR's verdict stands"]}
+            continue
+        suite = get_suite(suite_id)
+        unchanged = same_prompts(head_reg, this_reg, fingerprints, suite_id)
+        results[suite_id] = ab_decision(suite, _aggregates(suite, head_raw), _aggregates(suite, base_raw),
+                                        split=None if unchanged else "holdout")
+    statuses = [r["status"] for r in results.values()]
+    this_status = ("fail" if "fail" in statuses
+                   else "pass" if statuses and all(s == "pass" for s in statuses) else "pass-provisional")
+    combined = ("fail" if "fail" in (report["status"], this_status)
+                else "pass" if report["status"] == this_status == "pass" else "pass-provisional")
+    decided = {"base_ref": report["base_ref"], "status": this_status, "combined_status": combined,
+               "suites": results}
+    (out / "ab-base-rule.json").write_text(json.dumps(decided, indent=2, sort_keys=True, default=str) + "\n",
+                                           encoding="utf-8")
+    section = ab_markdown({**decided, "base_ref": report["base_ref"]}).replace(
+        "## Prompt A/B", "## Same runs, judged by the base branch's graders and rule:", 1).replace(
+        "scored with the head graders.", "scored with the base branch's graders.", 1)
+    with open(out / "ab.md", "a", encoding="utf-8") as fh:
+        fh.write(f"\n{section}\n**Combined (both rules must pass): {combined}**\n")
+    return decided
 
 
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
@@ -613,6 +661,13 @@ def cmd_prompt_ab(args) -> int:
     return 0
 
 
+def cmd_prompt_ab_decide(args) -> int:
+    decided = decide_with_this_rule(Path(args.dir), Path(args.head_registry))
+    print(json.dumps({"status": decided["status"], "combined_status": decided["combined_status"]}))
+    github_output(ab_status=decided["combined_status"])
+    return 0
+
+
 def cmd_prompt_calibrate(args) -> int:
     suites = [s for s in (args.suites or "").split(",") if s] or None
     patch = asyncio.run(calibrate(Path(args.out), suites, args.repeats, apply=args.apply))
@@ -661,6 +716,12 @@ def add_parsers(sub) -> None:
     ab.add_argument("--judge-model", default=None)
     ab.add_argument("--judge-cache", default=None)
     ab.set_defaults(func=cmd_prompt_ab)
+
+    dec = sub.add_parser("prompt-ab-decide",
+                         help="re-decide a finished A/B with this checkout's graders and rule ($0)")
+    dec.add_argument("--dir", required=True, help="the prompt-ab --out directory (ab.json, head/, base/)")
+    dec.add_argument("--head-registry", required=True, help="the PR's config/prompt_registry.json")
+    dec.set_defaults(func=cmd_prompt_ab_decide)
 
     cal = sub.add_parser("prompt-calibrate", help="run every suite on its incumbent; propose thresholds")
     cal.add_argument("--suites", default=None)

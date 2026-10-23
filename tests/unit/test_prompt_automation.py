@@ -558,3 +558,44 @@ def test_power_script_exits_1_when_no_case_has_matching_runs(tmp_path, monkeypat
         runpy.run_path(str(script), run_name="__main__")
     assert exit_info.value.code == 1
     assert "too few for a paired test" in capsys.readouterr().err
+
+
+class TestDecideWithTheBaseRule:
+    """The workflow re-decides a finished A/B from a base-branch checkout: both rules must pass."""
+
+    @pytest.fixture
+    async def finished_ab(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CQC_TEST_MODE", "true")
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1)
+        if report["suites"]["requirement-extraction"]["status"] == "no-base":
+            pytest.skip("no base run in this checkout")
+        return tmp_path
+
+    async def test_identical_runs_pass_both_rules(self, finished_ab):
+        decided = pa.decide_with_this_rule(finished_ab, pa.prompt_registry.REGISTRY_PATH)
+        assert decided["combined_status"] in ("pass", "pass-provisional")
+        assert (finished_ab / "ab-base-rule.json").exists()
+        md = (finished_ab / "ab.md").read_text()
+        assert "judged by the base branch's graders and rule" in md and "Combined (both rules must pass)" in md
+
+    async def test_a_fail_under_the_base_rule_fails_the_ab_whatever_the_pr_rule_said(self, finished_ab, monkeypatch):
+        monkeypatch.setattr(pa, "ab_decision", lambda *a, **k: {"suite": "x", "status": "fail", "reasons": ["r"],
+                                                                 "notes": [], "models": {}})
+        decided = pa.decide_with_this_rule(finished_ab, pa.prompt_registry.REGISTRY_PATH)
+        assert decided["status"] == "fail" and decided["combined_status"] == "fail"
+
+    async def test_a_suite_the_base_branch_lacks_fails(self, finished_ab):
+        report = json.loads((finished_ab / "ab.json").read_text())
+        report["suites"]["brand-new-suite"] = {"suite": "brand-new-suite", "status": "pass", "models": {}}
+        (finished_ab / "ab.json").write_text(json.dumps(report))
+        decided = pa.decide_with_this_rule(finished_ab, pa.prompt_registry.REGISTRY_PATH)
+        assert decided["suites"]["brand-new-suite"]["status"] == "fail" and decided["combined_status"] == "fail"
+
+    def test_the_workflow_feeds_the_required_check_from_the_base_rule(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "prompt-eval.yml").read_text()
+        assert "ab_status: ${{ steps.decide.outputs.ab_status }}" in workflow
+        assert workflow.count("prompt-ab-decide") == 2 and workflow.count("path: .base-rule") == 2
+        assert "steps.decide.outcome != 'failure'" in workflow

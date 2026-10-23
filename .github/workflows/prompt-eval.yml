@@ -289,7 +289,7 @@ jobs:
       group: prompt-eval-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     outputs:
-      ab_status: ${{ steps.ab.outputs.ab_status }}
+      ab_status: ${{ steps.decide.outputs.ab_status }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v7
@@ -326,7 +326,27 @@ jobs:
           poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${SUITES}" --base-ref "origin/${BASE_BRANCH}" \
             --out evals/runs/prompt-ab --judges > ab.log 2>&1 || { tail -n 80 ab.log; exit 1; }
           tail -n 60 ab.log
-          cat evals/runs/prompt-ab/ab.md >> "$GITHUB_STEP_SUMMARY"
+
+      # The PR's own code ran the A/B above, including the rule that judged it. Judge the same
+      # saved outputs again with the base branch's graders and rule; both must pass, so a PR
+      # cannot relax the rule that judges it. No PR code runs in the next two steps.
+      - name: Check out the base branch's graders and rule
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.base_ref }}
+          path: .base-rule
+          persist-credentials: false
+
+      - name: Re-decide with the base branch's graders and rule
+        id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          py="$(poetry env info -p)/bin/python"
+          cd .base-rule
+          PYTHONPATH=src "${py}" -m cqc_cpcc.model_eval prompt-ab-decide --dir ../evals/runs/prompt-ab \
+            --head-registry ../src/cqc_cpcc/config/prompt_registry.json
+          cat ../evals/runs/prompt-ab/ab.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload A/B
         if: always()
@@ -335,6 +355,7 @@ jobs:
           name: prompt-eval-ab-${{ github.run_id }}
           path: |
             evals/runs/prompt-ab/ab.json
+            evals/runs/prompt-ab/ab-base-rule.json
             evals/runs/prompt-ab/ab.md
             evals/runs/prompt-ab/head/
             evals/runs/prompt-ab/base/
@@ -815,6 +836,27 @@ jobs:
           done
           exit 0
 
+      # ab mode: the PR's code ran the A/B, including the rule that judged it. Judge the same
+      # saved outputs again with the base branch's graders and rule; both must pass.
+      - name: Check out the base branch's graders and rule (ab mode)
+        if: inputs.mode == 'ab' && hashFiles('evals/runs/dispatch/ab.json') != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.base }}
+          path: .base-rule
+          persist-credentials: false
+
+      - name: Re-decide with the base branch's graders and rule (ab mode)
+        id: decide
+        if: inputs.mode == 'ab' && hashFiles('evals/runs/dispatch/ab.json') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          py="$(poetry env info -p)/bin/python"
+          cd .base-rule
+          PYTHONPATH=src "${py}" -m cqc_cpcc.model_eval prompt-ab-decide --dir ../evals/runs/dispatch \
+            --head-registry ../src/cqc_cpcc/config/prompt_registry.json
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v7
@@ -825,14 +867,15 @@ jobs:
           retention-days: 90
 
       - name: Report the A/B on the PR
-        if: inputs.mode == 'ab' && steps.run.outcome == 'success'
+        # A failed re-decide posts no status, so the required check stays pending (fails closed).
+        if: inputs.mode == 'ab' && steps.run.outcome == 'success' && steps.decide.outcome != 'failure'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ inputs.pr_number }}
           SHA: ${{ steps.pr.outputs.sha }}
-          AB_STATUS: ${{ steps.run.outputs.ab_status }}
+          AB_STATUS: ${{ steps.decide.outputs.ab_status || steps.run.outputs.ab_status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail

@@ -132,6 +132,16 @@ in `model_policy.json`.
   requirement coverage, parsers) can still be tuned on dev cases, and the all-cases split
   does not guard against that.
 
+**Both rules must pass.** The A/B runs the PR's own code, including this rule, so a PR
+could relax the rule that judges it. After the runs, the workflow checks out the base branch
+into `.base-rule/` and re-decides the same saved outputs with the base branch's graders and
+rule (`prompt-ab-decide`, no model calls, $0). The PR's registry is read only as JSON there,
+so no PR code runs in that step. The A/B fails if either rule fails, and `ab.md` shows both
+verdicts. A rule change therefore takes effect only once it is on the base branch. Known
+limit: on a `pull_request` run the workflow file itself comes from the PR, so a PR that edits
+`prompt-eval.yml` could drop the step. A maintainer `ab` dispatch from master uses master's
+workflow file, which is how `claude/` and `auto/` PRs are always run.
+
 Before this rule, every grader had to be non-inferior on its own, and a prompt-identical
 change failed it most of the time. PR #401 records the measured rates (false fails, and
 the chance that a real regression passes) from `scripts/prompt_ab_power.py`; re-run it on
