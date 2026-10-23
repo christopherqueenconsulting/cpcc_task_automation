@@ -321,6 +321,23 @@ class TestCalibration:
         assert data["prompt_eval"]["calibrated_versions"] == {"preprocessing-digest": 1}
 
 
+    def test_apply_keeps_each_suites_repeats(self, tmp_path, uncalibrated_policy):
+        """A calibration re-sets floors, never how many repeats a suite runs (ruling 168 set 4)."""
+        from cqc_cpcc.utilities.AI import model_registry
+
+        path = tmp_path / "model_policy.json"
+        data = json.loads(model_registry.DEFAULT_POLICY_PATH.read_text())
+        data["prompt_eval"]["suites"]["grading"]["repeats"] = 4
+        path.write_text(json.dumps(data))
+        patch = {"suites": {"grading": pa.propose_suite_policy({"graders": {"f1": 0.9}, "composite": 0.9}, "x")},
+                 "calibrated_versions": {}}
+        pa.apply_policy_patch(patch, path)
+        assert json.loads(path.read_text())["prompt_eval"]["suites"]["grading"]["repeats"] == 4
+
+    def test_proposal_carries_the_given_repeats(self):
+        assert pa.propose_suite_policy({"graders": {}, "composite": 0.9}, "x", repeats=4)["repeats"] == 4
+
+
 class TestRecords:
     def _scorecard(self, tmp_path, needs_work):
         d = tmp_path / "cards" / "exam-grading"

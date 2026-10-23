@@ -417,7 +417,7 @@ GRADER_TOLERANCE = 0.10
 HEALTH_TOLERANCE = 0.05
 
 
-def propose_suite_policy(agg: dict, report_path: str) -> dict:
+def propose_suite_policy(agg: dict, report_path: str, repeats: int = 2) -> dict:
     gates = {"ok_rate": {"min": 0.95}, "errors.refusal": {"max": 0}, "errors.truncated": {"max": 0}}
     for name, value in (agg.get("graders") or {}).items():
         if value is not None:
@@ -426,7 +426,7 @@ def propose_suite_policy(agg: dict, report_path: str) -> dict:
         if info.get("calibrated") and info.get("mean") is not None:
             gates[f"judge.{judge_id}"] = {"min": round(max(0.0, info["mean"] - GRADER_TOLERANCE), 3)}
     composite = agg.get("composite")
-    return {"calibrated": True, "repeats": 2, "hard_gates": gates,
+    return {"calibrated": True, "repeats": repeats, "hard_gates": gates,
             "health_floor": round(max(0.0, composite - HEALTH_TOLERANCE), 3) if composite is not None else None,
             "baseline_report": report_path}
 
@@ -443,7 +443,8 @@ async def calibrate(out: Path, suite_ids: Optional[list] = None, repeats: int = 
             raise SystemExit(f"{suite_id}: calibration run {sc.get('status')}; nothing proposed")
         (label, m), = sc["models"].items()
         prompt_eval.write_scorecard(Path(report_dir) / suite_id, sc)  # the baseline the patch cites
-        proposal[suite_id] = propose_suite_policy(m, f"{report_dir}/{suite_id}/scorecard.json")
+        proposal[suite_id] = propose_suite_policy(m, f"{report_dir}/{suite_id}/scorecard.json",
+                                                  repeats=prompt_eval.suite_policy(suite_id).repeats)
     versions = {pid: e.version for pid, e in prompt_registry.load().prompts.items() if e.status == "live"}
     patch = {"suites": proposal, "calibrated_versions": versions}
     (out / "policy_patch.json").write_text(json.dumps(patch, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -456,7 +457,11 @@ def apply_policy_patch(patch: dict, path: Path = model_registry.DEFAULT_POLICY_P
     """Merge a calibration proposal into model_policy.json (a human runs this and commits)."""
     data = json.loads(path.read_text(encoding="utf-8"))
     block = data.setdefault("prompt_eval", {})
-    block.setdefault("suites", {}).update(patch["suites"])
+    suites = block.setdefault("suites", {})
+    for suite_id, proposed in patch["suites"].items():
+        # A calibration re-sets floors, never how many repeats a suite runs (a human choice).
+        current = suites.get(suite_id, {})
+        suites[suite_id] = {**proposed, **({"repeats": current["repeats"]} if "repeats" in current else {})}
     block["calibrated_versions"] = {**block.get("calibrated_versions", {}), **patch["calibrated_versions"]}
     model_registry.PromptEvalPolicy.model_validate(block)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
