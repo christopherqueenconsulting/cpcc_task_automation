@@ -220,7 +220,7 @@ def test_the_regrade_button_is_disabled_while_a_batch_runs_and_the_cost_is_state
     assert any("Wait for the current grading run to finish, then re-grade." in c for c in captions)
     assert any("replaces the results of the 1 other student(s)" in c and "cannot be undone" in c
                and "Worst-case wait" in c for c in captions)
-    assert any("openai/alpha@low: 1 student(s)" in c for c in captions)
+    assert any(c.startswith("Graded at: ") and "openai/alpha@low: 1 student(s)" in c for c in captions)
 
 
 def test_the_banner_without_the_original_files_says_so_and_offers_no_button():

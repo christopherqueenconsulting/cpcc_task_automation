@@ -3166,7 +3166,7 @@ def _render_effort_banner(run_key: str, all_results, where: str) -> None:
                    "directly comparable. To fix this, re-grade the other students at the same effort "
                    "using the button below.", icon=":material/balance:")
         from cqc_cpcc.reconciliation import safe_line
-        st.caption(safe_line("; ".join(f"{label}: {count} student(s)" for label, count in sorted(mix.counts.items()))))
+        st.caption(safe_line("Graded at: " + "; ".join(f"{label}: {count} student(s)" for label, count in sorted(mix.counts.items()))))
         if run_key not in st.session_state.get("grading_inputs_by_key", {}):
             st.caption("The original files are gone after an app restart, so these cannot be re-graded here. "
                        "Use Clear results, then grade the batch again.")
