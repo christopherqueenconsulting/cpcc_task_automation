@@ -80,9 +80,9 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
 
     notes = getattr(result, "reconciliation", None) or []
     if notes:
-        from cqc_cpcc.reconciliation import describe
+        from cqc_cpcc.reconciliation import describe, safe_line
         lines += ["", "## Scoring notes", ""]
-        lines += [f"- {describe(n)}" for n in notes]
+        lines += [f"- {safe_line(describe(n))}" for n in notes]
 
     lines += ["", "## Feedback for the student", "",
               build_student_feedback(result, student_name=greeting_name)]
@@ -107,7 +107,9 @@ def result_card_json(student: str, result: RubricAssessmentResult) -> str:
     what was not counted and why.
     """
     data = result.model_dump(mode="json", exclude={
-        "detected_errors": {"__all__": {"compiler_diagnostics"}}})
+        "detected_errors": {"__all__": {"compiler_diagnostics"}},
+        # A dropped error rides on its note with the same instructor-only field.
+        "reconciliation": {"__all__": {"error": {"compiler_diagnostics"}}}})
     payload = {"student": student, "result": data}
     return json.dumps(payload, indent=2, ensure_ascii=False)
 

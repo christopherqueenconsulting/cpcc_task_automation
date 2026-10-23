@@ -737,6 +737,11 @@ def apply_no_code_floor(result: RubricAssessmentResult, rubric: Rubric,
         "error_counts_by_severity": result.error_counts_by_severity,
         "error_counts_by_id": result.error_counts_by_id,
         "requirement_results": result.requirement_results,
+        # The audit trail of the graded-anyway result stays with it.
+        "reconciliation": list(result.reconciliation or []) + [note(
+            "validity", reason.split(". ")[0] + "; the score is floored at 0.")],
+        "graded_with_model": result.graded_with_model,
+        "execution_report": result.execution_report,
     })
 
 

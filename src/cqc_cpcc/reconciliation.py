@@ -10,9 +10,12 @@ back with :func:`reinstate` (a deterministic re-score, no model call).
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from cqc_cpcc.rubric_models import DetectedError, ReconciliationNote, Rubric, RubricAssessmentResult
+
+logger = logging.getLogger("cpcc_logger")
 
 SOURCE_MODEL = "model"
 SOURCE_COMPILER = "compiler"
@@ -71,7 +74,10 @@ def reinstate(result: RubricAssessmentResult, rubric: Rubric, index: int) -> Rub
     """Put the error behind note ``index`` back into ``detected_errors`` and re-score.
 
     Pure and deterministic: the same result and index always give the same score. Raises
-    ``ValueError`` when the note holds no suppressed error.
+    ``ValueError`` when the note holds no suppressed error, when it was already reinstated,
+    or when ``rubric`` is not the version the result was graded under (re-scoring against
+    an edited rubric would put this student on different rules from the rest of the batch).
+    An error of the same code and severity already back in the list is not added twice.
     """
     from cqc_cpcc.rubric_grading import apply_backend_scoring
 
@@ -79,13 +85,37 @@ def reinstate(result: RubricAssessmentResult, rubric: Rubric, index: int) -> Rub
     if not 0 <= index < len(notes):
         raise ValueError(f"no reconciliation note {index}")
     n = notes[index]
+    if n.reinstated:
+        raise ValueError(f"note {index} was already reinstated")
     if not n.suppressed or n.error is None:
         raise ValueError(f"note {index} holds no suppressed error")
+    if str(rubric.rubric_version) != str(result.rubric_version):
+        raise ValueError(f"rubric {rubric.rubric_id} is now version {rubric.rubric_version}; this result "
+                         f"was graded under {result.rubric_version}. Re-grade instead.")
+    errors = list(result.detected_errors or [])
+    key = ((n.error.code or "").strip().upper(), (n.error.severity or "").strip().lower())
+    if not any(((e.code or "").strip().upper(), (e.severity or "").strip().lower()) == key for e in errors):
+        errors.append(n.error)
     notes[index] = n.model_copy(update={"suppressed": False, "reinstated": True})
     updated = result.model_copy(update={
-        "detected_errors": list(result.detected_errors or []) + [n.error],
+        "detected_errors": errors,
         "reconciliation": notes,
         "error_counts_by_severity": None,  # recompute from the restored error list
         "error_counts_by_id": None,
     })
-    return apply_backend_scoring(rubric, updated)
+    scored = apply_backend_scoring(rubric, updated)
+    logger.info("Reinstated %s (note %d): %s -> %s points", n.error.code, index,
+                result.total_points_earned, scored.total_points_earned)
+    return scored
+
+
+def safe_line(text: str) -> str:
+    """One Markdown-inert line: no line breaks, links, images, code spans or raw HTML.
+
+    Note text includes the model's error names, which a submission can steer, so the drawer
+    and the result card (pasted into outside tools) never render it as live Markdown.
+    """
+    text = " ".join((text or "").split())
+    for ch in ("\\", "[", "]", "`", "*", "_", "!"):
+        text = text.replace(ch, "\\" + ch)
+    return text.replace("<", "&lt;").replace(">", "&gt;")

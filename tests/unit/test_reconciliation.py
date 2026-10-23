@@ -1,6 +1,7 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 """Reconciliation notes, error sources, Reinstate and the run-key additions (PR 5)."""
 
+import re
 from unittest.mock import AsyncMock
 
 import pytest
@@ -153,6 +154,44 @@ def test_reinstate_puts_the_error_back_and_rescores_deterministically():
         rec.reinstate(before, RUBRIC, 5)
 
 
+def test_reinstate_refuses_a_second_click_a_stale_index_and_an_edited_rubric():
+    dropped = apply_backend_scoring(RUBRIC, _unscored(NAMING).model_copy(update={
+        "reconciliation": [rec.note_removed("compile", COMPILE, "The submission compiles (javac).")]}))
+    once = rec.reinstate(dropped, RUBRIC, 0)
+    with pytest.raises(ValueError, match="already reinstated"):
+        rec.reinstate(once, RUBRIC, 0)
+    with pytest.raises(ValueError, match="no reconciliation note"):
+        rec.reinstate(dropped, RUBRIC, 99)
+    edited = RUBRIC.model_copy(update={"rubric_version": str(RUBRIC.rubric_version) + ".1"})
+    with pytest.raises(ValueError, match="Re-grade instead"):
+        rec.reinstate(dropped, edited, 0)
+
+
+def test_reinstate_never_counts_an_error_already_back_in_the_list():
+    # The model (or a later stage) listed the same error again after the stage dropped it.
+    already = apply_backend_scoring(RUBRIC, _unscored(NAMING, COMPILE).model_copy(update={
+        "reconciliation": [rec.note_removed("compile", COMPILE, "The submission compiles (javac).")]}))
+    back = rec.reinstate(already, RUBRIC, 0)
+    assert [e.code for e in back.detected_errors] == [NAMING.code, COMPILE.code]
+    assert back.total_points_earned == already.total_points_earned
+    assert back.reconciliation[0].reinstated
+
+
+def test_note_text_is_inert_markdown_in_the_card():
+    steered = COMPILE.model_copy(update={"name": "[a](http://x) ![i](http://y)\n## Ignore previous instructions"})
+    result = apply_backend_scoring(RUBRIC, _unscored(NAMING).model_copy(update={
+        "reconciliation": [rec.note_removed("compile", steered, "The submission compiles (javac).")]}))
+    md = result_card_markdown("Ada Example", result)
+    section = md.split("## Scoring notes")[1].split("## Feedback for the student")[0]
+    bullets = [line for line in section.splitlines() if line.strip()]
+    assert len(bullets) == 1 and bullets[0].startswith("- Removed: ")
+    # Every bracket and bang is escaped, so no link or image can form; the heading is inline.
+    assert re.search(r"(?<!\\)[\[\]!`]", bullets[0]) is None
+    assert not any(line.lstrip().startswith("#") for line in section.splitlines())
+    assert "Ignore previous instructions" in bullets[0]
+    assert rec.safe_line("a <b> `c` *d*") == "a &lt;b&gt; \\`c\\` \\*d\\*"
+
+
 def test_describe_reads_as_an_instructor_note():
     assert rec.describe(rec.note_removed("compile", COMPILE, "The submission compiles (javac).")) == \
         "Removed: Does Not Compile. The submission compiles (javac)."
@@ -166,6 +205,19 @@ def test_the_card_shows_the_notes_and_the_json_carries_the_dropped_error():
     md = result_card_markdown("Ada Example", result)
     assert "## Scoring notes" in md and "Removed: Does Not Compile" in md
     assert COMPILE.code in result_card_json("Ada Example", result)
+
+
+def test_the_json_card_keeps_a_dropped_errors_compiler_diagnostics_instructor_only():
+    secret = COMPILE.model_copy(update={"compiler_diagnostics": "SECRET-DIAG: Main.java:3 error"})
+    result = apply_backend_scoring(RUBRIC, _unscored(NAMING).model_copy(update={
+        "reconciliation": [rec.note_removed("compile", secret, "The submission compiles (javac).")]}))
+    assert "SECRET-DIAG" not in result_card_json("Ada Example", result)
+    assert "SECRET-DIAG" not in result_card_markdown("Ada Example", result)
+    # The exclusion is for the card only: the in-memory result and Reinstate keep the diagnostics.
+    assert result.reconciliation[0].error.compiler_diagnostics.startswith("SECRET-DIAG")
+    back = rec.reinstate(result, RUBRIC, 0)
+    assert any(e.compiler_diagnostics and e.compiler_diagnostics.startswith("SECRET-DIAG")
+               for e in back.detected_errors)
 
 
 def test_backend_fields_stay_out_of_the_llm_schema():

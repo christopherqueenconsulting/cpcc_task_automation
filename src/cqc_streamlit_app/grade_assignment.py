@@ -2938,18 +2938,19 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
 
 def _render_scoring_notes(result, run_key: str, student_id: Optional[str]) -> None:
     """The backend's reconciliation notes (instructor-only), with Reinstate for dropped errors."""
-    from cqc_cpcc.reconciliation import describe
+    from cqc_cpcc.reconciliation import describe, safe_line
 
     notes = list(getattr(result, "reconciliation", None) or [])
     if not notes:
         return
     st.markdown("**Scoring notes**")
     st.caption("Not for the student. Reinstate puts a removed error back and recomputes the "
-               "score without a model call.")
+               "score without a model call; there is no undo short of re-grading.")
     for i, n in enumerate(notes):
         with st.container(horizontal=True):
-            st.markdown(describe(n))
-            if n.suppressed and n.error is not None and run_key and student_id:
+            # Error names come from the model: never live Markdown.
+            st.markdown(render_safe_markdown(safe_line(describe(n))))
+            if n.suppressed and not n.reinstated and n.error is not None and run_key and student_id:
                 st.button("Reinstate", key=f"reinstate_{run_key}_{student_id}_{i}",
                           on_click=_reinstate_error, args=(run_key, student_id, i))
 
@@ -2962,9 +2963,15 @@ def _reinstate_error(run_key: str, student_id: str, index: int) -> None:
     result = dict(st.session_state.grading_results_by_key.get(run_key, [])).get(student_id)
     rubric = find_rubric(result.rubric_id) if result is not None else None
     if result is None or rubric is None:
-        st.toast("Could not reinstate: the result or its rubric is no longer available.", icon=":material/error:")
+        st.toast("Could not reinstate: the result or its rubric is no longer available. "
+                 "Re-grade this student instead.", icon=":material/error:")
         return
-    _replace_result(run_key, student_id, reinstate(result, rubric, index))
+    try:
+        updated = reinstate(result, rubric, index)
+    except ValueError as e:  # a stale note (double click, older drawer) or an edited rubric
+        st.toast(f"Could not reinstate: {e}", icon=":material/error:")
+        return
+    _replace_result(run_key, student_id, updated)
 
 
 def _submission_for(run_key: str, student_id: str):
