@@ -1,6 +1,7 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 """Code version helper: pyproject is the source, metadata and "unknown" are fallbacks."""
 
+import re
 import tomllib
 from importlib import metadata
 from pathlib import Path
@@ -22,7 +23,8 @@ def _fresh_cache():
 @pytest.mark.unit
 def test_matches_pyproject_in_a_source_checkout():
     expected = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["poetry"]["version"]
-    assert version.get_version() == expected
+    # get_version() reports the tag's form: pyproject's PEP 440 "0.2.0rc1" reads "0.2.0-rc1".
+    assert version.get_version() == re.sub(r"(\d)rc(\d)", r"\1-rc\2", expected)
 
 
 @pytest.mark.unit

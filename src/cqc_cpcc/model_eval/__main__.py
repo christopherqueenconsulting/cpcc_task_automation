@@ -750,6 +750,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     st.add_argument("--repeats", type=int, default=None)
     st.add_argument("--limit", type=int, default=None, help="first N cases only (smoke)")
     st.add_argument("--budget", type=float, default=None)
+    st.add_argument("--concurrency", type=int, default=None,
+                    help="model calls in flight (default 4, or CQC_EVAL_CONCURRENCY)")
     st.add_argument("--out", default="evals/runs/suites")
     st.add_argument("--raw", default=None, help="score: raw_outputs.jsonl to re-score")
     st.add_argument("--label", default=None)

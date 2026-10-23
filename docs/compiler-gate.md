@@ -124,6 +124,16 @@ feedback. Prefer a forward fix unless the gate is breaking grading.
 One residual gap, not currently exploited by the tool but worth knowing: `javac` runs
 annotation processors by default (`-proc:none` would close that).
 
+## Compile checks in the sandbox
+
+When the exec-runner container is available (`program_runner.runner_status()`), the C++ and
+Java compile checks run inside it, with no network and no host files; the host toolchain and
+its include guard above are only the fallback. A sandbox that is available but cannot answer
+(timeout, daemon error) gives "cannot verify", never "does not compile", and the host is not
+tried instead. Python is still parse-checked in process. `CQC_EXECUTION=off` forces the host
+fallback. The gate has no C language today, so C compile checks are not part of it. See
+`docs/execution-gate.md`.
+
 ## Multi-file submissions
 
 Files are grouped by language and compiled **together** in one temp directory, so a
