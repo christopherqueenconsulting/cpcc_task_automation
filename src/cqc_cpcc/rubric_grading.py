@@ -34,6 +34,7 @@ from typing import Optional
 
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
+from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES
 from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUIREMENT, note, note_added,
                                      note_kept, note_removed, tag_source)
 from cqc_cpcc.requirement_coverage import (apply_requirement_coverage, is_requirement_error,
@@ -175,8 +176,12 @@ def build_rubric_grading_prompt(
 
     # Reference solution if provided
     if reference_solution:
-        prompt_parts.append("## Reference Solution")
+        prompt_parts.append("## Reference Solution (authoritative)")
+        prompt_parts.extend(SOLUTION_RULES)
+        prompt_parts.append("")
+        prompt_parts.append("<!--BEGIN_REFERENCE_SOLUTION-->")
         prompt_parts.append(reference_solution)
+        prompt_parts.append("<!--END_REFERENCE_SOLUTION-->")
         prompt_parts.append("")
 
     # Rubric details
@@ -314,7 +319,8 @@ def build_rubric_grading_prompt(
     prompt_parts.append("For all criteria:")
     prompt_parts.append("- Evaluate submission against criterion")
     prompt_parts.append("- Provide specific, actionable feedback with evidence from submission")
-    prompt_parts.append("- Base assessment solely on assignment instructions and rubric criteria")
+    prompt_parts.append("- Base assessment on the assignment instructions and rubric criteria, and on the reference "
+                        "solution when one is given: it defines what is required and the required output")
     prompt_parts.append("")
 
     prompt_parts.append("### Output Requirements")

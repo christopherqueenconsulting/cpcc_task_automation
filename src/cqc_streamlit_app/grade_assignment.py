@@ -1437,6 +1437,13 @@ async def grade_single_rubric_student(
 
             status.update(label=f"{status_label} | Processing results...")
 
+            # Instructor-only: how close the submission's shape is to the reference solution.
+            # Information for the drawer and the results table, never a score input.
+            if reference_solution:
+                from cqc_cpcc.solution_similarity import solution_similarity
+                result = result.model_copy(update={
+                    "solution_similarity": solution_similarity(submission_text, reference_solution).ratio})
+
             # Compile-gate tracking badge (Streamlit report ONLY — never enters the
             # feedback docx, grades, or anything student-facing). Lets the instructor see
             # how often the real compiler overrode the model's "Does Not Compile" call,
@@ -2865,6 +2872,7 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
         st.metric("Errors (major / minor)", f"{counts.get('major', 0)} / {counts.get('minor', 0)}", border=True)
     if getattr(result, "needs_review", False):
         st.warning(f"{_review_status_label(result)}: {result.validity_reason}", icon=":material/flag:")
+    _render_solution_similarity(result)
 
     labels = (["Feedback", "Criteria", "Errors", "Requirements", "Code", "LLM Prompt"]
               + (["Debug"] if CQC_OPENAI_DEBUG else []))
@@ -3258,12 +3266,31 @@ def _summary_rows(all_results, failed_student_ids) -> list[dict]:
             "Points Earned": earned,
             "Points Possible": possible,
             "Level": _get_band_or_level_label(result) or "",
+            "Like the solution": _similarity_label(result),
         })
     possible = next((r.total_points_possible for _, r in all_results if r is not None), 0)
     for failed_id in failed_student_ids:
         rows.append({"Student": failed_id, "Status": "Failed", "Score": 0.0, "Points Earned": None,
-                     "Points Possible": possible, "Level": ""})
+                     "Points Possible": possible, "Level": "", "Like the solution": ""})
     return rows
+
+
+def _similarity_label(result) -> str:
+    """The results-table cell for the instructor-only flag ("" when off or no solution)."""
+    from cqc_cpcc.solution_similarity import Similarity, DEFAULT_THRESHOLD, similarity_label
+    ratio = getattr(result, "solution_similarity", None)
+    if ratio is None:
+        return ""
+    return similarity_label(Similarity(ratio, ratio >= DEFAULT_THRESHOLD, DEFAULT_THRESHOLD))
+
+
+def _render_solution_similarity(result) -> None:
+    """Instructor-only caption: the submission's shape is very close to the reference solution.
+    Information only; it never changes a score and it is not an accusation."""
+    label = _similarity_label(result)
+    if label:
+        st.caption(f"Instructor note: the submission's structure is {label} to the reference solution. "
+                   "Information only; no effect on the score.")
 
 
 def display_cached_grading_results(run_key: str, course_name: str) -> None:
