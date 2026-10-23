@@ -129,13 +129,14 @@ A superseded or bad release is replaced by a later one, not edited.
 
 ## Deployment
 
-The app runs on Streamlit Community Cloud and builds from the **`release` branch**, not from
-`master` (Christopher moved it on 2026-10-23: Community Cloud cannot change the branch of an
-existing app, so it is a second app or a redeploy). The previous app URL was
+The app is meant to build from the **`release` branch**, not from `master`. Christopher reported
+in chat on 2026-10-23 that the Streamlit deployment was updated; confirm the branch in the
+Streamlit dashboard before relying on it. The previous app URL was
 https://cpcc-task-automation.streamlit.app/; the URL of the app that builds from `release` is not
 recorded in this repository, so ask Christopher for it. The repository's push webhook to
-`https://share.streamlit.io/hook` redeploys the app when the branch it builds moves. A merge to
-`master` therefore does **not** reach the instructor; a release does, once `release` is moved to it.
+`https://share.streamlit.io/hook` redeploys the app when the branch it builds moves. Once the app
+builds from `release`, a merge to `master` does **not** reach the instructor; a release does, when
+`release` is moved to it.
 
 To put a tagged release in front of the instructor, after the Release run for the tag is green:
 
