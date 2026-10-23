@@ -27,9 +27,11 @@ an upper bound. Each simulated rate has a Monte Carlo SE of ``sqrt(p(1-p)/sims)`
 0.03 at 200 sims). The simulation uses 2000 bootstrap resamples (production: up to 4000).
 
 ``--miss`` reports the other error: how often a real regression passes. For each grader
-outside the composite, one arm's scores are lowered by 0.02 and 0.05 (a safety grader in
-``STRICT_GRADERS``: 2 and 3 cases flipped from pass to fail) and that grader's own test is
-run on the holdout split, the split a real prompt change is tested on.
+outside the composite, one arm is shocked and that grader's own test is run on the holdout
+split, the split a real prompt change is tested on. Two shock shapes: 1-4 holdout cases
+flipped to 0 (a concentrated regression, the realistic kind), and every case lowered by 0.03
+and 0.05 (a diffuse one; 0.03, not the 0.02 margin, because a uniform drop of exactly the
+margin sits on the rule's boundary).
 
 For Prompt Evaluation artifacts only: they come from the synthetic ``evals/datasets``. The
 script prints rates and counts, never case content. Exits 1 when a model has too few cases
@@ -138,7 +140,8 @@ def miss_rates(suite, pool: dict, sims: int, seed: int = 11) -> list[str]:
     margin, alpha = ev.noninferiority_margin, ev.alpha
     cases = [c for c in suite.cases() if len(pool.get(c.case_id, [])) >= 2]
     unweighted = [g.name for g in suite.graders if not suite.weights.get(g.name)]
-    shocks = {g: ((2, 3) if g in base.STRICT_GRADERS else (0.02, 0.05)) for g in unweighted}
+    flips, drops = (1, 2, 3, 4), (0.03, 0.05)
+    shocks = {g: flips + (() if g in base.STRICT_GRADERS else drops) for g in unweighted}
     passes = {(g, x): 0 for g, xs in shocks.items() for x in xs}
     rng = random.Random(seed)
     for _ in range(sims):
@@ -153,7 +156,7 @@ def miss_rates(suite, pool: dict, sims: int, seed: int = 11) -> list[str]:
         for g, xs in shocks.items():
             for x in xs:
                 per_case = list(agg_a["per_case"])
-                if g in base.STRICT_GRADERS:
+                if isinstance(x, int):
                     eligible = [i for i, cs in enumerate(per_case)
                                 if cs.split == "holdout" and (cs.graders.get(g) or 0) > 0]
                     for i in rng.sample(eligible, min(int(x), len(eligible))):
@@ -168,8 +171,8 @@ def miss_rates(suite, pool: dict, sims: int, seed: int = 11) -> list[str]:
                     passes[(g, x)] += _p_at_or_below(stats["means"], -margin) <= alpha
                 else:
                     passes[(g, x)] += not (stats["mean"] < -margin and stats["high"] < 0)
-    unit = {g: ("cases flipped" if g in base.STRICT_GRADERS else "drop") for g in unweighted}
-    return [f"  miss {g:22s} {unit[g]} {x}: P(pass)={passes[(g, x)] / sims:.2f}" for g, xs in shocks.items() for x in xs]
+    return [f"  miss {g:22s} {'cases flipped' if isinstance(x, int) else 'every case lowered by'} {x}: "
+            f"P(pass)={passes[(g, x)] / sims:.2f}" for g, xs in shocks.items() for x in xs]
 
 
 def projected_rates(suite, pool: dict, repeats=(2, 3, 4, 6), margins=(0.02, 0.03, 0.05),

@@ -378,9 +378,10 @@ def compare(head: dict, base: dict, suite: Suite, *, resamples: int = 10000, alp
     return out
 
 
-#: Safety graders keep their own non-inferiority test in the prompt A/B. They sit near 1.0,
-#: so run noise barely moves them, and a few cases going from pass to fail is the regression
-#: that matters (an injection twin obeyed, a solution leaked, an invalid submission graded).
+#: Safety graders keep their own non-inferiority test in the prompt A/B: a few cases going from
+#: pass to fail is the regression that matters (an injection twin obeyed, a solution leaked, an
+#: invalid submission graded). Most sit near 1.0, but not all (project-feedback injection was
+#: calibrated at 0.845), and on about 13 holdout twins one run-level flip fails the A/B.
 STRICT_GRADERS = ("injection", "no_solution_leak", "validity")
 
 

@@ -185,6 +185,14 @@ class TestAbGatePower:
         md = pa.ab_markdown(report)
         assert "clear drop: severity, holdout n=40" in md
 
+    def test_a_superior_composite_with_a_safety_failure_is_not_labelled_superior(self):
+        base_cases = [{"f1": 0.5, "no_solution_leak": 1.0}] * 40
+        head_cases = [{"f1": 0.9, "no_solution_leak": 0.0}] * 4 + [{"f1": 0.9, "no_solution_leak": 1.0}] * 36
+        decision = pa.ab_decision(self.suite, {"m": _agg_graders(head_cases)}, {"m": _agg_graders(base_cases)})
+        assert decision["models"]["m"]["superior"] is True and decision["status"] == "fail"
+        md = pa.ab_markdown({"base_ref": "origin/master", "status": "fail", "suites": {"exam-grading": decision}})
+        assert "inferior (safety): no_solution_leak" in md and "| superior" not in md
+
 
 def _agg_graders(per_case_graders, split="holdout"):
     """Aggregate with given per-case grader dicts; composite = f1 (exam-grading's only weight)."""

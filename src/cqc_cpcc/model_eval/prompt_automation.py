@@ -392,7 +392,8 @@ def ab_markdown(report: dict) -> str:
             elif not m.get("comparative"):
                 test = "too few cases"
             else:
-                verdict = ("superior" if m.get("superior") else "non-inferior" if m.get("noninferior")
+                verdict = ("superior" if m.get("superior") and m.get("noninferior")
+                           else "non-inferior" if m.get("noninferior")
                            else "inferior (composite)" if not m.get("primary_noninferior", True)
                            else "inferior (safety): " + ", ".join(m["strict_failures"]) if m.get("strict_failures")
                            else "clear drop: " + ", ".join(m.get("clear_drops") or {}))
