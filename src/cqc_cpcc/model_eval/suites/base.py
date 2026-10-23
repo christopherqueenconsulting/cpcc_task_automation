@@ -30,6 +30,41 @@ from cqc_cpcc.utilities.logger import logger
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DATASETS_ROOT = REPO_ROOT / "evals" / "datasets"
 
+#: Model calls in flight per run. 4 is the long-standing default; the A/B raises it (see
+#: ``prompt_automation.AB_CONCURRENCY``) because it only waits on the network.
+DEFAULT_CONCURRENCY = 4
+MAX_CONCURRENCY = 32  # a typo (400) must not fan out a rate-limit storm
+
+
+def eval_concurrency(default: int = DEFAULT_CONCURRENCY, value=None) -> int:
+    """``value``, else the ``CQC_EVAL_CONCURRENCY`` environment variable, else ``default``.
+
+    Anything that is not a whole number from 1 to ``MAX_CONCURRENCY`` is ignored with a warning.
+    """
+    import os
+
+    raw = value if value is not None else os.environ.get("CQC_EVAL_CONCURRENCY")
+    if raw in (None, ""):
+        return default
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 0
+    if not 1 <= n <= MAX_CONCURRENCY:
+        logger.warning(f"[prompt-eval] concurrency {raw!r} is not a whole number from 1 to {MAX_CONCURRENCY}; "
+                       f"using {default}")
+        return default
+    return n
+
+
+def retry_stats(records: list) -> dict:
+    """How many model calls needed a retry (a 429 or a timeout, retried by the client)."""
+    calls = [r for r in records if r.error_kind != "budget"]
+    retried = [r for r in calls if (r.attempts or 1) > 1]
+    return {"calls": len(calls), "retried": len(retried),
+            "extra_attempts": sum((r.attempts or 1) - 1 for r in retried)}
+
+
 #: Suites with fewer scorable cases than this use absolute hard gates only; paired
 #: comparisons (bootstrap, Holm) need at least this many cases to mean anything.
 MIN_COMPARATIVE_CASES = 30
@@ -120,7 +155,7 @@ class Suite:
 # --- Running ---------------------------------------------------------------------------
 
 async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list, repeats: int,
-                    budget: Budget, concurrency: int = 4, profile=None,
+                    budget: Budget, concurrency: Optional[int] = None, profile=None,
                     on_record: Optional[Callable[[SuiteRecord], None]] = None) -> list[SuiteRecord]:
     """Call the production function for every case ``repeats`` times on ``model``.
 
@@ -129,7 +164,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     """
     from cqc_cpcc.utilities.AI import llm_gateway
 
-    semaphore = asyncio.Semaphore(concurrency)
+    semaphore = asyncio.Semaphore(eval_concurrency(value=concurrency))
 
     async def one(case: SuiteCase, repeat: int, resolved) -> SuiteRecord:
         async with semaphore:

@@ -40,3 +40,29 @@ class Budget:
 
     def can_afford(self, estimate: float) -> bool:
         return not self.exhausted and estimate <= self.remaining
+
+    def split(self, weights: tuple = (1, 1)) -> list["Budget"]:
+        """Carve what is left into independent budgets, one per concurrent run.
+
+        Each child gets its weighted share of both the remaining hard limit and the remaining
+        ``stop_at``, so the children's ``stop_at`` values add up to this budget's, and neither run
+        can spend the other's share. Hand the children back with :meth:`absorb` when they finish.
+        In-flight calls can still carry a child past its ``stop_at``: by at most (calls in flight
+        on that child) x (the dearest single call), which the gap between ``stop_at`` and
+        ``limit`` has to cover for every child at once.
+        """
+        total = float(sum(weights))
+        left_limit = max(self.limit - self.spent, 1e-9)
+        left_stop = max(self.remaining, 1e-9)
+        children = [Budget(limit=left_limit * w / total, stop_at=min(left_stop * w / total, left_limit * w / total))
+                    for w in weights]
+        if self.exhausted:  # nothing left to share: the children start spent, so they refuse every call
+            for child in children:
+                child.spent = child.stop_at
+        return children
+
+    def absorb(self, child: "Budget") -> None:
+        """Charge a finished child's spend and calls to this budget."""
+        with self._lock:
+            self.spent += child.spent
+            self.calls += child.calls
