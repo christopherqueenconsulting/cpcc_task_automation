@@ -87,9 +87,11 @@ class TestAffected:
         assert self._affected(["README.md"])["dependency_only"] is False
 
 
-def _agg(suite, composites, cost=0.01):
+def _agg(suite, composites, cost=0.01, split="holdout", grader=None):
     cases = [base.SuiteCase(case_id=f"c{i}", stratum="s", inputs={}, labels={}) for i in range(len(composites))]
-    per_case = [base.CaseScore(c.case_id, "s", "holdout", 1, 1, {"f1": v}, v) for c, v in zip(cases, composites)]
+    grader = grader or composites
+    per_case = [base.CaseScore(c.case_id, "s", split, 1, 1, {"f1": v, "severity": g}, v)
+                for c, v, g in zip(cases, composites, grader)]
     return {"composite": sum(composites) / len(composites), "graders": {"f1": sum(composites) / len(composites)},
             "ok_rate": 1.0, "errors": {}, "cost_per_call": cost, "per_case": per_case}
 
@@ -105,7 +107,7 @@ class TestAbDecision:
 
     def test_a_regression_fails(self):
         result = pa.ab_decision(self.suite, {"m": _agg(self.suite, [0.5] * 40)}, {"m": _agg(self.suite, [0.9] * 40)})
-        assert result["status"] == "fail" and "not non-inferior" in result["reasons"][0]
+        assert result["status"] == "fail" and "composite not non-inferior" in result["reasons"][0]
 
     def test_small_suites_use_the_absolute_margin(self):
         suite = get_suite("digest")
@@ -124,6 +126,61 @@ class TestAbDecision:
         assert result["status"] == "pass-provisional" and "report-only" in result["notes"][0]
         calibrated = pa.ab_decision(self.suite, {"m": a}, {"m": a}, pairwise_scores={"m": -0.9}, judge_calibrated=True)
         assert calibrated["status"] == "fail"
+
+
+@pytest.mark.usefixtures("uncalibrated_policy")
+class TestAbGatePower:
+    """The composite is the primary endpoint; a grader fails the A/B only on a clear drop."""
+
+    suite = get_suite("exam-grading")
+
+    def test_a_noisy_grader_with_no_clear_drop_does_not_fail_an_unchanged_composite(self):
+        # The grader swings both ways case by case (mean +0.0125, interval spans zero): noise.
+        noisy = [1.0, 0.0, 0.5, 1.0] * 10
+        other = [0.5, 0.5, 1.0, 0.45] * 10
+        head = _agg(self.suite, [0.8] * 40, grader=noisy)
+        base_agg = _agg(self.suite, [0.8] * 40, grader=other)
+        cmp = base.ab_noninferior(head, base_agg, self.suite, resamples=2000)
+        assert cmp["primary_noninferior"] and cmp["clear_drops"] == [] and cmp["noninferior"]
+        assert base.compare(head, base_agg, self.suite, resamples=2000)["noninferior"] is False  # old rule
+
+    def test_a_clear_grader_drop_fails(self):
+        head = _agg(self.suite, [0.8] * 40, grader=[0.6] * 40)
+        base_agg = _agg(self.suite, [0.8] * 40, grader=[0.9] * 40)
+        result = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg})
+        assert result["status"] == "fail" and any("clear drop" in r and "severity" in r for r in result["reasons"])
+
+    def test_dev_only_cases_are_compared_only_when_the_prompts_are_unchanged(self):
+        head = _agg(self.suite, [0.5] * 40, split="dev")
+        base_agg = _agg(self.suite, [0.9] * 40, split="dev")
+        holdout = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg})
+        assert holdout["models"]["m"]["comparative"] is False and holdout["models"]["m"]["split"] == "holdout"
+        everything = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg}, split=None)
+        assert everything["models"]["m"]["comparative"] is True and everything["models"]["m"]["split"] == "all"
+        assert any("on all cases" in r for r in everything["reasons"])
+
+
+class TestPromptsUnchanged:
+    def test_same_fingerprints_mean_unchanged(self, monkeypatch):
+        from cqc_cpcc.model_eval import prompt_registry
+
+        head = prompt_registry.load()
+        monkeypatch.setattr(prompt_registry, "load_at_ref", lambda ref: head)
+        monkeypatch.setattr(prompt_registry, "compute_all",
+                            lambda reg: {pid: e.fingerprint for pid, e in reg.prompts.items()})
+        assert pa.prompts_unchanged("grading", "origin/master") is True
+
+    def test_a_changed_fingerprint_or_missing_base_means_changed(self, monkeypatch):
+        from cqc_cpcc.model_eval import prompt_registry
+
+        head = prompt_registry.load()
+        monkeypatch.setattr(prompt_registry, "load_at_ref", lambda ref: head)
+        monkeypatch.setattr(prompt_registry, "compute_all",
+                            lambda reg: {pid: "different" for pid in reg.prompts})
+        assert pa.prompts_unchanged("grading", "origin/master") is False
+        monkeypatch.setattr(prompt_registry, "load_at_ref", lambda ref: None)
+        assert pa.prompts_unchanged("grading", "origin/master") is False
+        assert pa.prompts_unchanged("no-such-suite", "origin/master") is False
 
 
 class TestCalibration:

@@ -157,8 +157,12 @@ def _aggregates(suite, raw_path: Path, case_ids: Optional[set] = None) -> dict:
 
 
 def ab_decision(suite, head: dict, base_aggs: dict, policy=None, pairwise_scores: Optional[dict] = None,
-                judge_calibrated: bool = False) -> dict:
-    """Accept a prompt change when nothing regresses on any model of the matrix."""
+                judge_calibrated: bool = False, split: Optional[str] = "holdout") -> dict:
+    """Accept a prompt change when nothing regresses on any model of the matrix.
+
+    ``split`` is the case split the paired test runs on: the holdout split by default, all
+    cases (``None``) when the suite's prompts are unchanged (see ``prompts_unchanged``).
+    """
     policy = policy or model_registry.load_policy()
     sp = prompt_eval.suite_policy(suite.id)
     ev = policy.eval
@@ -169,20 +173,23 @@ def ab_decision(suite, head: dict, base_aggs: dict, policy=None, pairwise_scores
             notes.append(f"{label}: no base run to compare with")
             continue
         new_failures = [f for f in base.gate_failures(h, sp.hard_gates) if f not in base.gate_failures(b, sp.hard_gates)]
-        cmp = base.compare(h, b, suite, resamples=min(ev.bootstrap_resamples, 4000), alpha=ev.alpha,
-                           superiority_margin=ev.superiority_margin, noninferiority_margin=ev.noninferiority_margin)
+        cmp = base.ab_noninferior(h, b, suite, resamples=min(ev.bootstrap_resamples, 4000), alpha=ev.alpha,
+                                  margin=ev.noninferiority_margin, split=split)
         delta = (h.get("composite") or 0) - (b.get("composite") or 0)
         cost_ratio = (h["cost_per_call"] / b["cost_per_call"]) if h.get("cost_per_call") and b.get("cost_per_call") else None
         per_model[label] = {"composite_head": h.get("composite"), "composite_base": b.get("composite"),
                             "delta": delta, "comparative": cmp["comparative"], "superior": cmp.get("superior"),
-                            "noninferior": cmp.get("noninferior"), "cost_ratio": cost_ratio,
+                            "noninferior": cmp.get("noninferior"), "split": split or "all", "cost_ratio": cost_ratio,
                             "new_gate_failures": new_failures}
         if new_failures and sp.calibrated:
             reasons.append(f"{label}: new hard-gate failures: {'; '.join(new_failures)}")
         elif new_failures:
             notes.append(f"{label}: below provisional gates: {'; '.join(new_failures)}")
-        if cmp["comparative"] and not cmp["noninferior"]:
-            reasons.append(f"{label}: not non-inferior on the holdout split (composite {delta:+.3f})")
+        where = f"the {split} split" if split else "all cases"
+        if cmp["comparative"] and not cmp.get("primary_noninferior", cmp["noninferior"]):
+            reasons.append(f"{label}: composite not non-inferior on {where} (composite {delta:+.3f})")
+        if cmp["comparative"] and cmp.get("clear_drops"):
+            reasons.append(f"{label}: clear drop on {where}: {', '.join(cmp['clear_drops'])}")
         elif not cmp["comparative"] and delta < -ev.noninferiority_margin:
             reasons.append(f"{label}: composite fell {delta:+.3f} (more than {ev.noninferiority_margin})")
         if cost_ratio is not None and cost_ratio > ev.better_path_max_cost_ratio:
@@ -241,6 +248,28 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
         return None
     raw = out / suite_id / "raw_outputs.jsonl"
     return raw if raw.exists() else None
+
+
+def prompts_unchanged(suite_id: str, base_ref: str) -> bool:
+    """True when every prompt the suite exercises renders the same request at ``base_ref``.
+
+    The holdout split guards against a prompt tuned on the dev cases. When no prompt text
+    changed (a transport, logging or scoring-only change), nothing was tuned against the dev
+    cases' outputs, so the paired test can use every case and roughly doubles its sample.
+    """
+    base_reg = prompt_registry.load_at_ref(base_ref)
+    if base_reg is None:
+        return False
+    head = prompt_registry.load()
+    computed = prompt_registry.compute_all(head)
+    pids = [pid for pid, e in head.prompts.items() if suite_id in e.suites and e.status != "judge"]
+    if not pids:
+        return False
+    for pid in pids:
+        old = base_reg.prompts.get(pid)
+        if old is None or old.fingerprint != computed.get(pid, head.prompts[pid].fingerprint):
+            return False
+    return True
 
 
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
@@ -311,8 +340,12 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                             if score is not None:
                                 wins.append(score)
                         pairwise_scores[label] = sum(wins) / len(wins) if wins else None
+            unchanged = prompts_unchanged(suite_id, base_ref)
             results[suite_id] = ab_decision(suite, head, base_aggs, pairwise_scores=pairwise_scores,
-                                            judge_calibrated=calibrated)
+                                            judge_calibrated=calibrated, split=None if unchanged else "holdout")
+            if unchanged:
+                results[suite_id]["notes"].append(
+                    "prompts unchanged from the base: compared on all cases, not only the holdout split")
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
     overall = ("fail" if any(r["status"] == "fail" for r in results.values())

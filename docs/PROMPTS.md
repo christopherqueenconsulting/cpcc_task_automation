@@ -102,9 +102,24 @@ Evaluations are **event-driven only**, never on a timer:
 | A PR changes nothing a prompt depends on | `prompt-eval/ab` = success, "no suites affected" | $0 |
 | A PR changes only `poetry.lock`, `pyproject.toml` or docs (a dependency version bump, see below) | no model calls: the `dependency-smoke` job syncs the environment to the head lock (`poetry install --with test --sync`), imports every `cqc_cpcc` module, resolves every absolute import in `cqc_cpcc` and `cqc_streamlit_app` (function-level ones included), and checks that packages removed from the lock are gone; `prompt-eval/ab` = success, "dependency-only change; import smoke passed" (failure if any check fails) | $0 |
 | A PR changes only grader code | re-score master's saved outputs with the new graders | $0 |
-| A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, or a model-registry role | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap on the holdout split (suites with ≥30 cases), absolute margin otherwise; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1-3 |
+| A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, or a model-registry role | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap for suites with ≥30 cases (the composite must be non-inferior; a grader fails it only on a clear drop, see below), on the holdout split, or on all cases when the suite's prompts render the same request as the base; absolute margin otherwise; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1-3 |
 | That PR is merged | the affected suites run on master; `prompt-history.jsonl` and `PROMPT_STATUS.md` are updated on the `model-eval-state` branch; "Prompt needs work: <id>" issues open (or close when passing again) | ~$1-3 |
 | A new model is considered (weekly free discovery finds a candidate, the current model changed, or a dispatch) | the Model Evaluation workflow grades it, then the **cross-suite gate** runs the winner on every other suite of the roles it would take; promotion needs both ([`MODEL_EVALUATION.md`](MODEL_EVALUATION.md)) | ≤ $10 + suites |
+
+**How the A/B decides.** The composite is the primary endpoint: head must be non-inferior to
+base, `P(mean paired difference <= -margin) <= alpha`, with `eval.noninferiority_margin` and
+`eval.alpha` from `model_policy.json`. Each grader is a secondary endpoint and fails the A/B
+only on a clear drop: its mean difference is below `-margin` and its whole 95% interval is
+below zero. The hard gates still hold every grader to its absolute floor. The split is the
+holdout split, because a prompt tuned on the dev cases would look better there. When every
+prompt the suite exercises renders the same request fingerprint as the base (a transport,
+logging or scoring change), nothing was tuned against those cases, so all cases are used.
+
+Before this rule, every grader had to show non-inferiority on its own. Re-splitting the four
+runs per case from A/B run 39866206990 (a prompt-identical change, so base and head runs are
+exchangeable) into 200 random pairs of arms failed that old rule 72-92% of the time on
+`grading`, `requirement-extraction`, `project-feedback` and `exam-grading`. The PR that
+introduced this rule records the per-suite rates before and after.
 
 **Lockfile changes.** `poetry.lock` is in the `shared_files` of six of the eleven prompts, but a
 dependency version bump is not a prompt change and never triggers model runs, whatever
