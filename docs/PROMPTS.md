@@ -106,20 +106,32 @@ Evaluations are **event-driven only**, never on a timer:
 | That PR is merged | the affected suites run on master; `prompt-history.jsonl` and `PROMPT_STATUS.md` are updated on the `model-eval-state` branch; "Prompt needs work: <id>" issues open (or close when passing again) | ~$1-3 |
 | A new model is considered (weekly free discovery finds a candidate, the current model changed, or a dispatch) | the Model Evaluation workflow grades it, then the **cross-suite gate** runs the winner on every other suite of the roles it would take; promotion needs both ([`MODEL_EVALUATION.md`](MODEL_EVALUATION.md)) | ≤ $10 + suites |
 
-**How the A/B decides.** The composite is the primary endpoint: head must be non-inferior to
-base, `P(mean paired difference <= -margin) <= alpha`, with `eval.noninferiority_margin` and
-`eval.alpha` from `model_policy.json`. Each grader is a secondary endpoint and fails the A/B
-only on a clear drop: its mean difference is below `-margin` and its whole 95% interval is
-below zero. The hard gates still hold every grader to its absolute floor. The split is the
-holdout split, because a prompt tuned on the dev cases would look better there. When every
-prompt the suite exercises renders the same request fingerprint as the base (a transport,
-logging or scoring change), nothing was tuned against those cases, so all cases are used.
+**How the A/B decides.** Margin and alpha are `eval.noninferiority_margin` and `eval.alpha`
+in `model_policy.json`.
 
-Before this rule, every grader had to show non-inferiority on its own. Re-splitting the four
-runs per case from A/B run 39866206990 (a prompt-identical change, so base and head runs are
-exchangeable) into 200 random pairs of arms failed that old rule 72-92% of the time on
-`grading`, `requirement-extraction`, `project-feedback` and `exam-grading`. The PR that
-introduced this rule records the per-suite rates before and after.
+- **Composite (primary):** head must be non-inferior to base, `P(mean paired difference <=
+  -margin) <= alpha` (one-sided).
+- **Safety graders** (`injection`, `no_solution_leak`, `validity`; `STRICT_GRADERS` in
+  `suites/base.py`): the same non-inferiority test each. They sit near 1.0, so a few cases
+  going from pass to fail is caught.
+- **Every other grader:** fails only on a clear drop, its mean difference below `-margin`
+  and its whole two-sided 95% interval below zero. For a grader outside the composite
+  (`requirement_agreement`, `feedback_length`, `offered_types`, `severity`, `ids`,
+  `details`) this rule and the hard-gate floor are the only checks; it has no
+  non-inferiority test of its own.
+- **Hard gates** still hold every grader to its absolute floor.
+- **Split:** the holdout split, because a prompt tuned on the dev cases would look better
+  there. When every non-judge prompt the suite exercises renders the same request
+  fingerprint as the base, no prompt text changed, so all cases are used (if there are at
+  least 30). Known limit: response-side code (scoring engine, compile gate, validity and
+  requirement coverage, parsers) can still be tuned on dev cases, and the all-cases split
+  does not guard against that.
+
+Before this rule, every grader had to be non-inferior on its own, and a prompt-identical
+change failed it most of the time. PR #401 records the measured rates (false fails, and
+the chance that a real regression passes) from `scripts/prompt_ab_power.py`; re-run it on
+any A/B artifact, for example after a change to `repeats` or the margin:
+`poetry run python scripts/prompt_ab_power.py <artifact dir> <suite> ... --observed --miss --project`.
 
 **Lockfile changes.** `poetry.lock` is in the `shared_files` of six of the eleven prompts, but a
 dependency version bump is not a prompt change and never triggers model runs, whatever

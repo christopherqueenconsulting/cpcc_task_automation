@@ -159,6 +159,67 @@ class TestAbGatePower:
         assert everything["models"]["m"]["comparative"] is True and everything["models"]["m"]["split"] == "all"
         assert any("on all cases" in r for r in everything["reasons"])
 
+    def test_all_cases_never_test_less_than_the_holdout_would(self):
+        # 20 holdout cases: enough for the holdout test (12), too few for all cases (30).
+        head = _agg(self.suite, [0.5] * 20)
+        base_agg = _agg(self.suite, [0.9] * 20)
+        result = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg}, split=None)
+        assert result["models"]["m"]["comparative"] is True and result["models"]["m"]["split"] == "holdout"
+        assert result["status"] == "fail"
+
+    def test_the_decision_records_the_paired_numbers_and_names_them(self):
+        head = _agg(self.suite, [0.5] * 40, grader=[0.5] * 40)
+        base_agg = _agg(self.suite, [0.9] * 40, grader=[0.9] * 40)
+        m = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg})["models"]["m"]
+        assert m["n"] == 40 and m["primary_noninferior"] is False and m["split"] == "holdout"
+        assert m["paired"]["mean"] == pytest.approx(-0.4) and m["paired"]["p_noninferior"] == 1.0
+        assert set(m["clear_drops"]) == {"f1", "severity"}
+        reasons = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg})["reasons"]
+        assert "paired mean -0.400" in reasons[0] and "n=40" in reasons[0]
+
+    def test_the_markdown_names_the_split_and_the_kind_of_failure(self):
+        a = _agg(self.suite, [0.8] * 40)
+        drop = _agg(self.suite, [0.8] * 40, grader=[0.5] * 40)
+        report = {"base_ref": "origin/master", "status": "fail", "suites": {
+            "exam-grading": pa.ab_decision(self.suite, {"m": drop}, {"m": a})}}
+        md = pa.ab_markdown(report)
+        assert "clear drop: severity, holdout n=40" in md
+
+
+def _agg_graders(per_case_graders, split="holdout"):
+    """Aggregate with given per-case grader dicts; composite = f1 (exam-grading's only weight)."""
+    per_case = [base.CaseScore(f"c{i}", "s", split, 1, 1, g, g.get("f1", 1.0)) for i, g in enumerate(per_case_graders)]
+    n = len(per_case)
+    return {"composite": sum(cs.composite for cs in per_case) / n, "graders": {}, "ok_rate": 1.0, "errors": {},
+            "cost_per_call": 0.01, "per_case": per_case}
+
+
+@pytest.mark.usefixtures("uncalibrated_policy")
+class TestSafetyGradersStayStrict:
+    def test_two_of_eleven_injection_twins_newly_failing_fails_the_ab(self):
+        suite = get_suite("exam-grading")
+        base_cases = [{"f1": 0.8}] * 30 + [{"f1": 0.8, "injection": 1.0}] * 11
+        head_cases = [{"f1": 0.8}] * 30 + [{"f1": 0.8, "injection": 0.0}] * 2 + [{"f1": 0.8, "injection": 1.0}] * 9
+        result = pa.ab_decision(suite, {"m": _agg_graders(head_cases)}, {"m": _agg_graders(base_cases)})
+        assert result["status"] == "fail" and any("safety grader injection" in r for r in result["reasons"])
+
+    def test_a_solution_leak_on_two_cases_fails_the_ab(self):
+        suite = get_suite("exam-grading")
+        base_cases = [{"f1": 0.8, "no_solution_leak": 1.0}] * 40
+        head_cases = [{"f1": 0.8, "no_solution_leak": 0.0}] * 2 + [{"f1": 0.8, "no_solution_leak": 1.0}] * 38
+        result = pa.ab_decision(suite, {"m": _agg_graders(head_cases)}, {"m": _agg_graders(base_cases)})
+        assert result["status"] == "fail" and any("safety grader no_solution_leak" in r for r in result["reasons"])
+
+    def test_three_of_ninety_submissions_newly_judged_invalid_fails_the_ab(self):
+        suite = get_suite("grading")
+        base_cases = [{"f1": 0.8, "validity": 1.0}] * 90
+        head_cases = [{"f1": 0.8, "validity": 0.0}] * 3 + [{"f1": 0.8, "validity": 1.0}] * 87
+        cmp = base.ab_noninferior(_agg_graders(head_cases), _agg_graders(base_cases), suite, split=None,
+                                  resamples=4000)
+        assert cmp["strict_failures"] == ["validity"] and cmp["noninferior"] is False
+        # The relaxed rule alone would have let it through: some resamples miss all three cases.
+        assert not (cmp["metrics"]["validity"]["high"] < 0)
+
 
 class TestPromptsUnchanged:
     def test_same_fingerprints_mean_unchanged(self, monkeypatch):
@@ -181,6 +242,27 @@ class TestPromptsUnchanged:
         monkeypatch.setattr(prompt_registry, "load_at_ref", lambda ref: None)
         assert pa.prompts_unchanged("grading", "origin/master") is False
         assert pa.prompts_unchanged("no-such-suite", "origin/master") is False
+
+    @pytest.mark.parametrize("change", ["added", "removed", "moved"])
+    def test_a_prompt_added_removed_or_moved_means_changed(self, monkeypatch, change):
+        from cqc_cpcc.model_eval import prompt_registry
+
+        head = prompt_registry.load()
+        base_reg = head.model_copy(deep=True)
+        pid = next(p for p, e in head.prompts.items() if "grading" in e.suites and e.status != "judge")
+        if change == "added":  # in head only
+            del base_reg.prompts[pid]
+        elif change == "removed":  # in base only
+            head = head.model_copy(deep=True)
+            del head.prompts[pid]
+        else:  # head no longer lists the suite
+            head = head.model_copy(deep=True)
+            head.prompts[pid].suites = [s for s in head.prompts[pid].suites if s != "grading"]
+        monkeypatch.setattr(prompt_registry, "load", lambda *a, **k: head)
+        monkeypatch.setattr(prompt_registry, "load_at_ref", lambda ref: base_reg)
+        monkeypatch.setattr(prompt_registry, "compute_all",
+                            lambda reg: {p: e.fingerprint for p, e in reg.prompts.items()})
+        assert pa.prompts_unchanged("grading", "origin/master") is False
 
 
 class TestCalibration:
@@ -433,3 +515,20 @@ class TestCli:
         assert json.loads(Path(baseline).read_text())["suite"] == "digest"  # the cited baseline exists
         assert "preprocessing-digest" in patch["calibrated_versions"]
         assert (tmp_path / "cal" / "policy_patch.json").exists()
+
+
+def test_power_script_exits_1_when_no_case_has_matching_runs(tmp_path, monkeypatch, capsys):
+    import runpy
+    import sys
+
+    for side in ("head", "base"):
+        out = tmp_path / side / "digest"
+        out.mkdir(parents=True)
+        rec = base.SuiteRecord("digest", "not-a-digest-case", "openai/gpt-6-luna", "medium", 0, ok=True)
+        (out / "raw_outputs.jsonl").write_text(rec.to_json() + "\n", encoding="utf-8")
+    script = Path(__file__).resolve().parents[2] / "scripts" / "prompt_ab_power.py"
+    monkeypatch.setattr(sys, "argv", ["prompt_ab_power.py", str(tmp_path), "digest", "--sims", "1"])
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_path(str(script), run_name="__main__")
+    assert exit_info.value.code == 1
+    assert "too few for a paired test" in capsys.readouterr().err

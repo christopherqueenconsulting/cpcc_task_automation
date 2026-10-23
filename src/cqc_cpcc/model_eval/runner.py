@@ -207,7 +207,7 @@ async def run_model(
             completion = call.completion if call else None
             if call is not None:
                 record.prompt = call.prompt
-            if record.ok and record.validity not in (None, "ok"):
+            if record.ok and record.validity not in (None, "ok") and call is None:
                 # Rejected by the validity gate: no model call was made, nothing to charge.
                 completion = None
                 record.cost_usd = 0.0
