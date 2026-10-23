@@ -13,8 +13,11 @@ import asyncio
 import datetime as dt
 import json
 import os
+import signal
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -255,17 +258,150 @@ def _base_has_suite(worktree: Path, suite_id: str) -> bool:
     return init.exists() and f'"{suite_id}"' in init.read_text(encoding="utf-8")
 
 
+#: Model calls in flight on each side of an A/B (head and base run at the same time, so up to twice
+#: this many at once). The calls only wait on the network; 4 was the default for every run before.
+AB_CONCURRENCY = 12
+
+
+#: A base run that has not finished after this long is killed and counts as failed. The A/B job itself
+#: stops at 240 minutes; the slowest recorded A/B (four suites, head then base, four calls at a time) took
+#: 115 minutes in all, so the base alone, now beside the head, needs well under this.
+BASE_TIMEOUT_S = 120 * 60
+
+#: How long to wait for a killed base's output pipes to close. A grandchild that left the process group
+#: (setsid) can hold them open, and an unbounded wait would then last until the job limit.
+BASE_REAP_S = 30
+
+_live_base: set = set()  # base processes running now, so they can be stopped before their worktree goes
+_live_base_lock = threading.Lock()
+_base_stopped = False  # set when the A/B is being torn down: a base not yet started must not start
+
+
+def _signal_group(proc, sig) -> None:
+    """Signal the base's whole process group (it was started in its own session).
+
+    A base that has already exited and been reaped is left alone: its pid may be someone else's now.
+    """
+    if proc.returncode is not None:
+        return
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(proc.pid, sig)
+        elif sig == signal.SIGTERM:
+            proc.terminate()
+        else:
+            proc.kill()
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _allow_base() -> None:
+    global _base_stopped
+    with _live_base_lock:
+        _base_stopped = False
+
+
+def _terminate_live_base(grace_s: float = 5.0, stop_new: bool = False) -> None:
+    """Stop every base run that is still going: TERM the process group, then KILL what is left.
+
+    ``asyncio.to_thread`` cannot cancel a thread, so cancelling the A/B (a cancelled job, Ctrl-C)
+    or a failing head would otherwise leave a paid base run going, and its worktree removed under it.
+    ``stop_new`` also stops a base whose thread has not started its process yet from ever starting
+    (``_run_base`` returns None for it); ``prompt_ab`` clears that when it is done.
+    """
+    global _base_stopped
+    with _live_base_lock:
+        if stop_new:
+            _base_stopped = True
+        procs = list(_live_base)
+    for proc in procs:
+        _signal_group(proc, signal.SIGTERM)
+    deadline = time.monotonic() + grace_s
+    while procs and time.monotonic() < deadline and any(p.poll() is None for p in procs):
+        time.sleep(0.05)
+    for proc in procs:
+        if proc.poll() is None:
+            _signal_group(proc, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)
+
+
+def _reap(proc) -> tuple:
+    """Collect a killed base's output, giving up on pipes a stray grandchild keeps open."""
+    try:
+        return proc.communicate(timeout=BASE_REAP_S)
+    except subprocess.TimeoutExpired:
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                pipe.close()
+            except Exception:  # noqa: BLE001 - already closed or never opened
+                pass
+        proc.wait()
+        return "", ""
+
+
+def _recorded_cost(raw: Path) -> float:
+    """What the calls recorded in a (possibly partial) ``raw_outputs.jsonl`` cost; each record is
+    flushed as it finishes, so this is what a run that died part-way already spent."""
+    total = 0.0
+    if raw.exists():
+        for line in raw.read_text(encoding="utf-8").splitlines():
+            try:
+                total += float(json.loads(line).get("cost_usd") or 0.0)
+            except (ValueError, TypeError, AttributeError):
+                continue
+    return total
+
+
 def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Path,
-              budget_usd: float) -> Optional[Path]:
-    """Run the suite with the BASE code (prompt, schema, graders). None when the run failed."""
+              budget_usd: float, concurrency: Optional[int] = None,
+              environ: Optional[dict] = None) -> Optional[Path]:
+    """Run the suite with the BASE code (prompt, schema, graders). None when the run failed.
+
+    The concurrency goes to the base code through ``CQC_EVAL_CONCURRENCY`` rather than a flag, so a
+    base that predates the setting simply runs at its own default instead of failing on an
+    argument it does not know.
+
+    The run has a hard time limit (``BASE_TIMEOUT_S``) and its own process group, so a stalled
+    call cannot hold the A/B until the job limit and a cancelled A/B can stop it
+    (``_terminate_live_base``). Its output goes to ``<out>/<suite>/run.log``, which the artifact keeps.
+
+    ``environ`` is the environment to start from. While the head runs in this process,
+    ``pinned_registry`` points ``CQC_MODEL_REGISTRY_PATH`` at a temporary registry file and removes the
+    ``CQC_MODEL_<ROLE>`` pins; a base started from the live ``os.environ`` would read the head's
+    registry instead of its own, and lose it when that file is deleted. Callers that run the base
+    beside the head pass the environment as it was before either started.
+    """
     args = [sys.executable, "-m", "cqc_cpcc.model_eval", "suite", "run", "--suite", suite_id,
             "--repeats", str(repeats), "--out", str(out.resolve()), "--budget", f"{max(budget_usd, 0.01):.4f}"]
     for m in models:
         args += ["--model", m]
-    env = {**os.environ, "PYTHONPATH": str(worktree / "src")}
-    result = subprocess.run(args, cwd=worktree, env=env, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(result.stdout[-2000:], result.stderr[-2000:])
+    env = {**(os.environ if environ is None else environ), "PYTHONPATH": str(worktree / "src")}
+    if concurrency:
+        env["CQC_EVAL_CONCURRENCY"] = str(concurrency)
+    with _live_base_lock:
+        if _base_stopped:
+            print(f"[{suite_id}] base run not started: the A/B is being torn down")
+            return None
+        proc = subprocess.Popen(args, cwd=worktree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+        _live_base.add(proc)
+    timed_out = False
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=BASE_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _signal_group(proc, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)
+            stdout, stderr = _reap(proc)
+    finally:
+        with _live_base_lock:
+            _live_base.discard(proc)
+    log_dir = out / suite_id
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "run.log").write_text(f"{stdout}\n--- stderr ---\n{stderr}", encoding="utf-8")
+    if timed_out or proc.returncode != 0:
+        print(f"[{suite_id}] base run {'timed out' if timed_out else f'exited {proc.returncode}'}; "
+              f"log in {log_dir / 'run.log'}")
+        print((stdout or "")[-2000:], (stderr or "")[-2000:])
         return None
     raw = out / suite_id / "raw_outputs.jsonl"
     return raw if raw.exists() else None
@@ -488,22 +624,80 @@ def base_rule_markdown(decided: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0: dict, judge_model: str,
+                           cache, budget, workers: int) -> list:
+    """The pairwise judge's score for each case id, in the order of ``case_ids`` (None: no score).
+
+    The calls run in parallel, but the result list keeps the case order, so the mean taken over it
+    is the same one the sequential loop took. Once the budget is spent no further call starts.
+    """
+    gate = asyncio.Semaphore(workers)
+
+    async def one(cid):
+        async with gate:
+            if budget.exhausted:
+                return None
+            score, cost = await jm.pairwise(suite, cases[cid], h0[cid].payload, b0[cid].payload, judge_model, cache)
+            budget.add(cost)
+            return score
+
+    outcomes = await asyncio.gather(*[one(cid) for cid in case_ids], return_exceptions=True)
+    for outcome in outcomes:  # every started call has finished before the first failure is raised
+        if isinstance(outcome, BaseException):
+            raise outcome
+    return list(outcomes)
+
+
+def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[Path]) -> dict:
+    """Wall-clock and retry counts for one suite (a 429 or timeout the client retried), for the log."""
+    def side(path):
+        if path is None:
+            return None
+        recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
+        return base.retry_stats(recs)
+
+    return {"elapsed_s": round(time.monotonic() - started, 1), "concurrency": workers,
+            "head": side(head_raw), "base": side(base_raw)}
+
+
+def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
+    """One line per suite for the end of the log (the workflow shows only its last 60 lines)."""
+    def part(name):
+        s = stats.get(name)
+        return f"{name} {s['calls']} calls, {s['retried']} retried" if s else f"{name} none"
+
+    line = f"A/B {suite_id}: {part('head')}; {part('base')}; {stats['elapsed_s']:.0f}s at {stats['concurrency']} in flight"
+    return line + (f"; FAILED: see base/{suite_id}/run.log" if failed else "")
+
+
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
-                    judges: bool = False, judge_model: Optional[str] = None, judge_cache: Optional[str] = None) -> dict:
-    """Run each suite at the base and head code on the same models and compare."""
+                    judges: bool = False, judge_model: Optional[str] = None, judge_cache: Optional[str] = None,
+                    concurrency: Optional[int] = None) -> dict:
+    """Run each suite at the base and head code on the same models and compare.
+
+    The head and the base of a suite run at the same time, each with its own share of the budget,
+    and the pairwise judge calls run in parallel. Which cases run, how often, on which models, how
+    both sides are scored and every pass or fail rule are exactly what they were when the two sides
+    ran one after the other: only the waiting overlaps.
+    """
     from cqc_cpcc.model_eval.__main__ import parse_model
 
     out = out.resolve()  # the base runs in another working directory
     out.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    workers = base.eval_concurrency(default=AB_CONCURRENCY, value=concurrency)
+    clean_environ = dict(os.environ)  # before any run pins the registry in this process (see _run_base)
     parsed = [parse_model(m) for m in models]
     # One budget for the whole A/B: head + base for every suite, judges included.
     budget = prompt_eval.shared_budget()
     estimate = 2 * prompt_eval.estimate_suites(suite_ids, parsed, repeats)
-    print(f"A/B estimate ${estimate:.2f} (head + base); budget stops at ${budget.stop_at:.2f}")
+    print(f"A/B estimate ${estimate:.2f} (head + base); budget stops at ${budget.stop_at:.2f}; "
+          f"{workers} calls in flight per side")
     if estimate > budget.stop_at:
         raise SystemExit("the A/B estimate exceeds the prompt-eval budget; run fewer suites")
     worktree = _base_worktree(base_ref, out / "base-src")
     results = {}
+    _allow_base()
     try:
         for suite_id in suite_ids:
             suite = get_suite(suite_id)
@@ -512,22 +706,52 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             r = repeats or prompt_eval.suite_policy(suite_id).repeats
             # Decided before any spend, so a git error here cannot waste a paid run.
             unchanged = prompts_unchanged(suite_id, base_ref)
-            await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"), budget=budget)
-            if not _base_has_suite(worktree, suite_id):
+            suite_started = time.monotonic()
+            has_base = _base_has_suite(worktree, suite_id)
+            base_estimate = prompt_eval.estimate_suites([suite_id], suite_models, r)
+            # Each side spends from its own share of what is left, so neither can eat the other's
+            # and the total cap still holds. Without a base run the head keeps the whole budget.
+            head_budget, base_share = budget.split() if has_base else (budget, None)
+            async def run_head():
+                try:
+                    return await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"),
+                                                 budget=head_budget, concurrency=workers)
+                except BaseException:
+                    # a failed head makes the base's result worthless: stop paying for it, and keep one
+                    # that has not started yet from starting
+                    _terminate_live_base(stop_new=True)
+                    raise
+
+            jobs = [run_head()]
+            if has_base:
+                jobs.append(asyncio.to_thread(_run_base, worktree, suite_id, labels, r, out / "base",
+                                              min(base_share.remaining, base_estimate * 1.5), workers,
+                                              clean_environ))
+            # Wait for both even when one fails: the worktree is removed in `finally`, which must not
+            # happen under a base run that is still going.
+            outcomes = await asyncio.gather(*jobs, return_exceptions=True)
+            if has_base:
+                budget.absorb(head_budget)
+                # Whatever the base run recorded was spent, whether it finished, failed or was stopped.
+                budget.add(_recorded_cost(out / "base" / suite_id / "raw_outputs.jsonl"))
+            for outcome in outcomes:
+                if isinstance(outcome, BaseException):
+                    raise outcome
+            if not has_base:
                 head = _aggregates(suite, out / "head" / suite_id / "raw_outputs.jsonl")
                 results[suite_id] = {"suite": suite_id, "status": "no-base",
                                      "reasons": [], "notes": ["the base ref has no such suite; absolute numbers only"],
-                                     "models": {k: {"composite_head": v.get("composite")} for k, v in head.items()}}
+                                     "models": {k: {"composite_head": v.get("composite")} for k, v in head.items()},
+                                     "run_stats": _run_stats(suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", None)}
                 continue
-            base_estimate = prompt_eval.estimate_suites([suite_id], suite_models, r)
-            base_raw = _run_base(worktree, suite_id, labels, r, out / "base",
-                                 min(budget.remaining, base_estimate * 1.5))
+            base_raw = outcomes[1]
             if base_raw is None:
                 # Fail closed: a base run that crashed or ran out of budget proves nothing.
                 results[suite_id] = {"suite": suite_id, "status": "fail", "models": {}, "notes": [],
-                                     "reasons": ["the base run failed, so the change could not be compared"]}
+                                     "reasons": ["the base run failed, so the change could not be compared"],
+                                     "run_stats": _run_stats(suite_started, workers,
+                                                             out / "head" / suite_id / "raw_outputs.jsonl", None)}
                 continue
-            budget.add(sum(rec.cost_usd for recs in prompt_eval.read_records(base_raw).values() for rec in recs))
             # Both sides are scored with the HEAD graders, so only the prompt differs. When the
             # PR changed the dataset, only cases whose inputs are unchanged are compared.
             same = _unchanged_case_ids(suite, worktree)
@@ -546,30 +770,34 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                     for label in labels[:1]:  # the incumbent (first model)
                         h0 = {x.case_id: x for x in head_recs.get(label, []) if x.ok and x.repeat == 0}
                         b0 = {x.case_id: x for x in base_recs.get(label, []) if x.ok and x.repeat == 0}
-                        wins = []
-                        for cid in sorted(set(h0) & set(b0)):
-                            if cases.get(cid) is None or cases[cid].split != "holdout":
-                                continue
-                            if budget.exhausted:
-                                break
-                            score, cost = await jm.pairwise(suite, cases[cid], h0[cid].payload, b0[cid].payload,
-                                                            jmodel, cache)
-                            budget.add(cost)
-                            if score is not None:
-                                wins.append(score)
+                        scores = await _pairwise_scores(
+                            jm, suite, cases, [c for c in sorted(set(h0) & set(b0))
+                                               if cases.get(c) is not None and cases[c].split == "holdout"],
+                            h0, b0, jmodel, cache, budget, workers)
+                        wins = [s for s in scores if s is not None]
                         pairwise_scores[label] = sum(wins) / len(wins) if wins else None
             results[suite_id] = ab_decision(suite, head, base_aggs, pairwise_scores=pairwise_scores,
                                             judge_calibrated=calibrated, split=None if unchanged else "holdout")
+            # Reporting only: nothing above or below reads it.
+            results[suite_id]["run_stats"] = _run_stats(
+                suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", base_raw)
             if unchanged:
                 results[suite_id]["notes"].append(
                     "prompts unchanged from the base: the paired test uses all cases when there are at least 30 "
                     "(the Paired test column names the split); the pairwise judge still scores holdout only")
     finally:
+        _terminate_live_base(stop_new=True)  # a cancelled or failed A/B must not leave a base run under its worktree
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
+        _allow_base()
+    for suite_id, r in results.items():  # last lines of the log: the workflow shows only its tail
+        if r.get("run_stats"):
+            print(_stats_line(suite_id, r["run_stats"], failed=r["status"] == "fail"))
     overall = ("fail" if any(r["status"] == "fail" for r in results.values())
                else "pass" if results and all(r["status"] == "pass" for r in results.values()) else "pass-provisional")
     report = {"base_ref": base_ref, "status": overall, "suites": results,
-              "prompt_versions": {pid: e.version for pid, e in prompt_registry.load().prompts.items()}}
+              "prompt_versions": {pid: e.version for pid, e in prompt_registry.load().prompts.items()},
+              "wall_clock_s": round(time.monotonic() - started, 1), "concurrency": workers}
+    print(f"A/B wall-clock {report['wall_clock_s']:.0f}s at {workers} calls in flight per side")
     (out / "ab.json").write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     (out / "ab.md").write_text(ab_markdown(report), encoding="utf-8")
     return report
@@ -809,7 +1037,8 @@ def cmd_prompt_ab(args) -> int:
         print("no suites to compare")
         return 0
     report = asyncio.run(prompt_ab(suites, args.base_ref, args.model or [], Path(args.out), args.repeats,
-                                   judges=args.judges, judge_model=args.judge_model, judge_cache=args.judge_cache))
+                                   judges=args.judges, judge_model=args.judge_model, judge_cache=args.judge_cache,
+                                   concurrency=args.concurrency))
     print((Path(args.out) / "ab.md").read_text(encoding="utf-8"))
     github_output(ab_status=report["status"])
     return 0
@@ -936,6 +1165,8 @@ def add_parsers(sub) -> None:
     ab.add_argument("--judges", action="store_true")
     ab.add_argument("--judge-model", default=None)
     ab.add_argument("--judge-cache", default=None)
+    ab.add_argument("--concurrency", type=int, default=None,
+                    help=f"model calls in flight per side (default {AB_CONCURRENCY}, or CQC_EVAL_CONCURRENCY)")
     ab.set_defaults(func=cmd_prompt_ab)
 
     rq = sub.add_parser("prompt-requests", help="capture each suite's exact requests with no model call ($0)")
