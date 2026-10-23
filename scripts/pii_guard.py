@@ -45,10 +45,11 @@ from typing import Iterable
 DENYLIST_PATH = Path("scripts/pii_denylist.sha256")
 
 #: Class (c): an address whose domain is ``cpcc.edu`` or ``<labels>.cpcc.edu``
-#: (agreed in issue #288). The lookahead rejects lookalikes that continue the
+#: (agreed in issue #288). The lookbehind anchors the match at the start of a
+#: local-part run, so a long run with no ``@`` scans in linear time. The lookahead rejects lookalikes that continue the
 #: domain (``cpcc.edu.example.org``, ``cpcc.edu-x``); a sentence-ending dot is fine.
 STUDENT_EMAIL_RE = re.compile(
-    r"([A-Za-z0-9._%+-]+)@(?:[A-Za-z0-9-]+\.)*cpcc\.edu(?![A-Za-z0-9-]|\.[A-Za-z0-9])",
+    r"(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@(?:[A-Za-z0-9-]+\.)*cpcc\.edu(?![A-Za-z0-9-]|\.[A-Za-z0-9])",
     re.IGNORECASE,
 )
 

@@ -40,7 +40,7 @@ Markers are strict (`--strict-markers`): `unit`, `integration`, `e2e`, `eval_liv
 - any token whose SHA-256 is in `scripts/pii_denylist.sha256` (plaintext never committed).
 
 Run it before pushing: `python scripts/pii_guard.py` (or pass paths). Use only the
-synthetic names and ids allowlisted at the top of the script in fixtures and docs. A
+synthetic names, ids and e-mail local parts allowlisted at the top of the script in fixtures and docs. A
 `pii-guard:allow` comment exempts a line from the structural checks only, never from the
 denylist. Never commit real student names, ids, submissions or grades, and never put real
 student work in a prompt renderer or eval fixture. Details: `docs/security-workflows.md`,

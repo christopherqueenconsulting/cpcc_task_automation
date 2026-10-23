@@ -255,3 +255,10 @@ class TestStudentEmailClass:
         args = ["--root", str(tmp_path), "--denylist", str(tmp_path / "none")]
         assert pii_guard.main([*args, str(bad)]) == 1
         assert "bad.md:1: [class-c] zed@email.cpcc.edu" in capsys.readouterr().err  # pii-guard:allow
+
+    def test_long_run_without_at_sign_scans_in_linear_time(self):
+        import time
+
+        start = time.perf_counter()
+        pii_guard.scan_text("a" * 200_000, "f.txt", frozenset())
+        assert time.perf_counter() - start < 2
