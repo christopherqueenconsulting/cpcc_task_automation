@@ -368,6 +368,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }} (base branch's lock)
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
       - name: Add the PR head as data
         shell: bash
         env:
@@ -375,19 +383,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch -q origin "${HEAD_SHA}"
-          git worktree add -q --detach .pr-head "${HEAD_SHA}"
-
-      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }} (base branch's lock)
-        uses: "./.github/actions/poetry_setup"
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          poetry-version: ${{ env.POETRY_VERSION }}
-          working-directory: "."
-          install-args: ""
+          git worktree add -q --detach "${RUNNER_TEMP}/pr-head" "${HEAD_SHA}"
 
       - name: Download the A/B outputs (data)
+        if: needs.ab.result == 'success'
         uses: actions/download-artifact@v8
-        continue-on-error: true
         with:
           name: prompt-eval-ab-${{ github.run_id }}
           path: ab-artifact
@@ -401,7 +401,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ab-artifact
-          poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --dir ab-artifact --head-root .pr-head \
+          if ! poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --help >/dev/null 2>&1; then
+            # Bootstrap: the base predates this check (only the PR that adds it). The report then
+            # uses the PR's own verdict. A PR cannot change the base checkout, so this is dead
+            # code once the check is on the base branch.
+            echo "base branch predates prompt-ab-decide: the PR's own verdict stands" | tee -a "$GITHUB_STEP_SUMMARY"
+            { echo "ab_status=bootstrap"; echo "required="; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --dir ab-artifact --head-root "${RUNNER_TEMP}/pr-head" \
             --base-sha "${BASE_SHA}" --head-sha "${HEAD_SHA}"
           cat ab-artifact/base-rule.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -449,6 +457,8 @@ jobs:
           DEPENDENCY_ONLY: ${{ needs.detect.outputs.dependency_only }}
           SMOKE_RESULT: ${{ needs.dependency-smoke.result }}
           AB_RESULT: ${{ needs.ab.result }}
+          AB_STATUS: ${{ needs.ab.outputs.ab_status }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           BASE_RESULT: ${{ needs.ab-base-rule.result }}
           BASE_STATUS: ${{ needs.ab-base-rule.outputs.ab_status }}
           BASE_REQUIRED: ${{ needs.ab-base-rule.outputs.required }}
@@ -477,26 +487,39 @@ jobs:
             if [ "${BASE_RESULT}" != "success" ]; then
               state="failure"; description="Base-branch check ${BASE_RESULT}"
               echo; echo "The base-branch check (detection and rule from the base branch) ended with **${BASE_RESULT}**: ${RUN_URL}"
-            elif [ -n "${RUN_SUITES}" ] || [ -n "${BASE_REQUIRED}" ]; then
+            elif [ -n "${RUN_SUITES}" ] || [ -n "${BASE_REQUIRED}" ] || [ "${BASE_STATUS}" = "bootstrap" ]; then
               echo "Suites that need a model run: \`${RUN_SUITES:-none}\` (this PR's detection), \`${BASE_REQUIRED:-none}\` (the base branch's)"
               if [ -f results/prompt-eval-estimate-*/estimate.txt ]; then
                 echo; echo '```'; cat results/prompt-eval-estimate-*/estimate.txt; echo '```'
               fi
-              if [ "${BASE_STATUS}" = "not-run" ] && [ "${AB_RESULT}" = "skipped" ] && [[ "${HEAD_REF}" == auto/model-* ]]; then
+              if [ "${AB_RESULT}" = "skipped" ] && [[ "${HEAD_REF}" == auto/model-* ]] && [ "${AUTHOR_TYPE}" = "Bot" ]; then
                 # Model promotion/rollback bot PRs: the Model Evaluation run and its cross-suite
                 # gate already evaluated the model change on every affected suite.
                 state="success"; description="Model change: evaluated by Model Evaluation"
                 echo; echo "Model registry bot PR: the model change was evaluated by the Model Evaluation run (incl. the cross-suite gate)."
-              elif [ "${BASE_STATUS}" = "not-run" ] && [ "${AB_RESULT}" = "skipped" ]; then
+              elif [ "${AB_RESULT}" = "skipped" ]; then
                 state="pending"; description="A/B needs a maintainer run"
                 echo
-                echo "The A/B did not run automatically (fork, bot, \`claude/\` or \`auto/\` branch, or an author not in \`PROMPT_EVAL_TRUSTED_AUTHORS\`)."
-                echo "A maintainer can run it: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, dry run off."
+                if [ -z "${RUN_SUITES}" ]; then
+                  echo "This PR's detection found no suite, but the base branch's requires \`${BASE_REQUIRED}\`."
+                  echo "A maintainer can run it: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, suites \`${BASE_REQUIRED}\`, dry run off."
+                else
+                  echo "The A/B did not run automatically (fork, bot, \`claude/\` or \`auto/\` branch, or an author not in \`PROMPT_EVAL_TRUSTED_AUTHORS\`)."
+                  echo "A maintainer can run it: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, dry run off."
+                fi
+              elif [ "${AB_RESULT}" != "success" ]; then
+                state="failure"; description="A/B job ${AB_RESULT}"
+                echo; echo "The A/B job ended with **${AB_RESULT}**: ${RUN_URL}"
               else
                 if ls results/prompt-eval-ab-*/ab.md >/dev/null 2>&1; then echo; cat results/prompt-eval-ab-*/ab.md; fi
                 if ls results/prompt-eval-baserule-*/base-rule.md >/dev/null 2>&1; then echo; cat results/prompt-eval-baserule-*/base-rule.md; fi
-                case "${BASE_STATUS}" in
-                  pass) state="success"; description="A/B: no regression (both rules)";;
+                verdict="${BASE_STATUS}"
+                if [ "${BASE_STATUS}" = "bootstrap" ]; then
+                  verdict="${AB_STATUS}"
+                  echo; echo "The base branch predates the base-branch check (this is the PR that adds it): this PR's own verdict stands."
+                fi
+                case "${verdict}" in
+                  pass) state="success"; description="A/B: no regression";;
                   pass-provisional) state="success"; description="A/B: no regression (suite thresholds not calibrated)";;
                   not-run) state="failure"; description="A/B did not run every suite the base branch requires";;
                   *) state="failure"; description="A/B: the change regresses a prompt suite (or the A/B is incomplete)";;
@@ -896,6 +919,9 @@ jobs:
               cd pr
               suites="$(poetry run python -m cqc_cpcc.model_eval prompts-affected --base-ref "origin/${BASE}" 2>/dev/null \
                 | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["run"]))')"
+              # A maintainer can add suites (for example ones only the base branch's detection requires).
+              if [ -n "${SUITES}" ] && [ "${SUITES}" != "all" ]; then suites="$(printf '%s,%s' "${suites}" "${SUITES}" \
+                | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)"; fi
               if [ -z "${suites}" ]; then echo "No suites affected (this PR's detection)"; exit 0; fi
               poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${suites}" --base-ref "origin/${BASE}" \
                 "${models[@]}" "${judges[@]}" --out ../evals/runs/dispatch | tee ../run.log
@@ -935,6 +961,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }} (base branch's lock)
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
       - name: Add the PR head as data
         shell: bash
         env:
@@ -942,15 +976,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch -q origin "${HEAD_SHA}"
-          git worktree add -q --detach .pr-head "${HEAD_SHA}"
-
-      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }} (base branch's lock)
-        uses: "./.github/actions/poetry_setup"
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          poetry-version: ${{ env.POETRY_VERSION }}
-          working-directory: "."
-          install-args: ""
+          git worktree add -q --detach "${RUNNER_TEMP}/pr-head" "${HEAD_SHA}"
 
       - name: Download the A/B outputs (data)
         uses: actions/download-artifact@v8
@@ -968,7 +994,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ab-artifact
-          poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --dir ab-artifact --head-root .pr-head \
+          if ! poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --help >/dev/null 2>&1; then
+            echo "::error::the base branch has no prompt-ab-decide; dispatch from a branch whose base has it"
+            exit 1
+          fi
+          poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --dir ab-artifact --head-root "${RUNNER_TEMP}/pr-head" \
             --base-sha "${BASE_SHA}" --head-sha "${HEAD_SHA}"
           cat ab-artifact/base-rule.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -987,6 +1017,8 @@ jobs:
         run: |
           set -euo pipefail
           { echo "<!-- prompt-eval -->"; echo "## Prompt evaluation (maintainer run)"; echo
+            if [ "${RUN_RESULT}" != "success" ]; then echo "The A/B run ended with **${RUN_RESULT}**."; echo; fi
+            if [ "${DECIDE_OUTCOME}" != "success" ]; then echo "The base-branch check ended with **${DECIDE_OUTCOME}**."; echo; fi
             if [ -f ab-artifact/ab.md ]; then cat ab-artifact/ab.md; echo; fi
             if [ -f ab-artifact/base-rule.md ]; then cat ab-artifact/base-rule.md; fi
             echo; echo "_Run: ${RUN_URL}_"; } > comment.md

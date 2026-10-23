@@ -600,6 +600,28 @@ class TestSuitesFromData:
             s for s in SUITE_MODULES if get_suite(s).role == "grading"}
 
 
+class TestDetectorsAgree:
+    """affected() (PR side) must ask for every suite suites_from_data() (base side) requires."""
+
+    @pytest.mark.parametrize("change", ["version", "removed", "status"])
+    def test_affected_covers_the_base_side_detection(self, monkeypatch, change):
+        reg = pa.prompt_registry.load()
+        head = reg.model_copy(deep=True)
+        if change == "version":
+            head.prompts["requirement-extraction"].version += 1
+        elif change == "removed":
+            del head.prompts["requirement-extraction"]
+        else:
+            head.prompts["requirement-extraction"].status = "draft"
+        monkeypatch.setattr(pa.prompt_registry, "load", lambda *a, **k: head)
+        monkeypatch.setattr(pa.prompt_registry, "load_at_ref", lambda ref: reg)
+        monkeypatch.setattr(pa.prompt_registry, "compute_all",
+                            lambda r: {p: e.fingerprint for p, e in r.prompts.items()})
+        roles = {"grading": {"model": "m"}}
+        required = set(pa.suites_from_data([], head, reg, roles, roles))
+        assert required and set(pa.affected("HEAD", changed=[])["run"]) >= required
+
+
 class TestDecideWithTheBaseRule:
     """The workflow re-decides a finished A/B from a base-branch checkout: both rules must pass."""
 
@@ -666,6 +688,38 @@ class TestDecideWithTheBaseRule:
         raw.write_text("".join(json.dumps(r) + "\n" for r in rows if r["case_id"] != dropped))
         decided = self._decide(finished_ab)
         assert decided["combined_status"] == "fail" and "fewer than" in str(decided["suites"])
+
+    async def test_a_run_without_the_roles_incumbent_fails(self, finished_ab):
+        for side in ("head", "base"):
+            raw = finished_ab / side / "requirement-extraction" / "raw_outputs.jsonl"
+            rows = [json.loads(line) for line in raw.read_text().splitlines() if line.strip()]
+            raw.write_text("".join(json.dumps({**r, "model": "other/model"}) + "\n" for r in rows))
+        decided = self._decide(finished_ab)
+        assert decided["combined_status"] == "fail" and "incumbent" in str(decided["suites"])
+
+    async def test_no_comparable_case_fails(self, finished_ab, tmp_path):
+        import shutil
+
+        head_root = tmp_path / "head-tree"
+        for rel in (pa.prompt_registry.REGISTRY_RELPATH, pa.MODEL_REGISTRY_RELPATH):
+            (head_root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(pa.REPO_ROOT / rel, head_root / rel)
+        # No dataset in the PR's tree at all: nothing can be compared.
+        decided = self._decide(finished_ab, head_root=head_root)
+        assert decided["combined_status"] == "fail" and "nothing was compared" in str(decided["suites"])
+
+    async def test_a_new_suite_the_pr_reports_no_base_is_no_base(self, finished_ab, monkeypatch):
+        report = json.loads((finished_ab / "ab.json").read_text())
+        report["suites"] = {"brand-new-suite": {"suite": "brand-new-suite", "status": "no-base", "models": {}}}
+        report["status"] = "pass-provisional"
+        (finished_ab / "ab.json").write_text(json.dumps(report))
+        monkeypatch.setattr(pa, "suites_from_data", lambda *a, **k: {"brand-new-suite": "test"})
+        decided = self._decide(finished_ab)
+        assert decided["suites"]["brand-new-suite"]["status"] == "no-base"
+        assert decided["combined_status"] == "pass-provisional"
+        report["suites"]["brand-new-suite"]["status"] = "pass"
+        (finished_ab / "ab.json").write_text(json.dumps(report))
+        assert self._decide(finished_ab)["combined_status"] == "fail"
 
     async def test_a_case_the_pr_changed_is_left_out_not_failed(self, finished_ab, tmp_path):
         import shutil
@@ -735,7 +789,9 @@ class TestWorkflowWiring:
         assert "ab-base-rule" in jobs["report"]["needs"]
         env = next(s for s in jobs["report"]["steps"] if s.get("name", "").startswith("Comment"))["env"]
         assert env["BASE_STATUS"] == "${{ needs.ab-base-rule.outputs.ab_status }}"
-        assert "AB_STATUS" not in env
+        run = next(s for s in jobs["report"]["steps"] if s.get("name", "").startswith("Comment"))["run"]
+        # The PR's own verdict is read only for the base check's bootstrap (the PR that adds it).
+        assert run.count("${AB_STATUS}") == 1 and 'verdict="${AB_STATUS}"' in run
 
     def test_the_base_rule_jobs_check_out_the_base_and_hold_no_secrets(self, jobs):
         for name in ("ab-base-rule", "dispatch-report"):
@@ -752,6 +808,25 @@ class TestWorkflowWiring:
             assert "statuses" not in perms and perms.get("pull-requests", "read") == "read"
             assert jobs[name]["steps"][0]["with"]["persist-credentials"] is False
         assert "statuses" not in json.dumps(jobs["dispatch"]["steps"])
+
+    def test_the_report_never_passes_an_a_b_that_did_not_run(self, jobs):
+        run = next(s for s in jobs["report"]["steps"] if s.get("name", "").startswith("Comment"))["run"]
+        ran = run.index('elif [ "${AB_RESULT}" != "success" ]; then')
+        assert run.index('case "${verdict}" in') > ran  # the verdict is read only after the A/B ran
+        assert 'auto/model-* ]] && [ "${AUTHOR_TYPE}" = "Bot" ]' in run
+        assert '"${BASE_STATUS}" = "bootstrap"' in run
+
+    def test_the_base_rule_jobs_tolerate_only_their_own_bootstrap(self, jobs):
+        pr_decide = next(s for s in jobs["ab-base-rule"]["steps"] if s.get("id") == "decide")["run"]
+        assert "ab_status=bootstrap" in pr_decide
+        dispatch_decide = next(s for s in jobs["dispatch-report"]["steps"] if s.get("id") == "decide")["run"]
+        assert "bootstrap" not in dispatch_decide and "exit 1" in dispatch_decide
+        download = next(s for s in jobs["ab-base-rule"]["steps"] if s.get("uses", "").startswith("actions/download"))
+        assert download["if"] == "needs.ab.result == 'success'"
+
+    def test_a_maintainer_can_add_suites_to_an_ab_dispatch(self, jobs):
+        run = next(s for s in jobs["dispatch"]["steps"] if s.get("id") == "run")["run"]
+        assert 'printf \'%s,%s\' "${suites}" "${SUITES}"' in run
 
     def test_the_setup_action_saves_caches_only_on_push_to_master(self):
         action = (pa.REPO_ROOT / ".github" / "actions" / "poetry_setup" / "action.yml").read_text()

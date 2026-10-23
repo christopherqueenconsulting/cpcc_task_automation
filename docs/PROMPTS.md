@@ -164,6 +164,11 @@ When the base cannot judge a PR (`prompt-eval/ab` fails, and the `ab-base-rule` 
 | The PR adds a new suite | the base reports it `no-base` (absolute numbers only), not a failure | none needed |
 | The PR changes the saved-output format (`SuiteRecord`) or the `prompt-ab-decide` arguments | the base job fails to read it | land the reader on the base branch first, then the PR; or Christopher merges past the check after reading the artifact, with the ruling recorded |
 | The PR adds a registry field | read leniently (unknown fields dropped) | none needed |
+| The PR that adds this check (the base has no `prompt-ab-decide` yet) | `ab-base-rule` reports `bootstrap` and the PR's own verdict stands | none needed; dead once the check is on master |
+| The PR changes every case of a required suite's dataset, or removes the dataset | fails: "nothing was compared" | Christopher merges past the check after reading the A/B artifact, with the ruling recorded |
+| The base's detection requires a suite this PR's detection did not run | pending ("A/B needs a maintainer run") | dispatch mode `ab` with `suites` set to the listed suites |
+| A maintainer `ab` dispatch of a PR branch older than a `repeats` change on master | fails: "fewer than N runs" (dispatch runs the PR head, which used its own repeats) | merge master into the branch, then dispatch again |
+| The base-branch job fails for infrastructure reasons (install, `git fetch`, the 20-minute timeout) | `prompt-eval/ab` fails, even on PRs with no suites | "Re-run failed jobs" on the Prompt Evaluation run |
 
 Before this rule, every grader had to be non-inferior on its own, and a prompt-identical
 change failed it most of the time. PR #401 records the measured rates (false fails, and

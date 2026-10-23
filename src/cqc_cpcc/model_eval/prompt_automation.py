@@ -102,6 +102,10 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
             reason = f"{pid}: {', '.join(sorted(hits)[:3])} changed"
         elif old and new and old.fingerprint != computed.get(pid, new.fingerprint):
             reason = f"{pid}: request fingerprint changed"
+        elif base_reg and (old is None or new is None):
+            reason = f"{pid}: registry entry {'added' if old is None else 'removed'}"
+        elif old and new and (old.version != new.version or old.status != new.status):
+            reason = f"{pid}: version or status changed"
         if reason:
             if entry.status == "judge":
                 judges_changed.append(pid)
@@ -298,19 +302,20 @@ def suites_from_data(changed: list, head_reg, base_reg, head_roles: dict, base_r
     """The suites a change needs a model run on, decided from data only (no PR code imported).
 
     The same triggers as ``affected``'s ``run`` list: a changed ``source_files``/``shared_files``
-    path of either registry, a stored fingerprint that differs, a changed suite dataset, or a
-    changed model-registry role. Used from a base-branch checkout to check the PR's own
+    path of either registry, a registry entry added or removed, a stored fingerprint, version
+    or status that differs, a changed suite dataset, or a changed model-registry role. Used from a base-branch checkout to check the PR's own
     detection, which runs the PR's code.
     """
     run: dict[str, str] = {}
     for pid in set(head_reg.prompts) | set(base_reg.prompts):
         old, new = base_reg.prompts.get(pid), head_reg.prompts.get(pid)
         entries = [e for e in (old, new) if e is not None]
-        if any(e.status == "judge" for e in entries):
+        if (new if new is not None else old).status == "judge":  # judges recalibrate, never run
             continue
         paths = {f for e in entries for f in e.source_files + e.shared_files}
         hits = [f for f in changed if _matches(f, paths) and f != LOCKFILE_RELPATH]
-        moved = old is None or new is None or old.fingerprint != new.fingerprint or old.version != new.version
+        moved = (old is None or new is None or old.fingerprint != new.fingerprint or old.version != new.version
+                 or old.status != new.status)
         if hits or moved:
             for suite_id in {s for e in entries for s in e.suites}:
                 run.setdefault(suite_id, f"{pid}: {', '.join(sorted(hits)[:3]) or 'registry entry changed'}")
@@ -343,8 +348,8 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
       the same on both sides, with this policy's repeats on every case and model.
     - The A/B passes only when the PR's own verdict and this one both pass.
     """
-    changed = [f for f in _git("diff", "--name-only", _git("merge-base", base_sha, head_sha).strip(),
-                               head_sha).splitlines() if f]
+    changed = [f for f in _git("diff", "--name-only", "--no-renames",
+                               _git("merge-base", base_sha, head_sha).strip(), head_sha).splitlines() if f]
     head_reg = prompt_registry._lenient(json.loads(
         (head_root / prompt_registry.REGISTRY_RELPATH).read_text(encoding="utf-8")))
     base_reg = prompt_registry.load()
@@ -364,7 +369,7 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
     else:
         for suite_id in sorted(required):
             results[suite_id] = _decide_suite(suite_id, (report or {}).get("suites", {}).get(suite_id), out,
-                                              head_root, changed, head_reg, base_reg)
+                                              head_root, changed, head_reg, base_reg, head_roles)
         statuses = [r["status"] for r in results.values()]
         status = ("fail" if "fail" in statuses
                   else "pass" if all(s == "pass" for s in statuses) else "pass-provisional")
@@ -385,7 +390,7 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
 
 
 def _decide_suite(suite_id: str, pr_result: Optional[dict], out: Path, head_root: Path, changed: list,
-                  head_reg, base_reg) -> dict:
+                  head_reg, base_reg, head_roles: Optional[dict] = None) -> dict:
     def failed(reason):
         return {"suite": suite_id, "status": "fail", "models": {}, "notes": [], "reasons": [reason]}
 
@@ -404,8 +409,15 @@ def _decide_suite(suite_id: str, pr_result: Optional[dict], out: Path, head_root
     head_recs, base_recs = prompt_eval.read_records(head_raw), prompt_eval.read_records(base_raw)
     if set(head_recs) != set(base_recs) or not head_recs:
         return failed(f"head and base ran different models: {sorted(head_recs)} vs {sorted(base_recs)}")
+    incumbent = (head_roles or {}).get(suite.role)
+    if incumbent is not None:
+        label = prompt_eval.label_of(incumbent["model"], incumbent.get("reasoning_effort"))
+        if label not in head_recs:
+            return failed(f"the A/B did not run the {suite.role} role's incumbent {label}: {sorted(head_recs)}")
     repeats = prompt_eval.suite_policy(suite_id).repeats
     wanted = {c.case_id for c in suite.cases() if same is None or c.case_id in same}
+    if not wanted:
+        return failed("no case is the same in the PR's dataset and the base's, so nothing was compared")
     for label in head_recs:
         for side, recs in (("head", head_recs[label]), ("base", base_recs[label])):
             counts: dict = {}

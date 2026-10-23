@@ -15,7 +15,9 @@
 #      counts against the repo's 10 GB budget. When the budget is hit GitHub
 #      evicts least-recently-used, and what it evicts is master's entry --
 #      the one entry every branch CAN read. That turns into a ~100% miss rate.
-#      So: every `cache/save` step below is gated on `github.ref` == master.
+#      So: every `cache/save` step below is gated on a `push` to master. A run that only
+#      happens to be on the master ref (a workflow_dispatch that checks out a PR, a schedule)
+#      never saves, so a PR's environment cannot land in master's cache scope.
 #
 #   2. The cache scope must be a deterministic function of the DEPENDENCY
 #      INPUTS only (OS, arch, python version, poetry version, dependency
