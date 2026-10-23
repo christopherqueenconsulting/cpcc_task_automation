@@ -14,8 +14,10 @@ calls OpenRouter, and on failure retries once on the role's fallback model.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -23,7 +25,7 @@ from typing import Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
-from cqc_cpcc.utilities.AI import model_registry
+from cqc_cpcc.utilities.AI import llm_limits, llm_progress, model_registry
 from cqc_cpcc.utilities.AI import openrouter_client
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.AI.openai_exceptions import (
@@ -111,7 +113,11 @@ async def structured(
 
     if _is_test_mode():
         from cqc_cpcc.utilities.AI.openai_client import _get_test_mode_response
+        llm_progress.emit("attempt_started", resolved.model, attempt=1, max_attempts=1)
+        # Lets e2e tests watch a call that is still waiting (default: no delay).
+        await asyncio.sleep(float(os.getenv("CQC_TEST_MODE_LATENCY_S", "0") or 0))
         result = _get_test_mode_response(schema_model)
+        llm_progress.emit("succeeded", resolved.model, attempt=1, max_attempts=1)
         _last_call.set(_call_record(resolved, resolved.model, False, None, prompt=tag))
         return result
 
@@ -134,6 +140,7 @@ async def structured(
             model=resolved.model,
             details={"role": role, "fallback_model": resolved.fallback},
         )
+        llm_progress.emit("fallback", resolved.model)
         fallback = model_registry.resolve(role, override=resolved.fallback)
         result = await _complete(fallback, prompt, schema_model, False)
         _last_call.set(_call_record(resolved, fallback.model, True, prompt=tag))
@@ -155,6 +162,7 @@ async def _complete(resolved, prompt, schema_model, use_auto_route):
         use_auto_route=use_auto_route,
         model_name=None if use_auto_route else resolved.model,
         extra_params=model_registry.build_request_params(resolved),
+        request_timeout=llm_limits.request_timeout(resolved.role),
     )
 
 
