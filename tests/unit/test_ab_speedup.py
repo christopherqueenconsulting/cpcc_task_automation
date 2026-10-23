@@ -5,6 +5,8 @@ What must not change: which cases run, how both sides are scored, and every pass
 """
 
 import asyncio
+import json
+import os
 import random
 import time
 from types import SimpleNamespace
@@ -187,6 +189,27 @@ class TestOrderDoesNotMatter:
         assert len(scores) == 12 and scores.count(None) >= 6 and calls < 12
 
 
+class TestJudgeFailure:
+    async def test_every_started_judge_call_finishes_before_the_first_failure_is_raised(self):
+        finished = []
+
+        class Judge:
+            @staticmethod
+            async def pairwise(suite, case, head_payload, base_payload, model, cache):
+                if case == "c1":
+                    raise RuntimeError("judge down")
+                await asyncio.sleep(0.05)
+                finished.append(case)
+                return 1.0, 0.0
+
+        ids = [f"c{i}" for i in range(6)]
+        payloads = {c: SimpleNamespace(payload=c) for c in ids}
+        with pytest.raises(RuntimeError, match="judge down"):
+            await pa._pairwise_scores(Judge, None, {c: c for c in ids}, ids, payloads, payloads, "j", None,
+                                      Budget(1.0, 0.9), 6)
+        assert sorted(finished) == ["c0", "c2", "c3", "c4", "c5"]  # none left running behind the raise
+
+
 class TestRunStats:
     def test_retries_are_counted_from_the_records_and_budget_stops_are_not_calls(self):
         def rec(attempts, error=None):
@@ -197,28 +220,115 @@ class TestRunStats:
 
 
 class TestTheBaseRunsBesideTheHead:
+    @staticmethod
+    def _fake_base(tmp_path, body):
+        """A stand-in base worktree whose `python -m cqc_cpcc.model_eval ...` runs ``body``."""
+        pkg = tmp_path / "wt" / "src" / "cqc_cpcc" / "model_eval"
+        pkg.mkdir(parents=True)
+        (pkg.parent / "__init__.py").write_text("")
+        (pkg / "__init__.py").write_text("")
+        (pkg / "__main__.py").write_text(
+            "import json, os, subprocess, sys, time\n"
+            "out = sys.argv[sys.argv.index('--out') + 1]\n"
+            "os.makedirs(out, exist_ok=True)\n" + body)
+        return tmp_path / "wt"
+
     def test_the_base_gets_its_concurrency_by_environment_and_never_the_heads_pinned_registry(self, monkeypatch, tmp_path):
-        seen = {}
-
-        def fake_run(args, cwd, env, capture_output, text):
-            seen["args"], seen["env"] = args, env
-            return SimpleNamespace(returncode=1, stdout="", stderr="")
-
+        worktree = self._fake_base(tmp_path, "json.dump({'env': dict(os.environ), 'argv': sys.argv}, "
+                                             "open(os.path.join(out, 'dump.json'), 'w'))\n")
         monkeypatch.setenv("CQC_MODEL_REGISTRY_PATH", "/tmp/the-heads-temporary-registry.json")
-        monkeypatch.setattr(pa.subprocess, "run", fake_run)
-        before_the_head_pinned_anything = {"PATH": "/bin", "OPENROUTER_API_KEY": "k"}
-        pa._run_base(tmp_path, "grading", ["m@high"], 2, tmp_path / "out", 1.0, 12, before_the_head_pinned_anything)
-        assert seen["env"]["CQC_EVAL_CONCURRENCY"] == "12"
-        assert "CQC_MODEL_REGISTRY_PATH" not in seen["env"] and seen["env"]["OPENROUTER_API_KEY"] == "k"
-        assert "--concurrency" not in seen["args"]  # an older base would not know the flag
+        before_the_head_pinned_anything = {"PATH": os.environ["PATH"], "OPENROUTER_API_KEY": "k"}
+        pa._run_base(worktree, "grading", ["m@high"], 2, tmp_path / "out", 1.0, 12, before_the_head_pinned_anything)
+        seen = json.loads((tmp_path / "out" / "dump.json").read_text())
+        assert seen["env"]["CQC_EVAL_CONCURRENCY"] == "12" and seen["env"]["OPENROUTER_API_KEY"] == "k"
+        assert "CQC_MODEL_REGISTRY_PATH" not in seen["env"]
+        assert "--concurrency" not in seen["argv"]  # an older base would not know the flag
 
     def test_without_a_snapshot_the_live_environment_is_used_as_before(self, monkeypatch, tmp_path):
-        seen = {}
+        worktree = self._fake_base(tmp_path, "json.dump(dict(os.environ), open(os.path.join(out, 'dump.json'), 'w'))\n")
         monkeypatch.setenv("SOME_FLAG", "1")
-        monkeypatch.setattr(pa.subprocess, "run", lambda *a, **k: seen.update(env=k["env"]) or
-                            SimpleNamespace(returncode=1, stdout="", stderr=""))
-        pa._run_base(tmp_path, "grading", [], 1, tmp_path / "o", 1.0)
-        assert seen["env"]["SOME_FLAG"] == "1" and "CQC_EVAL_CONCURRENCY" not in seen["env"]
+        monkeypatch.delenv("CQC_EVAL_CONCURRENCY", raising=False)
+        pa._run_base(worktree, "grading", [], 1, tmp_path / "o", 1.0)
+        env = json.loads((tmp_path / "o" / "dump.json").read_text())
+        assert env["SOME_FLAG"] == "1" and "CQC_EVAL_CONCURRENCY" not in env
+
+    def test_the_base_output_is_kept_in_a_log_next_to_its_results(self, tmp_path):
+        worktree = self._fake_base(tmp_path, "print('hello from the base'); sys.stderr.write('warning line')\n")
+        assert pa._run_base(worktree, "grading", [], 1, tmp_path / "o", 1.0) is None  # no raw file written
+        log = (tmp_path / "o" / "grading" / "run.log").read_text()
+        assert "hello from the base" in log and "warning line" in log
+
+    @staticmethod
+    def _alive(pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def test_a_base_that_never_finishes_is_killed_after_the_time_limit_with_its_children(self, monkeypatch, tmp_path):
+        worktree = self._fake_base(
+            tmp_path,
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+            "json.dump({'me': os.getpid(), 'child': child.pid}, open(os.path.join(out, 'pids.json'), 'w'))\n"
+            "time.sleep(120)\n")
+        monkeypatch.setattr(pa, "BASE_TIMEOUT_S", 1.5)
+        started = time.monotonic()
+        assert pa._run_base(worktree, "grading", [], 1, tmp_path / "o", 1.0) is None
+        assert time.monotonic() - started < 20
+        pids = json.loads((tmp_path / "o" / "pids.json").read_text())
+        time.sleep(0.3)
+        assert not self._alive(pids["me"]) and not self._alive(pids["child"])
+
+    async def test_cancelling_stops_a_running_base_and_it_is_dead_before_the_worktree_would_go(self, tmp_path):
+        worktree = self._fake_base(
+            tmp_path,
+            "json.dump({'me': os.getpid()}, open(os.path.join(out, 'pids.json'), 'w'))\n"
+            "time.sleep(120)\n")
+        job = asyncio.create_task(asyncio.to_thread(pa._run_base, worktree, "grading", [], 1, tmp_path / "o", 1.0))
+        for _ in range(100):
+            if (tmp_path / "o" / "pids.json").exists() and pa._live_base:
+                break
+            await asyncio.sleep(0.05)
+        pid = json.loads((tmp_path / "o" / "pids.json").read_text())["me"]
+        assert self._alive(pid) and len(pa._live_base) == 1
+        pa._terminate_live_base()
+        assert await asyncio.wait_for(job, 20) is None
+        assert not self._alive(pid) and not pa._live_base
+
+    async def test_a_failing_head_stops_the_base_instead_of_paying_for_it_to_finish(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        stopped = []
+        monkeypatch.setattr(pa, "_terminate_live_base", lambda *a, **k: stopped.append(True))
+
+        async def boom(*a, **k):
+            raise RuntimeError("head failed")
+
+        monkeypatch.setattr(prompt_eval, "run", boom)
+        monkeypatch.setattr(pa, "_run_base", lambda *a, **k: None)
+        with pytest.raises(RuntimeError, match="head failed"):
+            await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1)
+        assert len(stopped) >= 2  # once when the head failed, once more before the worktree is removed
+
+    async def test_what_a_failed_base_already_spent_is_charged_before_the_next_suite_splits(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        whole = prompt_eval.shared_budget()
+        monkeypatch.setattr(prompt_eval, "shared_budget", lambda *a, **k: whole)
+
+        def failing_base(worktree, suite_id, labels, r, out, *a, **k):
+            raw = out / suite_id / "raw_outputs.jsonl"
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            raw.write_text("".join(json.dumps({"cost_usd": 0.25}) + "\n" for _ in range(3)) + "not json\n")
+            return None  # crashed after three paid calls
+
+        monkeypatch.setattr(pa, "_run_base", failing_base)
+        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1)
+        assert report["suites"]["requirement-extraction"]["status"] == "fail"
+        assert whole.spent >= 0.75 - 1e-9  # the head costs $0 in test mode; the base's three calls were charged
 
     async def test_head_and_base_overlap_in_time_and_report_their_wall_clock(self, tmp_path, monkeypatch):
         from cqc_cpcc.utilities.AI import llm_gateway
@@ -258,6 +368,20 @@ class TestTheBaseRunsBesideTheHead:
         stats = r["run_stats"]
         assert stats["concurrency"] == 5 and stats["head"]["calls"] > 0 and stats["base"]["calls"] > 0
         assert r["status"] in ("pass", "pass-provisional")  # same answers both sides: no regression
+
+    async def test_the_last_lines_of_the_log_sum_up_each_suite(self, tmp_path, monkeypatch, capsys):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setenv("CQC_TEST_MODE", "true")
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1)
+        if report["suites"]["requirement-extraction"]["status"] == "no-base":
+            pytest.skip("no base run in this checkout")
+        lines = capsys.readouterr().out.rstrip().splitlines()
+        summary = [l for l in lines[-6:] if l.startswith("A/B requirement-extraction:")]
+        assert summary and "head" in summary[0] and "base" in summary[0] and "in flight" in summary[0]
+        assert lines[-1].startswith("A/B wall-clock")
+        assert (tmp_path / "base" / "requirement-extraction" / "run.log").exists()
 
     async def test_a_failing_head_still_waits_for_the_base_before_the_worktree_goes(self, tmp_path, monkeypatch):
         from cqc_cpcc.utilities.AI import llm_gateway

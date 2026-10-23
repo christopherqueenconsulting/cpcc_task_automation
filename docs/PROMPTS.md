@@ -211,9 +211,12 @@ capture, runs the full paid A/B as before.
 - **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
   (issue #406) is the follow-up for that.
 
-**How fast the A/B runs.** A paid A/B used to take 67 to 81 minutes because every call waited its
-turn: four calls in flight, the head run first, then the base run, then the pairwise judge one case
-at a time. Now:
+**How fast the A/B runs.** A paid A/B used to take 67 to 82 minutes for three or four suites (the
+dispatch job's duration in runs 39966026743, 39978967241 and 39988799201 on 2026-10-23: 67, 68 and
+82 minutes) because every call waited its turn: four calls in flight, the head run first, then the
+base run, then the pairwise judge one case at a time. In those runs the `grading` suite alone made
+2,592 of 5,808 recorded calls over five runs at a mean of 17.5 s each, and not one call needed a
+retry. Now:
 
 - **Head and base run at the same time**, each from its own half of the remaining budget
   (`Budget.split`), and each half is charged back to the whole when its run ends, so the total cap
@@ -230,12 +233,21 @@ at a time. Now:
 - **Nothing that decides changed:** the same cases, repeats, models and effort, both sides scored with
   the head graders, the same paired tests and pass rules. Records arrive in a different order, and
   scoring does not depend on it (a test shuffles them).
+- **A stuck or cancelled A/B no longer leaves the base running.** The base runs in its own process
+  group with a hard limit of 120 minutes (`BASE_TIMEOUT_S`; the job limit is 240); on a timeout, a
+  cancelled job, Ctrl-C or a failing head the group is stopped before the base worktree is removed.
+  Whatever a base run recorded before it failed or was stopped is charged to the budget. Its output is
+  kept in `base/<suite>/run.log` in the artifact.
 - **Retries are logged.** A rate limit (429) or timeout goes through the same client retry as before;
-  each side's log line and `ab.json` (`run_stats`: calls, calls that needed a retry, extra attempts,
-  seconds) show how many. If a run shows many retried calls, lower the number.
+  one summary line per suite at the end of the log (`A/B <suite>: head N calls, R retried; base ...`;
+  the workflow shows only the last 60 lines) and `ab.json` (`run_stats`: calls, calls that needed a
+  retry, extra attempts, seconds) show how many. If a run shows many retried calls, lower the number.
+  The retry has no jitter, so 24 calls that hit a limit together retry together; this change does not
+  touch the client.
 - **Budget overshoot:** calls already in flight when a side reaches its stop can still finish. The
-  gap between `stop_at_usd` and `budget_usd` ($1.50) has to cover 24 calls at once; the dearest single
-  call in a suite is well under $0.05, so about $1.20 at the worst.
+  gap between `stop_at_usd` and `budget_usd` ($1.50) has to cover every call in flight. The dearest
+  single call in those five runs cost $0.0033, so 24 in flight is about $0.08 and even the largest
+  setting (32 per side, 64 at once) is about $0.21.
 - **Who gets it:** the dispatch runs `prompt-ab` from the PR's own checkout, so the speed-up applies
   to A/Bs of PRs that contain this change (merge `master` into an older branch first). The base side
   only speeds up once the base branch has it too.
