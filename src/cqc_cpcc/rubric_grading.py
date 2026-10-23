@@ -172,7 +172,7 @@ def build_rubric_grading_prompt(
 
     # Assignment instructions
     prompt_parts.append("## Assignment Instructions")
-    prompt_parts.append(assignment_instructions)
+    prompt_parts.append(neutralize_markers(assignment_instructions))
     prompt_parts.append("")
 
     # Reference solution if provided

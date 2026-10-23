@@ -101,7 +101,7 @@ prompt says it is data, never the solution or instructions.
   current threshold, so changing the threshold relabels old runs). With no solution the
   cell is empty, as it is for a failed row. The exam (errors-only) path gets the rules but
   no flag. Measured on `evals/datasets/grading-solution/v1`: the solution by another author
-  1.0, rename-only or reorder-only rewrites 0.99–1.0, structural rewrites 0.88–0.96, bug
+  1.0, rename-only or reorder-only rewrites 0.99–1.0, structural rewrites 0.88–0.959, bug
   twins 0.88–1.0; the flag cannot tell a near copy from a near-copy with one bug.
 - **Rollback:** `git revert` the PR. The version goes back, so the run key changes a second
   time and the next run re-grades again; runs saved under v2 stay on disk. If only the

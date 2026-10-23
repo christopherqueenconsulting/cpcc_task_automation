@@ -28,8 +28,6 @@ DEFAULT_THRESHOLD = 0.96
 MAX_SOURCE_CHARS = 200_000
 MAX_TOKENS = 8_000
 
-_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/|#[^\n]*", re.S)
-_STRING = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
 _NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
 _TOKEN = re.compile(r"[A-Za-z_]\w*|\d+(?:\.\d+)?|\S")
 
@@ -48,13 +46,43 @@ format main args
 """.split())
 
 
+def _strip_strings_and_comments(source: str) -> str:
+    """``source`` with every string literal replaced by ``"S"`` and every comment by a space.
+
+    One left-to-right pass (no regular expression), so a hostile file full of unterminated
+    ``/*`` or quotes costs linear time. A ``//`` or ``#`` inside a string does not start a
+    comment and a quote inside a comment does not start a string; a string ends at its
+    closing quote or at the end of its line.
+    """
+    out: list[str] = []
+    i, n = 0, len(source)
+    while i < n:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/" or ch == "#":
+            end = source.find("\n", i)
+            i = n if end < 0 else end
+            out.append(" ")
+        elif ch == "/" and nxt == "*":
+            end = source.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            out.append(" ")
+        elif ch in "\"'":
+            j = i + 1
+            while j < n and source[j] != ch and source[j] != "\n":
+                j += 2 if source[j] == "\\" else 1
+            i = min(j + 1, n)
+            out.append(' "S" ')
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
 def normalize(source: str) -> list[str]:
     """The token shape of ``source``: comments gone, strings ``S``, numbers ``N``, identifiers
     that are not keywords or library names ``V``."""
-    # Strings first, so a "//" or "#" inside a string never eats the rest of its line.
-    text = _STRING.sub(' "S" ', (source or "")[:MAX_SOURCE_CHARS])
-    text = _COMMENT.sub(" ", text)
-    text = _NUMBER.sub(" N ", text)
+    text = _NUMBER.sub(" N ", _strip_strings_and_comments((source or "")[:MAX_SOURCE_CHARS]))
     out = []
     for token in _TOKEN.findall(text):
         if token in _KEYWORDS or token in ("S", "N") or not token[0].isalpha() and token[0] != "_":
