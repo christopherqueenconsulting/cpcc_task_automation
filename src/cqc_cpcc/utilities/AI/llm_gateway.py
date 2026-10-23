@@ -101,6 +101,7 @@ async def structured(
         correlation_id: Optional[str] = None,
         session_id: Optional[str] = None,
         system: Optional[str] = None,
+        effort_override: Optional[str] = None,
 ) -> T:
     """Return a ``schema_model`` instance for ``prompt`` using ``role``'s model.
 
@@ -119,9 +120,15 @@ async def structured(
         session_id: A stable id for the run (OpenRouter's ``user`` field), so the
             provider can route the run's calls to the same cache.
         system: Optional system message; without it the prompt is one user message.
+        effort_override: Reasoning effort that replaces the role's effort for this call
+            when the model supports it (otherwise none is sent and the provider default
+            applies). Ignored under ``use_auto_route``, which takes no effort.
     """
     _last_call.set(None)
-    resolved = model_registry.resolve(role, override=override)
+    if use_auto_route and effort_override:
+        logger.warning("Auto Router takes no reasoning effort setting; ignoring the effort override.")
+        effort_override = None
+    resolved = model_registry.resolve(role, override=override, effort_override=effort_override)
     tag = prompt_tag(prompt_id)
 
     if _is_test_mode():
@@ -157,7 +164,7 @@ async def structured(
             details={"role": role, "fallback_model": resolved.fallback},
         )
         llm_progress.emit("fallback", resolved.model)
-        fallback = model_registry.resolve(role, override=resolved.fallback)
+        fallback = model_registry.resolve_fallback(resolved, effort_override)
         result = await _complete(fallback, prompt, schema_model, False, **send)
         _last_call.set(_call_record(resolved, fallback.model, True, prompt=tag))
         return result
@@ -179,7 +186,8 @@ async def _complete(resolved, prompt, schema_model, use_auto_route, *, correlati
         use_auto_route=use_auto_route,
         model_name=None if use_auto_route else resolved.model,
         extra_params=model_registry.build_request_params(resolved),
-        request_timeout=llm_limits.request_timeout(resolved.role),
+        request_timeout=llm_limits.request_timeout(
+            resolved.role, None if use_auto_route else resolved.reasoning_effort),
         correlation_id=correlation_id,
         session_id=session_id,
         system=system,
@@ -197,13 +205,14 @@ def last_request_record(prompt_id: str, role: str) -> Optional[dict]:
     if call is None or not call.messages:
         return None
     reasoning = (call.params or {}).get("reasoning")
+    effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
     completion = call.completion
     return {
         "prompt_id": prompt_id,
         "prompt": call.prompt,
         "model": call.model_used,
-        "effort": reasoning.get("effort") if isinstance(reasoning, dict) else None,
-        "timeout_s": llm_limits.request_timeout(role),
+        "effort": effort,
+        "timeout_s": llm_limits.request_timeout(role, effort),
         "correlation_id": call.correlation_id,
         "messages": call.messages,
         "params": call.params,

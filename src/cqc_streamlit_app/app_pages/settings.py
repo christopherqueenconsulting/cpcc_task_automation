@@ -102,13 +102,17 @@ def preferences_section():
 def model_settings_section():
     """Show the registry's model per feature and let the instructor pin a different one.
 
-    A pin sets ``CQC_MODEL_<ROLE>`` for this app process, which every LLM call honours
-    (including the preprocessing digest, which has no picker of its own). It lasts until
-    the app restarts; put the variable in ``.env`` to keep it.
+    A pin sets ``CQC_MODEL_<ROLE>`` (and an effort pin ``CQC_REASONING_EFFORT_<ROLE>``) for
+    the whole app process, which every LLM call honours, including the preprocessing digest,
+    which has no picker of its own. It lasts until the app restarts and is never written to
+    ``.env``; put the variable in ``.env`` to keep it.
     """
     from cqc_cpcc.utilities.AI import model_registry
     from cqc_streamlit_app.utils import registry_model_choices
 
+    if st.session_state.pop("_pins_saved", False):
+        st.success("Model choices saved. They apply to every page and every user until the app restarts.",
+                   icon=":material/check_circle:")
     registry = model_registry.load_registry()
     st.caption(
         f"Defaults come from `config/model_registry.json` (revision {registry.revision}), "
@@ -122,7 +126,8 @@ def model_settings_section():
             "Feature": role,
             "Model in use": resolved.model,
             "Source": resolved.source,
-            "Reasoning effort": resolved.reasoning_effort or "default",
+            "Reasoning effort": resolved.reasoning_effort
+            or ("default (your chosen effort is not supported by this model)" if resolved.reasoning_effort_dropped else "default"),
             "Fallback": resolved.fallback or "none",
             "Previous": registry.previous.get(role, "none"),
         })
@@ -130,8 +135,11 @@ def model_settings_section():
 
     unpinned = "Use registry default"
     choices = [unpinned] + registry_model_choices()
+    efforts = [unpinned, *model_registry.KNOWN_EFFORTS]
     with st.form("model_pins"):
+        st.caption("A pin applies to every page and every user. It lasts until the app restarts.")
         pins = {}
+        effort_pins = {}
         for role in model_registry.ROLES:
             current = os.environ.get(f"CQC_MODEL_{role.upper()}")
             options = choices if not current or current in choices else choices + [current]
@@ -141,6 +149,16 @@ def model_settings_section():
                 index=options.index(current) if current in options else 0,
                 key=f"model_pin_{role}",
             )
+            current_effort = os.environ.get(f"CQC_REASONING_EFFORT_{role.upper()}")
+            effort_options = efforts if not current_effort or current_effort in efforts \
+                else efforts + [current_effort]
+            effort_pins[role] = st.selectbox(
+                f"Pin reasoning effort for {role}",
+                effort_options,
+                index=effort_options.index(current_effort) if current_effort in effort_options else 0,
+                key=f"effort_pin_{role}",
+                help="Used only when the model supports it; otherwise the provider default applies.",
+            )
         if st.form_submit_button("Save model pins"):
             for role, choice in pins.items():
                 env_key = f"CQC_MODEL_{role.upper()}"
@@ -148,8 +166,17 @@ def model_settings_section():
                     os.environ.pop(env_key, None)
                 else:
                     os.environ[env_key] = choice
-            st.success("Model pins saved for this session. Add CQC_MODEL_<FEATURE> to .env to keep them.")
+            for role, choice in effort_pins.items():
+                env_key = f"CQC_REASONING_EFFORT_{role.upper()}"
+                if choice == unpinned:
+                    os.environ.pop(env_key, None)
+                elif choice in model_registry.KNOWN_EFFORTS:
+                    os.environ[env_key] = choice
+            # Shown at the top of the section after the rerun below.
+            st.session_state["_pins_saved"] = True
             st.rerun()
+    st.caption("To keep a choice after a restart, add CQC_MODEL_<FEATURE> or "
+               "CQC_REASONING_EFFORT_<FEATURE> to .env.")
 
 
 _CUSTOM_HOST = "Custom (self-hosted)"

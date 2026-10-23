@@ -231,7 +231,9 @@ def test_deadline_covers_both_models_and_warns_when_set_shorter(monkeypatch):
     monkeypatch.delenv("CQC_LLM_TIMEOUT", raising=False)
     monkeypatch.delenv("CQC_LLM_TIMEOUT_GRADING", raising=False)
     monkeypatch.delenv("CQC_GRADING_STUDENT_DEADLINE_S", raising=False)
-    assert llm_limits.student_deadline() == 2 * 2 * (180 + llm_limits.TIMEOUT_SLACK_S) + 60
+    # The registry's grading role runs at high effort on both models: 180 s x 1.5 each.
+    assert llm_limits.student_deadline() == (
+        2 * (2 * (270 + llm_limits.TIMEOUT_SLACK_S) + llm_limits.BACKOFF_S_PER_MODEL) + llm_limits.DEADLINE_MARGIN_S)
 
     llm_limits._warned.discard("deadline_short")
     monkeypatch.setenv("CQC_GRADING_STUDENT_DEADLINE_S", "120")
@@ -391,3 +393,10 @@ def test_short_deadline_warns_once_and_concurrency_reads_env(monkeypatch):
     assert llm_limits.student_deadline() == 100000
     monkeypatch.setenv("CQC_GRADING_CONCURRENCY", "8")
     assert llm_limits.grading_concurrency() == 8
+
+
+def test_env_timeouts_and_concurrency_are_capped(monkeypatch):
+    monkeypatch.setenv("CQC_LLM_TIMEOUT_GRADING", "999999")
+    assert llm_limits.request_timeout("grading", "high") == llm_limits.MAX_TIMEOUT_S == 3600
+    monkeypatch.setenv("CQC_GRADING_CONCURRENCY", "500")
+    assert llm_limits.grading_concurrency() == 32
