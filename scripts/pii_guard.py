@@ -7,9 +7,10 @@ Four pattern classes are checked (see ``docs/security-workflows.md``):
 a. BrightSpace submission-folder names, ``<userid>-<subid> - First Last``.
 b. BrightSpace query ids: ``ou=``, ``qi=``, ``db=``, ``ouId=``, ``orgUnitId=``
    followed by four or more digits.
-c. Student e-mail addresses. No student-specific domain is identifiable from
-   this repository, so this class is currently disabled (``STUDENT_EMAIL_DOMAIN``
-   is ``None``); set it to enable.
+c. Student e-mail addresses: any address at ``cpcc.edu`` or at a subdomain of
+   it (``*.cpcc.edu``; the subdomain part is optional, so ``@cpcc.edu`` counts).
+   Lookalikes such as ``notcpcc.edu`` and ``cpcc.edu.example.org`` do not match.
+   Only the synthetic local parts in ``ALLOWED_EMAIL_LOCALS`` pass.
 d. A denylist of SHA-256 hashes (``scripts/pii_denylist.sha256``) of lowercased
    known-leaked tokens. Every capitalised ``First Last`` bigram, every run of
    five or more digits, and every long alphanumeric token in the tree is hashed
@@ -17,8 +18,8 @@ d. A denylist of SHA-256 hashes (``scripts/pii_denylist.sha256``) of lowercased
    text is never printed for this class.
 
 Synthetic placeholders that the fixtures and docs use on purpose are allowlisted
-for the structural classes (a, b). A line containing ``pii-guard:allow`` is also
-exempt from those two classes (for tests that need a deliberately bad fixture);
+for the structural classes (a, b, c). A line containing ``pii-guard:allow`` is also
+exempt from those three classes (for tests that need a deliberately bad fixture);
 the marker never bypasses the hashed denylist.
 
 Usage::
@@ -43,8 +44,18 @@ from typing import Iterable
 
 DENYLIST_PATH = Path("scripts/pii_denylist.sha256")
 
-#: Optional student e-mail domain for class (c). ``None`` disables the class.
-STUDENT_EMAIL_DOMAIN: str | None = None
+#: Class (c): an address whose domain is ``cpcc.edu`` or ``<labels>.cpcc.edu``
+#: (agreed in issue #288). The lookahead rejects lookalikes that continue the
+#: domain (``cpcc.edu.example.org``, ``cpcc.edu-x``); a sentence-ending dot is fine.
+STUDENT_EMAIL_RE = re.compile(
+    r"([A-Za-z0-9._%+-]+)@(?:[A-Za-z0-9-]+\.)*cpcc\.edu(?![A-Za-z0-9-]|\.[A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+#: Synthetic e-mail local parts allowed at ``cpcc.edu`` (compared lowercased).
+ALLOWED_EMAIL_LOCALS = frozenset(
+    {"example", "student.example", "ada.example", "ben.sample", "cal.fixture"}
+)
 
 #: Synthetic names used deliberately in fixtures and docs.
 ALLOWED_NAMES = frozenset(
@@ -143,11 +154,6 @@ def tracked_files(root: Path) -> list[Path]:
 
 def scan_text(text: str, path: str, denylist: frozenset[str]) -> list[Finding]:
     findings: list[Finding] = []
-    email_re = (
-        re.compile(r"[A-Za-z0-9._%+-]+@" + re.escape(STUDENT_EMAIL_DOMAIN) + r"\b")
-        if STUDENT_EMAIL_DOMAIN
-        else None
-    )
     for lineno, line in enumerate(text.splitlines(), start=1):
         structural = ALLOW_MARKER not in line
         for m in FOLDER_RE.finditer(line) if structural else ():
@@ -156,8 +162,8 @@ def scan_text(text: str, path: str, denylist: frozenset[str]) -> list[Finding]:
         for m in PARAM_RE.finditer(line) if structural else ():
             if m.group(1) not in ALLOWED_IDS:
                 findings.append(Finding(path, lineno, "b", m.group(0)))
-        if email_re and structural:
-            for m in email_re.finditer(line):
+        for m in STUDENT_EMAIL_RE.finditer(line) if structural else ():
+            if m.group(1).lower() not in ALLOWED_EMAIL_LOCALS:
                 findings.append(Finding(path, lineno, "c", m.group(0)))
         if denylist:
             candidates: Iterable[str] = (

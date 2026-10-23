@@ -35,6 +35,8 @@ Markers are strict (`--strict-markers`): `unit`, `integration`, `e2e`, `eval_liv
 
 - BrightSpace submission-folder names (`<userid>-<subid> - First Last`);
 - BrightSpace ids (`ou=`, `qi=`, `db=`, `ouId=`, `orgUnitId=` with 4+ digits);
+- e-mail addresses at `cpcc.edu` or `*.cpcc.edu`, except the synthetic local parts allowlisted in the
+  script (`example`, `student.example`, `ada.example`, `ben.sample`, `cal.fixture`);
 - any token whose SHA-256 is in `scripts/pii_denylist.sha256` (plaintext never committed).
 
 Run it before pushing: `python scripts/pii_guard.py` (or pass paths). Use only the
