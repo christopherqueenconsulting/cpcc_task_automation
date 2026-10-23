@@ -176,7 +176,9 @@ and only blocks a PR on a *regression* against the base; it never raises "needs 
 Calibrate once the setup below is done: Actions > Prompt Evaluation > Run workflow, mode
 `calibrate`, dry run off. Review `policy_patch.json` in the artifact (each floor = the current
 model's measured score minus 0.10, health floor = composite minus 0.05) and apply it with
-`prompt-calibrate --apply` locally or by copying it into `model_policy.json`.
+`prompt-calibrate --apply` locally or by copying it into `model_policy.json`. Calibration re-sets floors only: the patch carries each suite's current `repeats`, and
+`--apply` keeps the `repeats` already in the policy. `prompt-calibrate --repeats N` is how many
+times the calibration run measures, not the gate's `repeats`; change that by hand in the policy.
 Calibration also runs the judges: each calibrated judge (feedback-quality, faithfulness) gets
 a `judge.<id>` floor at its measured mean minus 0.10. A judge floor applies only to runs that
 scored with that calibrated judge (the master record run and PR A/Bs do; runs without
