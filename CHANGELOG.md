@@ -13,8 +13,8 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 ## 0.1.2 and earlier
 
 `pyproject.toml` has said `0.1.2` since 2024-04-19 (commit 7d175b3) and was never bumped. No
-tags or GitHub releases exist before this changelog. The history is 968 commits on `master`
-from 2024-02-21. Recent merged pull requests, newest first:
+tags or GitHub releases exist before this changelog. The history on `master` starts
+2024-02-21. Recent merged pull requests, newest first:
 
 - Rubric grading with a reference solution as the authority: #414, eval suite #413.
 - Disjoint rubric point bands: #416.

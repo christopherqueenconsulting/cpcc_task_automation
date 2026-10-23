@@ -149,10 +149,10 @@ release then is `git push origin vX.Y.Z:refs/heads/release`.
 ## Roll back
 
 1. Find the last good tag: `git tag --sort=-v:refname` or the GitHub releases page.
-2. Roll the code back. Today (Streamlit deploys from `master`, unconfirmed): open a revert PR
+2. Roll the code back. While Streamlit deploys from `master`: open a revert PR
    for the bad change (do not rewrite `master`). In the same PR bump the patch version and add
    a CHANGELOG entry, so new grades are not stamped with the bad version; merge it and cut a
-   release as above. If a `release` branch exists (pending decision): redeploy the last good tag
+   release as above. If Streamlit has been moved to a `release` branch: redeploy the last good tag
    with `git push --force origin <tag>:refs/heads/release`. Only Christopher force-pushes
    `release`.
 3. Mark the bad release and name the new one, keeping its generated notes:
