@@ -282,7 +282,7 @@ jobs:
       contains(format(',{0},', vars.PROMPT_EVAL_TRUSTED_AUTHORS), format(',{0},', github.event.pull_request.user.login))
     runs-on: ubuntu-latest
     environment: prompt-eval
-    timeout-minutes: 150
+    timeout-minutes: 240
     permissions:
       contents: read
     concurrency:
@@ -700,7 +700,7 @@ jobs:
     # ab mode runs PR code with a key: only the prompt-eval environment's key, and only a
     # maintainer can dispatch. Other modes run master's code with the model-eval key.
     environment: ${{ inputs.mode == 'ab' && 'prompt-eval' || 'model-eval' }}
-    timeout-minutes: 180
+    timeout-minutes: 240
     permissions:
       contents: read
       pull-requests: write
