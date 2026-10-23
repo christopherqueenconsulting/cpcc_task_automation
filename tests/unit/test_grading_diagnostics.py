@@ -54,10 +54,12 @@ def test_one_repeated_minor_is_counted_as_inflation():
                              _error("PARTIAL_REQUIREMENT_R5", "minor"))
     row = attribute(result, rubric)
 
-    assert row["points_earned"] == 160 and row["points_lost"] == 40      # 5 minor -> 1 major: B-
+    # Since PR 4 (#400) the scorer counts each error type once, so the 4 occurrences cost
+    # nothing extra: 2 minor types -> A-. The occurrence count is still reported.
+    assert row["points_earned"] == 180 and row["points_lost"] == 20
     assert row["minor_occurrence_inflation"] == 3
-    assert row["minor_to_major_conversions"] == 1
-    assert row["gain_if_distinct"] == 20                                   # 2 minor types: A-
+    assert row["minor_to_major_conversions"] == 0
+    assert row["gain_if_distinct"] == 0
     assert row["possible_overlaps"] == 1
     assert _parts(row) == row["points_lost"] and row["rescore_gap"] == 0
     assert row["rescore_mismatch"] is False and row["floored"] is False

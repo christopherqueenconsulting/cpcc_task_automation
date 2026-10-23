@@ -362,13 +362,16 @@ class TestScorecard:
 
 @pytest.mark.unit
 class TestReviewFixes:
-    def test_multi_site_errors_widen_the_expected_range(self, cases):
+    def test_multi_site_errors_do_not_widen_the_expected_range(self, cases):
+        """Each distinct error type counts once however often it occurs (2026-10-22), so
+        reporting a multi-site error at its max_occurrences scores the same as reporting it
+        once and the expected range does not widen."""
         c = _case(cases, "csc134_project_cpp__magic_threshold")
         low, high = c.expected_score_range
         assert c.max_occurrences == {"CSC_134_PROJECT_1_CONSTANTS_ERROR": 3}
         assert low == ds.score_for_errors(c, c.error_ids, {"CSC_134_PROJECT_1_CONSTANTS_ERROR": 3})
         assert high == ds.score_for_errors(c, c.error_ids)
-        assert low < high
+        assert low == high
 
     def test_empty_submissions_must_score_zero(self, cases):
         c = _case(cases, "csc151_exam1_java__empty")

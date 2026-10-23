@@ -52,33 +52,39 @@ from langchain_core.callbacks import BaseCallbackHandler
 AUTO_ROUTE_MODEL = "openrouter/auto"
 
 
+_SEVERITY_RANK = {"major": 2, "minor": 1}
+
+
 def normalize_detected_errors_for_scoring(
         detected_errors: Optional[list[DetectedError]],
 ) -> tuple[list[DetectedError], dict[str, int], dict[str, int]]:
     """Collapse duplicate error types for scoring while preserving occurrence details.
 
-    Scoring should count each error type once per severity bucket. If the same
-    error code appears multiple times, descriptions/notes are combined and
-    occurrences are summed for display transparency.
+    Each error type counts once (Christopher, 2026-10-22). A type is its code, compared
+    case-insensitively; if the model labels one code with more than one severity, the
+    more severe label wins (major over minor). Descriptions and notes are combined and
+    occurrences are summed for display only.
     """
     if not detected_errors:
         return [], {}, {}
 
-    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    grouped: dict[str, dict[str, object]] = {}
     for error in detected_errors:
         severity = (error.severity or "unknown").strip().lower() or "unknown"
-        code = (error.code or "UNKNOWN_ERROR").strip() or "UNKNOWN_ERROR"
-        key = (severity, code)
+        code = (error.code or "UNKNOWN_ERROR").strip().upper() or "UNKNOWN_ERROR"
         entry = grouped.setdefault(
-            key,
+            code,
             {
                 "name": error.name or code,
+                "severity": severity,
                 "descriptions": [],
                 "notes": [],
                 "diagnostics": [],
                 "occurrences": 0,
             },
         )
+        if _SEVERITY_RANK.get(severity, 0) > _SEVERITY_RANK.get(entry["severity"], 0):
+            entry["severity"] = severity
 
         if error.description and error.description not in entry["descriptions"]:
             entry["descriptions"].append(error.description)
@@ -94,7 +100,8 @@ def normalize_detected_errors_for_scoring(
     counts_by_severity: dict[str, int] = {}
     counts_by_id: dict[str, int] = {}
 
-    for (severity, code), entry in grouped.items():
+    for code, entry in grouped.items():
+        severity = entry["severity"]
         descriptions = entry["descriptions"]
         combined_description = "\n".join(descriptions) if descriptions else f"Detected {code}"
 
@@ -891,7 +898,7 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
         Updated RubricAssessmentResult with backend-computed scores
     """
     from cqc_cpcc.error_scoring import normalize_errors, select_program_performance_level, \
-        select_csc134_program_performance_level, get_error_count_for_severity, aggregate_error_counts
+        select_csc134_program_performance_level, get_error_count_for_severity
     from cqc_cpcc.scoring import score_level_band_criterion, aggregate_rubric_result
 
     logger.info(f"=== Backend Scoring Start ===")
@@ -944,41 +951,25 @@ def apply_backend_scoring(rubric: Rubric, result: RubricAssessmentResult) -> Rub
     effective_minor = 0
 
     if error_count_criteria or has_program_performance:
-        # Scoring source differs by criterion type:
-        # - program_performance should use occurrence totals (authoritative LLM counts if provided)
-        # - generic error_count criteria use normalized unique error-type counts
+        # Each distinct error type counts once, for minors and majors, however many times it
+        # occurs (Christopher, 2026-10-22). program_performance counts only the errors listed:
+        # counts the model reports without listing the errors cost nothing.
         scoring_counts_by_severity = normalized_counts_by_severity
         if has_program_performance:
-            if result.error_counts_by_severity is not None:
-                scoring_counts_by_severity = result.error_counts_by_severity
-            elif normalized_detected_errors:
-                scoring_counts_by_severity, _ = aggregate_error_counts(normalized_detected_errors)
+            scoring_counts_by_severity = normalized_counts_by_severity if result.detected_errors else {}
+            if not result.detected_errors and any((result.error_counts_by_severity or {}).values()):
+                logger.warning("The model reported error counts but listed no errors; "
+                               "only listed errors are scored, so this scores as no errors.")
 
         has_error_counts = scoring_counts_by_severity is not None
 
         if not has_error_counts:
-            logger.warning(
-                f"Rubric has error-based criteria but no error_counts_by_severity in result."
-            )
-
-            # Try to compute error counts from detected_errors if present
-            if normalized_detected_errors:
-                logger.info(
-                    f"Computing error_counts_by_severity from {len(normalized_detected_errors)} detected_errors")
-                error_counts = {}
-                for error in normalized_detected_errors:
-                    severity = error.severity.lower() if error.severity else "unknown"
-                    error_counts[severity] = error_counts.get(severity, 0) + (error.occurrences or 1)
-
-                logger.info(f"Computed error_counts_by_severity: {error_counts}")
-                # Use the computed counts
-                original_major = error_counts.get("major", 0)
-                original_minor = error_counts.get("minor", 0)
-            else:
-                logger.warning("No detected_errors either. Using 0 errors for scoring.")
-                # Default to 0 errors
-                original_major = 0
-                original_minor = 0
+            # Counts are missing only when no errors were listed either (listed errors always
+            # produce counts above), so this scores as no errors.
+            logger.warning("Rubric has error-based criteria but the result lists no errors and "
+                           "no error counts. Using 0 errors for scoring.")
+            original_major = 0
+            original_minor = 0
         else:
             # Extract error counts by severity
             original_major = get_error_count_for_severity(scoring_counts_by_severity, "major")

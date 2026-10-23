@@ -46,7 +46,8 @@ class Mutation:
     acceptable: tuple = ()  # error-id suffixes that are fair extra reports
     compiles: bool = True
     # The error appears at this many places, so a careful grader may report up to this
-    # many occurrences (production scoring counts occurrences).
+    # many occurrences (production scoring counts each distinct error type once, so the
+    # occurrence count does not change the score).
     max_occurrences: int = 1
     # Requirement this mutation removes: the grader may report the error OR mark the
     # requirement missing/partial (the prompt asks for one, not both).

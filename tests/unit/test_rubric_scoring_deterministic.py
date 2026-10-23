@@ -44,15 +44,20 @@ def test_c_band_2_majors_yields_correct_score():
             )
         ],
         overall_feedback="Needs improvement.",
-        error_counts_by_severity={"major": 2, "minor": 0},
+        # Two distinct major error types: each distinct type counts once.
         detected_errors=[
             DetectedError(
                 code="CSC_151_EXAM_1_LOGIC_ERROR",
                 name="Logic Error",
                 severity="major",
                 description="Algorithm error",
-                occurrences=2,
-            )
+            ),
+            DetectedError(
+                code="CSC_151_EXAM_1_MISSING_OUTPUT",
+                name="Missing Output",
+                severity="major",
+                description="Required output not produced",
+            ),
         ],
     )
     
@@ -66,6 +71,8 @@ def test_c_band_2_majors_yields_correct_score():
     # Verify criterion was also updated
     assert updated_result.criteria_results[0].points_earned == updated_result.total_points_earned
     assert updated_result.criteria_results[0].selected_level_label == "C (2 major errors)"
+    assert updated_result.original_major_errors == 2
+    assert updated_result.effective_major_errors == 2
     
     print(f"✅ Test passed: C (2 majors) → {updated_result.total_points_earned}/200")
 
