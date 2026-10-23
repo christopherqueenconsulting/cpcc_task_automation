@@ -1,0 +1,62 @@
+name: Release
+
+# A pushed tag vX.Y.Z or vX.Y.Z-rcN creates a GitHub release with generated notes (-rcN is
+# flagged as a prerelease). Nothing is published to a package index and nothing is deployed:
+# see docs/RELEASING.md. The tag must equal v + the pyproject.toml version, and a final
+# release must be on master.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
+
+permissions:
+  contents: write
+
+# A release is a write: never cancel one half way. One at a time per tag.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches pyproject.toml
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: echo "kind=$(python scripts/check_release_tag.py "$TAG")" >> "$GITHUB_OUTPUT"
+
+      - name: A final release must be on master
+        if: steps.check.outputs.kind == 'final'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git fetch --no-tags origin master
+          git merge-base --is-ancestor "$TAG^{commit}" origin/master \
+            || { echo "::error::$TAG is not on master"; exit 1; }
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          KIND: ${{ steps.check.outputs.kind }}
+        run: |
+          if [ "$KIND" = "prerelease" ]; then flags="--prerelease"; else flags="--latest"; fi
+          gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes $flags

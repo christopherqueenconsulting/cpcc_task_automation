@@ -468,6 +468,9 @@ class RubricAssessmentResult(BaseModel):
     # the execution report. SkipJsonSchema keeps them out of the model's schema.
     reconciliation: SkipJsonSchema[list[ReconciliationNote]] = Field(default_factory=list)
     graded_with_model: SkipJsonSchema[Optional[str]] = None
+    # Version of the code that graded this (cqc_cpcc.version). Optional: results saved before
+    # it existed load without it.
+    code_version: SkipJsonSchema[Optional[str]] = None
     execution_report: SkipJsonSchema[Optional[dict]] = None
     # The exact request the grading call sent (prompt tag, model, effort, timeout,
     # correlation id, messages, params). Never persisted: it holds the whole submission.
