@@ -43,6 +43,18 @@ def test_identical_shape_flags_and_a_restructured_program_does_not():
     assert ss.similarity_label(None) == ""
 
 
+def test_huge_or_hostile_input_is_bounded():
+    import time
+
+    start = time.monotonic()
+    huge = ss.solution_similarity("int x;\n" * 70_000, JAVA)
+    hostile = ss.solution_similarity("/*" * 500_000, JAVA)
+    assert huge == ss.Similarity(0.0, False, ss.DEFAULT_THRESHOLD)
+    assert not hostile.flagged
+    assert time.monotonic() - start < 5.0
+    assert ss.normalize('x = "http://a//b"; // c') .count("S") == 1 and "c" not in ss.normalize('x = "http://a//b"; // c')
+
+
 def test_the_threshold_is_calibrated_on_the_grading_solution_dataset():
     """Rename-only rewrites and the solution itself flag; the structural rewrites do not."""
     structural = ("helper_method", "string_format", "ternary_pay", "do_while_rate")

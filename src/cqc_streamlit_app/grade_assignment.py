@@ -3289,8 +3289,9 @@ def _render_solution_similarity(result) -> None:
     Information only; it never changes a score and it is not an accusation."""
     label = _similarity_label(result)
     if label:
-        st.caption(f"Instructor note: the submission's structure is {label} to the reference solution. "
-                   "Information only; no effect on the score.")
+        st.caption(f"Instructor note: the submission's structure is {label} to the reference solution; "
+                   "it follows the solution's shape, which is not a copying claim. Information only; "
+                   "no effect on the score.")
 
 
 def display_cached_grading_results(run_key: str, course_name: str) -> None:

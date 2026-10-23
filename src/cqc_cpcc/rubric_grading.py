@@ -34,6 +34,7 @@ from typing import Optional
 
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
+from cqc_cpcc.prompts.markers import UNTRUSTED_NOTE, neutralize_markers
 from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES
 from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUIREMENT, note, note_added,
                                      note_kept, note_removed, tag_source)
@@ -180,7 +181,7 @@ def build_rubric_grading_prompt(
         prompt_parts.extend(SOLUTION_RULES)
         prompt_parts.append("")
         prompt_parts.append("<!--BEGIN_REFERENCE_SOLUTION-->")
-        prompt_parts.append(reference_solution)
+        prompt_parts.append(neutralize_markers(reference_solution))
         prompt_parts.append("<!--END_REFERENCE_SOLUTION-->")
         prompt_parts.append("")
 
@@ -281,9 +282,12 @@ def build_rubric_grading_prompt(
 
     # Student submission
     prompt_parts.append("## Student Submission to Grade")
+    prompt_parts.append(UNTRUSTED_NOTE)
     # Note Need to wrap code in backticks. It is expected that the student submission is preprocessed to be safely included in a markdown code block with File Name included ahead of it.
     # If the submission is very long, it should be truncated with an indication that it was truncated.
-    prompt_parts.append(student_submission)
+    prompt_parts.append("<!--BEGIN_STUDENT_SUBMISSION-->")
+    prompt_parts.append(neutralize_markers(student_submission))
+    prompt_parts.append("<!--END_STUDENT_SUBMISSION-->")
     prompt_parts.append("")
 
     # Grading instructions - GPT-5.2 methodology

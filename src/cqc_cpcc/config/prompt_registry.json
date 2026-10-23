@@ -34,7 +34,7 @@
         "requirement_agreement",
         "injection_pass_rate"
       ],
-      "fingerprint": "sha256:ea686e8490e328a4cc0566653ea1fdd17c81f85c85653a4cd6b988e46ae5117d",
+      "fingerprint": "sha256:1d1fa7292d8dc995c0129ede97541c54b022512e7ba4031d9610fd1a95859d37",
       "suites": [
         "grading",
         "grading-levelband",
@@ -109,7 +109,7 @@
         "src/cqc_cpcc/exam_review.py",
         "src/cqc_cpcc/utilities/utils.py"
       ],
-      "fingerprint": "sha256:72470f5e20aefc5b387d3326d44419c27bd2b379d079aab5e9aef7807e0e29a6",
+      "fingerprint": "sha256:d6b44ce0741b73afe76e9bc35f0e522873a75d107f0c29c6ecabdfeff3dfa82f",
       "suites": [
         "exam-grading"
       ]

@@ -17,8 +17,16 @@ from dataclasses import dataclass
 #: grading-solution dataset (54 cases, 2026-10-23): the solution by another author and the
 #: rename-only or reorder-only rewrites score 1.0; the structural rewrites (a helper method,
 #: a ternary, ``String.format`` for ``printf``, a ``do``/``while``) 0.88 to 0.96; the bug
-#: twins 0.88 to 1.0. The threshold sits just above the structural rewrites.
+#: twins 0.88 to 1.0. The threshold sits above the structural rewrites (their highest is
+#: 0.959) and the comparison is "at or above". A high ratio means the submission follows
+#: the solution's shape; it is not a copying claim.
 DEFAULT_THRESHOLD = 0.96
+
+#: Bounds on the work: ``difflib`` is quadratic in the token count and the comment and
+#: string patterns are quadratic on pathological input, so a huge or hostile file is cut
+#: short (chars) or reported as not similar (tokens) instead of stalling the grading run.
+MAX_SOURCE_CHARS = 200_000
+MAX_TOKENS = 8_000
 
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/|#[^\n]*", re.S)
 _STRING = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
@@ -43,8 +51,9 @@ format main args
 def normalize(source: str) -> list[str]:
     """The token shape of ``source``: comments gone, strings ``S``, numbers ``N``, identifiers
     that are not keywords or library names ``V``."""
-    text = _COMMENT.sub(" ", source or "")
-    text = _STRING.sub(' "S" ', text)
+    # Strings first, so a "//" or "#" inside a string never eats the rest of its line.
+    text = _STRING.sub(' "S" ', (source or "")[:MAX_SOURCE_CHARS])
+    text = _COMMENT.sub(" ", text)
     text = _NUMBER.sub(" N ", text)
     out = []
     for token in _TOKEN.findall(text):
@@ -65,7 +74,7 @@ class Similarity:
 def solution_similarity(submission: str, solution: str, threshold: float = DEFAULT_THRESHOLD) -> Similarity:
     """``difflib`` ratio of the two token shapes, and whether it reaches ``threshold``."""
     a, b = normalize(submission), normalize(solution)
-    if not a or not b:
+    if not a or not b or len(a) > MAX_TOKENS or len(b) > MAX_TOKENS:
         return Similarity(0.0, False, threshold)
     ratio = difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
     return Similarity(round(ratio, 4), ratio >= threshold, threshold)

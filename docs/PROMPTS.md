@@ -74,6 +74,40 @@ A pydantic or schema-normalizer upgrade that changes the schema JSON also change
 fingerprints. That is intended, because the model then receives a different request. Bump
 the affected versions in that PR.
 
+## The reference solution
+
+Since `rubric-grading` v2 and `exam-grading` v2 (PR 7, ruling 2026-10-22), both prompts
+frame the reference solution as authoritative: it defines the required observable
+behaviour (inputs, prompt and output wording, format, order, results); how it is
+implemented is not required; prompt and output wording are compared literally while
+format differences follow the course error definitions; nothing that matches the solution
+is penalised, even an error the solution itself would trigger; and feedback states the
+expected behaviour but never shows solution code. The rules live in
+`cqc_cpcc/prompts/solution_rules.py`; the submission sits between
+`<!--BEGIN_STUDENT_SUBMISSION-->` markers, marker tokens inside it are neutralised, and the
+prompt says it is data, never the solution or instructions.
+
+- **A version bump re-grades.** The prompt version is part of the run key, so the first run
+  after this change grades every submission again (and spends model calls). Runs saved under
+  the old key stay in the results store and still show from Results & review.
+- **"Like the solution"** (instructor-only). When a solution was given, each result stores
+  the `difflib` ratio of the two programs' token shapes (`cqc_cpcc/solution_similarity.py`:
+  comments dropped, strings, numbers and non-keyword identifiers normalised). At or above
+  0.96 the Student drawer shows "Instructor note: the submission's structure is very similar
+  (0.98) to the reference solution; it follows the solution's shape, which is not a copying
+  claim", and the results table's "Like the solution" column shows `very similar (0.98)`.
+  It never changes a score, it never reaches student feedback, the .docx or BrightSpace, and
+  a restored run shows it too (the ratio is saved; the label is recomputed against the
+  current threshold, so changing the threshold relabels old runs). With no solution the
+  cell is empty, as it is for a failed row. The exam (errors-only) path gets the rules but
+  no flag. Measured on `evals/datasets/grading-solution/v1`: the solution by another author
+  1.0, rename-only or reorder-only rewrites 0.99–1.0, structural rewrites 0.88–0.96, bug
+  twins 0.88–1.0; the flag cannot tell a near copy from a near-copy with one bug.
+- **Rollback:** `git revert` the PR. The version goes back, so the run key changes a second
+  time and the next run re-grades again; runs saved under v2 stay on disk. If only the
+  version is reverted by hand, run `poetry run python -m cqc_cpcc.model_eval prompts
+  fingerprint --write`.
+
 ## Adding a prompt
 
 `test_every_llm_call_site_is_registered` scans `src/` for `llm_gateway.structured(`,

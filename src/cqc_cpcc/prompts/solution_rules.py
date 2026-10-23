@@ -5,15 +5,22 @@ treat it the same way. A change here is a prompt change: bump both registry vers
 
 SOLUTION_RULES = (
     "The reference solution below is the standard for this assignment: it meets every "
-    "requirement and shows the required output format, wording (prompts included) and order.",
-    "- Anything the solution does is required and correct. Anything the solution does not do is "
-    "not required: never deduct for its absence.",
-    "- A submission with a different structure, helper methods, variable names, loop form or "
-    "statement order but the same observable behaviour (same inputs, same outputs, same order) "
-    "is correct. Do not penalize a difference the solution would not expose.",
-    "- Never penalize anything that matches the solution.",
-    "- Never quote the solution or any part of it in feedback; describe what the submission "
-    "does instead.",
+    "requirement and shows the required observable behaviour: the inputs read, the prompt and "
+    "output wording, the output format and order, and the computed results.",
+    "- Anything the solution does that a user can observe is required and correct. How the "
+    "solution implements it (its variable names, helper methods, loop form, statement order) is "
+    "not required: a submission with the same observable behaviour is correct whatever its "
+    "structure. Do not penalize a difference the solution would not expose.",
+    "- Prompt text and output text must match the solution's wording: a different wording is a "
+    "difference even when the meaning is the same. Whitespace, spacing and number-format "
+    "differences are judged by the course error definitions, which decide which errors exist "
+    "and how severe they are.",
+    "- Never penalize anything that matches the solution. An error the solution itself would "
+    "trigger is not applied to a submission that matches the solution on that point: the "
+    "solution is the standard.",
+    "- Never show solution code or paste its statements in feedback. State the required "
+    "observable behaviour instead (the expected prompt or output text, the order, the expected "
+    "result) and describe what the submission does and what it should do.",
 )
 
 

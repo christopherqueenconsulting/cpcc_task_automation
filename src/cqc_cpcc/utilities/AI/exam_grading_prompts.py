@@ -7,6 +7,7 @@ Unlike the LangChain-based prompts, these do not inject format_instructions
 since the schema is enforced via OpenAI's native JSON Schema validation.
 """
 
+from cqc_cpcc.prompts.markers import UNTRUSTED_NOTE, neutralize_markers
 from cqc_cpcc.prompts.solution_rules import solution_rules_text
 from cqc_cpcc.utilities.env_constants import SHOW_ERROR_LINE_NUMBERS
 
@@ -63,6 +64,7 @@ INPUTS
 <!--END_EXAMPLE_SOLUTION-->
 
 ## Student Submission
+{untrusted_note}
 <!--BEGIN_EXAM_SUBMISSION-->
 {submission}
 <!--END_EXAM_SUBMISSION-->
@@ -132,10 +134,11 @@ AMBIGUITY HANDLING
 
     # Fill in the template
     return prompt_template.format(
-        exam_instructions=exam_instructions,
-        exam_solution=exam_solution,
+        exam_instructions=neutralize_markers(exam_instructions),
+        exam_solution=neutralize_markers(exam_solution),
         solution_rules=solution_rules_text(),
-        submission=student_submission,
+        untrusted_note=UNTRUSTED_NOTE,
+        submission=neutralize_markers(student_submission),
         major_error_types=major_errors_formatted,
         minor_error_types=minor_errors_formatted,
         extra_system_instructions=extra_system_instructions,
