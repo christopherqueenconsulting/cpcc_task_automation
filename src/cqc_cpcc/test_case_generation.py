@@ -266,9 +266,13 @@ class SuggestedCase(BaseModel):
 class TestCaseSuggestion(BaseModel):
     __test__ = False
 
+    # Defaults let the gateway's generic test-mode answer (an empty instance) validate, so the
+    # shared test-mode switch in openai_client.py needs no branch for this schema.
     conditions: Annotated[list[SuggestedCondition], Field(
+        default_factory=list,
         description=f"Every selection or loop condition the instructions name, at most {MAX_CONDITIONS}")]
     cases: Annotated[list[SuggestedCase], Field(
+        default_factory=list,
         description=f"Between 1 and {MAX_LLM_CASES} stdin test cases")]
 
 
