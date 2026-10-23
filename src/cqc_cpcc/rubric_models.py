@@ -472,6 +472,9 @@ class RubricAssessmentResult(BaseModel):
     # The exact request the grading call sent (prompt tag, model, effort, timeout,
     # correlation id, messages, params). Never persisted: it holds the whole submission.
     llm_request: SkipJsonSchema[Optional[dict]] = None
+    # Instructor-only: how close the submission's token shape is to the reference solution
+    # (solution_similarity.py). Information, never a score input.
+    solution_similarity: SkipJsonSchema[Optional[float]] = None
     validity_reason: SkipJsonSchema[Optional[str]] = None
 
     @field_validator('total_points_earned')
