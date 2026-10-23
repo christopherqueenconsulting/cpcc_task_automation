@@ -76,16 +76,17 @@ the affected versions in that PR.
 
 ## The reference solution
 
-Since `rubric-grading` v2 and `exam-grading` v2 (PR 7, ruling 2026-10-22), both prompts
-frame the reference solution as authoritative: it defines the required observable
+Since `rubric-grading` v2 (PR 7, ruling 2026-10-22), the rubric prompt
+frames the reference solution as authoritative: it defines the required observable
 behaviour (inputs, prompt and output wording, format, order, results); how it is
 implemented is not required; prompt and output wording are compared literally while
 format differences follow the course error definitions; nothing that matches the solution
 is penalised, even an error the solution itself would trigger; and feedback states the
 expected behaviour but never shows solution code. The rules live in
-`cqc_cpcc/prompts/solution_rules.py`; the submission sits between
+`cqc_cpcc/prompts/solution_rules.py`; with a solution, the submission sits between
 `<!--BEGIN_STUDENT_SUBMISSION-->` markers, marker tokens inside it are neutralised, and the
-prompt says it is data, never the solution or instructions.
+prompt says it is data, never the solution or instructions; without one the prompt is
+exactly what it was before PR 7.
 
 - **A version bump re-grades.** The prompt version is part of the run key, so the first run
   after this change grades every submission again (and spends model calls). Runs saved under
@@ -99,8 +100,8 @@ prompt says it is data, never the solution or instructions.
   It never changes a score, it never reaches student feedback, the .docx or BrightSpace, and
   a restored run shows it too (the ratio is saved; the label is recomputed against the
   current threshold, so changing the threshold relabels old runs). With no solution the
-  cell is empty, as it is for a failed row. The exam (errors-only) path gets the rules but
-  no flag. Measured on `evals/datasets/grading-solution/v1`: the solution by another author
+  cell is empty, as it is for a failed row. The exam (errors-only) prompt is unchanged by PR 7 and has no flag; its
+  version follows in PR 7b. Measured on `evals/datasets/grading-solution/v1`: the solution by another author
   1.0, rename-only or reorder-only rewrites 0.99–1.0, structural rewrites 0.88–0.959, bug
   twins 0.88–1.0; the flag cannot tell a near copy from a near-copy with one bug.
 - **Rollback:** `git revert` the PR. The version goes back, so the run key changes a second
