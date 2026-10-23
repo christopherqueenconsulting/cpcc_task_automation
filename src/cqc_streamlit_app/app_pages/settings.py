@@ -110,6 +110,9 @@ def model_settings_section():
     from cqc_cpcc.utilities.AI import model_registry
     from cqc_streamlit_app.utils import registry_model_choices
 
+    if st.session_state.pop("_pins_saved", False):
+        st.success("Model choices saved. They apply to every page and every user until the app restarts.",
+                   icon=":material/check_circle:")
     registry = model_registry.load_registry()
     st.caption(
         f"Defaults come from `config/model_registry.json` (revision {registry.revision}), "
@@ -124,7 +127,7 @@ def model_settings_section():
             "Model in use": resolved.model,
             "Source": resolved.source,
             "Reasoning effort": resolved.reasoning_effort
-            or ("default (pinned effort not supported)" if resolved.reasoning_effort_dropped else "default"),
+            or ("default (your chosen effort is not supported by this model)" if resolved.reasoning_effort_dropped else "default"),
             "Fallback": resolved.fallback or "none",
             "Previous": registry.previous.get(role, "none"),
         })
@@ -134,8 +137,7 @@ def model_settings_section():
     choices = [unpinned] + registry_model_choices()
     efforts = [unpinned, *model_registry.KNOWN_EFFORTS]
     with st.form("model_pins"):
-        st.caption("A pin applies to the whole app process: every page and every session, and on "
-                   "Community Cloud every viewer. It lasts until the app restarts.")
+        st.caption("A pin applies to every page and every user. It lasts until the app restarts.")
         pins = {}
         effort_pins = {}
         for role in model_registry.ROLES:
@@ -170,11 +172,11 @@ def model_settings_section():
                     os.environ.pop(env_key, None)
                 elif choice in model_registry.KNOWN_EFFORTS:
                     os.environ[env_key] = choice
-            # A toast survives the rerun below; a st.success would vanish with it.
-            st.toast("Model pins saved. They apply to the whole app process (every page and session) "
-                     "until the app restarts. Add CQC_MODEL_<FEATURE> or CQC_REASONING_EFFORT_<FEATURE> "
-                     "to .env to keep them.", icon=":material/check_circle:")
+            # Shown at the top of the section after the rerun below.
+            st.session_state["_pins_saved"] = True
             st.rerun()
+    st.caption("To keep a choice after a restart, add CQC_MODEL_<FEATURE> or "
+               "CQC_REASONING_EFFORT_<FEATURE> to .env.")
 
 
 _CUSTOM_HOST = "Custom (self-hosted)"

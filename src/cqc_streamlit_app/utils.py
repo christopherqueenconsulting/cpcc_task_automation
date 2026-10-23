@@ -1268,7 +1268,7 @@ def _default_effort_label(role: str, model_id: str) -> str:
         resolved = model_registry.resolve(role, override=model_id)  # type: ignore[arg-type]
     except Exception:  # noqa: BLE001
         return "Default"
-    where = "pinned" if os.environ.get(f"CQC_REASONING_EFFORT_{role.upper()}") else "registry"
+    where = "set in Settings" if os.environ.get(f"CQC_REASONING_EFFORT_{role.upper()}") else "app default"
     return f"Default ({where}: {resolved.reasoning_effort or 'provider default'})"
 
 
@@ -1287,18 +1287,30 @@ def _reasoning_effort_selectbox(uk: str, role: str, model_id: str, use_auto_rout
     index = options.index(default_effort) if default_effort in options[1:] else 0
     choice = st.selectbox(
         "Reasoning effort", options, index=index, key=f"openrouter_effort_{uk}_{model_id}",
-        help="How long the model thinks before it answers. Higher effort can be more careful "
-             "and is slower and costs more. Every student in a run should be graded at the "
-             "same effort so the grades are comparable.")
+        help="How long the model thinks before it answers. Low: fastest and cheapest, fine for "
+             "simple work. Medium: a balance. High: slower and costs more, more careful. Max: "
+             "slowest and costliest, use only for hard cases. Grade every student in a run at the "
+             "same effort so grades are comparable.")
     if len(options) == 1:
         st.caption("This model has no effort setting; the provider default applies.")
         return None
     if choice == default_label:
         return None
-    if not model_id_has_profile(model_id):
-        st.caption("This model is not in the model registry yet, so the app cannot send an effort "
-                   f"for it: {choice} is not applied and the provider default runs.")
+    if _effort_would_be_dropped(role, model_id, choice):
+        st.caption("This model is not on the app's list of known models, or the list gives it no effort "
+                   f"setting, so the app cannot send an effort for it: {choice} is not applied and the "
+                   "provider default runs.")
     return choice
+
+
+def _effort_would_be_dropped(role: str, model_id: str, effort: str) -> bool:
+    """True when the model resolves ``effort`` to nothing (it is not sent)."""
+    from cqc_cpcc.utilities.AI import model_registry
+
+    try:
+        return model_registry.resolve(role, override=model_id, effort_override=effort).reasoning_effort_dropped  # type: ignore[arg-type]
+    except Exception:  # noqa: BLE001 - a caption never blocks the page
+        return False
 
 
 def model_id_has_profile(model_id: str) -> bool:

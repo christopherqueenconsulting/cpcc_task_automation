@@ -33,6 +33,9 @@ TIMEOUT_SLACK_S = 5.0
 BACKOFF_S_PER_MODEL = 10.0
 DEADLINE_MARGIN_S = 60.0
 DEFAULT_GRADING_CONCURRENCY = 4
+# Upper bounds for values read from the environment, so a typo cannot mean days or a flood.
+MAX_TIMEOUT_S = 3600.0
+MAX_GRADING_CONCURRENCY = 32
 
 _warned: set[str] = set()
 
@@ -60,7 +63,7 @@ def request_timeout(role: str, effort: str | None = None) -> float:
     x1.25, high x1.5). A timeout set in the environment is used as given."""
     explicit = _positive(f"CQC_LLM_TIMEOUT_{role.upper()}") or _positive("CQC_LLM_TIMEOUT")
     if explicit:
-        return explicit
+        return min(explicit, MAX_TIMEOUT_S)
     base = DEFAULT_REQUEST_TIMEOUT_S.get(role, FALLBACK_REQUEST_TIMEOUT_S)
     return base * EFFORT_TIMEOUT_FACTOR.get(effort or "", 1.0)
 
@@ -111,4 +114,5 @@ def student_deadline(role: str = "grading", model: str | None = None,
 
 def grading_concurrency() -> int:
     """How many students grade at once: ``CQC_GRADING_CONCURRENCY``, default 4."""
-    return _positive("CQC_GRADING_CONCURRENCY", int) or DEFAULT_GRADING_CONCURRENCY
+    return min(_positive("CQC_GRADING_CONCURRENCY", int) or DEFAULT_GRADING_CONCURRENCY,
+               MAX_GRADING_CONCURRENCY)

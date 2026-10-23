@@ -393,3 +393,10 @@ def test_short_deadline_warns_once_and_concurrency_reads_env(monkeypatch):
     assert llm_limits.student_deadline() == 100000
     monkeypatch.setenv("CQC_GRADING_CONCURRENCY", "8")
     assert llm_limits.grading_concurrency() == 8
+
+
+def test_env_timeouts_and_concurrency_are_capped(monkeypatch):
+    monkeypatch.setenv("CQC_LLM_TIMEOUT_GRADING", "999999")
+    assert llm_limits.request_timeout("grading", "high") == llm_limits.MAX_TIMEOUT_S == 3600
+    monkeypatch.setenv("CQC_GRADING_CONCURRENCY", "500")
+    assert llm_limits.grading_concurrency() == 32

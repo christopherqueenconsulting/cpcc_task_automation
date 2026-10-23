@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -22,6 +23,7 @@ from cqc_cpcc.rubric_models import RubricAssessmentResult
 from cqc_cpcc.utilities.logger import logger
 
 MAX_RUNS = 20
+_RUN_KEY_RE = re.compile(r"[0-9A-Za-z]{1,64}")
 
 
 def results_dir() -> Path:
@@ -30,8 +32,10 @@ def results_dir() -> Path:
 
 
 def _path(run_key: str) -> Path:
-    if not run_key.isalnum():
-        raise ValueError("run key must be alphanumeric")
+    # Real run keys are 64 hex characters (SHA-256); the looser ASCII form keeps older saved
+    # files loading. Nothing with a separator, a dot or a non-ASCII character gets through.
+    if not _RUN_KEY_RE.fullmatch(run_key):
+        raise ValueError("run key must be 1-64 ASCII letters or digits")
     return results_dir() / f"{run_key}.json"
 
 
@@ -89,7 +93,10 @@ def remembered_effort(instructions_hash: str) -> Optional[str]:
         except (OSError, ValueError):
             continue
         if meta.get("instructions_hash") == instructions_hash:
-            return meta.get("effort") or None
+            from cqc_cpcc.utilities.AI.model_registry import KNOWN_EFFORTS
+            effort = meta.get("effort")
+            # A saved file is not trusted: only a known effort name is handed back.
+            return effort if effort in KNOWN_EFFORTS else None
     return None
 
 
@@ -115,6 +122,8 @@ def load_runs() -> list[dict]:
     for path in sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data.get("run_key"), str) or not _RUN_KEY_RE.fullmatch(data["run_key"]):
+                data["run_key"] = path.stem  # the file name decides, not what the file claims
             if data.get("mode") != "errors_only":
                 # A saved file never holds the prompt; one that claims to is not trusted.
                 data["results"] = [(sid, RubricAssessmentResult.model_validate({**r, "llm_request": None}))

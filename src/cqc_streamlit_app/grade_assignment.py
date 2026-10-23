@@ -1284,10 +1284,10 @@ def _render_compile_gate_badge(gate_report: dict, model_name: str, student_id: s
 
     badges = {
         "removed": ("🛠️ Compile gate CORRECTED the model",
-                    f"code **compiles** ({tool}) — removed the model's false “Does Not Compile” for **{student_id}**",
+                    f"code **compiles** ({tool}) — removed the model's false “Does Not Compile” for **{_inert(student_id)}**",
                     "warning"),
         "added": ("🛠️ Compile gate CORRECTED the model",
-                  f"code **does not compile** ({tool}) — added “Does Not Compile” the model missed for **{student_id}**",
+                  f"code **does not compile** ({tool}) — added “Does Not Compile” the model missed for **{_inert(student_id)}**",
                   "warning"),
         "confirmed_compiles": ("✅ Compile gate: agrees", f"verified compiles ({tool}, {lang})", "caption"),
         "confirmed_no_compile": ("✅ Compile gate: agrees", f"verified does not compile ({tool}, {lang})", "caption"),
@@ -1341,6 +1341,12 @@ def render_compile_gate_summary() -> None:
                 "Correction rate": rate,
             })
         st.dataframe(rows, width="stretch", hide_index=True)
+
+
+def _inert(text: str) -> str:
+    """``text`` with Markdown specials escaped, for a student id shown in a caption or warning."""
+    from cqc_cpcc.reconciliation import safe_line
+    return safe_line(text)
 
 
 def _student_deadline(model_name: Optional[str], effort: Optional[str] = None) -> float:
@@ -1498,7 +1504,7 @@ async def grade_single_rubric_student(
         except TimeoutError:
             limit_min = _student_deadline(model_name, effort) / 60
             logger.error(f"Grading {alias(student_id)} with {model_name} gave no result within {limit_min:.0f} min")
-            st.error(f"❌ No result from {model_name} within {limit_min:.0f} min for {student_id}. "
+            st.error(f"❌ No result from {model_name} within {limit_min:.0f} min for {_inert(student_id)}. "
                      "Retry it from Results & review, or pick another model.")
             status.update(label=f"⏱️ Timed out: {student_id}", state="error")
             return (student_id, None)
@@ -2174,7 +2180,7 @@ def render_requirement_checklist(instructions: str, source_id: str) -> Optional[
                 if st.button("Try again", key=f"retry_requirements_{key[:12]}", icon=":material/refresh:"):
                     st.rerun()
                 return None
-    st.caption(f"Extracted automatically from the instructions ({cost}). Edit the table if needed.")
+    st.caption(f"Extracted automatically from the instructions (estimated cost: {cost}). Edit the table if needed.")
     if st.button("Re-extract", key=f"reextract_requirements_{key[:12]}", icon=":material/refresh:",
                  help="Read the instructions again; your edits to the table are discarded."):
         store.pop(key, None)
@@ -3157,14 +3163,24 @@ def _render_effort_banner(run_key: str, all_results, where: str) -> None:
     with st.container(border=True):
         st.warning(f"{n} student{'s were' if n != 1 else ' was'} graded at a different effort (or model) "
                    f"from the other {len(all_results) - n}. Grades from different efforts are not "
-                   "directly comparable.", icon=":material/balance:")
-        st.caption("Graded at: " + "; ".join(f"{label} x{count}" for label, count in sorted(mix.counts.items())))
+                   "directly comparable. To fix this, re-grade the other students at the same effort "
+                   "using the button below.", icon=":material/balance:")
+        from cqc_cpcc.reconciliation import safe_line
+        st.caption(safe_line("; ".join(f"{label}: {count} student(s)" for label, count in sorted(mix.counts.items()))))
         if run_key not in st.session_state.get("grading_inputs_by_key", {}):
             st.caption("The original files are gone after an app restart, so these cannot be re-graded here. "
                        "Use Clear results, then grade the batch again.")
             return
+        inputs = st.session_state["grading_inputs_by_key"][run_key]
+        wait_min = len(mix.others) * _deadline_for({**inputs["kwargs"], "effort": mix.majority_effort}) / 60
+        st.caption(f"This replaces the results of the {n} other student(s) with new grades at "
+                   f"{mix.majority_effort or 'the default effort'}. It costs money and cannot be undone. "
+                   f"Worst-case wait: about {wait_min:.0f} min ({n} x the per-student limit).")
+        running = st.session_state.get("grading_status_by_key", {}).get(run_key) == "running"
+        if running:
+            st.caption("Wait for the current grading run to finish, then re-grade.")
         if st.button(f"Re-grade the other students at {mix.majority_effort or 'the default effort'}",
-                     key=f"regrade_others_{where}_{run_key}", icon=":material/refresh:"):
+                     key=f"regrade_others_{where}_{run_key}", icon=":material/refresh:", disabled=running):
             _regrade_others(run_key, list(mix.others), mix.majority_effort)
 
 
@@ -3184,7 +3200,7 @@ def _regrade_others(run_key: str, student_ids: list[str], effort: Optional[str])
         submission = inputs["submissions"].get(student_id)
         if submission is None:
             continue
-        with st.spinner(f"Grading {student_id} with {label} (up to {deadline / 60:.0f} min)..."):
+        with st.spinner(f"Grading {alias(student_id)} with {label} (up to {deadline / 60:.0f} min)..."):
             try:
                 added[student_id] = run_coroutine_blocking(with_deadline(grade_with_rubric(
                     student_submission=build_submission_text_with_token_limit(files=submission.files),
@@ -3253,13 +3269,14 @@ def _render_effort_compare(student_id: str, result, run_key: str) -> None:
         effort = st.selectbox("Effort to compare", options, key=f"compare_effort_{run_key}_{student_id}")
         cost = _estimated_one_cost(inputs["kwargs"].get("assignment_instructions"), submission.files,
                                    model_name, effort)
-        st.caption(f"One extra grading call, {cost}. Nothing changes unless you keep the new result.")
+        st.caption(f"Estimated cost: {cost}. Nothing is replaced unless you press Keep this result. "
+                   "This sends this student's work to the model provider again.")
         running = st.session_state.grading_status_by_key.get(run_key) == "running"
         if st.button(f"Re-grade at {effort} effort", key=f"compare_run_{run_key}_{student_id}",
                      disabled=running, icon=":material/play_arrow:"):
             kwargs = {**inputs["kwargs"], "effort": effort}
             deadline = _deadline_for(kwargs)
-            with st.spinner(f"Grading {student_id} at {effort} effort (up to {deadline / 60:.0f} min)..."):
+            with st.spinner(f"Grading {alias(student_id)} at {effort} effort (up to {deadline / 60:.0f} min)..."):
                 try:
                     st.session_state[_compare_key(run_key, student_id)] = run_coroutine_blocking(
                         with_deadline(grade_with_rubric(
@@ -3272,11 +3289,15 @@ def _render_effort_compare(student_id: str, result, run_key: str) -> None:
                     st.error(f"No result within {deadline / 60:.0f} min. Try again, or compare another effort.")
                 except Exception as e:  # noqa: BLE001 - keep the drawer usable
                     logger.error(f"Effort comparison failed for {alias(student_id)}: {e}", exc_info=True)
-                    st.error(f"Grading {student_id} at {effort} effort failed: {e}")
+                    st.error("Grading this student at that effort failed. Details are in the log.")
+        if running:
+            st.caption("Wait for the current grading run to finish, then re-grade.")
         new = st.session_state.get(_compare_key(run_key, student_id))
         if new is not None:
             _render_effort_diff(effort_compare.compare_results(result, new))
-            if st.button("Keep this result", key=f"compare_keep_{run_key}_{student_id}",
+            st.caption("Keeping this result replaces the stored result for this student. This cannot be "
+                       "undone. The old result is not saved, only a note that records both scores.")
+            if st.button("Keep this result and replace the stored one", key=f"compare_keep_{run_key}_{student_id}",
                          icon=":material/check:",
                          help="Replace the stored result with this one and record a note."):
                 _keep_compared_result(run_key, student_id)
@@ -3289,7 +3310,7 @@ def _render_effort_diff(comparison: "effort_compare.EffortComparison") -> None:
 
     st.dataframe(
         pd.DataFrame({
-            "": ["Graded with", "Score", "Level"],
+            "Item": ["Graded with", "Score", "Level"],
             "Stored result": [comparison.old_label, f"{comparison.old_score:g}/{comparison.possible:g}",
                               comparison.old_level or "none"],
             "This re-grade": [comparison.new_label, f"{comparison.new_score:g}/{comparison.possible:g}",
@@ -3395,7 +3416,7 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
                  "Add the file type under accepted types and grade the batch again.")
         return
     deadline = _deadline_for(inputs["kwargs"])
-    with st.spinner(f"Grading {student_id} with {_run_model(inputs)} (up to {deadline / 60:.0f} min)..."):
+    with st.spinner(f"Grading {alias(student_id)} with {_run_model(inputs)} (up to {deadline / 60:.0f} min)..."):
         try:
             result = run_coroutine_blocking(with_deadline(grade_with_rubric(
                 student_submission=build_submission_text_with_token_limit(files=submission.files),
@@ -3409,7 +3430,7 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
             return
         except Exception as e:  # noqa: BLE001 - keep the rest of the results page usable
             logger.error(f"Grade anyway failed for {alias(student_id)}: {e}", exc_info=True)
-            st.error(f"Grading {student_id} failed: {e}")
+            st.error("Grading this student failed. Details are in the log.")
             return
     # No code in the course language (e.g. a .docx lab report for a C++ project): keep the
     # written feedback but score 0, still held for review (ruling 2026-10-07).
@@ -3440,7 +3461,7 @@ def _retry_failed(run_key: str) -> None:
             still_failed.append(student_id)
             continue
         deadline = _deadline_for(inputs["kwargs"])
-        with st.spinner(f"Grading {student_id} with {_run_model(inputs)} (up to {deadline / 60:.0f} min)..."):
+        with st.spinner(f"Grading {alias(student_id)} with {_run_model(inputs)} (up to {deadline / 60:.0f} min)..."):
             try:
                 result = run_coroutine_blocking(with_deadline(grade_with_rubric(
                     student_submission=build_submission_text_with_token_limit(files=submission.files),

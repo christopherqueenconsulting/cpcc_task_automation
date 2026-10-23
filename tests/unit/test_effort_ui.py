@@ -72,7 +72,7 @@ def test_the_effort_options_follow_the_selected_model():
     at = _model_app()
     assert not at.exception
     effort = at.selectbox(key="openrouter_effort_t_openai/alpha")
-    assert effort.options == ["Default (registry: high)", "low", "medium", "high"]
+    assert effort.options == ["Default (app default: high)", "low", "medium", "high"]
     assert effort.label == "Reasoning effort" and not effort.disabled
     assert at.session_state["cfg"]["effort"] is None  # Default
 
@@ -83,6 +83,27 @@ def test_the_effort_options_follow_the_selected_model():
     at.selectbox(key="openrouter_effort_t_openai/beta").select("low")
     at = _run(at)
     assert at.session_state["cfg"]["effort"] == "low"
+
+
+def test_a_profile_without_efforts_but_a_discovery_entry_shows_the_not_applied_caption(tmp_path, monkeypatch):
+    from cqc_streamlit_app.utils import effort_options
+
+    entry = {"id": "openai/gamma", "reasoning": {"supported_efforts": ["high"]}}
+    assert effort_options("openai/gamma", entry) == ["high"]
+    # The registry profile lists no efforts, so resolve() drops "high": same run key as Default.
+    assert (mr.resolve("grading", "openai/gamma", effort_override="high").config_hash
+            == mr.resolve("grading", "openai/gamma").config_hash)
+
+    def page():
+        import streamlit as st
+        from cqc_streamlit_app.utils import _reasoning_effort_selectbox
+        entry = {"id": "openai/gamma", "reasoning": {"supported_efforts": ["high"]}}
+        st.session_state["effort"] = _reasoning_effort_selectbox("t", "grading", "openai/gamma", False, entry, "high")
+
+    at = AppTest.from_function(page, default_timeout=30).run()
+    assert not at.exception, at.exception
+    assert at.session_state["effort"] == "high"
+    assert any("high is not applied and the provider default runs" in c.value for c in at.caption)
 
 
 def test_a_model_without_efforts_offers_only_the_default():
@@ -187,6 +208,21 @@ def test_the_banner_and_the_regrade_action_show_on_all_three_tabs():
         assert button.label == "Re-grade the other students at high"
 
 
+def test_the_regrade_button_is_disabled_while_a_batch_runs_and_the_cost_is_stated():
+    at = _results_app(["openai/alpha@high", "openai/alpha@high", "openai/alpha@low"])
+    at.session_state["grading_status_by_key"] = {RUN_KEY: "running"}
+    at.run()
+    assert not at.exception, at.exception
+    tab = _tab(at, "Students")
+    button = next(b for b in tab.button if b.key == f"regrade_others_students_{RUN_KEY}")
+    assert button.disabled
+    captions = [c.value for c in tab.caption]
+    assert any("Wait for the current grading run to finish, then re-grade." in c for c in captions)
+    assert any("replaces the results of the 1 other student(s)" in c and "cannot be undone" in c
+               and "Worst-case wait" in c for c in captions)
+    assert any("openai/alpha@low: 1 student(s)" in c for c in captions)
+
+
 def test_the_banner_without_the_original_files_says_so_and_offers_no_button():
     at = _results_app(["openai/alpha@high", "openai/alpha@high", "openai/alpha@low"], inputs=False).run()
     assert not at.exception
@@ -246,13 +282,16 @@ def test_compare_offers_the_other_efforts_and_the_cost_before_it_runs():
     assert not at.exception, at.exception
     effort = at.selectbox(key=f"compare_effort_{RUN_KEY}_Student A")
     assert effort.options == ["low", "medium"]  # not the effort it already ran at
-    assert any("One extra grading call" in c.value for c in at.caption)
+    assert any(c.value.startswith("Estimated cost:") and "Nothing is replaced unless you press Keep this result"
+               in c.value and "sends this student's work to the model provider again" in c.value
+               for c in at.caption)
     assert not at.button(key=f"compare_run_{RUN_KEY}_Student A").disabled
 
 
 def test_compare_is_disabled_while_a_batch_for_the_run_is_running():
     at = _compare_app(running=True).run()
     assert at.button(key=f"compare_run_{RUN_KEY}_Student A").disabled
+    assert "Wait for the current grading run to finish, then re-grade." in [c.value for c in at.caption]
 
 
 def test_compare_shows_a_neutral_diff_and_changes_nothing_until_kept():
@@ -268,6 +307,10 @@ def test_compare_shows_a_neutral_diff_and_changes_nothing_until_kept():
     assert not at.exception, at.exception
     assert redo.await_args.kwargs["effort"] == "low"
     table = at.dataframe[0].value
+    assert list(table["Item"]) == ["Graded with", "Score", "Level"]
+    assert any("Keeping this result replaces the stored result" in c.value and "records both scores" in c.value
+               for c in at.caption)
+    assert at.button(key=f"compare_keep_{RUN_KEY}_Student A").label == "Keep this result and replace the stored one"
     assert list(table["Stored result"]) == ["openai/alpha@high", "170/200", "Good"]
     assert list(table["This re-grade"]) == ["openai/alpha@low", "150/200", "Good"]
     text = " ".join(m.value for m in at.markdown)

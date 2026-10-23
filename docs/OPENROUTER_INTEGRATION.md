@@ -171,8 +171,8 @@ Every OpenRouter request is bounded (`src/cqc_cpcc/utilities/AI/llm_limits.py`):
   fallback of `2 timeouts x (timeout at that model's actual effort + 5 s) + 10 s backoff`, plus a 60 s
   margin. The fallback runs at the per-run effort if it supports it, else at the role's effort. With
   the registry's grading role (high effort on both models) that is 2 x (2 x (270 + 5) + 10) + 60 =
-  1180 s; at low effort on both it is 800 s. The worst case before a student is reported "Timed out"
-  is therefore about 20 minutes at high effort (13 at low), instead of about 3 hours (600 s x 3 SDK
+  1180 s; at low effort on both it is 820 s. The worst case before a student is reported "Timed out"
+  is therefore about 20 minutes at high effort (14 at low), instead of about 3 hours (600 s x 3 SDK
   tries x 3 attempts x 2 models) before this limit existed.
 
 The per-student deadline also covers the compile check (`COMPILE_TIMEOUT_SECONDS`, 45 s in

@@ -77,8 +77,8 @@ class TestEffortPins:
         assert model_registry.resolve("grading").reasoning_effort == "low"
         assert not list(tmp_path.iterdir()), "the pin must not be written to .env or any file"
         # The message says it applies to the whole app process.
-        assert any("whole app process" in t.value for t in app.toast)
-        assert any("whole app process" in c.value for c in app.caption)
+        assert any("every page and every user" in s.value for s in app.success)
+        assert any("every page and every user" in c.value for c in app.caption)
 
         pin = next(s for s in app.selectbox if s.label == "Pin reasoning effort for grading")
         pin.select("Use registry default")
