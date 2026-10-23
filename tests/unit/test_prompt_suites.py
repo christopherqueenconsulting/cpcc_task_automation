@@ -86,6 +86,41 @@ class TestRunAndScore:
         assert by_case["c2"].error_kind == "schema" and not by_case["c2"].ok
         assert all(r.cost_usd == 0.0 for r in records if r.ok)  # test mode is free
 
+    async def test_a_call_made_before_the_case_is_not_recorded_as_the_cases(self, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        stale = llm_gateway.GatewayCall("feedback", "judge/model", "judge/model", False, "h", "r",
+                                        completion=None, prompt="judge-pairwise@1")
+        token = llm_gateway._last_call.set(stale)
+        try:
+            suite = _toy_suite()
+            suite = base.Suite(**{**suite.__dict__, "to_payload": lambda out: {"answer": out, "validity": "empty"}})
+            records = await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(2), 1, Budget(1.0, 0.9))
+        finally:
+            llm_gateway._last_call.reset(token)
+        assert all(r.ok and r.prompt is None and r.model_used is None for r in records)
+        assert all(r.cost_usd == 0.0 and not r.cost_estimated for r in records)  # validity gate: no call
+
+    async def test_a_case_with_no_call_and_no_validity_rejection_is_charged_an_estimate(self, monkeypatch):
+        records = await base.run_suite(_toy_suite(), "openai/gpt-5-mini", None, _cases(1), 1, Budget(1.0, 0.9))
+        assert records[0].ok and records[0].cost_estimated and records[0].prompt is None
+
+    async def test_a_call_made_during_the_case_is_recorded(self, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client
+
+        async def invoke(case):
+            meta = openrouter_client.CompletionMetadata(
+                requested_model="m", model="openai/gpt-5-mini", provider=None, generation_id=None,
+                prompt_tokens=10, completion_tokens=5, reasoning_tokens=None, cost_usd=0.001,
+                latency_seconds=0.1, attempts=1)
+            llm_gateway._last_call.set(llm_gateway.GatewayCall(
+                "feedback", "m", "openai/gpt-5-mini", False, "h", "r", completion=meta, prompt="toy@1"))
+            return "ok"
+
+        suite = base.Suite(**{**_toy_suite().__dict__, "invoke": invoke})
+        records = await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(1), 1, Budget(1.0, 0.9))
+        assert records[0].prompt == "toy@1" and records[0].cost_usd == 0.001
+
     def test_failed_calls_score_zero_and_composite_uses_weights(self):
         suite = _toy_suite()
         case = _cases(1)[0]

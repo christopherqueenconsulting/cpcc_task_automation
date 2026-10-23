@@ -102,6 +102,10 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
             reason = f"{pid}: {', '.join(sorted(hits)[:3])} changed"
         elif old and new and old.fingerprint != computed.get(pid, new.fingerprint):
             reason = f"{pid}: request fingerprint changed"
+        elif base_reg and (old is None or new is None):
+            reason = f"{pid}: registry entry {'added' if old is None else 'removed'}"
+        elif old and new and (old.version != new.version or old.status != new.status):
+            reason = f"{pid}: version or status changed"
         if reason:
             if entry.status == "judge":
                 judges_changed.append(pid)
@@ -157,8 +161,12 @@ def _aggregates(suite, raw_path: Path, case_ids: Optional[set] = None) -> dict:
 
 
 def ab_decision(suite, head: dict, base_aggs: dict, policy=None, pairwise_scores: Optional[dict] = None,
-                judge_calibrated: bool = False) -> dict:
-    """Accept a prompt change when nothing regresses on any model of the matrix."""
+                judge_calibrated: bool = False, split: Optional[str] = "holdout") -> dict:
+    """Accept a prompt change when nothing regresses on any model of the matrix.
+
+    ``split`` is the case split the paired test runs on: the holdout split by default, all
+    cases (``None``) when the suite's prompts are unchanged (see ``prompts_unchanged``).
+    """
     policy = policy or model_registry.load_policy()
     sp = prompt_eval.suite_policy(suite.id)
     ev = policy.eval
@@ -169,21 +177,41 @@ def ab_decision(suite, head: dict, base_aggs: dict, policy=None, pairwise_scores
             notes.append(f"{label}: no base run to compare with")
             continue
         new_failures = [f for f in base.gate_failures(h, sp.hard_gates) if f not in base.gate_failures(b, sp.hard_gates)]
-        cmp = base.compare(h, b, suite, resamples=min(ev.bootstrap_resamples, 4000), alpha=ev.alpha,
-                           superiority_margin=ev.superiority_margin, noninferiority_margin=ev.noninferiority_margin)
+        cmp = base.ab_noninferior(h, b, suite, resamples=min(ev.bootstrap_resamples, 4000), alpha=ev.alpha,
+                                  margin=ev.noninferiority_margin, superiority_margin=ev.superiority_margin,
+                                  split=split)
         delta = (h.get("composite") or 0) - (b.get("composite") or 0)
         cost_ratio = (h["cost_per_call"] / b["cost_per_call"]) if h.get("cost_per_call") and b.get("cost_per_call") else None
+        tested = cmp.get("split") or split or "all"
+        paired = cmp.get("metrics", {}).get("composite", {})
+        drops = {name: cmp["metrics"][name] for name in cmp.get("clear_drops", [])}
+        strict = {name: cmp["metrics"][name] for name in cmp.get("strict_failures", [])}
         per_model[label] = {"composite_head": h.get("composite"), "composite_base": b.get("composite"),
                             "delta": delta, "comparative": cmp["comparative"], "superior": cmp.get("superior"),
-                            "noninferior": cmp.get("noninferior"), "cost_ratio": cost_ratio,
-                            "new_gate_failures": new_failures}
+                            "noninferior": cmp.get("noninferior"), "split": tested, "n": cmp.get("n"),
+                            "primary_noninferior": cmp.get("primary_noninferior"),
+                            "paired": {k: paired.get(k) for k in ("mean", "low", "high", "p_noninferior")},
+                            "clear_drops": {name: {"mean": st["mean"], "high": st["high"]} for name, st in drops.items()},
+                            "strict_failures": {name: {"mean": st["mean"], "p_noninferior": st["p_noninferior"]}
+                                                for name, st in strict.items()},
+                            "cost_ratio": cost_ratio, "new_gate_failures": new_failures}
         if new_failures and sp.calibrated:
             reasons.append(f"{label}: new hard-gate failures: {'; '.join(new_failures)}")
         elif new_failures:
             notes.append(f"{label}: below provisional gates: {'; '.join(new_failures)}")
-        if cmp["comparative"] and not cmp["noninferior"]:
-            reasons.append(f"{label}: not non-inferior on the holdout split (composite {delta:+.3f})")
-        elif not cmp["comparative"] and delta < -ev.noninferiority_margin:
+        where = "all cases" if tested == "all" else f"the {tested} split"
+        if cmp["comparative"]:
+            if not cmp.get("primary_noninferior"):
+                reasons.append(f"{label}: composite not non-inferior on {where} (n={cmp['n']}, paired mean "
+                               f"{paired['mean']:+.3f}, 95% interval {paired['low']:+.3f}..{paired['high']:+.3f}, "
+                               f"P(<= -{ev.noninferiority_margin}) = {paired['p_noninferior']:.3f})")
+            for name, st in strict.items():
+                reasons.append(f"{label}: strict grader {name} not non-inferior on {where} (paired mean "
+                               f"{st['mean']:+.3f}, P(<= -{ev.noninferiority_margin}) = {st['p_noninferior']:.3f})")
+            for name, st in drops.items():
+                reasons.append(f"{label}: clear drop on {where}: {name} paired mean {st['mean']:+.3f}, "
+                               f"95% interval upper bound {st['high']:+.3f}")
+        elif delta < -ev.noninferiority_margin:
             reasons.append(f"{label}: composite fell {delta:+.3f} (more than {ev.noninferiority_margin})")
         if cost_ratio is not None and cost_ratio > ev.better_path_max_cost_ratio:
             reasons.append(f"{label}: cost per call x{cost_ratio:.2f} > {ev.better_path_max_cost_ratio}")
@@ -243,6 +271,223 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
     return raw if raw.exists() else None
 
 
+def prompts_unchanged(suite_id: str, base_ref: str) -> bool:
+    """True when every prompt the suite exercises renders the same request at ``base_ref``.
+
+    The holdout split guards against a prompt tuned on the dev cases. When the rendered
+    requests are unchanged, no prompt text changed, so the paired test can use every case and
+    roughly doubles its sample. Known limit: response-side code (scoring engine, compile gate,
+    validity and requirement coverage, parsers) can still be tuned on dev cases, and that bias
+    favours head; the all-cases split does not guard against it.
+    """
+    base_reg = prompt_registry.load_at_ref(base_ref)
+    if base_reg is None:
+        return False
+    head = prompt_registry.load()
+    return same_prompts(head, base_reg, prompt_registry.compute_all(head), suite_id)
+
+
+def same_prompts(head, base_reg, head_fingerprints: dict, suite_id: str) -> bool:
+    """The suite exercises the same non-judge prompts in both registries, each rendering the
+    same request (``head_fingerprints``: pid -> fingerprint of the head's requests)."""
+    in_head = {pid for pid, e in head.prompts.items() if suite_id in e.suites and e.status != "judge"}
+    in_base = {pid for pid, e in base_reg.prompts.items() if suite_id in e.suites and e.status != "judge"}
+    if not in_head or in_head != in_base:  # a prompt added, removed or moved to another suite
+        return False
+    return all(base_reg.prompts[pid].fingerprint == head_fingerprints.get(pid, head.prompts[pid].fingerprint)
+               for pid in in_head)
+
+
+def suites_from_data(changed: list, head_reg, base_reg, head_roles: dict, base_roles: dict) -> dict:
+    """The suites a change needs a model run on, decided from data only (no PR code imported).
+
+    The same triggers as ``affected``'s ``run`` list: a changed ``source_files``/``shared_files``
+    path of either registry, a registry entry added or removed, a stored fingerprint, version
+    or status that differs, a changed suite dataset, or a changed model-registry role. Used from a base-branch checkout to check the PR's own
+    detection, which runs the PR's code.
+    """
+    run: dict[str, str] = {}
+    for pid in set(head_reg.prompts) | set(base_reg.prompts):
+        old, new = base_reg.prompts.get(pid), head_reg.prompts.get(pid)
+        entries = [e for e in (old, new) if e is not None]
+        if (new if new is not None else old).status == "judge":  # judges recalibrate, never run
+            continue
+        paths = {f for e in entries for f in e.source_files + e.shared_files}
+        hits = [f for f in changed if _matches(f, paths) and f != LOCKFILE_RELPATH]
+        moved = (old is None or new is None or old.fingerprint != new.fingerprint or old.version != new.version
+                 or old.status != new.status)
+        if hits or moved:
+            for suite_id in {s for e in entries for s in e.suites}:
+                run.setdefault(suite_id, f"{pid}: {', '.join(sorted(hits)[:3]) or 'registry entry changed'}")
+    for suite_id in SUITE_MODULES:
+        suite = get_suite(suite_id)
+        if any(f.startswith(f"evals/datasets/{suite.dataset}/") for f in changed):
+            run.setdefault(suite_id, f"dataset {suite.dataset} changed")
+        if head_roles.get(suite.role) != base_roles.get(suite.role):
+            run.setdefault(suite_id, f"model registry role {suite.role} changed")
+    return run
+
+
+def _prompt_paths(reg, suite_id: str) -> set:
+    return {f for e in reg.prompts.values() if suite_id in e.suites and e.status != "judge"
+            for f in e.source_files + e.shared_files}
+
+
+def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: str,
+                          changed: Optional[list] = None) -> dict:
+    """Re-decide a finished A/B with THIS checkout's detection, graders and rule.
+
+    The workflow runs this in its own job from a checkout of the base branch, with the
+    base's own environment. The PR's tree (``head_root``) and the A/B artifact (``out``) are
+    read as data only. This guards against an honest PR that relaxes the rule that judges it
+    or skips a suite by mistake; it does not stop a hostile author, whose code wrote the
+    saved outputs (docs/PROMPTS.md, "Both rules must pass").
+
+    - The suites that need a run are detected here from the changed files, and each must be in
+      the A/B with its saved outputs. Otherwise the result is ``not-run`` or ``fail``.
+    - Each suite is decided with this checkout's graders and rule, on cases whose inputs are
+      the same on both sides, with this policy's repeats on every case and model.
+    - The A/B passes only when the PR's own verdict and this one both pass.
+    """
+    if changed is None:  # the CI passes GitHub's own list of the PR's files instead
+        changed = [f for f in _git("diff", "--name-only", "--no-renames",
+                                   _git("merge-base", base_sha, head_sha).strip(), head_sha).splitlines() if f]
+    head_reg = prompt_registry._lenient(json.loads(
+        (head_root / prompt_registry.REGISTRY_RELPATH).read_text(encoding="utf-8")))
+    base_reg = prompt_registry.load()
+    head_roles = (json.loads((head_root / MODEL_REGISTRY_RELPATH).read_text(encoding="utf-8")).get("roles") or {})
+    base_roles = model_registry.load_registry().model_dump(mode="json")["roles"]
+
+    def role(cfg):
+        return model_registry.RoleConfig.model_validate(cfg).model_dump(mode="json") if cfg else None
+
+    required = suites_from_data(changed, head_reg, base_reg, {r: role(c) for r, c in head_roles.items()},
+                                {r: role(c) for r, c in base_roles.items()})
+    ab_path = out / "ab.json"
+    report = json.loads(ab_path.read_text(encoding="utf-8")) if ab_path.exists() else None
+    results: dict = {}
+    requests_path = out / "requests.json"
+    if required and report is None and requests_path.exists():
+        # The PR's side found every required suite's requests identical to the base's and ran
+        # no model A/B. Check that claim here: capture the base's requests with this checkout's
+        # code and compare them with the PR's capture.
+        from cqc_cpcc.model_eval import request_capture
+
+        head_capture = json.loads(requests_path.read_text(encoding="utf-8")).get("head") or {}
+        reasons = request_capture.compare(head_capture, request_capture.capture(sorted(required)), sorted(required))
+        fingerprints = {p: e.fingerprint for p, e in head_reg.prompts.items()}
+        for suite_id in reasons:  # the capture sees fixed-answer calls only: every prompt must also be unchanged
+            if reasons[suite_id] is None and not same_prompts(head_reg, base_reg, fingerprints, suite_id):
+                reasons[suite_id] = "a prompt this suite uses changed in the registry"
+        for suite_id, reason in reasons.items():
+            results[suite_id] = {"suite": suite_id, "status": "pass" if reason is None else "fail", "models": {},
+                                 "reasons": [] if reason is None else [f"requests differ from the base: {reason}"],
+                                 "notes": ["requests identical to the base's; no model A/B needed"] if reason is None
+                                 else []}
+        status = "request-identical" if all(r is None for r in reasons.values()) else "not-run"
+    elif required and report is None:
+        status = "not-run"
+    else:
+        for suite_id in sorted(required):
+            results[suite_id] = _decide_suite(suite_id, (report or {}).get("suites", {}).get(suite_id), out,
+                                              head_root, changed, head_reg, base_reg,
+                                              {r: role(c) for r, c in head_roles.items()})
+        statuses = [r["status"] for r in results.values()]
+        status = ("fail" if "fail" in statuses
+                  else "pass" if all(s == "pass" for s in statuses) else "pass-provisional")
+    pr_status = (report or {}).get("status")
+    if status in ("fail", "not-run", "request-identical"):
+        combined = status
+    elif pr_status == "fail":
+        combined = "fail"
+    else:
+        combined = "pass" if status == "pass" and pr_status in (None, "pass") else "pass-provisional"
+    decided = {"base_sha": base_sha, "head_sha": head_sha, "required": required, "status": status,
+               "pr_status": pr_status, "combined_status": combined, "suites": results}
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "ab-base-rule.json").write_text(json.dumps(decided, indent=2, sort_keys=True, default=str) + "\n",
+                                           encoding="utf-8")
+    (out / "base-rule.md").write_text(base_rule_markdown(decided), encoding="utf-8")
+    return decided
+
+
+def _decide_suite(suite_id: str, pr_result: Optional[dict], out: Path, head_root: Path, changed: list,
+                  head_reg, base_reg, head_roles: Optional[dict] = None) -> dict:
+    def failed(reason):
+        return {"suite": suite_id, "status": "fail", "models": {}, "notes": [], "reasons": [reason]}
+
+    if pr_result is None:
+        return failed("the base branch's detection needs this suite, but the A/B did not run it")
+    if suite_id not in SUITE_MODULES:
+        if pr_result.get("status") == "no-base":
+            return {"suite": suite_id, "status": "no-base", "models": {}, "reasons": [],
+                    "notes": ["the base branch has no such suite; absolute numbers only"]}
+        return failed("the base branch has no such suite, so its rule cannot judge it")
+    head_raw, base_raw = (out / side / suite_id / "raw_outputs.jsonl" for side in ("head", "base"))
+    if pr_result.get("status") == "no-base" or not (head_raw.exists() and base_raw.exists()):
+        return failed("the base branch has this suite, but the A/B saved no base or head outputs for it")
+    suite = get_suite(suite_id)
+    same = _unchanged_case_ids(suite, head_root)
+    head_recs, base_recs = prompt_eval.read_records(head_raw), prompt_eval.read_records(base_raw)
+    if set(head_recs) != set(base_recs) or not head_recs:
+        return failed(f"head and base ran different models: {sorted(head_recs)} vs {sorted(base_recs)}")
+    incumbent = (head_roles or {}).get(suite.role)
+    if incumbent is not None:
+        label = prompt_eval.label_of(incumbent["model"], incumbent.get("reasoning_effort"))
+        if label not in head_recs:
+            return failed(f"the A/B did not run the {suite.role} role's incumbent {label}: {sorted(head_recs)}")
+    repeats = prompt_eval.suite_policy(suite_id).repeats
+    wanted = {c.case_id for c in suite.cases() if same is None or c.case_id in same}
+    if not wanted:
+        return failed("no case is the same in the PR's dataset and the base's, so nothing was compared")
+    for label in head_recs:
+        for side, recs in (("head", head_recs[label]), ("base", base_recs[label])):
+            counts: dict = {}
+            for r in recs:
+                if r.error_kind != "budget":
+                    counts[r.case_id] = counts.get(r.case_id, 0) + 1
+            short = sorted(c for c in wanted if counts.get(c, 0) < repeats)
+            if short:
+                return failed(f"{label} {side}: {len(short)} case(s) have fewer than {repeats} runs "
+                              f"(e.g. {short[0]})")
+    unchanged = (same_prompts(head_reg, base_reg, {p: e.fingerprint for p, e in head_reg.prompts.items()}, suite_id)
+                 and not any(_matches(f, _prompt_paths(head_reg, suite_id) | _prompt_paths(base_reg, suite_id))
+                             for f in changed))
+    return ab_decision(suite, _aggregates(suite, head_raw, same), _aggregates(suite, base_raw, same),
+                       split=None if unchanged else "holdout")
+
+
+def base_rule_markdown(decided: dict) -> str:
+    from cqc_cpcc.model_eval.scorecard import _safe
+
+    lines = [f"## Base-branch check: {decided['combined_status']}", "",
+             f"Base `{decided['base_sha'][:7]}` re-decided this PR's A/B with its own detection, graders and "
+             f"rule (data only; protects against honest relaxations, not a hostile author).", ""]
+    required = decided["required"]
+    if not required:
+        lines.append("The base branch's detection finds no suite that needs a model run.")
+    elif decided["status"] == "request-identical":
+        lines.append("Every request the required suites send (" + ", ".join(f"`{s}`" for s in sorted(required))
+                     + ") is byte-identical to the base's (messages, schema, model parameters, model registry "
+                       "and client endpoint), every registry prompt they use is unchanged, and each case "
+                       "handles the fixed test-mode answer identically. Captured with no model call. No model "
+                       "A/B is needed. Not covered: how the code handles the model's real, varied answers "
+                       "(the unit suite; record-and-replay is issue #406).")
+    elif decided["status"] == "not-run":
+        lines.append("Suites the base branch requires, but the A/B did not run: "
+                     + ", ".join(f"`{s}`" for s in sorted(required)))
+        for suite_id, r in decided["suites"].items():
+            for reason in r.get("reasons", []):
+                lines.append(f"- `{suite_id}`: {reason}")
+    else:
+        body = ab_markdown({"base_ref": decided["base_sha"][:7], "status": decided["status"],
+                            "suites": decided["suites"]})
+        lines.append(body.split("\n", 4)[-1].replace("scored with the head graders", "scored with the base graders"))
+    lines += ["", f"PR rule: **{decided['pr_status'] or 'no A/B'}**. Base rule: **{decided['status']}**. "
+                  f"Combined (both must pass): **{decided['combined_status']}**."]
+    return "\n".join(lines) + "\n"
+
+
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
                     judges: bool = False, judge_model: Optional[str] = None, judge_cache: Optional[str] = None) -> dict:
     """Run each suite at the base and head code on the same models and compare."""
@@ -265,6 +510,8 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             suite_models = parsed or [prompt_eval.incumbent_of(suite.role)]
             labels = [prompt_eval.label_of(m, e) for m, e in suite_models]
             r = repeats or prompt_eval.suite_policy(suite_id).repeats
+            # Decided before any spend, so a git error here cannot waste a paid run.
+            unchanged = prompts_unchanged(suite_id, base_ref)
             await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"), budget=budget)
             if not _base_has_suite(worktree, suite_id):
                 head = _aggregates(suite, out / "head" / suite_id / "raw_outputs.jsonl")
@@ -312,7 +559,11 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                                 wins.append(score)
                         pairwise_scores[label] = sum(wins) / len(wins) if wins else None
             results[suite_id] = ab_decision(suite, head, base_aggs, pairwise_scores=pairwise_scores,
-                                            judge_calibrated=calibrated)
+                                            judge_calibrated=calibrated, split=None if unchanged else "holdout")
+            if unchanged:
+                results[suite_id]["notes"].append(
+                    "prompts unchanged from the base: the paired test uses all cases when there are at least 30 "
+                    "(the Paired test column names the split); the pairwise judge still scores holdout only")
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
     overall = ("fail" if any(r["status"] == "fail" for r in results.values())
@@ -333,9 +584,17 @@ def ab_markdown(report: dict) -> str:
              "| Suite | Model | Base | Head | Δ | Paired test | Cost × | Status |", "|---|---|---|---|---|---|---|---|"]
     for suite_id, r in report["suites"].items():
         for label, m in (r.get("models") or {}).items():
-            test = ("n/a" if "comparative" not in m else
-                    ("superior" if m.get("superior") else "non-inferior" if m.get("noninferior") else "inferior")
-                    if m.get("comparative") else "too few cases")
+            if "comparative" not in m:
+                test = "n/a"
+            elif not m.get("comparative"):
+                test = "too few cases"
+            else:
+                verdict = ("superior" if m.get("superior") and m.get("noninferior")
+                           else "non-inferior" if m.get("noninferior")
+                           else "inferior (composite)" if not m.get("primary_noninferior", True)
+                           else "inferior (strict): " + ", ".join(m["strict_failures"]) if m.get("strict_failures")
+                           else "clear drop: " + ", ".join(m.get("clear_drops") or {}))
+                test = f"{verdict}, {m.get('split', 'holdout')} n={m.get('n')}"
             lines.append(
                 f"| `{suite_id}` | `{_safe(label)}` | {prompt_eval._fmt(m.get('composite_base'))} | "
                 f"{prompt_eval._fmt(m.get('composite_head'))} | {prompt_eval._fmt(m.get('delta'))} | {test} | "
@@ -355,7 +614,7 @@ GRADER_TOLERANCE = 0.10
 HEALTH_TOLERANCE = 0.05
 
 
-def propose_suite_policy(agg: dict, report_path: str) -> dict:
+def propose_suite_policy(agg: dict, report_path: str, repeats: int = 2) -> dict:
     gates = {"ok_rate": {"min": 0.95}, "errors.refusal": {"max": 0}, "errors.truncated": {"max": 0}}
     for name, value in (agg.get("graders") or {}).items():
         if value is not None:
@@ -364,7 +623,7 @@ def propose_suite_policy(agg: dict, report_path: str) -> dict:
         if info.get("calibrated") and info.get("mean") is not None:
             gates[f"judge.{judge_id}"] = {"min": round(max(0.0, info["mean"] - GRADER_TOLERANCE), 3)}
     composite = agg.get("composite")
-    return {"calibrated": True, "repeats": 2, "hard_gates": gates,
+    return {"calibrated": True, "repeats": repeats, "hard_gates": gates,
             "health_floor": round(max(0.0, composite - HEALTH_TOLERANCE), 3) if composite is not None else None,
             "baseline_report": report_path}
 
@@ -381,7 +640,8 @@ async def calibrate(out: Path, suite_ids: Optional[list] = None, repeats: int = 
             raise SystemExit(f"{suite_id}: calibration run {sc.get('status')}; nothing proposed")
         (label, m), = sc["models"].items()
         prompt_eval.write_scorecard(Path(report_dir) / suite_id, sc)  # the baseline the patch cites
-        proposal[suite_id] = propose_suite_policy(m, f"{report_dir}/{suite_id}/scorecard.json")
+        proposal[suite_id] = propose_suite_policy(m, f"{report_dir}/{suite_id}/scorecard.json",
+                                                  repeats=prompt_eval.suite_policy(suite_id).repeats)
     versions = {pid: e.version for pid, e in prompt_registry.load().prompts.items() if e.status == "live"}
     patch = {"suites": proposal, "calibrated_versions": versions}
     (out / "policy_patch.json").write_text(json.dumps(patch, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -394,7 +654,11 @@ def apply_policy_patch(patch: dict, path: Path = model_registry.DEFAULT_POLICY_P
     """Merge a calibration proposal into model_policy.json (a human runs this and commits)."""
     data = json.loads(path.read_text(encoding="utf-8"))
     block = data.setdefault("prompt_eval", {})
-    block.setdefault("suites", {}).update(patch["suites"])
+    suites = block.setdefault("suites", {})
+    for suite_id, proposed in patch["suites"].items():
+        # A calibration re-sets floors, never how many repeats a suite runs (a human choice).
+        current = suites.get(suite_id, {})
+        suites[suite_id] = {**proposed, **({"repeats": current["repeats"]} if "repeats" in current else {})}
     block["calibrated_versions"] = {**block.get("calibrated_versions", {}), **patch["calibrated_versions"]}
     model_registry.PromptEvalPolicy.model_validate(block)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -551,6 +815,80 @@ def cmd_prompt_ab(args) -> int:
     return 0
 
 
+def requests_identical(suite_ids: list, base_ref: str, out: Path) -> dict:
+    """Capture each suite's requests at the head (this checkout) and at ``base_ref``; compare.
+
+    Any failure (no base command, a crash, a different format) leaves the suite "not
+    identical", so the full A/B runs.
+    """
+    import tempfile
+
+    from cqc_cpcc.model_eval import request_capture
+
+    out = out.resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    head = request_capture.capture(suite_ids)
+    base: dict = {}
+    with tempfile.TemporaryDirectory() as tmp:  # outside out/, so the base source never lands in an artifact
+        worktree = _base_worktree(base_ref, Path(tmp) / "base-src")
+        base_file = Path(tmp) / "base-requests.json"
+        try:
+            # No API key: the capture never sends, and a path that bypassed it could not either.
+            env = {k: v for k, v in os.environ.items() if k not in ("OPENROUTER_API_KEY", "OPENAI_API_KEY")}
+            env["PYTHONPATH"] = str(worktree / "src")
+            result = subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests", "--suites",
+                                     ",".join(suite_ids), "--out", str(base_file)],
+                                    cwd=worktree, env=env, capture_output=True, text=True, timeout=900)
+            if result.returncode == 0:
+                base = json.loads(base_file.read_text(encoding="utf-8"))
+            else:
+                print(result.stderr[-2000:])
+        except subprocess.TimeoutExpired:
+            print("the base capture timed out")
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
+    reasons = request_capture.compare(head, base, suite_ids)
+    for suite_id in suite_ids:  # the capture sees fixed-answer calls only: every prompt must also be unchanged
+        if reasons[suite_id] is None and not prompts_unchanged(suite_id, base_ref):
+            reasons[suite_id] = "a prompt this suite uses changed in the registry"
+    report = {"base_ref": base_ref, "suites": reasons,
+              "identical": bool(suite_ids) and all(r is None for r in reasons.values()), "head": head}
+    (out / "requests.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return report
+
+
+def cmd_prompt_requests(args) -> int:
+    from cqc_cpcc.model_eval import request_capture
+
+    suites = [s for s in args.suites.split(",") if s]
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out).write_text(json.dumps(request_capture.capture(suites), sort_keys=True) + "\n", encoding="utf-8")
+    return 0
+
+
+def cmd_prompt_requests_identical(args) -> int:
+    suites = [s for s in args.suites.split(",") if s]
+    report = requests_identical(suites, args.base_ref, Path(args.out))
+    for suite_id, reason in report["suites"].items():
+        print(f"{suite_id}: {'identical' if reason is None else reason}")
+    github_output(request_identical=str(report["identical"]).lower())
+    return 0
+
+
+def cmd_prompt_ab_decide(args) -> int:
+    import cqc_cpcc
+
+    print(f"decision code: {Path(cqc_cpcc.__file__).resolve().parent}")
+    changed = None
+    if args.changed_files:
+        changed = [line.strip() for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines()
+                   if line.strip()]
+    decided = decide_with_this_rule(Path(args.dir), Path(args.head_root), args.base_sha, args.head_sha, changed)
+    print(Path(args.dir, "base-rule.md").read_text(encoding="utf-8"))
+    github_output(ab_status=decided["combined_status"], required=",".join(sorted(decided["required"])))
+    return 0
+
+
 def cmd_prompt_calibrate(args) -> int:
     suites = [s for s in (args.suites or "").split(",") if s] or None
     patch = asyncio.run(calibrate(Path(args.out), suites, args.repeats, apply=args.apply))
@@ -599,6 +937,28 @@ def add_parsers(sub) -> None:
     ab.add_argument("--judge-model", default=None)
     ab.add_argument("--judge-cache", default=None)
     ab.set_defaults(func=cmd_prompt_ab)
+
+    rq = sub.add_parser("prompt-requests", help="capture each suite's exact requests with no model call ($0)")
+    rq.add_argument("--suites", required=True)
+    rq.add_argument("--out", required=True)
+    rq.set_defaults(func=cmd_prompt_requests)
+
+    ri = sub.add_parser("prompt-requests-identical",
+                        help="are the head's requests byte-identical to --base-ref's? ($0; writes requests.json)")
+    ri.add_argument("--suites", required=True)
+    ri.add_argument("--base-ref", required=True)
+    ri.add_argument("--out", required=True, help="directory for requests.json")
+    ri.set_defaults(func=cmd_prompt_requests_identical)
+
+    dec = sub.add_parser("prompt-ab-decide",
+                         help="re-decide a finished A/B with this checkout's graders and rule ($0)")
+    dec.add_argument("--dir", required=True, help="the A/B artifact directory (ab.json, head/, base/); may be empty")
+    dec.add_argument("--head-root", required=True, help="the PR's tree, read as data only")
+    dec.add_argument("--base-sha", required=True)
+    dec.add_argument("--head-sha", required=True)
+    dec.add_argument("--changed-files", default=None,
+                     help="file listing the PR's changed paths (old and new path of a rename); default: git diff")
+    dec.set_defaults(func=cmd_prompt_ab_decide)
 
     cal = sub.add_parser("prompt-calibrate", help="run every suite on its incumbent; propose thresholds")
     cal.add_argument("--suites", default=None)
