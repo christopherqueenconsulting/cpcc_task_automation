@@ -669,7 +669,8 @@ class TestDecideWithTheBaseRule:
         from cqc_cpcc.utilities.AI import llm_gateway
 
         monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
-        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=2)
+        # The policy's repeats, which the base check requires on every case.
+        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path)
         if report["suites"]["requirement-extraction"]["status"] == "no-base":
             pytest.skip("no base run in this checkout")
         monkeypatch.setattr(pa, "suites_from_data", lambda *a, **k: {"requirement-extraction": "test"})
