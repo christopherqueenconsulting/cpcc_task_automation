@@ -211,6 +211,37 @@ capture, runs the full paid A/B as before.
 - **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
   (issue #406) is the follow-up for that.
 
+**How fast the A/B runs.** A paid A/B used to take 67 to 81 minutes because every call waited its
+turn: four calls in flight, the head run first, then the base run, then the pairwise judge one case
+at a time. Now:
+
+- **Head and base run at the same time**, each from its own half of the remaining budget
+  (`Budget.split`), and each half is charged back to the whole when its run ends, so the total cap
+  (`budget_usd` 15, stopping at `stop_at_usd` 13.5) is the one it always was. The base is still a
+  separate process on the base's own code, started from the environment as it was before the head
+  pinned its temporary registry.
+- **12 calls in flight per side** (24 at once) instead of 4. Set `--concurrency N` on `prompt-ab`
+  or `suite run`, or `CQC_EVAL_CONCURRENCY=N` (whole numbers 1 to 32; anything else is ignored with
+  a warning). Every other run (`suite run`, the model-eval runner) keeps its default of 4. The base
+  receives the number through the environment, so a base that predates the setting runs at its own
+  default instead of failing on an unknown flag.
+- **The pairwise judge calls run in parallel** with the same limit. The scores are collected in case
+  order, so the mean is the one the sequential loop computed.
+- **Nothing that decides changed:** the same cases, repeats, models and effort, both sides scored with
+  the head graders, the same paired tests and pass rules. Records arrive in a different order, and
+  scoring does not depend on it (a test shuffles them).
+- **Retries are logged.** A rate limit (429) or timeout goes through the same client retry as before;
+  each side's log line and `ab.json` (`run_stats`: calls, calls that needed a retry, extra attempts,
+  seconds) show how many. If a run shows many retried calls, lower the number.
+- **Budget overshoot:** calls already in flight when a side reaches its stop can still finish. The
+  gap between `stop_at_usd` and `budget_usd` ($1.50) has to cover 24 calls at once; the dearest single
+  call in a suite is well under $0.05, so about $1.20 at the worst.
+- **Who gets it:** the dispatch runs `prompt-ab` from the PR's own checkout, so the speed-up applies
+  to A/Bs of PRs that contain this change (merge `master` into an older branch first). The base side
+  only speeds up once the base branch has it too.
+- **Rollback:** `git revert`; or set `CQC_EVAL_CONCURRENCY=4` in the workflow's environment (a
+  workflow edit, Christopher's) to keep the code and slow the A/B down.
+
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.
 A second job, `ab-base-rule` (and `dispatch-report` for a maintainer `ab` run), re-checks it:
