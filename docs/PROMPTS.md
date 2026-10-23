@@ -117,11 +117,13 @@ in `model_policy.json`.
   run-level flip in one twin fails the A/B (`P(<= -margin)` about 0.65). Most strict graders
   sit near 1.0 and do not flip, but `project-feedback` injection was calibrated at 0.845,
   so it can false-fail this way.
-- **Every other grader:** fails only on a clear drop, its mean difference below `-margin`
-  and its whole two-sided 95% interval below zero. For a grader outside the composite
-  (`requirement_agreement`, `feedback_length`, `offered_types`, `severity`, `ids`,
-  `details`) this rule and the hard-gate floor are the only checks; it has no
-  non-inferiority test of its own.
+- **Other graders outside the composite** (`feedback_length`, `severity`, `ids`, `details`):
+  the same strict test. Only the two that run noise measurably moves, `requirement_agreement`
+  and `offered_types` (`RELAXED_GRADERS`), are relaxed.
+- **Graders in the composite, and the relaxed two:** fail only on a clear drop, their mean
+  difference below `-margin` and their whole two-sided 95% interval below zero. A relaxed
+  grader has no non-inferiority test of its own: the clear-drop rule and its hard-gate floor
+  are its only checks. `strict_grader()` in `suites/base.py` decides which rule applies.
 - **Hard gates** still hold every grader to its absolute floor.
 - **Split:** the holdout split, because a prompt tuned on the dev cases would look better
   there. When every non-judge prompt the suite exercises renders the same request

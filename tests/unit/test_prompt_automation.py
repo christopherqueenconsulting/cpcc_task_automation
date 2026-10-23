@@ -90,7 +90,7 @@ class TestAffected:
 def _agg(suite, composites, cost=0.01, split="holdout", grader=None):
     cases = [base.SuiteCase(case_id=f"c{i}", stratum="s", inputs={}, labels={}) for i in range(len(composites))]
     grader = grader or composites
-    per_case = [base.CaseScore(c.case_id, "s", split, 1, 1, {"f1": v, "severity": g}, v)
+    per_case = [base.CaseScore(c.case_id, "s", split, 1, 1, {"f1": v, "offered_types": g}, v)
                 for c, v, g in zip(cases, composites, grader)]
     return {"composite": sum(composites) / len(composites), "graders": {"f1": sum(composites) / len(composites)},
             "ok_rate": 1.0, "errors": {}, "cost_per_call": cost, "per_case": per_case}
@@ -148,7 +148,7 @@ class TestAbGatePower:
         head = _agg(self.suite, [0.8] * 40, grader=[0.6] * 40)
         base_agg = _agg(self.suite, [0.8] * 40, grader=[0.9] * 40)
         result = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg})
-        assert result["status"] == "fail" and any("clear drop" in r and "severity" in r for r in result["reasons"])
+        assert result["status"] == "fail" and any("clear drop" in r and "offered_types" in r for r in result["reasons"])
 
     def test_dev_only_cases_are_compared_only_when_the_prompts_are_unchanged(self):
         head = _agg(self.suite, [0.5] * 40, split="dev")
@@ -173,7 +173,7 @@ class TestAbGatePower:
         m = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg})["models"]["m"]
         assert m["n"] == 40 and m["primary_noninferior"] is False and m["split"] == "holdout"
         assert m["paired"]["mean"] == pytest.approx(-0.4) and m["paired"]["p_noninferior"] == 1.0
-        assert set(m["clear_drops"]) == {"f1", "severity"}
+        assert set(m["clear_drops"]) == {"f1", "offered_types"}
         reasons = pa.ab_decision(self.suite, {"m": head}, {"m": base_agg})["reasons"]
         assert "paired mean -0.400" in reasons[0] and "n=40" in reasons[0]
 
@@ -183,7 +183,7 @@ class TestAbGatePower:
         report = {"base_ref": "origin/master", "status": "fail", "suites": {
             "exam-grading": pa.ab_decision(self.suite, {"m": drop}, {"m": a})}}
         md = pa.ab_markdown(report)
-        assert "clear drop: severity, holdout n=40" in md
+        assert "clear drop: offered_types, holdout n=40" in md
 
     def test_a_superior_composite_with_a_safety_failure_is_not_labelled_superior(self):
         base_cases = [{"f1": 0.5, "no_solution_leak": 1.0}] * 40
@@ -191,7 +191,7 @@ class TestAbGatePower:
         decision = pa.ab_decision(self.suite, {"m": _agg_graders(head_cases)}, {"m": _agg_graders(base_cases)})
         assert decision["models"]["m"]["superior"] is True and decision["status"] == "fail"
         md = pa.ab_markdown({"base_ref": "origin/master", "status": "fail", "suites": {"exam-grading": decision}})
-        assert "inferior (safety): no_solution_leak" in md and "| superior" not in md
+        assert "inferior (strict): no_solution_leak" in md and "| superior" not in md
 
 
 def _agg_graders(per_case_graders, split="holdout"):
@@ -209,14 +209,14 @@ class TestSafetyGradersStayStrict:
         base_cases = [{"f1": 0.8}] * 30 + [{"f1": 0.8, "injection": 1.0}] * 11
         head_cases = [{"f1": 0.8}] * 30 + [{"f1": 0.8, "injection": 0.0}] * 2 + [{"f1": 0.8, "injection": 1.0}] * 9
         result = pa.ab_decision(suite, {"m": _agg_graders(head_cases)}, {"m": _agg_graders(base_cases)})
-        assert result["status"] == "fail" and any("safety grader injection" in r for r in result["reasons"])
+        assert result["status"] == "fail" and any("grader injection" in r for r in result["reasons"])
 
     def test_a_solution_leak_on_two_cases_fails_the_ab(self):
         suite = get_suite("exam-grading")
         base_cases = [{"f1": 0.8, "no_solution_leak": 1.0}] * 40
         head_cases = [{"f1": 0.8, "no_solution_leak": 0.0}] * 2 + [{"f1": 0.8, "no_solution_leak": 1.0}] * 38
         result = pa.ab_decision(suite, {"m": _agg_graders(head_cases)}, {"m": _agg_graders(base_cases)})
-        assert result["status"] == "fail" and any("safety grader no_solution_leak" in r for r in result["reasons"])
+        assert result["status"] == "fail" and any("grader no_solution_leak" in r for r in result["reasons"])
 
     def test_three_of_ninety_submissions_newly_judged_invalid_fails_the_ab(self):
         suite = get_suite("grading")
@@ -227,6 +227,24 @@ class TestSafetyGradersStayStrict:
         assert cmp["strict_failures"] == ["validity"] and cmp["noninferior"] is False
         # The relaxed rule alone would have let it through: some resamples miss all three cases.
         assert not (cmp["metrics"]["validity"]["high"] < 0)
+
+
+class TestWhichGradersAreStrict:
+    def test_graders_outside_the_composite_are_strict_unless_relaxed(self):
+        grading, exam, feedback = get_suite("grading"), get_suite("exam-grading"), get_suite("project-feedback")
+        assert base.strict_grader(grading, "feedback_length") and base.strict_grader(exam, "severity")
+        assert not base.strict_grader(grading, "requirement_agreement")
+        assert not base.strict_grader(exam, "offered_types")
+        assert not base.strict_grader(grading, "f1")  # in the composite
+        assert base.strict_grader(feedback, "no_solution_leak")  # safety, although weighted
+
+    @pytest.mark.usefixtures("uncalibrated_policy")
+    def test_three_flipped_cases_on_a_quiet_grader_outside_the_composite_fail_the_ab(self):
+        suite = get_suite("exam-grading")
+        base_cases = [{"f1": 0.8, "severity": 1.0}] * 40
+        head_cases = [{"f1": 0.8, "severity": 0.0}] * 3 + [{"f1": 0.8, "severity": 1.0}] * 37
+        result = pa.ab_decision(suite, {"m": _agg_graders(head_cases)}, {"m": _agg_graders(base_cases)})
+        assert result["status"] == "fail" and any("grader severity" in r for r in result["reasons"])
 
 
 class TestPromptsUnchanged:

@@ -202,7 +202,7 @@ def ab_decision(suite, head: dict, base_aggs: dict, policy=None, pairwise_scores
                                f"{paired['mean']:+.3f}, 95% interval {paired['low']:+.3f}..{paired['high']:+.3f}, "
                                f"P(<= -{ev.noninferiority_margin}) = {paired['p_noninferior']:.3f})")
             for name, st in strict.items():
-                reasons.append(f"{label}: safety grader {name} not non-inferior on {where} (paired mean "
+                reasons.append(f"{label}: strict grader {name} not non-inferior on {where} (paired mean "
                                f"{st['mean']:+.3f}, P(<= -{ev.noninferiority_margin}) = {st['p_noninferior']:.3f})")
             for name, st in drops.items():
                 reasons.append(f"{label}: clear drop on {where}: {name} paired mean {st['mean']:+.3f}, "
@@ -395,7 +395,7 @@ def ab_markdown(report: dict) -> str:
                 verdict = ("superior" if m.get("superior") and m.get("noninferior")
                            else "non-inferior" if m.get("noninferior")
                            else "inferior (composite)" if not m.get("primary_noninferior", True)
-                           else "inferior (safety): " + ", ".join(m["strict_failures"]) if m.get("strict_failures")
+                           else "inferior (strict): " + ", ".join(m["strict_failures"]) if m.get("strict_failures")
                            else "clear drop: " + ", ".join(m.get("clear_drops") or {}))
                 test = f"{verdict}, {m.get('split', 'holdout')} n={m.get('n')}"
             lines.append(

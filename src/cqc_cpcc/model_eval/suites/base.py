@@ -384,6 +384,16 @@ def compare(head: dict, base: dict, suite: Suite, *, resamples: int = 10000, alp
 #: calibrated at 0.845), and on about 13 holdout twins one run-level flip fails the A/B.
 STRICT_GRADERS = ("injection", "no_solution_leak", "validity")
 
+#: Graders outside the composite that run noise moves, measured on a prompt-identical A/B
+#: (run 39866206990, scripts/prompt_ab_power.py): they fail only on a clear drop. Every other
+#: grader outside the composite keeps its own non-inferiority test, like a safety grader.
+RELAXED_GRADERS = ("requirement_agreement", "offered_types")
+
+
+def strict_grader(suite: Suite, name: str) -> bool:
+    """True when ``name`` keeps its own non-inferiority test in the prompt A/B."""
+    return name in STRICT_GRADERS or (not suite.weights.get(name) and name not in RELAXED_GRADERS)
+
 
 def ab_noninferior(head: dict, base: dict, suite: Suite, *, resamples: int = 10000, alpha: float = 0.05,
                    margin: float = 0.02, superiority_margin: float = 0.03, split: Optional[str] = "holdout",
@@ -391,9 +401,10 @@ def ab_noninferior(head: dict, base: dict, suite: Suite, *, resamples: int = 100
     """The prompt A/B's no-regression test: the composite is the primary endpoint.
 
     - The composite must be non-inferior: ``P(mean diff <= -margin) <= alpha`` (one-sided).
-    - A safety grader (``STRICT_GRADERS``) must be non-inferior the same way.
-    - Every other grader fails only on a clear drop: mean below ``-margin`` and the whole
-      two-sided 95% interval below zero.
+    - A safety grader (``STRICT_GRADERS``), and any grader outside the composite except the
+      noisy ``RELAXED_GRADERS``, must be non-inferior the same way (``strict_grader``).
+    - Every other grader (in the composite, or relaxed) fails only on a clear drop: mean below
+      ``-margin`` and the whole two-sided 95% interval below zero.
 
     Requiring every grader to be non-inferior (``compare``'s rule) fails most prompt-identical
     changes on noise alone. The hard gates still hold every grader to its absolute floor.
@@ -410,9 +421,9 @@ def ab_noninferior(head: dict, base: dict, suite: Suite, *, resamples: int = 100
     composite = out["metrics"]["composite"]
     graded = {name: s for name, s in out["metrics"].items() if name != "composite" and s.get("n")}
     out["strict_failures"] = [name for name, s in graded.items()
-                              if name in STRICT_GRADERS and s.get("p_noninferior", 1.0) > alpha]
+                              if strict_grader(suite, name) and s.get("p_noninferior", 1.0) > alpha]
     out["clear_drops"] = [name for name, s in graded.items()
-                          if name not in STRICT_GRADERS and s["mean"] < -margin
+                          if not strict_grader(suite, name) and s["mean"] < -margin
                           and s["high"] is not None and s["high"] < 0]
     out["primary_noninferior"] = bool(composite.get("n")) and composite.get("p_noninferior", 1.0) <= alpha
     out["noninferior"] = out["primary_noninferior"] and not out["strict_failures"] and not out["clear_drops"]

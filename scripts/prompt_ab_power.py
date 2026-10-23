@@ -141,7 +141,7 @@ def miss_rates(suite, pool: dict, sims: int, seed: int = 11) -> list[str]:
     cases = [c for c in suite.cases() if len(pool.get(c.case_id, [])) >= 2]
     unweighted = [g.name for g in suite.graders if not suite.weights.get(g.name)]
     flips, drops = (1, 2, 3, 4), (0.03, 0.05)
-    shocks = {g: flips + (() if g in base.STRICT_GRADERS else drops) for g in unweighted}
+    shocks = {g: flips + (() if base.strict_grader(suite, g) else drops) for g in unweighted}
     passes = {(g, x): 0 for g, xs in shocks.items() for x in xs}
     rng = random.Random(seed)
     for _ in range(sims):
@@ -167,7 +167,7 @@ def miss_rates(suite, pool: dict, sims: int, seed: int = 11) -> list[str]:
                 stats = bootstrap(base.paired({"per_case": per_case}, agg_b, g, "holdout"), 1000, 0)
                 if not stats["n"]:
                     continue
-                if g in base.STRICT_GRADERS:
+                if base.strict_grader(suite, g):
                     passes[(g, x)] += _p_at_or_below(stats["means"], -margin) <= alpha
                 else:
                     passes[(g, x)] += not (stats["mean"] < -margin and stats["high"] < 0)
