@@ -37,7 +37,8 @@
       "fingerprint": "sha256:bab7c37b0b30661fb39a713de47e4d1b19500f2a5ca03a6a63297f0407a86a7a",
       "suites": [
         "grading",
-        "grading-levelband"
+        "grading-levelband",
+        "grading-solution"
       ]
     },
     "requirements-section": {

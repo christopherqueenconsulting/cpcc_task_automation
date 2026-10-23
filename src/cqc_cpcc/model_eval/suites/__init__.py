@@ -14,6 +14,7 @@ SUITE_MODULES = {
     "digest": "cqc_cpcc.model_eval.suites.digest",
     "project-feedback": "cqc_cpcc.model_eval.suites.feedback",
     "flowgorithm-grade": "cqc_cpcc.model_eval.suites.flowgorithm",
+    "grading-solution": "cqc_cpcc.model_eval.suites.grading_solution",
 }
 
 

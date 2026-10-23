@@ -161,6 +161,7 @@ async def _grade_once(case: EvalCase, files: dict, grade_fn: GradeFn) -> tuple:
             source_files=paths,
             gate_report=gate_report,
             requirements=checklist_model(case),
+            reference_solution=case.reference_solution,
         )
     return result, gate_report
 
