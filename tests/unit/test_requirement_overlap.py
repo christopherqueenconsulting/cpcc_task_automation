@@ -60,6 +60,53 @@ class TestSeverityMatrix:
         assert _codes(out) == ["MISSING_REQUIREMENT_R2", "PARTIAL_REQUIREMENT_R3"]  # neither requirement loses its penalty
 
 
+class TestOneToOne:
+    """One model error is one issue: it pairs with one requirement error, and a requirement error with one model error."""
+
+    def test_one_major_error_linked_to_three_minor_requirement_errors_erases_only_one_of_them(self, rubric):
+        checklist = rc.RequirementChecklist(requirements=[
+            rc.RequirementItem(id="R1", text="a", weight="secondary"), rc.RequirementItem(id="R2", text="b", weight="secondary"),
+            rc.RequirementItem(id="R3", text="c", weight="secondary")])
+        after, _ = rc.apply_requirement_coverage(
+            _llm_result(rubric, {"R1": "partial", "R2": "partial", "R3": "partial"},
+                        [_model_error(links=["R1", "R2", "R3"])]), checklist)
+        out, notes = rc.reconcile_requirement_overlaps(after, checklist)
+        assert _codes(out) == sorted(["CSC_134_PROJECT_OUTPUT_IMPACT_ERROR", "PARTIAL_REQUIREMENT_R2", "PARTIAL_REQUIREMENT_R3"])
+        assert len([n for n in notes if n.action == "removed"]) == 1
+
+    def test_a_model_error_linked_to_several_requirement_errors_is_dropped_once_and_they_all_stay(self, rubric):
+        out, notes = _covered(rubric, {"R1": "missing", "R2": "missing"}, [_model_error(links=["R1", "R2"])])
+        assert _codes(out) == ["MISSING_REQUIREMENT_R1", "MISSING_REQUIREMENT_R2"]
+        assert len([n for n in notes if n.action == "removed"]) == 1
+
+    def test_many_model_errors_linked_to_one_requirement_error_are_not_all_absorbed(self, rubric):
+        errors = [_model_error(code=f"CSC_134_OUTPUT_E{i}", links=["R2"]) for i in range(3)]
+        out, notes = _covered(rubric, {"R2": "missing"}, errors)
+        assert len(out.detected_errors) == 3  # the requirement error plus two model errors: one was absorbed
+        assert len([n for n in notes if n.action == "removed"]) == 1
+
+    def test_a_pair_prefers_the_most_severe_linked_requirement_error(self, rubric):
+        out, _ = _covered(rubric, {"R2": "missing", "R3": "partial"}, [_model_error(severity="minor", links=["R3", "R2"])])
+        assert _codes(out) == ["MISSING_REQUIREMENT_R2", "PARTIAL_REQUIREMENT_R3"]  # paired with R2, the minor model error went
+
+    def test_a_does_not_compile_error_is_never_dropped_even_without_a_source(self, rubric):
+        out, notes = _covered(rubric, {"R2": "missing"},
+                              [_model_error(code="DOES_NOT_COMPILE", name="Does Not Compile", links=["R2"])])
+        assert len(out.detected_errors) == 2 and notes == []
+
+    @pytest.mark.parametrize("model_sev", ["minor", "major"])
+    @pytest.mark.parametrize("statuses,links", [
+        ({"R2": "missing"}, ["R2"]), ({"R3": "partial"}, ["R3"]), ({"R2": "missing", "R3": "partial"}, ["R2", "R3"]),
+        ({"R1": "missing", "R2": "missing", "R3": "partial"}, ["R1", "R2", "R3"])])
+    async def test_an_incomplete_program_never_scores_above_a_complete_one_with_the_same_bug(
+            self, rubric, model_sev, statuses, links):
+        complete, _ = await _grade(rubric, _llm_result(rubric, {"R1": "met", "R2": "met", "R3": "met"},
+                                                       [_model_error(severity=model_sev)]))
+        incomplete, _ = await _grade(rubric, _llm_result(
+            rubric, {"R1": "met", "R2": "met", "R3": "met", **statuses}, [_model_error(severity=model_sev, links=links)]))
+        assert incomplete.total_points_earned <= complete.total_points_earned
+
+
 class TestLinks:
     def test_an_unlinked_model_error_is_never_dropped_but_a_likely_overlap_gets_a_note(self, rubric):
         out, notes = _covered(rubric, {"R2": "missing"}, [_model_error(links=None)])
@@ -120,7 +167,7 @@ class TestScoringAndReinstate:
     async def test_the_run_reports_how_many_it_dropped_and_how_many_it_could_not_link(self, rubric):
         _, report = await _grade(rubric, _llm_result(
             rubric, {"R2": "missing", "R3": "partial"},
-            [_model_error(links=["R2"]), _model_error(code="CSC_134_FORMATTING_X", severity="minor")]))
+            [_model_error(links=["R2"]), _model_error(code="CSC_134_METHOD_ERRORS", severity="minor")]))
         assert report["overlap"] == {"dropped": 1, "possible": 1}
 
 

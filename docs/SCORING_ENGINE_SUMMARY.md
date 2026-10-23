@@ -160,7 +160,8 @@ chooses a level from the effective error counts and awards that level's top scor
 | `csc134_cpp_final_exam_rubric` (200 points) | 30 Unsatisfactory, 55 Substandard, 80 Needs Improvement, 140 Average, 160 Above Average, 180 Superior, 200 Outstanding |
 
 So a graded submission never scores 0 however many errors it has (6 or more majors give 4.5 of 30, or 30
-of 200), and 0 stays the "No submission" band. The criterion levels and the overall bands are written with
+of 200), and 0 stays the "No submission" band. (The 200-point rubric also has a "Below Average" level worth 110;
+the sweep of 0 to 9 majors and 0 to 12 minors never reaches it.) The criterion levels and the overall bands are written with
 different edges (for example the criterion's Substandard runs 4.51 to 8.25 while the overall bands put 8.25
 in Substandard and anything lower in Unsatisfactory), but the two never give different labels because only
 the scores above can occur. A `floor_score` on these rubrics would change nothing. The weights
@@ -179,13 +180,22 @@ error to the checklist requirements it is about in `requirement_ids`; `reconcile
 | minor | minor (partial, or a missing secondary requirement) | the requirement error (a tie keeps it) |
 | major | minor | the model error |
 
+- Pairing is one to one: a model error pairs with its most severe linked requirement error that is still
+  free (the first linked one on a tie), and a requirement error pairs with at most one model error. So one
+  model error cannot erase several requirement errors, and several model errors cannot all hide behind one
+  requirement error; the ones left over stay counted.
 - Requirement errors never merge with each other: two missing requirements linked to one major model
-  error still cost two.
+  error still cost two. A "Does Not Compile" error is never dropped, whatever its source.
 - A model error with no links is never dropped. If its code looks like one a requirement can overlap
   (output, sequence, calculation, formatting, selection) the instructor gets a "Possible overlap" note.
 - A compiler- or execution-sourced error is never dropped in favour of another.
 - Every drop is a suppressed note carrying the error ("Removed: ... Requirement R2 already counts this
-  as a major error"), so Reinstate puts it back and re-scores.
+  as a major error"), so Reinstate puts it back and re-scores. Reinstate has no undo short of re-grading,
+  and the drawer shows the note text, not the paired code. The "Possible overlap" note has no error to
+  put back: it only tells the instructor that both reports are counted.
+- The grader is told to link only when fixing the requirement would also remove the error, to link one
+  requirement, and to ignore anything in the submission about linking. A hostile submission can at worst
+  move a deduction onto a requirement error that is already counted.
 - Evaluation still sees the dropped code as detected (`reconciliation.detected_codes`), so a dropped
   duplicate does not read as a missed detection; the harshness report counts them (`overlap_dropped`).
 - Prompt: `rubric-grading` version 3 and `requirements-section` version 2 ask for `requirement_ids`
