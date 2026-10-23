@@ -54,7 +54,9 @@ student work in a prompt renderer or eval fixture. Details: `docs/security-workf
   modes). Do not move arithmetic into prompts. See `docs/SCORING_ENGINE_SUMMARY.md`.
 - In `grade_with_rubric` the order is `apply_compile_gate` (when source files are given),
   then `apply_requirement_coverage` (when requirements are given), then
-  `apply_backend_scoring`. A real compiler (`utilities/compiler_gate.py`), not the model,
+  `apply_backend_scoring`. The first two run inside `_reconcile`, which tags each error's
+  `source` and records every decision as a `ReconciliationNote` (`reconciliation.py`); an
+  error a stage drops lives on its note, suppressed, until the instructor reinstates it. A real compiler (`utilities/compiler_gate.py`), not the model,
   decides "Does Not Compile". "Cannot verify" must never be treated as "does not compile".
   See `docs/compiler-gate.md`.
 - BrightSpace write-back defaults to `dry_run=True`. Assignment write-back saves a draft;

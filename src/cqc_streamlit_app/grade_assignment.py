@@ -2408,6 +2408,12 @@ def _estimated_batch_cost(rows: list[dict], instructions: str, selected_model: s
     return f"about ${total:.2f}" if total >= 0.01 else "under $0.01"
 
 
+def prompt_tag(prompt_id: str) -> Optional[str]:
+    """``id@version`` of a registered prompt (part of the run key)."""
+    from cqc_cpcc.utilities.AI.llm_gateway import prompt_tag as _tag
+    return _tag(prompt_id)
+
+
 def _read_solution(solution_file_paths) -> Optional[str]:
     if not solution_file_paths:
         return None
@@ -2581,6 +2587,7 @@ async def get_rubric_based_exam_grading():
     from cqc_cpcc.grading_run_key import (
         generate_file_metadata,
         generate_grading_run_key,
+        hash_solution,
     )
     file_metadata = generate_file_metadata(student_submission_file_paths)
     error_definition_ids = [ed.error_id for ed in (effective_error_definitions or []) if ed.enabled]
@@ -2603,6 +2610,10 @@ async def get_rubric_based_exam_grading():
             None if use_auto_route else resolve_model("grading", selected_model).config_hash
         ),
         requirements_hash=checklist_hash(requirements_checklist),
+        # A different reference solution or prompt version grades differently: never serve
+        # cached results for it.
+        solution_hash=hash_solution(assignment_solution_contents),
+        prompt_version=prompt_tag("rubric-grading"),
     )
 
     results_cache = (st.session_state.error_only_results_by_key if grading_mode == "errors_only"
@@ -2831,12 +2842,14 @@ def _remember_feedback_view(widget_key: str) -> None:
 
 def display_rubric_assessment_result(result, student_name: str, correlation_id: Optional[str] = None,
                                      greeting_name: Optional[str] = ...,
-                                     source_files: Optional[dict] = None):
+                                     source_files: Optional[dict] = None,
+                                     run_key: str = "", student_id: Optional[str] = None):
     """One student's result in tabs: Feedback, Criteria, Errors, Requirements, Code (and
     Debug only in debug mode). Tables instead of nested expanders (UX goals §2.2, §3).
 
     ``source_files`` is the submission's ``{name: path}``; without it the Code tab says
-    the files are no longer available."""
+    the files are no longer available. With ``run_key`` and ``student_id`` the scoring notes
+    offer Reinstate for an error a backend stage dropped."""
     from cqc_cpcc.student_feedback_builder import build_student_feedback
     from cqc_cpcc.utilities.env_constants import CQC_OPENAI_DEBUG
 
@@ -2895,6 +2908,7 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
             )
         else:
             st.caption("No errors detected.")
+        _render_scoring_notes(result, run_key, student_id)
     with tabs[3]:
         if result.requirement_results:
             checklist = st.session_state.get("active_requirement_checklist")
@@ -2920,6 +2934,37 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
                 render_openai_debug_panel(correlation_id=correlation_id, error=None)
             else:
                 st.caption("Debug mode is on; request and response details are in the logs directory.")
+
+
+def _render_scoring_notes(result, run_key: str, student_id: Optional[str]) -> None:
+    """The backend's reconciliation notes (instructor-only), with Reinstate for dropped errors."""
+    from cqc_cpcc.reconciliation import describe
+
+    notes = list(getattr(result, "reconciliation", None) or [])
+    if not notes:
+        return
+    st.markdown("**Scoring notes**")
+    st.caption("Not for the student. Reinstate puts a removed error back and recomputes the "
+               "score without a model call.")
+    for i, n in enumerate(notes):
+        with st.container(horizontal=True):
+            st.markdown(describe(n))
+            if n.suppressed and n.error is not None and run_key and student_id:
+                st.button("Reinstate", key=f"reinstate_{run_key}_{student_id}_{i}",
+                          on_click=_reinstate_error, args=(run_key, student_id, i))
+
+
+def _reinstate_error(run_key: str, student_id: str, index: int) -> None:
+    """Put a dropped error back for one student and save the re-scored result."""
+    from cqc_cpcc.grading_diagnostics import find_rubric
+    from cqc_cpcc.reconciliation import reinstate
+
+    result = dict(st.session_state.grading_results_by_key.get(run_key, [])).get(student_id)
+    rubric = find_rubric(result.rubric_id) if result is not None else None
+    if result is None or rubric is None:
+        st.toast("Could not reinstate: the result or its rubric is no longer available.", icon=":material/error:")
+        return
+    _replace_result(run_key, student_id, reinstate(result, rubric, index))
 
 
 def _submission_for(run_key: str, student_id: str):
@@ -2972,7 +3017,8 @@ def _student_drawer(student_id: str, result, run_key: str = "") -> None:
     greeting = _greeting_name(run_key, student_id)
     display_rubric_assessment_result(
         result, student_id, greeting_name=greeting,
-        source_files=getattr(_submission_for(run_key, student_id), "files", None))
+        source_files=getattr(_submission_for(run_key, student_id), "files", None),
+        run_key=run_key, student_id=student_id)
     _render_result_card_export(student_id, result, greeting)
 
 

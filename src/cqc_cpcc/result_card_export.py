@@ -40,7 +40,8 @@ def _level(result: RubricAssessmentResult) -> str:
 
 def result_card_markdown(student: str, result: RubricAssessmentResult,
                          greeting_name: Optional[str] = None) -> str:
-    """The card as Markdown: summary, criteria, errors, requirements, feedback, notes."""
+    """The card as Markdown: summary, criteria, errors, requirements, scoring notes, feedback,
+    instructor notes."""
     lines = [
         f"# Result card: {student}",
         "",
@@ -77,6 +78,12 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
         for r in requirements:
             lines.append(f"| {_cell(r.requirement_id)} | {_cell(r.status)} | {_cell(r.evidence or '')} |")
 
+    notes = getattr(result, "reconciliation", None) or []
+    if notes:
+        from cqc_cpcc.reconciliation import describe
+        lines += ["", "## Scoring notes", ""]
+        lines += [f"- {describe(n)}" for n in notes]
+
     lines += ["", "## Feedback for the student", "",
               build_student_feedback(result, student_name=greeting_name)]
     if result.overall_feedback:
@@ -95,7 +102,9 @@ def result_card_json(student: str, result: RubricAssessmentResult) -> str:
     """The full result as JSON, with the student it belongs to.
 
     Raw compiler diagnostics are left out: the card is meant to be pasted into outside
-    tools, and the diagnostics are instructor-only.
+    tools, and the diagnostics are instructor-only. The reconciliation notes are included,
+    and with them any error a backend stage dropped (``suppressed``), so the JSON shows
+    what was not counted and why.
     """
     data = result.model_dump(mode="json", exclude={
         "detected_errors": {"__all__": {"compiler_diagnostics"}}})
