@@ -319,6 +319,25 @@ class TestSubmissionTextBuilding:
         assert "### Submission File Name: test.java" in text
         assert "public class Test {}" in text
     
+    @pytest.mark.parametrize("name,fence", [("main.cpp", "```cpp"), ("Main.java", "```java"), ("app.py", "```python")])
+    def test_the_code_fence_starts_on_its_own_line(self, tmp_path, name, fence):
+        """The heading ends at the colon; the opening fence is the next line, not part of the heading."""
+        source = tmp_path / name
+        source.write_text("x = 1\n")
+
+        text = build_submission_text_with_token_limit({name: str(source)})
+
+        assert f"### Submission Content:\n{fence}\n" in text
+        assert f"### Submission Content: {fence}" not in text
+
+    def test_a_file_type_with_no_known_language_is_fenced_as_text_on_its_own_line(self, tmp_path):
+        notes = tmp_path / "notes.zzz"
+        notes.write_text("plain words")
+
+        text = build_submission_text_with_token_limit({"notes.zzz": str(notes)})
+
+        assert "### Submission Content:\n```text\nplain words\n```" in text
+
     def test_build_submission_text_multiple_files(self, tmp_path):
         """Test building submission text with multiple files."""
         # Create temp files
