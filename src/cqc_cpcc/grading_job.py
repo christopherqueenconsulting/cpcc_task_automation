@@ -161,15 +161,12 @@ def _call_limit() -> threading.BoundedSemaphore:
 
 
 async def _acquire_call_slot() -> threading.BoundedSemaphore:
-    """Wait for a process-wide slot without blocking the loop. A cancel while waiting hands the
-    slot back as soon as the waiting thread gets it."""
+    """Wait for a process-wide slot by polling ``acquire(blocking=False)``, so a task cancelled or
+    timed out while waiting never leaves an acquirer behind. The slot is taken and returned with
+    no ``await`` in between, so the caller owns it as soon as this returns."""
     limit = _call_limit()
-    waiter = asyncio.get_running_loop().run_in_executor(None, limit.acquire)
-    try:
-        await waiter
-    except asyncio.CancelledError:
-        waiter.add_done_callback(lambda f: limit.release() if not f.cancelled() and f.exception() is None else None)
-        raise
+    while not limit.acquire(blocking=False):
+        await asyncio.sleep(0.05)
     return limit
 
 
@@ -208,6 +205,7 @@ class GradingJob:
         # re-run of a few students on another model has fewer submissions and other kwargs.
         self.inputs: Optional[dict] = None
         self._save = save
+        self._saved_once = False
         self._load = load  # run_key -> (results, failures) as last saved, or None
         self._grade = grade
         self._deadline_s = deadline_s if deadline_s is not None else default_deadline(self.kwargs)
@@ -409,15 +407,16 @@ class GradingJob:
         if grade is None:
             from cqc_cpcc.rubric_grading import grade_with_rubric as grade
         gate_report: dict = {}
-        slot = await _acquire_call_slot()
-        try:
-            with llm_progress.progress_scope(lambda event: self._on_event(sid, event)):
-                async with asyncio.timeout(self._deadline_s):
+        # The wait for a process-wide slot counts against the student's deadline.
+        with llm_progress.progress_scope(lambda event: self._on_event(sid, event)):
+            async with asyncio.timeout(self._deadline_s):
+                slot = await _acquire_call_slot()
+                try:
                     result = await grade(
                         student_submission=text, source_files=submission.files, gate_report=gate_report,
                         rejected_files=submission.rejected_files, **self.kwargs)
-        finally:
-            slot.release()
+                finally:
+                    slot.release()
         self._set(sid, state=SCORING)
         reference = self.kwargs.get("reference_solution")
         if reference:
@@ -459,22 +458,26 @@ class GradingJob:
         failures += [sid for sid in self.submissions if sid not in self._results]
         return JobOutcome(results, failures, _count_states(self._progress))
 
-    def _merged_with_saved(self) -> tuple[list, list]:
+    def _merged_with_saved(self) -> Optional[tuple[list, list]]:
         """This job's state laid over the saved file's current state, so a save never wipes
         students another job (or the page) saved since this one started. Students this job
         finished win; every other student keeps what the file has."""
         with self._lock:
             mine = self._merged_locked()
-            finished = {sid for sid in self.submissions if sid in self._results}
-        saved = self._load(self.run_key) if self._load is not None else None
+            finished = {sid: self._results[sid] for sid in self.submissions if sid in self._results}
+            unfinished = [sid for sid in self.submissions if sid not in self._results]
+        if self._load is None:
+            return mine.results, mine.failures
+        saved = self._load(self.run_key)
         if saved is None:
+            if self._saved_once:
+                return None  # the file was removed (Clear results) since we saved: do not bring it back
             return mine.results, mine.failures
         saved_results, saved_failures = saved
-        results = [(sid, r) for sid, r in saved_results if sid not in finished]
-        results += [(sid, r) for sid, r in mine.results if sid in finished or sid not in dict(results)]
+        # From this job, only what it finished; everything else is the file's, not launch-time state.
+        results = [(sid, r) for sid, r in saved_results if sid not in finished] + list(finished.items())
         have = {sid for sid, _ in results}
-        failures = [sid for sid in list(saved_failures) + list(mine.failures)
-                    if sid not in have and sid not in finished]
+        failures = [sid for sid in list(saved_failures) + unfinished if sid not in have]
         return results, list(dict.fromkeys(failures))
 
     def _persist(self) -> None:
@@ -483,9 +486,12 @@ class GradingJob:
             return
         try:
             with run_lock(self.run_key):
-                results, failures = self._merged_with_saved()
-                self._save(self.run_key, results, failures,
+                merged = self._merged_with_saved()
+                if merged is None:
+                    return
+                self._save(self.run_key, merged[0], merged[1],
                            greeting_names=self._greeting_names, meta=self._meta)
+                self._saved_once = True
         except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
             logger.warning(f"Could not save grading results to disk: {type(e).__name__}")
 
@@ -535,7 +541,12 @@ def start_job(job: GradingJob) -> str:
         if len(live) >= MAX_ACTIVE_JOBS:
             raise JobRefused("Too many grading runs are active at once. Wait for one to finish, then try again.")
         _JOBS[token] = job
-    job.start()
+    try:
+        job.start()
+    except BaseException:
+        with _JOBS_GUARD:
+            _JOBS.pop(token, None)  # a job that never started must not count as live
+        raise
     return token
 
 

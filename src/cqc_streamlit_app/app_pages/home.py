@@ -46,8 +46,8 @@ def main():
                 "Grading, feedback and attendance tools for your CPCC courses.")
     show_model_update_banner()
     if not results_store.persistence_enabled():
-        st.caption("Results are kept in this browser session only. If you reload or close this page they are "
-                   "lost. Download the feedback ZIP and the summary now.")
+        from cqc_streamlit_app.grade_assignment import _SESSION_ONLY_NOTICE
+        st.caption(_SESSION_ONLY_NOTICE)
 
     settings = load_settings()
     with st.container(horizontal=True):

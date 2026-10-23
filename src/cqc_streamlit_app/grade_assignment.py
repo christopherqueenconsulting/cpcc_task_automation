@@ -186,7 +186,7 @@ def run_async_in_streamlit(coro):
             # No running loop, safe to use asyncio.run()
             return asyncio.run(coro)
     except Exception as e:
-        logger.error(f"Failed to run async code in Streamlit: {e}", exc_info=True)
+        logger.error(f"Failed to run async code in Streamlit: {type(e).__name__}", exc_info=True)
         raise RuntimeError(
             f"Failed to execute async code: {e}. "
             "This may be due to event loop conflicts. "
@@ -283,7 +283,7 @@ def get_flowgorithm_content():
                         str(total_points_possible), model_name=selected_model))
                     feedback = render_flowgorithm(grade, total_points_possible)
                 except Exception as e:  # noqa: BLE001 - one failure must not lose the others
-                    logger.error(f"Flowgorithm grading failed for {alias(name)}: {e}", exc_info=True)
+                    logger.error(f"Flowgorithm grading failed for {alias(name)}: {type(e).__name__}", exc_info=True)
                     feedback = f"Grading failed: {e}"
             results.append((name, feedback))
         store[key] = results
@@ -1519,7 +1519,7 @@ async def grade_single_rubric_student(
             return (student_id, None)
 
         except Exception as e:
-            logger.error(f"Error grading student {alias(student_id)}: {e}", exc_info=True)
+            logger.error(f"Error grading student {alias(student_id)}: {type(e).__name__}", exc_info=True)
 
             # Try to extract correlation_id from exception if available
             if not grading_correlation_id:
@@ -1651,7 +1651,7 @@ def _collect_submissions(submission_file_paths: list[tuple[str, str]],
 
             except Exception as e:
                 st.error(f"❌ Error extracting ZIP {base_filename}: {e}")
-                logger.error(f"ZIP extraction failed for {base_filename}: {e}", exc_info=True)
+                logger.error(f"ZIP extraction failed for {base_filename}: {type(e).__name__}", exc_info=True)
                 continue
         else:
             # Single file = one student
@@ -1829,8 +1829,9 @@ def _attached_grading_job():
     return job
 
 
-_BACKGROUND_NOTICE = ("A grading run is still working in the background. Open the link you started it from "
-                      "to watch or cancel it; finished students are saved.")
+_BACKGROUND_NOTICE = ("A grading run, possibly started in another session on this server, is working in the "
+                      "background. Grade is paused until it finishes. The person who started it can watch or "
+                      "cancel it from the link they started it from. Finished students are saved.")
 _SESSION_ONLY_NOTICE = ("Results are kept in this browser session only. If you reload or close this page they "
                         "are lost. Download the feedback ZIP and the summary now.")
 
@@ -2220,7 +2221,7 @@ async def process_error_only_grading_batch(
                 student_submissions.update(zip_students)
             except Exception as e:
                 st.error(f"❌ Error extracting ZIP {base_filename}: {e}")
-                logger.error(f"ZIP extraction failed for {base_filename}: {e}", exc_info=True)
+                logger.error(f"ZIP extraction failed for {base_filename}: {type(e).__name__}", exc_info=True)
                 continue
         else:
             student_id = os.path.splitext(base_filename)[0]
@@ -2460,7 +2461,7 @@ def render_requirement_checklist(instructions: str, source_id: str) -> Optional[
             try:
                 store[key] = run_coroutine_blocking(extract_requirements(instructions))
             except Exception as e:  # noqa: BLE001 - shown to the instructor
-                logger.error(f"Requirement extraction failed: {e}", exc_info=True)
+                logger.error(f"Requirement extraction failed: {type(e).__name__}", exc_info=True)
                 st.error(f"Could not extract requirements: {e}")
                 if st.button("Try again", key=f"retry_requirements_{key[:12]}", icon=":material/refresh:"):
                     st.rerun()
@@ -2576,7 +2577,7 @@ def remember_results(run_key: str, grading_mode: str) -> None:
         results_store.save_run(run_key, grading_mode, results, failures, greeting_names=greeting_names,
                                meta=_run_meta(run_key, grading_mode))
     except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
-        logger.warning(f"Could not save grading results to disk: {e}")
+        logger.warning(f"Could not save grading results to disk: {type(e).__name__}")
 
 
 def forget_results(run_key: str) -> None:
@@ -2748,7 +2749,7 @@ def _remembered_effort(instructions: Optional[str]) -> Optional[str]:
         try:
             cache[key] = results_store.remembered_effort(key)
         except Exception as e:  # noqa: BLE001 - a convenience; never block Setup
-            logger.warning(f"Could not read the remembered effort: {e}")
+            logger.warning(f"Could not read the remembered effort: {type(e).__name__}")
             cache[key] = None
     return cache[key]
 
@@ -3037,9 +3038,11 @@ async def get_rubric_based_exam_grading():
             )
             st.caption(f"{cost} on {model_label}")
             if has_cached_results:
+                clear_busy = _run_is_grading(current_run_key)
                 st.button("Clear results", key="clear_results_button", icon=":material/delete:",
-                          on_click=_clear_results, args=(current_run_key, grading_mode),
-                          help="Remove the results for these inputs so they can be graded again.")
+                          on_click=_clear_results, args=(current_run_key, grading_mode), disabled=clear_busy,
+                          help=("Wait for the grading in progress to finish first." if clear_busy
+                                else "Remove the results for these inputs so they can be graded again."))
                 st.caption("Already graded with these inputs; the results are in Results & review.")
         if flagged:
             st.warning(f"{len(flagged)} will be scored 0 without an AI call and held for your review "
@@ -3110,7 +3113,7 @@ async def get_rubric_based_exam_grading():
                 st.session_state.grading_status_by_key[current_run_key] = "failed"
                 st.session_state.grading_errors_by_key[current_run_key] = str(e)
                 st.error(f"Grading failed: {e}", icon=":material/error:")
-                logger.error(f"Grading failed for run_key {current_run_key}: {e}", exc_info=True)
+                logger.error(f"Grading failed for run_key {current_run_key}: {type(e).__name__}", exc_info=True)
             finally:
                 st.session_state.do_grade = False
                 # Stop, a reconnect or a click during the run raises a BaseException that
@@ -3473,7 +3476,7 @@ def _render_effort_banner(run_key: str, all_results, where: str) -> None:
         st.caption(f"This replaces the results of the {n} other student(s) with new grades at "
                    f"{mix.majority_effort or 'the default effort'}. It costs money and cannot be undone. "
                    f"Worst-case wait: about {wait_min:.0f} min ({n} x the per-student limit).")
-        running = st.session_state.get("grading_status_by_key", {}).get(run_key) == "running"
+        running = _run_is_grading(run_key)
         if running:
             st.caption("Wait for the current grading run to finish, then re-grade.")
         if st.button(f"Re-grade the other students at {mix.majority_effort or 'the default effort'}",
@@ -3510,7 +3513,7 @@ def _regrade_others(run_key: str, student_ids: list[str], effort: Optional[str])
                           "Stopped; the students not yet re-graded keep their results.")
                 break
             except Exception as e:  # noqa: BLE001 - one failure must not lose the others
-                logger.error(f"Re-grade at another effort failed for {alias(student_id)}: {e}", exc_info=True)
+                logger.error(f"Re-grade at another effort failed for {alias(student_id)}: {type(e).__name__}", exc_info=True)
     with _run_lock(run_key):
         if added:
             st.session_state.grading_results_by_key[run_key] = [
@@ -3566,7 +3569,7 @@ def _render_effort_compare(student_id: str, result, run_key: str) -> None:
                                    model_name, effort)
         st.caption(f"Estimated cost: {cost}. Nothing is replaced unless you press Keep this result. "
                    "This sends this student's work to the model provider again.")
-        running = st.session_state.grading_status_by_key.get(run_key) == "running"
+        running = _run_is_grading(run_key)
         if st.button(f"Re-grade at {effort} effort", key=f"compare_run_{run_key}_{student_id}",
                      disabled=running, icon=":material/play_arrow:"):
             kwargs = {**inputs["kwargs"], "effort": effort}
@@ -3583,7 +3586,7 @@ def _render_effort_compare(student_id: str, result, run_key: str) -> None:
                 except TimeoutError:
                     st.error(f"No result within {deadline / 60:.0f} min. Try again, or compare another effort.")
                 except Exception as e:  # noqa: BLE001 - keep the drawer usable
-                    logger.error(f"Effort comparison failed for {alias(student_id)}: {e}", exc_info=True)
+                    logger.error(f"Effort comparison failed for {alias(student_id)}: {type(e).__name__}", exc_info=True)
                     st.error("Grading this student at that effort failed. Details are in the log.")
         if running:
             st.caption("Wait for the current grading run to finish, then re-grade.")
@@ -3593,7 +3596,7 @@ def _render_effort_compare(student_id: str, result, run_key: str) -> None:
             st.caption("Keeping this result replaces the stored result for this student. This cannot be "
                        "undone. The old result is not saved, only a note that records both scores.")
             if st.button("Keep this result and replace the stored one", key=f"compare_keep_{run_key}_{student_id}",
-                         icon=":material/check:",
+                         icon=":material/check:", disabled=_run_is_grading(run_key),
                          help="Replace the stored result with this one and record a note."):
                 _keep_compared_result(run_key, student_id)
                 st.rerun()
@@ -3718,7 +3721,7 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
                      "Try again, or grade the batch with another model.")
             return
         except Exception as e:  # noqa: BLE001 - keep the rest of the results page usable
-            logger.error(f"Grade anyway failed for {alias(student_id)}: {e}", exc_info=True)
+            logger.error(f"Grade anyway failed for {alias(student_id)}: {type(e).__name__}", exc_info=True)
             st.error("Grading this student failed. Details are in the log.")
             return
     # No code in the course language (e.g. a .docx lab report for a C++ project): keep the
@@ -3767,7 +3770,7 @@ def _retry_failed(run_key: str) -> None:
                     f"No result from {_run_model(inputs)} within {deadline / 60:.0f} min for "
                     f"{student_id}. Stopped retrying; the rest stay failed. Try another model.")
             except Exception as e:  # noqa: BLE001 - one failure must not lose the others
-                logger.error(f"Retry failed for {alias(student_id)}: {e}", exc_info=True)
+                logger.error(f"Retry failed for {alias(student_id)}: {type(e).__name__}", exc_info=True)
                 still_failed.append(student_id)
     st.session_state.grading_results_by_key[run_key] = (
         st.session_state.grading_results_by_key.get(run_key, []) + added)
@@ -4239,7 +4242,7 @@ def _generate_feedback_docs_and_zip(
             st.caption(f"{len(doc_files)} Word document(s): {', '.join([fn for fn, _ in doc_files])}")
 
         except Exception as e:
-            logger.error(f"Error generating feedback documents: {e}", exc_info=True)
+            logger.error(f"Error generating feedback documents: {type(e).__name__}", exc_info=True)
             st.error(f"❌ Error generating documents: {str(e)}")
 
 
@@ -4252,7 +4255,7 @@ def grade_exam_content_sync():
     try:
         return run_async_in_streamlit(get_grade_exam_content())
     except Exception as e:
-        logger.error(f"Error in legacy exam grading: {e}", exc_info=True)
+        logger.error(f"Error in legacy exam grading: {type(e).__name__}", exc_info=True)
         st.error(f"❌ Error: {e}")
         st.error("If this persists, please check the logs or contact support.")
 
@@ -4267,6 +4270,6 @@ def rubric_based_exam_grading_sync():
     try:
         return run_async_in_streamlit(get_rubric_based_exam_grading())
     except Exception as e:
-        logger.error(f"Error in rubric-based exam grading: {e}", exc_info=True)
+        logger.error(f"Error in rubric-based exam grading: {type(e).__name__}", exc_info=True)
         st.error(f"❌ Error: {e}")
         st.error("If this persists, please check the logs or contact support.")

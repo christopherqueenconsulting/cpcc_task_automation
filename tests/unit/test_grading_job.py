@@ -453,3 +453,89 @@ def test_the_process_wide_call_limit_is_shared_by_jobs(tmp_path, monkeypatch):
     assert job.wait(10)
     assert running["peak"] == 1
     assert job.snapshot().counts[grading_job.DONE] == 4
+
+
+def test_the_call_slot_is_never_leaked_by_cancel_timeout_or_error(tmp_path, monkeypatch):
+    sem = threading.BoundedSemaphore(2)
+    monkeypatch.setattr(grading_job, "_CALL_LIMIT", sem)
+    gate = threading.Event()
+
+    async def hold(text, **kwargs):
+        await asyncio.get_running_loop().run_in_executor(None, gate.wait, 30)
+        if "Student D" in text:
+            raise RuntimeError("boom")
+        return _result()
+
+    # Two holders, two queued students that are cancelled while they wait for a slot.
+    job = _job(tmp_path, ["Student A", "Student B", "Student C", "Student X"], hold, concurrency=4)
+    job.start()
+    assert _wait_for(lambda: sum(r.state == grading_job.CALLING or r.state == grading_job.PREPARING
+                                 for r in job.snapshot().rows) >= 2)
+    time.sleep(0.2)
+    job.cancel_student("Student C")
+    job.cancel_student("Student X")
+    time.sleep(0.2)
+    gate.set()
+    assert job.wait(10)
+    for _ in range(2):
+        assert sem.acquire(blocking=False)
+    assert not sem.acquire(blocking=False)
+    sem.release()
+    sem.release()
+
+
+def test_a_wait_for_a_stuck_slot_ends_at_the_deadline_and_releases_nothing(tmp_path, monkeypatch):
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # someone else holds the only slot
+    monkeypatch.setattr(grading_job, "_CALL_LIMIT", sem)
+    job = _job(tmp_path, ["Student A"], _ok, deadline_s=0.3)
+    job.start()
+    assert job.wait(10)
+    assert job.snapshot().counts[grading_job.TIMED_OUT] == 1
+    sem.release()
+    assert sem.acquire(blocking=False)
+
+
+def test_an_error_in_the_call_releases_the_slot(tmp_path, monkeypatch):
+    sem = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(grading_job, "_CALL_LIMIT", sem)
+
+    async def boom(text, **kwargs):
+        raise RuntimeError("x")
+
+    job = _job(tmp_path, ["Student A"], boom)
+    job.start()
+    assert job.wait(10)
+    assert sem.acquire(blocking=False)
+
+
+def test_a_job_that_fails_to_start_is_not_counted_as_live(tmp_path, monkeypatch):
+    job = _job(tmp_path, ["Student A"], _ok)
+    before = grading_job.active_count()
+    monkeypatch.setattr(job, "start", lambda: (_ for _ in ()).throw(RuntimeError("no thread")))
+    with pytest.raises(RuntimeError):
+        grading_job.start_job(job)
+    assert grading_job.active_count() == before
+
+
+def test_a_cleared_run_is_not_brought_back_by_a_later_save(tmp_path, monkeypatch):
+    from cqc_streamlit_app import results_store
+
+    monkeypatch.setenv("CQC_GRADING_RESULTS_DIR", str(tmp_path / "saved"))
+    gate = threading.Event()
+
+    async def behave(text, **kwargs):
+        if "Student B" in text:
+            await asyncio.get_running_loop().run_in_executor(None, gate.wait, 30)
+        return _result()
+
+    def save(run_key, results, failures, **kwargs):
+        results_store.save_run(run_key, "rubric", results, failures, **kwargs)
+
+    job = _job(tmp_path, ["Student A", "Student B"], behave, save=save, load=results_store.load_run)
+    job.start()
+    assert _wait_for(lambda: results_store.load_run(RUN_KEY) is not None)
+    results_store.delete_run(RUN_KEY)  # Clear results
+    gate.set()
+    assert job.wait(10)
+    assert results_store.load_run(RUN_KEY) is None

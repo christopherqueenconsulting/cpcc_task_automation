@@ -23,6 +23,7 @@ from cqc_cpcc.rubric_models import RubricAssessmentResult
 from cqc_cpcc.utilities.logger import logger
 
 MAX_RUNS = 20
+MAX_RUN_FILE_BYTES = 20 * 1024 * 1024  # a saved run bigger than this is not read back by a job's save
 _RUN_KEY_RE = re.compile(r"[0-9A-Za-z]{1,64}")
 
 
@@ -39,7 +40,8 @@ def persistence_enabled() -> bool:
     ``CQC_GRADING_RESULTS_DIR`` means on, and a Community Cloud host (it mounts the app
     under ``/mount/src``) means off.
 
-    Ruling: "Decisions taken for Christopher's review, 2026-10-23", decision 3 (plan file).
+    Ruling: decision 3 in the 2026-10-23 decisions taken for Christopher's review (to be recorded
+    in docs/REVIEW-2026-10-26.md).
     Any other shared host defaults to ON, so set ``CQC_RESULTS_PERSIST=off`` there: with it on,
     every instructor's student data sits on one disk (see docs/PRIVACY_AND_TELEMETRY.md).
     """
@@ -148,13 +150,16 @@ def load_run(run_key: str) -> Optional[tuple]:
     if not persistence_enabled():
         return None
     try:
-        data = json.loads(_path(run_key).read_text(encoding="utf-8"))
+        path = _path(run_key)
+        if path.stat().st_size > MAX_RUN_FILE_BYTES:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("mode") == "errors_only":
             return None
         results = [(sid, RubricAssessmentResult.model_validate({**r, "llm_request": None}))
                    for sid, r in data["results"]]
         return results, list(data.get("failures") or [])
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return None
 
 

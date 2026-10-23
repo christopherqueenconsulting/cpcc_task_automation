@@ -524,7 +524,7 @@ def test_a_tab_without_the_token_is_told_a_run_is_working_and_the_controls_are_d
         at = _failed_app(tmp_path)
         _rerun(at)
         assert not at.exception, at.exception
-        assert any("still working in the background" in i.value for i in at.info)
+        assert any("is working in the background" in i.value and "Grade is paused" in i.value for i in at.info)
         assert at.button(key=f"retry_failed_{RUN_KEY}").disabled
         assert not any(name in _everything_on_the_page(at) for name in ("Student Alpha secret",))
         # And nothing of the job itself is shown.
@@ -574,8 +574,8 @@ def test_files_gone_message_names_a_reload_and_adds_the_background_notice_when_a
     running = Running(tmp_path)
     try:
         at = AppTest.from_function(page, default_timeout=30).run()
-        assert at.caption[0].value.endswith("finished students are saved.")
-        assert "still working in the background" in at.caption[0].value
+        assert at.caption[0].value.endswith("Finished students are saved.")
+        assert "possibly started in another session on this server" in at.caption[0].value
     finally:
         running.finish()
 

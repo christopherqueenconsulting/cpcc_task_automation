@@ -223,6 +223,15 @@ token shows a notice that a run is working in the background and disables Grade,
 model and the review buttons until it ends. A job's saves are merged onto the saved file's current
 results, so one job never wipes students another saved.
 
+While ANY job is live, every session in the process is blocked from starting or changing a run
+(`_run_is_grading` ends with `return grading_job.active_count() > 0`), including a tab that holds the
+token for a different run. Grade, Retry, Use another model, Clear results and the review buttons are
+paused for everyone, not only the session that started it, so one stuck job locks everyone until it
+ends: restart the app to clear it. Because of this the 4-job cap is reachable only by a race. The
+process-wide call limit is read once, at first use; restart the app to change
+`CQC_GRADING_CONCURRENCY`. The wait for a call slot counts against the student's deadline, so a stuck
+slot cannot hold a job forever.
+
 Rollback: `CQC_GRADING_JOB=off`, then `git revert`.
 
 #### Hang or stuck job
@@ -243,6 +252,7 @@ Rollback: `CQC_GRADING_JOB=off`, then `git revert`.
 - The errors-only batch is still synchronous.
 - A job is lost when the app restarts, and its token expires 15 minutes after it ends.
 - A tab without the token cannot see or cancel a job.
+- One stuck job pauses Grade and the review buttons for every session in the process until it ends or the app restarts.
 - `openrouter_client.py` logs some provider error text (`{e}`) that can echo the provider's wording:
   a follow-up, not part of this change.
 
