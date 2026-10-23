@@ -37,6 +37,19 @@ def _isolate_posthog_telemetry(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_docker_sandbox_unless_asked(monkeypatch):
+    """Keep tests off a developer's real Docker. With CQC_EXECUTION=off the compile gate
+    uses its host fallback, as on Streamlit Cloud. Tests of the sandbox runner and the
+    Docker integration tests set the variable themselves."""
+    from cqc_cpcc.utilities import program_runner
+
+    monkeypatch.setenv("CQC_EXECUTION", "off")
+    program_runner.reset_runner_status_cache()
+    yield
+    program_runner.reset_runner_status_cache()
+
+
+@pytest.fixture(autouse=True)
 def _block_real_openrouter_in_unit_tests(request, monkeypatch):
     """A unit test that forgets to mock the LLM must fail fast, not spend real money
     with the developer's .env OPENROUTER_API_KEY. Unroutable base URL for unit tests."""

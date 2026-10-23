@@ -18,6 +18,13 @@ SAS (``.sas``, used by CSC 152) has NO free local compiler, so it is treated as
 UNSUPPORTED: :func:`check_code` returns ``supported=False`` and the caller must leave
 the LLM's judgment untouched. Any unrecognized language is likewise unsupported.
 
+SANDBOX: when the exec-runner container is available (``program_runner.runner_status()``),
+C++ and Java compile checks run INSIDE it, with no network and no host files, so a hostile
+``#include`` cannot reach the host. The host toolchain below (with the include guard) is
+only the fallback when the sandbox is unavailable. If the sandbox IS available but cannot
+give an answer (timeout, daemon error), the result is "cannot verify" (``supported=False``),
+never "does not compile", and the host is not tried.
+
 SAFETY: this module NEVER executes student code. C++ uses ``-fsyntax-only`` (compile
 front-end only, no link, no run); Java uses ``javac`` (compiles to .class, never runs);
 Python uses the builtin ``compile()`` which parses/byte-compiles WITHOUT executing.
@@ -292,8 +299,33 @@ def _no_caret_flag(compiler: str) -> str:
     return "-fno-caret-diagnostics" if "clang" in out.lower() else "-fno-diagnostics-show-caret"
 
 
+def _sandbox_compile(language: str, files: list) -> Optional[CompileResult]:
+    """Compile-check ``[(name, code)]`` inside the exec-runner, or None when it is unavailable.
+
+    None means "use the host fallback". A CompileResult with ``supported=False`` means the
+    sandbox was available but could not verify: the caller keeps the LLM judgment.
+    """
+    from cqc_cpcc.utilities import program_runner as pr  # lazy: keeps imports light
+
+    if not pr.runner_status().available:
+        return None
+    sandbox_files = [pr.SandboxFile(os.path.basename(n) or "submission", c) for n, c in files]
+    outcome = pr.run_program(language, sandbox_files, mode="compile")
+    check = outcome.compile
+    if not outcome.verified or check is None or check.timed_out or not check.tool:
+        return CompileResult(language, supported=False, tool="exec-runner",
+                             skipped_reason=f"sandbox could not verify the compile ({outcome.reason or 'no result'})")
+    names = [f.name for f in sandbox_files]
+    return CompileResult(language, supported=True, compiles=check.ok,
+                         errors="" if check.ok else (check.stderr or "").strip(),
+                         tool=f"exec-runner:{check.tool}", files_checked=names)
+
+
 def _check_cpp_group(files: list) -> CompileResult:
     """Syntax-check ALL C++ sources together in one dir so cross-file #includes resolve."""
+    sandboxed = _sandbox_compile("cpp", files)
+    if sandboxed is not None:
+        return sandboxed
     unsafe = _unsafe_include(files)
     if unsafe:
         return CompileResult("cpp", supported=False,
@@ -325,15 +357,22 @@ def _check_cpp_group(files: list) -> CompileResult:
 
 def _check_java_group(files: list) -> CompileResult:
     """Compile ALL .java sources together (javac resolves inter-type references)."""
+    # javac requires each file be named after its public top-level type.
+    named = []
+    for name, code in files:
+        m = _JAVA_PUBLIC_CLASS.search(code) or _JAVA_ANY_TYPE.search(code)
+        stem = m.group(1) if m else (os.path.splitext(os.path.basename(name))[0] or "Submission")
+        named.append((f"{stem}.java", code))
+    sandboxed = _sandbox_compile("java", named)
+    if sandboxed is not None:
+        return sandboxed
     javac = shutil.which("javac")
     if not javac:
         return CompileResult("java", supported=False, skipped_reason="no 'javac' on PATH")
     with tempfile.TemporaryDirectory(prefix="cgate_java_") as d:
         written = []
-        for name, code in files:
-            # javac requires each file be named after its public top-level type.
-            m = _JAVA_PUBLIC_CLASS.search(code) or _JAVA_ANY_TYPE.search(code)
-            stem = m.group(1) if m else (os.path.splitext(os.path.basename(name))[0] or "Submission")
+        for stem_name, code in named:
+            stem = stem_name[: -len(".java")]
             src = os.path.join(d, f"{stem}.java")
             with open(src, "w", encoding="utf-8", errors="replace") as f:
                 f.write(code)
