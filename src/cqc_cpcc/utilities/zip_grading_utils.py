@@ -588,7 +588,9 @@ def build_submission_text_with_token_limit(
             if solution_language:
                 # Add the content inside a codeblock
                 content = wrap_code_in_markdown_backticks(content, solution_language)
-            file_section += f"### Submission Content: {content}"
+            # The fenced block starts on its own line: "### Submission Content:\n```cpp". On the
+            # same line the opening fence reads as part of the heading and some models drop it.
+            file_section += f"### Submission Content:\n{content}"
 
             parts.append(file_section)
             total_tokens += file_tokens
