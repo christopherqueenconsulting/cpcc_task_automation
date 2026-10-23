@@ -87,6 +87,32 @@
         "requirement-extraction"
       ]
     },
+    "effort-recommendation": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Recommends the lowest reasoning effort expected to grade an assignment reliably, from the instructions, the reference solution and counted signals (advice only; takes no student submission).",
+      "builder": "cqc_cpcc.effort_recommendation:build_effort_recommendation_prompt",
+      "schema": "cqc_cpcc.effort_recommendation:EffortJudgement",
+      "call_sites": [
+        "cqc_cpcc.effort_recommendation:recommend_effort"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/effort_recommendation.py",
+        "src/cqc_cpcc/utilities/AI/untrusted_fence.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "fingerprint": "sha256:525120285b78d43f1ac9dba47f7efad42a9d09e6871fe071d64f9350353c902b",
+      "suites": [
+        "effort-recommendation"
+      ]
+    },
     "exam-grading": {
       "version": 2,
       "status": "live",

@@ -590,6 +590,13 @@ def cmd_build_suite_datasets(args) -> int:
     return 0
 
 
+def cmd_effort_truth(args) -> int:
+    """Derive the effort-recommendation ground truth from a run over its labeled cases."""
+    from cqc_cpcc.model_eval import effort_truth
+
+    return effort_truth.run(args)
+
+
 def cmd_build_judge_gold(args) -> int:
     from cqc_cpcc.model_eval import judge_calibration
 
@@ -774,6 +781,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     bsd = sub.add_parser("build-suite-datasets", help="regenerate the prompt-suite datasets")
     bsd.add_argument("--reviewed-by", default=None, help="record a human label review")
     bsd.set_defaults(func=cmd_build_suite_datasets)
+
+    et = sub.add_parser("effort-truth", help="effort-recommendation ground truth from a run (no model calls)")
+    et.add_argument("--raw", required=True, help="raw_outputs.jsonl of `run --dataset <effort dataset>` "
+                                                 "with the incumbent at high and candidates at low and medium")
+    et.add_argument("--dataset", default="evals/datasets/effort-recommendation/v1")
+    et.add_argument("--write", action="store_true", help="write ground_truth.json into the dataset")
+    et.set_defaults(func=cmd_effort_truth)
 
     pm = sub.add_parser("prompts", help="list / fingerprint / check the prompt registry")
     pm.add_argument("action", choices=["list", "fingerprint", "check"])

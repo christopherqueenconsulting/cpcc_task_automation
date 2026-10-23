@@ -219,6 +219,20 @@ def _render_requirement_extraction() -> list[str]:
     return [build_requirement_extraction_prompt(FIXTURE_INSTRUCTIONS)]
 
 
+def _render_effort_recommendation() -> list[str]:
+    from cqc_cpcc.effort_recommendation import (
+        build_effort_recommendation_prompt,
+        extract_signals,
+    )
+
+    signals = extract_signals(FIXTURE_INSTRUCTIONS, _fixture_checklist(), FIXTURE_SOLUTION)
+    # A fixed nonce keeps the fingerprint stable; real calls draw a fresh one. No submission.
+    return [build_effort_recommendation_prompt(FIXTURE_INSTRUCTIONS, signals, ["low", "medium", "high"],
+                                               solution=FIXTURE_SOLUTION, nonce="0123456789abcdef"),
+            build_effort_recommendation_prompt(FIXTURE_INSTRUCTIONS, signals, ["low", "medium", "high"],
+                                               nonce="0123456789abcdef")]
+
+
 def _render_exam_grading() -> list[str]:
     from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_prompt
 
@@ -274,6 +288,7 @@ RENDERERS: dict[str, Callable[[], list[str]]] = {
     "rubric-grading": _render_rubric_grading,
     "requirements-section": _render_requirements_section,
     "requirement-extraction": _render_requirement_extraction,
+    "effort-recommendation": _render_effort_recommendation,
     "exam-grading": _render_exam_grading,
     "preprocessing-digest": _render_preprocessing_digest,
     "project-feedback": _render_project_feedback,

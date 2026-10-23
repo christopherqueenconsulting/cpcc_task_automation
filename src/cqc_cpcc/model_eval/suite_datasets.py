@@ -791,7 +791,14 @@ def build_levelband() -> list[dict]:
 
 # --------------------------------------------------------------------------------------
 
+def build_effort_recommendation() -> list[dict]:
+    from cqc_cpcc.model_eval import effort_dataset
+
+    return effort_dataset.build_rows()
+
+
 BUILDERS = {
+    "effort-recommendation": build_effort_recommendation,
     "exam-grading": build_exam,
     "project-feedback": build_feedback,
     "requirement-extraction": build_requirements,
@@ -823,6 +830,10 @@ def write_all(root: Path = ROOT, reviewed_by: Optional[str] = None) -> dict:
         (d / "cases.jsonl").write_text(text, encoding="utf-8")
         (d / "VERSION").write_text(VERSION + "\n", encoding="utf-8")
         counts[name] = text.count("\n")
+        if name == "effort-recommendation":
+            from cqc_cpcc.model_eval import effort_dataset
+
+            counts[name + " (labeled grading cases)"] = effort_dataset.write_grading_cases(d, reviewed_by)
     return counts
 
 
