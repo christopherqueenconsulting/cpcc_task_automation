@@ -6,6 +6,7 @@ A score must fall in exactly one band. An overlap (``Unsatisfactory 0-8.24`` bes
 boundary score depend on which band is read first.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,7 +16,11 @@ import cqc_cpcc
 
 pytestmark = pytest.mark.unit
 
-RUBRICS = json.loads((Path(cqc_cpcc.__file__).parent / "config" / "rubrics.json").read_text(encoding="utf-8"))
+CONFIG = Path(cqc_cpcc.__file__).parent / "config"
+# rubric_config merges the legacy file under rubrics.json ({**legacy, **rubrics}), so a rubric that
+# exists only in the legacy file (ai_assignment_reflection_rubric) is live and is checked too.
+RUBRICS = {**json.loads((CONFIG / "rubrics_v1_legacy.json").read_text(encoding="utf-8")),
+           **json.loads((CONFIG / "rubrics.json").read_text(encoding="utf-8"))}
 
 
 def _band_sets():
@@ -52,3 +57,43 @@ def test_bands_do_not_overlap_or_leave_gaps(name, bands, top):
 @pytest.mark.parametrize("name,bands,top", BAND_SETS, ids=IDS)
 def test_the_highest_band_reaches_the_maximum(name, bands, top):
     assert max(b["score_max"] for b in bands) == top, name
+
+
+def _digest(rubric):
+    bands = {"criteria": [[c["criterion_id"], [[lv["label"], lv["score_min"], lv["score_max"]] for lv in c["levels"]]]
+                          for c in rubric["criteria"] if c.get("levels") and "score_min" in c["levels"][0]],
+             "overall": [[b["label"], b["score_min"], b["score_max"]] for b in rubric.get("overall_bands", [])]}
+    return hashlib.sha256(json.dumps(bands, sort_keys=True).encode()).hexdigest()[:12]
+
+
+# rubric_id: (rubric_version, digest of every band). The version is part of the grading run key, so a
+# changed band must come with a new version, or results graded under the old bands would be reused.
+# When this test fails: bump that rubric's rubric_version in rubrics.json, then update its row here.
+PINNED = {
+    "ai_assignment_reflection_rubric": ("1.0", "5c81d8596d81"),
+    "csc113_final_reflection_rubric": ("1.1", "ce954ec9f01a"),
+    "csc113_week1_reflection_rubric": ("1.0", "82efa0656ed1"),
+    "csc113_week2_reflection_rubric": ("1.0", "4b08f5d173b6"),
+    "csc113_week3_reflection_rubric": ("1.0", "32baada4288b"),
+    "csc113_week4_reflection_rubric": ("1.1", "795128c12607"),
+    "csc113_week5_reflection_rubric": ("1.1", "a43679554a31"),
+    "csc113_week6_reflection_rubric": ("1.1", "5fe9a019b2b0"),
+    "csc113_week7_reflection_rubric": ("1.1", "fbc1a09a2617"),
+    "csc113_week8_reflection_rubric": ("1.1", "ff86bb7cf552"),
+    "csc134_cpp_exam_rubric": ("3.3", "36f06fb40c83"),
+    "csc134_cpp_final_exam_rubric": ("3.3", "392f56c23947"),
+    "csc151_java_exam_rubric": ("3.2", "a2c7aac97aad"),
+    "default_100pt_rubric": ("1.0", "64f188bf2a0f"),
+}
+
+
+@pytest.mark.parametrize("rubric_id", sorted(RUBRICS))
+def test_changed_bands_come_with_a_new_rubric_version(rubric_id):
+    rubric = RUBRICS[rubric_id]
+    assert (str(rubric["rubric_version"]), _digest(rubric)) == PINNED[rubric_id], (
+        f"{rubric_id}: its point bands or its rubric_version changed. Bump rubric_version in rubrics.json "
+        f"(it is part of the grading run key) and update the row in PINNED.")
+
+
+def test_every_rubric_is_pinned():
+    assert set(PINNED) == set(RUBRICS)

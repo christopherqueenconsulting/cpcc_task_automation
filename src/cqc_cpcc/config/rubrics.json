@@ -2236,7 +2236,7 @@
       },
       {
         "label": "Unsatisfactory",
-        "score_min": 0.01,
+        "score_min": 1,
         "score_max": 8.24
       },
       {
