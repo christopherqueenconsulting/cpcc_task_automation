@@ -27,7 +27,7 @@ from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from cqc_cpcc.rubric_models import DetectedError, RubricAssessmentResult
+from cqc_cpcc.rubric_models import DetectedError, ReconciliationNote, RubricAssessmentResult
 from cqc_cpcc.utilities.logger import logger
 
 MISSING_REQUIREMENT_ID = "MISSING_REQUIREMENT"
@@ -49,6 +49,10 @@ def is_requirement_error(code: Optional[str]) -> bool:
     return any((code or "").startswith(base) for base in REQUIREMENT_ERROR_IDS)
 
 MAX_REQUIREMENTS = 12
+
+#: Model error codes whose issue a requirement verdict may also have been penalised for.
+OVERLAP_HINTS = ("OUTPUT", "SEQUENCE", "CALCULATION", "FORMATTING", "SELECTION")
+_SEVERITY_RANK = {"minor": 1, "major": 2}
 
 
 class RequirementItem(BaseModel):
@@ -171,6 +175,9 @@ def requirements_prompt_section(checklist: Optional[RequirementChecklist]) -> li
         "Do not ALSO report a detected error for functionality that is entirely missing; "
         "the missing requirement already accounts for it. Likewise, do not mark a "
         "requirement partial only because of an error you already reported for it.",
+        "When a detected error is about one of these requirements (the same missing or wrong "
+        "behavior), put that requirement's id in the error's `requirement_ids`. Leave it empty for "
+        "an error that is about none of them (naming, comments, formatting no requirement mentions).",
         "",
     ]
     for r in checklist.requirements:
@@ -231,3 +238,119 @@ def apply_requirement_coverage(
         "error_counts_by_id": None,
     })
     return result, info
+
+
+def requirement_id_of(error: DetectedError) -> Optional[str]:
+    """The requirement id behind a requirement error code (``MISSING_REQUIREMENT_R2`` -> ``R2``)."""
+    code = error.code or ""
+    for base in REQUIREMENT_ERROR_IDS:
+        if code.startswith(base + "_"):
+            return _id_key(code[len(base) + 1:])
+    return None
+
+
+def _rank(error: DetectedError) -> int:
+    return _SEVERITY_RANK.get((error.severity or "").strip().lower(), 0)
+
+
+def _linked_ids(error: DetectedError) -> list[str]:
+    seen: list[str] = []
+    for rid in error.requirement_ids or []:
+        key = _id_key(str(rid))
+        if key and key not in seen:
+            seen.append(key)
+    return seen
+
+
+def is_overlap_candidate(error: DetectedError) -> bool:
+    return any(hint in (error.code or "").upper() for hint in OVERLAP_HINTS)
+
+
+def reconcile_requirement_overlaps(
+        result: RubricAssessmentResult,
+        checklist: Optional[RequirementChecklist],
+) -> tuple[RubricAssessmentResult, list[ReconciliationNote]]:
+    """Count one issue once when a model error and a requirement error describe it.
+
+    Runs after :func:`apply_requirement_coverage` and before scoring. The model links an error to
+    the requirements it is about (``requirement_ids``); with those links:
+
+    * a model error is dropped when a linked requirement error is at least as severe (at a tie the
+      requirement error stays);
+    * a minor requirement error is dropped when a linked model error is major;
+    * requirement errors never merge with each other (two missing requirements stay two errors);
+    * an error that came from the compiler or the execution check is never dropped;
+    * a model error with no links is never dropped; if its code looks like one a requirement can
+      overlap (output, sequence, calculation, formatting, selection) it gets an instructor-only
+      "possible overlap" note.
+
+    Every drop leaves a suppressed note carrying the error, so the instructor can put it back
+    (Reinstate). Idempotent: a second run finds nothing left to drop.
+    """
+    from cqc_cpcc.reconciliation import may_drop, note, note_removed
+
+    errors = list(result.detected_errors or [])
+    if not checklist or not checklist.requirements:
+        return result, []
+    by_req: dict[str, DetectedError] = {}
+    for e in errors:
+        rid = requirement_id_of(e)
+        if rid is not None:
+            by_req.setdefault(rid, e)
+    if not by_req:
+        return result, []
+
+    model_errors = [e for e in errors if requirement_id_of(e) is None]
+    links = {id(e): [r for r in _linked_ids(e) if r in by_req] for e in model_errors}
+
+    covered_by: dict[int, str] = {}  # model error -> the requirement whose error already counts it
+    for e in model_errors:
+        if not may_drop(e):
+            continue
+        for rid in links[id(e)]:
+            if _rank(by_req[rid]) >= _rank(e):
+                covered_by[id(e)] = rid
+                break
+    minor_covered_by: dict[str, DetectedError] = {}  # requirement id -> the major model error counting it
+    for e in model_errors:
+        if id(e) in covered_by:
+            continue
+        for rid in links[id(e)]:
+            if _rank(e) > _rank(by_req[rid]):
+                minor_covered_by.setdefault(rid, e)
+
+    notes: list[ReconciliationNote] = []
+    dropped: set[int] = set()
+    for e in model_errors:
+        rid = covered_by.get(id(e))
+        if rid is not None:
+            dropped.add(id(e))
+            kept = by_req[rid]
+            notes.append(note_removed(
+                "overlap", e,
+                f"Requirement {rid} already counts this as a {(kept.severity or '').lower()} error "
+                f"({kept.name}); counting it again would penalize one issue twice.",
+                kept_code=kept.code, requirement_id=rid))
+    for rid, e in minor_covered_by.items():
+        req_error = by_req[rid]
+        dropped.add(id(req_error))
+        notes.append(note_removed(
+            "overlap", req_error,
+            f"A {(e.severity or '').lower()} error ({e.name}) already counts this issue, so the "
+            f"{(req_error.severity or '').lower()} error for requirement {rid} is not counted as well.",
+            kept_code=e.code, requirement_id=rid))
+    for e in model_errors:
+        if not links[id(e)] and not (e.requirement_ids or []) and is_overlap_candidate(e):
+            notes.append(note(
+                "overlap",
+                f"Possible overlap: {e.name} may describe the same issue as a requirement error "
+                f"({', '.join(sorted(by_req))}). Both are counted because the grader did not link them."))
+    if not dropped:
+        return result, notes
+    kept_errors = [e for e in errors if id(e) not in dropped]
+    return result.model_copy(update={
+        "detected_errors": kept_errors,
+        "error_counts_by_severity": None,  # recompute from the corrected error list
+        "error_counts_by_id": None,
+    }), notes
+

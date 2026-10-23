@@ -27,6 +27,7 @@ from typing import Optional
 from cqc_cpcc.model_eval import dataset as ds
 from cqc_cpcc.model_eval.runner import _grade_once, estimate_prompt_tokens, perturb
 from cqc_cpcc.model_eval.suites.base import CodeGrader, Suite, SuiteCase
+from cqc_cpcc.reconciliation import detected_codes
 
 CORRECT_TAGS = ("equivalent", "follows_solution_format")
 #: A solution line this long or longer, absent from the submission, is a quote if it appears
@@ -54,7 +55,7 @@ def to_payload(output) -> dict:
     result, gate = output
     errors = list(result.detected_errors or [])
     return {
-        "detected": sorted({e.code for e in errors}),
+        "detected": detected_codes(result),
         "major": sorted({e.code for e in errors if (e.severity or "").lower() == "major"}),
         "total": float(result.total_points_earned),
         "validity": (gate.get("validity") or {}).get("status", "ok"),

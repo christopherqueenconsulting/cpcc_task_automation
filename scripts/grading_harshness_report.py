@@ -50,7 +50,7 @@ LOCAL_ONLY_BANNER = ("LOCAL USE ONLY - DO NOT SHARE. This output describes indiv
 MEANS = ("points_possible", "points_lost", "lost_not_error_driven", "lost_to_model_errors",
          "lost_to_requirements", "rescore_gap", "gain_if_distinct", "gain_if_no_overlap_upper_bound",
          "model_major_types", "model_minor_types", "requirement_errors", "minor_occurrence_inflation",
-         "minor_to_major_conversions", "possible_overlaps")
+         "minor_to_major_conversions", "possible_overlaps", "overlap_dropped")
 COUNTED = ("needs_review", "rescore_mismatch", "rubric_version_changed", "requirements_unmarked")
 # A BrightSpace submission folder is "<userid>-<submissionid> - Name"; a resubmission gets a
 # new submission id, so the student is keyed by the user id alone.
@@ -149,7 +149,8 @@ def render_text(report: dict) -> str:
             f"  per student: {e['mean_model_major_types']} major and {e['mean_model_minor_types']} minor error "
             f"types, {e['mean_requirement_errors']} requirement errors, {e['mean_minor_occurrence_inflation']} "
             f"repeated minor occurrences, {e['mean_minor_to_major_conversions']} minor-to-major conversions, "
-            f"{e['mean_possible_overlaps']} possible overlaps",
+            f"{e['mean_possible_overlaps']} possible overlaps, {e['mean_overlap_dropped']} errors dropped as "
+            f"overlapping a requirement",
             f"  needs review: {e['needs_review_count']} ({e['requirements_unmarked_count']} with unmarked "
             f"requirements); total not reproduced by today's rules: {e['rescore_mismatch_count']} of "
             f"{e['graded_students']}; graded under an older rubric version: {e['rubric_version_changed_count']}",

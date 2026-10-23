@@ -39,7 +39,7 @@ from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES
 from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUIREMENT, note, note_added,
                                      note_kept, note_removed, tag_source)
 from cqc_cpcc.requirement_coverage import (apply_requirement_coverage, is_requirement_error,
-                                           requirements_prompt_section)
+                                           reconcile_requirement_overlaps, requirements_prompt_section)
 from cqc_cpcc.rubric_models import (
     Criterion,
     CriterionResult,
@@ -401,7 +401,8 @@ def build_rubric_grading_prompt(
         "Do NOT return schema objects like {\"type\": \"Object\", \"properties\": {...}} or {\"completionState\": \"...\"}.")
     prompt_parts.append("Each `detected_errors` item must have actual values:")
     prompt_parts.append('  {"code": "MISSING_DOCS", "name": "Insufficient Documentation", "severity": "major",')
-    prompt_parts.append('   "description": "What was found in the code.", "occurrences": 1, "notes": null}')
+    prompt_parts.append('   "description": "What was found in the code.", "occurrences": 1, "notes": null'
+                        + (', "requirement_ids": []}' if requirements and requirements.requirements else '}'))
 
     return "\n".join(prompt_parts)
 
@@ -888,6 +889,12 @@ async def _reconcile(
         for rid in coverage_info.get("unmarked", []):
             notes.append(note("requirement", f"The grader did not assess requirement {rid}; "
                                              "flagged for review, not counted.", requirement_id=rid))
+        # One issue, one penalty: a model error and a requirement error for the same thing count once.
+        result, overlap_notes = reconcile_requirement_overlaps(result, requirements)
+        notes.extend(overlap_notes)
+        if gate_report is not None:
+            gate_report["overlap"] = {"dropped": sum(1 for n in overlap_notes if n.action == "removed"),
+                                      "possible": sum(1 for n in overlap_notes if n.action == "note")}
     elif result.requirement_results:
         result = result.model_copy(update={"requirement_results": None})
 

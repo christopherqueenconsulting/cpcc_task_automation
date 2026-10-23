@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from cqc_cpcc.model_eval.budget import Budget
+from cqc_cpcc.reconciliation import detected_codes
 from cqc_cpcc.model_eval.dataset import AUTHORS_IN_DATASET, EvalCase, checklist_model, error_definitions, rubric
 from cqc_cpcc.utilities.AI import model_registry
 from cqc_cpcc.utilities.logger import logger
@@ -198,7 +199,7 @@ async def run_model(
             try:
                 result, gate = await _grade_once(case, perturb(case, seed), grade_fn)
                 record.ok = True
-                record.detected = sorted({e.code for e in (result.detected_errors or [])})
+                record.detected = detected_codes(result)
                 record.total = float(result.total_points_earned)
                 record.output_sha256 = output_fingerprint(result)
                 record.compile_gate = gate.get("action")

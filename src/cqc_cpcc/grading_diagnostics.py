@@ -30,13 +30,11 @@ from __future__ import annotations
 from collections import Counter
 from typing import Callable, Optional
 
-from cqc_cpcc.requirement_coverage import is_requirement_error
+from cqc_cpcc.requirement_coverage import is_overlap_candidate, is_requirement_error
 from cqc_cpcc.rubric_config import load_rubrics_from_config
 from cqc_cpcc.rubric_models import DetectedError, Rubric, RubricAssessmentResult
 from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES
 
-# Model error codes whose issue a requirement verdict may also have been penalised for.
-OVERLAP_HINTS = ("OUTPUT", "SEQUENCE", "CALCULATION", "FORMATTING", "SELECTION")
 
 
 def find_rubric(rubric_id: str) -> Optional[Rubric]:
@@ -52,7 +50,7 @@ def scoring_modes(rubric: Rubric) -> list[str]:
 
 
 def _is_overlap_candidate(error: DetectedError) -> bool:
-    return any(hint in (error.code or "").upper() for hint in OVERLAP_HINTS)
+    return is_overlap_candidate(error)
 
 
 def rescore(result: RubricAssessmentResult, rubric: Rubric, *,
@@ -118,6 +116,8 @@ def attribute(result: RubricAssessmentResult, rubric: Rubric) -> dict:
         "minor_to_major_conversions": max(
             (result.effective_major_errors or 0) - (result.original_major_errors or 0), 0),
         "possible_overlaps": overlaps,
+        "overlap_dropped": sum(1 for n in (result.reconciliation or [])
+                               if n.stage == "overlap" and n.action == "removed" and not n.reinstated),
         "needs_review": bool(result.needs_review),
         "floored": result.validity_status in NO_WORK_STATUSES,
         "requirements_unmarked": result.validity_status == "requirements_unmarked",

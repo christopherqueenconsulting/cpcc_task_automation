@@ -148,6 +148,53 @@ run keys change back and session caches re-grade on their own. A revert does not
 written to BrightSpace: assignment drafts and quiz grades (published on write) stay as written until they
 are re-graded and written again. Rolling back is Christopher's call.
 
+### What the CSC134 rubrics can score (checked 2026-10-23)
+
+`program_performance` on the CSC134 rubrics does not subtract weights from the maximum: the scoring step
+chooses a level from the effective error counts and awards that level's top score. Running 0 to 9 major and
+0 to 12 minor errors through `apply_backend_scoring` shows the only scores that occur:
+
+| Rubric | Reachable scores (level and overall band are the same at each) |
+|---|---|
+| `csc134_cpp_exam_rubric` (30 points) | 4.5 Unsatisfactory, 8.25 Substandard, 12 Needs Improvement, 21 Average, 24 Above Average, 27 Superior, 30 Outstanding |
+| `csc134_cpp_final_exam_rubric` (200 points) | 30 Unsatisfactory, 55 Substandard, 80 Needs Improvement, 140 Average, 160 Above Average, 180 Superior, 200 Outstanding |
+
+So a graded submission never scores 0 however many errors it has (6 or more majors give 4.5 of 30, or 30
+of 200), and 0 stays the "No submission" band. The criterion levels and the overall bands are written with
+different edges (for example the criterion's Substandard runs 4.51 to 8.25 while the overall bands put 8.25
+in Substandard and anything lower in Unsatisfactory), but the two never give different labels because only
+the scores above can occur. A `floor_score` on these rubrics would change nothing. The weights
+(`major_weight`, `minor_weight`) are used by the generic `error_count` path, not by `program_performance`.
+
+### One issue, one penalty (model error and requirement error)
+
+Ruled by Christopher on 2026-10-22. When the grader reports an error and a requirement verdict
+(missing or partial) for the same issue, only the more severe deduction counts. The grader links an
+error to the checklist requirements it is about in `requirement_ids`; `reconcile_requirement_overlaps`
+(`requirement_coverage.py`, run inside `_reconcile` after requirement coverage) then applies:
+
+| Linked model error | Linked requirement error | Counted |
+|---|---|---|
+| major or minor | major (a missing core requirement) | the requirement error |
+| minor | minor (partial, or a missing secondary requirement) | the requirement error (a tie keeps it) |
+| major | minor | the model error |
+
+- Requirement errors never merge with each other: two missing requirements linked to one major model
+  error still cost two.
+- A model error with no links is never dropped. If its code looks like one a requirement can overlap
+  (output, sequence, calculation, formatting, selection) the instructor gets a "Possible overlap" note.
+- A compiler- or execution-sourced error is never dropped in favour of another.
+- Every drop is a suppressed note carrying the error ("Removed: ... Requirement R2 already counts this
+  as a major error"), so Reinstate puts it back and re-scores.
+- Evaluation still sees the dropped code as detected (`reconciliation.detected_codes`), so a dropped
+  duplicate does not read as a missed detection; the harshness report counts them (`overlap_dropped`).
+- Prompt: `rubric-grading` version 3 and `requirements-section` version 2 ask for `requirement_ids`
+  when a checklist is present; a prompt with no checklist is unchanged. The field is also in the schema
+  the model answers, so every rubric request carries it.
+
+**Rollback:** `git revert`; the prompt versions go back, so the run keys change and sessions re-grade.
+Results saved with `requirement_ids` still load (the field is optional).
+
 ## Testing
 
 ### New Tests (37 total)

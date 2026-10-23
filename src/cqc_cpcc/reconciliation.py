@@ -38,6 +38,19 @@ def tag_source(errors: Optional[list[DetectedError]], source: str, *,
     return out
 
 
+def detected_codes(result: RubricAssessmentResult) -> list[str]:
+    """Sorted error codes the grader found, counting errors the overlap stage dropped.
+
+    Evaluation measures detection (did the grader find the seeded error?), not what a student
+    ends up penalised for, and the overlap stage only decides which of two reports of one issue
+    to count. Errors other stages dropped (a compile error the real compiler refuted) stay out.
+    """
+    codes = {e.code for e in (result.detected_errors or [])}
+    codes |= {n.code for n in (result.reconciliation or [])
+              if n.stage == "overlap" and n.action == "removed" and n.error is not None and n.code}
+    return sorted(codes)
+
+
 def may_drop(error: DetectedError) -> bool:
     """Whether a later stage may remove this error in favour of another one."""
     return (error.source or SOURCE_MODEL) not in EVIDENCE_SOURCES

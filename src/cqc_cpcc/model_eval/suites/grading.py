@@ -18,6 +18,7 @@ from cqc_cpcc.model_eval import metrics
 from cqc_cpcc.model_eval.runner import CallRecord, _grade_once, estimate_prompt_tokens, perturb
 from cqc_cpcc.model_eval.suites import common
 from cqc_cpcc.model_eval.suites.base import CodeGrader, Suite, SuiteCase
+from cqc_cpcc.reconciliation import detected_codes
 
 
 def load_cases(root: Path) -> list[SuiteCase]:
@@ -36,7 +37,7 @@ async def invoke(case: SuiteCase):
 def to_payload(output) -> dict:
     result, gate = output
     return {
-        "detected": sorted({e.code for e in (result.detected_errors or [])}),
+        "detected": detected_codes(result),
         "total": float(result.total_points_earned),
         "validity": (gate.get("validity") or {}).get("status", "ok"),
         "requirements": {r.requirement_id.strip().upper(): r.status
