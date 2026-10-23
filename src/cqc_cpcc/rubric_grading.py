@@ -282,12 +282,18 @@ def build_rubric_grading_prompt(
 
     # Student submission
     prompt_parts.append("## Student Submission to Grade")
-    prompt_parts.append(UNTRUSTED_NOTE)
     # Note Need to wrap code in backticks. It is expected that the student submission is preprocessed to be safely included in a markdown code block with File Name included ahead of it.
     # If the submission is very long, it should be truncated with an indication that it was truncated.
-    prompt_parts.append("<!--BEGIN_STUDENT_SUBMISSION-->")
-    prompt_parts.append(neutralize_markers(student_submission))
-    prompt_parts.append("<!--END_STUDENT_SUBMISSION-->")
+    if reference_solution:
+        # The one thing a submission can borrow is the solution's authority, so the fence and the
+        # untrusted-data note exist only when there is a solution. Without one the prompt is exactly
+        # what it was before PR 7 (the A/B on grading-levelband showed the extra text moved levels).
+        prompt_parts.append(UNTRUSTED_NOTE)
+        prompt_parts.append("<!--BEGIN_STUDENT_SUBMISSION-->")
+        prompt_parts.append(neutralize_markers(student_submission))
+        prompt_parts.append("<!--END_STUDENT_SUBMISSION-->")
+    else:
+        prompt_parts.append(student_submission)
     prompt_parts.append("")
 
     # Grading instructions - GPT-5.2 methodology
@@ -323,8 +329,11 @@ def build_rubric_grading_prompt(
     prompt_parts.append("For all criteria:")
     prompt_parts.append("- Evaluate submission against criterion")
     prompt_parts.append("- Provide specific, actionable feedback with evidence from submission")
-    prompt_parts.append("- Base assessment on the assignment instructions and rubric criteria, and on the reference "
-                        "solution when one is given: it defines what is required and the required output")
+    if reference_solution:
+        prompt_parts.append("- Base assessment on the assignment instructions and rubric criteria, and on the reference "
+                            "solution when one is given: it defines what is required and the required output")
+    else:
+        prompt_parts.append("- Base assessment solely on assignment instructions and rubric criteria")
     prompt_parts.append("")
 
     prompt_parts.append("### Output Requirements")

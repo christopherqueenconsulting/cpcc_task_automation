@@ -34,7 +34,7 @@
         "requirement_agreement",
         "injection_pass_rate"
       ],
-      "fingerprint": "sha256:1d1fa7292d8dc995c0129ede97541c54b022512e7ba4031d9610fd1a95859d37",
+      "fingerprint": "sha256:d7a9889859242e70e15dd31186e637ecbe18a533f4b3be247742d9307e59c0e4",
       "suites": [
         "grading",
         "grading-levelband",
