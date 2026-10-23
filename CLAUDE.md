@@ -5,6 +5,7 @@ Project context for Claude Code sessions.
 - Browser control + BrightSpace automation notes: @.claude/brightspace-and-selenium-mcp.md
 - BrightSpace session handoff (status, kickoff prompt): @docs/BRIGHTSPACE_AUTOMATION_HANDOFF.md
 - Selenium MCP setup/usage: @docs/SELENIUM_MCP.md
+- Versioning, `-rc` prereleases, release and rollback: [docs/RELEASING.md](docs/RELEASING.md)
 
 The `selenium` MCP server (`.mcp.json`) drives the project's Docker Selenium grid
 (`SELENIUM_REMOTE_URL=http://localhost:14444/wd/hub`). Start the container first:

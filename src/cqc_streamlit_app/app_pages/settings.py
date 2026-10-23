@@ -3,6 +3,7 @@ import os
 
 import streamlit as st
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
+from cqc_cpcc.version import get_version
 from cqc_streamlit_app.app_settings import load_settings, update_settings
 from cqc_streamlit_app.initi_pages import init_session_state
 from cqc_streamlit_app.utils import page_header, secret_text_input
@@ -25,6 +26,7 @@ def main():
         preferences_section()
     with analytics_tab:
         analytics_settings_section()
+    st.caption(f"CPCC Task Automation v{get_version()}")
 
 
 def credentials_section():

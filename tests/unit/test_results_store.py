@@ -65,3 +65,20 @@ def test_remember_saves_only_changes():
     mtime = app_settings.settings_path().stat().st_mtime_ns
     app_settings.remember(last_course_id="CSC_134")  # unchanged: no write
     assert app_settings.settings_path().stat().st_mtime_ns == mtime
+
+
+@pytest.mark.unit
+def test_code_version_is_stamped_and_old_runs_still_load():
+    stamped = _result().model_copy(update={"code_version": "0.1.2"})
+    results_store.save_run("ver1", "rubric", [("s1", stamped)], meta={"code_version": "0.1.2"})
+    [run] = results_store.load_runs()
+    assert run["results"][0][1].code_version == "0.1.2" and run["meta"]["code_version"] == "0.1.2"
+    # A run saved before the field existed has no code_version and still loads.
+    results_store.save_run("ver2", "rubric", [("s1", _result())])
+    older = next(r for r in results_store.load_runs() if r["run_key"] == "ver2")
+    assert older["results"][0][1].code_version is None
+
+
+@pytest.mark.unit
+def test_code_version_is_not_in_the_model_schema():
+    assert "code_version" not in RubricAssessmentResult.model_json_schema()["properties"]

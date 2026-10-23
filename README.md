@@ -220,6 +220,7 @@ For detailed technical documentation, see:
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture and design decisions
 - **[PRODUCT.md](docs/PRODUCT.md)** - Product features and user personas
 - **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines
+- **[RELEASING.md](docs/RELEASING.md)** - Versioning, prereleases, release and rollback; see also [CHANGELOG.md](CHANGELOG.md)
 
 ## Important Notes
 
@@ -292,6 +293,7 @@ Workflows in `.github/workflows/`:
 - **codeql.yml**, **gitguardian-scan.yml**, **pii-guard.yml**: Code scanning, secret scanning, and student-PII guard
 - **dependabot-auto-merge.yml**, **dependabot-ci-autofix.yml**: Dependabot housekeeping
 - **Cron_Action.yml**: Manual dispatch only (the schedule is commented out); `cron.py` currently prints a placeholder and does not take attendance
+- **release.yml**: A pushed tag `vX.Y.Z` or `vX.Y.Z-rcN` creates a GitHub release (see `docs/RELEASING.md`)
 - **Selenium_Action.yml**: Stale; it references `main_selenium.py`, which does not exist in the repo
 
 ## Docker Support
