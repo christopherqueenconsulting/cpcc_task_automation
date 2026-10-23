@@ -69,8 +69,8 @@ class TestCase(BaseModel):
     #: A sample run whose shown output differs from what the solution prints. Kept visible
     #: for the instructor, never used (``usable_cases`` leaves it out).
     disagrees_with_instructions: bool = False
-    #: The expected output needs a human look (C and C++ cannot be checked for reading past
-    #: the end of the input).
+    #: The expected output needs a human look. Reserved for signals the driver really gives;
+    #: nothing sets it today (C and C++ over-reads are a plan-wide warning, not a case flag).
     needs_review: bool = False
 
 

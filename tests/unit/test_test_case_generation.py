@@ -41,7 +41,7 @@ class TestParseSampleRuns:
         assert run.expected_output == "Enter hours worked:\nEnter hourly rate:\nGross pay: $950.00"
 
     def test_fenced_block_and_wrapped_values(self):
-        text = "Example Run\n```\nHow many items? <3>\nPrice? [4.50]\nTotal: 13.50\n```\nMore text.\n"
+        text = "Example Run\n```\nHow many items? <3>\nPrice? <4.50>\nTotal: 13.50\n```\nMore text.\n"
         [run] = tcg.parse_sample_runs(text)
         assert run.stdin == "3\n4.50\n"
 
@@ -72,6 +72,12 @@ class TestParseSampleRuns:
         assert run.stdin == ""
         [run] = tcg.parse_sample_runs("Sample Run:\nEnter a number: 4\nArray: [1, 2, 3]\nYour grade: B\n")
         assert run.stdin == "4\n"
+
+    def test_a_lone_bracketed_result_is_output_but_a_prompted_one_is_input(self):
+        [run] = tcg.parse_sample_runs("Sample Output:\nResult: [5]\n")
+        assert run.stdin == ""
+        [run] = tcg.parse_sample_runs("Sample Run:\nEnter a value: [5]\nDone\n")
+        assert run.stdin == "5\n"
 
     def test_no_sample_means_no_runs(self):
         assert tcg.parse_sample_runs("Write a program that adds two numbers.") == []
@@ -198,6 +204,24 @@ class TestNormalize:
         wrong = tcg.normalize_suggestion(_raw(
             [("C1", "overtime after 40 hours", "selection")], [("T1", "typical", ["10", "20"], ["C1"])]))
         assert wrong.cases[0].boundary_of == [] and tcg.uncovered_conditions(wrong) == ["C1"]
+
+    @pytest.mark.parametrize("text, inputs", [
+        ("balance of $1,000 or more", ["1000"]),
+        ("balance of $1,000 or more", ["1,000"]),
+        ("balance of $1,000 or more", ["$1000"]),
+        ("discount over 50%", ["50"]),
+        ("discount over 50%", ["50%"]),
+        ("between 10 and 20", ["20"]),
+        ("between 10 and 20", ["9"]),
+    ])
+    def test_plausibility_filter_keeps_real_edges(self, text, inputs):
+        out = tcg.normalize_suggestion(_raw([("C1", text, "selection")], [("T1", "edge", inputs, ["C1"])]))
+        assert out.cases[0].boundary_of == ["C1"]
+
+    def test_plausibility_filter_still_strips_unrelated_values(self):
+        out = tcg.normalize_suggestion(_raw([("C1", "balance of $1,000 or more", "selection")],
+                                            [("T1", "far", ["5000"], ["C1"])]))
+        assert out.cases[0].boundary_of == []
 
     def test_a_condition_without_a_number_keeps_its_claim(self):
         out = tcg.normalize_suggestion(_raw(
@@ -425,18 +449,21 @@ class TestValidate:
         result = tcg.validate_cases_on_solution(SOLUTION, dup, runner=runner)
         assert result.status == "no_valid_cases" and "duplicate" in result.reason
 
-    def test_cpp_read_past_the_end_is_flagged_for_review(self):
-        cpp = ec.SolutionSources("cpp", (ec.SourceFile("main.cpp", "int main(){}"),))
-        # Two reads recorded for a one-line input: the second cin failed unseen.
-        runner = _fake_runner(lambda cs: [_case_outcome("T1", reads=[(1, 0, 4), (2, 2, 9)]),
-                                          _case_outcome("T2", reads=[(1, 0, 4)])])
-        result = tcg.validate_cases_on_solution(cpp, _cases("40\n", "40\n"), runner=runner)
-        assert [c.needs_review for c in result.cases] == [True, False]
-        assert any("cannot detect reading past the end of input in C/C++".lower() in w.lower()
-                   for w in result.warnings)
-        assert not any(c.needs_review for c in tcg.validate_cases_on_solution(
-            SOLUTION, _cases("40\n"), runner=_fake_runner(
-                lambda cs: [_case_outcome("T1", reads=[(1, 0, 4), (2, 2, 9)])])).cases)
+    @pytest.mark.parametrize("language, name", [("cpp", "main.cpp"), ("c", "main.c")])
+    def test_c_and_cpp_always_warn_once_that_over_reads_are_invisible(self, language, name):
+        sources = ec.SolutionSources(language, (ec.SourceFile(name, "int main(){}"),))
+        runner = _fake_runner(lambda cs: [_case_outcome(c.id, reads=[(1, 0, 4)]) for c in cs])
+        result = tcg.validate_cases_on_solution(sources, _cases("40\n", "41\n"), runner=runner)
+        text = ("The sandbox cannot tell when a C or C++ program reads past the end of its input. "
+                "Check each expected output.")
+        assert result.warnings.count(text) == 1
+        assert [c.id for c in result.cases] == ["T1", "T2"] and not any(c.needs_review for c in result.cases)
+        assert len(tcg.build_plan(sources, result).usable_cases()) == 2
+
+    def test_java_and_python_do_not_get_the_c_warning(self):
+        runner = _fake_runner(lambda cs: [_case_outcome(c.id) for c in cs])
+        result = tcg.validate_cases_on_solution(SOLUTION, _cases("1\n"), runner=runner)
+        assert not any("C or C++" in w for w in result.warnings)
 
     def test_sample_that_agrees_modulo_format_is_silent(self):
         case = ec.TestCase(id="S1", label="Sample run 1", stdin="4\n", source="sample")

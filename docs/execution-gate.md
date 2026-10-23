@@ -230,8 +230,9 @@ it); `CQC_EXECUTION=off` makes validation report `unavailable` without starting 
    edge value is requested, so a compound range needs both of its edges. When there are more
    conditions than cases they share cases, which gives weaker coverage. A boundary claim is
    kept only if one of the case's input values is a number in the condition text or that
-   number plus or minus one; otherwise the claim is removed and the condition shows as
-   uncovered. The gate (PR 14) checks the map against the validated cases and never assumes it.
+   number plus or minus one (thousands commas, a leading `$` and a trailing `%` are ignored);
+   otherwise the claim is removed and the condition shows as uncovered. This is a plausibility
+   filter, not a proof: a condition with no digits, or with several numbers, passes loosely. The gate (PR 14) checks the map against the validated cases and never assumes it.
    The instructions and the solution go into the prompt inside a nonce fence, and any fence
    marker already in them is stripped. The nonce is a keyed hash (HMAC-SHA256) of the
    assignment text under a per-process secret: unguessable from outside, stable for one
@@ -242,9 +243,10 @@ it); `CQC_EXECUTION=off` makes validation report `unavailable` without starting 
    not compile turns the feature off (`ExecutionPlan.enabled` is false); a runner error means
    "cannot verify" and also leaves the plan disabled. A sample run whose shown output differs
    from what the solution prints is kept but not usable (`disagrees_with_instructions`), with
-   a warning to fix the instructions or the solution, or delete the sample. In C and C++ the
-   driver cannot see a failed `cin`, so a case where the solution read more often than the
-   input has lines is marked `needs_review` and the instructor should check its expected output.
+   a warning to fix the instructions or the solution, or delete the sample. The sandbox cannot
+   tell when a C or C++ program reads past the end of its input (a failed `cin` is silent; the
+   driver's end-of-input detection covers Java and Python), so every validated C or C++ case set
+   carries one warning to check each expected output. No case is made unusable for that alone.
    Duplicate case ids are refused.
 4. `scan_solution_risks(...)`: warns about randomness, the clock, files and command-line
    arguments in the solution.
@@ -257,6 +259,9 @@ it); `CQC_EXECUTION=off` makes validation report `unavailable` without starting 
   the only evidence for removing a deduction. Use `ExecutionPlan.independent_cases()` (source
   `llm` or `manual`, usable) and `covered_by_independent(condition_id)`. `sample_only` is true
   when there is no independent case, even if the plan lists no conditions.
+- For C and C++ the over-read risk stays. Before relying on C or C++ cases to remove deductions,
+  PR 14 should add a driver-side "waiting on stdin after input exhausted" signal (a later image
+  bump).
 - `suggest_test_cases` has no `CQC_EXECUTION=off` switch: it would still send the solution to the
   model provider. The caller must check `program_runner.runner_status()` first.
 

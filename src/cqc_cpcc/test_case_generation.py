@@ -138,10 +138,11 @@ def _split_prompt_style(block: list) -> tuple:
         value = match.group("value").strip() if match else ""
         wrapped = _WRAPPED.match(value) if match else None
         has_word = bool(match and _PROMPT_WORD.search(match.group("prompt")))
-        # A value in <angle> or [square] brackets is marked as typed input only when it is one
-        # token (not a printed list such as "Array: [1, 2, 3]") or the line also reads like a
-        # prompt. A labelled result ("Your grade: B") has no prompt word and stays output.
-        single = bool(wrapped) and not re.search(r"[\s,]", wrapped.group(1))
+        # A value in <angle> brackets is marked as typed input when it is one token. A value in
+        # [square] brackets needs a prompt word as well, so a printed result such as
+        # "Result: [5]" or a list "Array: [1, 2, 3]" stays output, and so does a labelled
+        # result ("Your grade: B"), which has no prompt word.
+        single = bool(wrapped) and value.startswith("<") and not re.search(r"[\s,]", wrapped.group(1))
         if match and (has_word or single):
             stdin.append(wrapped.group(1) if wrapped else value)
             shown.append(match.group("prompt"))
@@ -389,20 +390,24 @@ def _inputs_to_stdin(inputs: Sequence) -> str:
 
 
 _NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
+_THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}\b)")
 
 
 def _claim_is_plausible(condition_text: str, inputs: Sequence) -> bool:
-    """A case may claim a condition's boundary only if one of its input values is a number
-    named in the condition, or that number plus or minus one. A condition that names no number
-    (for example "until the input is valid") cannot be checked and the claim stands."""
-    named = [float(m) for m in _NUMBER.findall(condition_text or "")]
+    """A plausibility filter for a boundary claim, not a proof: the claim is kept only if one of
+    the case's input values is a number named in the condition, or that number plus or minus
+    one. Thousands commas ("$1,000") are removed first, in the condition and in the inputs, and
+    a leading "$" or trailing "%" on an input is ignored. A condition with no digits (for example
+    "until the input is valid") passes, and one with several numbers passes if any of them fits,
+    so the filter is loose; it only removes claims whose values are clearly unrelated."""
+    named = [float(m) for m in _NUMBER.findall(_THOUSANDS.sub("", condition_text or ""))]
     if not named:
         return True
     allowed = {n + d for n in named for d in (-1.0, 0.0, 1.0)}
     for line in inputs or []:
-        for token in str(line).replace(",", " ").split():
+        for token in _THOUSANDS.sub("", str(line)).replace(",", " ").split():
             try:
-                if float(token) in allowed:
+                if float(token.lstrip("$").rstrip("%")) in allowed:
                     return True
             except ValueError:
                 continue
@@ -581,9 +586,10 @@ def validate_cases_on_solution(
     the solution's stdout as ``expected_output``. A sample case whose shown output (from the
     instructions) differs from the solution's beyond formatting is kept but marked
     ``disagrees_with_instructions``: it is not usable, and a warning tells the instructor to fix
-    the instructions or the solution, or delete the sample. In C and C++ a failed ``cin`` cannot
-    be seen by the driver, so a case where the solution read more times than the input has lines
-    is marked ``needs_review``. Duplicate case ids are refused (``no_valid_cases``).
+    the instructions or the solution, or delete the sample. The sandbox cannot tell when a C or
+    C++ program reads past the end of its input (a failed ``cin`` is silent), so a validated C or
+    C++ case set always carries a warning to check each expected output; no case is made unusable
+    for that alone. Duplicate case ids are refused (``no_valid_cases``).
 
     ``status`` is not ``ok`` when nothing could be verified: ``unavailable`` (no Docker, or
     ``CQC_EXECUTION=off``), ``runner_error`` (cannot verify), ``solution_compile_failed``
@@ -620,7 +626,6 @@ def validate_cases_on_solution(
 
     by_id = {c.id: c for c in outcome.cases}
     kept = []
-    review_cpp = False
     for case in pool:
         got = by_id.get(case.id)
         reason = "crash" if got is None else _drop_reason(got)
@@ -629,9 +634,6 @@ def validate_cases_on_solution(
             continue
         reads = [int(r[2]) for r in got.stdin_reads] if got.segmented else []
         update = {"expected_output": got.stdout, "expected_reads": reads, "validated": True}
-        if solution.language in ("cpp", "c") and got.segmented and len(got.stdin_reads) > len(case.stdin.splitlines()):
-            update["needs_review"] = True
-            review_cpp = True
         shown = (sample_outputs or {}).get(case.id)
         if case.source == "sample" and shown and _sample_disagrees(shown, got.stdout, ignore_patterns):
             update["disagrees_with_instructions"] = True
@@ -639,9 +641,9 @@ def validate_cases_on_solution(
                 f'{case.label or case.id} shows "{_brief(shown)}" but the solution prints '
                 f'"{_brief(got.stdout)}". Fix the instructions or the solution, or delete this sample.')
         kept.append(case.model_copy(update=update))
-    if review_cpp:
-        result.warnings.append("Cannot detect reading past the end of input in C/C++; check each expected "
-                               "output (cases marked for review).")
+    if kept and solution.language in ("cpp", "c"):
+        result.warnings.append("The sandbox cannot tell when a C or C++ program reads past the end of its "
+                               "input. Check each expected output.")
     result.cases = kept
     result.condition_map = condition_map_for(kept, conditions)
     if not kept:
