@@ -167,6 +167,18 @@ def test_reinstate_refuses_a_second_click_a_stale_index_and_an_edited_rubric():
         rec.reinstate(dropped, edited, 0)
 
 
+def test_reinstate_refuses_a_result_floored_for_no_gradeable_work():
+    from types import SimpleNamespace
+
+    from cqc_cpcc.rubric_grading import build_invalid_submission_result
+
+    floored = build_invalid_submission_result(RUBRIC, SimpleNamespace(status="wrong_type", reason="no code"))
+    floored = floored.model_copy(update={
+        "reconciliation": [rec.note_removed("compile", COMPILE, "The submission compiles (javac).")]})
+    with pytest.raises(ValueError, match="floored at 0"):
+        rec.reinstate(floored, RUBRIC, 0)
+
+
 def test_reinstate_never_counts_an_error_already_back_in_the_list():
     # The model (or a later stage) listed the same error again after the stage dropped it.
     already = apply_backend_scoring(RUBRIC, _unscored(NAMING, COMPILE).model_copy(update={

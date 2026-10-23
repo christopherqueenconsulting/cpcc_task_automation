@@ -75,12 +75,15 @@ def reinstate(result: RubricAssessmentResult, rubric: Rubric, index: int) -> Rub
 
     Pure and deterministic: the same result and index always give the same score. Raises
     ``ValueError`` when the note holds no suppressed error, when it was already reinstated,
-    or when ``rubric`` is not the version the result was graded under (re-scoring against
+    when the result is floored at 0 for no gradeable work, or when ``rubric`` is not the version the result was graded under (re-scoring against
     an edited rubric would put this student on different rules from the rest of the batch).
     An error of the same code and severity already back in the list is not added twice.
     """
     from cqc_cpcc.rubric_grading import apply_backend_scoring
+    from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES
 
+    if result.validity_status in NO_WORK_STATUSES:
+        raise ValueError("this result is floored at 0 (no gradeable work); re-grade it instead")
     notes = list(result.reconciliation or [])
     if not 0 <= index < len(notes):
         raise ValueError(f"no reconciliation note {index}")
