@@ -560,6 +560,46 @@ def test_power_script_exits_1_when_no_case_has_matching_runs(tmp_path, monkeypat
     assert "too few for a paired test" in capsys.readouterr().err
 
 
+# --- The base-branch check (prompt-ab-decide) --------------------------------------------------
+
+def _git_head():
+    import subprocess
+
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=pa.REPO_ROOT, capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+
+class TestSuitesFromData:
+    """Base-side detection reads only data: registries, the diff and model-registry roles."""
+
+    reg = pa.prompt_registry.load()
+
+    def _run(self, changed, head=None, head_roles=None):
+        roles = {"grading": {"model": "m"}, "digest": {"model": "m"}, "feedback": {"model": "m"},
+                 "flowgorithm": {"model": "m"}}
+        return pa.suites_from_data(changed, head or self.reg, self.reg, head_roles or roles, roles)
+
+    def test_a_prompt_source_file_runs_its_suites(self):
+        assert set(self._run(["src/cqc_cpcc/rubric_grading.py"])) >= {"grading", "grading-levelband"}
+
+    def test_a_lockfile_or_docs_change_runs_nothing(self):
+        assert self._run(["poetry.lock", "README.md"]) == {}
+
+    def test_a_changed_fingerprint_runs_the_prompts_suites(self):
+        head = self.reg.model_copy(deep=True)
+        head.prompts["requirement-extraction"].fingerprint = "changed"
+        assert "requirement-extraction" in self._run([], head=head)
+
+    def test_a_dataset_change_runs_that_suite(self):
+        assert set(self._run(["evals/datasets/digest/v1/cases.jsonl"])) == {"digest"}
+
+    def test_a_model_role_change_runs_that_roles_suites(self):
+        roles = {"grading": {"model": "other"}, "digest": {"model": "m"}, "feedback": {"model": "m"},
+                 "flowgorithm": {"model": "m"}}
+        assert set(self._run([], head_roles=roles)) == {
+            s for s in SUITE_MODULES if get_suite(s).role == "grading"}
+
+
 class TestDecideWithTheBaseRule:
     """The workflow re-decides a finished A/B from a base-branch checkout: both rules must pass."""
 
@@ -569,33 +609,151 @@ class TestDecideWithTheBaseRule:
         from cqc_cpcc.utilities.AI import llm_gateway
 
         monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
-        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1)
+        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=2)
         if report["suites"]["requirement-extraction"]["status"] == "no-base":
             pytest.skip("no base run in this checkout")
+        monkeypatch.setattr(pa, "suites_from_data", lambda *a, **k: {"requirement-extraction": "test"})
         return tmp_path
 
+    def _decide(self, out, head_root=None):
+        sha = _git_head()
+        return pa.decide_with_this_rule(out, head_root or pa.REPO_ROOT, sha, sha)
+
     async def test_identical_runs_pass_both_rules(self, finished_ab):
-        decided = pa.decide_with_this_rule(finished_ab, pa.prompt_registry.REGISTRY_PATH)
+        decided = self._decide(finished_ab)
         assert decided["combined_status"] in ("pass", "pass-provisional")
+        md = (finished_ab / "base-rule.md").read_text()
+        assert "Base-branch check" in md and "Combined (both must pass)" in md
         assert (finished_ab / "ab-base-rule.json").exists()
-        md = (finished_ab / "ab.md").read_text()
-        assert "judged by the base branch's graders and rule" in md and "Combined (both rules must pass)" in md
 
-    async def test_a_fail_under_the_base_rule_fails_the_ab_whatever_the_pr_rule_said(self, finished_ab, monkeypatch):
-        monkeypatch.setattr(pa, "ab_decision", lambda *a, **k: {"suite": "x", "status": "fail", "reasons": ["r"],
-                                                                 "notes": [], "models": {}})
-        decided = pa.decide_with_this_rule(finished_ab, pa.prompt_registry.REGISTRY_PATH)
-        assert decided["status"] == "fail" and decided["combined_status"] == "fail"
-
-    async def test_a_suite_the_base_branch_lacks_fails(self, finished_ab):
+    async def test_a_required_suite_missing_from_the_ab_fails(self, finished_ab):
         report = json.loads((finished_ab / "ab.json").read_text())
-        report["suites"]["brand-new-suite"] = {"suite": "brand-new-suite", "status": "pass", "models": {}}
+        report["suites"] = {}
         (finished_ab / "ab.json").write_text(json.dumps(report))
-        decided = pa.decide_with_this_rule(finished_ab, pa.prompt_registry.REGISTRY_PATH)
-        assert decided["suites"]["brand-new-suite"]["status"] == "fail" and decided["combined_status"] == "fail"
+        assert self._decide(finished_ab)["combined_status"] == "fail"
 
-    def test_the_workflow_feeds_the_required_check_from_the_base_rule(self):
-        workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "prompt-eval.yml").read_text()
-        assert "ab_status: ${{ steps.decide.outputs.ab_status }}" in workflow
-        assert workflow.count("prompt-ab-decide") == 2 and workflow.count("path: .base-rule") == 2
-        assert "steps.decide.outcome != 'failure'" in workflow
+    async def test_no_ab_at_all_is_not_run_when_a_suite_is_required(self, finished_ab):
+        (finished_ab / "ab.json").unlink()
+        assert self._decide(finished_ab)["combined_status"] == "not-run"
+
+    async def test_no_required_suite_passes_without_an_ab(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pa, "suites_from_data", lambda *a, **k: {})
+        decided = self._decide(tmp_path / "empty")
+        assert decided["combined_status"] == "pass" and decided["required"] == {}
+
+    async def test_a_forged_no_base_on_a_suite_the_base_has_fails(self, finished_ab):
+        report = json.loads((finished_ab / "ab.json").read_text())
+        report["suites"]["requirement-extraction"]["status"] = "no-base"
+        (finished_ab / "ab.json").write_text(json.dumps(report))
+        assert self._decide(finished_ab)["combined_status"] == "fail"
+
+    async def test_missing_base_outputs_fail(self, finished_ab):
+        (finished_ab / "base" / "requirement-extraction" / "raw_outputs.jsonl").unlink()
+        assert self._decide(finished_ab)["combined_status"] == "fail"
+
+    async def test_a_renamed_head_model_fails(self, finished_ab):
+        raw = finished_ab / "head" / "requirement-extraction" / "raw_outputs.jsonl"
+        rows = [json.loads(line) for line in raw.read_text().splitlines() if line.strip()]
+        raw.write_text("".join(json.dumps({**r, "model": "other/model"}) + "\n" for r in rows))
+        decided = self._decide(finished_ab)
+        assert decided["combined_status"] == "fail"
+        assert "different models" in decided["suites"]["requirement-extraction"]["reasons"][0]
+
+    async def test_dropped_head_cases_fail(self, finished_ab):
+        raw = finished_ab / "head" / "requirement-extraction" / "raw_outputs.jsonl"
+        rows = [json.loads(line) for line in raw.read_text().splitlines() if line.strip()]
+        dropped = rows[0]["case_id"]
+        raw.write_text("".join(json.dumps(r) + "\n" for r in rows if r["case_id"] != dropped))
+        decided = self._decide(finished_ab)
+        assert decided["combined_status"] == "fail" and "fewer than" in str(decided["suites"])
+
+    async def test_a_case_the_pr_changed_is_left_out_not_failed(self, finished_ab, tmp_path):
+        import shutil
+
+        head_root = tmp_path / "head-tree"
+        for rel in (pa.prompt_registry.REGISTRY_RELPATH, pa.MODEL_REGISTRY_RELPATH,
+                    "evals/datasets/requirement-extraction"):
+            src, dst = pa.REPO_ROOT / rel, head_root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            (shutil.copytree if src.is_dir() else shutil.copy)(src, dst)
+        cases = head_root / "evals/datasets/requirement-extraction/v1/cases.jsonl"
+        lines = cases.read_text().splitlines()
+        first = json.loads(lines[0])
+        first["inputs"] = {**first["inputs"], "edited_by_pr": True}
+        cases.write_text("\n".join([json.dumps(first)] + lines[1:]) + "\n")
+        for side in ("head", "base"):  # outputs for the edited case would not be comparable
+            raw = finished_ab / side / "requirement-extraction" / "raw_outputs.jsonl"
+            rows = [json.loads(line) for line in raw.read_text().splitlines() if line.strip()]
+            raw.write_text("".join(json.dumps(r) + "\n" for r in rows if r["case_id"] != first["case_id"]))
+        assert self._decide(finished_ab, head_root=head_root)["combined_status"] in ("pass", "pass-provisional")
+
+    async def test_a_changed_prompt_source_file_keeps_the_holdout_split(self, finished_ab, monkeypatch):
+        suite = get_suite("requirement-extraction")
+        reg = pa.prompt_registry.load()
+        report = json.loads((finished_ab / "ab.json").read_text())["suites"]["requirement-extraction"]
+        unchanged = pa._decide_suite("requirement-extraction", report, finished_ab, pa.REPO_ROOT, [], reg, reg)
+        source = next(iter(pa._prompt_paths(reg, "requirement-extraction")))
+        changed = pa._decide_suite("requirement-extraction", report, finished_ab, pa.REPO_ROOT, [source], reg, reg)
+        (u,), (c,) = unchanged["models"].values(), changed["models"].values()
+        assert u["split"] == "all" and c["split"] == "holdout" and suite.id == "requirement-extraction"
+
+    async def test_the_cli_runs_the_checkout_it_is_started_in(self, finished_ab, tmp_path):
+        """The way CI runs it: from a second checkout, writing GITHUB_OUTPUT."""
+        import os
+        import subprocess
+        import sys
+
+        sha = _git_head()
+        base = tmp_path / "base-checkout"
+        subprocess.run(["git", "worktree", "add", "--detach", str(base), sha], cwd=pa.REPO_ROOT, check=True,
+                       capture_output=True)
+        try:
+            out_file = tmp_path / "github_output"
+            env = {**os.environ, "PYTHONPATH": "src", "GITHUB_OUTPUT": str(out_file), "CQC_TEST_MODE": "true"}
+            run = subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-ab-decide", "--dir",
+                                  str(tmp_path / "no-ab"), "--head-root", str(pa.REPO_ROOT), "--base-sha", sha,
+                                  "--head-sha", sha], cwd=base, env=env, capture_output=True, text=True)
+            assert run.returncode == 0, run.stderr[-2000:]
+            assert f"decision code: {(base / 'src' / 'cqc_cpcc').resolve()}" in run.stdout
+            assert "ab_status=pass" in out_file.read_text()
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(base)], cwd=pa.REPO_ROOT, capture_output=True)
+
+
+class TestWorkflowWiring:
+    """The jobs that post prompt-eval/ab run no PR code; the jobs that run PR code cannot post."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def jobs(cls):
+        import yaml
+
+        path = pa.REPO_ROOT / ".github" / "workflows" / "prompt-eval.yml"
+        return yaml.safe_load(path.read_text())["jobs"]
+
+    def test_the_report_uses_the_base_branch_verdict(self, jobs):
+        assert "ab-base-rule" in jobs["report"]["needs"]
+        env = next(s for s in jobs["report"]["steps"] if s.get("name", "").startswith("Comment"))["env"]
+        assert env["BASE_STATUS"] == "${{ needs.ab-base-rule.outputs.ab_status }}"
+        assert "AB_STATUS" not in env
+
+    def test_the_base_rule_jobs_check_out_the_base_and_hold_no_secrets(self, jobs):
+        for name in ("ab-base-rule", "dispatch-report"):
+            job = jobs[name]
+            text = json.dumps(job)
+            assert "secrets." not in text and "prompt-ab-decide" in text
+            checkout = job["steps"][0]
+            assert checkout["uses"].startswith("actions/checkout@")
+            assert "base" in checkout["with"]["ref"] and checkout["with"]["persist-credentials"] is False
+
+    def test_jobs_that_run_pr_code_cannot_post_statuses(self, jobs):
+        for name in ("ab", "dispatch"):
+            perms = jobs[name]["permissions"]
+            assert "statuses" not in perms and perms.get("pull-requests", "read") == "read"
+            assert jobs[name]["steps"][0]["with"]["persist-credentials"] is False
+        assert "statuses" not in json.dumps(jobs["dispatch"]["steps"])
+
+    def test_the_setup_action_saves_caches_only_on_push_to_master(self):
+        action = (pa.REPO_ROOT / ".github" / "actions" / "poetry_setup" / "action.yml").read_text()
+        saves = action.count("actions/cache/save@")
+        assert saves and action.count("github.event_name == 'push' && github.ref == 'refs/heads/master'") == saves
