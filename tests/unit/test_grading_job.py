@@ -200,7 +200,7 @@ def test_model_events_update_the_row(tmp_path):
     assert _wait_for(lambda: _state(job, "Student A") == grading_job.RETRYING)
     row = job.snapshot().rows[0]
     assert row.model == "vendor/model-one" and row.attempt == "2/3"
-    assert "Attempt 1 failed: timed out after 180 s; trying again" == row.last_issue
+    assert "Try 1 did not work. Trying again." == row.last_issue
     assert row.status == "Trying again"
     gate.set()
     assert job.wait(10)
@@ -224,7 +224,7 @@ def test_the_fallback_event_is_shown_as_a_plain_sentence(tmp_path):
     assert _wait_for(lambda: job.snapshot().rows[0].model == "vendor/model-two")
     row = job.snapshot().rows[0]
     assert row.state == grading_job.RETRYING
-    assert row.last_issue == "vendor/model-one did not answer; switching to the fallback model"
+    assert row.last_issue == "The first model did not answer. Switching to a backup model."
     gate.set()
     assert job.wait(10)
 
@@ -416,3 +416,40 @@ def test_cancel_stops_a_real_gateway_call_that_is_waiting(tmp_path, monkeypatch)
     assert time.monotonic() - started < 15
     assert job.snapshot().counts[grading_job.CANCELLED] == 2
     assert job.outcome().failures == ["Student A", "Student B"]
+
+
+def test_active_count_counts_only_unfinished_jobs(tmp_path):
+    gate = threading.Event()
+
+    async def behave(text, **kwargs):
+        await asyncio.get_running_loop().run_in_executor(None, gate.wait, 30)
+        return _result()
+
+    before = grading_job.active_count()
+    job = _job(tmp_path, ["Student A"], behave)
+    grading_job.start_job(job)
+    assert grading_job.active_count() == before + 1
+    gate.set()
+    assert job.wait(10)
+    assert grading_job.active_count() == before
+
+
+def test_the_process_wide_call_limit_is_shared_by_jobs(tmp_path, monkeypatch):
+    monkeypatch.setattr(grading_job, "_CALL_LIMIT", threading.BoundedSemaphore(1))
+    lock = threading.Lock()
+    running = {"now": 0, "peak": 0}
+
+    async def behave(text, **kwargs):
+        with lock:
+            running["now"] += 1
+            running["peak"] = max(running["peak"], running["now"])
+        await asyncio.sleep(0.05)
+        with lock:
+            running["now"] -= 1
+        return _result()
+
+    job = _job(tmp_path, [f"Student {c}" for c in "ABCD"], behave, concurrency=4)
+    job.start()
+    assert job.wait(10)
+    assert running["peak"] == 1
+    assert job.snapshot().counts[grading_job.DONE] == 4

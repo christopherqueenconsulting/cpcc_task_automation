@@ -45,6 +45,9 @@ def main():
     page_header("CPCC Task Automation", ":material/home:",
                 "Grading, feedback and attendance tools for your CPCC courses.")
     show_model_update_banner()
+    if not results_store.persistence_enabled():
+        st.caption("Results are kept in this browser session only. If you reload or close this page they are "
+                   "lost. Download the feedback ZIP and the summary now.")
 
     settings = load_settings()
     with st.container(horizontal=True):

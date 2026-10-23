@@ -216,7 +216,35 @@ synchronous batch.
   and merges the results under the original run key, with the model shown per student.
 - **Telemetry:** counts only (students, succeeded, failed, cancelled, timed out).
 
+Only one job runs per run key (a second start says "This run is already grading."), at most four
+jobs run at once in the process, and one process-wide limit (`CQC_GRADING_CONCURRENCY`) is shared by
+all jobs for model calls, so several sessions do not multiply the spend. A page without the `?job=`
+token shows a notice that a run is working in the background and disables Grade, Retry, Use another
+model and the review buttons until it ends. A job's saves are merged onto the saved file's current
+results, so one job never wipes students another saved.
+
 Rollback: `CQC_GRADING_JOB=off`, then `git revert`.
+
+#### Hang or stuck job
+
+1. Open the link you started the run from (it has `?job=`) and press Cancel grading. Students already
+   finished keep their results.
+2. If the page cannot reach the job, restart the app. The in-memory job is lost. Finished students are
+   in `~/.cqc_cpcc/grading_results` on the Mac (`CQC_GRADING_RESULTS_DIR`); on Streamlit Community Cloud
+   nothing is saved, so grade again.
+3. To go back to grading inside the page, set `CQC_GRADING_JOB=off` in `.env` and restart. The flag is
+   read each time Grade is pressed.
+4. The app log is in `logs/` in the repository (or the terminal / Streamlit Cloud "Manage app" log).
+   Student names there are aliased.
+
+#### Not done yet
+
+- The per-student effort compare is still synchronous.
+- The errors-only batch is still synchronous.
+- A job is lost when the app restarts, and its token expires 15 minutes after it ends.
+- A tab without the token cannot see or cancel a job.
+- `openrouter_client.py` logs some provider error text (`{e}`) that can echo the provider's wording:
+  a follow-up, not part of this change.
 
 ### Reasoning effort per run
 

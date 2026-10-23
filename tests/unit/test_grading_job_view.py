@@ -168,10 +168,10 @@ def test_the_right_token_shows_the_live_table_and_the_cancel_controls(tmp_path):
         assert not at.exception, at.exception
         assert [s.value for s in at.subheader] == ["Grading in progress"]
         table = at.dataframe[0].value
-        assert list(table.columns) == ["Student", "Status", "Model", "Attempt", "Waiting (s)", "Last issue"]
+        assert list(table.columns) == ["Student", "Status", "Model", "Try number", "Seconds waiting", "Problem so far"]
         assert list(table["Student"]) == list(NAMES)
         assert set(table["Status"]) == {"Waiting for the model"}
-        assert set(table["Model"]) == {"openai/alpha"} and set(table["Attempt"]) == {"1/3"}
+        assert set(table["Model"]) == {"openai/alpha"} and set(table["Try number"]) == {"1/3"}
         bar = at.get("progress")[0].proto
         assert bar.value == 0 and bar.text.startswith("0 of 2 students finished")
         buttons = {b.key: b for b in at.button}
@@ -179,8 +179,10 @@ def test_the_right_token_shows_the_live_table_and_the_cancel_controls(tmp_path):
         assert selected.label == "Cancel selected (0)" and selected.disabled
         assert not buttons[f"cancel_all_{running.token}"].disabled
         captions = [c.value for c in at.caption]
-        assert any("may still be billed" in c and "compile check" in c for c in captions)
-        assert any("select their rows" in c for c in captions)
+        assert any("may still be charged" in c and "check of the student's code" in c for c in captions)
+        assert any("choose them in Students to cancel" in c for c in captions)
+        assert at.multiselect(key=f"cancel_pick_{running.token}").label == "Students to cancel"
+        assert any("Do not share this page's link" in c for c in captions)
         assert not [w for w in at.warning if "waited more than" in w.value]
         assert "job" in at.query_params  # still attached
     finally:
@@ -196,7 +198,7 @@ def test_a_call_that_waits_too_long_shows_the_slow_model_warning(tmp_path, monke
         at = _app(running.token).run()
         assert not at.exception, at.exception
         warning = next(w for w in at.warning if "waited more than" in w.value)
-        assert "2 student(s)" in warning.value and "cancel those students" in warning.value
+        assert "2 students have" in warning.value and "cancel those students" in warning.value
     finally:
         running.finish()
 
@@ -488,3 +490,159 @@ def test_the_model_column_shows_only_when_the_models_differ():
     assert "Model" not in list(same.dataframe[0].proto.column_order)
     mixed = run(["openai/alpha@high", "openai/beta@low"])
     assert "Model" in list(mixed.dataframe[0].proto.column_order)
+
+
+# ------------------------------------------------------------------ gauntlet fixes
+
+def test_cancel_selected_works_from_the_keyboard_picker(tmp_path):
+    started = threading.Event()
+
+    async def grade(student_submission, **kwargs):
+        if "Student Bravo" in student_submission:
+            started.set()
+            await asyncio.sleep(60)
+        return _result()
+
+    job = GradingJob(RUN_KEY, _submissions(tmp_path), dict(KWARGS), grade=grade, deadline_s=30)
+    token = grading_job.start_job(job)
+    assert started.wait(5)
+    at = _app(token).run()
+    at.multiselect(key=f"cancel_pick_{token}").select("Student Bravo")
+    at.run()
+    button = at.button(key=f"cancel_selected_{token}")
+    assert button.label == "Cancel selected (1)" and not button.disabled
+    button.click()
+    at.run()
+    assert job.wait(10)
+    assert {r.student_id: r.state for r in job.snapshot().rows}["Student Bravo"] == grading_job.CANCELLED
+
+
+def test_a_tab_without_the_token_is_told_a_run_is_working_and_the_controls_are_disabled(tmp_path):
+    running = Running(tmp_path)
+    try:
+        assert grading_job.active_count() == 1
+        at = _failed_app(tmp_path)
+        _rerun(at)
+        assert not at.exception, at.exception
+        assert any("still working in the background" in i.value for i in at.info)
+        assert at.button(key=f"retry_failed_{RUN_KEY}").disabled
+        assert not any(name in _everything_on_the_page(at) for name in ("Student Alpha secret",))
+        # And nothing of the job itself is shown.
+        assert not at.dataframe
+    finally:
+        running.finish()
+    assert grading_job.active_count() == 0
+
+
+def test_a_second_job_for_the_same_run_is_refused_and_the_page_says_so(tmp_path):
+    running = Running(tmp_path)
+    try:
+        second = GradingJob(RUN_KEY, _submissions(tmp_path), dict(KWARGS), deadline_s=30)
+        with pytest.raises(grading_job.JobRefused, match="This run is already grading."):
+            grading_job.start_job(second)
+        other = GradingJob("other1", _submissions(tmp_path), dict(KWARGS), deadline_s=30)
+        # A different run key is allowed (up to the cap).
+        token = grading_job.start_job(other)
+        other.cancel()
+        assert other.wait(10)
+        grading_job.release(token)
+    finally:
+        running.finish()
+
+
+def test_the_cap_on_active_jobs_is_enforced(tmp_path, monkeypatch):
+    monkeypatch.setattr(grading_job, "MAX_ACTIVE_JOBS", 1)
+    running = Running(tmp_path)
+    try:
+        extra = GradingJob("other2", _submissions(tmp_path), dict(KWARGS), deadline_s=30)
+        with pytest.raises(grading_job.JobRefused, match="Too many grading runs"):
+            grading_job.start_job(extra)
+    finally:
+        running.finish()
+
+
+def test_files_gone_message_names_a_reload_and_adds_the_background_notice_when_a_job_is_live(tmp_path):
+    def page():
+        import streamlit as st
+        from cqc_streamlit_app import grade_assignment as ga
+        st.caption(ga._files_gone_message())
+
+    at = AppTest.from_function(page, default_timeout=30).run()
+    text = at.caption[0].value
+    assert text == ("The original files are not in this browser session (you reloaded or the app restarted). "
+                    "Use Clear results, then upload and grade the batch again.")
+    running = Running(tmp_path)
+    try:
+        at = AppTest.from_function(page, default_timeout=30).run()
+        assert at.caption[0].value.endswith("finished students are saved.")
+        assert "still working in the background" in at.caption[0].value
+    finally:
+        running.finish()
+
+
+def test_the_session_only_notice_shows_on_results_and_home_when_nothing_is_saved(monkeypatch):
+    monkeypatch.setenv("CQC_RESULTS_PERSIST", "off")
+    note = ("Results are kept in this browser session only. If you reload or close this page they are lost. "
+            "Download the feedback ZIP and the summary now.")
+
+    def results_page():
+        import streamlit as st
+        from cqc_streamlit_app import grade_assignment as ga
+        for name in ("grading_failures_by_key", "feedback_zip_bytes_by_key", "grading_status_by_key"):
+            st.session_state.setdefault(name, {})
+        ga._session_only_caption()
+
+    at = AppTest.from_function(results_page, default_timeout=30).run()
+    assert [c.value for c in at.caption] == [note]
+    monkeypatch.setenv("CQC_RESULTS_PERSIST", "on")
+    assert not AppTest.from_function(results_page, default_timeout=30).run().caption
+
+    monkeypatch.setenv("CQC_RESULTS_PERSIST", "off")
+    from pathlib import Path
+    home = Path(__import__("cqc_streamlit_app").__file__).parent / "app_pages" / "home.py"
+    at = AppTest.from_file(str(home), default_timeout=30).run()
+    assert not at.exception, at.exception
+    assert note in [c.value for c in at.caption]
+
+
+def test_running_on_a_session_only_host_warns_in_the_live_view(tmp_path, monkeypatch):
+    monkeypatch.setenv("CQC_RESULTS_PERSIST", "off")
+    running = Running(tmp_path)
+    try:
+        at = _app(running.token).run()
+        assert any(w.value.startswith("Results are not saved on this server.") for w in at.warning)
+    finally:
+        running.finish()
+
+
+def test_retry_shows_the_cost_caption_and_plural_counts(tmp_path):
+    at = _failed_app(tmp_path)
+    _rerun(at)
+    assert any(c.value.startswith("Retry uses the same model again and costs money for each student.")
+               for c in at.caption)
+    assert "1 submission failed to grade" in at.markdown[0].value
+
+
+def test_a_job_never_wipes_students_another_job_saved(tmp_path, monkeypatch):
+    from cqc_streamlit_app import results_store
+
+    monkeypatch.setenv("CQC_GRADING_RESULTS_DIR", str(tmp_path / "saved"))
+
+    def save(run_key, results, failures, **kwargs):
+        results_store.save_run(run_key, "rubric", results, failures, **kwargs)
+
+    async def grade(student_submission, **kwargs):
+        return _result()
+
+    a = GradingJob(RUN_KEY, _submissions(tmp_path, ("Student Alpha",)), dict(KWARGS), grade=grade, save=save,
+                   load=results_store.load_run, deadline_s=30)
+    a.start()
+    assert a.wait(10)
+    # B started from an older view of the run (no Alpha) and only grades Bravo.
+    b = GradingJob(RUN_KEY, _submissions(tmp_path, ("Student Bravo",)), dict(KWARGS), grade=grade, save=save,
+                   load=results_store.load_run, deadline_s=30, base_results=[], base_failures=["Student Bravo"])
+    b.start()
+    assert b.wait(10)
+    saved = results_store.load_runs()[0]
+    assert sorted(sid for sid, _ in saved["results"]) == ["Student Alpha", "Student Bravo"]
+    assert saved["failures"] == []

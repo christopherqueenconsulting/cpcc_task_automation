@@ -76,8 +76,11 @@ STATE_LABELS = {
 JOB_TTL_S = 900.0
 # A call waiting longer than max(this, half its timeout) is called slow on the page.
 SLOW_FLOOR_S = 60.0
+# Most jobs running at once in this process; more would multiply the spend of concurrent sessions.
+MAX_ACTIVE_JOBS = 4
 
 SaveFn = Callable[..., None]
+LoadFn = Callable[[str], Optional[tuple]]
 GradeFn = Callable[..., Awaitable[Any]]
 
 
@@ -139,6 +142,37 @@ class JobOutcome:
     counts: dict
 
 
+class JobRefused(Exception):
+    """A job was not started. The message is plain language for the page."""
+
+
+_CALL_LIMIT: Optional[threading.BoundedSemaphore] = None
+_CALL_LIMIT_GUARD = threading.Lock()
+
+
+def _call_limit() -> threading.BoundedSemaphore:
+    """Model calls in flight across ALL jobs in this process (default ``grading_concurrency()``),
+    so several sessions together do not multiply the spend."""
+    global _CALL_LIMIT
+    with _CALL_LIMIT_GUARD:
+        if _CALL_LIMIT is None:
+            _CALL_LIMIT = threading.BoundedSemaphore(llm_limits.grading_concurrency())
+        return _CALL_LIMIT
+
+
+async def _acquire_call_slot() -> threading.BoundedSemaphore:
+    """Wait for a process-wide slot without blocking the loop. A cancel while waiting hands the
+    slot back as soon as the waiting thread gets it."""
+    limit = _call_limit()
+    waiter = asyncio.get_running_loop().run_in_executor(None, limit.acquire)
+    try:
+        await waiter
+    except asyncio.CancelledError:
+        waiter.add_done_callback(lambda f: limit.release() if not f.cancelled() and f.exception() is None else None)
+        raise
+    return limit
+
+
 def model_effort_label(model: str, effort: Optional[str]) -> str:
     return f"{model}@{effort}" if effort else model
 
@@ -161,7 +195,8 @@ class GradingJob:
     """
 
     def __init__(self, run_key: str, submissions: dict, grade_kwargs: dict, *,
-                 save: Optional[SaveFn] = None, grade: Optional[GradeFn] = None,
+                 save: Optional[SaveFn] = None, load: Optional[LoadFn] = None,
+                 grade: Optional[GradeFn] = None,
                  deadline_s: Optional[float] = None, concurrency: Optional[int] = None,
                  base_results: Optional[list] = None, base_failures: Optional[list] = None,
                  greeting_names: Optional[dict] = None, meta: Optional[dict] = None):
@@ -173,6 +208,7 @@ class GradingJob:
         # re-run of a few students on another model has fewer submissions and other kwargs.
         self.inputs: Optional[dict] = None
         self._save = save
+        self._load = load  # run_key -> (results, failures) as last saved, or None
         self._grade = grade
         self._deadline_s = deadline_s if deadline_s is not None else default_deadline(self.kwargs)
         self._concurrency = concurrency or llm_limits.grading_concurrency()
@@ -337,13 +373,14 @@ class GradingJob:
                 p.state = RETRYING if p.retried else CALLING
             elif event.kind == "attempt_failed":
                 p.retried = True
-                p.last_issue = (f"Attempt {event.attempt} failed: {event.error or 'no answer'}"
-                                + ("; trying again" if event.will_retry else ""))
+                logger.info(f"LLM try {event.attempt} for {alias(sid)} failed: {event.error or 'no answer'}")
+                p.last_issue = (f"Try {event.attempt} did not work"
+                                + (". Trying again." if event.will_retry else "."))
                 if event.will_retry:
                     p.state = RETRYING
             elif event.kind == "fallback":
                 p.retried = True
-                p.last_issue = f"{event.model} did not answer; switching to the fallback model"
+                p.last_issue = "The first model did not answer. Switching to a backup model."
                 p.state = RETRYING
             elif event.kind == "succeeded":
                 p.model, p.state, p.attempt_started = event.model, SCORING, None
@@ -372,11 +409,15 @@ class GradingJob:
         if grade is None:
             from cqc_cpcc.rubric_grading import grade_with_rubric as grade
         gate_report: dict = {}
-        with llm_progress.progress_scope(lambda event: self._on_event(sid, event)):
-            async with asyncio.timeout(self._deadline_s):
-                result = await grade(
-                    student_submission=text, source_files=submission.files, gate_report=gate_report,
-                    rejected_files=submission.rejected_files, **self.kwargs)
+        slot = await _acquire_call_slot()
+        try:
+            with llm_progress.progress_scope(lambda event: self._on_event(sid, event)):
+                async with asyncio.timeout(self._deadline_s):
+                    result = await grade(
+                        student_submission=text, source_files=submission.files, gate_report=gate_report,
+                        rejected_files=submission.rejected_files, **self.kwargs)
+        finally:
+            slot.release()
         self._set(sid, state=SCORING)
         reference = self.kwargs.get("reference_solution")
         if reference:
@@ -418,14 +459,32 @@ class GradingJob:
         failures += [sid for sid in self.submissions if sid not in self._results]
         return JobOutcome(results, failures, _count_states(self._progress))
 
+    def _merged_with_saved(self) -> tuple[list, list]:
+        """This job's state laid over the saved file's current state, so a save never wipes
+        students another job (or the page) saved since this one started. Students this job
+        finished win; every other student keeps what the file has."""
+        with self._lock:
+            mine = self._merged_locked()
+            finished = {sid for sid in self.submissions if sid in self._results}
+        saved = self._load(self.run_key) if self._load is not None else None
+        if saved is None:
+            return mine.results, mine.failures
+        saved_results, saved_failures = saved
+        results = [(sid, r) for sid, r in saved_results if sid not in finished]
+        results += [(sid, r) for sid, r in mine.results if sid in finished or sid not in dict(results)]
+        have = {sid for sid, _ in results}
+        failures = [sid for sid in list(saved_failures) + list(mine.failures)
+                    if sid not in have and sid not in finished]
+        return results, list(dict.fromkeys(failures))
+
     def _persist(self) -> None:
         """Save the run as it stands, under the run's lock. A failed save is logged, never raised."""
         if self._save is None:
             return
         try:
             with run_lock(self.run_key):
-                outcome = self.outcome()
-                self._save(self.run_key, outcome.results, outcome.failures,
+                results, failures = self._merged_with_saved()
+                self._save(self.run_key, results, failures,
                            greeting_names=self._greeting_names, meta=self._meta)
         except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
             logger.warning(f"Could not save grading results to disk: {type(e).__name__}")
@@ -470,9 +529,21 @@ def start_job(job: GradingJob) -> str:
     job.token = token
     with _JOBS_GUARD:
         _purge_locked(time.monotonic())
+        live = [j for j in _JOBS.values() if not j.done]
+        if any(j.run_key == job.run_key for j in live):
+            raise JobRefused("This run is already grading.")
+        if len(live) >= MAX_ACTIVE_JOBS:
+            raise JobRefused("Too many grading runs are active at once. Wait for one to finish, then try again.")
         _JOBS[token] = job
     job.start()
     return token
+
+
+def active_count() -> int:
+    """How many jobs are still grading in this process. A count only: it says nothing about
+    which runs, students or sessions they belong to."""
+    with _JOBS_GUARD:
+        return sum(1 for j in _JOBS.values() if not j.done)
 
 
 def attach(token: object) -> Optional[GradingJob]:

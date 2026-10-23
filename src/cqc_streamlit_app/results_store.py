@@ -38,6 +38,10 @@ def persistence_enabled() -> bool:
     ``CQC_RESULTS_PERSIST=on`` or ``off`` decides outright. Unset, an explicit
     ``CQC_GRADING_RESULTS_DIR`` means on, and a Community Cloud host (it mounts the app
     under ``/mount/src``) means off.
+
+    Ruling: "Decisions taken for Christopher's review, 2026-10-23", decision 3 (plan file).
+    Any other shared host defaults to ON, so set ``CQC_RESULTS_PERSIST=off`` there: with it on,
+    every instructor's student data sits on one disk (see docs/PRIVACY_AND_TELEMETRY.md).
     """
     raw = os.environ.get("CQC_RESULTS_PERSIST", "").strip().lower()
     if raw in _ON:
@@ -137,6 +141,21 @@ def delete_run(run_key: str) -> None:
         _path(run_key).unlink(missing_ok=True)
     except ValueError:
         pass
+
+
+def load_run(run_key: str) -> Optional[tuple]:
+    """``(results, failures)`` as last saved for ``run_key``, or ``None`` (not saved, off, unreadable)."""
+    if not persistence_enabled():
+        return None
+    try:
+        data = json.loads(_path(run_key).read_text(encoding="utf-8"))
+        if data.get("mode") == "errors_only":
+            return None
+        results = [(sid, RubricAssessmentResult.model_validate({**r, "llm_request": None}))
+                   for sid, r in data["results"]]
+        return results, list(data.get("failures") or [])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def load_runs() -> list[dict]:
