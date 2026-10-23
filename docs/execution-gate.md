@@ -190,8 +190,12 @@ the tag in `docker-compose.yml`, then set `RUNNER_SOURCE_SHA256` to the hash the
 test prints. Rebuild the image. The app refuses a stale image ("image out of date, rebuild").
 
 The base image is pinned by digest. A new base is a reviewed change. Dependabot updates to
-`/docker/exec-runner` must not auto-merge (see the PR that added this directory for the
-workflow edits).
+`/docker/exec-runner` must not auto-merge. The Dependabot entry, the auto-merge exclusion and
+the CI image build step are in a separate pull request (branch `claude/pr12-workflow-edits`)
+that the repository owner merges; until it is merged, the Docker integration tests skip in CI
+and a Dependabot base-image bump is not held back by a workflow rule. The hash test in
+`tests/unit/test_program_runner.py` still fails if `driver.py` or the `Dockerfile` change
+without a version bump.
 
 ## Estimates (not measured here)
 
