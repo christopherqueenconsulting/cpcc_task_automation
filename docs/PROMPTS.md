@@ -215,8 +215,8 @@ capture, runs the full paid A/B as before.
 dispatch job's duration in runs 39966026743, 39978967241 and 39988799201 on 2026-10-23: 67, 68 and
 82 minutes) because every call waited its turn: four calls in flight, the head run first, then the
 base run, then the pairwise judge one case at a time. Over five runs the
-artifacts hold 5,808 records, 5,520 of them model calls (288 `skeleton` cases are turned away before any
-call); `grading` alone made 2,592 timed calls at a mean of 17.5 s, and not one record needed a retry. Now:
+artifacts hold 5,808 records, 5,520 of them model calls (288 `grading` cases, the empty, skeleton, whitespace and
+wrong-file-type submissions, are answered by the validity gate before any call); `grading` alone made 2,592 timed calls at a mean of 17.5 s, and not one record needed a retry. Now:
 
 - **Head and base run at the same time**, each from its own half of the remaining budget
   (`Budget.split`), and each half is charged back to the whole when its run ends, so the total cap
