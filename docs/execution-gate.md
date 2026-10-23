@@ -5,8 +5,10 @@ protects, and what to do if it fails. It belongs to PR 12 of the grading-fairnes
 Later PRs (test-case derivation, the execution gate in grading, the output-check UI) build
 on `cqc_cpcc.utilities.program_runner`.
 
-**Rule: student code never runs on the host without the sandbox.** If the sandbox is not
-available, nothing runs, and grading follows the path it had before.
+**Rule: student programs are never executed on the host.** If the sandbox is not available, no
+program runs, and grading follows the path it had before. The one exception to "nothing touches
+the host" is the compile check: when the sandbox is unavailable it falls back to the host
+`g++` or `javac` with the include guard from PR 0. That compiles student code and never runs it.
 
 ## What exists
 
@@ -35,6 +37,12 @@ The app finds the image by its tag and checks the label `org.cqc.exec-runner.ver
 against `RUNNER_VERSION`. A missing image, a stale image, a stopped daemon or a missing
 `docker` binary makes `runner_status()` false (cached for 30 seconds). On Streamlit
 Community Cloud there is no Docker, so the sandbox is off there.
+
+The image is built for the machine's own architecture. Only x86_64 was run; on arm64 (Apple
+Silicon) the driver's stdin-read detection falls back to a quiet-period guess, which is
+untested. To remove the image on a full rollback: `docker rmi cpcc_task_automation/exec-runner:1`.
+Nothing in this PR calls `kill_orphans`, so a container left by a crash waits until the sweep
+exists or the operator runs `docker kill` on `docker ps --filter label=cqc.exec=1`.
 
 `CQC_EXECUTION=off` forces the sandbox off. That is the rollback for everything in this
 document: the compile gate goes back to the host toolchain with its include guard, and
@@ -154,7 +162,10 @@ work, and the grade itself.
 1. Run `CQC_EXECUTION=off` and stop the app. Run `docker ps --filter label=cqc.exec=1` and
    `docker kill` anything listed.
 2. Rotate the OpenRouter key and the OpenAI key, and change `INSTRUCTOR_PASS`. Treat every
-   secret in the checkout's `.env` as exposed.
+   secret in the checkout's `.env` as exposed. Also sign out of BrightSpace everywhere, change
+   the CPCC password, and delete `./chrome-profile` and the `selenium_profiles` folder
+   (`clear_persisted_browser_profile`): the persistent Chrome profile holds a logged-in
+   instructor session that can read every student's grades and submissions.
 3. Search saved results and feedback documents for key prefixes. Saved results live in
    `~/.cqc_cpcc/grading_results`; feedback `.docx` files are in the hand-back ZIPs and the
    app's temp folder. For example:
@@ -167,6 +178,9 @@ work, and the grade itself.
    Prune old containers and images.
 5. Keep the submission that caused it out of the repo and out of public issues (student data
    rule). Note the date, what was run and what was rotated in the vault.
+6. The key search in step 3 finds leaked keys only, not leaked student content. If a leak of
+   student data is suspected, the instructor decides with the college whether its FERPA
+   incident process applies.
 
 ## Changing the image
 
