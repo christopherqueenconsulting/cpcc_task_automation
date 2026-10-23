@@ -87,6 +87,15 @@ def base_rubric():
     return get_rubric_by_id("default_100pt_rubric")
 
 
+def _without_backend_stamps(result):
+    """The result as the model returned it: without the model label and the error sources the
+    backend stamps on every result (PR 5)."""
+    errors = result.detected_errors
+    if errors is not None:
+        errors = [e.model_copy(update={"source": None}) for e in errors]
+    return result.model_copy(update={"graded_with_model": None, "detected_errors": errors})
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 class TestValidationAndRetry:
@@ -109,7 +118,7 @@ class TestValidationAndRetry:
         )
         
         # Verify result
-        assert result == valid_result
+        assert _without_backend_stamps(result) == valid_result
         assert result.total_points_earned == 85
         assert len(result.criteria_results) == 4
         
@@ -144,7 +153,7 @@ class TestValidationAndRetry:
             student_submission=STUDENT_SUBMISSION,
         )
         
-        assert result == valid_result
+        assert _without_backend_stamps(result) == valid_result
         assert result.total_points_earned == 85
     
     async def test_correlation_id_tracking(self, base_rubric, mocker):
@@ -164,7 +173,7 @@ class TestValidationAndRetry:
             student_submission=STUDENT_SUBMISSION,
         )
         
-        assert result == valid_result
+        assert _without_backend_stamps(result) == valid_result
         # Verify get_structured_completion was called (it handles correlation internally)
         mock_completion.assert_called_once()
     
@@ -262,7 +271,7 @@ class TestScoringWithValidation:
         mock_backend_scoring.assert_called_once()
         call_args = mock_backend_scoring.call_args
         assert call_args[0][0] == base_rubric  # First arg is rubric
-        assert call_args[0][1] == llm_result  # Second arg is LLM result
+        assert _without_backend_stamps(call_args[0][1]) == llm_result  # Second arg is LLM result
     
     async def test_rubric_validation_warnings(self, base_rubric, mocker):
         """Test that rubric validation warnings are logged."""

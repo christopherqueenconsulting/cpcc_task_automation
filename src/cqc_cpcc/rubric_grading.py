@@ -34,7 +34,10 @@ from typing import Optional
 
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
-from cqc_cpcc.requirement_coverage import apply_requirement_coverage, requirements_prompt_section
+from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUIREMENT, note, note_added,
+                                     note_kept, note_removed, tag_source)
+from cqc_cpcc.requirement_coverage import (apply_requirement_coverage, is_requirement_error,
+                                           requirements_prompt_section)
 from cqc_cpcc.rubric_models import (
     Criterion,
     CriterionResult,
@@ -53,6 +56,9 @@ AUTO_ROUTE_MODEL = "openrouter/auto"
 
 
 _SEVERITY_RANK = {"major": 2, "minor": 1}
+
+
+_SOURCE_RANK = {None: 0, "model": 1, "requirement": 2, "execution": 3, "compiler": 4}
 
 
 def normalize_detected_errors_for_scoring(
@@ -81,10 +87,15 @@ def normalize_detected_errors_for_scoring(
                 "notes": [],
                 "diagnostics": [],
                 "occurrences": 0,
+                "source": None,
             },
         )
         if _SEVERITY_RANK.get(severity, 0) > _SEVERITY_RANK.get(entry["severity"], 0):
             entry["severity"] = severity
+        # The source survives the collapse; hard evidence (compiler, execution) outranks
+        # the model's own listing, so a later stage can never drop the evidence-backed one.
+        if _SOURCE_RANK.get(error.source, 0) > _SOURCE_RANK.get(entry["source"], 0):
+            entry["source"] = error.source
 
         if error.description and error.description not in entry["descriptions"]:
             entry["descriptions"].append(error.description)
@@ -119,6 +130,7 @@ def normalize_detected_errors_for_scoring(
                 occurrences=entry["occurrences"],
                 notes=combined_notes,
                 compiler_diagnostics="\n\n".join(entry["diagnostics"]) or None,
+                source=entry["source"],
             )
         )
 
@@ -510,36 +522,20 @@ async def grade_with_rubric(
                 "rubric_version": rubric.rubric_version,
             })
 
-        # Gate fields are backend-only; never trust values the model may have sent.
+        # Gate and reconciliation fields are backend-only; never trust values the model may
+        # have sent. Every error the model listed is tagged as its own.
         result = result.model_copy(update={
             "needs_review": False, "review_confirmed": False,
             "validity_status": None, "validity_reason": None,
+            "reconciliation": [], "execution_report": None,
+            "detected_errors": tag_source(result.detected_errors, SOURCE_MODEL, only_untagged=False),
+            "graded_with_model": _graded_with(model_name, use_auto_route),
         })
 
-        # Compile gate: verify the LLM's "Does Not Compile" call against the REAL
-        # local toolchain and correct detected_errors BEFORE scoring, so the score/band
-        # reflect the truth (a false "Does Not Compile" otherwise floors the grade).
-        if source_files:
-            # The compiler runs in a subprocess; a worker thread keeps the event loop free so
-            # other students' deadlines and progress labels keep moving meanwhile.
-            result, gate_info = await asyncio.to_thread(apply_compile_gate, result, source_files, error_definitions)
-            if gate_report is not None:
-                gate_report.update(gate_info)
-            if gate_info.get("action") in ("removed", "added"):
-                logger.warning(
-                    "Compile gate %s 'Does Not Compile' (language=%s, compiles=%s, tool=%s)",
-                    gate_info["action"], gate_info.get("language"),
-                    gate_info.get("compiles"), gate_info.get("tool"),
-                )
-
-        # Requirement coverage: unimplemented requirements become errors, so incomplete
-        # work cannot outscore complete work with mistakes.
-        if requirements is not None:
-            result, coverage_info = apply_requirement_coverage(result, requirements)
-            if gate_report is not None:
-                gate_report["requirements"] = coverage_info
-        elif result.requirement_results:
-            result = result.model_copy(update={"requirement_results": None})
+        # Reconcile the model's errors against hard evidence (compile gate, then requirement
+        # coverage), recording each decision as an instructor note, BEFORE scoring.
+        result = await _reconcile(result, source_files=source_files, error_definitions=error_definitions,
+                                  requirements=requirements, gate_report=gate_report)
 
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
@@ -741,6 +737,11 @@ def apply_no_code_floor(result: RubricAssessmentResult, rubric: Rubric,
         "error_counts_by_severity": result.error_counts_by_severity,
         "error_counts_by_id": result.error_counts_by_id,
         "requirement_results": result.requirement_results,
+        # The audit trail of the graded-anyway result stays with it.
+        "reconciliation": list(result.reconciliation or []) + [note(
+            "validity", reason.split(". ")[0] + "; the score is floored at 0.")],
+        "graded_with_model": result.graded_with_model,
+        "execution_report": result.execution_report,
     })
 
 
@@ -756,6 +757,113 @@ def _find_compile_error_def(error_definitions):
         if getattr(d, "enabled", True):
             return d
     return candidates[0] if candidates else None
+
+
+def _graded_with(model_name: str, use_auto_route: bool) -> str:
+    """``model@effort`` for the result: the model that answered and the effort it ran at."""
+    from cqc_cpcc.utilities.AI import model_registry
+
+    call = llm_gateway.last_call()
+    model = call.model_used if call is not None else None
+    effort = None
+    if use_auto_route:
+        model = model or AUTO_ROUTE_MODEL
+    else:
+        try:
+            resolved = model_registry.resolve("grading", override=model_name or None)
+            model = model or resolved.model
+            effort = resolved.reasoning_effort
+        except Exception:  # noqa: BLE001 - a label must never fail the grade
+            model = model or model_name or "unknown"
+    return f"{model}@{effort}" if effort else str(model)
+
+
+async def _reconcile(
+        result: RubricAssessmentResult,
+        *,
+        source_files: Optional[dict],
+        error_definitions: Optional[list],
+        requirements,
+        gate_report: Optional[dict],
+) -> RubricAssessmentResult:
+    """Run the evidence stages in pipeline order and record each decision as a note.
+
+    Order: compile gate (a real compiler decides "Does Not Compile"), then requirement
+    coverage (unmet requirements become errors). Later PRs add the execution and overlap
+    stages here. An error a stage drops is kept on its note, suppressed, for Reinstate.
+    """
+    from cqc_cpcc.utilities.compiler_gate import is_compile_error
+
+    notes = list(result.reconciliation or [])
+
+    # Compile gate: verify the LLM's "Does Not Compile" call against the REAL
+    # local toolchain and correct detected_errors BEFORE scoring, so the score/band
+    # reflect the truth (a false "Does Not Compile" otherwise floors the grade).
+    if source_files:
+        prior = list(result.detected_errors or [])
+        # The compiler runs in a subprocess; a worker thread keeps the event loop free so
+        # other students' deadlines and progress labels keep moving meanwhile.
+        result, gate_info = await asyncio.to_thread(apply_compile_gate, result, source_files, error_definitions)
+        if gate_report is not None:
+            gate_report.update(gate_info)
+        action = gate_info.get("action")
+        tool = gate_info.get("tool") or "the compiler"
+        # Errors are matched by code: the gate may rebuild objects. Anything it left untagged
+        # is still the model's.
+        current = tag_source(result.detected_errors, SOURCE_MODEL)
+        prior_codes = {e.code for e in prior}
+        current_codes = {e.code for e in (current or [])}
+        if action in ("removed", "added"):
+            logger.warning(
+                "Compile gate %s 'Does Not Compile' (language=%s, compiles=%s, tool=%s)",
+                action, gate_info.get("language"), gate_info.get("compiles"), tool,
+            )
+        if action == "removed":
+            for e in prior:
+                if e.code not in current_codes:
+                    notes.append(note_removed(
+                        "compile", e, f"The submission compiles ({tool}), so this error is not counted."))
+        elif action == "added":
+            current = [e.model_copy(update={"source": SOURCE_COMPILER}) if e.code not in prior_codes else e
+                       for e in (current or [])]
+            for e in current:
+                if e.code not in prior_codes:
+                    notes.append(note_added("compile", e, f"{tool} reports that the submission does not compile."))
+        elif action == "confirmed_no_compile":
+            # The model's compile error is backed by the compiler: no later stage may drop it.
+            current = [e.model_copy(update={"source": SOURCE_COMPILER})
+                       if is_compile_error(e.code, e.name) else e for e in (current or [])]
+            for e in current:
+                if e.source == SOURCE_COMPILER:
+                    notes.append(note_kept("compile", e, f"{tool} confirms that the submission does not compile."))
+        elif action == "skipped":
+            notes.append(note("compile", f"Compile check skipped ({gate_info.get('reason') or 'not verifiable'}); "
+                                         "the model's compile judgment stands."))
+        result = result.model_copy(update={"detected_errors": current})
+
+    # Requirement coverage: unimplemented requirements become errors, so incomplete
+    # work cannot outscore complete work with mistakes.
+    if requirements is not None:
+        result, coverage_info = apply_requirement_coverage(result, requirements)
+        if gate_report is not None:
+            gate_report["requirements"] = coverage_info
+        result = result.model_copy(update={
+            "detected_errors": [e.model_copy(update={"source": SOURCE_REQUIREMENT})
+                                if e.source is None and is_requirement_error(e.code) else e
+                                for e in (result.detected_errors or [])]})
+        for rid in coverage_info.get("missing", []):
+            notes.append(note("requirement", f"Requirement {rid} is not implemented: counted as an error.",
+                              requirement_id=rid))
+        for rid in coverage_info.get("partial", []):
+            notes.append(note("requirement", f"Requirement {rid} is incomplete: counted as a minor error.",
+                              requirement_id=rid))
+        for rid in coverage_info.get("unmarked", []):
+            notes.append(note("requirement", f"The grader did not assess requirement {rid}; "
+                                             "flagged for review, not counted.", requirement_id=rid))
+    elif result.requirement_results:
+        result = result.model_copy(update={"requirement_results": None})
+
+    return result.model_copy(update={"reconciliation": notes})
 
 
 def apply_compile_gate(
