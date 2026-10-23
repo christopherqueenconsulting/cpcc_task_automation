@@ -178,6 +178,10 @@ class TestAsksTheModelForLinks:
         without = build_rubric_grading_prompt(rubric=rubric, assignment_instructions="x", student_submission="y")
         assert "requirement_ids" in with_list and '"requirement_ids": []' in with_list
         assert "requirement_ids" not in without  # a prompt with no checklist is not touched
+        # A link never changes a requirement's status: the A/B on this change showed the model marking
+        # a linked requirement partial as well as reporting the error (requirement_agreement fell).
+        assert "Linking never changes a requirement's status" in with_list
+        assert "Linking never changes" not in without
 
     def test_the_field_is_in_the_schema_the_model_answers(self):
         assert "requirement_ids" in DetectedError.model_json_schema()["properties"]
