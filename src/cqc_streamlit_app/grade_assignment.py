@@ -2623,7 +2623,8 @@ async def get_rubric_based_exam_grading():
         use_openrouter = model_cfg.get("use_openrouter", True)
         use_auto_route = model_cfg.get("use_auto_route", True)
         selected_model = model_cfg.get("model", "openrouter/auto")
-        selected_effort = None if use_auto_route else model_cfg.get("effort")
+        # The errors-only path takes the role's effort: the per-run choice is for rubric grading.
+        selected_effort = None if use_auto_route or grading_mode == "errors_only" else model_cfg.get("effort")
         st.caption(f"Model: {_model_effort_label(selected_model, use_auto_route, selected_effort)}")
 
         setup_complete = bool(assignment_instructions_content) and (

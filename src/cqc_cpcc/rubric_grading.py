@@ -445,6 +445,9 @@ async def grade_with_rubric(
         model_name: OpenRouter model id overriding the registry's grading model;
             "openrouter/auto" enables auto-routing. None uses the registry.
         temperature: Deprecated and ignored; sampling is set per model in the registry.
+        effort: Reasoning effort for this call, replacing the registry's effort when the
+            model supports it (otherwise none is sent). Ignored under auto-routing. The
+            effort that ran is stamped on the result as ``graded_with_model`` (``model@effort``).
         callback: Optional LangChain callback for compatibility
         source_files: ``{filename: temp_path}`` of the student's real files, used by the
             validity gate and the compile gate.
