@@ -268,12 +268,22 @@ AB_CONCURRENCY = 12
 #: 115 minutes in all, so the base alone, now beside the head, needs well under this.
 BASE_TIMEOUT_S = 120 * 60
 
+#: How long to wait for a killed base's output pipes to close. A grandchild that left the process group
+#: (setsid) can hold them open, and an unbounded wait would then last until the job limit.
+BASE_REAP_S = 30
+
 _live_base: set = set()  # base processes running now, so they can be stopped before their worktree goes
 _live_base_lock = threading.Lock()
+_base_stopped = False  # set when the A/B is being torn down: a base not yet started must not start
 
 
 def _signal_group(proc, sig) -> None:
-    """Signal the base's whole process group (it was started in its own session)."""
+    """Signal the base's whole process group (it was started in its own session).
+
+    A base that has already exited and been reaped is left alone: its pid may be someone else's now.
+    """
+    if proc.returncode is not None:
+        return
     try:
         if hasattr(os, "killpg"):
             os.killpg(proc.pid, sig)
@@ -285,13 +295,24 @@ def _signal_group(proc, sig) -> None:
         pass
 
 
-def _terminate_live_base(grace_s: float = 5.0) -> None:
+def _allow_base() -> None:
+    global _base_stopped
+    with _live_base_lock:
+        _base_stopped = False
+
+
+def _terminate_live_base(grace_s: float = 5.0, stop_new: bool = False) -> None:
     """Stop every base run that is still going: TERM the process group, then KILL what is left.
 
     ``asyncio.to_thread`` cannot cancel a thread, so cancelling the A/B (a cancelled job, Ctrl-C)
     or a failing head would otherwise leave a paid base run going, and its worktree removed under it.
+    ``stop_new`` also stops a base whose thread has not started its process yet from ever starting
+    (``_run_base`` returns None for it); ``prompt_ab`` clears that when it is done.
     """
+    global _base_stopped
     with _live_base_lock:
+        if stop_new:
+            _base_stopped = True
         procs = list(_live_base)
     for proc in procs:
         _signal_group(proc, signal.SIGTERM)
@@ -301,6 +322,20 @@ def _terminate_live_base(grace_s: float = 5.0) -> None:
     for proc in procs:
         if proc.poll() is None:
             _signal_group(proc, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)
+
+
+def _reap(proc) -> tuple:
+    """Collect a killed base's output, giving up on pipes a stray grandchild keeps open."""
+    try:
+        return proc.communicate(timeout=BASE_REAP_S)
+    except subprocess.TimeoutExpired:
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                pipe.close()
+            except Exception:  # noqa: BLE001 - already closed or never opened
+                pass
+        proc.wait()
+        return "", ""
 
 
 def _recorded_cost(raw: Path) -> float:
@@ -342,9 +377,12 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
     env = {**(os.environ if environ is None else environ), "PYTHONPATH": str(worktree / "src")}
     if concurrency:
         env["CQC_EVAL_CONCURRENCY"] = str(concurrency)
-    proc = subprocess.Popen(args, cwd=worktree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, start_new_session=True)
     with _live_base_lock:
+        if _base_stopped:
+            print(f"[{suite_id}] base run not started: the A/B is being torn down")
+            return None
+        proc = subprocess.Popen(args, cwd=worktree, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
         _live_base.add(proc)
     timed_out = False
     try:
@@ -353,7 +391,7 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
         except subprocess.TimeoutExpired:
             timed_out = True
             _signal_group(proc, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)
-            stdout, stderr = proc.communicate()
+            stdout, stderr = _reap(proc)
     finally:
         with _live_base_lock:
             _live_base.discard(proc)
@@ -622,13 +660,14 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
             "head": side(head_raw), "base": side(base_raw)}
 
 
-def _stats_line(suite_id: str, stats: dict) -> str:
+def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
     """One line per suite for the end of the log (the workflow shows only its last 60 lines)."""
     def part(name):
         s = stats.get(name)
         return f"{name} {s['calls']} calls, {s['retried']} retried" if s else f"{name} none"
 
-    return f"A/B {suite_id}: {part('head')}; {part('base')}; {stats['elapsed_s']:.0f}s at {stats['concurrency']} in flight"
+    line = f"A/B {suite_id}: {part('head')}; {part('base')}; {stats['elapsed_s']:.0f}s at {stats['concurrency']} in flight"
+    return line + (f"; FAILED: see base/{suite_id}/run.log" if failed else "")
 
 
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
@@ -658,6 +697,7 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
         raise SystemExit("the A/B estimate exceeds the prompt-eval budget; run fewer suites")
     worktree = _base_worktree(base_ref, out / "base-src")
     results = {}
+    _allow_base()
     try:
         for suite_id in suite_ids:
             suite = get_suite(suite_id)
@@ -677,7 +717,9 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                     return await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"),
                                                  budget=head_budget, concurrency=workers)
                 except BaseException:
-                    _terminate_live_base()  # a failed head makes the base's result worthless: stop paying for it
+                    # a failed head makes the base's result worthless: stop paying for it, and keep one
+                    # that has not started yet from starting
+                    _terminate_live_base(stop_new=True)
                     raise
 
             jobs = [run_head()]
@@ -706,7 +748,9 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             if base_raw is None:
                 # Fail closed: a base run that crashed or ran out of budget proves nothing.
                 results[suite_id] = {"suite": suite_id, "status": "fail", "models": {}, "notes": [],
-                                     "reasons": ["the base run failed, so the change could not be compared"]}
+                                     "reasons": ["the base run failed, so the change could not be compared"],
+                                     "run_stats": _run_stats(suite_started, workers,
+                                                             out / "head" / suite_id / "raw_outputs.jsonl", None)}
                 continue
             # Both sides are scored with the HEAD graders, so only the prompt differs. When the
             # PR changed the dataset, only cases whose inputs are unchanged are compared.
@@ -742,11 +786,12 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                     "prompts unchanged from the base: the paired test uses all cases when there are at least 30 "
                     "(the Paired test column names the split); the pairwise judge still scores holdout only")
     finally:
-        _terminate_live_base()  # a cancelled or failed A/B must not leave a base run under its worktree
+        _terminate_live_base(stop_new=True)  # a cancelled or failed A/B must not leave a base run under its worktree
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
+        _allow_base()
     for suite_id, r in results.items():  # last lines of the log: the workflow shows only its tail
         if r.get("run_stats"):
-            print(_stats_line(suite_id, r["run_stats"]))
+            print(_stats_line(suite_id, r["run_stats"], failed=r["status"] == "fail"))
     overall = ("fail" if any(r["status"] == "fail" for r in results.values())
                else "pass" if results and all(r["status"] == "pass" for r in results.values()) else "pass-provisional")
     report = {"base_ref": base_ref, "status": overall, "suites": results,

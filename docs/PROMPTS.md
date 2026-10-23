@@ -214,9 +214,9 @@ capture, runs the full paid A/B as before.
 **How fast the A/B runs.** A paid A/B used to take 67 to 82 minutes for three or four suites (the
 dispatch job's duration in runs 39966026743, 39978967241 and 39988799201 on 2026-10-23: 67, 68 and
 82 minutes) because every call waited its turn: four calls in flight, the head run first, then the
-base run, then the pairwise judge one case at a time. In those runs the `grading` suite alone made
-2,592 of 5,808 recorded calls over five runs at a mean of 17.5 s each, and not one call needed a
-retry. Now:
+base run, then the pairwise judge one case at a time. Over five runs the
+artifacts hold 5,808 records, 5,520 of them model calls (288 `skeleton` cases are turned away before any
+call); `grading` alone made 2,592 timed calls at a mean of 17.5 s, and not one record needed a retry. Now:
 
 - **Head and base run at the same time**, each from its own half of the remaining budget
   (`Budget.split`), and each half is charged back to the whole when its run ends, so the total cap

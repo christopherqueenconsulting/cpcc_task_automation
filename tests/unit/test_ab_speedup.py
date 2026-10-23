@@ -296,6 +296,53 @@ class TestTheBaseRunsBesideTheHead:
         assert await asyncio.wait_for(job, 20) is None
         assert not self._alive(pid) and not pa._live_base
 
+    def test_a_base_not_yet_started_never_starts_once_the_ab_is_being_torn_down(self, tmp_path):
+        worktree = self._fake_base(tmp_path, "open(os.path.join(out, 'started'), 'w').write('x')\n")
+        pa._terminate_live_base(stop_new=True)
+        try:
+            assert pa._run_base(worktree, "grading", [], 1, tmp_path / "o", 1.0) is None
+            assert not (tmp_path / "o" / "started").exists()
+        finally:
+            pa._allow_base()
+        pa._run_base(worktree, "grading", [], 1, tmp_path / "o", 1.0)
+        assert (tmp_path / "o" / "started").exists()  # and it runs again once the flag is cleared
+
+    def test_a_grandchild_that_keeps_the_pipes_open_cannot_hang_the_reap(self, monkeypatch, tmp_path):
+        worktree = self._fake_base(
+            tmp_path,
+            "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)\n"
+            "open(os.path.join(out, 'grandchild'), 'w').write(str(g.pid))\n"
+            "time.sleep(60)\n")
+        monkeypatch.setattr(pa, "BASE_TIMEOUT_S", 1.0)
+        monkeypatch.setattr(pa, "BASE_REAP_S", 1.0)
+        started = time.monotonic()
+        try:
+            assert pa._run_base(worktree, "grading", [], 1, tmp_path / "o", 1.0) is None
+            assert time.monotonic() - started < 20
+        finally:
+            gc = tmp_path / "o" / "grandchild"
+            if gc.exists():
+                try:
+                    os.kill(int(gc.read_text()), 9)
+                except ProcessLookupError:
+                    pass
+
+    def test_a_process_that_has_already_exited_is_never_signalled(self, monkeypatch):
+        def no(*a):
+            raise AssertionError("signalled a reaped process")
+
+        monkeypatch.setattr(pa.os, "killpg", no)
+        pa._signal_group(SimpleNamespace(pid=4242, returncode=0), pa.signal.SIGTERM)
+
+    async def test_a_suite_whose_base_failed_gets_a_line_pointing_at_its_log(self, tmp_path, monkeypatch, capsys):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        monkeypatch.setattr(pa, "_run_base", lambda *a, **k: None)
+        await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1)
+        out = capsys.readouterr().out
+        assert "A/B requirement-extraction:" in out and "FAILED: see base/requirement-extraction/run.log" in out
+
     async def test_a_failing_head_stops_the_base_instead_of_paying_for_it_to_finish(self, tmp_path, monkeypatch):
         from cqc_cpcc.utilities.AI import llm_gateway
 
