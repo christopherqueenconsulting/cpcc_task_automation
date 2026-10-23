@@ -498,8 +498,9 @@ async def grade_with_rubric(
             override=None if use_auto_route else model_name,
             use_auto_route=use_auto_route,
             prompt_id="rubric-grading",
-            correlation_id=correlation_id,
-            session_id=session_id,
+            # Only when set: an unset id must leave the call exactly as before, so the
+            # request-identical fast path of the prompt A/B still matches the base.
+            **{k: v for k, v in (("correlation_id", correlation_id), ("session_id", session_id)) if v},
         )
 
         # Log raw OpenAI response for debugging
