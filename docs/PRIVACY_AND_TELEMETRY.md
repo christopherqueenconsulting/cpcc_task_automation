@@ -13,9 +13,11 @@ analytics.
 | **Console / Streamlit log panel** | Same messages | Same scrubbing filter. The panel no longer forces DEBUG on. |
 | **AI debug dumps** (`CQC_AI_DEBUG_SAVE_DIR`, off by default) | Requests and responses | Student identifiers are always scrubbed from files on disk; `CQC_AI_DEBUG_REDACT` (default on) also masks secrets, e-mails, phone numbers and SSNs. Files `0600`. Submission *content* is still present: keep this off unless you are debugging. |
 | **Temp files** (downloaded ZIPs, extracted submissions, screenshots, generated `.docx`) | Student work | Written to a private `<system tmp>/cqc_cpcc/` (`0700`). Anything older than `CQC_TEMP_RETENTION_HOURS` (default 24) is deleted when the app starts. |
+| **Saved grading results** `~/.cqc_cpcc/grading_results/` (`CQC_GRADING_RESULTS_DIR` overrides) | Student names, scores, feedback, detected errors (including raw compiler diagnostics, which are instructor-only) | Kept so results survive a restart. Files `0600` in a `0700` directory, outside the repository. Only the newest 20 runs are kept. Local only: never uploaded. The result-card JSON export leaves the raw diagnostics out. |
 | **Withdrawal CSVs** (`WITHDRAWALS_CSV_DIR`) | Names, IDs, e-mails | By design. Outside version control and git-ignored. Protect the folder. |
 | **OpenRouter** and the model provider it routes to | Submission content, instructions, rubric | Needed for grading. Every LLM path (rubric, exam/errors-only, digest, Give Feedback, Flowgorithm) goes through OpenRouter. Each request asks for zero data retention, no data collection and no fallback to other providers; the policy lives in `src/cqc_cpcc/config/model_policy.json`. The `Submission File Name:` line in prompts is scrubbed. Header comments inside submissions are sent as written, because rubrics commonly grade them. See [Vendor settings](#vendor-settings-you-control). |
 | **OpenAI** (direct) | Audio/video submissions only | Whisper transcription. `OPENAI_API_KEY` is optional and needed only for this. |
+| **OneCompiler** (onecompiler.com) and **OnlineGDB** (onlinegdb.com) | One student's code | Sent only when the instructor acts on that student's Code tab. OneCompiler: the editor loads and the code is posted to it only after **Run in OneCompiler** is clicked. OnlineGDB: **Open in OnlineGDB** opens a blank editor, and the code reaches it only if the instructor pastes it in. No data-processing agreement is in place with either site, and their FERPA status has not been verified. |
 | **PostHog** (optional) | Counts, durations, token usage, model names, scrubbed error types | No student data, not even an alias. See [Usage analytics](#usage-analytics-posthog). |
 | **BrightSpace, MyColleges, Attendance Tracker** | Grades, attendance, withdrawal rows | These are the institution's own systems. Grade write-back defaults to a dry run. |
 
@@ -106,6 +108,8 @@ These are account settings, not code. Check them against your institution's poli
 
 The instructor uses this tool on the institution's behalf. Sending student work to an
 LLM provider is a disclosure of education records to a third party, so check whether
-your institution's AI-use policy and vendor agreements cover it. The design keeps
-every other destination free of student identifiers, so the LLM providers are the
-only vendors that need that review.
+your institution's AI-use policy and vendor agreements cover it. The LLM providers are
+not the only vendors that need that review: the code runners (OneCompiler and
+OnlineGDB) receive a student's code when the instructor runs it, and neither has an
+agreement in place. Every other outside destination is kept free of student
+identifiers.

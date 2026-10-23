@@ -157,8 +157,12 @@ def _aggregates(suite, raw_path: Path, case_ids: Optional[set] = None) -> dict:
 
 
 def ab_decision(suite, head: dict, base_aggs: dict, policy=None, pairwise_scores: Optional[dict] = None,
-                judge_calibrated: bool = False) -> dict:
-    """Accept a prompt change when nothing regresses on any model of the matrix."""
+                judge_calibrated: bool = False, split: Optional[str] = "holdout") -> dict:
+    """Accept a prompt change when nothing regresses on any model of the matrix.
+
+    ``split`` is the case split the paired test runs on: the holdout split by default, all
+    cases (``None``) when the suite's prompts are unchanged (see ``prompts_unchanged``).
+    """
     policy = policy or model_registry.load_policy()
     sp = prompt_eval.suite_policy(suite.id)
     ev = policy.eval
@@ -169,21 +173,41 @@ def ab_decision(suite, head: dict, base_aggs: dict, policy=None, pairwise_scores
             notes.append(f"{label}: no base run to compare with")
             continue
         new_failures = [f for f in base.gate_failures(h, sp.hard_gates) if f not in base.gate_failures(b, sp.hard_gates)]
-        cmp = base.compare(h, b, suite, resamples=min(ev.bootstrap_resamples, 4000), alpha=ev.alpha,
-                           superiority_margin=ev.superiority_margin, noninferiority_margin=ev.noninferiority_margin)
+        cmp = base.ab_noninferior(h, b, suite, resamples=min(ev.bootstrap_resamples, 4000), alpha=ev.alpha,
+                                  margin=ev.noninferiority_margin, superiority_margin=ev.superiority_margin,
+                                  split=split)
         delta = (h.get("composite") or 0) - (b.get("composite") or 0)
         cost_ratio = (h["cost_per_call"] / b["cost_per_call"]) if h.get("cost_per_call") and b.get("cost_per_call") else None
+        tested = cmp.get("split") or split or "all"
+        paired = cmp.get("metrics", {}).get("composite", {})
+        drops = {name: cmp["metrics"][name] for name in cmp.get("clear_drops", [])}
+        strict = {name: cmp["metrics"][name] for name in cmp.get("strict_failures", [])}
         per_model[label] = {"composite_head": h.get("composite"), "composite_base": b.get("composite"),
                             "delta": delta, "comparative": cmp["comparative"], "superior": cmp.get("superior"),
-                            "noninferior": cmp.get("noninferior"), "cost_ratio": cost_ratio,
-                            "new_gate_failures": new_failures}
+                            "noninferior": cmp.get("noninferior"), "split": tested, "n": cmp.get("n"),
+                            "primary_noninferior": cmp.get("primary_noninferior"),
+                            "paired": {k: paired.get(k) for k in ("mean", "low", "high", "p_noninferior")},
+                            "clear_drops": {name: {"mean": st["mean"], "high": st["high"]} for name, st in drops.items()},
+                            "strict_failures": {name: {"mean": st["mean"], "p_noninferior": st["p_noninferior"]}
+                                                for name, st in strict.items()},
+                            "cost_ratio": cost_ratio, "new_gate_failures": new_failures}
         if new_failures and sp.calibrated:
             reasons.append(f"{label}: new hard-gate failures: {'; '.join(new_failures)}")
         elif new_failures:
             notes.append(f"{label}: below provisional gates: {'; '.join(new_failures)}")
-        if cmp["comparative"] and not cmp["noninferior"]:
-            reasons.append(f"{label}: not non-inferior on the holdout split (composite {delta:+.3f})")
-        elif not cmp["comparative"] and delta < -ev.noninferiority_margin:
+        where = "all cases" if tested == "all" else f"the {tested} split"
+        if cmp["comparative"]:
+            if not cmp.get("primary_noninferior"):
+                reasons.append(f"{label}: composite not non-inferior on {where} (n={cmp['n']}, paired mean "
+                               f"{paired['mean']:+.3f}, 95% interval {paired['low']:+.3f}..{paired['high']:+.3f}, "
+                               f"P(<= -{ev.noninferiority_margin}) = {paired['p_noninferior']:.3f})")
+            for name, st in strict.items():
+                reasons.append(f"{label}: strict grader {name} not non-inferior on {where} (paired mean "
+                               f"{st['mean']:+.3f}, P(<= -{ev.noninferiority_margin}) = {st['p_noninferior']:.3f})")
+            for name, st in drops.items():
+                reasons.append(f"{label}: clear drop on {where}: {name} paired mean {st['mean']:+.3f}, "
+                               f"95% interval upper bound {st['high']:+.3f}")
+        elif delta < -ev.noninferiority_margin:
             reasons.append(f"{label}: composite fell {delta:+.3f} (more than {ev.noninferiority_margin})")
         if cost_ratio is not None and cost_ratio > ev.better_path_max_cost_ratio:
             reasons.append(f"{label}: cost per call x{cost_ratio:.2f} > {ev.better_path_max_cost_ratio}")
@@ -243,6 +267,30 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
     return raw if raw.exists() else None
 
 
+def prompts_unchanged(suite_id: str, base_ref: str) -> bool:
+    """True when every prompt the suite exercises renders the same request at ``base_ref``.
+
+    The holdout split guards against a prompt tuned on the dev cases. When the rendered
+    requests are unchanged, no prompt text changed, so the paired test can use every case and
+    roughly doubles its sample. Known limit: response-side code (scoring engine, compile gate,
+    validity and requirement coverage, parsers) can still be tuned on dev cases, and that bias
+    favours head; the all-cases split does not guard against it.
+    """
+    base_reg = prompt_registry.load_at_ref(base_ref)
+    if base_reg is None:
+        return False
+    head = prompt_registry.load()
+    computed = prompt_registry.compute_all(head)
+    in_head = {pid for pid, e in head.prompts.items() if suite_id in e.suites and e.status != "judge"}
+    in_base = {pid for pid, e in base_reg.prompts.items() if suite_id in e.suites and e.status != "judge"}
+    if not in_head or in_head != in_base:  # a prompt added, removed or moved to another suite
+        return False
+    for pid in in_head:
+        if base_reg.prompts[pid].fingerprint != computed.get(pid, head.prompts[pid].fingerprint):
+            return False
+    return True
+
+
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
                     judges: bool = False, judge_model: Optional[str] = None, judge_cache: Optional[str] = None) -> dict:
     """Run each suite at the base and head code on the same models and compare."""
@@ -265,6 +313,8 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             suite_models = parsed or [prompt_eval.incumbent_of(suite.role)]
             labels = [prompt_eval.label_of(m, e) for m, e in suite_models]
             r = repeats or prompt_eval.suite_policy(suite_id).repeats
+            # Decided before any spend, so a git error here cannot waste a paid run.
+            unchanged = prompts_unchanged(suite_id, base_ref)
             await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"), budget=budget)
             if not _base_has_suite(worktree, suite_id):
                 head = _aggregates(suite, out / "head" / suite_id / "raw_outputs.jsonl")
@@ -312,7 +362,11 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                                 wins.append(score)
                         pairwise_scores[label] = sum(wins) / len(wins) if wins else None
             results[suite_id] = ab_decision(suite, head, base_aggs, pairwise_scores=pairwise_scores,
-                                            judge_calibrated=calibrated)
+                                            judge_calibrated=calibrated, split=None if unchanged else "holdout")
+            if unchanged:
+                results[suite_id]["notes"].append(
+                    "prompts unchanged from the base: the paired test uses all cases when there are at least 30 "
+                    "(the Paired test column names the split); the pairwise judge still scores holdout only")
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
     overall = ("fail" if any(r["status"] == "fail" for r in results.values())
@@ -333,9 +387,17 @@ def ab_markdown(report: dict) -> str:
              "| Suite | Model | Base | Head | Δ | Paired test | Cost × | Status |", "|---|---|---|---|---|---|---|---|"]
     for suite_id, r in report["suites"].items():
         for label, m in (r.get("models") or {}).items():
-            test = ("n/a" if "comparative" not in m else
-                    ("superior" if m.get("superior") else "non-inferior" if m.get("noninferior") else "inferior")
-                    if m.get("comparative") else "too few cases")
+            if "comparative" not in m:
+                test = "n/a"
+            elif not m.get("comparative"):
+                test = "too few cases"
+            else:
+                verdict = ("superior" if m.get("superior") and m.get("noninferior")
+                           else "non-inferior" if m.get("noninferior")
+                           else "inferior (composite)" if not m.get("primary_noninferior", True)
+                           else "inferior (strict): " + ", ".join(m["strict_failures"]) if m.get("strict_failures")
+                           else "clear drop: " + ", ".join(m.get("clear_drops") or {}))
+                test = f"{verdict}, {m.get('split', 'holdout')} n={m.get('n')}"
             lines.append(
                 f"| `{suite_id}` | `{_safe(label)}` | {prompt_eval._fmt(m.get('composite_base'))} | "
                 f"{prompt_eval._fmt(m.get('composite_head'))} | {prompt_eval._fmt(m.get('delta'))} | {test} | "
@@ -355,7 +417,7 @@ GRADER_TOLERANCE = 0.10
 HEALTH_TOLERANCE = 0.05
 
 
-def propose_suite_policy(agg: dict, report_path: str) -> dict:
+def propose_suite_policy(agg: dict, report_path: str, repeats: int = 2) -> dict:
     gates = {"ok_rate": {"min": 0.95}, "errors.refusal": {"max": 0}, "errors.truncated": {"max": 0}}
     for name, value in (agg.get("graders") or {}).items():
         if value is not None:
@@ -364,7 +426,7 @@ def propose_suite_policy(agg: dict, report_path: str) -> dict:
         if info.get("calibrated") and info.get("mean") is not None:
             gates[f"judge.{judge_id}"] = {"min": round(max(0.0, info["mean"] - GRADER_TOLERANCE), 3)}
     composite = agg.get("composite")
-    return {"calibrated": True, "repeats": 2, "hard_gates": gates,
+    return {"calibrated": True, "repeats": repeats, "hard_gates": gates,
             "health_floor": round(max(0.0, composite - HEALTH_TOLERANCE), 3) if composite is not None else None,
             "baseline_report": report_path}
 
@@ -381,7 +443,8 @@ async def calibrate(out: Path, suite_ids: Optional[list] = None, repeats: int = 
             raise SystemExit(f"{suite_id}: calibration run {sc.get('status')}; nothing proposed")
         (label, m), = sc["models"].items()
         prompt_eval.write_scorecard(Path(report_dir) / suite_id, sc)  # the baseline the patch cites
-        proposal[suite_id] = propose_suite_policy(m, f"{report_dir}/{suite_id}/scorecard.json")
+        proposal[suite_id] = propose_suite_policy(m, f"{report_dir}/{suite_id}/scorecard.json",
+                                                  repeats=prompt_eval.suite_policy(suite_id).repeats)
     versions = {pid: e.version for pid, e in prompt_registry.load().prompts.items() if e.status == "live"}
     patch = {"suites": proposal, "calibrated_versions": versions}
     (out / "policy_patch.json").write_text(json.dumps(patch, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -394,7 +457,11 @@ def apply_policy_patch(patch: dict, path: Path = model_registry.DEFAULT_POLICY_P
     """Merge a calibration proposal into model_policy.json (a human runs this and commits)."""
     data = json.loads(path.read_text(encoding="utf-8"))
     block = data.setdefault("prompt_eval", {})
-    block.setdefault("suites", {}).update(patch["suites"])
+    suites = block.setdefault("suites", {})
+    for suite_id, proposed in patch["suites"].items():
+        # A calibration re-sets floors, never how many repeats a suite runs (a human choice).
+        current = suites.get(suite_id, {})
+        suites[suite_id] = {**proposed, **({"repeats": current["repeats"]} if "repeats" in current else {})}
     block["calibrated_versions"] = {**block.get("calibrated_versions", {}), **patch["calibrated_versions"]}
     model_registry.PromptEvalPolicy.model_validate(block)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
