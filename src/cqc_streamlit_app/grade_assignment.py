@@ -3279,8 +3279,8 @@ def _similarity_label(result) -> str:
     """The results-table cell for the instructor-only flag ("" when off or no solution)."""
     from cqc_cpcc.solution_similarity import Similarity, DEFAULT_THRESHOLD, similarity_label
     ratio = getattr(result, "solution_similarity", None)
-    if ratio is None:
-        return ""
+    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
+        return ""  # None, or a stand-in result object: no flag
     return similarity_label(Similarity(ratio, ratio >= DEFAULT_THRESHOLD, DEFAULT_THRESHOLD))
 
 
