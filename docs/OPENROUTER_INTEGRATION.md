@@ -157,17 +157,23 @@ OPENAI_API_KEY=sk-...
 
 Every OpenRouter request is bounded (`src/cqc_cpcc/utilities/AI/llm_limits.py`):
 
-- **Per request:** `CQC_LLM_TIMEOUT_<ROLE>`, then `CQC_LLM_TIMEOUT`, then the default (grading 180 s,
-  digest 300 s, feedback and flowgorithm 120 s). A hard limit of the timeout plus 5 s backs up the
-  client's read timeout, which only bounds the gap between bytes.
+- **Per request:** `CQC_LLM_TIMEOUT_<ROLE>`, then `CQC_LLM_TIMEOUT`, then the built-in default at low
+  effort (grading 180 s, digest 300 s, feedback and flowgorithm 120 s; 180 s is twice the policy's
+  90 s p95 gate). The built-in default scales with the reasoning effort the request runs at: low x1,
+  medium x1.25, high x1.5 (grading: 180 / 225 / 270 s). A timeout set with `CQC_LLM_TIMEOUT*` is used
+  as given. A hard limit of the timeout plus 5 s backs up the client's read timeout, which only
+  bounds the gap between bytes.
 - **One retry counter:** the OpenAI SDK's own retries are off (`max_retries=0`). The client tries up
   to 3 times and logs `Attempt n/3`. Two timeouts on one model end the call, so the gateway moves to
   the role's fallback model, which gets the same rules.
 - **Not retried:** 400, 401, 403 and 404 answers. A 429 waits for its `Retry-After` header, up to 30 s.
-- **Per student:** `CQC_GRADING_STUDENT_DEADLINE_S`, default `2 models x 2 timeouts x (timeout + 5 s) + 60 s`
-  = 800 s for grading. The worst case before a student is reported "Timed out" is therefore about
-  13 minutes with the defaults, instead of about 3 hours (600 s x 3 SDK tries x 3 attempts x 2 models)
-  before this limit existed.
+- **Per student:** `CQC_GRADING_STUDENT_DEADLINE_S`, default the sum over the primary model and its
+  fallback of `2 timeouts x (timeout at that model's actual effort + 5 s) + 10 s backoff`, plus a 60 s
+  margin. The fallback runs at the per-run effort if it supports it, else at the role's effort. With
+  the registry's grading role (high effort on both models) that is 2 x (2 x (270 + 5) + 10) + 60 =
+  1180 s; at low effort on both it is 820 s. The worst case before a student is reported "Timed out"
+  is therefore about 20 minutes at high effort (14 at low), instead of about 3 hours (600 s x 3 SDK
+  tries x 3 attempts x 2 models) before this limit existed.
 
 The per-student deadline also covers the compile check (`COMPILE_TIMEOUT_SECONDS`, 45 s in
 `utilities/compiler_gate.py`), which runs in a worker thread so other students keep moving.
@@ -175,14 +181,29 @@ The per-student deadline also covers the compile check (`COMPILE_TIMEOUT_SECONDS
 and leaves the rest failed, so a model that is down cannot hold the page for hours.
 
 Extracting the requirement checklist at Setup has no student deadline but the same per-request
-rules, so a hung model can hold that spinner for up to about 12 minutes before its fallback answers
-or fails.
+rules, so a hung model can hold that spinner for up to about 19 minutes (high effort) before its
+fallback answers or fails.
 
 Cost: with SDK retries off, one student can be billed for at most 3 attempts on the model and
 3 on its fallback (rate-limit or server errors); a timed-out request may still be billed.
 
 Rollback: revert the PR that added these limits, or raise `CQC_LLM_TIMEOUT` and
 `CQC_GRADING_STUDENT_DEADLINE_S` as a stopgap.
+
+### Reasoning effort per run
+
+The role's effort comes from the registry (grading: high). It can be overridden without editing
+`model_registry.json`, in this order: the Grade Assignment "Reasoning effort" selectbox (one run),
+then `CQC_REASONING_EFFORT_<ROLE>` (the Settings page sets it for the app process only; put it in
+`.env` to keep it), then the registry. A value is sent only if the model's profile lists it;
+anything else (an unknown word, an effort the model lacks) is ignored with a logged warning and the
+provider default applies. Auto Router takes no effort, so the control is disabled there.
+One run should use one effort: Results shows a banner when students were graded at different
+efforts (or models) and can re-grade the others at the majority effort, and the Student drawer's
+"Re-grade this student at another effort" compares two efforts without changing anything until you
+keep the new result. The effort used is stamped on each result as `model@effort`. The majority
+effort is remembered, with a hash of the instructions and no student data, in the saved run's meta
+and pre-selected for the next section of the same assignment.
 
 While a student grades, the status label shows the model, the attempt (`attempt 2/3`) and the last
 failure (`timed out after 180 s`). The `openai` SDK logger is held at WARNING, and its warnings are
