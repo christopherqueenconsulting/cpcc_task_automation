@@ -6,7 +6,9 @@ no name, no status row and no score; the right token reattaches.
 """
 
 import asyncio
+import importlib
 import json
+import sys
 import threading
 import time
 from unittest.mock import AsyncMock, patch
@@ -18,7 +20,6 @@ from cqc_cpcc import grading_job
 from cqc_cpcc.grading_job import GradingJob
 from cqc_cpcc.rubric_models import CriterionResult, RubricAssessmentResult
 from cqc_cpcc.utilities.AI import llm_progress
-from cqc_cpcc.utilities.AI import model_registry as mr
 from cqc_cpcc.utilities.zip_grading_utils import StudentSubmission
 
 pytestmark = pytest.mark.unit
@@ -36,6 +37,9 @@ def _profile(slug, efforts):
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
+    # The module the app code uses now: another test may have replaced it in sys.modules since
+    # this file was imported, and clearing a stale copy's cache would leave the live one stale.
+    mr = importlib.import_module("cqc_cpcc.utilities.AI.model_registry")
     role = {"model": "openai/alpha", "reasoning_effort": "high", "max_output_tokens": 1024,
             "fallback": "openai/beta"}
     data = {"schema_version": 1, "revision": "t", "roles": {r: dict(role) for r in mr.ROLES},
@@ -49,7 +53,10 @@ def isolated(tmp_path, monkeypatch):
         monkeypatch.delenv(f"CQC_MODEL_{r.upper()}", raising=False)
         monkeypatch.delenv(f"CQC_REASONING_EFFORT_{r.upper()}", raising=False)
     monkeypatch.delenv("CQC_GRADING_JOB", raising=False)
-    monkeypatch.setattr("cqc_cpcc.utilities.env_constants.OPENROUTER_ALLOWED_MODELS", "", raising=False)
+    # The entry in sys.modules, which the app's `from ... import` reads: a dotted-path patch can
+    # reach an orphan copy another test left on the package.
+    monkeypatch.setattr(sys.modules["cqc_cpcc.utilities.env_constants"], "OPENROUTER_ALLOWED_MODELS", "",
+                        raising=False)
     mr._cache.clear()
     yield
     mr._cache.clear()

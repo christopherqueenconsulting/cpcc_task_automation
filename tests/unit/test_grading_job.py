@@ -386,9 +386,16 @@ def test_the_module_imports_nothing_from_streamlit():
 def test_cancel_stops_a_real_gateway_call_that_is_waiting(tmp_path, monkeypatch):
     """The gateway in test mode with CQC_TEST_MODE_LATENCY_S: a call that would wait 20 s ends in
     well under that when the job is cancelled, and the student is listed for a retry."""
+    from cqc_cpcc import rubric_grading
     from cqc_cpcc.rubric_config import get_rubric_by_id, list_available_rubrics
 
-    monkeypatch.setattr("cqc_cpcc.utilities.env_constants.TEST_MODE", True)
+    def no_real_call(*args, **kwargs):
+        raise AssertionError("a real model call was attempted")
+
+    # The module object rubric_grading itself calls, whatever other tests did to sys.modules.
+    gateway = rubric_grading.llm_gateway
+    monkeypatch.setattr(gateway, "_is_test_mode", lambda: True)
+    monkeypatch.setattr(gateway, "_complete", no_real_call)
     monkeypatch.setenv("CQC_TEST_MODE_LATENCY_S", "20")
     rubric = get_rubric_by_id(list_available_rubrics()[0])
     code = "public class Main {\n    public static void main(String[] a) {\n        System.out.println(1);\n    }\n}\n"
