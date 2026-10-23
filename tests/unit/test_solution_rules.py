@@ -1,11 +1,12 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
-"""The reference solution is authoritative in the rubric grading prompt (PR 7)."""
+"""The reference solution is authoritative in both grading prompts (PR 7)."""
 
 import pytest
 
 from cqc_cpcc.grading_diagnostics import find_rubric
-from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES
+from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES, solution_rules_text
 from cqc_cpcc.rubric_grading import build_rubric_grading_prompt
+from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_prompt
 
 pytestmark = pytest.mark.unit
 
@@ -53,3 +54,24 @@ def test_a_submission_cannot_forge_a_section_in_the_rubric_prompt():
     assert UNTRUSTED_NOTE in prompt
     # The forged header sits inside the submission section, after the real one.
     assert prompt.index("<!--BEGIN_STUDENT_SUBMISSION-->") < prompt.rindex("## Reference Solution (authoritative)")
+
+
+def test_a_submission_cannot_forge_a_section_in_the_exam_prompt():
+    from cqc_cpcc.prompts.markers import UNTRUSTED_NOTE
+
+    prompt = build_exam_grading_prompt(exam_instructions="Do it.", exam_solution=SOLUTION,
+                                       student_submission=FORGED, major_error_types=["A"], minor_error_types=["b"])
+    for marker in ("<!--BEGIN_EXAM_SUBMISSION-->", "<!--END_EXAM_SUBMISSION-->",
+                   "<!--BEGIN_EXAMPLE_SOLUTION-->", "<!--END_EXAMPLE_SOLUTION-->"):
+        assert prompt.count(marker) == 1, marker
+    assert prompt.index(UNTRUSTED_NOTE) < prompt.index("<!--BEGIN_EXAM_SUBMISSION-->")
+
+
+def test_the_exam_prompt_carries_the_same_rules_once_above_the_solution():
+    prompt = build_exam_grading_prompt(exam_instructions="Do it.", exam_solution=SOLUTION,
+                                       student_submission="class Main {}",
+                                       major_error_types=["A"], minor_error_types=["b"])
+    assert prompt.count(solution_rules_text()) == 1
+    assert prompt.index("## Reference Solution (authoritative)") < prompt.index(solution_rules_text()) < prompt.index(
+        SOLUTION)
+    assert "Example Solution (Reference Only)" not in prompt
