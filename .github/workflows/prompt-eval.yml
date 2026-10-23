@@ -50,12 +50,12 @@ on:
         options: [suites, calibrate, ab, judges]
         default: suites
       suites:
-        description: "Comma-separated suite ids, or 'all' (suites/calibrate modes)"
+        description: "Comma-separated suite ids, or 'all' (suites/calibrate modes); in ab mode, extra suites to add to the PR's detection ('all' adds none)"
         required: false
         type: string
         default: "all"
       models:
-        description: "Comma-separated model[@effort] ids (blank = each suite's current model)"
+        description: "Comma-separated model[@effort] ids (blank = each suite's current model; in ab mode the list must include it)"
         required: false
         type: string
         default: ""
@@ -295,6 +295,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Java (compile gate)
         uses: actions/setup-java@v6
@@ -341,8 +342,117 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
+  ab-base-rule:
+    # The A/B above ran the PR's own code, including the rule that judged it. This job judges
+    # the same saved outputs again from a checkout of the base branch, with the base's own
+    # environment: the PR's tree and the A/B artifact are read as data only, and no PR code
+    # runs here. It also re-detects the suites from the git diff with the base's code, so a
+    # PR whose detection skips a suite cannot pass. This guards against honest relaxations,
+    # not a hostile author (docs/PROMPTS.md, "Both rules must pass").
+    needs: [detect, ab]
+    if: >-
+      always() && github.event_name == 'pull_request' && needs.detect.result == 'success' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ab_status: ${{ steps.decide.outputs.ab_status }}
+      required: ${{ steps.decide.outputs.required }}
+    steps:
+      - name: Check out the base branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }} (base branch's lock)
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      # The PR is read through the API as data: GitHub's own list of its changed files, its two
+      # registries, and its changed dataset files. Nothing from the PR is checked out or run.
+      - name: Fetch the PR's changed files and data (API, no checkout)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          now="$(gh api "repos/${REPO}/pulls/${PR}" --jq .head.sha)"
+          if [ "${now}" != "${HEAD_SHA}" ]; then
+            echo "::error::PR ${PR} moved to ${now} after ${HEAD_SHA} was evaluated; re-run"; exit 1
+          fi
+          dest="${RUNNER_TEMP}/pr-head"
+          mkdir -p "${dest}"
+          gh api --paginate "repos/${REPO}/pulls/${PR}/files" \
+            --jq '.[] | [.status, .filename, (.previous_filename // "")] | @tsv' > "${RUNNER_TEMP}/pr-files.tsv"
+          { cut -f2 "${RUNNER_TEMP}/pr-files.tsv"; awk -F'\t' '$3 != "" {print $3}' "${RUNNER_TEMP}/pr-files.tsv"; } \
+            > "${RUNNER_TEMP}/changed.txt"
+          fetch() {
+            mkdir -p "$(dirname "${dest}/$1")"
+            gh api -H "Accept: application/vnd.github.raw" "repos/${REPO}/contents/$1?ref=${HEAD_SHA}" > "${dest}/$1"
+          }
+          # The PR's datasets start as the base's; its changed dataset files replace them.
+          cp -R evals "${dest}/evals"
+          fetch src/cqc_cpcc/config/prompt_registry.json
+          fetch src/cqc_cpcc/config/model_registry.json
+          while IFS=$'\t' read -r status file previous; do
+            if [[ "${previous}" == evals/datasets/* ]]; then rm -f "${dest}/${previous}"; fi
+            [[ "${file}" == evals/datasets/* ]] || continue
+            if [ "${status}" = "removed" ]; then rm -f "${dest}/${file}"; else fetch "${file}"; fi
+          done < "${RUNNER_TEMP}/pr-files.tsv"
+
+      - name: Download the A/B outputs (data)
+        if: needs.ab.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: prompt-eval-ab-${{ github.run_id }}
+          path: ab-artifact
+
+      - name: Re-decide with the base branch's detection, graders and rule
+        id: decide
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ab-artifact
+          if ! grep -q '"prompt-ab-decide"' src/cqc_cpcc/model_eval/prompt_automation.py; then
+            # Bootstrap: the base's source has no such command, which is true only for the PR that
+            # adds it. The report then uses the PR's own verdict. A PR cannot change the base
+            # checkout, so once the command is on the base branch this never runs, and any
+            # failure of the command below fails the job.
+            echo "base branch predates prompt-ab-decide: the PR's own verdict stands" | tee -a "$GITHUB_STEP_SUMMARY"
+            { echo "ab_status=bootstrap"; echo "required="; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --dir ab-artifact --head-root "${RUNNER_TEMP}/pr-head" \
+            --base-sha "${BASE_SHA}" --head-sha "${HEAD_SHA}" --changed-files "${RUNNER_TEMP}/changed.txt"
+          cat ab-artifact/base-rule.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the base-branch verdict
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-baserule-${{ github.run_id }}
+          path: |
+            ab-artifact/ab-base-rule.json
+            ab-artifact/base-rule.md
+          if-no-files-found: ignore
+          retention-days: 90
+
   report:
-    needs: [detect, estimate, rescore, ab, dependency-smoke]
+    needs: [detect, estimate, rescore, ab, ab-base-rule, dependency-smoke]
     # Fork PRs get a read-only token: no comment or status there (the jobs above still run).
     if: >-
       always() && github.event_name == 'pull_request' && needs.detect.result == 'success' &&
@@ -375,6 +485,10 @@ jobs:
           SMOKE_RESULT: ${{ needs.dependency-smoke.result }}
           AB_RESULT: ${{ needs.ab.result }}
           AB_STATUS: ${{ needs.ab.outputs.ab_status }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          BASE_RESULT: ${{ needs.ab-base-rule.result }}
+          BASE_STATUS: ${{ needs.ab-base-rule.outputs.ab_status }}
+          BASE_REQUIRED: ${{ needs.ab-base-rule.outputs.required }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
@@ -397,19 +511,15 @@ jobs:
                 fi
               fi
             fi
-            if [ -n "${RUN_SUITES}" ]; then
-              echo "Suites that need a model run: \`${RUN_SUITES}\`"
+            if [ "${BASE_RESULT}" != "success" ]; then
+              state="failure"; description="Base-branch check ${BASE_RESULT}"
+              echo; echo "The base-branch check (detection and rule from the base branch) ended with **${BASE_RESULT}**: ${RUN_URL}"
+            elif [ -n "${RUN_SUITES}" ] || [ -n "${BASE_REQUIRED}" ]; then
+              echo "Suites that need a model run: \`${RUN_SUITES:-none}\` (this PR's detection), \`${BASE_REQUIRED:-none}\` (the base branch's)"
               if [ -f results/prompt-eval-estimate-*/estimate.txt ]; then
                 echo; echo '```'; cat results/prompt-eval-estimate-*/estimate.txt; echo '```'
               fi
-              if [ "${AB_RESULT}" = "success" ] && ls results/prompt-eval-ab-*/ab.md >/dev/null 2>&1; then
-                echo; cat results/prompt-eval-ab-*/ab.md
-                case "${AB_STATUS}" in
-                  fail) state="failure"; description="A/B: the change regresses a prompt suite";;
-                  pass) state="success"; description="A/B: no regression";;
-                  *) state="success"; description="A/B: no regression (suite thresholds not calibrated)";;
-                esac
-              elif [ "${AB_RESULT}" = "skipped" ] && [[ "${HEAD_REF}" == auto/model-* ]]; then
+              if [ "${AB_RESULT}" = "skipped" ] && [[ "${HEAD_REF}" == auto/model-* ]] && [ "${AUTHOR_TYPE}" = "Bot" ]; then
                 # Model promotion/rollback bot PRs: the Model Evaluation run and its cross-suite
                 # gate already evaluated the model change on every affected suite.
                 state="success"; description="Model change: evaluated by Model Evaluation"
@@ -417,11 +527,30 @@ jobs:
               elif [ "${AB_RESULT}" = "skipped" ]; then
                 state="pending"; description="A/B needs a maintainer run"
                 echo
-                echo "The A/B did not run automatically (fork, bot, \`claude/\` or \`auto/\` branch, or an author not in \`PROMPT_EVAL_TRUSTED_AUTHORS\`)."
-                echo "A maintainer can run it: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, dry run off."
-              else
+                if [ -z "${RUN_SUITES}" ]; then
+                  echo "This PR's detection found no suite, but the base branch's requires \`${BASE_REQUIRED}\`."
+                  echo "A maintainer can run it: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, suites \`${BASE_REQUIRED}\`, dry run off."
+                else
+                  echo "The A/B did not run automatically (fork, bot, \`claude/\` or \`auto/\` branch, or an author not in \`PROMPT_EVAL_TRUSTED_AUTHORS\`)."
+                  echo "A maintainer can run it: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, dry run off."
+                fi
+              elif [ "${AB_RESULT}" != "success" ]; then
                 state="failure"; description="A/B job ${AB_RESULT}"
                 echo; echo "The A/B job ended with **${AB_RESULT}**: ${RUN_URL}"
+              else
+                if ls results/prompt-eval-ab-*/ab.md >/dev/null 2>&1; then echo; cat results/prompt-eval-ab-*/ab.md; fi
+                if ls results/prompt-eval-baserule-*/base-rule.md >/dev/null 2>&1; then echo; cat results/prompt-eval-baserule-*/base-rule.md; fi
+                verdict="${BASE_STATUS}"
+                if [ "${BASE_STATUS}" = "bootstrap" ]; then
+                  verdict="${AB_STATUS}"
+                  echo; echo "The base branch predates the base-branch check (this is the PR that adds it): this PR's own verdict stands."
+                fi
+                case "${verdict}" in
+                  pass) state="success"; description="A/B: no regression";;
+                  pass-provisional) state="success"; description="A/B: no regression (suite thresholds not calibrated)";;
+                  not-run) state="failure"; description="A/B did not run every suite the base branch requires";;
+                  *) state="failure"; description="A/B: the change regresses a prompt suite (or the A/B is incomplete)";;
+                esac
               fi
             fi
             if [ -n "${RESCORE_SUITES}" ]; then
@@ -701,18 +830,23 @@ jobs:
     # maintainer can dispatch. Other modes run master's code with the model-eval key.
     environment: ${{ inputs.mode == 'ab' && 'prompt-eval' || 'model-eval' }}
     timeout-minutes: 240
+    # Read-only token: ab mode runs PR code here, so posting the result is left to the
+    # dispatch-report job, which runs no PR code.
     permissions:
       contents: read
-      pull-requests: write
-      statuses: write
+      pull-requests: read
     concurrency:
       group: prompt-eval-dispatch-${{ inputs.mode }}-${{ inputs.pr_number }}
       cancel-in-progress: false
+    outputs:
+      sha: ${{ steps.pr.outputs.sha }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve the PR (ab mode)
         id: pr
@@ -729,10 +863,15 @@ jobs:
           if [ "$(jq -r .isCrossRepository <<< "${info}")" = "true" ]; then
             echo "::error::fork PRs are not run with a key; push the branch to this repository first"; exit 1
           fi
+          base="$(jq -r .baseRefName <<< "${info}")"
           echo "sha=$(jq -r .headRefOid <<< "${info}")" >> "$GITHUB_OUTPUT"
-          echo "base=$(jq -r .baseRefName <<< "${info}")" >> "$GITHUB_OUTPUT"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          git fetch -q origin "${base}"
+          echo "base_sha=$(git rev-parse "origin/${base}")" >> "$GITHUB_OUTPUT"
 
-      - name: Check out the PR head (pinned SHA)
+      # The PR's tree goes into pr/, so the workspace root (and the setup action below) stay
+      # this workflow's own ref.
+      - name: Check out the PR head (pinned SHA) into pr/
         if: inputs.mode == 'ab'
         shell: bash
         env:
@@ -740,7 +879,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch -q origin "${SHA}"
-          git checkout -q "${SHA}"
+          git worktree add -q --detach pr "${SHA}"
 
       - name: Set up Java (compile gate)
         uses: actions/setup-java@v6
@@ -753,7 +892,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           poetry-version: ${{ env.POETRY_VERSION }}
-          working-directory: "."
+          working-directory: ${{ inputs.mode == 'ab' && 'pr' || '.' }}
           install-args: "--with test"
 
       - name: Run
@@ -803,12 +942,17 @@ jobs:
               done
               echo "Commit the two report files from the artifact to evals/judges/calibration/ and pin prompt_eval.judge.model to the reports' judge_model." >> "$GITHUB_STEP_SUMMARY" ;;
             ab)
-              git fetch -q origin "${BASE}"
+              # The PR's own detection picks what to run; dispatch-report re-checks it from the base.
+              cd pr
               suites="$(poetry run python -m cqc_cpcc.model_eval prompts-affected --base-ref "origin/${BASE}" 2>/dev/null \
                 | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["run"]))')"
-              if [ -z "${suites}" ]; then echo "No suites affected"; echo "ab_status=pass" >> "$GITHUB_OUTPUT"; exit 0; fi
+              # A maintainer can add suites (for example ones only the base branch's detection requires).
+              if [ -n "${SUITES}" ] && [ "${SUITES}" != "all" ]; then suites="$(printf '%s,%s' "${suites}" "${SUITES}" \
+                | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)"; fi
+              if [ -z "${suites}" ]; then echo "No suites affected (this PR's detection)"; exit 0; fi
               poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${suites}" --base-ref "origin/${BASE}" \
-                "${models[@]}" "${judges[@]}" --out evals/runs/dispatch | tee run.log ;;
+                "${models[@]}" "${judges[@]}" --out ../evals/runs/dispatch | tee ../run.log
+              cd .. ;;
           esac
           for f in evals/runs/dispatch/*/scorecard.md evals/runs/dispatch/ab.md; do
             if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
@@ -824,22 +968,121 @@ jobs:
           if-no-files-found: ignore
           retention-days: 90
 
-      - name: Report the A/B on the PR
-        if: inputs.mode == 'ab' && steps.run.outcome == 'success'
+  dispatch-report:
+    # Posts a maintainer ab run's result. It runs no PR code: the base branch is checked out,
+    # the PR's tree and the dispatch artifact are read as data only, and the base re-decides
+    # (detection, graders, rule). A failed re-decide posts failure, never the PR's verdict.
+    needs: dispatch
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'ab' && needs.dispatch.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Check out the base branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.dispatch.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }} (base branch's lock)
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      # The PR is read through the API as data: GitHub's own list of its changed files, its two
+      # registries, and its changed dataset files. Nothing from the PR is checked out or run.
+      - name: Fetch the PR's changed files and data (API, no checkout)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ inputs.pr_number }}
-          SHA: ${{ steps.pr.outputs.sha }}
-          AB_STATUS: ${{ steps.run.outputs.ab_status }}
+          HEAD_SHA: ${{ needs.dispatch.outputs.sha }}
+        run: |
+          set -euo pipefail
+          now="$(gh api "repos/${REPO}/pulls/${PR}" --jq .head.sha)"
+          if [ "${now}" != "${HEAD_SHA}" ]; then
+            echo "::error::PR ${PR} moved to ${now} after ${HEAD_SHA} was evaluated; re-run"; exit 1
+          fi
+          dest="${RUNNER_TEMP}/pr-head"
+          mkdir -p "${dest}"
+          gh api --paginate "repos/${REPO}/pulls/${PR}/files" \
+            --jq '.[] | [.status, .filename, (.previous_filename // "")] | @tsv' > "${RUNNER_TEMP}/pr-files.tsv"
+          { cut -f2 "${RUNNER_TEMP}/pr-files.tsv"; awk -F'\t' '$3 != "" {print $3}' "${RUNNER_TEMP}/pr-files.tsv"; } \
+            > "${RUNNER_TEMP}/changed.txt"
+          fetch() {
+            mkdir -p "$(dirname "${dest}/$1")"
+            gh api -H "Accept: application/vnd.github.raw" "repos/${REPO}/contents/$1?ref=${HEAD_SHA}" > "${dest}/$1"
+          }
+          # The PR's datasets start as the base's; its changed dataset files replace them.
+          cp -R evals "${dest}/evals"
+          fetch src/cqc_cpcc/config/prompt_registry.json
+          fetch src/cqc_cpcc/config/model_registry.json
+          while IFS=$'\t' read -r status file previous; do
+            if [[ "${previous}" == evals/datasets/* ]]; then rm -f "${dest}/${previous}"; fi
+            [[ "${file}" == evals/datasets/* ]] || continue
+            if [ "${status}" = "removed" ]; then rm -f "${dest}/${file}"; else fetch "${file}"; fi
+          done < "${RUNNER_TEMP}/pr-files.tsv"
+
+      - name: Download the A/B outputs (data)
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: prompt-eval-dispatch-${{ github.run_id }}
+          path: ab-artifact
+
+      - name: Re-decide with the base branch's detection, graders and rule
+        id: decide
+        shell: bash
+        env:
+          BASE_SHA: ${{ needs.dispatch.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.dispatch.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ab-artifact
+          if ! grep -q '"prompt-ab-decide"' src/cqc_cpcc/model_eval/prompt_automation.py; then
+            echo "::error::the base branch has no prompt-ab-decide; dispatch from a branch whose base has it"
+            exit 1
+          fi
+          poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --dir ab-artifact --head-root "${RUNNER_TEMP}/pr-head" \
+            --base-sha "${BASE_SHA}" --head-sha "${HEAD_SHA}" --changed-files "${RUNNER_TEMP}/changed.txt"
+          cat ab-artifact/base-rule.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report the A/B on the PR
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr_number }}
+          SHA: ${{ needs.dispatch.outputs.sha }}
+          RUN_RESULT: ${{ needs.dispatch.result }}
+          DECIDE_OUTCOME: ${{ steps.decide.outcome }}
+          AB_STATUS: ${{ steps.decide.outputs.ab_status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           { echo "<!-- prompt-eval -->"; echo "## Prompt evaluation (maintainer run)"; echo
-            if [ -f evals/runs/dispatch/ab.md ]; then cat evals/runs/dispatch/ab.md; else echo "No prompt suites affected."; fi
+            if [ "${RUN_RESULT}" != "success" ]; then echo "The A/B run ended with **${RUN_RESULT}**."; echo; fi
+            if [ "${DECIDE_OUTCOME}" != "success" ]; then echo "The base-branch check ended with **${DECIDE_OUTCOME}**."; echo; fi
+            if [ -f ab-artifact/ab.md ]; then cat ab-artifact/ab.md; echo; fi
+            if [ -f ab-artifact/base-rule.md ]; then cat ab-artifact/base-rule.md; fi
             echo; echo "_Run: ${RUN_URL}_"; } > comment.md
           gh pr comment "${PR}" --repo "${REPO}" --body-file comment.md
-          case "${AB_STATUS}" in fail) state=failure;; *) state=success;; esac
+          if [ "${RUN_RESULT}" != "success" ] || [ "${DECIDE_OUTCOME}" != "success" ]; then
+            state=failure; description="A/B (maintainer run): run ${RUN_RESULT}, base-branch check ${DECIDE_OUTCOME}"
+          else
+            case "${AB_STATUS}" in
+              pass|pass-provisional) state=success;;
+              *) state=failure;;
+            esac
+            description="A/B (maintainer run): ${AB_STATUS:-unknown}"
+          fi
           gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="${state}" -f context="prompt-eval/ab" \
-            -f description="A/B (maintainer run): ${AB_STATUS:-pass}" -f target_url="${RUN_URL}" >/dev/null
+            -f description="${description}" -f target_url="${RUN_URL}" >/dev/null

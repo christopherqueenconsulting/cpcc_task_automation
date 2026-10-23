@@ -102,6 +102,10 @@ def affected(base_ref: str, changed: Optional[list] = None) -> dict:
             reason = f"{pid}: {', '.join(sorted(hits)[:3])} changed"
         elif old and new and old.fingerprint != computed.get(pid, new.fingerprint):
             reason = f"{pid}: request fingerprint changed"
+        elif base_reg and (old is None or new is None):
+            reason = f"{pid}: registry entry {'added' if old is None else 'removed'}"
+        elif old and new and (old.version != new.version or old.status != new.status):
+            reason = f"{pid}: version or status changed"
         if reason:
             if entry.status == "judge":
                 judges_changed.append(pid)
@@ -280,15 +284,179 @@ def prompts_unchanged(suite_id: str, base_ref: str) -> bool:
     if base_reg is None:
         return False
     head = prompt_registry.load()
-    computed = prompt_registry.compute_all(head)
+    return same_prompts(head, base_reg, prompt_registry.compute_all(head), suite_id)
+
+
+def same_prompts(head, base_reg, head_fingerprints: dict, suite_id: str) -> bool:
+    """The suite exercises the same non-judge prompts in both registries, each rendering the
+    same request (``head_fingerprints``: pid -> fingerprint of the head's requests)."""
     in_head = {pid for pid, e in head.prompts.items() if suite_id in e.suites and e.status != "judge"}
     in_base = {pid for pid, e in base_reg.prompts.items() if suite_id in e.suites and e.status != "judge"}
     if not in_head or in_head != in_base:  # a prompt added, removed or moved to another suite
         return False
-    for pid in in_head:
-        if base_reg.prompts[pid].fingerprint != computed.get(pid, head.prompts[pid].fingerprint):
-            return False
-    return True
+    return all(base_reg.prompts[pid].fingerprint == head_fingerprints.get(pid, head.prompts[pid].fingerprint)
+               for pid in in_head)
+
+
+def suites_from_data(changed: list, head_reg, base_reg, head_roles: dict, base_roles: dict) -> dict:
+    """The suites a change needs a model run on, decided from data only (no PR code imported).
+
+    The same triggers as ``affected``'s ``run`` list: a changed ``source_files``/``shared_files``
+    path of either registry, a registry entry added or removed, a stored fingerprint, version
+    or status that differs, a changed suite dataset, or a changed model-registry role. Used from a base-branch checkout to check the PR's own
+    detection, which runs the PR's code.
+    """
+    run: dict[str, str] = {}
+    for pid in set(head_reg.prompts) | set(base_reg.prompts):
+        old, new = base_reg.prompts.get(pid), head_reg.prompts.get(pid)
+        entries = [e for e in (old, new) if e is not None]
+        if (new if new is not None else old).status == "judge":  # judges recalibrate, never run
+            continue
+        paths = {f for e in entries for f in e.source_files + e.shared_files}
+        hits = [f for f in changed if _matches(f, paths) and f != LOCKFILE_RELPATH]
+        moved = (old is None or new is None or old.fingerprint != new.fingerprint or old.version != new.version
+                 or old.status != new.status)
+        if hits or moved:
+            for suite_id in {s for e in entries for s in e.suites}:
+                run.setdefault(suite_id, f"{pid}: {', '.join(sorted(hits)[:3]) or 'registry entry changed'}")
+    for suite_id in SUITE_MODULES:
+        suite = get_suite(suite_id)
+        if any(f.startswith(f"evals/datasets/{suite.dataset}/") for f in changed):
+            run.setdefault(suite_id, f"dataset {suite.dataset} changed")
+        if head_roles.get(suite.role) != base_roles.get(suite.role):
+            run.setdefault(suite_id, f"model registry role {suite.role} changed")
+    return run
+
+
+def _prompt_paths(reg, suite_id: str) -> set:
+    return {f for e in reg.prompts.values() if suite_id in e.suites and e.status != "judge"
+            for f in e.source_files + e.shared_files}
+
+
+def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: str,
+                          changed: Optional[list] = None) -> dict:
+    """Re-decide a finished A/B with THIS checkout's detection, graders and rule.
+
+    The workflow runs this in its own job from a checkout of the base branch, with the
+    base's own environment. The PR's tree (``head_root``) and the A/B artifact (``out``) are
+    read as data only. This guards against an honest PR that relaxes the rule that judges it
+    or skips a suite by mistake; it does not stop a hostile author, whose code wrote the
+    saved outputs (docs/PROMPTS.md, "Both rules must pass").
+
+    - The suites that need a run are detected here from the changed files, and each must be in
+      the A/B with its saved outputs. Otherwise the result is ``not-run`` or ``fail``.
+    - Each suite is decided with this checkout's graders and rule, on cases whose inputs are
+      the same on both sides, with this policy's repeats on every case and model.
+    - The A/B passes only when the PR's own verdict and this one both pass.
+    """
+    if changed is None:  # the CI passes GitHub's own list of the PR's files instead
+        changed = [f for f in _git("diff", "--name-only", "--no-renames",
+                                   _git("merge-base", base_sha, head_sha).strip(), head_sha).splitlines() if f]
+    head_reg = prompt_registry._lenient(json.loads(
+        (head_root / prompt_registry.REGISTRY_RELPATH).read_text(encoding="utf-8")))
+    base_reg = prompt_registry.load()
+    head_roles = (json.loads((head_root / MODEL_REGISTRY_RELPATH).read_text(encoding="utf-8")).get("roles") or {})
+    base_roles = model_registry.load_registry().model_dump(mode="json")["roles"]
+
+    def role(cfg):
+        return model_registry.RoleConfig.model_validate(cfg).model_dump(mode="json") if cfg else None
+
+    required = suites_from_data(changed, head_reg, base_reg, {r: role(c) for r, c in head_roles.items()},
+                                {r: role(c) for r, c in base_roles.items()})
+    ab_path = out / "ab.json"
+    report = json.loads(ab_path.read_text(encoding="utf-8")) if ab_path.exists() else None
+    results: dict = {}
+    if required and report is None:
+        status = "not-run"
+    else:
+        for suite_id in sorted(required):
+            results[suite_id] = _decide_suite(suite_id, (report or {}).get("suites", {}).get(suite_id), out,
+                                              head_root, changed, head_reg, base_reg,
+                                              {r: role(c) for r, c in head_roles.items()})
+        statuses = [r["status"] for r in results.values()]
+        status = ("fail" if "fail" in statuses
+                  else "pass" if all(s == "pass" for s in statuses) else "pass-provisional")
+    pr_status = (report or {}).get("status")
+    if status in ("fail", "not-run"):
+        combined = status
+    elif pr_status == "fail":
+        combined = "fail"
+    else:
+        combined = "pass" if status == "pass" and pr_status in (None, "pass") else "pass-provisional"
+    decided = {"base_sha": base_sha, "head_sha": head_sha, "required": required, "status": status,
+               "pr_status": pr_status, "combined_status": combined, "suites": results}
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "ab-base-rule.json").write_text(json.dumps(decided, indent=2, sort_keys=True, default=str) + "\n",
+                                           encoding="utf-8")
+    (out / "base-rule.md").write_text(base_rule_markdown(decided), encoding="utf-8")
+    return decided
+
+
+def _decide_suite(suite_id: str, pr_result: Optional[dict], out: Path, head_root: Path, changed: list,
+                  head_reg, base_reg, head_roles: Optional[dict] = None) -> dict:
+    def failed(reason):
+        return {"suite": suite_id, "status": "fail", "models": {}, "notes": [], "reasons": [reason]}
+
+    if pr_result is None:
+        return failed("the base branch's detection needs this suite, but the A/B did not run it")
+    if suite_id not in SUITE_MODULES:
+        if pr_result.get("status") == "no-base":
+            return {"suite": suite_id, "status": "no-base", "models": {}, "reasons": [],
+                    "notes": ["the base branch has no such suite; absolute numbers only"]}
+        return failed("the base branch has no such suite, so its rule cannot judge it")
+    head_raw, base_raw = (out / side / suite_id / "raw_outputs.jsonl" for side in ("head", "base"))
+    if pr_result.get("status") == "no-base" or not (head_raw.exists() and base_raw.exists()):
+        return failed("the base branch has this suite, but the A/B saved no base or head outputs for it")
+    suite = get_suite(suite_id)
+    same = _unchanged_case_ids(suite, head_root)
+    head_recs, base_recs = prompt_eval.read_records(head_raw), prompt_eval.read_records(base_raw)
+    if set(head_recs) != set(base_recs) or not head_recs:
+        return failed(f"head and base ran different models: {sorted(head_recs)} vs {sorted(base_recs)}")
+    incumbent = (head_roles or {}).get(suite.role)
+    if incumbent is not None:
+        label = prompt_eval.label_of(incumbent["model"], incumbent.get("reasoning_effort"))
+        if label not in head_recs:
+            return failed(f"the A/B did not run the {suite.role} role's incumbent {label}: {sorted(head_recs)}")
+    repeats = prompt_eval.suite_policy(suite_id).repeats
+    wanted = {c.case_id for c in suite.cases() if same is None or c.case_id in same}
+    if not wanted:
+        return failed("no case is the same in the PR's dataset and the base's, so nothing was compared")
+    for label in head_recs:
+        for side, recs in (("head", head_recs[label]), ("base", base_recs[label])):
+            counts: dict = {}
+            for r in recs:
+                if r.error_kind != "budget":
+                    counts[r.case_id] = counts.get(r.case_id, 0) + 1
+            short = sorted(c for c in wanted if counts.get(c, 0) < repeats)
+            if short:
+                return failed(f"{label} {side}: {len(short)} case(s) have fewer than {repeats} runs "
+                              f"(e.g. {short[0]})")
+    unchanged = (same_prompts(head_reg, base_reg, {p: e.fingerprint for p, e in head_reg.prompts.items()}, suite_id)
+                 and not any(_matches(f, _prompt_paths(head_reg, suite_id) | _prompt_paths(base_reg, suite_id))
+                             for f in changed))
+    return ab_decision(suite, _aggregates(suite, head_raw, same), _aggregates(suite, base_raw, same),
+                       split=None if unchanged else "holdout")
+
+
+def base_rule_markdown(decided: dict) -> str:
+    from cqc_cpcc.model_eval.scorecard import _safe
+
+    lines = [f"## Base-branch check: {decided['combined_status']}", "",
+             f"Base `{decided['base_sha'][:7]}` re-decided this PR's A/B with its own detection, graders and "
+             f"rule (data only; protects against honest relaxations, not a hostile author).", ""]
+    required = decided["required"]
+    if not required:
+        lines.append("The base branch's detection finds no suite that needs a model run.")
+    elif decided["status"] == "not-run":
+        lines.append("Suites the base branch requires, but the A/B did not run: "
+                     + ", ".join(f"`{s}`" for s in sorted(required)))
+    else:
+        body = ab_markdown({"base_ref": decided["base_sha"][:7], "status": decided["status"],
+                            "suites": decided["suites"]})
+        lines.append(body.split("\n", 4)[-1].replace("scored with the head graders", "scored with the base graders"))
+    lines += ["", f"PR rule: **{decided['pr_status'] or 'no A/B'}**. Base rule: **{decided['status']}**. "
+                  f"Combined (both must pass): **{decided['combined_status']}**."]
+    return "\n".join(lines) + "\n"
 
 
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
@@ -618,6 +786,20 @@ def cmd_prompt_ab(args) -> int:
     return 0
 
 
+def cmd_prompt_ab_decide(args) -> int:
+    import cqc_cpcc
+
+    print(f"decision code: {Path(cqc_cpcc.__file__).resolve().parent}")
+    changed = None
+    if args.changed_files:
+        changed = [line.strip() for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines()
+                   if line.strip()]
+    decided = decide_with_this_rule(Path(args.dir), Path(args.head_root), args.base_sha, args.head_sha, changed)
+    print(Path(args.dir, "base-rule.md").read_text(encoding="utf-8"))
+    github_output(ab_status=decided["combined_status"], required=",".join(sorted(decided["required"])))
+    return 0
+
+
 def cmd_prompt_calibrate(args) -> int:
     suites = [s for s in (args.suites or "").split(",") if s] or None
     patch = asyncio.run(calibrate(Path(args.out), suites, args.repeats, apply=args.apply))
@@ -666,6 +848,16 @@ def add_parsers(sub) -> None:
     ab.add_argument("--judge-model", default=None)
     ab.add_argument("--judge-cache", default=None)
     ab.set_defaults(func=cmd_prompt_ab)
+
+    dec = sub.add_parser("prompt-ab-decide",
+                         help="re-decide a finished A/B with this checkout's graders and rule ($0)")
+    dec.add_argument("--dir", required=True, help="the A/B artifact directory (ab.json, head/, base/); may be empty")
+    dec.add_argument("--head-root", required=True, help="the PR's tree, read as data only")
+    dec.add_argument("--base-sha", required=True)
+    dec.add_argument("--head-sha", required=True)
+    dec.add_argument("--changed-files", default=None,
+                     help="file listing the PR's changed paths (old and new path of a rename); default: git diff")
+    dec.set_defaults(func=cmd_prompt_ab_decide)
 
     cal = sub.add_parser("prompt-calibrate", help="run every suite on its incumbent; propose thresholds")
     cal.add_argument("--suites", default=None)

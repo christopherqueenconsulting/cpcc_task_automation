@@ -102,7 +102,7 @@ Evaluations are **event-driven only**, never on a timer:
 | A PR changes nothing a prompt depends on | `prompt-eval/ab` = success, "no suites affected" | $0 |
 | A PR changes only `poetry.lock`, `pyproject.toml` or docs (a dependency version bump, see below) | no model calls: the `dependency-smoke` job syncs the environment to the head lock (`poetry install --with test --sync`), imports every `cqc_cpcc` module, resolves every absolute import in `cqc_cpcc` and `cqc_streamlit_app` (function-level ones included), and checks that packages removed from the lock are gone; `prompt-eval/ab` = success, "dependency-only change; import smoke passed" (failure if any check fails) | $0 |
 | A PR changes only grader code | re-score master's saved outputs with the new graders | $0 |
-| A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, or a model-registry role | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap for suites with ≥30 cases (the composite must be non-inferior; a grader fails it only on a clear drop, see below), on the holdout split, or on all cases when the suite's prompts render the same request as the base; absolute margin otherwise; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1.6 projected on one model (from #398's $0.89 at repeats 2; PR #404), up to ~$5.3 worst case |
+| A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, or a model-registry role | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap for suites with ≥30 cases (the composite must be non-inferior; a grader fails it only on a clear drop, see below), on the holdout split, or on all cases when the suite's prompts render the same request as the base; absolute margin otherwise; then re-decided by the `ab-base-rule` job with the base branch's detection, graders and rule, and both must pass; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1.6 projected on one model (from #398's $0.89 at repeats 2; PR #404), up to ~$5.3 worst case |
 | That PR is merged | the affected suites run on master; `prompt-history.jsonl` and `PROMPT_STATUS.md` are updated on the `model-eval-state` branch; "Prompt needs work: <id>" issues open (or close when passing again) | ~$0.9 (one side; PR #404) |
 | A new model is considered (weekly free discovery finds a candidate, the current model changed, or a dispatch) | the Model Evaluation workflow grades it, then the **cross-suite gate** runs the winner on every other suite of the roles it would take; promotion needs both ([`MODEL_EVALUATION.md`](MODEL_EVALUATION.md)) | ≤ $10 + suites |
 
@@ -131,6 +131,47 @@ in `model_policy.json`.
   least 30). Known limit: response-side code (scoring engine, compile gate, validity and
   requirement coverage, parsers) can still be tuned on dev cases, and the all-cases split
   does not guard against that.
+
+**Both rules must pass.** The A/B runs the PR's own code, including this rule and the
+detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.
+A second job, `ab-base-rule` (and `dispatch-report` for a maintainer `ab` run), re-checks it:
+
+- It checks out the base branch and installs the base branch's own environment. It reads the
+  PR through the GitHub API as data only (its changed-file list, its registries and changed
+  dataset files) and the A/B artifact. Nothing from the PR is checked out or run, and the job
+  holds no secret.
+- It detects the suites that need a model run from the PR's changed files (GitHub's list)
+  (`suites_from_data`: changed prompt files, registry entries, datasets, model roles). Each
+  one must be in the A/B with saved head and base outputs for the same models, and every
+  case must have the base policy's `repeats` runs on both sides. A case whose inputs the PR
+  changed is left out of the comparison.
+- It re-decides each suite with the base's graders and rule (`prompt-ab-decide`, no model
+  calls, $0). The all-cases split applies only when the PR changed none of the suite's
+  prompt files and every fingerprint matches.
+- `prompt-eval/ab` passes only when the PR's verdict and the base's both pass. A rule change
+  therefore takes effect only once it is on the base branch.
+
+What this protects against: an honest PR that relaxes the rule, or skips a suite, by
+mistake. It does not stop a hostile author. Both sides' saved outputs are written by PR code,
+and on a `pull_request` run the workflow file itself comes from the PR, so a PR that edits
+`prompt-eval.yml` could change these jobs. Every PR author today is a trusted account.
+Hostile-author resistance (a `workflow_run` job that always runs master's workflow and posts
+its own required context with the bot's app token) is a follow-up for Christopher.
+
+When the base cannot judge a PR (`prompt-eval/ab` fails, and the `ab-base-rule` log or
+`base-rule.md` says why):
+
+| Case | What happens | Path |
+|---|---|---|
+| The PR adds a new suite | the base reports it `no-base` (absolute numbers only), not a failure | none needed |
+| The PR changes the saved-output format (`SuiteRecord`) or the `prompt-ab-decide` arguments | the base job fails to read it | land the reader on the base branch first, then the PR; or Christopher merges past the check after reading the artifact, with the ruling recorded |
+| The PR adds a registry field | read leniently (unknown fields dropped) | none needed |
+| The PR that adds this check (the base's source has no `prompt-ab-decide`) | `ab-base-rule` reports `bootstrap` and the PR's own verdict stands; a maintainer dispatch fails instead | none needed; never reached once the check is on master |
+| The PR changes every case of a required suite's dataset, or removes the dataset | fails: "nothing was compared" | Christopher merges past the check after reading the A/B artifact, with the ruling recorded |
+| The base's detection requires a suite this PR's detection did not run | pending ("A/B needs a maintainer run") when no A/B ran; failure ("the A/B did not run it") when an A/B ran other suites | dispatch mode `ab` with `suites` set to the listed suites |
+| A maintainer `ab` dispatch whose `models` leave out the role's current model | fails: "did not run the … incumbent" | dispatch again with the current model in `models` (or `models` blank) |
+| A maintainer `ab` dispatch of a PR branch older than a `repeats` change on master | fails: "fewer than N runs" (dispatch runs the PR head, which used its own repeats) | merge master into the branch, then dispatch again |
+| The base-branch job fails for infrastructure reasons (install, `git fetch`, the 20-minute timeout) | `prompt-eval/ab` fails, even on PRs with no suites | "Re-run failed jobs" on the Prompt Evaluation run |
 
 Before this rule, every grader had to be non-inferior on its own, and a prompt-identical
 change failed it most of the time. PR #401 records the measured rates (false fails, and
@@ -166,6 +207,7 @@ Commands (all under `poetry run python -m cqc_cpcc.model_eval`):
 - `suite list` · `suite run --suite <id|all> [--model m@effort] [--judges] [--dry-run]` · `suite score --suite <id> --raw <raw_outputs.jsonl>`
 - `prompts-affected --base-ref origin/master` (what a change needs)
 - `prompt-ab --suites a,b --base-ref origin/master [--judges]`
+- `prompt-ab-decide --dir <A/B artifact> --head-root <PR tree> --base-sha <sha> --head-sha <sha>` (run from a base-branch checkout; the CI's base-branch check)
 - `prompt-calibrate [--apply]` (run every suite on its current model and propose thresholds)
 - `prompt-record`, `prompt-rescore`, `suite-gate` (used by the workflows)
 
