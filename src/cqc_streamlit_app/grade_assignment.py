@@ -2209,6 +2209,22 @@ def _clear_results(run_key: str, grading_mode: str) -> None:
     forget_results(run_key)
 
 
+def _run_meta(run_key: str, grading_mode: str) -> Optional[dict]:
+    """PII-free facts about how a run was graded, for the harshness report. ``None`` after a
+    restart (the inputs are gone), which keeps the meta already saved."""
+    kwargs = st.session_state.get("grading_inputs_by_key", {}).get(run_key, {}).get("kwargs")
+    if kwargs is None or grading_mode == "errors_only":
+        return None
+    from cqc_cpcc.requirement_coverage import checklist_hash
+    from cqc_cpcc.utilities.AI.llm_gateway import prompt_tag
+    checklist = kwargs.get("requirements")
+    return {"solution_provided": bool(kwargs.get("reference_solution")),
+            "requirements_count": len(checklist.requirements) if checklist else 0,
+            "checklist_hash": checklist_hash(checklist),
+            "prompt": prompt_tag("rubric-grading"),
+            "model": kwargs.get("model_name")}
+
+
 def remember_results(run_key: str, grading_mode: str) -> None:
     """Save a finished run so it survives an app restart (see results_store)."""
     try:
@@ -2222,7 +2238,8 @@ def remember_results(run_key: str, grading_mode: str) -> None:
         greeting_names = ({sid: (sub.student_name or "") for sid, sub in submissions.items()}
                           # After a restart the inputs are gone: keep the names the saved run had.
                           or st.session_state.get("greeting_names_by_key", {}).get(run_key))
-        results_store.save_run(run_key, grading_mode, results, failures, greeting_names=greeting_names)
+        results_store.save_run(run_key, grading_mode, results, failures, greeting_names=greeting_names,
+                               meta=_run_meta(run_key, grading_mode))
     except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
         logger.warning(f"Could not save grading results to disk: {e}")
 
