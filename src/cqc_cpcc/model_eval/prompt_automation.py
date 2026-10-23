@@ -375,6 +375,10 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
 
         head_capture = json.loads(requests_path.read_text(encoding="utf-8")).get("head") or {}
         reasons = request_capture.compare(head_capture, request_capture.capture(sorted(required)), sorted(required))
+        fingerprints = {p: e.fingerprint for p, e in head_reg.prompts.items()}
+        for suite_id in reasons:  # the capture sees fixed-answer calls only: every prompt must also be unchanged
+            if reasons[suite_id] is None and not same_prompts(head_reg, base_reg, fingerprints, suite_id):
+                reasons[suite_id] = "a prompt this suite uses changed in the registry"
         for suite_id, reason in reasons.items():
             results[suite_id] = {"suite": suite_id, "status": "pass" if reason is None else "fail", "models": {},
                                  "reasons": [] if reason is None else [f"requests differ from the base: {reason}"],
@@ -464,9 +468,11 @@ def base_rule_markdown(decided: dict) -> str:
         lines.append("The base branch's detection finds no suite that needs a model run.")
     elif decided["status"] == "request-identical":
         lines.append("Every request the required suites send (" + ", ".join(f"`{s}`" for s in sorted(required))
-                     + ") is byte-identical to the base's: messages, schema and model parameters, captured "
-                       "with no model call. No model A/B is needed; the re-score, the unit suite and the "
-                       "stub-transport tests cover the response side.")
+                     + ") is byte-identical to the base's (messages, schema, model parameters, model registry "
+                       "and client endpoint), every registry prompt they use is unchanged, and each case "
+                       "handles the fixed test-mode answer identically. Captured with no model call. No model "
+                       "A/B is needed. Not covered: how the code handles the model's real, varied answers "
+                       "(the unit suite; record-and-replay is issue #406).")
     elif decided["status"] == "not-run":
         lines.append("Suites the base branch requires, but the A/B did not run: "
                      + ", ".join(f"`{s}`" for s in sorted(required)))
@@ -815,23 +821,36 @@ def requests_identical(suite_ids: list, base_ref: str, out: Path) -> dict:
     Any failure (no base command, a crash, a different format) leaves the suite "not
     identical", so the full A/B runs.
     """
+    import tempfile
+
     from cqc_cpcc.model_eval import request_capture
 
+    out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     head = request_capture.capture(suite_ids)
-    worktree = _base_worktree(base_ref, out / "base-src")
-    base_file = out / "base-requests.json"
-    try:
-        env = {**os.environ, "PYTHONPATH": str(worktree / "src")}
-        result = subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests", "--suites",
-                                 ",".join(suite_ids), "--out", str(base_file.resolve())],
-                                cwd=worktree, env=env, capture_output=True, text=True)
-        base = json.loads(base_file.read_text(encoding="utf-8")) if result.returncode == 0 else {}
-        if result.returncode != 0:
-            print(result.stderr[-2000:])
-    finally:
-        subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
+    base: dict = {}
+    with tempfile.TemporaryDirectory() as tmp:  # outside out/, so the base source never lands in an artifact
+        worktree = _base_worktree(base_ref, Path(tmp) / "base-src")
+        base_file = Path(tmp) / "base-requests.json"
+        try:
+            # No API key: the capture never sends, and a path that bypassed it could not either.
+            env = {k: v for k, v in os.environ.items() if k not in ("OPENROUTER_API_KEY", "OPENAI_API_KEY")}
+            env["PYTHONPATH"] = str(worktree / "src")
+            result = subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests", "--suites",
+                                     ",".join(suite_ids), "--out", str(base_file)],
+                                    cwd=worktree, env=env, capture_output=True, text=True, timeout=900)
+            if result.returncode == 0:
+                base = json.loads(base_file.read_text(encoding="utf-8"))
+            else:
+                print(result.stderr[-2000:])
+        except subprocess.TimeoutExpired:
+            print("the base capture timed out")
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
     reasons = request_capture.compare(head, base, suite_ids)
+    for suite_id in suite_ids:  # the capture sees fixed-answer calls only: every prompt must also be unchanged
+        if reasons[suite_id] is None and not prompts_unchanged(suite_id, base_ref):
+            reasons[suite_id] = "a prompt this suite uses changed in the registry"
     report = {"base_ref": base_ref, "suites": reasons,
               "identical": bool(suite_ids) and all(r is None for r in reasons.values()), "head": head}
     (out / "requests.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

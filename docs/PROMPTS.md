@@ -102,7 +102,7 @@ Evaluations are **event-driven only**, never on a timer:
 | A PR changes nothing a prompt depends on | `prompt-eval/ab` = success, "no suites affected" | $0 |
 | A PR changes only `poetry.lock`, `pyproject.toml` or docs (a dependency version bump, see below) | no model calls: the `dependency-smoke` job syncs the environment to the head lock (`poetry install --with test --sync`), imports every `cqc_cpcc` module, resolves every absolute import in `cqc_cpcc` and `cqc_streamlit_app` (function-level ones included), and checks that packages removed from the lock are gone; `prompt-eval/ab` = success, "dependency-only change; import smoke passed" (failure if any check fails) | $0 |
 | A PR changes only grader code | re-score master's saved outputs with the new graders | $0 |
-| A PR's affected suites send byte-identical requests (messages, schema, model parameters) | no model A/B: re-score master's saved outputs; `ab-base-rule` re-checks the requests with the base's code | $0 |
+| A PR's affected suites send byte-identical requests and handle a fixed test answer identically | no model A/B; `ab-base-rule` re-checks with the base's code; a re-score for information (a failed re-score job fails the check) | $0 |
 | A PR changes a prompt, its schema, shared request code (`shared_files`), a suite dataset, or a model-registry role | **A/B**: each affected suite at the base and at the head, same model(s), both scored with the head graders; paired bootstrap for suites with ≥30 cases (the composite must be non-inferior; a grader fails it only on a clear drop, see below), on the holdout split, or on all cases when the suite's prompts render the same request as the base; absolute margin otherwise; then re-decided by the `ab-base-rule` job with the base branch's detection, graders and rule, and both must pass; pairwise judge (report-only). A base run that fails fails the A/B; when the PR changes a dataset, only unchanged cases are compared. One budget covers the whole command. PR comment + commit status `prompt-eval/ab` | ~$1.6 projected on one model (from #398's $0.89 at repeats 2; PR #404), up to ~$5.3 worst case |
 | That PR is merged | the affected suites run on master; `prompt-history.jsonl` and `PROMPT_STATUS.md` are updated on the `model-eval-state` branch; "Prompt needs work: <id>" issues open (or close when passing again) | ~$0.9 (one side; PR #404) |
 | A new model is considered (weekly free discovery finds a candidate, the current model changed, or a dispatch) | the Model Evaluation workflow grades it, then the **cross-suite gate** runs the winner on every other suite of the roles it would take; promotion needs both ([`MODEL_EVALUATION.md`](MODEL_EVALUATION.md)) | ≤ $10 + suites |
@@ -134,24 +134,48 @@ in `model_policy.json`.
   does not guard against that.
 
 **Request-identical changes skip the paid A/B.** Many shared-file changes (transport,
-timeouts, logging) send byte-identical requests, and a paid A/B of them only measures run
-noise: #398 failed two A/Bs that way. So before any model call:
+timeouts, logging) leave everything the model receives unchanged, and a paid A/B of them only
+measures run noise: #398 failed two A/Bs that way. So before any model call, the `detect` job
+runs `prompt-requests-identical` on every suite that needs a run, at the head and at the base,
+with no API key and no model call ($0):
 
-- The `detect` job runs `prompt-requests-identical`. For every suite that needs a run, it
-  captures the exact request body each case would send (messages, response schema and every
-  model parameter) at the head and at the base. It replaces the OpenRouter client with one
-  that records and refuses to send, so there are no model calls and the cost is $0.
-- If every suite's requests match, the paid A/B is skipped. The suites are re-scored on
-  master's saved outputs instead ($0). `ab-base-rule` then re-captures the base's requests
-  with the base's own code and compares them with the PR's capture. Only an exact match
-  passes (`request-identical`).
-- Any difference, error or missing capture runs the full paid A/B, as before. A maintainer
-  dispatch can force it with `full_ab`.
+- **Requests:** the exact request body each case sends first (messages, response schema and
+  every model parameter), with the OpenRouter client replaced by one that records and
+  refuses to send.
+- **Later calls of a case:** with the fixed test-mode answer, every gateway call each case
+  makes (role, prompt text, response schema, model override). Every registry prompt the suite
+  uses must also keep its fingerprint.
+- **Settings:** the whole model registry (roles, fallbacks, token limits) and the client's base
+  URL and headers. Timeouts and retries are left out on purpose: they do not change what the
+  model receives (the unit suite and the stub-transport tests check them).
+- **Answer handling:** each case's output when the gateway returns its fixed test-mode answer,
+  which runs the parsing, compile gate, requirement coverage and scoring code
+  (`src/cqc_cpcc/scoring/` included) on both sides. A fixed answer is a coarse probe: most
+  suites produce one output for it, so this catches a change in how an answer is handled, not
+  every change in how a real, varied answer would be. A suite whose cases all raise on the
+  fixed answer handled nothing, so it never takes the fast path. Captures from a different
+  capture format never match, so the first run after a format change is a full A/B.
 
-What the fast path does not cover: code that handles the model's answer (parsing, scoring)
-on live output. The re-score runs the PR's graders on saved outputs, and the unit suite
-(including the stub-transport tests) runs as its own required check. Neither replays a live
-answer through the PR's parsing code. A record-and-replay A/B is the follow-up for that.
+When everything matches, the paid A/B is skipped. `ab-base-rule` then re-captures the base
+side with the base's own code and accepts only an exact match (`request-identical`). The
+suites are also re-scored: the PR's graders run on master's saved outputs, and the code that
+produced those outputs is not re-run. The re-score's numbers are shown for information only and
+do not decide the result, but if the re-score job itself fails, `prompt-eval/ab` fails and the
+report names the `full_ab` dispatch. Anything else, including a failure or a timeout of the
+capture, runs the full paid A/B as before.
+
+- **Who can pass this way:** any same-repository PR, including `claude/` and `auto/` branches
+  and authors outside `PROMPT_EVAL_TRUSTED_AUTHORS`, with no maintainer step. The PR's code
+  produces its side of the capture, so this guards against honest mistakes, not a hostile
+  author.
+- **Per-PR override:** a maintainer dispatch with mode `ab` and `full_ab: true` runs the paid
+  A/B. The report names this whenever the base does not confirm the fast path.
+- **Global off switch:** set the repository variable `PROMPT_EVAL_FAST_PATH` to `off`
+  (lowercase). It takes effect on the next run. Christopher owns that decision. To remove the
+  fast path entirely, revert both #407 and the PR that added this switch; reverting only the
+  latter leaves #407's fast path running without a switch.
+- **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
+  (issue #406) is the follow-up for that.
 
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.

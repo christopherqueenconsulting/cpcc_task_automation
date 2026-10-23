@@ -785,6 +785,17 @@ class TestDecideWithTheBaseRule:
         decided = self._decide(out)
         assert decided["combined_status"] == "not-run" and "requests differ" in str(decided["suites"])
 
+    def test_a_requests_claim_with_a_changed_registry_prompt_is_not_run(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import request_capture
+
+        monkeypatch.setattr(pa, "suites_from_data", lambda *a, **k: {"digest": "test"})
+        monkeypatch.setattr(pa, "same_prompts", lambda *a, **k: False)
+        out = tmp_path / "artifact"
+        out.mkdir()
+        (out / "requests.json").write_text(json.dumps({"head": request_capture.capture(["digest"])}))
+        decided = self._decide(out)
+        assert decided["combined_status"] == "not-run" and "changed in the registry" in str(decided["suites"])
+
     async def test_a_case_the_pr_changed_is_left_out_not_failed(self, finished_ab, tmp_path):
         import shutil
 
@@ -902,6 +913,14 @@ class TestWorkflowWiring:
         run = next(s for s in jobs["dispatch"]["steps"] if s.get("id") == "run")["run"]
         assert 'printf \'%s,%s\' "${suites}" "${SUITES}"' in run
 
+    def test_a_capture_failure_or_hang_falls_back_to_the_paid_a_b(self, jobs):
+        step = next(s for s in jobs["detect"]["steps"] if s.get("id") == "requests")
+        assert step["continue-on-error"] is True and step["timeout-minutes"] and jobs["detect"]["timeout-minutes"]
+        assert "vars.PROMPT_EVAL_FAST_PATH != 'off'" in step["if"] and "env -u OPENROUTER_API_KEY" in step["run"]
+        upload = next(s for s in jobs["detect"]["steps"] if s.get("name") == "Upload the request capture")
+        download = next(s for s in jobs["ab-base-rule"]["steps"] if s.get("name") == "Download the request capture (data)")
+        assert upload["if"] == "always()" and upload["with"]["name"] == download["with"]["name"]
+
     def test_the_paid_a_b_is_skipped_only_on_identical_requests_and_dispatch_can_force_it(self, jobs):
         assert "needs.detect.outputs.request_identical != 'true'" in jobs["ab"]["if"]
         run = next(s for s in jobs["dispatch"]["steps"] if s.get("id") == "run")["run"]
@@ -922,7 +941,7 @@ class TestReportStateMachine:
                 "JUDGES_CHANGED": "", "DEPENDENCY_ONLY": "false", "SMOKE_RESULT": "skipped",
                 "AB_RESULT": "skipped", "AB_STATUS": "", "AUTHOR_TYPE": "User", "BASE_RESULT": "success",
                 "BASE_STATUS": "pass", "BASE_REQUIRED": "", "RUN_URL": "https://run", "HEAD_REF": "claude/x",
-                "RESCORE_RESULT": "skipped"}
+                "RESCORE_RESULT": "skipped", "REQUEST_IDENTICAL": ""}
 
     @pytest.fixture(scope="class")
     @classmethod
@@ -980,6 +999,27 @@ class TestReportStateMachine:
         posted, _ = self._post(script, tmp_path, RUN_SUITES="x", BASE_REQUIRED="x", AB_RESULT="skipped",
                                BASE_STATUS="request-identical", RESCORE_RESULT=rescore)
         assert posted == state
+
+    def test_a_fast_path_the_base_does_not_confirm_is_pending_and_names_full_ab(self, script, tmp_path):
+        state, comment = self._post(script, tmp_path, RUN_SUITES="x", BASE_REQUIRED="x", AB_RESULT="skipped",
+                                    BASE_STATUS="not-run", REQUEST_IDENTICAL="true")
+        assert state == "pending" and "full_ab" in comment and "PROMPT_EVAL_TRUSTED_AUTHORS" not in comment
+
+    def test_a_fast_path_where_the_base_requires_nothing_passes(self, script, tmp_path):
+        state, _ = self._post(script, tmp_path, RUN_SUITES="x", AB_RESULT="skipped", BASE_STATUS="pass",
+                              REQUEST_IDENTICAL="true")
+        assert state == "success"
+
+    def test_the_fast_path_comment_shows_the_rescore_and_the_reasons(self, script, tmp_path):
+        (tmp_path / "results" / "prompt-eval-rescore-1").mkdir(parents=True)
+        (tmp_path / "results" / "prompt-eval-rescore-1" / "rescore.md").write_text("RESCORE-TABLE")
+        (tmp_path / "results" / "prompt-eval-requests-1").mkdir(parents=True)
+        (tmp_path / "results" / "prompt-eval-requests-1" / "requests.json").write_text(
+            json.dumps({"suites": {"digest": None}}))
+        state, comment = self._post(script, tmp_path, RUN_SUITES="digest", BASE_REQUIRED="digest",
+                                    AB_RESULT="skipped", BASE_STATUS="request-identical", RESCORE_RESULT="success",
+                                    REQUEST_IDENTICAL="true")
+        assert state == "success" and "RESCORE-TABLE" in comment and "`digest`: identical" in comment
 
     def test_an_a_b_that_did_not_finish_fails_and_says_so(self, script, tmp_path):
         state, comment = self._post(script, tmp_path, RUN_SUITES="x", AB_RESULT="cancelled", BASE_STATUS="pass")
