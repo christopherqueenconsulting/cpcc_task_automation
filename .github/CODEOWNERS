@@ -9,3 +9,12 @@
 /.github/actions/ @gitchrisqueen
 /.github/CODEOWNERS @gitchrisqueen
 /.github/dependabot.yml @gitchrisqueen
+
+# The prompt A/B decision rule: which graders must stay non-inferior, the bootstrap, and how a
+# suite is judged. The rule runs from the PR's own code, so a PR could relax it and weaken a
+# prompt in the same change. Same limits as above: this only requests a review, and never on a
+# PR opened under the owner's own account.
+/src/cqc_cpcc/model_eval/suites/base.py @gitchrisqueen
+/src/cqc_cpcc/model_eval/prompt_automation.py @gitchrisqueen
+/src/cqc_cpcc/model_eval/gates.py @gitchrisqueen
+/src/cqc_cpcc/config/model_policy.json @gitchrisqueen
