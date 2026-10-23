@@ -343,6 +343,93 @@ class TestTheBaseRunsBesideTheHead:
         out = capsys.readouterr().out
         assert "A/B requirement-extraction:" in out and "FAILED: see base/requirement-extraction/run.log" in out
 
+    async def test_a_base_that_ignores_the_polite_stop_is_killed_after_the_grace_period(self, tmp_path):
+        worktree = self._fake_base(
+            tmp_path,
+            "import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "json.dump({'me': os.getpid()}, open(os.path.join(out, 'pids.json'), 'w'))\n"
+            "time.sleep(120)\n")
+        job = asyncio.create_task(asyncio.to_thread(pa._run_base, worktree, "grading", [], 1, tmp_path / "o", 1.0))
+        for _ in range(100):
+            if (tmp_path / "o" / "pids.json").exists() and pa._live_base:
+                break
+            await asyncio.sleep(0.05)
+        pid = json.loads((tmp_path / "o" / "pids.json").read_text())["me"]
+        await asyncio.sleep(0.5)  # let it install the handler
+        pa._terminate_live_base(grace_s=0.5)
+        assert await asyncio.wait_for(job, 20) is None
+        assert not self._alive(pid)
+
+    def test_signalling_falls_back_to_the_process_methods_without_killpg(self, monkeypatch):
+        calls = []
+        proc = SimpleNamespace(pid=1, returncode=None, terminate=lambda: calls.append("terminate"),
+                               kill=lambda: calls.append("kill"))
+        monkeypatch.delattr(pa.os, "killpg", raising=False)
+        pa._signal_group(proc, pa.signal.SIGTERM)
+        pa._signal_group(proc, getattr(pa.signal, "SIGKILL", pa.signal.SIGINT))
+        assert calls == ["terminate", "kill"]
+
+    def test_a_process_that_vanished_between_the_check_and_the_signal_is_ignored(self, monkeypatch):
+        def gone(pid, sig):
+            raise ProcessLookupError
+
+        monkeypatch.setattr(pa.os, "killpg", gone)
+        pa._signal_group(SimpleNamespace(pid=4242, returncode=None), pa.signal.SIGTERM)  # no exception
+
+    def test_pipes_that_cannot_be_closed_do_not_stop_the_reap(self):
+        class Pipe:
+            @staticmethod
+            def close():
+                raise OSError("already closed")
+
+        class Proc:
+            stdout, stderr = Pipe(), Pipe()
+
+            @staticmethod
+            def communicate(timeout):
+                raise pa.subprocess.TimeoutExpired("base", timeout)
+
+            @staticmethod
+            def wait():
+                return 0
+
+        assert pa._reap(Proc()) == ("", "")
+
+    async def test_a_suite_the_base_does_not_have_is_reported_without_a_comparison(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        monkeypatch.setattr(pa, "_base_has_suite", lambda *a: False)
+        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1)
+        r = report["suites"]["requirement-extraction"]
+        assert r["status"] == "no-base" and r["run_stats"]["base"] is None and r["run_stats"]["head"]["calls"] > 0
+
+    async def test_the_pairwise_judge_runs_in_parallel_and_feeds_the_report(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import judges as jm
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        monkeypatch.setattr(jm, "pick_judge_model", lambda: "judge/x")
+        monkeypatch.setattr(jm, "is_calibrated", lambda *a: False)
+        flight, peak, seen = 0, 0, []
+
+        async def pairwise(suite, case, head_payload, base_payload, model, cache):
+            nonlocal flight, peak
+            flight += 1
+            peak = max(peak, flight)
+            seen.append(case.case_id)
+            await asyncio.sleep(0.05)
+            flight -= 1
+            return 0.5, 0.0
+
+        monkeypatch.setattr(jm, "pairwise", pairwise)
+        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1, judges=True,
+                                    concurrency=6)
+        r = report["suites"]["requirement-extraction"]
+        if r["status"] == "no-base":
+            pytest.skip("no base run in this checkout")
+        assert seen and peak > 1  # calls overlapped
+
     async def test_a_failing_head_stops_the_base_instead_of_paying_for_it_to_finish(self, tmp_path, monkeypatch):
         from cqc_cpcc.utilities.AI import llm_gateway
 
