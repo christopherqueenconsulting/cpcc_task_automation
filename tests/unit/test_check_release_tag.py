@@ -22,6 +22,7 @@ def _pyproject(tmp_path, version):
 @pytest.mark.parametrize("version, tag, kind", [
     ("0.2.0", "v0.2.0", "final"),
     ("0.2.0-rc1", "v0.2.0-rc1", "prerelease"),
+    ("0.2.0rc1", "v0.2.0-rc1", "prerelease"),
     ("1.10.3-rc12", "v1.10.3-rc12", "prerelease"),
 ])
 def test_matching_tag_is_accepted(tmp_path, version, tag, kind):

@@ -5,7 +5,7 @@
     python scripts/check_release_tag.py v0.2.0        # prints "final"
     python scripts/check_release_tag.py v0.2.0-rc1    # prints "prerelease"
 
-The tag must be ``vX.Y.Z`` or ``vX.Y.Z-rcN`` and equal ``v`` + the ``[tool.poetry]`` version.
+The tag must be ``vX.Y.Z`` or ``vX.Y.Z-rcN`` and equal ``v`` + the ``[tool.poetry]`` version (``0.2.0rc1`` counts as ``0.2.0-rc1``).
 Exits 1 with a message on a mismatch. Standard library only.
 """
 
@@ -26,6 +26,8 @@ def check(tag: str, pyproject: Path = PYPROJECT) -> str:
     if not match:
         raise ValueError(f"tag {tag!r} is not vX.Y.Z or vX.Y.Z-rcN")
     version = tomllib.loads(pyproject.read_text(encoding="utf-8"))["tool"]["poetry"]["version"]
+    # pyproject may carry the PEP 440 form (0.2.0rc1), which Poetry always accepts.
+    version = re.sub(r"(\d)rc(\d)", r"\1-rc\2", str(version))
     if tag != f"v{version}":
         raise ValueError(f"tag {tag!r} does not match pyproject.toml version {version!r}")
     return "prerelease" if match.group(4) else "final"

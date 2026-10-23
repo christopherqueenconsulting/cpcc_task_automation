@@ -80,7 +80,7 @@ An rc that fails is fixed on master and re-tagged `-rc2`. Never move a tag that 
 
 Every tag, final or rc, must be on `master`: `release.yml` rejects any other.
 
-1. Open a PR that sets `version` in `pyproject.toml` (`0.2.0-rc1` for an rc, `0.2.0` for the
+1. Open a PR that sets `version` in `pyproject.toml` (`0.2.0rc1` for an rc, the PEP 440 form Poetry always accepts; `0.2.0` for the
    final), moves the `CHANGELOG.md` "Unreleased" entries under a new `## 0.2.0 - YYYY-MM-DD`
    heading (leave an empty `## Unreleased` above it), and nothing else. CI must be green.
    Merge it and note the merge commit SHA.
@@ -101,9 +101,14 @@ Every tag, final or rc, must be on `master`: `release.yml` rejects any other.
    change, a rollback warning), and for an rc run the checklist above.
 5. For the final release repeat steps 1 to 3 with the final version.
 
-Poetry accepts `0.2.0-rc1` and reports `0.2.0rc1` in installed metadata (PEP 440).
-`get_version()` converts that back to the tag's form; a unit test covers it. I did not run
-`poetry check` on an rc version with the CI-pinned Poetry 1.7.1: try it in the first rc PR.
+The tag is `v0.2.0-rc1`; `pyproject.toml` holds `0.2.0rc1`. `check_release_tag.py` and
+`get_version()` both treat the two as the same version (unit-tested), so the stamp on grading
+output reads `0.2.0-rc1`, like the tag. Poetry itself was not run against an rc version while
+writing this, which is why the PEP 440 form is the one to use.
+
+Cutting a release: Christopher, or an agent he has told to, pushes the tag and watches the
+Release run to green. An agent that pushes a tag reports the run URL to Christopher, because the
+failure email goes only to the pusher.
 
 Anyone with write access can push a `v*` tag, and the workflow runs from the tagged commit.
 The checks inside `release.yml` guard against mistakes; they are not a boundary. The boundary
@@ -115,6 +120,8 @@ A superseded or bad release is replaced by a later one, not edited.
 ### The release workflow failed
 
 - Transient error (the tag is right): re-run the failed run from the Actions tab.
+- The re-run says the release already exists: run `gh release view vX.Y.Z`; edit it with
+  `gh release edit`, and delete it only with Christopher's approval.
 - Wrong tag (version mismatch, wrong commit, not on master): if no GitHub release exists for it
   (`gh release view vX.Y.Z` says not found), delete the tag with
   `git push origin :refs/tags/vX.Y.Z` and `git tag -d vX.Y.Z`, then tag the right SHA. Only
@@ -124,23 +131,20 @@ A superseded or bad release is replaced by a later one, not edited.
 
 The app at https://cpcc-task-automation.streamlit.app/ is on Streamlit Community Cloud. The
 repository has a push webhook to `https://share.streamlit.io/hook`, so a push to the app's
-branch redeploys it. The branch is set in the Streamlit Cloud dashboard, which is not
-visible from the repository: confirm it there. If it is `master`, every merge reaches the
-instructor and an rc is only a label.
-
-The recommended setup, pending Christopher's decision (see the PR that added this file), is to
-deploy from a `release` branch that only moves when a release is cut:
-
-```bash
-git push origin vX.Y.Z:refs/heads/release      # deploy a release (use --force to roll back)
-```
-
-Until then, an rc tag is a label on a commit already on `master`, which is probably live. Run
-the rc checklist locally from the tag before the final version PR merges:
+branch redeploys it. The branch is set in the Streamlit dashboard, not visible from the
+repository, and has not been confirmed. Work as if it is `master`: **every merge to `master`
+reaches the instructor, so an rc is a label on a commit that is already live.** Risky changes
+(write-back, scoring, models, sandbox) are live when they merge. Run the rc checklist from the
+tag before the final version PR merges, and merge risky changes only when ready for that.
 
 ```bash
 git fetch --tags && git checkout v0.2.0-rc1 && ./run.sh
 ```
+
+If Streamlit is moved to a `release` branch that only moves when a release is cut, an rc is
+no longer live on merge. Christopher's decision on that is tracked in the PR that added this
+file (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/419). Deploying a
+release then is `git push origin vX.Y.Z:refs/heads/release`.
 
 ## Roll back
 
@@ -151,8 +155,10 @@ git fetch --tags && git checkout v0.2.0-rc1 && ./run.sh
    release as above. If a `release` branch exists (pending decision): redeploy the last good tag
    with `git push --force origin <tag>:refs/heads/release`. Only Christopher force-pushes
    `release`.
-3. Name the bad tag in its GitHub release notes:
-   `gh release edit <bad-tag> --notes "Rolled back in <new-tag>: <reason>"`.
+3. Mark the bad release and name the new one, keeping its generated notes:
+   `gh release edit <bad-tag> --prerelease --notes "Rolled back in <new-tag>: <reason>
+
+$(gh release view <bad-tag> --json body -q .body)"`.
 4. Know what stays behind. Saved runs on the instructor's computer (`~/.cqc_cpcc/grading_results`,
    or `CQC_GRADING_RESULTS_DIR`) keep the scores and the `code_version` stamp of the code that
    graded them. The run key does not include the code version, so after a code rollback the
