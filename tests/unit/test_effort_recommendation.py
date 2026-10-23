@@ -71,6 +71,11 @@ def _checklist(n, core=None):
         for i in range(1, n + 1)])
 
 
+def _small():
+    """A small assignment with a reference solution: the counted signals allow ``low``."""
+    return er.extract_signals(SMALL, _checklist(2), solution="class A {}")
+
+
 def _judge(effort="low", confidence="high", reasons=("Short task.",)):
     return er.EffortJudgement(effort=effort, confidence=confidence, reasons=list(reasons))
 
@@ -103,17 +108,19 @@ class TestSignals:
         assert "1 solution file" in text
 
     def test_low_is_supported_only_by_small_signals(self):
-        assert er.signals_support_low(er.extract_signals(SMALL, _checklist(2)))
+        assert er.signals_support_low(_small())
         assert not er.signals_support_low(er.extract_signals(SMALL))  # no checklist
+        no_solution = er.extract_signals(SMALL, _checklist(3))
+        assert no_solution.solution_files == 0 and not er.signals_support_low(no_solution)
         assert not er.signals_support_low(er.extract_signals(SMALL, _checklist(9)))
         assert not er.signals_support_low(er.extract_signals(BIG, _checklist(3)))  # exact output
-        assert not er.signals_support_low(er.extract_signals(SMALL + "x" * 4000, _checklist(2)))
+        assert not er.signals_support_low(er.extract_signals(SMALL + "x" * 4000, _checklist(2), "class A {}"))
 
 
 # ---------------------------------------------------------------------- safety rules
 
 class TestSafetyRules:
-    small = er.extract_signals(SMALL, _checklist(2))
+    small = _small()
     big = er.extract_signals(BIG, _checklist(7))
 
     def rules(self, judgement, signals, supported=("low", "medium", "high"), default="high"):
@@ -121,7 +128,7 @@ class TestSafetyRules:
 
     def test_low_confidence_keeps_the_default(self):
         effort, note, _ = self.rules(_judge("low", "low"), self.small)
-        assert effort == "high" and "not sure" in note
+        assert effort == "high" and "not confident" in note
 
     def test_confident_small_assignment_may_go_low(self):
         assert self.rules(_judge("low"), self.small)[:2] == ("low", None)
@@ -174,7 +181,7 @@ class TestRecommendEffort:
 
     async def test_cache_hit_makes_no_second_call_and_is_free(self, registry):
         fake = _gateway(_judge("low"))
-        signals = er.extract_signals(SMALL, _checklist(2))
+        signals = _small()
         with patch.object(llm_gateway, "structured", fake):
             first = await er.recommend_effort(SMALL, signals, "openai/alpha")
             second = await er.recommend_effort(SMALL, signals, "openai/alpha")
@@ -183,18 +190,18 @@ class TestRecommendEffort:
         assert second.effort == first.effort and second.cost_usd == 0.0
 
     async def test_failure_gives_the_default_and_is_not_cached(self, registry):
-        signals = er.extract_signals(SMALL, _checklist(2))
+        signals = _small()
         failing = _gateway(error=RuntimeError("boom"))
         with patch.object(llm_gateway, "structured", failing):
             rec = await er.recommend_effort(SMALL, signals, "openai/alpha")
-        assert (rec.effort, rec.source) == ("high", "default") and "could not answer" in rec.note
+        assert (rec.effort, rec.source) == ("high", "default") and "could not be made" in rec.note
         assert not er._RECOMMENDATION_CACHE
         working = _gateway(_judge("low"))
         with patch.object(llm_gateway, "structured", working):
             assert (await er.recommend_effort(SMALL, signals, "openai/alpha")).effort == "low"
 
     async def test_low_confidence_gives_the_default(self, registry):
-        signals = er.extract_signals(SMALL, _checklist(2))
+        signals = _small()
         with patch.object(llm_gateway, "structured", _gateway(_judge("low", "low"))):
             rec = await er.recommend_effort(SMALL, signals, "openai/alpha")
         assert (rec.effort, rec.source, rec.reasons) == ("high", "default", [])
@@ -227,21 +234,21 @@ class TestRecommendEffort:
         hanging = _gateway(_judge("low"), delay=30)
         started = time.monotonic()
         with patch.object(llm_gateway, "structured", hanging):
-            rec = await er.recommend_effort(SMALL, er.extract_signals(SMALL, _checklist(2)), "openai/alpha")
+            rec = await er.recommend_effort(SMALL, _small(), "openai/alpha")
         assert time.monotonic() - started < 2.0
-        assert (rec.effort, rec.source) == ("high", "default") and "did not answer within 0.2 seconds" in rec.note
+        assert (rec.effort, rec.source) == ("high", "default") and "did not arrive within 0.2 seconds" in rec.note
         assert hanging.calls[0][2]["request_timeout"] == 0.2
 
     async def test_reasons_are_cleaned_and_capped_at_three(self, registry):
         reasons = ["  one   spaced  ", "two", "three", "four", ""]
         with patch.object(llm_gateway, "structured", _gateway(_judge("low", reasons=reasons))):
-            rec = await er.recommend_effort(SMALL, er.extract_signals(SMALL, _checklist(2)), "openai/alpha")
+            rec = await er.recommend_effort(SMALL, _small(), "openai/alpha")
         assert rec.reasons == ["one spaced", "two", "three"]
 
 
 class TestCacheKeyAndCost:
     def test_cache_key_depends_on_instructions_signals_model_solution_and_prompt_version(self):
-        s = er.extract_signals(SMALL, _checklist(2))
+        s = _small()
         base = er.cache_key(SMALL, s, "m", None, "effort-recommendation@1")
         assert base == er.cache_key(SMALL + "\n", s, "m", None, "effort-recommendation@1")  # whitespace only
         assert base != er.cache_key(SMALL + "x", s, "m", None, "effort-recommendation@1")
@@ -274,7 +281,7 @@ class TestPrompt:
             assert "submission" not in text.lower()
 
     def test_instructions_and_solution_are_fenced_with_a_fresh_nonce_each_time(self):
-        s = er.extract_signals(SMALL, _checklist(2))
+        s = _small()
         a = er.build_effort_recommendation_prompt(SMALL, s, ["low", "high"], solution="class A {}")
         b = er.build_effort_recommendation_prompt(SMALL, s, ["low", "high"], solution="class A {}")
         assert a != b  # a new nonce per call
@@ -356,3 +363,53 @@ class TestJudgeTimeout:
     def test_a_bad_value_falls_back_to_the_default(self, monkeypatch):
         monkeypatch.setenv("CQC_EFFORT_JUDGE_TIMEOUT_S", "soon")
         assert llm_limits.effort_judge_timeout() == 30.0
+
+
+class TestSolutionAndDetails:
+    def test_without_a_reference_solution_low_is_raised_to_medium(self):
+        signals = er.extract_signals(SMALL, _checklist(3))  # short, 3 requirements, no solution
+        effort, note, raised = er.apply_safety_rules(_judge("low"), signals, ["low", "medium", "high"], "high")
+        assert effort == "medium" and note is None and "solution file" in raised
+
+    def test_a_raised_answer_does_not_keep_high_confidence(self, registry):
+        import asyncio
+
+        signals = er.extract_signals(BIG, _checklist(7))
+        with patch.object(llm_gateway, "structured", _gateway(_judge("low", "high"))):
+            rec = asyncio.run(er.recommend_effort(BIG, signals, "openai/alpha"))
+        assert rec.effort == "medium" and rec.confidence == "medium"
+
+    def test_loops_are_counted_in_plain_words(self):
+        one = er.EffortSignals(loop_cues=1).summary()
+        many = er.EffortSignals(loop_cues=3).summary()
+        assert "1 mention of loops" in one and "3 mentions of loops" in many
+
+    @pytest.mark.parametrize("text", [
+        "Your output must match the sample output exactly.",
+        "The program prints Celsius: X.X with one decimal place.",
+        "Prints Gross pay: $X.XX (two decimal places).",
+        "Prints three lines exactly like this.",
+        "Run it like the example run in the handout.",
+        "Print Total: followed by the amount.",
+    ])
+    def test_exact_output_wording_is_detected(self, text):
+        assert er.extract_signals(text).exact_output is True
+
+    @pytest.mark.parametrize("text", [
+        "Read exactly five test scores with a Scanner.",
+        "Prints Even if the number is even and Odd if it is odd.",
+        "Write a program that adds two numbers and tells the user the answer.",
+    ])
+    def test_plain_prose_is_not_exact_output(self, text):
+        assert er.extract_signals(text).exact_output is False
+
+    def test_the_cache_is_keyed_by_default_effort_and_capped(self):
+        s = _small()
+        assert er.cache_key("a", s, "m", None, "t", "high") != er.cache_key("a", s, "m", None, "t", "medium")
+        er._RECOMMENDATION_CACHE.clear()
+        rec = er.EffortRecommendation(effort="low", confidence="high", source="judge")
+        for i in range(er.CACHE_MAX_ENTRIES + 10):
+            er._remember(f"k{i}", rec)
+        assert len(er._RECOMMENDATION_CACHE) == er.CACHE_MAX_ENTRIES
+        assert "k0" not in er._RECOMMENDATION_CACHE and f"k{er.CACHE_MAX_ENTRIES + 9}" in er._RECOMMENDATION_CACHE
+        er._RECOMMENDATION_CACHE.clear()

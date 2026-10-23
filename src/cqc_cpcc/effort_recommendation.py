@@ -61,12 +61,19 @@ _SELECTION_CUES = re.compile(r"\b(?:if|else|otherwise|switch|case|depending on|d
                              re.IGNORECASE)
 _LOOP_CUES = re.compile(r"\b(?:loop|while|for each|for loop|repeat(?:s|ed)?|until|iterate|iteration)\b",
                         re.IGNORECASE)
+# Wording that fixes what the program must print: "must match the sample output exactly", a template
+# such as X.X or X.XX, "two decimal places", "sample output", "example run", "Prints Total: ..." lines.
+# Plain "exactly five scores" is not output wording, so a bare "exactly" does not count.
 _EXACT_OUTPUT = re.compile(
-    r"(?:output\s+(?:must|should)\s+(?:match|be)\s+(?:exactly|identical)"
-    r"|(?:match|matches|matching)\s+(?:the\s+)?(?:sample|expected|example)\s+output"
-    r"|exactly\s+(?:as|like)\s+(?:shown|the\s+(?:sample|example))"
+    r"(?:output\s+(?:must|should)\s+(?:match|be)\b"
+    r"|\bmust\s+match\b[^.\n]{0,40}\b(?:output|sample|example)"
+    r"|(?:match|matches|matching)\s+(?:the\s+)?(?:sample|expected|example)"
+    r"|exactly\s+(?:as|like|this|the\s+same)"
+    r"|(?:prints?|displays?|outputs?|format\w*)\s+(?:\w+\s+){0,3}(?:exactly|precisely)"
     r"|word[- ]for[- ]word|character[- ]for[- ]character|identical\s+output"
-    r"|(?:format|print|display)\w*\s+(?:exactly|precisely))",
+    r"|\bX\.X+\b|\b(?:\d+|one|two|three|four)\s+decimal\s+places?\b|\bdecimal\s+places?\b"
+    r"|sample\s+(?:output|run)|example\s+(?:output|run)"
+    r"|\bprints?\s+[A-Z][\w ]{0,30}:)",
     re.IGNORECASE)
 _LANGUAGES = (
     ("java", re.compile(r"\bjava\b|\.java\b", re.IGNORECASE)),
@@ -101,7 +108,7 @@ class EffortSignals(BaseModel):
         if self.language:
             parts.append(LANGUAGE_NAMES.get(self.language, self.language))
         parts.append(f"{self.selection_cues} mention{'s' if self.selection_cues != 1 else ''} of decisions (if/else)")
-        parts.append(f"{self.loop_cues} of loops")
+        parts.append(f"{self.loop_cues} mention{'s' if self.loop_cues != 1 else ''} of loops")
         parts.append(f"{self.solution_files} solution file{'s' if self.solution_files != 1 else ''}"
                      if self.solution_files else "no solution file")
         parts.append("exact output required" if self.exact_output else "exact output not required")
@@ -140,9 +147,10 @@ def extract_signals(instructions: str, checklist=None, solution: Optional[str] =
 
 def signals_support_low(signals: EffortSignals) -> bool:
     """True when the counted signals agree the assignment is small enough for ``low``:
-    a checklist with few requirements, no exact-output rule, short instructions and at
-    most one solution file."""
+    a checklist with few requirements, no exact-output rule, short instructions and a
+    reference solution (one file at most). Without a reference solution there is no ``low``."""
     return (signals.requirement_count is not None
+            and signals.solution_files >= 1
             and signals.requirement_count <= LOW_MAX_REQUIREMENTS
             and not signals.exact_output
             and signals.instruction_chars <= LOW_MAX_INSTRUCTION_CHARS
@@ -191,6 +199,8 @@ def build_effort_recommendation_prompt(instructions: str, signals: EffortSignals
         "output rule) can be graded reliably at a low effort.",
         "- Many requirements, several decisions or loops, several methods or classes, "
         "ambiguous wording, or output that must match exactly call for a higher effort.",
+        "- The app never goes below medium when there is no reference solution, a long list of "
+        "requirements or an exact-output rule, whatever you answer.",
         "- Use the counted signals as facts. Do not repeat them as your only reason.",
         "- Say confidence `low` when the instructions are unclear, incomplete or odd. "
         "A `low` confidence means the app keeps its default effort.",
@@ -250,14 +260,15 @@ def apply_safety_rules(judgement: EffortJudgement, signals: EffortSignals, suppo
     was raised to ``medium`` because the counted signals do not show a small assignment.
     """
     if judgement.confidence == "low":
-        return default, "The recommender was not sure, so the default effort stays.", None
+        return default, "The effort suggestion was not confident, so the default effort stays.", None
     effort = _lowest_at_or_above(judgement.effort, supported)
     if effort is None:
         return default, "This model has no effort level that matches, so the default effort stays.", None
     raised = None
     if _rank(effort) < _rank(MEDIUM) and not signals_support_low(signals):
         effort = _lowest_at_or_above(MEDIUM, supported) or effort
-        raised = "The counts do not show a small assignment, so the effort is not lowered below medium."
+        raised = ("The counts do not show a small assignment with a solution file, so the effort "
+                  "is not lowered below medium.")
     if default in EFFORT_ORDER and _rank(effort) > _rank(default):
         effort = default  # never costlier than the default
     return effort, None, raised
@@ -279,7 +290,7 @@ def default_effort_for(model: Optional[str]) -> Optional[str]:
     try:
         return model_registry.resolve("grading", override=model).reasoning_effort
     except Exception as e:  # noqa: BLE001 - a missing registry only removes the recommendation
-        logger.warning(f"Effort recommendation: could not read the default effort: {e}")
+        logger.warning(f"Effort recommendation: could not read the default effort ({type(e).__name__}).")
         return None
 
 
@@ -295,14 +306,24 @@ def _fallback(default: Optional[str], note: str, signals: EffortSignals, cost: O
 # --------------------------------------------------------------------------------------
 
 _RECOMMENDATION_CACHE: dict[str, EffortRecommendation] = {}
+CACHE_MAX_ENTRIES = 128
+
+
+def _remember(key: str, rec: EffortRecommendation) -> None:
+    """Cache ``rec``, dropping the oldest entries past :data:`CACHE_MAX_ENTRIES`."""
+    _RECOMMENDATION_CACHE.pop(key, None)
+    _RECOMMENDATION_CACHE[key] = rec
+    while len(_RECOMMENDATION_CACHE) > CACHE_MAX_ENTRIES:
+        _RECOMMENDATION_CACHE.pop(next(iter(_RECOMMENDATION_CACHE)))
 
 
 def cache_key(instructions: str, signals: EffortSignals, model: Optional[str], solution: Optional[str],
-              prompt_tag: Optional[str]) -> str:
-    """Hash of the instructions, solution, signals, model and prompt version."""
+              prompt_tag: Optional[str], default_effort: Optional[str] = None) -> str:
+    """Hash of the instructions, solution, signals, model, default effort and prompt version."""
     payload = json.dumps({
         "instructions": (instructions or "").strip(), "solution": (solution or "").strip(),
         "signals": signals.model_dump(), "model": model or "", "prompt": prompt_tag or "",
+        "default": default_effort or "",
     }, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -325,7 +346,7 @@ async def recommend_effort(instructions: str, signals: EffortSignals, model: Opt
         return _fallback(default, "This model has no effort setting, so there is nothing to recommend.", signals)
 
     tag = llm_gateway.prompt_tag(PROMPT_ID)
-    key = cache_key(instructions, signals, model, solution, tag)
+    key = cache_key(instructions, signals, model, solution, tag, default)
     if use_cache and key in _RECOMMENDATION_CACHE:
         return _RECOMMENDATION_CACHE[key].model_copy(update={"cost_usd": 0.0})
 
@@ -340,21 +361,23 @@ async def recommend_effort(instructions: str, signals: EffortSignals, model: Opt
         cost = _call_cost(llm_gateway)
     except TimeoutError:
         logger.warning(f"Effort recommendation: no answer within {timeout:g} s; keeping the default.")
-        return _fallback(default, f"The recommender did not answer within {timeout:g} seconds, "
+        return _fallback(default, f"The effort suggestion did not arrive within {timeout:g} seconds, "
                                   "so the default effort stays.", signals, prompt=tag)
     except Exception as e:  # noqa: BLE001 - advice only; never blocks setup
-        logger.warning(f"Effort recommendation failed ({type(e).__name__}): {str(e)[:200]}")
-        return _fallback(default, "The recommender could not answer, so the default effort stays.",
+        logger.warning(f"Effort recommendation failed ({type(e).__name__}).")
+        return _fallback(default, "The effort suggestion could not be made, so the default effort stays.",
                          signals, cost=_call_cost(llm_gateway), prompt=tag)
 
     effort, note, raised = apply_safety_rules(judgement, signals, supported, default)
     reasons = [] if note else ([raised] if raised else _clean_reasons(judgement.reasons))
+    # An answer the rules raised is no longer what the judge was confident about.
+    confidence = "medium" if raised and judgement.confidence == "high" else judgement.confidence
     recommendation = EffortRecommendation(
-        effort=effort, confidence=judgement.confidence, reasons=reasons,
+        effort=effort, confidence=confidence, reasons=reasons,
         source="judge" if note is None else "default", default_effort=default, note=note,
         cost_usd=cost, prompt=tag, signals=signals)
     if recommendation.source == "judge":
-        _RECOMMENDATION_CACHE[key] = recommendation
+        _remember(key, recommendation)
     return recommendation
 
 
@@ -397,7 +420,7 @@ def policy_floor_met() -> bool:
         return bool(suite and suite.calibrated and version is not None
                     and policy.calibrated_versions.get(PROMPT_ID) == version)
     except Exception as e:  # noqa: BLE001 - a missing policy means "not met"
-        logger.warning(f"Effort recommendation: could not read the policy floor: {e}")
+        logger.warning(f"Effort recommendation: could not read the policy floor ({type(e).__name__}).")
         return False
 
 
@@ -427,8 +450,8 @@ class EffortJob:
         try:
             self.result = asyncio.run(recommend_effort(instructions, signals, model, solution=solution))
         except Exception as e:  # noqa: BLE001 - recommend_effort should not raise; never lose the thread silently
-            logger.warning(f"Effort recommendation job failed: {e}")
-            self.result = _fallback(default_effort_for(model), "The recommender could not answer, "
+            logger.warning(f"Effort recommendation job failed ({type(e).__name__}).")
+            self.result = _fallback(default_effort_for(model), "The effort suggestion could not be made, "
                                     "so the default effort stays.", signals)
         finally:
             self.finished.set()

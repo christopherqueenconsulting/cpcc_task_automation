@@ -2634,7 +2634,9 @@ async def get_rubric_based_exam_grading():
         # The errors-only path takes the role's effort: the per-run choice is for rubric grading.
         selected_effort = None if use_auto_route or grading_mode == "errors_only" else model_cfg.get("effort")
         st.caption(f"Model: {_model_effort_label(selected_model, use_auto_route, selected_effort)}")
-        if grading_mode != "errors_only":
+        if grading_mode == "errors_only":
+            st.caption("Effort recommendation is off in errors-only mode, which always uses the app's default effort.")
+        else:
             render_effort_recommendation(
                 widget_uk="rubric_grade_exam", model=selected_model, use_auto_route=use_auto_route,
                 instructions=assignment_instructions_content, checklist=requirements_checklist,

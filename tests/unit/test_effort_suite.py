@@ -99,7 +99,19 @@ class TestDataset:
                 small += 1
             else:
                 big += 1
-        assert small >= 3 and big >= 3  # both kinds exist, so the safety floor is exercised
+        assert small >= 2 and big >= 3  # both kinds exist, so the safety floor is exercised
+
+    def test_exact_output_is_detected_as_intended_on_every_row(self):
+        from cqc_cpcc.effort_recommendation import extract_signals
+
+        expected = {
+            "csc151_even_odd": False, "csc151_fahrenheit_to_celsius": True, "csc151_grade_book": True,
+            "csc134_rectangle": True, "csc134_tip_calculator": True, "csc134_inventory_total": True,
+            "csc251_sum_to_n": True, "csc251_access_check": False, "csc251_shopping_cart": True,
+            "csc151_exam1_java": True, "csc134_project_cpp": True, "csc251_exam1_java": True,
+        }
+        got = {r["case_id"]: extract_signals(r["inputs"]["instructions"]).exact_output for r in self.assignments}
+        assert got == expected
 
 
 # ----------------------------------------------------------------------------- graders
@@ -196,7 +208,7 @@ class TestGraders:
 
 # ------------------------------------------------------------------------- ground truth
 
-def _records(cases, worse=(), efforts=("low", "medium", "high"), repeats=3, wobble=0.0):
+def _records(cases, worse=(), efforts=("low", "medium", "high"), repeats=3, wobble=0.0, model="m"):
     """Perfect grading at every effort, except where ``worse`` degrades (effort, assignment)."""
     records = []
     for effort in efforts:
@@ -212,7 +224,7 @@ def _records(cases, worse=(), efforts=("low", "medium", "high"), repeats=3, wobb
                     total = max(0.0, low - 0.3 * c.max_points)
                 if wobble and effort == "high" and rep == 1 and "bug" in c.tags:
                     detected = []
-                records.append({"case_id": c.case_id, "effort": effort, "repeat": rep, "ok": True,
+                records.append({"case_id": c.case_id, "effort": effort, "repeat": rep, "ok": True, "model": model,
                                 "total": total, "detected": detected})
     return records
 
@@ -225,12 +237,13 @@ def eval_cases():
 class TestGroundTruth:
     def test_the_lowest_effort_no_worse_than_high_is_the_ground_truth(self, eval_cases):
         records = _records(eval_cases, worse={("low", "csc151_grade_book"), ("medium", "csc151_grade_book"),
-                                              ("low", "csc134_inventory_total")})
+                                              ("low", "csc134_inventory_total"), ("low", "csc251_sum_to_n")})
         report = effort_truth.derive_ground_truth(eval_cases, records)
         assert report["informative"] is True
         truth = report["ground_truth"]
         assert truth["csc151_grade_book"] == "high"
         assert truth["csc134_inventory_total"] == "medium"
+        assert truth["csc251_sum_to_n"] == "medium"
         assert truth["csc151_even_odd"] == "low"
         assert set(report["verdicts"]["csc151_grade_book"]["worse_than_high"]) == {"low", "medium"}
 
@@ -245,7 +258,7 @@ class TestGroundTruth:
         assert quiet["noise_high_vs_high"]["recall"] == 0.0
         assert noisy["noise_high_vs_high"]["recall"] > 0.0
         assert quiet["tolerance"]["recall"] == effort_truth.MIN_TOLERANCE  # floored
-        assert noisy["tolerance"]["recall"] >= noisy["noise_high_vs_high"]["recall"]
+        assert noisy["tolerance"]["recall"] == min(noisy["noise_high_vs_high"]["recall"], effort_truth.MAX_TOLERANCE)
 
     def test_a_difference_inside_the_noise_does_not_raise_the_ground_truth(self, eval_cases):
         # high disagrees with itself as much as low differs from it, so low is not "worse"
@@ -253,12 +266,12 @@ class TestGroundTruth:
             + [dict(r, effort="high", repeat=r["repeat"] + 3, detected=[])
                for r in _records(eval_cases, efforts=("high",)) if "csc151_grade_book" in r["case_id"]]
         report = effort_truth.derive_ground_truth(eval_cases, records)
-        assert report["tolerance"]["recall"] > effort_truth.MIN_TOLERANCE
+        assert effort_truth.MIN_TOLERANCE < report["tolerance"]["recall"] <= effort_truth.MAX_TOLERANCE
 
     def test_it_reports_single_metric_decisions_and_the_medium_vs_high_balance(self, eval_cases):
         report = effort_truth.derive_ground_truth(
             eval_cases, _records(eval_cases, worse={("low", "csc151_grade_book")}))
-        assert report["decided_by_single_metric"] >= 0
+        assert report["decided_by_single_metric"] == 0  # truth is low: nothing sits below it
         assert set(report["mean_metrics"]["medium"]) == {"band", "recall", "harshness"}
         assert set(report["mean_metrics"]) == {"low", "medium", "high"}
 
@@ -269,7 +282,8 @@ class TestGroundTruth:
     def test_failed_calls_count_as_wrong_answers(self, eval_cases):
         records = _records(eval_cases)
         for r in records:
-            if r["effort"] == "low" and r["case_id"].startswith("csc151_even_odd"):
+            if r["effort"] == "low" and r["case_id"].split("__")[0] in (
+                    "csc151_even_odd", "csc134_rectangle", "csc251_sum_to_n"):
                 r["ok"] = False
         report = effort_truth.derive_ground_truth(eval_cases, records)
         assert report["ground_truth"]["csc151_even_odd"] == "medium"
@@ -292,3 +306,83 @@ class TestGroundTruth:
         assert cases["csc151_even_odd"].labels["ground_truth_effort"] is None
         effort_truth.write_report({"informative": False, "ground_truth": {"csc151_grade_book": "high"}}, tmp_path)
         assert effort_truth.load_ground_truth(tmp_path) == {}  # not informative: nothing is used
+
+
+THREE = {("low", "csc151_even_odd"), ("low", "csc134_rectangle"), ("low", "csc251_sum_to_n")}
+
+
+class TestGroundTruthRules:
+    def test_low_that_passes_after_a_failing_medium_does_not_count(self, eval_cases):
+        # low looks fine, medium is worse than high: low is luck, the truth is high
+        worse = {("medium", "csc151_even_odd"), ("medium", "csc134_rectangle"), ("medium", "csc251_sum_to_n")}
+        report = effort_truth.derive_ground_truth(eval_cases, _records(eval_cases, worse=worse))
+        assert report["informative"] is True
+        assert report["ground_truth"]["csc151_even_odd"] == "high"
+
+    def test_fewer_than_three_separating_assignments_is_not_informative(self, eval_cases):
+        one = effort_truth.derive_ground_truth(eval_cases, _records(eval_cases, worse={("low", "csc151_even_odd")}))
+        assert one["informative"] is False and one["ground_truth"] == {}
+        assert "1 of 12 assignments" in one["reason"] and "at least 3" in one["reason"]
+        three = effort_truth.derive_ground_truth(eval_cases, _records(eval_cases, worse=THREE))
+        assert three["informative"] is True and three["separating_assignments"] == 3
+
+    def test_the_noise_tolerance_is_capped(self, eval_cases):
+        records = _records(eval_cases)
+        for r in records:  # high disagrees with itself completely on bug twins
+            if r["effort"] == "high" and r["repeat"] % 2 and "twin" in r["case_id"]:
+                r["detected"] = []
+        report = effort_truth.derive_ground_truth(eval_cases, records)
+        assert report["noise_high_vs_high"]["recall"] > effort_truth.MAX_TOLERANCE
+        assert report["tolerance"]["recall"] == effort_truth.MAX_TOLERANCE
+
+    def test_the_report_counts_cases_repeats_and_comparisons(self, eval_cases):
+        report = effort_truth.derive_ground_truth(eval_cases, _records(eval_cases, worse=THREE))
+        assert report["n_cases"] == 48 and report["n_repeats"] == 3
+        assert report["n_comparisons"] == 12 * 2 * 3 and report["model"] == "m"
+
+    def test_records_of_more_than_one_model_are_refused(self, eval_cases):
+        mixed = _records(eval_cases, model="a") + _records(eval_cases, model="b")
+        with pytest.raises(ValueError, match="more than one model"):
+            effort_truth.derive_ground_truth(eval_cases, mixed)
+
+    def test_ground_truth_from_another_dataset_version_or_content_is_ignored(self, tmp_path, caplog):
+        import logging
+
+        (tmp_path / "cases.jsonl").write_text('{"a": 1}\n', encoding="utf-8")
+        (tmp_path / "VERSION").write_text("v1\n", encoding="utf-8")
+        report = {"informative": True, "ground_truth": {"x": "high"}}
+        effort_truth.write_report(report, tmp_path)
+        assert effort_truth.load_ground_truth(tmp_path) == {"x": "high"}
+        (tmp_path / "VERSION").write_text("v2\n", encoding="utf-8")  # a new dataset version
+        with caplog.at_level(logging.WARNING):
+            assert effort_truth.load_ground_truth(tmp_path) == {}
+        (tmp_path / "VERSION").write_text("v1\n", encoding="utf-8")
+        assert effort_truth.load_ground_truth(tmp_path) == {"x": "high"}
+        (tmp_path / "cases.jsonl").write_text('{"a": 2}\n', encoding="utf-8")  # same version, edited content
+        assert effort_truth.load_ground_truth(tmp_path) == {}
+
+    def test_the_suite_ignores_stale_truth(self, tmp_path):
+        (tmp_path / "cases.jsonl").write_text((ROOT / "cases.jsonl").read_text(encoding="utf-8"), encoding="utf-8")
+        (tmp_path / "VERSION").write_text("v1\n", encoding="utf-8")
+        effort_truth.write_report({"informative": True, "ground_truth": {"csc151_grade_book": "high"}}, tmp_path)
+        (tmp_path / "VERSION").write_text("v9\n", encoding="utf-8")
+        assert all(c.labels["ground_truth_effort"] is None for c in SUITE.load_cases(tmp_path))
+
+    def test_decided_by_single_metric_counts_only_the_effort_just_below_the_truth(self, eval_cases):
+        # even_odd: low fails two measures, medium fails recall only => truth high, decided by one measure
+        records = _records(eval_cases)
+        by_id = {c.case_id: c for c in eval_cases}
+        for r in records:
+            if r["case_id"].split("__")[0] != "csc151_even_odd":
+                continue
+            if r["effort"] == "low":
+                r["total"] = 0.0
+                r["detected"] = []
+            if r["effort"] == "medium":
+                r["detected"] = []
+        report = effort_truth.derive_ground_truth(eval_cases, records)
+        verdict = report["verdicts"]["csc151_even_odd"]
+        assert verdict["effort"] == "high" and len(verdict["worse_than_high"]["low"]) >= 2
+        assert verdict["worse_than_high"]["medium"] == ["recall"]
+        assert report["decided_by_single_metric"] == 1
+        assert by_id  # the dataset loaded

@@ -42,15 +42,39 @@ noise, the report says `not informative`, no ground truth is written, and the ju
 display-only.
 
 ```bash
+# <model> is the registry grading model (src/cqc_cpcc/config/model_registry.json): openai/gpt-6-luna.
+# Its registry effort is high, and `run` starts that incumbent (<model>@high) by itself, so only
+# the two lower efforts are named as candidates.
+
 # 1. cost first (no model call)
 poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
-  --candidate <model>@low --candidate <model>@medium --repeats 3 --dry-run
-# 2. the incumbent (the registry grading model at its own effort, high) runs beside the candidates
+  --candidate openai/gpt-6-luna@low --candidate openai/gpt-6-luna@medium --repeats 3 --dry-run
+# 2. the paid run: worst case $0.9713 (the dry-run total at the commit that measured it; step 1 prints
+#    the current figure). Step 2 spends it.
 poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
-  --candidate <model>@low --candidate <model>@medium --repeats 3 --out evals/runs/effort-truth
-# 3. derive and write the ground truth, the noise baseline and the extras
+  --candidate openai/gpt-6-luna@low --candidate openai/gpt-6-luna@medium --repeats 3 --out evals/runs/effort-truth
+# 3. derive the ground truth (no model call); --write puts ground_truth.json in the dataset directory
 poetry run python -m cqc_cpcc.model_eval effort-truth --raw evals/runs/effort-truth/raw_outputs.jsonl --write
 ```
+
+Then, by hand:
+
+1. Commit `evals/datasets/effort-recommendation/v1/ground_truth.json` (the report says `not informative` and
+   writes no truth when fewer than 3 assignments separate; then stop here).
+2. Add an `effort-recommendation` entry under `prompt_eval.suites` in `src/cqc_cpcc/config/model_policy.json`
+   with `"calibrated": true`, and the prompt version under `prompt_eval.calibrated_versions`. This file is
+   Christopher's: it is edited by hand only, and the bot guard rejects agent edits. Set the floor only
+   when at least 10 non-injection answers were confident (count them in the suite run's
+   `raw_outputs.jsonl`, field `payload.confidence`, source `judge`) and `confident_not_under` is 1.0.
+
+If nobody runs this, the recommendation stays display-only (Apply button, never selected for you) and the
+suite's graders that need ground truth return nothing. The ground truth belongs to one model, this dataset
+version and its content, and the prompt version it was calibrated on: change any of them and measure again
+(a stale report is ignored with a warning).
+
+**Limits.** These are short single-class labs. They cannot show that a real multi-file project needs
+`high`, so a low ground truth here says nothing about such work. A recommendation is advice for one
+assignment; the instructor still chooses one effort for the whole run.
 
 The report also lists: each counted signal's association with the ground truth (a signal that does
 not predict is dropped from the prompt and the UI reasons), whether `medium` or `high` has the better

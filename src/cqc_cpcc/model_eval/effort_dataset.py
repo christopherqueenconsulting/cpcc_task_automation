@@ -493,45 +493,45 @@ public class SumToN {
              acceptable=("OUTPUT_IMPACT_ERROR",), partial_ok=("R3",)),
 )
 
-PASSWORD_CHECK = _spec(
-    "csc251_password_check", "CSC_251", "PasswordCheck.java",
+ACCESS_CHECK = _spec(
+    "csc251_access_check", "CSC_251", "AccessCheck.java",
     """\
-Write a Java program named PasswordCheck.java that:
-1. Uses a Scanner to read a password (String).
-2. A password is valid when it has at least 8 characters and contains at least one digit.
+Write a Java program named AccessCheck.java that:
+1. Uses a Scanner to read an access code (String).
+2. A code is valid when it has at least 8 characters and contains at least one digit.
    Use a loop to look for the digit.
 3. Prints Valid or Invalid.
 Follow Java naming conventions and comment your code.
 """,
     """\
 /*
- * Program: Password Check
+ * Program: Access Check
  * Author: {author}
- * Purpose: Checks that a password is long enough and contains a digit.
+ * Purpose: Checks that a code is long enough and contains a digit.
  */
 import java.util.Scanner;
 
-public class PasswordCheck {
-    // Shortest password that is accepted
+public class AccessCheck {
+    // Shortest code that is accepted
     public static final int MIN_LENGTH = 8;
 
     public static void main(String[] args) {
         Scanner input = new Scanner(System.in);
 
-        // Read the password
-        System.out.print("Enter a password: ");
-        String password = input.nextLine();
+        // Read the access code
+        System.out.print("Enter an access code: ");
+        String code = input.nextLine();
 
         // Look for at least one digit
         boolean hasDigit = false;
-        for (int i = 0; i < password.length(); i++) {
-            if (Character.isDigit(password.charAt(i))) {
+        for (int i = 0; i < code.length(); i++) {
+            if (Character.isDigit(code.charAt(i))) {
                 hasDigit = true;
             }
         }
 
-        // The password needs the minimum length and a digit
-        if (password.length() >= MIN_LENGTH && hasDigit) {
+        // The code needs the minimum length and a digit
+        if (code.length() >= MIN_LENGTH && hasDigit) {
             System.out.println("Valid");
         } else {
             System.out.println("Invalid");
@@ -541,16 +541,16 @@ public class PasswordCheck {
     }
 }
 """,
-    (("R1", "Use a Scanner to read the password as a String.", "core"),
+    (("R1", "Use a Scanner to read the access code as a String.", "core"),
      ("R2", "Use a loop to find at least one digit.", "core"),
-     ("R3", "A password is valid with at least 8 characters and a digit; print Valid or Invalid.", "core")),
-    ("for_each_char", (("        for (int i = 0; i < password.length(); i++) {\n"
-                        "            if (Character.isDigit(password.charAt(i))) {\n",
-                        "        for (char ch : password.toCharArray()) {\n"
+     ("R3", "A code is valid with at least 8 characters and a digit; print Valid or Invalid.", "core")),
+    ("for_each_char", (("        for (int i = 0; i < code.length(); i++) {\n"
+                        "            if (Character.isDigit(code.charAt(i))) {\n",
+                        "        for (char ch : code.toCharArray()) {\n"
                         "            if (Character.isDigit(ch)) {\n"),)),
     Mutation("lowercase_invalid", "MINOR_FORMATTING", (('System.out.println("Invalid");', 'System.out.println("invalid");'),),
              partial_ok=("R3",)),
-    Mutation("length_boundary", "SEQUENCE_AND_SELECTION_ERROR", (("password.length() >= MIN_LENGTH", "password.length() > MIN_LENGTH"),),
+    Mutation("length_boundary", "SEQUENCE_AND_SELECTION_ERROR", (("code.length() >= MIN_LENGTH", "code.length() > MIN_LENGTH"),),
              acceptable=("OUTPUT_IMPACT_ERROR",), partial_ok=("R3",)),
 )
 
@@ -658,7 +658,7 @@ def _reused() -> tuple:
 
 #: Short assignments first within each course, then the multi-requirement ones.
 NEW_ASSIGNMENTS = (EVEN_ODD, TEMPERATURE, GRADE_BOOK, RECTANGLE, TIP_CALCULATOR, INVENTORY,
-                   SUM_TO_N, PASSWORD_CHECK, SHOPPING_CART)
+                   SUM_TO_N, ACCESS_CHECK, SHOPPING_CART)
 #: Assignments the injection twins are made of (multi-requirement ones, so a "low" answer is wrong).
 INJECTION_BASES = ("csc151_grade_book", "csc134_inventory_total", "csc251_shopping_cart")
 

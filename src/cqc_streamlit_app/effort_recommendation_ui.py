@@ -25,6 +25,7 @@ from cqc_streamlit_app.utils import effort_options, effort_widget_key, mark_effo
 
 STATE_KEY = "effort_recommendations"
 LATEST_KEY = "effort_recommendation_latest"
+JOBS_KEY = "effort_recommendation_jobs"
 POLL_SECONDS = 1.0
 
 
@@ -32,6 +33,11 @@ def _plain(text: str) -> str:
     """Model text as plain characters: no Markdown or LaTeX can come out of it."""
     cleaned = re.sub(r"[`*_#>\[\]()~|\\<]", "", str(text or ""))
     return cleaned.replace("$", r"\$").strip()
+
+
+def _safe(text: str) -> str:
+    """Our own text (not model text): only dollar signs are escaped, so (), _ and * survive."""
+    return str(text or "").replace("$", r"\$")
 
 
 def _usd(value: Optional[float]) -> str:
@@ -85,13 +91,22 @@ def _running(key: str, instructions: str, model: str, timeout_s: float) -> None:
                 _remember(instructions, model, job.result)
         st.rerun()
     st.caption(f"Checking how much effort this assignment needs. This takes up to {timeout_s:g} seconds "
-               f"({job.elapsed_s:.0f} s so far). You can keep working: the effort setting above still works.")
+               f"({job.elapsed_s:.0f} seconds so far). You can keep working. The Reasoning effort setting "
+               "still works.")
     if st.button("Skip", key=f"skip_effort_recommendation_{key[:12]}", icon=":material/skip_next:",
                  help="Stop waiting and keep the default effort."):
         job.skip()
         state["job"] = None
         state["skipped"] = True
         st.rerun()
+
+
+def _busy() -> bool:
+    """True while any recommendation of this session is still running (a skipped one keeps running
+    until its own bound), so Skip then Recommend again cannot start parallel paid calls."""
+    jobs = st.session_state.get(JOBS_KEY, [])
+    jobs[:] = [j for j in jobs if not j.finished.is_set()]
+    return bool(jobs)
 
 
 def render_effort_recommendation(*, widget_uk: str, model: str, use_auto_route: bool, instructions: str,
@@ -102,7 +117,9 @@ def render_effort_recommendation(*, widget_uk: str, model: str, use_auto_route: 
     ``current_effort`` is the effort the control gives now (``None`` = the default), so
     Apply can say when the recommendation is already selected.
     """
-    st.markdown("**Recommended effort**")
+    st.markdown("##### Recommended effort")
+    st.caption("Effort is how long the grading model thinks before it answers. Higher effort is slower and "
+               "costs more. The suggestion is advice only.")
     if use_auto_route:
         st.caption("The Auto Router takes no effort setting, so there is nothing to recommend.")
         return
@@ -115,11 +132,13 @@ def render_effort_recommendation(*, widget_uk: str, model: str, use_auto_route: 
         return
 
     signals = er.extract_signals(instructions, checklist, solution_text, solution_files)
-    key = er.cache_key(instructions, signals, model, solution_text, llm_gateway.prompt_tag(er.PROMPT_ID))
-    state = _state(key)
     default = er.default_effort_for(model)
+    key = er.cache_key(instructions, signals, model, solution_text, llm_gateway.prompt_tag(er.PROMPT_ID), default)
+    state = _state(key)
     floor_met = er.policy_floor_met()
-    st.caption(f"Counted from the instructions: {_plain(signals.summary())}.")
+    st.caption(f"What the app counted in your instructions: {_safe(signals.summary())}.")
+    if not signals.solution_files:
+        st.caption("No solution file is added, so the suggestion will not go below medium effort.")
 
     if state.get("job") is not None:
         _running(key, instructions, model, llm_limits.effort_judge_timeout())
@@ -134,13 +153,21 @@ def render_effort_recommendation(*, widget_uk: str, model: str, use_auto_route: 
         if state.get("skipped"):
             st.caption(f"Skipped. The default effort ({_plain(default or 'the provider default')}) stays.")
         estimate = er.estimate_cost(instructions, solution_text, model)
-        st.caption(f"One short call to the grading model, {_usd(estimate)}. The answer is remembered for "
-                   "these instructions and this model.")
+        st.caption(f"Estimated cost: {_usd(estimate)}, for one short request to the grading model. The answer "
+                   "is remembered for these instructions and this model.")
+        st.caption("Sends the instructions and your solution (no student work) to the model provider.")
+        busy = _busy()
+        if busy:
+            st.caption("The button is off because an earlier request is still running. It ends by itself "
+                       f"within {llm_limits.effort_judge_timeout():g} seconds.")
         if st.button("Recommend effort", key=f"recommend_effort_{key[:12]}", icon=":material/lightbulb:",
+                     disabled=busy,
                      help="Ask the grading model which effort this assignment needs. Nothing changes until you "
                           "press Apply."):
             state["skipped"] = False
-            state["job"] = er.EffortJob(instructions, signals, model, solution_text)
+            job = er.EffortJob(instructions, signals, model, solution_text)
+            st.session_state.setdefault(JOBS_KEY, []).append(job)
+            state["job"] = job
             st.rerun()
         return
 
@@ -148,15 +175,14 @@ def render_effort_recommendation(*, widget_uk: str, model: str, use_auto_route: 
         st.caption(f"{_plain(rec.note or 'No recommendation.')} Default effort: "
                    f"{_plain(default or 'the provider default')}.")
     else:
-        reasons = " ".join(f"{_plain(r)}" for r in rec.reasons)
-        st.markdown(f"Recommended effort: **{_plain(rec.effort)}**. {_plain(signals.summary())}.")
-        if reasons:
-            st.caption(f"Why: {reasons}")
+        st.markdown(f"Recommended effort: **{_plain(rec.effort)}**.")
+        if rec.reasons:
+            st.caption("Why:\n" + "\n".join(f"- {_plain(r)}" for r in rec.reasons))
         _apply_controls(widget_uk, model, rec, current_effort or default, floor_met, key)
     if rec.cost_usd:
-        st.caption(rf"Cost of this recommendation: \${rec.cost_usd:.4f}.")
+        st.caption(rf"Cost of this suggestion: about \${rec.cost_usd:.4f}.")
     if st.button("Recommend again", key=f"recommend_again_{key[:12]}", icon=":material/refresh:",
-                 help="Ask again; the remembered answer for these instructions is discarded."):
+                 disabled=_busy(), help="Ask again and replace the saved answer."):
         er._RECOMMENDATION_CACHE.pop(key, None)
         state.clear()
         st.rerun()
@@ -165,11 +191,16 @@ def render_effort_recommendation(*, widget_uk: str, model: str, use_auto_route: 
 def _apply_controls(widget_uk: str, model: str, rec: er.EffortRecommendation, current: Optional[str],
                     floor_met: bool, key: str) -> None:
     same = current == rec.effort
-    st.button(f"Apply {rec.effort}", key=f"apply_effort_{key[:12]}", icon=":material/check:",
+    st.caption("This is a suggestion for this assignment. The effort you choose is used for every student in "
+               "this run, so grade the whole section at one effort.")
+    if er._rank(rec.effort) < er._rank(rec.default_effort):
+        st.caption("Lower effort costs less; check a few results before returning grades.")
+    st.button(f"Apply {rec.effort} effort", key=f"apply_effort_{key[:12]}", icon=":material/check:",
               on_click=_apply, args=(widget_uk, model, rec.effort), disabled=same,
-              help="Select this effort in the Reasoning effort control.")
+              help="Select this effort in the Reasoning effort setting.")
     if same:
         st.caption("Apply is off because this effort is already selected.")
     elif not floor_met:
-        st.caption("For now this is advice only. The recommender has not yet been checked against measured "
-                   "grading results, so it never changes the effort unless you press Apply.")
+        st.caption("This is a suggestion only. Nothing is selected for you. Press Apply to use it.")
+    st.caption("Apply sets the Reasoning effort setting for this run. Every student in the run is graded at "
+               "that one effort, so the grades stay comparable.")

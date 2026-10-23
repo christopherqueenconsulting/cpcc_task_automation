@@ -88,7 +88,7 @@ def _page():
         RequirementItem(id=f"R{i}", text=f"Requirement {i}", weight="core") for i in range(1, 3)])
     render_effort_recommendation(
         widget_uk="t", model=cfg["model"], use_auto_route=cfg["use_auto_route"], instructions=instructions,
-        checklist=checklist, solution_text=None, solution_files=0, current_effort=cfg["effort"])
+        checklist=checklist, solution_text="class A {}", solution_files=1, current_effort=cfg["effort"])
     st.session_state["cfg"] = cfg
 
 
@@ -132,7 +132,8 @@ def test_nothing_is_called_until_the_instructor_asks():
     assert judge.calls == 0
     assert "Recommended effort" in _text(at)
     assert _button(at, "Recommend effort").disabled is False
-    assert any("One short call to the grading model" in c.value for c in at.caption)
+    assert any("Estimated cost:" in c.value and "one short request to the grading model" in c.value for c in at.caption)
+    assert "Sends the instructions and your solution (no student work) to the model provider." in _text(at)
     assert at.session_state["cfg"]["effort"] is None
 
 
@@ -145,16 +146,16 @@ def test_a_recommendation_is_shown_with_reasons_and_apply_selects_it():
         at = _wait_done(at)
     assert not at.exception, at.exception
     text = _text(at)
-    assert "Recommended effort: **low**" in text and "Why: A short task." in text
-    assert "advice only" in text  # the policy floor is not met
+    assert "Recommended effort: **low**" in text and "Why:\n- A short task." in text
+    assert "Nothing is selected for you" in text  # the policy floor is not met
     assert at.session_state["cfg"]["effort"] is None  # display only: the control did not move
-    apply_button = _button(at, "Apply low")
+    apply_button = _button(at, "Apply low effort")
     assert not apply_button.disabled
     apply_button.click()
     at = _run(at)
     assert at.session_state["cfg"]["effort"] == "low"
     assert at.selectbox(key="openrouter_effort_t_openai/alpha").value == "low"
-    again = _button(at, "Apply low")
+    again = _button(at, "Apply low effort")
     assert again.disabled and any("already selected" in c.value for c in at.caption)
 
 
@@ -188,7 +189,7 @@ def test_a_failed_call_says_the_default_stays_and_offers_to_try_again():
         _button(at, "Recommend effort").click()
         at = _run(at)
         at = _wait_done(at)
-    assert "could not answer, so the default effort stays" in _text(at)
+    assert "could not be made, so the default effort stays" in _text(at)
     assert not [b for b in at.button if b.label.startswith("Apply")]
     assert _button(at, "Recommend again")
 
@@ -213,7 +214,7 @@ def test_with_the_floor_met_the_recommendation_is_pre_applied_when_untouched(mon
     assert not at.exception, at.exception
     assert at.selectbox(key="openrouter_effort_t_openai/alpha").value == "low"
     assert at.session_state["cfg"]["effort"] == "low"
-    assert "advice only" not in _text(at)
+    assert "Nothing is selected for you" not in _text(at)
 
 
 def test_with_the_floor_met_a_touched_control_is_left_alone(monkeypatch):
@@ -237,7 +238,7 @@ def test_a_low_confidence_answer_is_never_pre_applied(monkeypatch):
         at = _wait_done(_run(at))
         at = _run(at)
     assert at.session_state["cfg"]["effort"] is None
-    assert "was not sure, so the default effort stays" in _text(at)
+    assert "was not confident, so the default effort stays" in _text(at)
 
 
 def test_no_widget_has_an_empty_label():
@@ -282,6 +283,55 @@ def test_markdown_in_model_reasons_is_flattened():
         at = _wait_done(_run(at))
     why = [c.value for c in at.caption if c.value.startswith("Why:")][0]
     assert "**" not in why and "](" not in why and "`" not in why and r"\$5" in why
+
+
+def test_the_apply_area_explains_one_effort_per_run_and_the_lower_effort_cost():
+    with patch.object(llm_gateway, "structured", Judge("low")):
+        at = _app()
+        _button(at, "Recommend effort").click()
+        at = _wait_done(_run(at))
+    text = _text(at)
+    assert ("This is a suggestion for this assignment. The effort you choose is used for every student in "
+            "this run, so grade the whole section at one effort.") in text
+    assert "Lower effort costs less; check a few results before returning grades." in text
+    assert ("Apply sets the Reasoning effort setting for this run. Every student in the run is graded at that one "
+            "effort, so the grades stay comparable.") in text
+    assert "What the app counted in your instructions:" in text
+    assert "2 requirements (2 core)" in text and "mentions of loops" in text or "mention of loops" in text
+    assert text.count("2 requirements") == 1  # the counts are said once
+    assert "Effort is how long the grading model thinks before it answers." in text
+
+
+def test_the_progress_line_uses_plain_words():
+    judge = Judge(hold=True)
+    with patch.object(llm_gateway, "structured", judge):
+        at = _app()
+        _button(at, "Recommend effort").click()
+        at = _run(at)
+        judge.release.set()
+    line = [c.value for c in at.caption if c.value.startswith("Checking how much effort")][0]
+    assert "seconds so far). You can keep working. The Reasoning effort setting still works." in line
+
+
+def test_skip_then_recommend_again_cannot_start_a_second_paid_call_while_the_first_runs():
+    judge = Judge(hold=True)
+    with patch.object(llm_gateway, "structured", judge):
+        at = _app()
+        _button(at, "Recommend effort").click()
+        at = _run(at)
+        _button(at, "Skip").click()
+        at = _run(at)
+        assert _button(at, "Recommend effort").disabled
+        assert any("earlier request is still running" in c.value for c in at.caption)
+        judge.release.set()
+    assert judge.calls == 1
+
+
+def test_the_errors_only_caption_exists_on_the_page():
+    import inspect
+
+    from cqc_streamlit_app import grade_assignment
+    assert "Effort recommendation is off in errors-only mode" in inspect.getsource(grade_assignment)
 
 
 # --------------------------------------------------------------- the policy floor

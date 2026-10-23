@@ -14,17 +14,22 @@ measures come from the labeled cases:
 
 The right effort for an assignment is the lowest one that is no worse than ``high`` on all
 three, beyond noise. Noise is how much ``high`` disagrees with itself across repeats (the
-high-vs-high baseline), floored at ``MIN_TOLERANCE``. If no assignment shows any lower
-effort worse than ``high`` beyond that noise, the suite is *not informative* and no ground
-truth is written: the judge then stays display-only.
+high-vs-high baseline), floored at ``MIN_TOLERANCE`` and capped at ``MAX_TOLERANCE``. The
+right effort and every effort between it and ``high`` must pass (a ``low`` that passes after a
+failing ``medium`` is luck). Unless at least ``MIN_SEPARATING_ASSIGNMENTS`` assignments show a
+lower effort worse than ``high`` beyond that noise, the suite is *not informative* and no ground
+truth is written: the judge then stays display-only. The records must come from one model; the
+report is tied to that model and to the dataset version and content it was measured on.
 
     python -m cqc_cpcc.model_eval effort-truth --raw evals/runs/local/raw_outputs.jsonl
 """
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
+import logging
 import statistics
 from pathlib import Path
 from typing import Optional
@@ -34,8 +39,14 @@ from cqc_cpcc.model_eval import dataset as ds
 EFFORTS = ("low", "medium", "high")
 METRICS = ("band", "recall", "harshness")
 MIN_TOLERANCE = 0.02
+#: The noise tolerance never exceeds this, so a noisy ``high`` cannot hide a real difference.
+MAX_TOLERANCE = 0.10
+#: Fewer assignments than this showing a lower effort worse than ``high`` is not enough to call the
+#: suite informative (one flipped assignment out of twelve is within what chance produces).
+MIN_SEPARATING_ASSIGNMENTS = 3
 GROUND_TRUTH_FILE = "ground_truth.json"
 CORRECT_TAGS = ("equivalent", "follows_solution_format")
+_log = logging.getLogger(__name__)
 
 
 def assignment_of(case_id: str) -> str:
@@ -117,32 +128,55 @@ def _worse_than_high(assignment: str, effort: str, by_effort: dict, tolerance: d
 
 
 def derive_ground_truth(cases: list, records: list[dict]) -> dict:
-    """The report: noise, per-assignment verdicts, ground truth (when informative) and extras."""
+    """The report: noise, per-assignment verdicts, ground truth (when informative) and extras.
+
+    Raises ``ValueError`` for records of more than one model (the truth belongs to one model) or
+    without a run at ``high``.
+    """
+    models = {r.get("model") for r in records if r.get("model")}
+    if len(models) > 1:
+        raise ValueError(f"The records come from more than one model ({', '.join(sorted(models))}); "
+                         "ground truth belongs to one model. Run and derive one model at a time.")
     by_effort = metrics_by_effort(cases, records)
     if "high" not in by_effort:
         raise ValueError("The records have no run at high effort: it is the reference for the noise baseline.")
     noise = noise_baseline(by_effort)
-    tolerance = {m: max(noise[m] or 0.0, MIN_TOLERANCE) for m in METRICS}
+    tolerance = {m: min(max(noise[m] or 0.0, MIN_TOLERANCE), MAX_TOLERANCE) for m in METRICS}
     efforts = [e for e in EFFORTS if e in by_effort]
     assignments = sorted(by_effort["high"])
     verdicts: dict[str, dict] = {}
+    single = 0
     for assignment in assignments:
         failed = {e: _worse_than_high(assignment, e, by_effort, tolerance) for e in efforts if e != "high"}
-        truth = next((e for e in efforts if e == "high" or not failed.get(e)), "high")
+        # The right effort passes, and so does every effort between it and high.
+        truth = "high"
+        for e in reversed([x for x in efforts if x != "high"]):
+            if failed[e]:
+                break
+            truth = e
+        below = [x for x in efforts if EFFORTS.index(x) < EFFORTS.index(truth)]
+        if below and len(failed[below[-1]]) == 1:
+            single += 1
         verdicts[assignment] = {"effort": truth, "worse_than_high": {e: m for e, m in failed.items() if m}}
-    differs = any(v["worse_than_high"] for v in verdicts.values())
-    single = sum(1 for v in verdicts.values()
-                 if any(len(m) == 1 for m in v["worse_than_high"].values()))
+    separating = sum(1 for v in verdicts.values() if v["worse_than_high"])
+    informative = separating >= MIN_SEPARATING_ASSIGNMENTS
+    repeats = sorted({r["repeat"] for r in records if r.get("repeat", 0) >= 0})
     return {
+        "model": next(iter(models), None),
         "efforts": efforts,
-        "repeats": sorted({r["repeat"] for r in records if r.get("repeat", 0) >= 0}),
+        "repeats": repeats,
+        "n_cases": len({r["case_id"] for r in records}),
+        "n_repeats": len(repeats),
+        "n_comparisons": len(assignments) * (len(efforts) - 1) * len(METRICS),
         "noise_high_vs_high": noise,
         "tolerance": tolerance,
-        "informative": differs,
-        "reason": ("" if differs else
-                   "not informative: no assignment shows an effort difference beyond the noise, "
+        "separating_assignments": separating,
+        "informative": informative,
+        "reason": ("" if informative else
+                   f"not informative: {separating} of {len(assignments)} assignments show a lower effort worse "
+                   f"than high beyond the noise (at least {MIN_SEPARATING_ASSIGNMENTS} are needed), "
                    "so the judge stays display-only"),
-        "ground_truth": {a: v["effort"] for a, v in verdicts.items()} if differs else {},
+        "ground_truth": {a: v["effort"] for a, v in verdicts.items()} if informative else {},
         "verdicts": verdicts,
         "decided_by_single_metric": single,
         "mean_metrics": {
@@ -204,19 +238,42 @@ def read_records(path: Path) -> list[dict]:
     return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def dataset_info(dataset_root: Path) -> dict:
+    """The dataset version and a hash of its content (``cases.jsonl`` and ``cases/``): ground truth
+    is only valid for the dataset it was measured on."""
+    root = Path(dataset_root)
+    digest = hashlib.sha256()
+    files = [root / "cases.jsonl"] + sorted(p for p in (root / "cases").rglob("*") if p.is_file())
+    for path in files:
+        if path.exists():
+            digest.update(str(path.relative_to(root)).encode())
+            digest.update(path.read_bytes())
+    version_file = root / "VERSION"
+    version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else None
+    return {"version": version, "cases_hash": digest.hexdigest()}
+
+
 def write_report(report: dict, dataset_root: Path) -> Path:
     path = Path(dataset_root) / GROUND_TRUTH_FILE
+    report = {**report, "dataset": dataset_info(dataset_root)}
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
 
 
 def load_ground_truth(dataset_root: Path) -> dict:
-    """``{assignment: effort}`` from the committed report; ``{}`` when none or not informative."""
+    """``{assignment: effort}`` from the committed report; ``{}`` when there is none, it is not
+    informative, or it was measured on a different dataset version or content (logged)."""
     path = Path(dataset_root) / GROUND_TRUTH_FILE
     if not path.exists():
         return {}
     report = json.loads(path.read_text(encoding="utf-8"))
-    return dict(report.get("ground_truth") or {}) if report.get("informative") else {}
+    if not report.get("informative"):
+        return {}
+    if report.get("dataset") != dataset_info(dataset_root):
+        _log.warning("Ignoring effort ground truth: it was measured on a different dataset "
+                     "version or content. Measure it again.")
+        return {}
+    return dict(report.get("ground_truth") or {})
 
 
 def run(args) -> int:
@@ -227,6 +284,8 @@ def run(args) -> int:
     rows = [json.loads(line) for line in (root / "cases.jsonl").read_text(encoding="utf-8").splitlines() if line]
     report["signal_association"] = signal_association(rows, report["ground_truth"])
     print(json.dumps({k: v for k, v in report.items() if k != "verdicts"}, indent=2, sort_keys=True))
+    print(f"{report['n_cases']} cases, {report['n_repeats']} repeats, {report['n_comparisons']} comparisons "
+          f"(assignments x efforts below high x measures); model {report['model']}")
     if args.write:
         print(f"wrote {write_report(report, root)}")
     return 0

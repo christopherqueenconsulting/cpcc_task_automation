@@ -1,18 +1,18 @@
 {
-  "case_id": "csc251_password_check__twin_length_boundary",
+  "case_id": "csc251_access_check__twin_length_boundary",
   "language": "java",
   "role": "grading",
   "course_id": "CSC_251",
   "assignment_id": "Exam1",
   "rubric_id": "csc151_java_exam_rubric",
-  "instructions": "Write a Java program named PasswordCheck.java that:\n1. Uses a Scanner to read a password (String).\n2. A password is valid when it has at least 8 characters and contains at least one digit.\n   Use a loop to look for the digit.\n3. Prints Valid or Invalid.\nFollow Java naming conventions and comment your code.\n",
+  "instructions": "Write a Java program named AccessCheck.java that:\n1. Uses a Scanner to read an access code (String).\n2. A code is valid when it has at least 8 characters and contains at least one digit.\n   Use a loop to look for the digit.\n3. Prints Valid or Invalid.\nFollow Java naming conventions and comment your code.\n",
   "files": [
-    "PasswordCheck.java"
+    "AccessCheck.java"
   ],
   "requirements": [
     {
       "id": "R1",
-      "text": "Use a Scanner to read the password as a String.",
+      "text": "Use a Scanner to read the access code as a String.",
       "weight": "core"
     },
     {
@@ -22,7 +22,7 @@
     },
     {
       "id": "R3",
-      "text": "A password is valid with at least 8 characters and a digit; print Valid or Invalid.",
+      "text": "A code is valid with at least 8 characters and a digit; print Valid or Invalid.",
       "weight": "core"
     }
   ],
@@ -53,7 +53,7 @@
   "tags": [
     "bug"
   ],
-  "twin_of": "csc251_password_check__solution_format",
+  "twin_of": "csc251_access_check__solution_format",
   "labels_reviewed_by": null,
-  "reference_solution_file": "solution/PasswordCheck.java"
+  "reference_solution_file": "solution/AccessCheck.java"
 }

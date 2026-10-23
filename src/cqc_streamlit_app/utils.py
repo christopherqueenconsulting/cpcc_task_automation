@@ -1327,9 +1327,8 @@ def _reasoning_effort_selectbox(uk: str, role: str, model_id: str, use_auto_rout
     if choice == default_label:
         return None
     if _effort_would_be_dropped(role, model_id, choice):
-        st.caption("This model is not on the app's list of known models, or the list gives it no effort "
-                   f"setting, so the app cannot send an effort for it: {choice} is not applied and the "
-                   "provider default runs.")
+        st.caption(f"The app cannot send an effort setting for this model, so {choice} is not used and the "
+                   "model's own default runs.")
     return choice
 
 
