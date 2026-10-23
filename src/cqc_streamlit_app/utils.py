@@ -1079,6 +1079,7 @@ def define_openrouter_model(
         default_model: str | None = None,
         role: str = "grading",
         default_effort: str | None = None,
+        preapply_effort: tuple[str, str] | None = None,
 ) -> Dict[str, Any]:
     """
     Presents OpenRouter model configuration with auto-routing option.
@@ -1104,6 +1105,9 @@ def define_openrouter_model(
         role: Registry role whose model is the default ("grading", "feedback", ...)
         default_effort: Effort pre-selected when the model supports it (for example the
             effort the last section of the same assignment was graded at).
+        preapply_effort: ``(model id, effort)`` to select once, for that model, while the
+            instructor has not touched the effort control (the effort recommendation, only
+            after its suite meets the policy floor).
 
     Returns:
         Configuration dictionary for OpenRouter
@@ -1233,7 +1237,7 @@ def define_openrouter_model(
         st.info("**Auto Router:** OpenRouter will automatically select the best model for your request.")
 
     effort = _reasoning_effort_selectbox(
-        uk, role, selected_model, use_auto_route, discovery_entry, default_effort)
+        uk, role, selected_model, use_auto_route, discovery_entry, default_effort, preapply_effort)
 
     return {
         "use_auto_route": use_auto_route,
@@ -1272,8 +1276,23 @@ def _default_effort_label(role: str, model_id: str) -> str:
     return f"Default ({where}: {resolved.reasoning_effort or 'provider default'})"
 
 
+def effort_widget_key(uk: str | int, model_id: str) -> str:
+    """Session-state key of the "Reasoning effort" selectbox for ``model_id``."""
+    return f"openrouter_effort_{uk}_{model_id}"
+
+
+def _effort_touched_key(uk: str | int, model_id: str) -> str:
+    return f"openrouter_effort_touched_{uk}_{model_id}"
+
+
+def mark_effort_touched(uk: str | int, model_id: str) -> None:
+    """Record that the instructor chose the effort (a pre-applied recommendation stops)."""
+    st.session_state[_effort_touched_key(uk, model_id)] = True
+
+
 def _reasoning_effort_selectbox(uk: str, role: str, model_id: str, use_auto_route: bool,
-                                discovery_entry: dict | None, default_effort: str | None) -> str | None:
+                                discovery_entry: dict | None, default_effort: str | None,
+                                preapply_effort: tuple[str, str] | None = None) -> str | None:
     """The "Reasoning effort" selectbox. Returns the chosen effort, or ``None`` for Default.
 
     Disabled under the Auto Router, which takes no effort. The key includes the model, so
@@ -1285,8 +1304,19 @@ def _reasoning_effort_selectbox(uk: str, role: str, model_id: str, use_auto_rout
     default_label = _default_effort_label(role, model_id)
     options = [default_label] + effort_options(model_id, discovery_entry)
     index = options.index(default_effort) if default_effort in options[1:] else 0
+    key = effort_widget_key(uk, model_id)
+    applied_key = f"openrouter_effort_preapplied_{uk}_{model_id}"
+    if (preapply_effort and preapply_effort[0] == model_id and preapply_effort[1] in options[1:]
+            and not st.session_state.get(_effort_touched_key(uk, model_id))
+            and st.session_state.get(applied_key) != preapply_effort[1]):
+        # The instructor has not chosen: select the recommendation once. Dropping the widget's
+        # state lets `index` set it (no session-state write on a widget that has a default).
+        st.session_state.pop(key, None)
+        st.session_state[applied_key] = preapply_effort[1]
+        index = options.index(preapply_effort[1])
     choice = st.selectbox(
-        "Reasoning effort", options, index=index, key=f"openrouter_effort_{uk}_{model_id}",
+        "Reasoning effort", options, index=index, key=key,
+        on_change=mark_effort_touched, args=(uk, model_id),
         help="How long the model thinks before it answers. Low: fastest and cheapest, fine for "
              "simple work. Medium: a balance. High: slower and costs more, more careful. Max: "
              "slowest and costliest, use only for hard cases. Grade every student in a run at the "

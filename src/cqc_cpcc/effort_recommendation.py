@@ -374,3 +374,70 @@ def estimate_cost(instructions: str, solution: Optional[str], model: Optional[st
         return model_registry.estimate_cost(resolved, tokens, 400)
     except Exception:  # noqa: BLE001 - a missing estimate never blocks the page
         return None
+
+
+# --------------------------------------------------------------------------------------
+# The policy floor and the background job
+# --------------------------------------------------------------------------------------
+
+def policy_floor_met() -> bool:
+    """True when the ``effort-recommendation`` suite meets the floor Christopher set in
+    ``model_policy.json``: the suite is calibrated there, on the current prompt version.
+
+    Until then the recommendation is shown with an Apply button and never changes the
+    effort on its own. ``model_policy.json`` is edited by hand only.
+    """
+    from cqc_cpcc.utilities.AI import llm_gateway, model_registry
+
+    try:
+        policy = model_registry.load_policy().prompt_eval
+        suite = policy.suites.get(PROMPT_ID)
+        tag = llm_gateway.prompt_tag(PROMPT_ID) or ""
+        version = int(tag.rsplit("@", 1)[-1]) if tag.rsplit("@", 1)[-1].isdigit() else None
+        return bool(suite and suite.calibrated and version is not None
+                    and policy.calibrated_versions.get(PROMPT_ID) == version)
+    except Exception as e:  # noqa: BLE001 - a missing policy means "not met"
+        logger.warning(f"Effort recommendation: could not read the policy floor: {e}")
+        return False
+
+
+class EffortJob:
+    """One recommendation running on a worker thread, so Setup stays usable meanwhile.
+
+    The thread never touches Streamlit: the page polls :attr:`finished` and reads
+    :attr:`result`. :meth:`skip` makes the page ignore the answer; the call itself is
+    already bounded by ``CQC_EFFORT_JUDGE_TIMEOUT_S`` and ends by itself.
+    """
+
+    def __init__(self, instructions: str, signals: EffortSignals, model: Optional[str],
+                 solution: Optional[str]):
+        import threading
+        import time
+
+        self.started_at = time.monotonic()
+        self.finished = threading.Event()
+        self.skipped = False
+        self.result: Optional[EffortRecommendation] = None
+        self._args = (instructions, signals, model, solution)
+        self._thread = threading.Thread(target=self._run, name="effort-recommendation", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        instructions, signals, model, solution = self._args
+        try:
+            self.result = asyncio.run(recommend_effort(instructions, signals, model, solution=solution))
+        except Exception as e:  # noqa: BLE001 - recommend_effort should not raise; never lose the thread silently
+            logger.warning(f"Effort recommendation job failed: {e}")
+            self.result = _fallback(default_effort_for(model), "The recommender could not answer, "
+                                    "so the default effort stays.", signals)
+        finally:
+            self.finished.set()
+
+    def skip(self) -> None:
+        self.skipped = True
+
+    @property
+    def elapsed_s(self) -> float:
+        import time
+
+        return time.monotonic() - self.started_at

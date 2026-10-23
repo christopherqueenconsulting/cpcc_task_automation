@@ -43,6 +43,7 @@ from cqc_cpcc.rubric_grading import (
 )
 from cqc_cpcc.utilities.AI import llm_limits, llm_progress
 from cqc_streamlit_app import results_store
+from cqc_streamlit_app.effort_recommendation_ui import preapply_for, render_effort_recommendation
 from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_cpcc.utilities.submission_validity import (
     NO_WORK_STATUSES, expected_language_for_rubric, language_for_course,
@@ -2603,7 +2604,8 @@ async def get_rubric_based_exam_grading():
             st.subheader("Model", anchor=False)
             model_cfg = define_openrouter_model(
                 "rubric_grade_exam", default_use_auto_route=False,
-                default_effort=_remembered_effort(assignment_instructions_content))
+                default_effort=_remembered_effort(assignment_instructions_content),
+                preapply_effort=preapply_for(assignment_instructions_content))
 
         course_name_parts = [selected_course_id]
         if course_section and course_section.strip():
@@ -2632,6 +2634,12 @@ async def get_rubric_based_exam_grading():
         # The errors-only path takes the role's effort: the per-run choice is for rubric grading.
         selected_effort = None if use_auto_route or grading_mode == "errors_only" else model_cfg.get("effort")
         st.caption(f"Model: {_model_effort_label(selected_model, use_auto_route, selected_effort)}")
+        if grading_mode != "errors_only":
+            render_effort_recommendation(
+                widget_uk="rubric_grade_exam", model=selected_model, use_auto_route=use_auto_route,
+                instructions=assignment_instructions_content, checklist=requirements_checklist,
+                solution_text=assignment_solution_contents,
+                solution_files=len(solution_file_paths or []), current_effort=selected_effort)
 
         setup_complete = bool(assignment_instructions_content) and (
             requirements_checklist is not None or not needs_checklist

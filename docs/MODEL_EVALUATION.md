@@ -106,3 +106,26 @@ alone was unsafe. It goes back once the digest prompt suite passes (see
 | The winner gets worse on another prompt of its roles | cross-suite gate fails; nothing is promoted; issue opened |
 | Model changed on master | issue "Model change on master: git pull + restart" (+ ClickUp task if configured) |
 | Auto-merge refused | comment on the PR explaining why, label switched to `blocked-on-chris` |
+
+## Effort recommendation: measuring the right effort
+
+The `effort-recommendation` prompt suite scores the Setup tab's effort judge against *measured* ground truth,
+not against `high`. Ground truth needs a paid run, so it is a separate, human-started step
+(see `evals/datasets/effort-recommendation/v1/README.md` for the dataset):
+
+```bash
+poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
+  --candidate <model>@low --candidate <model>@medium --repeats 3 --dry-run   # cost first
+poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
+  --candidate <model>@low --candidate <model>@medium --repeats 3 --out evals/runs/effort-truth
+poetry run python -m cqc_cpcc.model_eval effort-truth --raw evals/runs/effort-truth/raw_outputs.jsonl --write
+```
+
+For each assignment the right effort is the lowest one no worse than `high`, beyond noise (high against
+itself across repeats), on level-band agreement, missed bug twins and harshness on equivalent cases.
+When no assignment shows a difference beyond the noise the report says `not informative`, writes no
+ground truth, and the judge stays display-only. The report also lists each counted signal's
+association with the ground truth, the medium-versus-high balance (so the registry default can be
+reviewed) and how many assignments were decided by a single measure. The policy floor that lets the
+recommendation be pre-selected is an entry for `effort-recommendation` in `model_policy.json`
+(`calibrated: true` and `calibrated_versions` at the current prompt version), edited by hand.
