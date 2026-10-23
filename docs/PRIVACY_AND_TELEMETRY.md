@@ -12,6 +12,7 @@ analytics.
 | **Log files** `logs/cpcc_*.log`, `logs/openai/*.log` | Operational messages | Every line is scrubbed by `pii_redaction` (below). Directory `0700`. 50 MB × 5 files per day, deleted after `CQC_LOG_RETENTION_DAYS` (default 14). |
 | **Console / Streamlit log panel** | Same messages | Same scrubbing filter. The panel no longer forces DEBUG on. |
 | **AI debug dumps** (`CQC_AI_DEBUG_SAVE_DIR`, off by default) | Requests and responses | Student identifiers are always scrubbed from files on disk; `CQC_AI_DEBUG_REDACT` (default on) also masks secrets, e-mails, phone numbers and SSNs. Files `0600`. Submission *content* is still present: keep this off unless you are debugging. |
+| **Clipboard / downloaded prompt (.md)** from the LLM Prompt tab of a student result | The full grading prompt, including that student's submission and any name in it | Leaves the app's controls once copied or downloaded; the instructor's responsibility. The prompt is never saved with results (a restored run has none). Each message is shown as a code block, never rendered. |
 | **Temp files** (downloaded ZIPs, extracted submissions, screenshots, generated `.docx`) | Student work | Written to a private `<system tmp>/cqc_cpcc/` (`0700`). Anything older than `CQC_TEMP_RETENTION_HOURS` (default 24) is deleted when the app starts. |
 | **Saved grading results** `~/.cqc_cpcc/grading_results/` (`CQC_GRADING_RESULTS_DIR` overrides) | Student names, scores, feedback, detected errors (including raw compiler diagnostics, which are instructor-only) | Kept so results survive a restart. Files `0600` in a `0700` directory, outside the repository. Only the newest 20 runs are kept. Local only: never uploaded. The result-card JSON export leaves the raw diagnostics out. |
 | **Withdrawal CSVs** (`WITHDRAWALS_CSV_DIR`) | Names, IDs, e-mails | By design. Outside version control and git-ignored. Protect the folder. |
@@ -111,5 +112,7 @@ LLM provider is a disclosure of education records to a third party, so check whe
 your institution's AI-use policy and vendor agreements cover it. The LLM providers are
 not the only vendors that need that review: the code runners (OneCompiler and
 OnlineGDB) receive a student's code when the instructor runs it, and neither has an
-agreement in place. Every other outside destination is kept free of student
-identifiers.
+agreement in place. A prompt copied or downloaded from the LLM Prompt tab is a
+disclosure to whatever tool receives it, so paste it only into tools the institution
+has approved for student records. Every other outside destination is kept free of
+student identifiers.

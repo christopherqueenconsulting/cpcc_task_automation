@@ -86,8 +86,11 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     async def recording(role, prompt, schema_model, *, override=None, use_auto_route=False, prompt_id=None,
                         **extra):
         call = [role, prompt, schema_model.model_json_schema(), override, use_auto_route]
-        if extra:  # a keyword the gateway gains later is part of the call too
-            call.append(sorted(extra.items()))
+        # A keyword the gateway gains later is part of the call too, but one passed as None
+        # changes nothing the model sees, so it does not change the hash.
+        given = sorted((k, v) for k, v in extra.items() if v is not None)
+        if given:
+            call.append(given)
         calls.append(_hash(call))
         return await real_structured(role, prompt, schema_model, override=override,
                                      use_auto_route=use_auto_route, prompt_id=prompt_id, **extra)

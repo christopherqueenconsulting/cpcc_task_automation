@@ -164,6 +164,9 @@ async def grade_exam_submission(
             use_auto_route=use_auto_route,
             prompt_id="exam-grading",
         )
+        # The exact request, for the LLM Prompt tab; never persisted.
+        result = result.model_copy(update={
+            "llm_request": llm_gateway.last_request_record("exam-grading", "grading")})
 
         logger.info(
             f"Grading complete: {len(result.all_major_errors or [])} major errors, "

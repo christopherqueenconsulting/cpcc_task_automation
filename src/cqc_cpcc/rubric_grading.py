@@ -400,6 +400,8 @@ async def grade_with_rubric(
         validity_gate: bool = True,
         rejected_files: Optional[list] = None,
         requirements=None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -496,6 +498,9 @@ async def grade_with_rubric(
             override=None if use_auto_route else model_name,
             use_auto_route=use_auto_route,
             prompt_id="rubric-grading",
+            # Only when set: an unset id must leave the call exactly as before, so the
+            # request-identical fast path of the prompt A/B still matches the base.
+            **{k: v for k, v in (("correlation_id", correlation_id), ("session_id", session_id)) if v},
         )
 
         # Log raw OpenAI response for debugging
@@ -530,6 +535,8 @@ async def grade_with_rubric(
             "reconciliation": [], "execution_report": None,
             "detected_errors": tag_source(result.detected_errors, SOURCE_MODEL, only_untagged=False),
             "graded_with_model": _graded_with(model_name, use_auto_route),
+            # The exact request, for the LLM Prompt tab; never persisted.
+            "llm_request": llm_gateway.last_request_record("rubric-grading", "grading"),
         })
 
         # Reconcile the model's errors against hard evidence (compile gate, then requirement

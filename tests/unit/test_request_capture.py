@@ -162,12 +162,35 @@ class TestCapture:
             hashes.append(calls[0])
         assert seen == ["a", "b"] and hashes[0] != hashes[1]
 
+    def test_a_gateway_keyword_passed_as_none_does_not_change_the_call(self, monkeypatch):
+        import asyncio
+
+        from pydantic import BaseModel
+
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        class Probe(BaseModel):
+            x: int = 0
+
+        async def structured(role, prompt, schema_model, *, override=None, use_auto_route=False, prompt_id=None,
+                             new_option=None):
+            return None
+
+        monkeypatch.setattr(llm_gateway, "structured", structured)
+        hashes = []
+        for kwargs in ({}, {"new_option": None}):
+            calls = []
+            with rc._patched([], test_mode=True, calls=calls):
+                asyncio.run(llm_gateway.structured("grading", "p", Probe, **kwargs))
+            hashes.append(calls[0])
+        assert hashes[0] == hashes[1]
+
     def test_a_changed_request_body_is_caught(self, monkeypatch):
         from cqc_cpcc.utilities.AI import openrouter_client
 
         before = rc.capture(["requirement-extraction"])
         real = openrouter_client.build_messages
-        monkeypatch.setattr(openrouter_client, "build_messages", lambda p: real(p + " "))
+        monkeypatch.setattr(openrouter_client, "build_messages", lambda p, system=None: real(p + " ", system))
         after = rc.capture(["requirement-extraction"])
         assert "send different requests" in rc.compare(after, before, ["requirement-extraction"])["requirement-extraction"]
 

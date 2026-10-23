@@ -107,6 +107,7 @@ def result_card_json(student: str, result: RubricAssessmentResult) -> str:
     what was not counted and why.
     """
     data = result.model_dump(mode="json", exclude={
+        "llm_request": True,  # the prompt holds the whole submission
         "detected_errors": {"__all__": {"compiler_diagnostics"}},
         # A dropped error rides on its note with the same instructor-only field.
         "reconciliation": {"__all__": {"error": {"compiler_diagnostics"}}}})
