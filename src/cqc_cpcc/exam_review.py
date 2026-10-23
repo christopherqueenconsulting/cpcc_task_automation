@@ -11,6 +11,7 @@ from docx import Document
 from docx.shared import Pt
 from langchain_core.callbacks import BaseCallbackHandler
 from pydantic import Field, BaseModel, StrictStr
+from pydantic.json_schema import SkipJsonSchema
 
 
 def parse_error_type_enum_name(enum_name: str):
@@ -302,6 +303,8 @@ class ErrorDefinitions(ErrorHolder):
 
     all_major_errors: Optional[List[MajorError]] = Field(description="List of the major code errors found in the code.")
     all_minor_errors: Optional[List[MinorError]] = Field(description="List of minor code errors found in the code.")
+    # Backend-only, never persisted: the exact request the grading call sent.
+    llm_request: SkipJsonSchema[Optional[dict]] = None
 
     def get_minor_errors_unique(self) -> None | List[MinorError]:
         minor_errors = None

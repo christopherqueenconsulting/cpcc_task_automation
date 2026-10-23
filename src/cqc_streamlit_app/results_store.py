@@ -48,7 +48,8 @@ def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = 
     if mode == "errors_only":
         payload_results = [[sid, summary] for sid, summary in results]
     else:
-        payload_results = [[sid, r.model_dump(mode="json")] for sid, r in results]
+        # The prompt (llm_request) holds the whole submission: it is never written to disk.
+        payload_results = [[sid, r.model_dump(mode="json", exclude={"llm_request"})] for sid, r in results]
     if meta is None:
         meta = _saved_meta(run_key)
     payload = {"run_key": run_key, "mode": mode, "saved_at": time.time(),

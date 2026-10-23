@@ -220,3 +220,48 @@ class TestOpenRouterExtraParams:
         assert kwargs["max_completion_tokens"] == 100
         assert "extra_body" not in kwargs
 
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestRequestRecord:
+    """PR 17: the call record keeps the exact request, and the caller's ids reach the client."""
+
+    async def test_the_record_holds_the_messages_params_and_the_callers_correlation_id(self, registry):
+        patcher, client = _fake_client(_response('{"answer": "4"}'))
+        with patcher:
+            await llm_gateway.structured("grading", "2+2?", Answer, prompt_id="rubric-grading",
+                                         correlation_id="ui-123", session_id="run-abc")
+        call = llm_gateway.last_call()
+        kwargs = client.chat.completions.create.call_args.kwargs
+        assert call.messages == openrouter_client.build_messages("2+2?") == kwargs["messages"]
+        assert call.params["reasoning"] == {"effort": "high"} and call.params["user"] == "run-abc"
+        assert kwargs["extra_body"]["user"] == "run-abc"
+        assert call.correlation_id == "ui-123"
+        record = llm_gateway.last_request_record("rubric-grading", "grading")
+        assert record["effort"] == "high" and record["model"] == "openai/primary"
+        assert record["correlation_id"] == "ui-123" and record["messages"] == call.messages
+        assert record["prompt"] == call.prompt and record["timeout_s"] > 0
+
+    async def test_a_system_message_is_sent_first(self, registry):
+        patcher, client = _fake_client(_response('{"answer": "4"}'))
+        with patcher:
+            await llm_gateway.structured("grading", "2+2?", Answer, system="You add.")
+        messages = client.chat.completions.create.call_args.kwargs["messages"]
+        assert [m["role"] for m in messages] == ["system", "user"] and messages[0]["content"] == "You add."
+        assert llm_gateway.last_call().messages == messages
+
+    async def test_the_debug_record_is_filed_under_the_callers_id(self, registry, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(openrouter_client, "should_debug", lambda: True)
+        monkeypatch.setattr(openrouter_client, "record_request", lambda **kw: recorded.append(kw))
+        monkeypatch.setattr(openrouter_client, "record_response", lambda *a, **kw: None, raising=False)
+        patcher, _ = _fake_client(_response('{"answer": "4"}'))
+        with patcher:
+            await llm_gateway.structured("grading", "2+2?", Answer, correlation_id="ui-123")
+        assert recorded and recorded[0]["correlation_id"] == "ui-123"
+        assert recorded[0]["extra_body"]["reasoning"] == {"effort": "high"}
+
+    async def test_no_record_without_a_call(self):
+        llm_gateway._last_call.set(None)
+        assert llm_gateway.last_request_record("rubric-grading", "grading") is None

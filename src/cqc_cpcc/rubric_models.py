@@ -469,6 +469,9 @@ class RubricAssessmentResult(BaseModel):
     reconciliation: SkipJsonSchema[list[ReconciliationNote]] = Field(default_factory=list)
     graded_with_model: SkipJsonSchema[Optional[str]] = None
     execution_report: SkipJsonSchema[Optional[dict]] = None
+    # The exact request the grading call sent (prompt tag, model, effort, timeout,
+    # correlation id, messages, params). Never persisted: it holds the whole submission.
+    llm_request: SkipJsonSchema[Optional[dict]] = None
     validity_reason: SkipJsonSchema[Optional[str]] = None
 
     @field_validator('total_points_earned')

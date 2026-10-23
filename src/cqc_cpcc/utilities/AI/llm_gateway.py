@@ -49,6 +49,11 @@ class GatewayCall:
     registry_revision: str
     completion: Optional[openrouter_client.CompletionMetadata]
     prompt: Optional[str] = None  # "prompt_id@version" from config/prompt_registry.json
+    # The exact request as sent: chat messages, the extra body (reasoning effort, seed,
+    # provider, token limit, user) and the correlation id the debug record is filed under.
+    messages: Optional[list] = None
+    params: Optional[dict] = None
+    correlation_id: Optional[str] = None
 
 
 _PROMPT_REGISTRY = Path(__file__).resolve().parents[2] / "config" / "prompt_registry.json"
@@ -93,6 +98,9 @@ async def structured(
         override: Optional[str] = None,
         use_auto_route: bool = False,
         prompt_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
 ) -> T:
     """Return a ``schema_model`` instance for ``prompt`` using ``role``'s model.
 
@@ -106,6 +114,11 @@ async def structured(
             (``OPENROUTER_ALLOWED_MODELS`` constrains it). No fallback applies.
         prompt_id: Id of the prompt in ``config/prompt_registry.json``; recorded as
             ``prompt_id@version`` on :func:`last_call` so every output names its prompt.
+        correlation_id: The id the caller shows in its debug panel; the request and
+            response records are filed under it instead of a fresh one.
+        session_id: A stable id for the run (OpenRouter's ``user`` field), so the
+            provider can route the run's calls to the same cache.
+        system: Optional system message; without it the prompt is one user message.
     """
     _last_call.set(None)
     resolved = model_registry.resolve(role, override=override)
@@ -118,11 +131,14 @@ async def structured(
         await asyncio.sleep(float(os.getenv("CQC_TEST_MODE_LATENCY_S", "0") or 0))
         result = _get_test_mode_response(schema_model)
         llm_progress.emit("succeeded", resolved.model, attempt=1, max_attempts=1)
-        _last_call.set(_call_record(resolved, resolved.model, False, None, prompt=tag))
+        _last_call.set(_call_record(resolved, resolved.model, False, None, prompt=tag, request={
+            "messages": openrouter_client.build_messages(prompt, system),
+            "params": model_registry.build_request_params(resolved), "correlation_id": correlation_id}))
         return result
 
+    send = dict(correlation_id=correlation_id, session_id=session_id, system=system)
     try:
-        result = await _complete(resolved, prompt, schema_model, use_auto_route)
+        result = await _complete(resolved, prompt, schema_model, use_auto_route, **send)
         _last_call.set(_call_record(resolved, resolved.model, False, prompt=tag))
         return result
     except (OpenAISchemaValidationError, OpenAITransportError) as primary_error:
@@ -142,7 +158,7 @@ async def structured(
         )
         llm_progress.emit("fallback", resolved.model)
         fallback = model_registry.resolve(role, override=resolved.fallback)
-        result = await _complete(fallback, prompt, schema_model, False)
+        result = await _complete(fallback, prompt, schema_model, False, **send)
         _last_call.set(_call_record(resolved, fallback.model, True, prompt=tag))
         return result
 
@@ -152,7 +168,8 @@ def _is_test_mode() -> bool:
     return TEST_MODE
 
 
-async def _complete(resolved, prompt, schema_model, use_auto_route):
+async def _complete(resolved, prompt, schema_model, use_auto_route, *, correlation_id=None,
+                    session_id=None, system=None):
     if use_auto_route:
         # The router picks the model, so only model-independent params apply.
         resolved = resolved.model_copy(update={"profile": None})
@@ -163,15 +180,46 @@ async def _complete(resolved, prompt, schema_model, use_auto_route):
         model_name=None if use_auto_route else resolved.model,
         extra_params=model_registry.build_request_params(resolved),
         request_timeout=llm_limits.request_timeout(resolved.role),
+        correlation_id=correlation_id,
+        session_id=session_id,
+        system=system,
     )
+
+
+def last_request_record(prompt_id: str, role: str) -> Optional[dict]:
+    """What the most recent gateway call sent, for the result it produced (never persisted).
+
+    ``None`` when no call was made in this context (a mocked gateway, a validity-gate
+    short-circuit). The effort comes from the request itself, so a fallback model's
+    effort is the one that actually ran.
+    """
+    call = last_call()
+    if call is None or not call.messages:
+        return None
+    reasoning = (call.params or {}).get("reasoning")
+    completion = call.completion
+    return {
+        "prompt_id": prompt_id,
+        "prompt": call.prompt,
+        "model": call.model_used,
+        "effort": reasoning.get("effort") if isinstance(reasoning, dict) else None,
+        "timeout_s": llm_limits.request_timeout(role),
+        "correlation_id": call.correlation_id,
+        "messages": call.messages,
+        "params": call.params,
+        "cached_tokens": getattr(completion, "cached_tokens", None) if completion else None,
+    }
 
 
 _UNSET = object()
 
 
-def _call_record(resolved, model_used, fallback_used, completion=_UNSET, prompt=None) -> GatewayCall:
+def _call_record(resolved, model_used, fallback_used, completion=_UNSET, prompt=None,
+                 request=_UNSET) -> GatewayCall:
     if completion is _UNSET:
         completion = openrouter_client.last_completion_metadata()
+    if request is _UNSET:
+        request = openrouter_client.last_request() or {}
     return GatewayCall(
         role=resolved.role,
         requested_model=resolved.model,
@@ -181,4 +229,7 @@ def _call_record(resolved, model_used, fallback_used, completion=_UNSET, prompt=
         registry_revision=resolved.registry_revision,
         completion=completion,
         prompt=prompt,
+        messages=(request or {}).get("messages"),
+        params=(request or {}).get("params"),
+        correlation_id=(request or {}).get("correlation_id"),
     )

@@ -167,7 +167,7 @@ class TestCapture:
 
         before = rc.capture(["requirement-extraction"])
         real = openrouter_client.build_messages
-        monkeypatch.setattr(openrouter_client, "build_messages", lambda p: real(p + " "))
+        monkeypatch.setattr(openrouter_client, "build_messages", lambda p, system=None: real(p + " ", system))
         after = rc.capture(["requirement-extraction"])
         assert "send different requests" in rc.compare(after, before, ["requirement-extraction"])["requirement-extraction"]
 

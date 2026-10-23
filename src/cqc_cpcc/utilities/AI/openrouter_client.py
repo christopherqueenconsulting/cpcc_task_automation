@@ -108,11 +108,23 @@ class CompletionMetadata:
     latency_seconds: float
     attempts: int
     ok: bool = True
+    cached_tokens: Optional[int] = None  # prompt tokens the provider served from its cache
 
 
 _last_completion: contextvars.ContextVar[Optional[CompletionMetadata]] = contextvars.ContextVar(
     "openrouter_last_completion", default=None
 )
+
+
+_last_request: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "openrouter_last_request", default=None
+)
+
+
+def last_request() -> Optional[dict]:
+    """The request body of the most recent completion call in this context (task): the chat
+    messages, the extra parameters sent, the model asked for and the correlation id."""
+    return _last_request.get()
 
 
 def last_completion_metadata() -> Optional[CompletionMetadata]:
@@ -129,6 +141,7 @@ class _Spend:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.reasoning_tokens = 0
+        self.cached_tokens = 0
         self.last_response = None
 
     def add(self, response) -> None:
@@ -148,6 +161,10 @@ class _Spend:
         reasoning = getattr(details, "reasoning_tokens", None) if details else None
         if isinstance(reasoning, int):
             self.reasoning_tokens += reasoning
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        cached = getattr(prompt_details, "cached_tokens", None) if prompt_details else None
+        if isinstance(cached, int):
+            self.cached_tokens += cached
 
     def metadata(self, requested_model: str, latency: float, ok: bool) -> CompletionMetadata:
         response = self.last_response
@@ -159,6 +176,7 @@ class _Spend:
             prompt_tokens=self.prompt_tokens or None,
             completion_tokens=self.completion_tokens or None,
             reasoning_tokens=self.reasoning_tokens or None,
+            cached_tokens=self.cached_tokens or None,
             cost_usd=self.cost,
             latency_seconds=latency,
             attempts=self.attempts,
@@ -324,9 +342,10 @@ def get_openrouter_plugins() -> Optional[list]:
     ]
 
 
-def build_messages(prompt: str) -> list[dict]:
-    """The chat messages sent for ``prompt`` (one user message, no system prompt)."""
-    return [{"role": "user", "content": prompt}]
+def build_messages(prompt: str, system: Optional[str] = None) -> list[dict]:
+    """One user message holding ``prompt``; with ``system``, a system message first."""
+    messages = [{"role": "system", "content": system}] if system else []
+    return messages + [{"role": "user", "content": prompt}]
 
 
 def build_response_format(schema_model: Type[BaseModel]) -> dict:
@@ -354,6 +373,9 @@ async def get_openrouter_completion(
         max_retries: int = DEFAULT_MAX_RETRIES,
         extra_params: Optional[dict] = None,
         request_timeout: Optional[float] = None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
 ) -> T:
     """Get a structured completion from OpenRouter, reporting failures to analytics.
 
@@ -367,6 +389,7 @@ async def get_openrouter_completion(
     spend = _Spend()
     _spend.set(spend)
     _last_completion.set(None)
+    _last_request.set(None)
     try:
         return await _get_openrouter_completion_impl(
             prompt=prompt,
@@ -377,6 +400,7 @@ async def get_openrouter_completion(
             max_retries=max_retries,
             extra_params=extra_params,
             request_timeout=request_timeout,
+            correlation_id=correlation_id, session_id=session_id, system=system
         )
     except Exception as call_error:
         _last_completion.set(spend.metadata(effective_model, timer.elapsed(), ok=False))
@@ -403,6 +427,9 @@ async def _get_openrouter_completion_impl(
         max_retries: int = DEFAULT_MAX_RETRIES,
         extra_params: Optional[dict] = None,
         request_timeout: Optional[float] = None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
 ) -> T:
     """Get structured completion from OpenRouter using OpenAI-compatible API.
 
@@ -455,9 +482,10 @@ async def _get_openrouter_completion_impl(
     client = _get_openrouter_client(timeout)
 
     # Debug logging setup. The correlation id doubles as the PostHog trace id.
-    correlation_id = (
-        create_correlation_id() if (should_debug() or telemetry.is_enabled()) else None
-    )
+    if not correlation_id:
+        correlation_id = (
+            create_correlation_id() if (should_debug() or telemetry.is_enabled()) else None
+        )
     telemetry.set_trace_id(correlation_id)
     telemetry_span = schema_model.__name__
     telemetry_timer = telemetry.GenerationTimer()
@@ -477,7 +505,7 @@ async def _get_openrouter_completion_impl(
             # Build API call parameters for OpenAI-compatible endpoint
             api_kwargs = {
                 "model": effective_model,
-                "messages": build_messages(prompt),
+                "messages": build_messages(prompt, system),
                 "response_format": response_format,
             }
 
@@ -505,8 +533,20 @@ async def _get_openrouter_completion_impl(
                             "allowed_models": allowed_models,
                         }
                     ]
+            if session_id:
+                # OpenRouter's stable per-run id: lets the provider route the run's calls to
+                # the same prompt cache.
+                extra_body["user"] = session_id
             if extra_body:
                 api_kwargs["extra_body"] = extra_body
+
+            # What this attempt sends, for the result's record (the gateway reads it).
+            _last_request.set({
+                "model": effective_model, "messages": api_kwargs["messages"],
+                "params": {**({"max_completion_tokens": max_tokens} if "max_completion_tokens" in api_kwargs else {}),
+                           **extra_body},
+                "correlation_id": correlation_id,
+            })
 
             # Debug: Record request
             if correlation_id:
@@ -517,6 +557,7 @@ async def _get_openrouter_completion_impl(
                     response_format=api_kwargs.get("response_format"),
                     max_tokens=max_tokens,
                     schema_name=schema_model.__name__,
+                    extra_body=extra_body or None,
                 )
 
             # Call OpenRouter API using OpenAI-compatible client. The hard limit backs up the
@@ -791,6 +832,9 @@ def get_openrouter_completion_sync(
         max_retries: int = DEFAULT_MAX_RETRIES,
         extra_params: Optional[dict] = None,
         request_timeout: Optional[float] = None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
 ) -> T:
     """Sync wrapper for get_openrouter_completion.
     
@@ -809,6 +853,7 @@ def get_openrouter_completion_sync(
             max_tokens=max_tokens,
             max_retries=max_retries,
             extra_params=extra_params,
+            correlation_id=correlation_id, session_id=session_id, system=system,
             request_timeout=request_timeout,
         )
     )
