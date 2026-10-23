@@ -108,6 +108,15 @@ def cmd_build_dataset(args) -> int:
     return 0
 
 
+def cmd_build_solution_dataset(args) -> int:
+    from cqc_cpcc.model_eval.dataset_builder import write_solution_dataset
+
+    count = write_solution_dataset(Path(args.out), reviewed_by=args.reviewed_by)
+    ds.load_cases(Path(args.out))  # validate what was written
+    print(f"Wrote {count} cases to {args.out}")
+    return 0
+
+
 async def _run(args) -> int:
     policy = model_registry.load_policy()
     ev = policy.eval
@@ -660,6 +669,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     b.add_argument("--out", default=str(ds.DEFAULT_DATASET))
     b.add_argument("--reviewed-by", default=None)
     b.set_defaults(func=cmd_build_dataset)
+    bs = sub.add_parser("build-solution-dataset",
+                        help="regenerate the grading-solution dataset (solution, equivalents, bug twins)")
+    bs.add_argument("--out", default=str(ds.DEFAULT_DATASET.parent / "grading-solution" / "v1"))
+    bs.add_argument("--reviewed-by", default=None)
+    bs.set_defaults(func=cmd_build_solution_dataset)
 
     r = sub.add_parser("run", help="evaluate candidates against the incumbent")
     r.add_argument("--candidate", action="append", default=[], help="model id, optionally @effort")

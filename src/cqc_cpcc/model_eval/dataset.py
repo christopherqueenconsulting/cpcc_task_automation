@@ -41,6 +41,8 @@ class EvalCase:
     requirements: dict = field(default_factory=dict)  # id -> allowed statuses (else "met")
     error_satisfied_by: dict = field(default_factory=dict)  # error id -> requirement id
     not_above: Optional[str] = None  # case id this case must never outscore
+    # The assignment's reference solution, when the dataset gives one (grading-solution).
+    reference_solution: Optional[str] = None
 
     @property
     def is_empty(self) -> bool:
@@ -63,13 +65,31 @@ def load_cases(root: Path = DEFAULT_DATASET) -> list[EvalCase]:
         files = {
             name: (case_json.parent / name).read_text(encoding="utf-8") for name in meta["files"]
         }
-        cases.append(_build(meta, files))
+        cases.append(_build(meta, files, case_json.parent))
     validate(cases)
     return cases
 
 
-def _build(meta: dict, files: dict) -> EvalCase:
+def _solution_inside(case_dir: Path, solution_file: str, case_id: str) -> Path:
+    """The solution path, refused unless it stays inside the case directory: the text goes
+    into a prompt sent to the model, so a case file must never point at another file."""
+    rel = Path(solution_file)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise ValueError(f"{case_id}: reference_solution_file must be a relative path inside the case")
+    path = (case_dir / rel).resolve()
+    if not path.is_relative_to(case_dir.resolve()):
+        raise ValueError(f"{case_id}: reference_solution_file escapes the case directory")
+    return path
+
+
+def _build(meta: dict, files: dict, case_dir: Optional[Path] = None) -> EvalCase:
     expected = meta["expected"]
+    solution_file = meta.get("reference_solution_file")
+    reference_solution = None
+    if solution_file:
+        if case_dir is None:
+            raise ValueError(f"{meta['case_id']}: reference_solution_file needs the case directory")
+        reference_solution = _solution_inside(case_dir, solution_file, meta["case_id"]).read_text(encoding="utf-8")
     case = EvalCase(
         case_id=meta["case_id"],
         language=meta["language"],
@@ -93,6 +113,7 @@ def _build(meta: dict, files: dict) -> EvalCase:
         requirements={k: tuple(v) for k, v in (expected.get("requirements") or {}).items()},
         error_satisfied_by=dict(expected.get("error_satisfied_by") or {}),
         not_above=expected.get("not_above"),
+        reference_solution=reference_solution,
     )
     low, high, max_points = expected_score_range(case)
     object.__setattr__(case, "expected_score_range", (low, high))

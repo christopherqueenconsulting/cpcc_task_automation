@@ -39,7 +39,7 @@ class TestAffected:
 
     def test_prompt_source_change_runs_its_suites(self):
         result = self._affected(["src/cqc_cpcc/rubric_grading.py"])
-        assert result["run"] == ["grading", "grading-levelband"]
+        assert result["run"] == ["grading", "grading-levelband", "grading-solution"]
 
     def test_shared_request_code_runs_every_suite_that_lists_it(self):
         result = self._affected(["src/cqc_cpcc/utilities/AI/schema_normalizer.py"])
@@ -72,7 +72,7 @@ class TestAffected:
 
     def test_lockfile_plus_prompt_source_runs_only_that_prompts_suites(self):
         result = self._affected(["poetry.lock", "src/cqc_cpcc/rubric_grading.py"])
-        assert result["run"] == ["grading", "grading-levelband"]
+        assert result["run"] == ["grading", "grading-levelband", "grading-solution"]
         assert not result["dependency_only"]
 
     def test_lockfile_plus_python_change_is_not_dependency_only(self):
@@ -435,7 +435,7 @@ async def test_suite_gate_runs_the_other_suites_of_the_roles(tmp_path, monkeypat
 
     monkeypatch.setattr(prompt_eval, "run", small_run)
     report = await pa.suite_gate("openai/gpt-6-luna@high", "openai/gpt-5-mini", ["grading"], tmp_path)
-    assert set(ran) == {"grading-levelband", "requirement-extraction", "exam-grading"}
+    assert set(ran) == {"grading-levelband", "grading-solution", "requirement-extraction", "exam-grading"}
     assert report["status"] == "pass"  # same canned answers for both models
     assert json.loads((tmp_path / "cross_suite.json").read_text())["candidate"] == "openai/gpt-5-mini"
 
