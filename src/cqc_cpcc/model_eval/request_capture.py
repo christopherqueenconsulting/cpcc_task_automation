@@ -5,7 +5,9 @@ A change whose requests are byte-identical to the base's cannot change what the 
 so a paid A/B of it only measures run noise. ``capture`` records, per suite:
 
 - **requests**: the request body each case sends first (messages, response schema and every
-  model parameter), with the OpenRouter client replaced by one that records and refuses to
+  model parameter), plus the client the code builds for it (base URL, default headers and
+  query; not the timeout or retry count, which do not change what the model receives), with
+  the OpenRouter client replaced by one that records and refuses to
   send. Only the first call of a case is reached here, because the refused send ends the case.
 - **calls**: every gateway call each case makes when the model gateway returns its fixed
   test-mode answer (role, prompt text, response schema, model override, auto-route), so a
@@ -33,7 +35,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 #: Bumped when the capture format changes, so captures from two versions never compare equal.
-FORMAT = 3
+FORMAT = 4
 
 ERROR = "error:"
 
@@ -81,14 +83,35 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     async def no_wait(delay, result=None):
         return await real_sleep(0, result)
 
-    async def recording(role, prompt, schema_model, *, override=None, use_auto_route=False, prompt_id=None):
-        calls.append(_hash([role, prompt, schema_model.model_json_schema(), override, use_auto_route]))
+    async def recording(role, prompt, schema_model, *, override=None, use_auto_route=False, prompt_id=None,
+                        **extra):
+        call = [role, prompt, schema_model.model_json_schema(), override, use_auto_route]
+        if extra:  # a keyword the gateway gains later is part of the call too
+            call.append(sorted(extra.items()))
+        calls.append(_hash(call))
         return await real_structured(role, prompt, schema_model, override=override,
-                                     use_auto_route=use_auto_route, prompt_id=prompt_id)
+                                     use_auto_route=use_auto_route, prompt_id=prompt_id, **extra)
 
-    openrouter_client._get_openrouter_client = lambda: _CapturingClient(sink)
+    real_factory = openrouter_client._get_openrouter_client
+
+    def capturing_factory(*args, **kwargs):
+        """Build the real client with a placeholder key (no network), record its request-shaping
+        settings, and hand back the capturing client instead."""
+        real_key = openrouter_client._get_openrouter_api_key
+        openrouter_client._get_openrouter_api_key = lambda: "capture-only-not-a-key"
+        try:
+            client = real_factory(*args, **kwargs)
+        finally:
+            openrouter_client._get_openrouter_api_key = real_key
+        sink.append(_hash(["client", str(client.base_url), dict(client._custom_headers),
+                           dict(client._custom_query)]))
+        return _CapturingClient(sink)
+
+    # Every stand-in accepts any arguments: one that rejects a changed signature would make each
+    # case raise before its request, and every suite would read as "no request captured".
+    openrouter_client._get_openrouter_client = capturing_factory
     asyncio.sleep = no_wait
-    llm_gateway._is_test_mode = lambda: test_mode
+    llm_gateway._is_test_mode = lambda *args, **kwargs: test_mode
     if calls is not None:
         llm_gateway.structured = recording
     os.environ["POSTHOG_LLM_ANALYTICS"] = "false"
