@@ -333,7 +333,8 @@ def _prompt_paths(reg, suite_id: str) -> set:
             for f in e.source_files + e.shared_files}
 
 
-def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: str) -> dict:
+def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: str,
+                          changed: Optional[list] = None) -> dict:
     """Re-decide a finished A/B with THIS checkout's detection, graders and rule.
 
     The workflow runs this in its own job from a checkout of the base branch, with the
@@ -342,14 +343,15 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
     or skips a suite by mistake; it does not stop a hostile author, whose code wrote the
     saved outputs (docs/PROMPTS.md, "Both rules must pass").
 
-    - The suites that need a run are detected here from the git diff, and each must be in
+    - The suites that need a run are detected here from the changed files, and each must be in
       the A/B with its saved outputs. Otherwise the result is ``not-run`` or ``fail``.
     - Each suite is decided with this checkout's graders and rule, on cases whose inputs are
       the same on both sides, with this policy's repeats on every case and model.
     - The A/B passes only when the PR's own verdict and this one both pass.
     """
-    changed = [f for f in _git("diff", "--name-only", "--no-renames",
-                               _git("merge-base", base_sha, head_sha).strip(), head_sha).splitlines() if f]
+    if changed is None:  # the CI passes GitHub's own list of the PR's files instead
+        changed = [f for f in _git("diff", "--name-only", "--no-renames",
+                                   _git("merge-base", base_sha, head_sha).strip(), head_sha).splitlines() if f]
     head_reg = prompt_registry._lenient(json.loads(
         (head_root / prompt_registry.REGISTRY_RELPATH).read_text(encoding="utf-8")))
     base_reg = prompt_registry.load()
@@ -369,7 +371,8 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
     else:
         for suite_id in sorted(required):
             results[suite_id] = _decide_suite(suite_id, (report or {}).get("suites", {}).get(suite_id), out,
-                                              head_root, changed, head_reg, base_reg, head_roles)
+                                              head_root, changed, head_reg, base_reg,
+                                              {r: role(c) for r, c in head_roles.items()})
         statuses = [r["status"] for r in results.values()]
         status = ("fail" if "fail" in statuses
                   else "pass" if all(s == "pass" for s in statuses) else "pass-provisional")
@@ -787,7 +790,11 @@ def cmd_prompt_ab_decide(args) -> int:
     import cqc_cpcc
 
     print(f"decision code: {Path(cqc_cpcc.__file__).resolve().parent}")
-    decided = decide_with_this_rule(Path(args.dir), Path(args.head_root), args.base_sha, args.head_sha)
+    changed = None
+    if args.changed_files:
+        changed = [line.strip() for line in Path(args.changed_files).read_text(encoding="utf-8").splitlines()
+                   if line.strip()]
+    decided = decide_with_this_rule(Path(args.dir), Path(args.head_root), args.base_sha, args.head_sha, changed)
     print(Path(args.dir, "base-rule.md").read_text(encoding="utf-8"))
     github_output(ab_status=decided["combined_status"], required=",".join(sorted(decided["required"])))
     return 0
@@ -848,6 +855,8 @@ def add_parsers(sub) -> None:
     dec.add_argument("--head-root", required=True, help="the PR's tree, read as data only")
     dec.add_argument("--base-sha", required=True)
     dec.add_argument("--head-sha", required=True)
+    dec.add_argument("--changed-files", default=None,
+                     help="file listing the PR's changed paths (old and new path of a rename); default: git diff")
     dec.set_defaults(func=cmd_prompt_ab_decide)
 
     cal = sub.add_parser("prompt-calibrate", help="run every suite on its incumbent; propose thresholds")

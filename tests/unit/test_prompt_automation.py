@@ -650,7 +650,7 @@ class TestDetectorsAgree:
         elif change == "removed":
             del head.prompts["requirement-extraction"]
         else:
-            head.prompts["requirement-extraction"].status = "draft"
+            head.prompts["requirement-extraction"].status = "dead-path"
         monkeypatch.setattr(pa.prompt_registry, "load", lambda *a, **k: head)
         monkeypatch.setattr(pa.prompt_registry, "load_at_ref", lambda ref: reg)
         monkeypatch.setattr(pa.prompt_registry, "compute_all",
@@ -856,12 +856,22 @@ class TestWorkflowWiring:
         assert '"${BASE_STATUS}" = "bootstrap"' in run
 
     def test_the_base_rule_jobs_tolerate_only_their_own_bootstrap(self, jobs):
+        """Bootstrap is read from the base's source; a failing command is a failure, never a bootstrap."""
         pr_decide = next(s for s in jobs["ab-base-rule"]["steps"] if s.get("id") == "decide")["run"]
-        assert "ab_status=bootstrap" in pr_decide
+        assert "ab_status=bootstrap" in pr_decide and "grep -q '\"prompt-ab-decide\"'" in pr_decide
+        assert "--help" not in pr_decide and "||" not in pr_decide
         dispatch_decide = next(s for s in jobs["dispatch-report"]["steps"] if s.get("id") == "decide")["run"]
         assert "bootstrap" not in dispatch_decide and "exit 1" in dispatch_decide
         download = next(s for s in jobs["ab-base-rule"]["steps"] if s.get("uses", "").startswith("actions/download"))
         assert download["if"] == "needs.ab.result == 'success'"
+
+    def test_the_base_rule_jobs_check_out_nothing_from_the_pr(self, jobs):
+        for name in ("ab-base-rule", "dispatch-report"):
+            text = json.dumps(jobs[name])
+            assert "git fetch" not in text and "worktree" not in text and "head.sha }}\n" not in text
+            checkouts = [s for s in jobs[name]["steps"] if s.get("uses", "").startswith("actions/checkout@")]
+            assert len(checkouts) == 1 and "head" not in checkouts[0]["with"]["ref"]
+            assert "--changed-files" in text and "pulls/${PR}/files" in text
 
     def test_a_maintainer_can_add_suites_to_an_ab_dispatch(self, jobs):
         run = next(s for s in jobs["dispatch"]["steps"] if s.get("id") == "run")["run"]
@@ -871,3 +881,67 @@ class TestWorkflowWiring:
         action = (pa.REPO_ROOT / ".github" / "actions" / "poetry_setup" / "action.yml").read_text()
         saves = action.count("actions/cache/save@")
         assert saves and action.count("github.event_name == 'push' && github.ref == 'refs/heads/master'") == saves
+
+
+class TestReportStateMachine:
+    """Run the report job's script with a stub `gh` and read the status it posts."""
+
+    BASE_ENV = {"GH_TOKEN": "x", "REPO": "o/r", "PR": "7", "SHA": "abc", "RUN_SUITES": "", "RESCORE_SUITES": "",
+                "JUDGES_CHANGED": "", "DEPENDENCY_ONLY": "false", "SMOKE_RESULT": "skipped",
+                "AB_RESULT": "skipped", "AB_STATUS": "", "AUTHOR_TYPE": "User", "BASE_RESULT": "success",
+                "BASE_STATUS": "pass", "BASE_REQUIRED": "", "RUN_URL": "https://run", "HEAD_REF": "claude/x"}
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def script(cls):
+        import yaml
+
+        jobs = yaml.safe_load((pa.REPO_ROOT / ".github" / "workflows" / "prompt-eval.yml").read_text())["jobs"]
+        return next(s for s in jobs["report"]["steps"] if s.get("name", "").startswith("Comment"))["run"]
+
+    def _post(self, script, tmp_path, **env):
+        import os
+        import stat
+        import subprocess
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "gh"
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_LOG"\n')
+        stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+        log = tmp_path / "gh.log"
+        full = {**os.environ, **self.BASE_ENV, **env, "GH_LOG": str(log), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+        run = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=full, capture_output=True, text=True)
+        assert run.returncode == 0, run.stderr[-2000:]
+        post = next(line for line in log.read_text().splitlines() if "/statuses/" in line)
+        return post.split("state=")[1].split()[0], (tmp_path / "comment.md").read_text()
+
+    def test_bootstrap_with_no_suite_is_success(self, script, tmp_path):
+        state, comment = self._post(script, tmp_path, BASE_STATUS="bootstrap")
+        assert state == "success" and "requires ``" not in comment
+
+    def test_base_required_suites_with_a_skipped_a_b_are_pending_with_the_dispatch_line(self, script, tmp_path):
+        state, comment = self._post(script, tmp_path, BASE_STATUS="not-run", BASE_REQUIRED="x")
+        assert state == "pending" and "suites `x`" in comment
+
+    def test_a_failed_base_check_fails(self, script, tmp_path):
+        assert self._post(script, tmp_path, BASE_RESULT="failure")[0] == "failure"
+
+    def test_a_base_fail_after_a_run_fails(self, script, tmp_path):
+        assert self._post(script, tmp_path, RUN_SUITES="x", AB_RESULT="success", BASE_STATUS="fail")[0] == "failure"
+
+    @pytest.mark.parametrize("pr_verdict, state", [("pass", "success"), ("fail", "failure")])
+    def test_bootstrap_with_suites_uses_the_prs_own_verdict(self, script, tmp_path, pr_verdict, state):
+        posted, _ = self._post(script, tmp_path, RUN_SUITES="x", AB_RESULT="success", BASE_STATUS="bootstrap",
+                               AB_STATUS=pr_verdict)
+        assert posted == state
+
+    def test_a_model_bot_pr_passes_and_an_agent_pr_on_the_same_branch_name_does_not(self, script, tmp_path):
+        bot = dict(HEAD_REF="auto/model-x", AB_RESULT="skipped", BASE_STATUS="not-run", BASE_REQUIRED="x")
+        assert self._post(script, tmp_path, AUTHOR_TYPE="Bot", **bot)[0] == "success"
+        (tmp_path / "u").mkdir()
+        assert self._post(script, tmp_path / "u", AUTHOR_TYPE="User", **bot)[0] == "pending"
+
+    def test_an_a_b_that_did_not_finish_fails_and_says_so(self, script, tmp_path):
+        state, comment = self._post(script, tmp_path, RUN_SUITES="x", AB_RESULT="cancelled", BASE_STATUS="pass")
+        assert state == "failure" and "cancelled" in comment

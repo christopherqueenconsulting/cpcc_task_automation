@@ -136,9 +136,11 @@ in `model_policy.json`.
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.
 A second job, `ab-base-rule` (and `dispatch-report` for a maintainer `ab` run), re-checks it:
 
-- It checks out the base branch, installs the base branch's own environment, and reads the
-  PR's tree and the A/B artifact as data only. No PR code runs in it, and it holds no secret.
-- It detects the suites that need a model run from the git diff with the base's code
+- It checks out the base branch and installs the base branch's own environment. It reads the
+  PR through the GitHub API as data only (its changed-file list, its registries and changed
+  dataset files) and the A/B artifact. Nothing from the PR is checked out or run, and the job
+  holds no secret.
+- It detects the suites that need a model run from the PR's changed files (GitHub's list)
   (`suites_from_data`: changed prompt files, registry entries, datasets, model roles). Each
   one must be in the A/B with saved head and base outputs for the same models, and every
   case must have the base policy's `repeats` runs on both sides. A case whose inputs the PR
@@ -164,9 +166,10 @@ When the base cannot judge a PR (`prompt-eval/ab` fails, and the `ab-base-rule` 
 | The PR adds a new suite | the base reports it `no-base` (absolute numbers only), not a failure | none needed |
 | The PR changes the saved-output format (`SuiteRecord`) or the `prompt-ab-decide` arguments | the base job fails to read it | land the reader on the base branch first, then the PR; or Christopher merges past the check after reading the artifact, with the ruling recorded |
 | The PR adds a registry field | read leniently (unknown fields dropped) | none needed |
-| The PR that adds this check (the base has no `prompt-ab-decide` yet) | `ab-base-rule` reports `bootstrap` and the PR's own verdict stands | none needed; dead once the check is on master |
+| The PR that adds this check (the base's source has no `prompt-ab-decide`) | `ab-base-rule` reports `bootstrap` and the PR's own verdict stands; a maintainer dispatch fails instead | none needed; never reached once the check is on master |
 | The PR changes every case of a required suite's dataset, or removes the dataset | fails: "nothing was compared" | Christopher merges past the check after reading the A/B artifact, with the ruling recorded |
-| The base's detection requires a suite this PR's detection did not run | pending ("A/B needs a maintainer run") | dispatch mode `ab` with `suites` set to the listed suites |
+| The base's detection requires a suite this PR's detection did not run | pending ("A/B needs a maintainer run") when no A/B ran; failure ("the A/B did not run it") when an A/B ran other suites | dispatch mode `ab` with `suites` set to the listed suites |
+| A maintainer `ab` dispatch whose `models` leave out the role's current model | fails: "did not run the … incumbent" | dispatch again with the current model in `models` (or `models` blank) |
 | A maintainer `ab` dispatch of a PR branch older than a `repeats` change on master | fails: "fewer than N runs" (dispatch runs the PR head, which used its own repeats) | merge master into the branch, then dispatch again |
 | The base-branch job fails for infrastructure reasons (install, `git fetch`, the 20-minute timeout) | `prompt-eval/ab` fails, even on PRs with no suites | "Re-run failed jobs" on the Prompt Evaluation run |
 
