@@ -248,7 +248,7 @@ class TestWithdrawalRowParsing:
             course,
             names=["Good Student", "Bad Row"],
             ids=["1111111", "2222222"],
-            emails=["good@cpcc.edu", "bad@cpcc.edu"],
+            emails=["student.example@cpcc.edu", "ben.sample@cpcc.edu"],
             dates=["2/2/2026", ""],
         )
 
@@ -268,7 +268,7 @@ class TestWithdrawalRowParsing:
             course,
             names=["Placeholder Student"],
             ids=["3333333"],
-            emails=["p@cpcc.edu"],
+            emails=["cal.fixture@cpcc.edu"],
             dates=[placeholder],
         )
 
@@ -282,7 +282,7 @@ class TestWithdrawalRowParsing:
             course,
             names=["Good Student"],
             ids=["1111111"],
-            emails=["good@cpcc.edu"],
+            emails=["student.example@cpcc.edu"],
             dates=["2/2/2026"],
         )
 
@@ -383,7 +383,7 @@ class TestWithdrawalRecordShape:
         course = self._course()
 
         records = self._run(
-            course, ["Good Student"], ["1111111"], ["g@cpcc.edu"], ["2/2/2026"]
+            course, ["Good Student"], ["1111111"], ["ada.example@cpcc.edu"], ["2/2/2026"]
         )
 
         (entry,) = records["Good_Student"]
@@ -393,7 +393,7 @@ class TestWithdrawalRecordShape:
         course = self._course()
 
         records = self._run(
-            course, ["Early Dropper"], ["1111111"], ["e@cpcc.edu"], ["1/1/2026"]
+            course, ["Early Dropper"], ["1111111"], ["ben.sample@cpcc.edu"], ["1/1/2026"]
         )
 
         assert records == {}
@@ -407,7 +407,7 @@ class TestWithdrawalRecordShape:
         course = self._course()
 
         records = self._run(
-            course, ["Late Leaver"], ["1111111"], ["l@cpcc.edu"], ["4/28/2026"]
+            course, ["Late Leaver"], ["1111111"], ["cal.fixture@cpcc.edu"], ["4/28/2026"]
         )
 
         (entry,) = records["Late Leaver".replace(" ", "_")]
@@ -419,7 +419,7 @@ class TestWithdrawalRecordShape:
         course = self._course()
 
         records = self._run(
-            course, ["Van Doe, John Paul"], ["1111111"], ["v@cpcc.edu"], ["2/2/2026"]
+            course, ["Van Doe, John Paul"], ["1111111"], ["ada.example@cpcc.edu"], ["2/2/2026"]
         )
 
         assert "Van_Doe,_John_Paul" in records
@@ -436,7 +436,7 @@ class TestWithdrawalRecordShape:
             course,
             ["First Student", "Second Student"],
             ["1111111"],
-            ["a@cpcc.edu", "b@cpcc.edu"],
+            ["ada.example@cpcc.edu", "ben.sample@cpcc.edu"],
             ["2/2/2026", "2/3/2026"],
         )
 
