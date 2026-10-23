@@ -421,6 +421,23 @@ class TestReviewFixes:
         assert not any(c.is_empty for c in picked)
 
     @pytest.mark.asyncio
+    async def test_a_call_made_before_the_case_is_not_recorded_as_the_cases(self, cases):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        async def no_call(**kwargs):
+            return _Result([], 200.0)
+
+        stale = llm_gateway.GatewayCall("feedback", "judge/model", "judge/model", False, "h", "r",
+                                        completion=None, prompt="judge-pairwise@1")
+        token = llm_gateway._last_call.set(stale)
+        try:
+            records = await run_model("openai/gpt-5-mini", None, cases[:1], 1, Budget(limit=1, stop_at=0.9),
+                                      grade_fn=no_call)
+        finally:
+            llm_gateway._last_call.reset(token)
+        assert records[0].prompt is None and records[0].model_used is None
+
+    @pytest.mark.asyncio
     async def test_failed_call_is_charged_an_estimate(self, cases):
         async def failing(**kwargs):
             raise ValueError("Connection error")

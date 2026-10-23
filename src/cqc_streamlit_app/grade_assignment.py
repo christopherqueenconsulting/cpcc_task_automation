@@ -34,6 +34,7 @@ from cqc_cpcc.requirement_coverage import (
     normalize_checklist,
 )
 from cqc_cpcc.rubric_grading import apply_no_code_floor, grade_with_rubric, rubric_scores_errors
+from cqc_cpcc.utilities.AI import llm_limits, llm_progress
 from cqc_streamlit_app import results_store
 from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_cpcc.utilities.submission_validity import (
@@ -79,6 +80,7 @@ from cqc_streamlit_app.utils import (
     define_openrouter_model,
     export_grading_summary_to_excel,
     run_coroutine_blocking,
+    with_deadline,
     get_file_extension_from_filepath,
     get_language_from_file_path,
     on_download_click,
@@ -1396,7 +1398,7 @@ async def grade_single_rubric_student(
                 st.info("🔄 Large submission detected - preprocessing will be used automatically")
 
             # Grade with rubric
-            status.update(label=f"{status_label} | Calling OpenAI...")
+            status.update(label=f"{status_label} | Calling the model...")
 
             # Create correlation ID for tracking (will be used by OpenAI debug if enabled)
             from cqc_cpcc.utilities.AI.openai_debug import (
@@ -1408,21 +1410,27 @@ async def grade_single_rubric_student(
                 logger.info(f"Starting grading for {alias(student_id)} with correlation_id={grading_correlation_id}")
 
             gate_report: dict = {}
-            result = await grade_with_rubric(
-                rubric=effective_rubric,
-                assignment_instructions=assignment_instructions,
-                student_submission=submission_text,
-                reference_solution=reference_solution,
-                error_definitions=error_definitions,
-                model_name=model_name,
-                temperature=temperature,
-                # Real-compiler gate: verify "Does Not Compile" against the actual
-                # toolchain using the student's real source files (name -> temp path).
-                source_files=student_submission.files,
-                gate_report=gate_report,
-                rejected_files=student_submission.rejected_files,
-                requirements=requirements,
-            )
+
+            def _show_llm_progress(event):
+                status.update(label=f"{status_label} | {llm_progress.describe(event)}")
+
+            with llm_progress.progress_scope(_show_llm_progress):
+                async with asyncio.timeout(llm_limits.student_deadline()):
+                    result = await grade_with_rubric(
+                        rubric=effective_rubric,
+                        assignment_instructions=assignment_instructions,
+                        student_submission=submission_text,
+                        reference_solution=reference_solution,
+                        error_definitions=error_definitions,
+                        model_name=model_name,
+                        temperature=temperature,
+                        # Real-compiler gate: verify "Does Not Compile" against the actual
+                        # toolchain using the student's real source files (name -> temp path).
+                        source_files=student_submission.files,
+                        gate_report=gate_report,
+                        rejected_files=student_submission.rejected_files,
+                        requirements=requirements,
+                    )
 
             status.update(label=f"{status_label} | Processing results...")
 
@@ -1456,6 +1464,14 @@ async def grade_single_rubric_student(
                 status.update(label=f"✅ {student_id} — {score_str}{level_str}", state="complete")
 
             return (student_id, result)
+
+        except TimeoutError:
+            limit_min = llm_limits.student_deadline() / 60
+            logger.error(f"Grading {alias(student_id)} with {model_name} gave no result within {limit_min:.0f} min")
+            st.error(f"❌ No result from {model_name} within {limit_min:.0f} min for {student_id}. "
+                     "Retry it from Results & review, or pick another model.")
+            status.update(label=f"⏱️ Timed out: {student_id}", state="error")
+            return (student_id, None)
 
         except Exception as e:
             logger.error(f"Error grading student {alias(student_id)}: {e}", exc_info=True)
@@ -3008,14 +3024,19 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
         st.error(f"There are no gradeable files for this student (files not accepted: {rejected}). "
                  "Add the file type under accepted types and grade the batch again.")
         return
-    with st.spinner(f"Grading {student_id}..."):
+    deadline = llm_limits.student_deadline()
+    with st.spinner(f"Grading {student_id} with {_run_model(inputs)} (up to {deadline / 60:.0f} min)..."):
         try:
-            result = run_coroutine_blocking(grade_with_rubric(
+            result = run_coroutine_blocking(with_deadline(grade_with_rubric(
                 student_submission=build_submission_text_with_token_limit(files=submission.files),
                 source_files=submission.files,
                 validity_gate=False,
                 **inputs["kwargs"],
-            ))
+            ), deadline))
+        except TimeoutError:
+            st.error(f"No result from {_run_model(inputs)} within {deadline / 60:.0f} min for {student_id}. "
+                     "Try again, or grade the batch with another model.")
+            return
         except Exception as e:  # noqa: BLE001 - keep the rest of the results page usable
             logger.error(f"Grade anyway failed for {alias(student_id)}: {e}", exc_info=True)
             st.error(f"Grading {student_id} failed: {e}")
@@ -3027,6 +3048,11 @@ def _grade_anyway(run_key: str, student_id: str) -> None:
     st.rerun()
 
 
+def _run_model(inputs: dict) -> str:
+    """The model a stored run graded with, for progress text."""
+    return inputs.get("kwargs", {}).get("model_name") or "the default model"
+
+
 def _retry_failed(run_key: str) -> None:
     """Grade only the students whose call failed or was interrupted, then merge them in."""
     inputs = st.session_state.get("grading_inputs_by_key", {}).get(run_key)
@@ -3035,21 +3061,30 @@ def _retry_failed(run_key: str) -> None:
         st.error("The original files for this run are no longer available (the app restarted). "
                  "Use Clear results, then grade the batch again.")
         return
-    still_failed, added = [], []
+    still_failed, added, timed_out = [], [], False
     for student_id in failed:
         submission = inputs["submissions"].get(student_id)
-        if submission is None:
+        if submission is None or timed_out:
             still_failed.append(student_id)
             continue
-        with st.spinner(f"Grading {student_id}..."):
+        deadline = llm_limits.student_deadline()
+        with st.spinner(f"Grading {student_id} with {_run_model(inputs)} (up to {deadline / 60:.0f} min)..."):
             try:
-                result = run_coroutine_blocking(grade_with_rubric(
+                result = run_coroutine_blocking(with_deadline(grade_with_rubric(
                     student_submission=build_submission_text_with_token_limit(files=submission.files),
                     source_files=submission.files,
                     rejected_files=submission.rejected_files,
                     **inputs["kwargs"],
-                ))
+                ), deadline))
                 added.append((student_id, result))
+            except TimeoutError:
+                # The model is not answering: waiting the full deadline again for every
+                # remaining student would block the page for hours.
+                timed_out = True
+                still_failed.append(student_id)
+                st.session_state[f"retry_notice_{run_key}"] = (
+                    f"No result from {_run_model(inputs)} within {deadline / 60:.0f} min for "
+                    f"{student_id}. Stopped retrying; the rest stay failed. Try another model.")
             except Exception as e:  # noqa: BLE001 - one failure must not lose the others
                 logger.error(f"Retry failed for {alias(student_id)}: {e}", exc_info=True)
                 still_failed.append(student_id)
@@ -3066,6 +3101,9 @@ def _retry_failed(run_key: str) -> None:
 def render_failed(run_key: str) -> None:
     """Offer to grade only the failed students again (UX goals: Failed can be retried)."""
     failed = st.session_state.grading_failures_by_key.get(run_key, [])
+    notice = st.session_state.pop(f"retry_notice_{run_key}", None)
+    if notice:
+        st.error(notice, icon=":material/timer_off:")
     if not failed:
         return
     with st.container(border=True, horizontal=True, vertical_alignment="center"):
