@@ -34,7 +34,8 @@ from cqc_cpcc.requirement_coverage import (
     instructions_hash,
     normalize_checklist,
 )
-from cqc_cpcc import effort_compare
+from cqc_cpcc import effort_compare, grading_job
+from cqc_cpcc.run_locks import run_lock
 from cqc_cpcc.rubric_grading import (
     AUTO_ROUTE_MODEL,
     apply_no_code_floor,
@@ -1300,7 +1301,15 @@ def _render_compile_gate_badge(gate_report: dict, model_name: str, student_id: s
     else:
         st.caption(f"{title} — {detail}")
 
-    # Per-model session tally (display-only tracking).
+    _tally_compile_gate(gate_report, model_name)
+
+
+def _tally_compile_gate(gate_report: dict, model_name: str) -> None:
+    """Count one student's compile-gate outcome in the per-model session tally (display-only
+    tracking; the grading job's results are tallied here when the page merges them)."""
+    if not gate_report or not gate_report.get("ran"):
+        return
+    action = gate_report.get("action", "none")
     stats = st.session_state.setdefault("compile_gate_stats", {})
     m = stats.setdefault(model_name or "unknown",
                          {"corrected": 0, "removed": 0, "added": 0, "agreed": 0,
@@ -1618,6 +1627,47 @@ def _split_batch_results(student_ids: list[str], results: list):
     return finished, failed, interrupt
 
 
+def _collect_submissions(submission_file_paths: list[tuple[str, str]],
+                         accepted_file_types: list[str]) -> dict[str, StudentSubmission]:
+    """Every student's submission from the uploaded files: one student per ZIP folder, or one
+    per loose file. Shows what it found (and any ZIP it could not read) on the page."""
+    student_submissions: dict[str, StudentSubmission] = {}
+
+    for original_path, temp_path in submission_file_paths:
+        base_filename = os.path.basename(original_path)
+
+        if original_path.endswith('.zip'):
+            # Extract students from ZIP
+            st.info(f"📦 Extracting students from ZIP: {base_filename}")
+
+            try:
+                zip_students = extract_student_submissions_from_zip(
+                    temp_path,
+                    accepted_file_types,
+                )
+
+                st.success(f"✅ Extracted {len(zip_students)} student(s) from {base_filename}")
+                student_submissions.update(zip_students)
+
+            except Exception as e:
+                st.error(f"❌ Error extracting ZIP {base_filename}: {e}")
+                logger.error(f"ZIP extraction failed for {base_filename}: {e}", exc_info=True)
+                continue
+        else:
+            # Single file = one student
+            student_id = os.path.splitext(base_filename)[0]
+
+            student_submissions[student_id] = StudentSubmission(
+                student_id=student_id,
+                # A loose file's name is not the student's name (e.g. "lab 4 super
+                # positon"), so the feedback greets with a plain "Hello,".
+                student_name="",
+                files={base_filename: temp_path},
+            )
+
+    return student_submissions
+
+
 @telemetry.tracked_run("rubric_grading")
 async def process_rubric_grading_batch(
         submission_file_paths: list[tuple[str, str]],
@@ -1654,40 +1704,7 @@ async def process_rubric_grading_batch(
     ctx = get_script_run_ctx()
     all_results: list[tuple[str, RubricAssessmentResult]] = []
 
-    # Collect all student submissions (from single files or ZIPs)
-    student_submissions: dict[str, StudentSubmission] = {}
-
-    for original_path, temp_path in submission_file_paths:
-        base_filename = os.path.basename(original_path)
-
-        if original_path.endswith('.zip'):
-            # Extract students from ZIP
-            st.info(f"📦 Extracting students from ZIP: {base_filename}")
-
-            try:
-                zip_students = extract_student_submissions_from_zip(
-                    temp_path,
-                    accepted_file_types,
-                )
-
-                st.success(f"✅ Extracted {len(zip_students)} student(s) from {base_filename}")
-                student_submissions.update(zip_students)
-
-            except Exception as e:
-                st.error(f"❌ Error extracting ZIP {base_filename}: {e}")
-                logger.error(f"ZIP extraction failed for {base_filename}: {e}", exc_info=True)
-                continue
-        else:
-            # Single file = one student
-            student_id = os.path.splitext(base_filename)[0]
-
-            student_submissions[student_id] = StudentSubmission(
-                student_id=student_id,
-                # A loose file's name is not the student's name (e.g. "lab 4 super
-                # positon"), so the feedback greets with a plain "Hello,".
-                student_name="",
-                files={base_filename: temp_path},
-            )
+    student_submissions = _collect_submissions(submission_file_paths, accepted_file_types)
 
     if not student_submissions:
         st.error("❌ No valid student submissions found")
@@ -1765,6 +1782,227 @@ async def process_rubric_grading_batch(
 
     if failure_count > 0:
         st.error(f"❌ {failure_count} submission(s) failed to grade")
+
+
+# ---------------------------------------------------------------------------
+# Background grading job (PR 10): the rubric batch runs on a worker thread
+# (cqc_cpcc/grading_job.py). The page starts it, shows it live, can cancel it,
+# and merges its results when it ends. CQC_GRADING_JOB=off keeps the old
+# synchronous batch above (rollback flag).
+# ---------------------------------------------------------------------------
+
+_JOB_PARAM = "job"
+
+
+def _job_mode_enabled() -> bool:
+    """False when ``CQC_GRADING_JOB=off``: grade in the script thread, as before."""
+    return os.getenv("CQC_GRADING_JOB", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def _save_job_progress(run_key: str, results: list, failures: list, **kwargs) -> None:
+    """Save the run as it stands. Called on the worker thread: no ``st.*`` call in here."""
+    results_store.save_run(run_key, "rubric", results, failures, **kwargs)
+
+
+def _forget_job_param() -> None:
+    try:
+        if _JOB_PARAM in st.query_params:
+            del st.query_params[_JOB_PARAM]
+    except Exception as e:  # noqa: BLE001 - a missing runtime must not break the page
+        logger.debug(f"Could not clear the job parameter: {type(e).__name__}")
+
+
+def _attached_grading_job():
+    """The job this page's URL carries the token for, or ``None``.
+
+    Only the token reaches a job: a page with no token, or a wrong or expired one, gets
+    nothing (and a stale token is dropped from the URL)."""
+    try:
+        token = st.query_params.get(_JOB_PARAM)
+    except Exception:  # noqa: BLE001 - no runtime (plain unit test): no job
+        return None
+    if token is None:
+        return None
+    job = grading_job.attach(token)
+    if job is None:
+        _forget_job_param()
+    return job
+
+
+def _run_is_grading(run_key: str) -> bool:
+    """True while a grading job for ``run_key`` is in progress for this page."""
+    if st.session_state.get("grading_status_by_key", {}).get(run_key) == "running":
+        return True
+    job = _attached_grading_job()
+    return job is not None and job.run_key == run_key and not job.done
+
+
+def _start_job(run_key: str, submissions: dict, kwargs: dict, *, inputs: dict,
+               base_results: list, base_failures: list) -> None:
+    """Start a job for ``submissions``, point the URL at it, and rerun into the live view."""
+    greeting_names = {sid: (sub.student_name or "") for sid, sub in inputs["submissions"].items()}
+    job = grading_job.GradingJob(
+        run_key, submissions, kwargs, save=_save_job_progress, deadline_s=_deadline_for(kwargs),
+        base_results=base_results, base_failures=base_failures, greeting_names=greeting_names,
+        meta=_run_meta(run_key, "rubric"))
+    job.inputs = inputs
+    st.query_params[_JOB_PARAM] = grading_job.start_job(job)
+    st.session_state.grading_status_by_key[run_key] = "running"
+    st.session_state.do_grade = False
+    st.rerun()
+
+
+def _launch_grading_job(
+        submission_file_paths: list[tuple[str, str]],
+        accepted_file_types: list[str],
+        run_key: str,
+        kwargs: dict,
+) -> None:
+    """Grade the uploaded batch on a background thread (the rubric path's Grade button).
+
+    ``kwargs`` is what ``grade_with_rubric`` takes besides the submission: ``rubric``,
+    ``assignment_instructions``, ``reference_solution``, ``error_definitions``,
+    ``model_name``, ``temperature``, ``requirements`` and ``effort``."""
+    submissions = _collect_submissions(submission_file_paths, accepted_file_types)
+    if not submissions:
+        st.session_state.do_grade = False
+        raise ValueError("No student submissions were found in the upload. A ZIP "
+                         "needs one folder per student.")
+    # Kept so a submission the validity gate flagged can be re-graded ("Grade anyway").
+    inputs = {"submissions": submissions, "kwargs": dict(kwargs)}
+    st.session_state.setdefault("grading_inputs_by_key", {})[run_key] = inputs
+    _start_job(run_key, submissions, dict(kwargs), inputs=inputs, base_results=[], base_failures=[])
+
+
+def _launch_regrade_job(run_key: str, student_ids: list[str], overrides: Optional[dict] = None) -> None:
+    """Grade only ``student_ids`` again (a retry, or a re-run on another model) and merge the
+    results into the run under its original run key."""
+    inputs = st.session_state.get("grading_inputs_by_key", {}).get(run_key)
+    if not inputs:
+        st.error("The original files for this run are no longer available (the app restarted). "
+                 "Use Clear results, then grade the batch again.")
+        return
+    submissions = {sid: inputs["submissions"][sid] for sid in student_ids if sid in inputs["submissions"]}
+    if not submissions:
+        st.error("None of these students' files are available any more. Use Clear results, "
+                 "then grade the batch again.")
+        return
+    failures = [f for f in st.session_state.grading_failures_by_key.get(run_key, []) if f not in submissions]
+    _start_job(run_key, submissions, {**inputs["kwargs"], **(overrides or {})}, inputs=inputs,
+               base_results=list(st.session_state.grading_results_by_key.get(run_key, [])),
+               base_failures=failures)
+
+
+def _show_attached_grading_job() -> None:
+    """Top of the Grade Assignment page: the live view of the job this URL's token reaches, or,
+    when that job has ended, its results merged into the session. Nothing without a token."""
+    job = _attached_grading_job()
+    if job is None:
+        return
+    if job.done:
+        _consume_grading_job(job)  # reruns into Results & review
+    else:
+        _render_grading_job_panel(job)
+
+
+def _render_grading_job_panel(job) -> None:
+    """The live view of a running job, above the stage tabs (so a reloaded page shows it too)."""
+    with st.container(border=True):
+        st.subheader("Grading in progress", anchor=False)
+        if results_store.persistence_enabled():
+            st.caption("Each student is saved as soon as they finish. You can reload this page or come "
+                       "back later; grading continues.")
+        else:
+            st.caption("Keep this page open: results are kept for this session only, not saved to disk.")
+        _grading_job_live(job)
+
+
+@st.fragment(run_every=1.0)
+def _grading_job_live(job) -> None:
+    """Progress bar and one row per student, redrawn every second without rerunning the page.
+    When the job ends, one full rerun merges its results."""
+    snap = job.snapshot()
+    if snap.done:
+        st.rerun()
+    st.progress(snap.finished / max(snap.total, 1),
+                text=f"{snap.finished} of {snap.total} students finished ({snap.elapsed_s:.0f} s)")
+    counts = snap.counts
+    summary = [f"{counts[state]} {label.lower()}" for state, label in (
+        (grading_job.DONE, "done"), (grading_job.NEEDS_REVIEW, "need your review"),
+        (grading_job.FAILED, "failed"), (grading_job.TIMED_OUT, "timed out"),
+        (grading_job.CANCELLED, "cancelled")) if counts[state]]
+    if summary:
+        st.caption(", ".join(summary))
+    slow = snap.slow
+    if slow:
+        st.warning(f"{len(slow)} student(s) have waited more than {snap.slow_after_s:.0f} s for the model. "
+                   f"It may be slow or stuck. A call stops by itself after about {job.deadline_s / 60:.0f} "
+                   "minutes. You can cancel those students now and re-run them with another model "
+                   "from Results & review.", icon=":material/hourglass_top:")
+    table = pd.DataFrame([{
+        "Student": r.student_id, "Status": r.status, "Model": r.model, "Attempt": r.attempt,
+        "Waiting (s)": round(r.waiting_s) if r.state in grading_job.WAITING else None,
+        "Last issue": r.last_issue} for r in snap.rows])
+    selection = st.dataframe(
+        table, hide_index=True, on_select="rerun", selection_mode="multi-row",
+        key=f"grading_job_table_{job.token}",
+        column_config={"Waiting (s)": st.column_config.NumberColumn("Waiting (s)", format="%d")})
+    try:
+        picked = [snap.rows[int(i)] for i in selection.selection.rows]
+    except (AttributeError, IndexError, TypeError, ValueError):
+        picked = []
+    active = [r for r in picked if r.state not in grading_job.TERMINAL]
+    with st.container(horizontal=True, vertical_alignment="center"):
+        if st.button(f"Cancel selected ({len(active)})", key=f"cancel_selected_{job.token}",
+                     icon=":material/block:", disabled=not active,
+                     help="Select unfinished students in the table first." if not active else None):
+            for row in active:
+                job.cancel_student(row.student_id)
+        if st.button("Cancel grading", key=f"cancel_all_{job.token}", icon=":material/stop_circle:",
+                     disabled=snap.cancel_requested,
+                     help="Already cancelling." if snap.cancel_requested else None):
+            job.cancel()
+    if not active:
+        st.caption("To stop only some students, select their rows in the table, then press Cancel selected.")
+    if snap.cancel_requested:
+        st.caption("Cancelling. Students who finished keep their results.")
+    st.caption("A request already sent to the model may still be billed after you cancel. "
+               "A compile check that is already running finishes first.")
+
+
+def _consume_grading_job(job) -> None:
+    """Merge a finished job's results and failures into the session (failed, timed out and
+    cancelled students all become retryable failures), then move the page to Results."""
+    run_key = job.run_key
+    outcome = job.outcome()
+    ss = st.session_state
+    with _run_lock(run_key):
+        ss.grading_results_by_key[run_key] = outcome.results
+        ss.grading_failures_by_key[run_key] = outcome.failures
+        # After a reload the inputs are gone from the session; the job still holds them.
+        if job.inputs and run_key not in ss.setdefault("grading_inputs_by_key", {}):
+            ss["grading_inputs_by_key"][run_key] = job.inputs
+        _drop_derived_outputs(run_key)
+        remember_results(run_key, "rubric")
+    for report in job.compile_gate_reports().values():
+        _tally_compile_gate(report, job.kwargs.get("model_name"))
+    ss.grading_status_by_key[run_key] = "done"
+    ss.last_grading_run_key = run_key
+    counts = outcome.counts
+    graded = counts[grading_job.DONE] + counts[grading_job.NEEDS_REVIEW]
+    parts = [f"Graded {graded} of {len(job.submissions)} student(s)."]
+    if counts[grading_job.CANCELLED]:
+        parts.append(f"{counts[grading_job.CANCELLED]} cancelled. They are listed below as failed, and "
+                     "you can retry them or use another model.")
+    if counts[grading_job.TIMED_OUT]:
+        parts.append(f"{counts[grading_job.TIMED_OUT]} timed out. Use another model for them.")
+    if counts[grading_job.FAILED]:
+        parts.append(f"{counts[grading_job.FAILED]} failed.")
+    ss[f"job_notice_{run_key}"] = " ".join(parts)
+    grading_job.release(job.token)
+    _forget_job_param()
+    _go_to_stage(GRADE_STAGES[2])
+    st.rerun()
 
 
 def _split_error_definitions_by_severity(
@@ -2516,7 +2754,8 @@ async def get_rubric_based_exam_grading():
     the run key. Grading runs in-script inside the "Submissions & run" tab.
     """
     restore_saved_results()
-    target = st.session_state.get("grade_stage_target", GRADE_STAGES[0])
+    _show_attached_grading_job()
+    target =st.session_state.get("grade_stage_target", GRADE_STAGES[0])
     setup_tab, run_tab, results_tab = st.tabs(
         list(GRADE_STAGES), default=target,
         key=f"grade_stages_{st.session_state.get('grade_stage_generation', 0)}")
@@ -2710,7 +2949,7 @@ async def get_rubric_based_exam_grading():
             and st.session_state.grading_run_key == current_run_key
             and not has_cached_results
     )
-    is_grading_in_progress = should_grade or status == "running"
+    is_grading_in_progress = should_grade or status == "running" or _run_is_grading(current_run_key)
 
     with run_tab:
         if status == "failed" and not should_grade:
@@ -2789,6 +3028,14 @@ async def get_rubric_based_exam_grading():
                         accepted_file_types=SUBMISSION_FILE_TYPES,
                         run_key=current_run_key,
                     )
+                elif _job_mode_enabled():
+                    _launch_grading_job(
+                        student_submission_file_paths, SUBMISSION_FILE_TYPES, current_run_key,
+                        dict(rubric=effective_rubric, assignment_instructions=assignment_instructions_content,
+                             reference_solution=assignment_solution_contents,
+                             error_definitions=effective_error_definitions, model_name=selected_model,
+                             temperature=0.0,  # Temperature not used with OpenRouter
+                             requirements=requirements_checklist, effort=selected_effort))
                 else:
                     await process_rubric_grading_batch(
                         submission_file_paths=student_submission_file_paths,
@@ -2821,7 +3068,9 @@ async def get_rubric_based_exam_grading():
                 st.session_state.do_grade = False
                 # Stop, a reconnect or a click during the run raises a BaseException that
                 # skips the handler above: never leave the page locked in "running".
-                if st.session_state.grading_status_by_key.get(current_run_key) == "running":
+                # (A job just launched keeps "running": it is the page's own rerun, not an interrupt.)
+                if (st.session_state.grading_status_by_key.get(current_run_key) == "running"
+                        and _attached_grading_job() is None):
                     st.session_state.grading_status_by_key[current_run_key] = "interrupted"
             if st.session_state.grading_status_by_key.get(current_run_key) == "done":
                 remember_results(current_run_key, grading_mode)
@@ -3079,8 +3328,10 @@ def _render_scoring_notes(result, run_key: str, student_id: Optional[str]) -> No
             # Error names come from the model: never live Markdown.
             st.markdown(render_safe_markdown(safe_line(describe(n))))
             if n.suppressed and not n.reinstated and n.error is not None and run_key and student_id:
+                busy = _run_is_grading(run_key)
                 st.button("Reinstate", key=f"reinstate_{run_key}_{student_id}_{i}",
-                          on_click=_reinstate_error, args=(run_key, student_id, i))
+                          on_click=_reinstate_error, args=(run_key, student_id, i), disabled=busy,
+                          help="Wait for the grading in progress to finish first." if busy else None)
 
 
 def _reinstate_error(run_key: str, student_id: str, index: int) -> None:
@@ -3372,15 +3623,10 @@ def _review_status_label(result) -> str:
     return f"Needs review: {label}"
 
 
-_RUN_LOCKS: dict[str, threading.RLock] = {}
-_RUN_LOCKS_GUARD = threading.Lock()
-
-
 def _run_lock(run_key: str) -> threading.RLock:
-    """One lock per run: a change to a run's stored results (swap, then save to disk) is
-    never interleaved with another change to the same run."""
-    with _RUN_LOCKS_GUARD:
-        return _RUN_LOCKS.setdefault(run_key, threading.RLock())
+    """One lock per run (``cqc_cpcc.run_locks``, shared with the grading job's worker): a change
+    to a run's stored results (swap, then save to disk) is never interleaved with another."""
+    return run_lock(run_key)
 
 
 def _drop_derived_outputs(run_key: str) -> None:
@@ -3499,15 +3745,45 @@ def render_failed(run_key: str) -> None:
         st.error(notice, icon=":material/timer_off:")
     if not failed:
         return
-    with st.container(border=True, horizontal=True, vertical_alignment="center"):
+    with st.container(border=True):
         st.markdown(f"**{len(failed)} submission(s) failed to grade:** {', '.join(failed)}")
-        if run_key in st.session_state.get("grading_inputs_by_key", {}):
-            if st.button(f"Retry {len(failed)} failed", key=f"retry_failed_{run_key}",
-                         icon=":material/refresh:"):
-                _retry_failed(run_key)
-        else:
+        if run_key not in st.session_state.get("grading_inputs_by_key", {}):
             st.caption("The original files are gone after an app restart. Use Clear results, "
                        "then grade the batch again to retry them.")
+            return
+        busy = _run_is_grading(run_key)
+        job_mode = _job_mode_enabled()
+        wait_help = "Wait for the grading in progress to finish first." if busy else None
+        with st.container(horizontal=True, vertical_alignment="center"):
+            if st.button(f"Retry {len(failed)} failed", key=f"retry_failed_{run_key}",
+                         icon=":material/refresh:", disabled=busy, help=wait_help):
+                if job_mode:
+                    _launch_regrade_job(run_key, list(failed))
+                else:
+                    _retry_failed(run_key)
+            if job_mode:
+                with st.popover("Use another model", icon=":material/swap_horiz:", disabled=busy,
+                                help=wait_help or "Grade the failed students again with a different model."):
+                    _render_rerun_form(run_key, list(failed))
+        if busy:
+            st.caption("Wait for the grading in progress to finish first.")
+
+
+def _render_rerun_form(run_key: str, failed: list[str]) -> None:
+    """Inside the "Use another model" popover: pick a model (and effort), then re-run the failed
+    students. Their results merge into this run under its original run key."""
+    inputs = st.session_state["grading_inputs_by_key"][run_key]
+    st.caption(f"Grade the {len(failed)} failed student(s) again with a different model. "
+               "The students already graded keep their results.")
+    cfg = define_openrouter_model(f"rerun_{run_key}", default_effort=inputs["kwargs"].get("effort"))
+    auto = bool(cfg.get("use_auto_route"))
+    model = cfg.get("model") or AUTO_ROUTE_MODEL
+    effort = None if auto else cfg.get("effort")
+    st.caption(f"This sends those students' work to {_model_effort_label(model, auto, effort)} and costs money. "
+               "Students graded with different models are marked in the results table.")
+    if st.button(f"Re-run {len(failed)} with this model", key=f"rerun_failed_{run_key}",
+                 icon=":material/play_arrow:", type="primary"):
+        _launch_regrade_job(run_key, failed, {"model_name": model, "effort": effort})
 
 
 def render_needs_review(run_key: str) -> None:
@@ -3532,13 +3808,16 @@ def render_needs_review(run_key: str) -> None:
                 st.markdown(f"**{sid}** — {_VALIDITY_LABELS.get(r.validity_status, r.validity_status)}: "
                             f"{r.validity_reason}{extra}")
                 no_work = r.validity_status in _NO_WORK_STATUSES
+                busy = _run_is_grading(run_key)
+                wait_help = "Wait for the grading in progress to finish first." if busy else None
                 if st.button("Confirm 0" if no_work else f"Accept {r.total_points_earned:g}",
-                             key=f"confirm0_{run_key}_{sid}", icon=":material/check:"):
+                             key=f"confirm0_{run_key}_{sid}", icon=":material/check:",
+                             disabled=busy, help=wait_help):
                     _replace_result(run_key, sid, r.model_copy(update={"review_confirmed": True}))
                     st.rerun()
                 if st.button("Grade anyway" if no_work else "Grade again",
                              key=f"grade_anyway_{run_key}_{sid}",
-                             icon=":material/play_arrow:"):
+                             icon=":material/play_arrow:", disabled=busy, help=wait_help):
                     _grade_anyway(run_key, sid)
 
 
@@ -3614,6 +3893,9 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
 
     render_needs_review(run_key)
     render_failed(run_key)
+    job_notice = st.session_state.pop(f"job_notice_{run_key}", None)
+    if job_notice:
+        st.info(job_notice, icon=":material/info:")
     effort_notice = st.session_state.pop(f"effort_notice_{run_key}", None)
     if effort_notice:
         st.info(effort_notice, icon=":material/info:")
@@ -3637,7 +3919,8 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         on_select="rerun",
         selection_mode="single-row",
         key=f"results_table_{run_key}",
-        column_order=["Student", "Status", "Score", "Points Earned", "Points Possible", "Level", "Model"],
+        column_order=["Student", "Status", "Score", "Points Earned", "Points Possible", "Level"]
+        + (["Model"] if len({r["Model"] for r in rows if r["Model"]}) > 1 else []),
         column_config={
             "Score": st.column_config.ProgressColumn("Score", format="%.0f%%", min_value=0, max_value=100),
             "Points Earned": st.column_config.NumberColumn("Points"),

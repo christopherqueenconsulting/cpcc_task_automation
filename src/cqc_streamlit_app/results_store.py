@@ -26,6 +26,29 @@ MAX_RUNS = 20
 _RUN_KEY_RE = re.compile(r"[0-9A-Za-z]{1,64}")
 
 
+_ON = ("1", "true", "on", "yes")
+_OFF = ("0", "false", "off", "no")
+
+
+def persistence_enabled() -> bool:
+    """Whether results are kept on disk. Session-only on Streamlit Community Cloud, where
+    one shared host would keep every instructor's student results (decision 2026-10-23);
+    on the Mac they stay on disk as before.
+
+    ``CQC_RESULTS_PERSIST=on`` or ``off`` decides outright. Unset, an explicit
+    ``CQC_GRADING_RESULTS_DIR`` means on, and a Community Cloud host (it mounts the app
+    under ``/mount/src``) means off.
+    """
+    raw = os.environ.get("CQC_RESULTS_PERSIST", "").strip().lower()
+    if raw in _ON:
+        return True
+    if raw in _OFF:
+        return False
+    if os.environ.get("CQC_GRADING_RESULTS_DIR"):
+        return True
+    return not Path("/mount/src").exists()
+
+
 def results_dir() -> Path:
     return Path(os.environ.get("CQC_GRADING_RESULTS_DIR")
                 or Path.home() / ".cqc_cpcc" / "grading_results")
@@ -45,7 +68,10 @@ def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = 
 
     ``meta`` holds PII-free facts about how the run was graded (solution given, checklist
     size and hash, prompt version, model). Omitted, the saved file's existing meta is kept.
+    Does nothing when :func:`persistence_enabled` is false (session-only hosts).
     """
+    if not persistence_enabled():
+        return
     directory = results_dir()
     directory.mkdir(parents=True, exist_ok=True)
     os.chmod(directory, 0o700)
@@ -85,7 +111,7 @@ def remembered_effort(instructions_hash: str) -> Optional[str]:
     were graded (``meta["instructions_hash"]`` and ``meta["effort"]``), newest run first.
     ``None`` when no saved run matches or it ran at the default effort."""
     directory = results_dir()
-    if not instructions_hash or not directory.is_dir():
+    if not persistence_enabled() or not instructions_hash or not directory.is_dir():
         return None
     for path in sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
@@ -116,7 +142,7 @@ def delete_run(run_key: str) -> None:
 def load_runs() -> list[dict]:
     """Every saved run, newest first, with results rebuilt as model objects."""
     directory = results_dir()
-    if not directory.is_dir():
+    if not persistence_enabled() or not directory.is_dir():
         return []
     runs = []
     for path in sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
