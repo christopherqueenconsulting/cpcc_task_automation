@@ -85,15 +85,15 @@ class TestFindStudentPage:
 class TestDesignPieceU6:
     """UX goals for Find student: one search box, read-only roster, no third-party tabs."""
 
-    ROSTER = {"1234567": ("Adams, Ann", "Ann.Adams@email.cpcc.edu", "CSC-134-N801"),
-              "7654321": ("Baker, Bo", "bo@email.cpcc.edu", "CSC-151-N855")}
+    ROSTER = {"1234567": ("Adams, Ann", "student.example@email.cpcc.edu", "CSC-134-N801"),
+              "7654321": ("Baker, Bo", "ben.sample@email.cpcc.edu", "CSC-151-N855")}
 
     def _app(self):
         return _app(FakeJob(PHASE_SUCCEEDED, dict(self.ROSTER)))
 
     @pytest.mark.parametrize("query,expected", [
-        ("Ann.Adams@email.cpcc.edu", ["1234567"]),
-        ("ann.adams@EMAIL.cpcc.edu", ["1234567"]),  # case-insensitive email fallback
+        ("student.example@email.cpcc.edu", ["1234567"]),
+        ("STUDENT.EXAMPLE@EMAIL.cpcc.edu", ["1234567"]),  # case-insensitive email fallback
         ("7654321", ["7654321"]),
         ("Bo Baker", ["7654321"]),
         ("Baker", []),  # names need two matching words

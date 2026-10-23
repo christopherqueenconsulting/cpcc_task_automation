@@ -116,3 +116,11 @@ agreement in place. A prompt copied or downloaded from the LLM Prompt tab is a
 disclosure to whatever tool receives it, so paste it only into tools the institution
 has approved for student records. Every other outside destination is kept free of
 student identifiers.
+
+## Student data in the repository
+
+The repository is public, so the `pii-guard` required check (`scripts/pii_guard.py`,
+see `docs/security-workflows.md`) blocks BrightSpace submission-folder names and ids,
+hashed known-leaked tokens, and any e-mail address at `cpcc.edu` or `*.cpcc.edu`. Fixtures
+and docs use only the synthetic local parts the script allowlists, for example
+`student.example@email.cpcc.edu`.

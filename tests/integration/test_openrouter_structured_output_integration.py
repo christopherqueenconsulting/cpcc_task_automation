@@ -458,19 +458,20 @@ class TestOpenRouterCSC113Week4Reflection:
         
         Week 4 Reflection
         
-        The first prompt is "generate five ideas that can help older people feel comfortable with AI."
-        The second and revised prompt is "give me five simple ways to help older adults feel more at ease using AI like tips, activities, or tools they can try"
-        and the third and final prompt is "List five easy ideas to make AI less confusing and more comfortable for seniors, including practical tips or examples they can use."
+        For my task I asked the tool for help planning a small herb garden on a sunny apartment balcony.
         
-        The details in words from each of the three prompts makes the model produce different answers, like changing "older people" to "older adults" to "seniors" adds context and makes the target audience more specific.
-        Using words like "list" in the prompt makes the answers more compact and short vs using words like "write a paragraph" where the answer is going to be longer.
-        The tone is defined by using certain words like "simple" and "easy," which makes the model produce a friendly style of answer.
+        My first prompt was "suggest some herbs I can grow on a balcony."
+        My second and revised prompt was "list five herbs that grow well in pots on a sunny balcony and say how often to water each one."
+        My third and final prompt was "Give me a short table of five beginner-friendly herbs for balcony pots, with watering frequency, sunlight needs, and one common mistake to avoid for each."
         
-        One thing that I couldn't get the tool to do well was consistency. When I placed the first prompt into the tool, it produced an answer and then the tab on the computer accidentally closed, and when I loaded it back up and put the same prompt in I got a different answer.
-        This isn't a failure, but what it says about the system is that it is designed to be random but also give you the best response it can every time.
+        The details I added changed the answers a lot. Naming the number of herbs, the pots, and the sunny balcony made the suggestions fit my situation instead of being generic.
+        Asking for a "table" in the last prompt produced a compact, organized answer, while the first prompt produced a long paragraph.
+        Adding words like "beginner-friendly" and "common mistake" shifted the tone to something encouraging and practical.
         
-        The prompt structure affects output quality because if you are clear and to the point with your prompt, what the model produces will be closer to your expectations.
-        The model is responding to specific words and context, comparing it to data it learned during training so it can give you the best answer possible.
+        One thing I could not get the tool to do well was give the same advice twice. I pasted the second prompt into the tool two times and the herbs and watering schedules were slightly different each time.
+        That is not exactly a failure, but it shows the system does not retrieve one stored answer. It builds a new response every time, so I should double-check anything important like watering schedules.
+        
+        I think prompt structure affects output quality because the model predicts a response from patterns in the text it was trained on. A clear, specific prompt points it toward the patterns that match what I actually want, while a vague prompt leaves it to guess what I meant.
         """
         
         assignment_instructions = """

@@ -186,3 +186,79 @@ class TestFileHandling:
         )
         err = capsys.readouterr().err
         assert "bad.md:1: [class-b] ou=999999" in err  # pii-guard:allow
+
+
+@pytest.mark.unit
+class TestStudentEmailClass:
+    """Class (c): any address at cpcc.edu or *.cpcc.edu, except synthetic ones."""
+
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "zed.nobody@cpcc.edu",  # pii-guard:allow
+            "znobody1@email.cpcc.edu",  # pii-guard:allow
+            "zed@a.b.cpcc.edu",  # pii-guard:allow
+            "ZED.NOBODY@CPCC.EDU",  # pii-guard:allow
+            "zed+tag@cpcc.edu",  # pii-guard:allow
+        ],
+    )
+    def test_cpcc_address_is_flagged(self, address):
+        findings = pii_guard.scan_text(f"contact {address} today", "f.md", frozenset())
+        assert _classes(findings) == ["c"]
+        assert findings[0].detail == address
+
+    def test_bare_domain_and_subdomain_are_both_flagged(self):
+        text = "zed@cpcc.edu and zed@email.cpcc.edu"  # pii-guard:allow
+        assert _classes(pii_guard.scan_text(text, "f.md", frozenset())) == ["c", "c"]
+
+    @pytest.mark.parametrize("local", sorted(pii_guard.ALLOWED_EMAIL_LOCALS))
+    @pytest.mark.parametrize("domain", ["cpcc.edu", "email.cpcc.edu"])
+    def test_synthetic_address_passes(self, local, domain):
+        assert pii_guard.scan_text(f"{local}@{domain}", "f.py", frozenset()) == []
+
+    def test_synthetic_local_part_is_case_insensitive(self):
+        assert pii_guard.scan_text("Example@CPCC.edu", "f.py", frozenset()) == []
+
+    def test_synthetic_local_part_is_exact_not_a_prefix_or_suffix(self):
+        text = "my.example@cpcc.edu example2@cpcc.edu"  # pii-guard:allow
+        assert _classes(pii_guard.scan_text(text, "f.py", frozenset())) == ["c", "c"]
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "zed@notcpcc.edu",
+            "zed@mycpcc.edu",
+            "zed@cpcc.edu.example.org",
+            "zed@cpcc.edu-evil.com",
+            "zed@cpcc.education",
+            "zed@cpcc.com",
+            "zed@email.cpcc.edu.example.org",
+            "see https://www.cpcc.edu/admissions",
+            "cpcc.edu",
+            "@cpcc.edu",
+        ],
+    )
+    def test_lookalikes_and_non_addresses_pass(self, text):
+        assert pii_guard.scan_text(text, "f.md", frozenset()) == []
+
+    def test_sentence_ending_dot_does_not_hide_the_address(self):
+        text = "Mail zed@cpcc.edu."  # pii-guard:allow
+        assert _classes(pii_guard.scan_text(text, "f.md", frozenset())) == ["c"]
+
+    def test_allow_marker_exempts_email_but_not_denylist(self, denylist):
+        line = "zed@cpcc.edu Zed Nobody  # pii-guard:allow"
+        assert _classes(pii_guard.scan_text(line, "f.py", denylist)) == ["d"]
+
+    def test_main_fails_on_email_in_file(self, tmp_path, capsys):
+        bad = tmp_path / "bad.md"
+        bad.write_text("zed@email.cpcc.edu\n")  # pii-guard:allow
+        args = ["--root", str(tmp_path), "--denylist", str(tmp_path / "none")]
+        assert pii_guard.main([*args, str(bad)]) == 1
+        assert "bad.md:1: [class-c] zed@email.cpcc.edu" in capsys.readouterr().err  # pii-guard:allow
+
+    def test_long_run_without_at_sign_scans_in_linear_time(self):
+        import time
+
+        start = time.perf_counter()
+        pii_guard.scan_text("a" * 200_000, "f.txt", frozenset())
+        assert time.perf_counter() - start < 2
