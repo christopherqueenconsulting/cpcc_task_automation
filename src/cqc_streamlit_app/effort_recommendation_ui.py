@@ -181,6 +181,9 @@ def render_effort_recommendation(*, widget_uk: str, model: str, use_auto_route: 
         _apply_controls(widget_uk, model, rec, current_effort or default, floor_met, key)
     if rec.cost_usd:
         st.caption(rf"Cost of this suggestion: about \${rec.cost_usd:.4f}.")
+    if _busy():
+        st.caption("The button is off because an earlier request is still running. It ends by itself within "
+                   f"{llm_limits.effort_judge_timeout():g} seconds.")
     if st.button("Recommend again", key=f"recommend_again_{key[:12]}", icon=":material/refresh:",
                  disabled=_busy(), help="Ask again and replace the saved answer."):
         er._RECOMMENDATION_CACHE.pop(key, None)
