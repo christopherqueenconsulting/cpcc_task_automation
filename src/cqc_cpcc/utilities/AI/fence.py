@@ -36,7 +36,7 @@ _PROCESS_KEY = secrets.token_bytes(32)
 
 #: Fixed key used only while a request capture runs (``deterministic_nonce``). It is public on purpose:
 #: a captured prompt is never sent to a model, so nothing is protected by hiding it.
-_CAPTURE_KEY = b"cqc-request-capture-key-not-a-secret"
+CAPTURE_KEY = b"request-capture-fixed-fence-key!"  # 32 bytes; the one source (request_capture imports it)
 _deterministic = 0  # nesting depth, process wide: a capture runs on one event loop in one process
 _lock = threading.Lock()
 
@@ -67,7 +67,7 @@ def new_fence_nonce(*parts: str) -> str:
     fixed = _deterministic > 0
     if not parts and not fixed:
         return secrets.token_hex(8)
-    mac = hmac.new(_CAPTURE_KEY if fixed else _PROCESS_KEY, digestmod=hashlib.sha256)
+    mac = hmac.new(CAPTURE_KEY if fixed else _PROCESS_KEY, digestmod=hashlib.sha256)
     for part in parts:
         mac.update((part or "").encode("utf-8") + b"\0")
     return mac.hexdigest()[:16]

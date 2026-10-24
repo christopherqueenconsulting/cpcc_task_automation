@@ -41,7 +41,7 @@ ERROR = "error:"
 
 #: Fixed stand-in for the per-process fence keys while capturing. A fence nonce is an HMAC of the
 #: assignment text under a random key, so without this the prompt differs on every run.
-_PINNED_FENCE_KEY = b"request-capture-fixed-fence-key!"  # 32 bytes
+from cqc_cpcc.utilities.AI.fence import CAPTURE_KEY as _PINNED_FENCE_KEY  # noqa: E402  (one source of truth)
 _FENCE_KEY_MODULES = ("cqc_cpcc.utilities.AI.fence", "cqc_cpcc.test_case_generation",
                       "cqc_cpcc.requirement_solution_check")
 
