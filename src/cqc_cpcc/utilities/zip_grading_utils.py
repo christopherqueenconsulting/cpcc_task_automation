@@ -63,11 +63,25 @@ IGNORE_FILE_PREFIXES = {
     'Thumbs.db',
 }
 
-# BrightSpace export files that should never be graded
+# BrightSpace export files that should never be graded, plus OS noise files that
+# carry no extension (matched case-insensitively)
 IGNORE_FILE_NAMES = {
     'index.html',  # BrightSpace export index
     'index.htm',  # Alternative BrightSpace export index
+    'icon\r',  # macOS custom-folder-icon file ("Icon" + carriage return)
+    'desktop.ini',  # Windows folder settings
 }
+
+# Files an OS or archiver adds that are never part of a submission. Used to keep them
+# out of wrapper-folder detection, where one stray path breaks the common prefix.
+IGNORE_NOISE_NAMES = {'.DS_Store', 'Thumbs.db', 'desktop.ini', 'Icon\r'}
+
+# Top-level folders this app's own exports produce. One of these is always a wrapper,
+# even around a single student folder (a one-student re-grade).
+KNOWN_EXPORT_WRAPPERS = {'brightspace_submissions', 'student_submissions'}
+
+# Where the Results & review "Download All Feedback" ZIP keeps the submissions ZIP.
+_NESTED_SUBMISSIONS_DIR = 'Student_Submissions/'
 
 # File extensions by priority (higher priority = more relevant for grading)
 FILE_PRIORITY = {
@@ -250,6 +264,68 @@ def should_ignore_file(filepath: str) -> bool:
     return False
 
 
+def _is_noise_path(filepath: str) -> bool:
+    """True for OS/archiver noise: ``__MACOSX`` and other ignored dirs, ``._*``, ``.DS_Store``..."""
+    parts = [p for p in filepath.replace('\\', '/').split('/') if p]
+    if not parts:
+        return True
+    if any(part in IGNORE_DIRECTORIES for part in parts[:-1]):
+        return True
+    name = parts[-1]
+    return name.startswith('._') or name in IGNORE_NOISE_NAMES
+
+
+def _student_folder_segment(directory_name: str) -> tuple[str, str]:
+    """Split a directory (wrapper already removed) into the student folder and the rest.
+
+    The student folder is the first segment, or the first one in BrightSpace
+    ``"{id} - {Name} - {date}"`` form when an un-stripped wrapper sits above it. Deeper
+    subfolders (``Name/src/pkg``) belong to that student.
+    """
+    segments = directory_name.replace('\\', '/').split('/')
+    index = next((i for i, seg in enumerate(segments) if _FOLDER_NAME_DELIMITER in seg), 0)
+    return segments[index], '/'.join(segments[index + 1:])
+
+
+def _detect_wrapper_folder(paths: list[str]) -> Optional[str]:
+    """Return the folder wrapping every student folder, or None.
+
+    ``paths`` must already exclude noise: a single ``__MACOSX/...`` entry would
+    otherwise leave no common prefix.
+    """
+    if not paths:
+        return None
+    split_paths = [p.split('/') for p in paths]
+    common_parts: list[str] = []
+    for i, part in enumerate(split_paths[0][:-1]):  # Exclude filename
+        if all(len(sp) > i + 1 and sp[i] == part for sp in split_paths):
+            common_parts.append(part)
+        else:
+            break
+    if not common_parts:
+        return None
+    if common_parts[0].lower() in KNOWN_EXPORT_WRAPPERS and any(len(sp) > 2 for sp in split_paths):
+        return common_parts[0]
+    # Heuristic: if there are multiple second-level folders, the common prefix is a wrapper
+    second_level_folders = {
+        sp[len(common_parts)] for sp in split_paths
+        if len(sp) > len(common_parts) + 1 and not should_ignore_file('/'.join(sp))
+    }
+    if len(second_level_folders) > 1:
+        return '/'.join(common_parts)
+    return None
+
+
+def _nested_submissions_zip(zip_ref: zipfile.ZipFile) -> Optional[str]:
+    """Name of ``Student_Submissions/<x>.zip`` inside a Download All Feedback ZIP, if any."""
+    for name in zip_ref.namelist():
+        if (name.startswith(_NESTED_SUBMISSIONS_DIR) and name.lower().endswith('.zip')
+                and '/' not in name[len(_NESTED_SUBMISSIONS_DIR):]
+                and not _is_noise_path(name)):
+            return name
+    return None
+
+
 def get_file_priority(filepath: str) -> int:
     """Get priority score for a file based on extension.
     
@@ -276,19 +352,21 @@ def extract_student_submissions_from_zip(
     Provides token estimates but does NOT truncate files. Large submissions
     are handled via preprocessing (see openai_client.py).
     
-    Expected ZIP structure:
+    Accepted ZIP layouts (one folder per student; every file in it, subfolders
+    included, is graded together as that student's submission):
         submission.zip/
             Student_Name_1/
                 file1.java
-                file2.java
+                src/pkg/file2.java
             Student_Name_2/
                 file1.py
-                file2.py
-    
-    Or with delimiter pattern (BrightSpace format):
-        submission.zip/
-            Assignment - Student Name/
-                file.java
+
+    Folder names may also use the BrightSpace patterns
+    ``{id} - {Student Name} - {date}`` or ``Assignment - Student Name``. An outer
+    wrapper folder is stripped (``brightspace_submissions/Student/...``), macOS/Windows
+    noise (``__MACOSX``, ``._*``, ``.DS_Store``, ``Icon\\r``) is ignored, and files at the
+    ZIP root are skipped. The Results & review "Download All Feedback" ZIP is accepted
+    as is: its nested ``Student_Submissions/*.zip`` is read instead.
     
     Args:
         zip_path: Path to ZIP file
@@ -308,47 +386,31 @@ def extract_student_submissions_from_zip(
     if not zip_path.endswith('.zip'):
         raise ValueError(f"Not a ZIP file: {zip_path}")
 
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        nested = _nested_submissions_zip(zip_ref)
+        if nested:
+            inner = tempfile.NamedTemporaryFile(delete=False, prefix='nested_submissions_', suffix='.zip')
+            with inner, zip_ref.open(nested) as src:
+                inner.write(src.read())
+    if nested:
+        logger.info("Reading the submissions ZIP nested in a Download All Feedback ZIP")
+        try:
+            return extract_student_submissions_from_zip(
+                inner.name, accepted_file_types, max_tokens_per_student)
+        finally:
+            os.unlink(inner.name)
+
     students_data: dict[str, StudentSubmission] = {}
 
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         # First pass: analyze ZIP structure and detect wrapper folders
         all_paths = [f.filename for f in zip_ref.infolist() if not f.is_dir()]
 
-        # Check if there's a common wrapper folder
+        # Check if there's a common wrapper folder, ignoring OS noise paths
         # e.g., "Programming Exam 1/Student1/file.java" -> wrapper is "Programming Exam 1"
-        wrapper_folder = None
-        if all_paths:
-            # Find common prefix path
-            common_parts = []
-            first_path_parts = all_paths[0].split('/')
-
-            for i, part in enumerate(first_path_parts[:-1]):  # Exclude filename
-                if all(p.split('/')[i] == part if len(p.split('/')) > i else False for p in all_paths):
-                    common_parts.append(part)
-                else:
-                    break
-
-            # If all files share a common top-level folder, treat it as wrapper
-            if common_parts and len(common_parts) >= 1:
-                # Check if this is likely a wrapper folder (not a student folder)
-                # Heuristic: if there are multiple second-level folders, first level is wrapper
-                # BUT: ignore noise folders like __MACOSX, node_modules, etc.
-                second_level_folders = set()
-                for path in all_paths:
-                    # Skip paths that should be ignored (noise files)
-                    if should_ignore_file(path):
-                        continue
-
-                    parts = path.split('/')
-                    if len(parts) > len(common_parts) + 1:
-                        folder_name = parts[len(common_parts)]
-                        # Don't count noise directories
-                        if folder_name not in IGNORE_DIRECTORIES:
-                            second_level_folders.add(folder_name)
-
-                if len(second_level_folders) > 1:
-                    wrapper_folder = '/'.join(common_parts)
-                    logger.info(f"Detected wrapper folder in ZIP: '{wrapper_folder}'")
+        wrapper_folder = _detect_wrapper_folder([p for p in all_paths if not _is_noise_path(p)])
+        if wrapper_folder:
+            logger.info(f"Detected wrapper folder in ZIP: '{wrapper_folder}'")
 
         # Second pass: group files by student folder
         student_files: dict[str, list[tuple[str, str]]] = {}  # student_id -> [(filename, zip_path)]
@@ -380,7 +442,8 @@ def extract_student_submissions_from_zip(
                     continue
 
             # Remove wrapper folder from directory path if present
-            if wrapper_folder and directory_name.startswith(wrapper_folder):
+            if wrapper_folder and (directory_name == wrapper_folder
+                                   or directory_name.startswith(wrapper_folder + '/')):
                 directory_name = directory_name[len(wrapper_folder):].lstrip('/')
                 # If directory is now empty (file was directly in wrapper), skip
                 if not directory_name:
@@ -390,7 +453,8 @@ def extract_student_submissions_from_zip(
             # Parse student name from the folder. Handles both BrightSpace
             # "{id} - {Student Name} - {Timestamp}" and "{Assignment} - {Name}",
             # preserving multi-word and dashed names (see parse_student_folder_name).
-            student_id = parse_student_folder_name(directory_name)
+            student_folder, subfolder = _student_folder_segment(directory_name)
+            student_id = parse_student_folder_name(student_folder)
 
             if binary_reject:
                 logger.debug(f"Ignoring binary file: {file_name}")
@@ -417,10 +481,18 @@ def extract_student_submissions_from_zip(
                 logger.debug(f"Skipping ignored file: {file_name}")
                 continue
 
-            # Add to student's file list
-            if student_id not in student_files:
-                student_files[student_id] = []
-            student_files[student_id].append((file_name, file_info.filename))
+            # Add to student's file list. Two files with the same name in different
+            # subfolders are both kept: the later one is keyed by its relative path.
+            files_for_student = student_files.setdefault(student_id, [])
+            taken = {name for name, _ in files_for_student}
+            if file_name in taken:
+                key = f"{subfolder}/{file_name}" if subfolder else file_name
+                copy = 2
+                while key in taken:
+                    key = f"{Path(file_name).stem} ({copy}){Path(file_name).suffix}"
+                    copy += 1
+                file_name = key
+            files_for_student.append((file_name, file_info.filename))
 
         logger.info(f"Found {len(student_files)} potential student folders after parsing")
 
@@ -513,7 +585,8 @@ def extract_student_submissions_from_zip(
         # List what was found (use all_paths already collected in with block)
         if all_paths:
             error_msg += f"Found {len(all_paths)} file(s) in ZIP but none matched expected structure.\n"
-            error_msg += "Expected structure: Student_Name/file.ext or Assignment - Student Name/file.ext\n"
+            error_msg += ("Expected structure: one folder per student, e.g. Student Name/file.ext, "
+                          "id - Student Name - date/file.ext, or a wrapper folder around those\n")
             error_msg += f"Accepted file types: {', '.join(accepted_file_types)}\n"
             error_msg += f"First few files found:\n"
             for f in all_paths[:5]:

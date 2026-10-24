@@ -169,3 +169,101 @@ class TestWrapperFolderHandling:
         assert "Expected structure:" in error_msg
         assert "Accepted file types:" in error_msg
         assert "First few files found:" in error_msg
+
+
+def _write_zip(path, entries):
+    with zipfile.ZipFile(path, 'w') as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return str(path)
+
+
+JAVA = "public class Main { public static void main(String[] args) {} }"
+
+
+@pytest.mark.unit
+class TestResultsAndReviewZipAsIs:
+    """The submissions ZIP from Results & review imports as is, even re-zipped on a Mac."""
+
+    def test_mac_rezip_of_export_gives_one_submission_per_student(self, tmp_path):
+        entries = {
+            "__MACOSX/._brightspace_submissions": b"\x00",
+            "brightspace_submissions/.DS_Store": b"\x00",
+            "brightspace_submissions/Icon\r": b"",
+        }
+        for name in ("Student A", "Student B", "Dee Placeholder"):
+            entries[f"brightspace_submissions/{name}/Exam1.java"] = JAVA
+            entries[f"brightspace_submissions/{name}/Icon\r"] = b""
+            entries[f"brightspace_submissions/{name}/.DS_Store"] = b"\x00"
+            entries[f"__MACOSX/brightspace_submissions/{name}/._Exam1.java"] = b"\x00"
+        entries["brightspace_submissions/Student A/Exam1.class"] = b"\xca\xfe\xba\xbe"
+        zip_path = _write_zip(tmp_path / "mac.zip", entries)
+
+        result = extract_student_submissions_from_zip(zip_path, ['.java'])
+
+        assert set(result) == {"Student A", "Student B", "Dee Placeholder"}
+        for sub in result.values():
+            assert list(sub.files) == ["Exam1.java"]
+        assert result["Student A"].rejected_files == ["Exam1.class"]
+        assert result["Student B"].rejected_files == []
+
+    def test_multi_file_student_keeps_every_file_including_subfolders(self, tmp_path):
+        entries = {f"Student A/{n}.java": JAVA for n in ("Main", "Shape", "Circle", "Square")}
+        entries["Student A/src/pkg/Helper.java"] = JAVA
+        entries["Student B/Main.java"] = JAVA
+        zip_path = _write_zip(tmp_path / "multi.zip", entries)
+
+        result = extract_student_submissions_from_zip(zip_path, ['.java'])
+
+        assert set(result) == {"Student A", "Student B"}
+        assert set(result["Student A"].files) == {
+            "Main.java", "Shape.java", "Circle.java", "Square.java", "Helper.java"}
+
+    def test_duplicate_file_names_in_subfolders_are_both_kept(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "dupes.zip", {
+            "Student A/part1/Main.java": "class Main { /* one */ }",
+            "Student A/part2/Main.java": "class Main { /* two */ }",
+            "Student B/Main.java": JAVA,
+        })
+
+        files = extract_student_submissions_from_zip(zip_path, ['.java'])["Student A"].files
+
+        assert set(files) == {"Main.java", "part2/Main.java"}
+        contents = {open(p).read() for p in files.values()}
+        assert contents == {"class Main { /* one */ }", "class Main { /* two */ }"}
+
+    def test_single_student_inside_export_wrapper_is_the_student(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "one.zip", {
+            "brightspace_submissions/Dee Placeholder/Exam1.java": JAVA,
+        })
+
+        result = extract_student_submissions_from_zip(zip_path, ['.java'])
+
+        assert list(result) == ["Dee Placeholder"]
+
+    def test_full_download_all_feedback_zip_reads_the_nested_submissions(self, tmp_path):
+        inner = _write_zip(tmp_path / "inner.zip", {
+            "Student A/Exam1.java": JAVA,
+            "Student B/Exam1.java": JAVA,
+        })
+        with open(inner, 'rb') as f:
+            inner_bytes = f.read()
+        outer = _write_zip(tmp_path / "feedback.zip", {
+            "Student A_Feedback.docx": b"docx",
+            "Grading_Summary.csv": "Student,Points\n",
+            "Student_Submissions/brightspace_submissions.zip": inner_bytes,
+        })
+
+        result = extract_student_submissions_from_zip(outer, ['.java', '.docx'])
+
+        assert set(result) == {"Student A", "Student B"}
+
+    def test_brightspace_id_folders_under_unstripped_wrapper_still_parse(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "bs.zip", {
+            "Exam 1/12345-12345 - Dee Placeholder - Jun 24, 2026 11:21 PM/src/Main.java": JAVA,
+        })
+
+        result = extract_student_submissions_from_zip(zip_path, ['.java'])
+
+        assert list(result) == ["Dee Placeholder"]
+        assert list(result["Dee Placeholder"].files) == ["Main.java"]
