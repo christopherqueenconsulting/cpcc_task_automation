@@ -34,6 +34,7 @@ from cqc_cpcc.requirement_coverage import (
     instructions_hash,
     normalize_checklist,
 )
+from cqc_cpcc.requirement_solution_check import solution_label
 from cqc_cpcc import effort_compare
 from cqc_cpcc.rubric_grading import (
     AUTO_ROUTE_MODEL,
@@ -2151,12 +2152,51 @@ def _extraction_cost_caption(instructions: str) -> str:
     return f"about ${cost:.4f}" if cost else "a fraction of a cent"
 
 
-def render_requirement_checklist(instructions: str, source_id: str) -> Optional[RequirementChecklist]:
+SOLUTION_FILE_TYPES = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip", "py", "c", "h", "hpp", "cc"]
+
+
+def _checklist_frame(checklist: RequirementChecklist) -> pd.DataFrame:
+    """The editor's table: what the instructor can edit plus the read-only solution column."""
+    return pd.DataFrame(
+        [{"id": r.id, "text": r.text, "weight": r.weight,
+          "solution": solution_label(r), "graded": r.graded} for r in checklist.requirements],
+        columns=["id", "text", "weight", "solution", "graded"])
+
+
+def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist) -> Optional[RequirementChecklist]:
+    """The checklist the table now describes. A row keeps its solution verdict only while its
+    text is the text that was checked."""
+    old = {r.id.strip().upper(): r for r in base.requirements}
+    items = []
+    for i, row in enumerate(edited.to_dict("records"), start=1):
+        text = str(row.get("text") or "").strip()
+        if not text or text == "nan":
+            continue
+        weight = row.get("weight") if row.get("weight") in ("core", "secondary") else "core"
+        rid = str(row.get("id") or "").strip()
+        rid = rid if rid and rid != "nan" else f"R{i}"
+        graded_cell = row.get("graded")
+        graded = True if graded_cell is None or pd.isna(graded_cell) else bool(graded_cell)
+        prior = old.get(rid.upper())
+        same = prior is not None and (prior.text or "").strip() == text
+        items.append(RequirementItem(
+            id=rid, text=text, weight=weight, graded=graded,
+            solution_status=prior.solution_status if same else None,
+            solution_evidence=prior.solution_evidence if same else None))
+    return normalize_checklist(RequirementChecklist(requirements=items)) if items else None
+
+
+def render_requirement_checklist(instructions: str, source_id: str,
+                                 solution: Optional[str] = None) -> Optional[RequirementChecklist]:
     """Extract, show and let the instructor edit the assignment's requirement checklist.
 
     Extraction runs automatically once per newly loaded instructions source (a fetch or
     an upload, ``source_id``), never on text edits, and its cost is shown. Edits to the
     checklist are kept while the instructions text is edited. "Re-extract" starts over.
+
+    With a ``solution``, one more call checks each requirement against it (once per solution,
+    then on request). A requirement the solution does not do is shown with "No" and can be left
+    out of the grading with the Graded box.
 
     Returns the checklist to grade with, or None when coverage is off or extraction failed.
     """
@@ -2168,7 +2208,9 @@ def render_requirement_checklist(instructions: str, source_id: str) -> Optional[
         return None
 
     store = st.session_state.setdefault("requirement_checklists", {})
+    generations = st.session_state.setdefault("requirement_editor_generation", {})
     key = instructions_hash(source_id)
+    tag = key[:12]
     cost = _extraction_cost_caption(instructions)
     if key not in store:
         with st.spinner(f"Reading the instructions for the checklist ({cost})..."):
@@ -2177,22 +2219,23 @@ def render_requirement_checklist(instructions: str, source_id: str) -> Optional[
             except Exception as e:  # noqa: BLE001 - shown to the instructor
                 logger.error(f"Requirement extraction failed: {e}", exc_info=True)
                 st.error(f"Could not extract requirements: {e}")
-                if st.button("Try again", key=f"retry_requirements_{key[:12]}", icon=":material/refresh:"):
+                if st.button("Try again", key=f"retry_requirements_{tag}", icon=":material/refresh:"):
                     st.rerun()
                 return None
     st.caption(f"Extracted automatically from the instructions (estimated cost: {cost}). Edit the table if needed.")
-    if st.button("Re-extract", key=f"reextract_requirements_{key[:12]}", icon=":material/refresh:",
+    if st.button("Re-extract", key=f"reextract_requirements_{tag}", icon=":material/refresh:",
                  help="Read the instructions again; your edits to the table are discarded."):
         store.pop(key, None)
         from cqc_cpcc.requirement_coverage import _CHECKLIST_CACHE
         _CHECKLIST_CACHE.clear()
-        st.session_state.pop(f"requirements_editor_{key[:12]}", None)
+        generations[key] = generations.get(key, 0) + 1  # a new editor key drops the old edits
+        st.session_state.get("solution_checked_for", {}).pop(key, None)
         st.rerun()
 
+    base = store[key]
     edited = st.data_editor(
-        pd.DataFrame([r.model_dump() for r in store[key].requirements],
-                     columns=["id", "text", "weight"]),
-        key=f"requirements_editor_{key[:12]}",
+        _checklist_frame(base),
+        key=f"requirements_editor_{tag}_{generations.get(key, 0)}",
         num_rows="dynamic",
         hide_index=True,
         column_config={
@@ -2200,17 +2243,107 @@ def render_requirement_checklist(instructions: str, source_id: str) -> Optional[
             "text": st.column_config.TextColumn("Requirement", width="large", required=True),
             "weight": st.column_config.SelectboxColumn(
                 "Weight", options=["core", "secondary"], required=True, default="core"),
+            "solution": st.column_config.TextColumn(
+                "Solution does it", width="small", disabled=True,
+                help="Whether your solution does this. Set by the check below; you cannot edit it."),
+            "graded": st.column_config.CheckboxColumn(
+                "Graded", default=True,
+                help="Untick to stop grading this requirement. Do that for anything your solution does not do."),
         },
     )
-    items = []
-    for i, row in enumerate(edited.to_dict("records"), start=1):
-        text = str(row.get("text") or "").strip()
-        if not text or text == "nan":
-            continue
-        weight = row.get("weight") if row.get("weight") in ("core", "secondary") else "core"
-        rid = str(row.get("id") or "").strip()
-        items.append(RequirementItem(id=rid if rid and rid != "nan" else f"R{i}", text=text, weight=weight))
-    return normalize_checklist(RequirementChecklist(requirements=items)) if items else None
+    current = _checklist_from_editor(edited, base)
+    if current is None:
+        return None
+    return _render_solution_check(key, tag, instructions, solution, base, current)
+
+
+def _render_solution_check(key: str, tag: str, instructions: str, solution: Optional[str],
+                           base: RequirementChecklist, current: RequirementChecklist) -> RequirementChecklist:
+    """The check against the solution, under the checklist table. Returns ``current``, or
+    redraws the page after it replaced the checklist (new verdicts, applied suggestions)."""
+    from cqc_cpcc import requirement_solution_check as rsc
+    from cqc_cpcc.grading_run_key import hash_solution
+
+    store = st.session_state["requirement_checklists"]
+    generations = st.session_state["requirement_editor_generation"]
+    checked_for = st.session_state.setdefault("solution_checked_for", {})
+    failures = st.session_state.setdefault("solution_check_failures", {})
+
+    def commit(updated: RequirementChecklist) -> None:
+        """Make ``updated`` the table's content (a new editor key re-seeds it) and redraw."""
+        store[key] = updated
+        generations[key] = generations.get(key, 0) + 1
+        st.rerun()
+
+    if not solution:
+        if any(r.solution_status for r in current.requirements):
+            checked_for.pop(key, None)
+            commit(rsc.clear_check(current))
+        st.button("Check against the solution", key=f"check_solution_{tag}", icon=":material/fact_check:",
+                  disabled=True)
+        st.caption("This button is off because there is no solution yet. Add one above and each "
+                   "requirement is checked against it, so you can leave out what the solution does not do.")
+        return current
+
+    solution_id = hash_solution(solution)
+    # Cheapest setting that is still honest: a "no" only suggests until the suite is calibrated.
+    pre_apply = rsc.policy_floor_met()
+    cost = _extraction_cost_caption(instructions + "\n" + solution)
+
+    def run_check(only_ids: Optional[set] = None) -> None:
+        with st.spinner(f"Checking the requirements against the solution ({cost})..."):
+            try:
+                answer = run_coroutine_blocking(
+                    rsc.check_requirements_against_solution(instructions, current, solution))
+            except Exception as e:  # noqa: BLE001 - shown to the instructor; grading is not blocked
+                logger.error(f"Solution check failed: {e}", exc_info=True)
+                failures[key] = (solution_id, str(e))
+                return
+        failures.pop(key, None)
+        commit(rsc.apply_check(current, answer, pre_apply=pre_apply, only_ids=only_ids))
+
+    failed = failures.get(key)
+    if checked_for.get(key) != solution_id and not (failed and failed[0] == solution_id):
+        checked_for[key] = solution_id
+        run_check()  # once per solution; it redraws the page when it succeeds
+        failed = failures.get(key)
+    if failed and failed[0] == solution_id:
+        st.warning(f"Could not check the requirements against the solution: {failed[1]} "
+                   "Every requirement stays graded.", icon=":material/warning:")
+        if st.button("Try the check again", key=f"retry_solution_check_{tag}", icon=":material/refresh:"):
+            failures.pop(key, None)
+            checked_for.pop(key, None)
+            st.rerun()
+
+    if st.button("Check all against the solution", key=f"check_solution_{tag}", icon=":material/fact_check:",
+                 help=f"Asks the model once whether the solution does each requirement ({cost})."):
+        run_check()
+
+    suggested = rsc.suggested_ids(current)
+    if suggested:
+        st.info("The solution does not seem to do: " + ", ".join(suggested)
+                + ". A student should not lose points for what the solution leaves out.",
+                icon=":material/lightbulb:")
+        if not pre_apply:
+            st.caption("This check has not been calibrated yet, so it only suggests. Nothing changes "
+                       "until you click, or untick Graded yourself.")
+        if st.button("Don't grade " + ", ".join(suggested), key=f"apply_solution_suggestions_{tag}",
+                     icon=":material/check:", type="primary"):
+            commit(rsc.apply_suggestions(current))
+    not_graded = [r for r in current.requirements if not r.graded]
+    if not_graded:
+        st.caption("Not graded (they cost students nothing): "
+                   + "; ".join(f"{r.id} {r.text}" for r in not_graded))
+    unclear = [r.id for r in current.requirements if r.solution_status == "unclear"]
+    if unclear:
+        st.caption("The check could not tell for " + ", ".join(unclear)
+                   + ". They stay graded; untick Graded if your solution does not do them.")
+    if any(r.solution_status for r in base.requirements):
+        for rid in rsc.edited_ids(base, current):
+            if st.button(f"Re-check {rid}", key=f"recheck_solution_{tag}_{rid}", icon=":material/refresh:",
+                         help="You changed this requirement after it was checked."):
+                run_check({rid})
+    return current
 
 
 GRADE_STAGES = ("Setup", "Submissions & run", "Results & review")
@@ -2565,12 +2698,25 @@ async def get_rubric_based_exam_grading():
         st.subheader("Instructions", anchor=False)
         assignment_instructions_content, instructions_source_id = _render_instructions_source()
 
+        st.subheader("Solution (optional)", anchor=False)
+        st.caption("Your reference solution. The grader compares each submission with it, and it "
+                   "decides which requirements below count: a student is not marked down for "
+                   "something your solution does not do.")
+        solution_file_paths = add_flexible_upload_element(
+            "Solution file(s) (optional)",
+            SOLUTION_FILE_TYPES,
+            accept_multiple_files=True,
+            key_prefix="rubric_exam_",
+            allow_url=True,
+        )
+        assignment_solution_contents = _read_solution(solution_file_paths)
+
         requirements_checklist = None
         needs_checklist = (grading_mode != "errors_only" and selected_rubric is not None
                            and rubric_scores_errors(selected_rubric))
         if assignment_instructions_content and needs_checklist:
             requirements_checklist = render_requirement_checklist(
-                assignment_instructions_content, instructions_source_id)
+                assignment_instructions_content, instructions_source_id, assignment_solution_contents)
         st.session_state["active_requirement_checklist"] = requirements_checklist
 
         with st.expander("Advanced options", icon=":material/tune:"):
@@ -2582,13 +2728,6 @@ async def get_rubric_based_exam_grading():
                                            key="rubric_grading_course_section")
             if use_rubric:
                 rubric_overrides = display_rubric_overrides_editor(selected_rubric)
-            solution_file_paths = add_flexible_upload_element(
-                "Solution file(s) (optional)",
-                ["txt", "docx", "pdf", "java", "cpp", "sas", "zip"],
-                accept_multiple_files=True,
-                key_prefix="rubric_exam_",
-                allow_url=True,
-            )
             max_points = deduction_per_major_error = deduction_per_minor_error = None
             if grading_mode == "errors_only":
                 st.subheader("Error-only scoring", anchor=False)
@@ -2625,7 +2764,6 @@ async def get_rubric_based_exam_grading():
             st.caption(f"Rubric: {effective_rubric.total_points_possible} points, "
                        f"{len([c for c in effective_rubric.criteria if c.enabled])} enabled criteria.")
 
-        assignment_solution_contents = _read_solution(solution_file_paths)
         use_openrouter = model_cfg.get("use_openrouter", True)
         use_auto_route = model_cfg.get("use_auto_route", True)
         selected_model = model_cfg.get("model", "openrouter/auto")

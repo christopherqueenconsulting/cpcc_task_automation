@@ -441,7 +441,8 @@ async def test_suite_gate_runs_the_other_suites_of_the_roles(tmp_path, monkeypat
 
     monkeypatch.setattr(prompt_eval, "run", small_run)
     report = await pa.suite_gate("openai/gpt-6-luna@high", "openai/gpt-5-mini", ["grading"], tmp_path)
-    assert set(ran) == {"grading-levelband", "grading-solution", "requirement-extraction", "exam-grading"}
+    assert set(ran) == {"grading-levelband", "grading-solution", "requirement-extraction", "exam-grading",
+                        "requirement-solution-check"}
     assert report["status"] == "pass"  # same canned answers for both models
     assert json.loads((tmp_path / "cross_suite.json").read_text())["candidate"] == "openai/gpt-5-mini"
 

@@ -897,6 +897,12 @@ async def _reconcile(
         for rid in coverage_info.get("partial", []):
             notes.append(note("requirement", f"Requirement {rid} is incomplete: counted as a minor error.",
                               requirement_id=rid))
+        by_id = {r.id: r for r in requirements.requirements}
+        for rid in coverage_info.get("ungraded", []):
+            item = by_id.get(rid)
+            why = f" ({item.solution_evidence})" if item is not None and item.solution_evidence else ""
+            notes.append(note("solution", f"Requirement {rid} is not graded: the instructor's solution "
+                                          f"does not do it{why}. It costs nothing.", requirement_id=rid))
         for rid in coverage_info.get("unmarked", []):
             notes.append(note("requirement", f"The grader did not assess requirement {rid}; "
                                              "flagged for review, not counted.", requirement_id=rid))
