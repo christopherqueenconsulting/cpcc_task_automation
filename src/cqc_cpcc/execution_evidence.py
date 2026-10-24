@@ -38,7 +38,18 @@ HEADING = "## Program Output Check (computed by the app)"
 MAX_STDERR_CHARS = 400
 MAX_CELL_CHARS = 48
 
-_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+#: Characters replaced by a space in anything student-controlled: C0 controls (tab and newline too, the
+#: callers collapse whitespace), DEL, C1 controls, NEL, line and paragraph separators, zero-width and
+#: direction marks and bidi embeddings and isolates. A translate table, not a character-range regex.
+_HIDDEN_CODE_POINTS = (
+    set(range(0x00, 0x20)) | {0x7F} | set(range(0x80, 0xA0)) | {0x2028, 0x2029}
+    | set(range(0x200B, 0x2010)) | set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A)))
+_HIDDEN_TABLE = {cp: " " for cp in _HIDDEN_CODE_POINTS}
+
+
+def clean_text(text: str) -> str:
+    """``text`` with every control, separator and invisible direction character turned into a space."""
+    return (text or "").translate(_HIDDEN_TABLE)
 
 _MEANING = (
     "- match: same output (trailing spaces and blank lines are ignored)",
@@ -55,7 +66,7 @@ _MEANING = (
 def _cell(text: str, limit: int = MAX_CELL_CHARS) -> str:
     """One short table-safe line: control characters out, whitespace collapsed, ``|`` and
     backticks replaced, cut at ``limit``."""
-    one = " ".join(_CONTROL.sub(" ", text or "").split()).replace("|", "/").replace("`", "'")
+    one = " ".join(clean_text(text).split()).replace("|", "/").replace("`", "'")
     return one if len(one) <= limit else one[: limit - 3] + "..."
 
 

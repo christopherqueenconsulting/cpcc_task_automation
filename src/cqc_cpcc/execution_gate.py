@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Sequence
 
 from cqc_cpcc.error_definitions_models import infer_execution_category
+from cqc_cpcc.execution_evidence import clean_text
 from cqc_cpcc.execution_check import (CaseResult, ExecutionPlan, ExecutionReport, SolutionSources,
                                       TestCase)
 from cqc_cpcc.reconciliation import SOURCE_EXECUTION, may_drop, note, note_kept, note_removed
@@ -267,14 +268,10 @@ def _is_typo(a: str, b: str) -> bool:
     return len(long_) - len(short) == 1 and any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
 
 
-#: Control characters and invisible direction marks (zero-width, bidi embeddings and isolates).
-_HIDDEN = re.compile("[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
-
-
 def inert(text: str, limit: int = MAX_SNIPPET_CHARS) -> str:
     """Program text for a student-visible note: one line, no control characters, backticks turned
     into quotes, cut at ``limit``, in a code span so Markdown and HTML in it stay literal."""
-    one = " ".join(_HIDDEN.sub(" ", text or "").split()).replace("`", "'")
+    one = " ".join(clean_text(text).split()).replace("`", "'")
     if len(one) > limit:
         one = one[: limit - 3] + "..."
     return f"`{one}`" if one else "(nothing)"

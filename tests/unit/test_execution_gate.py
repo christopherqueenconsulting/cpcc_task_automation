@@ -1134,3 +1134,19 @@ def test_two_captures_of_the_test_case_prompt_are_identical():
     first = asyncio.run(capture_suite("test-case-generation"))
     second = asyncio.run(capture_suite("test-case-generation"))
     assert first["requests"] == second["requests"]
+
+
+def test_every_control_separator_and_direction_character_is_stripped_from_student_text():
+    from cqc_cpcc.execution_evidence import clean_text
+
+    hidden = ([chr(c) for c in range(0x20)] + ["\x7f", "\x85", "\u2028", "\u2029"]
+              + [chr(c) for c in range(0x200B, 0x2010)] + [chr(c) for c in range(0x202A, 0x202F)]
+              + [chr(c) for c in range(0x2066, 0x206A)])
+    for ch in hidden:
+        assert clean_text(f"a{ch}b") == "a b", hex(ord(ch))
+        assert eg.inert(f"a{ch}b") == "`a b`", hex(ord(ch))
+    assert clean_text("plain text 123 \u00e9") == "plain text 123 \u00e9" and clean_text(None) == ""
+    plan = make_plan()
+    report = ExecutionReport(plan_hash="h", status="ok", cases=[CaseResult(case_id="T1" + "".join(hidden), verdict="match")])
+    text = "\n".join(execution_evidence_section(plan, report, "n"))
+    assert not any(ch in text for ch in hidden if ch != "\n")
