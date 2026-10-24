@@ -333,9 +333,9 @@ string in it), then one block per non-matching case with the diff (`-` expected,
 a crash, the first lines of stderr. Every student-controlled string sits in a per-call random-nonce
 fence (`utilities/AI/fence.py`) with any marker already in it stripped by a linear scan. The model is
 told that only the table carries verdicts and that fenced text is untrusted program output. File names
-and the solution's source are never in the fragment. (PR 19 owns the long-term shared fence helper
-`utilities/AI/untrusted_fence.py`; `fence.py` is the PR 13 helper moved here with the same output, apart
-from a linear marker strip that also leaves no marker behind, and goes away when that lands.)
+and the solution's source are never in the fragment. (`utilities/AI/untrusted_fence.py`, from PR 19, is the shared fence helper for prompts; `fence.py` is the
+PR 13 helper moved here with the same output, apart from a linear marker strip that also leaves no marker
+behind. Both stay, and the request capture pins both.)
 
 ### What the gate may do
 

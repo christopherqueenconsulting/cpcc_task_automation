@@ -103,7 +103,7 @@ def test_a_profile_without_efforts_but_a_discovery_entry_shows_the_not_applied_c
     at = AppTest.from_function(page, default_timeout=30).run()
     assert not at.exception, at.exception
     assert at.session_state["effort"] == "high"
-    assert any("high is not applied and the provider default runs" in c.value for c in at.caption)
+    assert any("so high is not used and the model's own default runs" in c.value for c in at.caption)
 
 
 def test_a_model_without_efforts_offers_only_the_default():

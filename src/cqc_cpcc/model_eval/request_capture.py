@@ -79,10 +79,13 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     import importlib
     import os
 
-    from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client
+    from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client, untrusted_fence
 
-    # A module that has no per-process fence key of its own (the helper moved to utilities/AI/fence.py)
-    # is skipped. fence.deterministic_nonce() (entered in capture_suite) covers the shared helper too.
+    # Three mechanisms keep a capture reproducible and all are undone in ``finally``:
+    # the per-process fence keys below (a module without a key of its own is skipped), the shared
+    # ``untrusted_fence.new_nonce`` pin further down, and ``fence.deterministic_nonce()`` (entered in
+    # ``capture_suite``) for the PR 13/14 helper in ``utilities/AI/fence.py``.
+    saved_nonce = untrusted_fence.new_nonce
     fence_modules = [m for m in (importlib.import_module(name) for name in _FENCE_KEY_MODULES)
                      if getattr(m, "_PROCESS_KEY", None) is not None]
     saved_keys = [m._PROCESS_KEY for m in fence_modules]
@@ -128,6 +131,8 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     openrouter_client._get_openrouter_client = capturing_factory
     asyncio.sleep = no_wait
     llm_gateway._is_test_mode = lambda *args, **kwargs: test_mode
+    # A fence nonce is random per prompt; a fixed one keeps two captures of the same code identical.
+    untrusted_fence.new_nonce = lambda: "capture0nonce0000"
     if calls is not None:
         llm_gateway.structured = recording
     os.environ["POSTHOG_LLM_ANALYTICS"] = "false"
@@ -140,6 +145,7 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
             m._PROCESS_KEY = key
         (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
          llm_gateway.structured) = saved
+        untrusted_fence.new_nonce = saved_nonce
         if saved_analytics is None:
             os.environ.pop("POSTHOG_LLM_ANALYTICS", None)
         else:

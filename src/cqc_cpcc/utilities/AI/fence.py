@@ -3,8 +3,10 @@
 """Nonce fence for untrusted text that goes into a prompt.
 
 Moved here unchanged from ``test_case_generation`` (PR 13) so the output check's evidence
-(PR 14) can reuse it. PR 19 owns the long-term shared helper (``utilities/AI/untrusted_fence.py``);
-when it lands, both callers move to it and this module goes away.
+(PR 14) can reuse it. ``utilities/AI/untrusted_fence.py`` (PR 19) is the shared helper for prompts. This module stays for the
+test-case prompt (PR 13) and the output-check evidence (PR 14), which were built on it first; the
+request capture pins both (``untrusted_fence.new_nonce`` and this module's key or
+``deterministic_nonce``). A later change may move these two callers onto ``untrusted_fence``.
 
 The nonce is either random (no ``parts``) or a keyed hash (HMAC-SHA256) of the given text under
 a per-process secret: unguessable from outside, differs between processes, and stable for the

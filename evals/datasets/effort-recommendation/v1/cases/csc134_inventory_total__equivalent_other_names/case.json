@@ -1,0 +1,64 @@
+{
+  "case_id": "csc134_inventory_total__equivalent_other_names",
+  "language": "cpp",
+  "role": "grading",
+  "course_id": "CSC_134",
+  "assignment_id": "Project",
+  "rubric_id": "csc134_cpp_exam_rubric",
+  "instructions": "Write a C++ program in a file named inventory.cpp that:\n1. Uses a for loop to read the unit price (double) and quantity (int) of four items.\n2. Validates each entry: the price must be greater than 0 and the quantity 0 or more;\n   re-prompt until valid.\n3. Declares a function prototype double lineTotal(double price, int quantity) above main,\n   defines it below main, and calls it for every item.\n4. Gives a 10% discount on an item's line total when its quantity is 12 or more.\n5. Adds up the grand total and counts how many items received the discount.\n6. Prints Items discounted: N and Grand total: $X.XX (two decimal places).\nUse named constants, curly braces on every control structure, consistent indentation and comments.\n",
+  "files": [
+    "inventory.cpp"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Read the price and quantity of four items in a for loop.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Validate price (greater than 0) and quantity (0 or more), re-prompting until valid.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Declare lineTotal above main, define it below main and call it for every item.",
+      "weight": "core"
+    },
+    {
+      "id": "R4",
+      "text": "Give a 10% discount on a line total when the quantity is 12 or more.",
+      "weight": "core"
+    },
+    {
+      "id": "R5",
+      "text": "Add up the grand total and count the discounted items.",
+      "weight": "core"
+    },
+    {
+      "id": "R6",
+      "text": "Print Items discounted and Grand total with two decimal places.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [],
+    "acceptable_error_ids": [],
+    "max_occurrences": {},
+    "requirements": {},
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [],
+  "tags": [
+    "clean",
+    "equivalent"
+  ],
+  "twin_of": "csc134_inventory_total__solution_format",
+  "labels_reviewed_by": null,
+  "reference_solution_file": "solution/inventory.cpp"
+}

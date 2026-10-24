@@ -1602,6 +1602,10 @@ def _get_test_mode_response(schema_model: Type[T]) -> T:
         ]})
 
     # Flowgorithm grade (structured since prompt v2)
+    elif model_name == "EffortJudgement":
+        return schema_model.model_validate({"effort": "high", "confidence": "high",
+                                            "reasons": ["Test mode: keeps the highest effort."]})
+
     elif model_name == "FlowgorithmGrade":
         return schema_model.model_validate({
             "requirements_summary": "Test mode: read the inputs and print the result.",

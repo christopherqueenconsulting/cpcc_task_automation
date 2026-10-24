@@ -1,0 +1,73 @@
+{
+  "case_id": "csc151_grade_book__twin_println_average",
+  "language": "java",
+  "role": "grading",
+  "course_id": "CSC_151",
+  "assignment_id": "Exam1",
+  "rubric_id": "csc151_java_exam_rubric",
+  "instructions": "Write a Java program named GradeBook.java that:\n1. Uses a Scanner and a for loop to read exactly five test scores (int).\n2. Rejects any score below 0 or above 100 by asking for that score again.\n3. Computes the average of the scores as a double.\n4. Counts how many scores are 60 or higher.\n5. Has a method letterGrade(double average) that returns \"A\" for 90 or more, \"B\" for 80 to 89,\n   \"C\" for 70 to 79, \"D\" for 60 to 69 and \"F\" otherwise.\n6. Prints three lines: Average: X.X (one decimal), Passing scores: N, Letter grade: L.\nUse named constants for the number of scores and the passing score, follow Java naming\nconventions, and comment your code.\n",
+  "files": [
+    "GradeBook.java"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Read exactly five int test scores with a Scanner in a for loop.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Reject a score below 0 or above 100 and ask for it again.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Compute the average of the scores as a double.",
+      "weight": "core"
+    },
+    {
+      "id": "R4",
+      "text": "Count the scores that are 60 or higher.",
+      "weight": "core"
+    },
+    {
+      "id": "R5",
+      "text": "Return the letter grade from a method letterGrade(double average).",
+      "weight": "core"
+    },
+    {
+      "id": "R6",
+      "text": "Print the average with one decimal, the passing count and the letter grade.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [
+      "CSC_151_EXAM_1_OUTPUT_FORMATTING"
+    ],
+    "acceptable_error_ids": [],
+    "max_occurrences": {},
+    "requirements": {
+      "R6": [
+        "met",
+        "partial"
+      ]
+    },
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [
+    "println_average"
+  ],
+  "tags": [
+    "bug",
+    "slight_format"
+  ],
+  "twin_of": "csc151_grade_book__solution_format",
+  "labels_reviewed_by": null,
+  "reference_solution_file": "solution/GradeBook.java"
+}
