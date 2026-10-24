@@ -4,7 +4,6 @@
 import asyncio
 import json
 import logging
-import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -13,6 +12,7 @@ from pydantic import BaseModel
 from cqc_cpcc.utilities.AI import llm_gateway, llm_limits
 from cqc_cpcc.utilities.AI import model_registry as mr
 from cqc_cpcc.utilities.AI import openrouter_client
+from tests.unit.virtual_clock import VirtualClockLoop
 
 pytestmark = pytest.mark.unit
 
@@ -210,11 +210,15 @@ class TestTimeouts:
               + llm_limits.BACKOFF_S_PER_MODEL + llm_limits.DEADLINE_MARGIN_S
         assert llm_limits.student_deadline(effort="high", auto_route=True) == one
 
-    @pytest.mark.asyncio
-    async def test_a_hung_low_effort_primary_then_a_high_effort_fallback_beats_the_deadline(
+    def test_a_hung_low_effort_primary_then_a_high_effort_fallback_beats_the_deadline(
             self, tmp_path, monkeypatch):
         """Primary (no effort, x1) hangs twice; the fallback runs at high (x1.5) and answers
-        after 0.9 x its scaled timeout. All of it fits inside student_deadline()."""
+        after 0.9 x its scaled timeout. All of it fits inside student_deadline().
+
+        Runs on a virtual-clock event loop (tests/unit/virtual_clock.py): sleeps, timeouts
+        and the deadline all use loop time, so scheduler jitter on a loaded CI runner cannot
+        move one past another. The 0.1 s, 0.15 s and 0.05 s values are virtual seconds.
+        """
         data = {
             "schema_version": 1, "revision": "t", "roles": {
                 role: {"model": "openai/primary", "reasoning_effort": "low", "max_output_tokens": 1024,
@@ -252,13 +256,26 @@ class TestTimeouts:
             return _response(model="openai/backup")
 
         client = _client(_hang, _hang, slow_answer)
-        started = time.monotonic()
-        with patch.object(openrouter_client, "_get_openrouter_client", return_value=client):
-            async with asyncio.timeout(deadline):
-                result = await llm_gateway.structured("grading", "2+2?", Answer, effort_override="high")
+
+        async def drive():
+            with patch.object(openrouter_client, "_get_openrouter_client", return_value=client):
+                async with asyncio.timeout(deadline):
+                    answer = await llm_gateway.structured("grading", "2+2?", Answer, effort_override="high")
+            # last_call() is context-local to the running task, so read it here.
+            return answer, llm_gateway.last_call()
+
+        loop = VirtualClockLoop()
+        try:
+            started = loop.time()
+            result, last_call = loop.run_until_complete(drive())
+            elapsed = loop.time() - started
+        finally:
+            loop.close()
         assert result.answer == "4"
-        assert time.monotonic() - started < deadline
+        # Two primary timeouts (x1) plus the slow fallback answer, in virtual seconds.
+        assert elapsed == pytest.approx(2 * 0.1 + 0.9 * 0.15, abs=1e-6)
+        assert elapsed < deadline
         assert llm_limits.request_timeout("grading", "high") > 0.9 * 0.15 - 1e-9
-        assert llm_gateway.last_call().fallback_used is True
-        assert llm_gateway.last_call().params["reasoning"] == {"effort": "high"}
+        assert last_call.fallback_used is True
+        assert last_call.params["reasoning"] == {"effort": "high"}
         mr._cache.clear()

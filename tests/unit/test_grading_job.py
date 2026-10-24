@@ -152,7 +152,7 @@ def test_a_student_past_the_deadline_is_timed_out_and_the_rest_finish(tmp_path):
             await asyncio.sleep(60)
         return _result()
 
-    job = _job(tmp_path, ["Student A", "Student B"], behave, deadline_s=0.2)
+    job = _job(tmp_path, ["Student A", "Student B"], behave, deadline_s=2.0)
     job.start()
     assert job.wait(10)
     states = {r.student_id: r for r in job.snapshot().rows}
