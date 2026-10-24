@@ -184,6 +184,9 @@ with no API key and no model call ($0):
 - **Settings:** the whole model registry (roles, fallbacks, token limits) and the client's base
   URL and headers. Timeouts and retries are left out on purpose: they do not change what the
   model receives (the unit suite and the stub-transport tests check them).
+- **Fence keys:** a capture pins the per-process fence keys of `test_case_generation` and
+  `requirement_solution_check` to a fixed value, so two captures of the same code are identical
+  (the keys stay random outside a capture). The base side benefits only once this is on `master`.
 - **Answer handling:** each case's output when the gateway returns its fixed test-mode answer,
   which runs the parsing, compile gate, requirement coverage and scoring code
   (`src/cqc_cpcc/scoring/` included) on both sides. A fixed answer is a coarse probe: most
