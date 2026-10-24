@@ -544,9 +544,10 @@ def test_the_run_key_is_unchanged_in_notes_and_off_and_changes_in_drop(monkeypat
 
 # --------------------------------------------------------------------------- prompts
 
-def test_the_grading_prompt_and_the_answer_schema_are_byte_identical_to_master():
+def test_the_grading_prompt_and_the_answer_schema_are_pinned_since_the_system_user_split():
     from cqc_cpcc.rubric_grading import build_rubric_grading_prompt
-    prompt = build_rubric_grading_prompt(RUBRIC, "Write a program.", "class Main {}", requirements=CHECKLIST)
+    prompt = build_rubric_grading_prompt(RUBRIC, "Write a program.", "class Main {}", requirements=CHECKLIST,
+                                         nonce="0123456789abcdef")
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     assert digest == PINNED_GRADING_PROMPT_SHA256
     schema = json.dumps(RubricAssessmentResult.model_json_schema(), sort_keys=True)
@@ -555,7 +556,7 @@ def test_the_grading_prompt_and_the_answer_schema_are_byte_identical_to_master()
     assert "possible overlap" not in prompt.lower()
 
 
-PINNED_GRADING_PROMPT_SHA256 = "e12ff7c189c49219d546041f09c95ef299fb4956549e0fb266539f4ddae55c0a"
+PINNED_GRADING_PROMPT_SHA256 = "0cf4445dd6b6866098e1f0e5d2b99442c653ad80b30ed42c7e9f144012993e7b"
 
 
 # --------------------------------------------------------------------------- offline gate script

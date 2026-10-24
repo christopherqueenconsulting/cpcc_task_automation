@@ -127,7 +127,8 @@ class TestValidationAndRetry:
         call_kwargs = mock_completion.call_args.kwargs
         assert call_kwargs['schema_model'] == RubricAssessmentResult
         assert 'prompt' in call_kwargs
-        assert 'Grading Task' in call_kwargs['prompt']
+        assert 'Grading Task' in call_kwargs['system']
+        assert 'Student Submission to Grade' in call_kwargs['prompt']
     
     async def test_retry_on_validation_error(self, base_rubric, mocker):
         """Test that validation errors trigger retries."""

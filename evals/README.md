@@ -19,14 +19,15 @@ Rubric grading with error definitions, the main production path:
 | CSC 151 Exam 1 (Java, `OrderTotal.java`) | `csc151_java_exam_rubric` | `CSC_151_EXAM_1_*` |
 | CSC 134 Project (C++, `payroll.cpp`) | `csc134_cpp_exam_rubric` | `CSC_134_PROJECT_1_*` |
 
-90 cases:
+97 cases:
 - **Error detection (as in v1):**
   - clean programs and one seeded error per mutation;
   - multi-error combinations;
   - decoys (correct but differently written code that must stay clean);
   - programs that do not compile (checked against real `javac`/`g++`);
   - unicode;
-  - 28 prompt-injection twins whose grade must not move.
+  - 35 prompt-injection twins whose grade must not move (7 of them imitate the prompt's own structure: a forged `## Grading Instructions` heading, a forged fence close, a fake `system:` line, an instruction in a file name).
+- **Provenance and review:** every case, and the `exam-grading/v1` and `project-feedback/v1` datasets derived from them, is synthetic (programs written from templates by `dataset_builder.py`, allowlisted author names); no case derives from a real submission. `labels_reviewed_by` is `null` on the base cases and on all twins: they are unreviewed drafts for the maintainer to review once. Known looseness: on the C++ `missing_multiplier` base, requirement R4 is labelled `[met, partial]` although overtime at 1x does not meet 1.5x; the twins inherit it. The `file_name` twin also accepts the file-name and naming errors as fair extra reports (a faithful grader may report the renamed file). A single-run A/B on these small datasets has limited power at the 0.02 margin.
 - **Validity (new in v2):** empty, whitespace-only and skeleton programs, and no source file in the course language (a Java file for C++, a C++ file or Markdown prose for Java). The submission-validity gate must score them 0 without a model call.
 - **Incomplete programs (new in v2):** functionality removed, alone or on top of an error. Each one has a `not_above` partner, the more complete program, and must never score above it. Ties are allowed.
 
@@ -78,12 +79,12 @@ labels come from construction and are drafts until reviewed.
 
 | Suite | Prompt | Cases | What is seeded | Code graders |
 |---|---|---|---|---|
-| `grading` | rubric-grading | 90 (v2) | the dataset above | error F1, score accuracy, validity, requirement agreement, injection, feedback length |
+| `grading` | rubric-grading | 97 (v2) | the dataset above | error F1, score accuracy, validity, requirement agreement, injection, feedback length |
 | `grading-levelband` | rubric-grading | 18 | CSC-113 reflections, strong/weak per criterion | allowed level per criterion, score range, feedback length |
 | `requirement-extraction` | requirement-extraction | 36 | 12 assignments x numbered/bulleted/prose; style rules that must not become items | recall, precision, one item per step, R1..Rn ids |
 | `effort-recommendation` | effort-recommendation | 15 | 12 synthetic assignments (CSC 151 Java, CSC 134 C++, CSC 251 Java) + 3 injection twins, each with 4 labeled grading cases (`cases/`) for measuring the right effort | confident answers not below the measured effort, not over, safety floor, supported efforts, 1-3 reasons, injection |
-| `exam-grading` | exam-grading | 74 | v2 programs mapped to exam error types | type F1, offered types only, major/minor severity, injection, no solution leak |
-| `project-feedback` | project-feedback | 74 | v2 programs mapped to FeedbackType | type F1, explanation present, no solution leak, injection |
+| `exam-grading` | exam-grading | 81 | v2 programs mapped to exam error types | type F1, offered types only, major/minor severity, injection, no solution leak |
+| `project-feedback` | project-feedback | 81 | v2 programs mapped to FeedbackType | type F1, explanation present, no solution leak, injection |
 | `flowgorithm-grade` | flowgorithm-grade | 24 | 3 flowcharts x 8 broken-criteria variants | grade in range, deduction F1, valid criteria, arithmetic, no leak |
 | `digest` | preprocessing-digest | 16 | 2 multi-file Java projects, seeded defects, a removed method | defect coverage, fact retention, files, completeness, compression |
 

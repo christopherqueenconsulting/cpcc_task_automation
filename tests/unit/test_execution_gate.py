@@ -19,7 +19,7 @@ from cqc_cpcc.execution_evidence import execution_evidence_section
 from cqc_cpcc.grading_diagnostics import find_rubric
 from cqc_cpcc.model_eval.prompt_registry import _render_rubric_grading
 from cqc_cpcc.requirement_coverage import MISSING_REQUIREMENT_ID
-from cqc_cpcc.rubric_grading import apply_backend_scoring, build_rubric_grading_prompt, grade_with_rubric
+from cqc_cpcc.rubric_grading import apply_backend_scoring, build_rubric_grading_messages, build_rubric_grading_prompt, grade_with_rubric
 from cqc_cpcc.rubric_models import CriterionResult, DetectedError, RubricAssessmentResult
 from cqc_cpcc.student_feedback_builder import build_student_feedback
 from cqc_cpcc.utilities import program_runner as pr
@@ -605,14 +605,17 @@ def test_a_driver_problem_with_the_students_job_is_skipped_not_runner_unavailabl
 # --------------------------------------------------------------------------- #
 # The prompt: byte-identical without a verified result, fenced evidence with one
 # --------------------------------------------------------------------------- #
-GOLDEN_RENDERS = ["a6522d384d5c92507282afb862132d3d7297d62dd121da93bfb51f2474a33fab",
-                  "073595fe9ea95f03ec07014d7cb01371e30a15c3c81312fdf406dafc8f578f6e"]  # sha256 of master's renders
+# sha256 of the two fingerprint renders (system + user message, fixed nonce) since PR 19b. They pin the
+# prompt without evidence: a change to the text is deliberate and updates these.
+GOLDEN_RENDERS = ["f9b64b95d940f62f74f19076f862a843c486838d3eda9936e5b8335f75bbd1df",
+                  "09673479982c52e1947a3b02bda44b4e6e25b6c8a245d1ce38e70326d2d8d76a"]
+NONCE = "0123456789abcdef"
 
 
-def test_the_prompt_is_byte_identical_to_master_without_evidence():
+def test_the_prompt_is_unchanged_without_evidence():
     assert [hashlib.sha256(t.encode()).hexdigest() for t in _render_rubric_grading()] == GOLDEN_RENDERS
     args = dict(rubric=RUBRIC, assignment_instructions="Write it.", student_submission="class A {}",
-                reference_solution="class S {}", error_definitions=defs("CSC_251"))
+                reference_solution="class S {}", error_definitions=defs("CSC_251"), nonce=NONCE)
     plain = build_rubric_grading_prompt(**args)
     assert build_rubric_grading_prompt(**args, execution_evidence=None) == plain
     assert build_rubric_grading_prompt(**args, execution_evidence=[]) == plain
@@ -621,6 +624,7 @@ def test_the_prompt_is_byte_identical_to_master_without_evidence():
 async def grade(mocker, plan=None, model_errors=(), definitions=None, runner=None, files=None, **kw):
     if runner is not None:
         mocker.patch.object(pr, "run_program", runner)
+    mocker.patch("cqc_cpcc.utilities.AI.untrusted_fence.new_nonce", lambda: NONCE)
     mock = mocker.patch("cqc_cpcc.rubric_grading.llm_gateway.structured", new_callable=AsyncMock,
                         return_value=unscored(*model_errors))
     result = await grade_with_rubric(
@@ -640,8 +644,10 @@ async def test_no_plan_gives_the_same_prompt_and_result_as_before(mocker):
     assert result_a.execution_report is None
     assert all(n.stage != "execution" for n in result_a.reconciliation)
     assert "Program Output Check" not in prompt_a
-    assert prompt_a == build_rubric_grading_prompt(
-        RUBRIC, "Write a program.", "class Main {}", reference_solution=SOLUTION, error_definitions=definitions)
+    system, user = build_rubric_grading_messages(
+        RUBRIC, "Write a program.", "class Main {}", reference_solution=SOLUTION, error_definitions=definitions,
+        nonce=NONCE)
+    assert prompt_a == user
 
 
 @pytest.mark.asyncio
@@ -682,9 +688,10 @@ async def test_a_verified_result_adds_the_fenced_evidence_and_the_gate_removes_w
     baseline, base_prompt = await grade(mocker, model_errors=three_model_errors(definitions), definitions=definitions)
     result, prompt = await grade(mocker, plan=make_plan(), model_errors=three_model_errors(definitions),
                                  definitions=definitions, runner=FakeRunner())
-    assert prompt.startswith(base_prompt.split("## Grading Instructions")[0].rstrip("\n")[:200])
+    assert prompt.startswith(base_prompt.split("## Student Submission to Grade")[0])
     assert "## Program Output Check (computed by the app)" in prompt
-    assert prompt.index("| Case |") < prompt.index("## Grading Instructions")
+    assert prompt.index("| Case |") < prompt.index("Grade the fenced submission per the system rules.")
+    assert prompt.index("<<<UNTRUSTED SUBMISSION") < prompt.index("## Program Output Check")
     assert prompt.index("## Student Submission to Grade") < prompt.index("## Program Output Check")
     assert codes(result) == [] and result.total_points_earned > baseline.total_points_earned
     assert result.execution_report["status"] == "ok" and result.execution_report["gate"]["verified"]

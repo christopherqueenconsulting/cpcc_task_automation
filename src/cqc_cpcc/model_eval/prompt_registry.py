@@ -190,6 +190,10 @@ def _fixture_checklist():
     ]})
 
 
+# A fixed fence nonce: production calls draw a fresh one, which the fingerprint must not depend on.
+FIXTURE_NONCE = "0123456789abcdef"
+
+
 # --- Renders: the real builder on the fixtures ---------------------------------------
 
 def _render_rubric_grading() -> list[str]:
@@ -200,10 +204,10 @@ def _render_rubric_grading() -> list[str]:
         build_rubric_grading_prompt(_fixture_rubric("error_count"), FIXTURE_INSTRUCTIONS,
                                     FIXTURE_SUBMISSION, reference_solution=FIXTURE_SOLUTION,
                                     error_definitions=_fixture_error_definitions(),
-                                    requirements=_fixture_checklist()),
+                                    requirements=_fixture_checklist(), nonce=FIXTURE_NONCE),
         # level-band rubric, no error definitions, no checklist
         build_rubric_grading_prompt(_fixture_rubric("level_band"), FIXTURE_INSTRUCTIONS,
-                                    FIXTURE_SUBMISSION),
+                                    FIXTURE_SUBMISSION, nonce=FIXTURE_NONCE),
     ]
 
 
@@ -270,7 +274,7 @@ def _render_exam_grading() -> list[str]:
     from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_prompt
 
     return [build_exam_grading_prompt(FIXTURE_INSTRUCTIONS, FIXTURE_SOLUTION, FIXTURE_SUBMISSION,
-                                      FIXTURE_MAJOR_TYPES, FIXTURE_MINOR_TYPES)]
+                                      FIXTURE_MAJOR_TYPES, FIXTURE_MINOR_TYPES, nonce=FIXTURE_NONCE)]
 
 
 def _render_preprocessing_digest() -> list[str]:

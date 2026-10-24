@@ -534,6 +534,8 @@ async def test_grade_with_rubric_is_identical_with_no_plan_and_with_the_argument
                                               points_possible=c.max_points, points_earned=None,
                                               selected_level_label=None, feedback="x") for c in rubric.criteria])
 
+    # The submission fence draws a fresh nonce per call (PR 19b); a fixed one makes the prompts comparable.
+    mocker.patch("cqc_cpcc.utilities.AI.untrusted_fence.new_nonce", lambda: "0123456789abcdef")
     mock = mocker.patch("cqc_cpcc.rubric_grading.llm_gateway.structured", new_callable=AsyncMock,
                         side_effect=lambda **kw: unscored())
     common = dict(rubric=rubric, assignment_instructions="Write a program.", student_submission="class Main {}",

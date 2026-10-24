@@ -510,16 +510,19 @@ class TestPromptQuality:
     
     def test_prompt_is_deterministic(self, base_rubric):
         """Test that prompt is deterministic (same inputs = same output)."""
+        # The fence nonce is random per call; a fixed one makes the whole prompt comparable.
         prompt1 = build_rubric_grading_prompt(
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
+            nonce="0123456789abcdef",
         )
-        
+
         prompt2 = build_rubric_grading_prompt(
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
+            nonce="0123456789abcdef",
         )
         
         assert prompt1 == prompt2
