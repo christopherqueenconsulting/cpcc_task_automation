@@ -57,7 +57,9 @@ student work in a prompt renderer or eval fixture. Details: `docs/security-workf
   modes). Do not move arithmetic into prompts. See `docs/SCORING_ENGINE_SUMMARY.md`.
 - In `grade_with_rubric` the order is `apply_compile_gate` (when source files are given),
   then `apply_requirement_coverage` (when requirements are given), then
-  `apply_backend_scoring`. The first two run inside `_reconcile`, which tags each error's
+  `reconcile_overlaps` (`requirement_overlap.py`: one penalty when a requirement error and a
+  model error describe the same issue; `CQC_REQUIREMENT_OVERLAP` = `notes` (default, drops
+  nothing) | `drop` | `off`), then `apply_backend_scoring`. The first three run inside `_reconcile`, which tags each error's
   `source` and records every decision as a `ReconciliationNote` (`reconciliation.py`); an
   error a stage drops lives on its note, suppressed, until the instructor reinstates it. A real compiler (`utilities/compiler_gate.py`), not the model,
   decides "Does Not Compile". "Cannot verify" must never be treated as "does not compile".

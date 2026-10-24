@@ -42,6 +42,7 @@ def generate_grading_run_key(
         requirements_hash: Optional[str] = None,
         solution_hash: Optional[str] = None,
         prompt_version: Optional[str] = None,
+        requirement_overlap: Optional[str] = None,
 ) -> str:
     """Generate a deterministic hash key from grading inputs.
     
@@ -67,6 +68,9 @@ def generate_grading_run_key(
             so a different solution never serves cached results
         prompt_version: the ``rubric-grading`` prompt's ``id@version`` tag, so a prompt
             change re-grades instead of reusing cache
+        requirement_overlap: ``requirement_overlap.run_key_overlap()``: ``"drop"`` when the
+            overlap stage removes errors (it changes scores), else ``None`` so keys of
+            ``notes``/``off`` runs stay exactly as before
         
     Returns:
         SHA256 hash string (64 hex characters)
@@ -98,6 +102,8 @@ def generate_grading_run_key(
         inputs["solution_hash"] = solution_hash
     if prompt_version is not None:
         inputs["prompt_version"] = prompt_version
+    if requirement_overlap is not None:
+        inputs["requirement_overlap"] = requirement_overlap
 
     # Serialize to JSON with sorted keys for determinism
     json_str = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
