@@ -5,6 +5,62 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc4 - 2026-10-24
+
+Prerelease, on top of 0.2.0-rc3. Grading can now check each requirement against the instructor's solution,
+and the app can note (and, if you turn it on, remove) a double penalty when a requirement error and a model
+error describe the same defect, and Setup can recommend a reasoning effort for the run. The rest is
+evaluation tooling and CI.
+
+What to check (about 10 minutes, one synthetic submission from `evals/datasets`, never real student work):
+
+1. Grade it with no solution uploaded. Expected: the score equals what rc3 gave for the same input.
+2. Upload a solution under Instructions and press "Check all against the solution". Expected: suggestions
+   appear for requirements the solution does not do, and none is applied until you click it (or remove the
+   requirement from "Requirements to grade").
+3. With a requirement list, grade again (default `CQC_REQUIREMENT_OVERLAP=notes`). Expected: the "Scoring
+   notes" section may show "Possible overlap (not applied; both are counted now)" lines, and the score is
+   unchanged from step 1's mode.
+4. Set `CQC_REQUIREMENT_OVERLAP=drop` in `.env`, restart, re-grade. Expected: a dropped error appears in
+   "Scoring notes" with a Reinstate button, and Reinstate restores the notes-mode score.
+5. In Setup press "Recommend effort". Expected: a "Recommended effort" block with reasons appears; "Apply <level> effort"
+   sets the Reasoning effort setting; "Skip" leaves the registry default; merely viewing a recommendation does
+   not change the score of a graded submission.
+
+If a step fails, tell the EA and see the rollback section of [docs/RELEASING.md](docs/RELEASING.md).
+
+No app behaviour change from #426, #433, #435, #436, #439 (CI and eval tooling only). Scores match rc3
+unless `CQC_REQUIREMENT_OVERLAP=drop` is set.
+
+Not in this release: the execution gate (#434).
+
+- Requirements checked against the solution (`requirement_solution_check.py`, new prompt
+  `requirement-solution-check`): one model call per assignment; only a "no" can make a requirement not
+  graded, "unclear" stays graded; the solution uploader moves under Instructions. Merge `f1f674f`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/432
+- Overlap, one penalty per issue (`requirement_overlap.py`, no model call, no prompt change): a matched
+  pair drops the lesser error (a tie keeps the requirement error); `MISSING_REQUIREMENT_*`, compiler and
+  execution errors and "Does Not Compile" are never dropped. Default `CQC_REQUIREMENT_OVERLAP=notes`
+  (notes only); `drop` and `off` are the other values. Merge `e972830`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/437
+- Effort recommendation judge (`effort_recommendation.py`, new prompt `effort-recommendation`; built on #425,
+  which is in rc2): one cached model call per assignment shows "Recommended effort" with an Apply button next to the
+  Reasoning effort setting. Display and Apply only until a calibrated policy entry exists, so nothing is
+  pre-applied; on low confidence or a failed call it recommends the registry default. Merge `951b66c`.
+  https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/428
+- Evaluation: the `grading-solution` suite runs 4 repeats per case (was the default 2) in
+  `model_policy.json`. Merge `ab55080`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/435
+- Evaluation: adaptive concurrency for the prompt A/B (starts at up to 64 calls per side, halves on a
+  throttle; `CQC_AB_MAX_CONCURRENCY` ceiling default 64, hard cap 256; `CQC_AB_JUDGE_CONCURRENCY` default
+  16; budget reserved per call). Eval harness only; grading is unchanged. Merge `9a21664`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/436
+- Evaluation: the request capture pins the fence keys of `test-case-generation` and
+  `requirement-solution-check`, so the identical-request fast path can skip them. Harness only; production
+  keys stay random. Merge `2b102da`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/439
+- CI: workflow and Dependabot edits for the exec-runner sandbox image: a `docker` Dependabot entry, an
+  intended skip of auto-merge for base-image bumps (PR #426 lists this as "Known unverified"), and a build
+  step so the Docker integration tests run in CI. If the skip works, a docker base-image bump will not
+  auto-merge. Merge `ae298b8`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/426
+- Evaluation: per-suite request-identical fast path, and identical suites are skipped in a mixed A/B.
+  Merge `6321194`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/433
+
 ## 0.2.0-rc3 - 2026-10-23
 
 Prerelease, on top of 0.2.0-rc2. Grading now runs in the background with a live table and a Cancel button,
