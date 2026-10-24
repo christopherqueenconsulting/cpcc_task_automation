@@ -33,14 +33,33 @@ docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner
 poetry run pytest -m integration tests/integration/test_program_runner_docker.py
 ```
 
+After upgrading from the JDK 21 image (tag `:1`), `:1` is unused. Optional cleanup to free disk:
+`docker rmi cpcc_task_automation/exec-runner:1`.
+
 The app finds the image by its tag and checks the label `org.cqc.exec-runner.version`
 against `RUNNER_VERSION`. A missing image, a stale image, a stopped daemon or a missing
 `docker` binary makes `runner_status()` false (cached for 30 seconds). On Streamlit
 Community Cloud there is no Docker, so the sandbox is off there.
 
-The image is built for the machine's own architecture. Only x86_64 was run; on arm64 (Apple
-Silicon) the driver's stdin-read detection falls back to a quiet-period guess, which is
-untested. To remove the image on a full rollback: `docker rmi cpcc_task_automation/exec-runner:2`.
+The image is built for the machine's own architecture. The base is pinned by the multi-arch index digest,
+so an Apple Silicon Mac pulls arm64 and an Intel or Linux host pulls amd64. The `:2` image (JDK 25) and the
+Docker integration tests were verified on linux/amd64 only (builder's local run: `uname -m` = x86_64,
+Docker server linux/amd64). Not checked on arm64: there the driver's stdin-read detection falls back to a
+quiet-period guess, which is untested.
+
+Workflows without `setup-java` (`unit-tests.yml`, `integration-coverage.yml`) use the runner's default JDK
+for host tests; Java sandbox tests run inside the container, so the container's JDK (25) is what they use.
+
+To remove the image on a full rollback of the sandbox feature: `docker rmi cpcc_task_automation/exec-runner:2`
+(the current tag; this is not a revert step).
+
+### Rolling back the JDK 25 change
+
+If the move to JDK 25 is reverted with `git revert`, `master` expects tag `:1` again (JDK 21). Run
+`docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner`, then optionally
+`docker rmi cpcc_task_automation/exec-runner:2`. Until `:1` is rebuilt, Output check shows "exec-runner image is
+not built".
+
 Nothing in this PR calls `kill_orphans`, so a container left by a crash waits until the sweep
 exists or the operator runs `docker kill` on `docker ps --filter label=cqc.exec=1`.
 
