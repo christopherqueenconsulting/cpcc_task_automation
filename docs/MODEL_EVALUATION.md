@@ -121,8 +121,8 @@ not against `high`. Ground truth needs a paid run, so it is a separate, human-st
 # 1. cost first (no model call)
 poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
   --candidate openai/gpt-6-luna@low --candidate openai/gpt-6-luna@medium --repeats 3 --dry-run
-# 2. the paid run: worst case $0.9713 (the dry-run total at the commit that measured it; step 1 prints
-#    the current figure). Step 2 spends it.
+# 2. the paid run: worst case. Step 1 prints the current cost (the author's local dry run printed $0.9713 on 2026-10-23;
+#    that is not a recorded artifact). Step 2 spends it.
 poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
   --candidate openai/gpt-6-luna@low --candidate openai/gpt-6-luna@medium --repeats 3 --out evals/runs/effort-truth
 # 3. derive the ground truth (no model call); --write puts ground_truth.json in the dataset directory
