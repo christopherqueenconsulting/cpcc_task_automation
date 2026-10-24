@@ -14,33 +14,52 @@ the host" is the compile check: when the sandbox is unavailable it falls back to
 
 | Piece | Where |
 | --- | --- |
-| Image | `docker/exec-runner/Dockerfile`, tag `cpcc_task_automation/exec-runner:1` |
+| Image | `docker/exec-runner/Dockerfile`, tag `cpcc_task_automation/exec-runner:2` |
 | Driver (the only file copied into the image) | `docker/exec-runner/driver.py` |
 | Host side | `src/cqc_cpcc/utilities/program_runner.py` |
 | Compile check in the sandbox | `src/cqc_cpcc/utilities/compiler_gate.py` |
 | Compose service (profile `exec`) | `docker-compose.yml`, service `exec-runner` |
 | Tests | `tests/unit/test_program_runner.py`, `tests/unit/test_exec_driver.py`, `tests/integration/test_program_runner_docker.py` |
 
-The image is `eclipse-temurin:21-jdk-noble` pinned by its multi-arch index digest, plus
+The image is `eclipse-temurin:25-jdk-noble` pinned by its multi-arch index digest, plus
 `g++ gcc libc6-dev python3`, a non-root user (uid 10001) and `driver.py`. Languages: Java,
 C++, C and Python.
 
 ## Setup (Docker on the instructor's Mac)
 
 ```bash
-docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner
+docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner
 # or: docker compose -p cpcc_task_automation --profile exec build exec-runner
 poetry run pytest -m integration tests/integration/test_program_runner_docker.py
 ```
+
+After upgrading from the JDK 21 image (tag `:1`), `:1` is unused. Optional cleanup to free disk:
+`docker rmi cpcc_task_automation/exec-runner:1`.
 
 The app finds the image by its tag and checks the label `org.cqc.exec-runner.version`
 against `RUNNER_VERSION`. A missing image, a stale image, a stopped daemon or a missing
 `docker` binary makes `runner_status()` false (cached for 30 seconds). On Streamlit
 Community Cloud there is no Docker, so the sandbox is off there.
 
-The image is built for the machine's own architecture. Only x86_64 was run; on arm64 (Apple
-Silicon) the driver's stdin-read detection falls back to a quiet-period guess, which is
-untested. To remove the image on a full rollback: `docker rmi cpcc_task_automation/exec-runner:1`.
+The image is built for the machine's own architecture. The base is pinned by the multi-arch index digest,
+so an Apple Silicon Mac pulls arm64 and an Intel or Linux host pulls amd64. The `:2` image (JDK 25) and the
+Docker integration tests were verified on linux/amd64 only (builder's local run: `uname -m` = x86_64,
+Docker server linux/amd64). Not checked on arm64: there the driver's stdin-read detection falls back to a
+quiet-period guess, which is untested.
+
+Workflows without `setup-java` (`unit-tests.yml`, `integration-coverage.yml`) use the runner's default JDK
+for host tests; Java sandbox tests run inside the container, so the container's JDK (25) is what they use.
+
+To remove the image on a full rollback of the sandbox feature: `docker rmi cpcc_task_automation/exec-runner:2`
+(the current tag; this is not a revert step).
+
+### Rolling back the JDK 25 change
+
+If the move to JDK 25 is reverted with `git revert`, `master` expects tag `:1` again (JDK 21). Run
+`docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner`, then optionally
+`docker rmi cpcc_task_automation/exec-runner:2`. Until `:1` is rebuilt, Output check shows "exec-runner image is
+not built".
+
 Nothing in this PR calls `kill_orphans`, so a container left by a crash waits until the sweep
 exists or the operator runs `docker kill` on `docker ps --filter label=cqc.exec=1`.
 
@@ -174,7 +193,7 @@ work, and the grade itself.
    ```
    A `.docx` is a ZIP: unzip a copy and search the XML inside it the same way. Check any
    hand-back ZIP that already went to students.
-4. Rebuild the image from a clean checkout: `docker build --no-cache -t cpcc_task_automation/exec-runner:1 docker/exec-runner`.
+4. Rebuild the image from a clean checkout: `docker build --no-cache -t cpcc_task_automation/exec-runner:2 docker/exec-runner`.
    Prune old containers and images.
 5. Keep the submission that caused it out of the repo and out of public issues (student data
    rule). Note the date, what was run and what was rotated in the vault.
@@ -534,7 +553,7 @@ Strings below are copied from the code. Use synthetic programs only.
 2. **Docker not running.** Quit Docker, reload. You see "Output check is not ready: docker daemon is not
    running." and a disabled **Build image** with "Build image is off because Docker is not ready (docker daemon
    is not running). Start Docker, then reload this page." **Suggest test cases** is not offered.
-3. **Image missing.** Start Docker, `docker rmi cpcc_task_automation/exec-runner:1`, reload. "Output check is not
+3. **Image missing.** Start Docker, `docker rmi cpcc_task_automation/exec-runner:2`, reload. "Output check is not
    ready: exec-runner image is not built." with an enabled **Build image** and the `docker build --tag ...`
    command. Press it: "Building the image... this can take a few minutes." When it ends the page shows the ready
    line.

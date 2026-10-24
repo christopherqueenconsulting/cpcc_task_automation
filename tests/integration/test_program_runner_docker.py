@@ -2,10 +2,10 @@
 
 """Real-container tests of the exec-runner sandbox (PR 12).
 
-These start real containers from ``cpcc_task_automation/exec-runner:1``. They are skipped
+These start real containers from ``cpcc_task_automation/exec-runner:2``. They are skipped
 when Docker, its daemon or the image is missing. Build the image first:
 
-    docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner
+    docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner
 
 Everything hostile here (loops, floods, fork bombs, sockets, writes) runs INSIDE the
 container only. Nothing in this file starts a student program on the host.
