@@ -221,10 +221,27 @@ class TestRetryLayers:
         assert out == "answer" and events == ["release", "sleep", "reacquire"]
         assert held.truncated_retries == 1 and held.charged == 0.5 and budget.spent == 0.5
 
+    async def test_a_budget_refused_retry_does_not_charge_the_first_attempt_twice(self, test_mode):  # noqa: F811
+        suite, seen = scripted_suite([truncated(), "ok"], _meta(REAL))  # no usage on the truncated attempt
+        probe, _ = await _run(suite, True, n=1)
+        est = probe[0].retry_charge_usd
+        assert est > 0
+        suite, seen = scripted_suite([(truncated(), _meta(est, 4013, 32768)), "ok"], _meta(REAL))
+        budget = Budget(est * 3, est * 0.9)  # the first attempt spends past stop_at: the retry is refused
+        records, budget = await _run(suite, True, n=1, budget=budget)
+        r = records[0]
+        assert set(seen.values()) == {1} and not r.ok and r.error_kind == "truncated"
+        assert r.attempts == 1 and r.error_detail[0]["retried"] is False
+        assert r.cost_usd == pytest.approx(est)  # the first attempt, once
+        assert budget.spent == pytest.approx(est) and budget.reserved == 0.0
+
     def test_truncation_retryable_matches_only_truncations(self):
         assert adaptive.truncation_retryable(truncated())
         assert adaptive.truncation_retryable(OpenAITransportError("response truncated (finish_reason=length)"))
         assert not adaptive.truncation_retryable(gateway_502())
+        # the word alone is not the marker: a 5xx or a provider error that mentions truncation
+        assert not adaptive.truncation_retryable(StatusError(502, message="Error code: 502 - upstream truncated"))
+        assert not adaptive.truncation_retryable(OpenAITransportError("the response was truncated by a proxy"))
         assert not adaptive.truncation_retryable(ValueError("other"))
         assert not adaptive.truncation_retryable(asyncio.CancelledError())
 
@@ -288,6 +305,42 @@ class TestMaxTokensCap:
         await _run(suite, False, n=1)
         assert got["max_output_tokens"] == 8192
         assert "8192" in got["params"]  # the cap reaches the request body
+
+
+class TestCapturePath:
+    """``request_capture.capture_suite`` pins the same limit as ``run_suite`` (the $0 fast path reads its hashes)."""
+
+    async def _capture(self, monkeypatch, env=None, pin=None):
+        from cqc_cpcc.model_eval import request_capture
+
+        if env is None:
+            monkeypatch.delenv(adaptive.ENV_MAX_TOKENS, raising=False)
+        else:
+            monkeypatch.setenv(adaptive.ENV_MAX_TOKENS, env)
+        if pin is not None:  # stand in for the pre-change code: always the default pin
+            real = runner.pinned_registry
+
+            def forced(*a, **kw):
+                kw["max_output_tokens"] = pin
+                return real(*a, **kw)
+
+            monkeypatch.setattr(runner, "pinned_registry", forced)
+        return await request_capture.capture_suite("digest")
+
+    async def test_unset_is_byte_identical_to_the_default_pin_and_set_differs(self, monkeypatch):
+        from cqc_cpcc.model_eval import request_capture
+
+        unset = await self._capture(monkeypatch)
+        default = await self._capture(monkeypatch, pin=runner.DEFAULT_MAX_OUTPUT_TOKENS)
+        assert unset["requests"] == default["requests"] and unset["requests"]
+        assert json.dumps(unset, sort_keys=True) == json.dumps(default, sort_keys=True)
+        monkeypatch.undo()
+        capped = await self._capture(monkeypatch, env="8192")
+        assert capped["requests"] != unset["requests"]  # reverting capture to the default pin alone fails this
+        head = {"format": request_capture.FORMAT, "settings": request_capture.settings(), "suites": {"digest": capped}}
+        same = {"format": request_capture.FORMAT, "settings": request_capture.settings(), "suites": {"digest": unset}}
+        assert request_capture.compare(head, same, ["digest"])["digest"] is not None
+        assert request_capture.compare(same, same, ["digest"])["digest"] is None
 
 
 class TestReport:

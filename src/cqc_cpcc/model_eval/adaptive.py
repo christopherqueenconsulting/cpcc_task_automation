@@ -263,20 +263,41 @@ def transport_retryable(error: BaseException) -> bool:
                for e in _chain(error))
 
 
+#: The gateway's own message for an output-token-limit stop (openrouter_client); the only text match kept.
+TRUNCATION_MESSAGE = "TRUNCATED by the output token limit"
+
+
+def _has_length_marker(error: BaseException) -> bool:
+    """True when ``error`` (or what it was raised from) carries the explicit finish_reason=length marker."""
+    for e in error_detail._chain(error):
+        if getattr(e, "finish_reason", None) == "length":
+            return True
+        if any("finish_reason=length" in str(v) for v in (getattr(e, "validation_errors", None) or [])):
+            return True
+        text = str(e)
+        if "finish_reason=length" in text or TRUNCATION_MESSAGE in text:
+            return True
+    return False
+
+
 def truncation_retryable(error: BaseException) -> bool:
     """True for a call that ended on the output-token limit (finish_reason=length), worth one more try.
 
-    Only the runner's own classification counts (``truncated``); a schema error, a refusal, a 4xx and a
-    cancellation never match.
+    Needs the explicit marker (``finish_reason == "length"`` on the error, ``finish_reason=length`` in its
+    validation errors or text, or the gateway's own "TRUNCATED by the output token limit" message), not just
+    the word "truncated": a 5xx or a provider error that mentions truncation is not a runaway output. A 4xx,
+    a throttle, a schema error, a refusal and a cancellation never match.
     """
     if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
         return False
-    from cqc_cpcc.model_eval.runner import classify_error  # lazy: runner does not import this module
-
     status = error_detail.http_status(error)
     if status is not None and 400 <= status <= 499:
         return False  # a 4xx is the request's fault, whatever its text says
-    return classify_throttle(error) is None and classify_error(error) == "truncated"
+    if classify_throttle(error) is not None or (status is not None and status >= 500):
+        return False
+    from cqc_cpcc.model_eval.runner import classify_error  # lazy: runner does not import this module
+
+    return classify_error(error) == "truncated" and _has_length_marker(error)
 
 
 def _last_gateway_call():
@@ -450,6 +471,8 @@ class Held:
     #: One ``error_detail`` entry per failed attempt, in order.
     detail: list = field(default_factory=list)
     last_error: Optional[BaseException] = None
+    #: True when ``last_error`` was a truncation (which retry counter to give back if the budget refuses it).
+    last_error_truncated: bool = False
     #: True when the call's last failed attempt is already in ``charged`` (fixed mode, refused after a wait).
     final_billed: bool = False
 
@@ -523,7 +546,16 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
             if not granted:
                 limiter.release()
                 if (transport_failures or held.truncated_retries) and held.last_error is not None:
-                    raise held.last_error  # the budget is spent: report the failure it left behind
+                    # the budget is spent: report the failure it left behind. That attempt was charged when it
+                    # failed (held.charged), so it is no longer "retried" and must not be charged again.
+                    if held.detail:
+                        held.detail[-1]["retried"] = False
+                    if held.truncated_retries and held.last_error_truncated:
+                        held.truncated_retries -= 1
+                    elif held.transport_retries:
+                        held.transport_retries -= 1
+                    held.final_billed = True
+                    raise held.last_error
                 return SKIPPED
             held.amount = estimate
         seen = {"n": 0}
@@ -552,6 +584,7 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
                     usage = attempt_usage(error, before)
                     again = held.truncated_retries < TRUNCATED_RETRIES
                     _note_failure(held, error, sends, started, clock, again, usage)
+                    held.last_error_truncated = True
                     if not again:
                         raise  # truncated twice: a final failure with both attempts in error_detail
                     charge = _truncated_charge(usage, estimate)  # real cost when known, else the estimate

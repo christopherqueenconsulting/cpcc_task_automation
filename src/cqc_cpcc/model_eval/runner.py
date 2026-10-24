@@ -59,7 +59,8 @@ class CallRecord:
 GradeFn = Callable[..., Awaitable]
 
 
-#: The output-token limit the eval pins for every call unless ``CQC_EVAL_MAX_TOKENS`` lowers it (prompt evals only).
+#: The output-token limit the eval pins for every call (sent as ``max_completion_tokens``) unless
+#: ``CQC_EVAL_MAX_TOKENS`` replaces it, up or down (prompt evals only).
 DEFAULT_MAX_OUTPUT_TOKENS = 32768
 
 
