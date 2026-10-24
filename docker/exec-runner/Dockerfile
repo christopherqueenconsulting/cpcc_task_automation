@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 # Sandbox image for running student programs. See docs/execution-gate.md.
-# Base: eclipse-temurin 21 JDK on Ubuntu noble, pinned by the multi-arch index digest.
+# Base: eclipse-temurin 25 JDK on Ubuntu noble, pinned by the multi-arch index digest.
 # A new base is reviewed by hand (Dependabot docker updates for this directory are not auto-merged).
 # Editing this file or driver.py requires a version bump here, in program_runner.py
 # (RUNNER_VERSION, RUNNER_IMAGE and RUNNER_SOURCE_SHA256) and in docker-compose.yml.
-FROM eclipse-temurin:21-jdk-noble@sha256:107215954359f1ab0be058a247d7c64ed6e69c71c1682d471d38ef751ec8e964
+FROM eclipse-temurin:25-jdk-noble@sha256:ba0f0e1a33864105e1d454e88105c617ab40f71062db1f306bf58be32a3f8e5e
 
-LABEL org.cqc.exec-runner.version="1"
+LABEL org.cqc.exec-runner.version="2"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends g++ gcc libc6-dev python3 \

@@ -123,7 +123,7 @@ def test_a_missing_image_offers_build_image_and_shows_the_manual_command(monkeyp
     assert not button.disabled
     assert any("exec-runner image is not built" in w.value for w in at.warning)
     [code] = at.code
-    assert code.value.startswith("docker build --tag cpcc_task_automation/exec-runner:1 ")
+    assert code.value.startswith("docker build --tag cpcc_task_automation/exec-runner:2 ")
     assert code.language == "bash"
     assert at.session_state["ready"] is False
 
