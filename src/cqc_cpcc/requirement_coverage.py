@@ -70,6 +70,8 @@ class RequirementItem(BaseModel):
     # What the solution check found for this item: yes, no, unclear; None = never checked.
     solution_status: SkipJsonSchema[Optional[Literal["yes", "no", "unclear"]]] = None
     solution_evidence: SkipJsonSchema[Optional[str]] = None
+    # The instructor removed this requirement from the list to grade. A check never changes it.
+    hand_ungraded: SkipJsonSchema[bool] = False
 
 
 class RequirementChecklist(BaseModel):
@@ -174,7 +176,8 @@ def normalize_checklist(checklist: RequirementChecklist) -> RequirementChecklist
         seen.add(rid)
         items.append(RequirementItem(id=rid, text=text, weight=r.weight, graded=r.graded,
                                      solution_status=r.solution_status,
-                                     solution_evidence=r.solution_evidence))
+                                     solution_evidence=r.solution_evidence,
+                                     hand_ungraded=r.hand_ungraded))
         if len(items) >= MAX_REQUIREMENTS:
             break
     return RequirementChecklist(requirements=items)

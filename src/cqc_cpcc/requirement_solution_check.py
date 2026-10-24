@@ -278,7 +278,8 @@ def apply_check(
     item already had a ``no`` (so an instructor's tick-again sticks). ``pre_apply`` False: ``graded``
     is never lowered, so a ``no`` stays a suggestion the instructor applies (:func:`apply_suggestions`).
     Either way the one way ``graded`` goes up is an item an earlier ``no`` left out when the new
-    answer is not ``no``; a row the instructor unticked by hand stays unticked.
+    answer is not ``no``. An item the instructor removed from the list to grade
+    (``hand_ungraded``) is never changed by a check, in either mode.
     ``only_ids`` limits the update to those items (a re-check of edited rows).
     """
     wanted = {_id_key(i) for i in only_ids} if only_ids is not None else None
@@ -290,7 +291,10 @@ def apply_check(
             items.append(item)
             continue
         update = {"solution_status": verdict.does_it, "solution_evidence": verdict.evidence or None}
-        if verdict.does_it == "no":
+        if item.hand_ungraded:
+            # The instructor removed it from the list to grade: a check records its answer only.
+            pass
+        elif verdict.does_it == "no":
             # Calibrated: lower graded, but not for an item an earlier "no" already covered, so an
             # instructor who ticked it again keeps it graded.
             if pre_apply and item.solution_status != "no":

@@ -579,3 +579,37 @@ def test_hard_cases_are_tagged_and_cover_other_ways():
     assert sum(1 for c in hard for e in c.labels["expected"].values() if e == "unclear") >= 4
     assert sum(1 for e in (e for c in TestSuite.cases.values() for e in c.labels["expected"].values())
                if e == "yes") >= 85
+
+
+def test_an_item_the_instructor_removed_is_never_changed_by_a_check():
+    for pre_apply in (False, True):
+        for answer in ("yes", "unclear", "no"):
+            item = _checklist()
+            item.requirements[1].graded = False
+            item.requirements[1].hand_ungraded = True
+            item.requirements[1].solution_status = "no"
+            out = rsc.apply_check(item, _answer(r1="yes", r2=answer, r3="yes"), pre_apply=pre_apply)
+            assert out.requirements[1].graded is False and out.requirements[1].hand_ungraded
+            assert out.requirements[1].solution_status == answer
+
+
+def test_the_hand_marker_is_backend_only_and_outside_the_hash():
+    assert "hand_ungraded" not in json.dumps(rc.RequirementChecklist.model_json_schema())
+    a = _checklist(True, False, True)
+    b = a.model_copy(deep=True)
+    b.requirements[1].hand_ungraded = True
+    assert rc.checklist_hash(a) == rc.checklist_hash(b)
+    assert rc.normalize_checklist(b).requirements[1].hand_ungraded
+
+
+def test_a_broken_report_hook_does_not_break_the_scorecard():
+    from cqc_cpcc.model_eval import prompt_eval
+    from cqc_cpcc.model_eval.suites import solution_check as sc
+
+    card = {"suite": "requirement-solution-check", "prompt_id": "requirement-solution-check",
+            "dataset": "x", "cases": 1, "repeats": 1, "status": "ok", "models": {"m": {
+                "composite": 1.0, "graders": {}, "ok_rate": 1.0, "cost_per_call": 0.0, "per_case": [],
+                "health": {"needs_work": False, "failures": [], "calibrated": False}}}}
+    with patch.object(sc, "pooled_false_no", side_effect=RuntimeError("boom")):
+        text = prompt_eval.to_markdown(card)
+    assert "extra report" in text and "RuntimeError" in text and "boom" not in text
