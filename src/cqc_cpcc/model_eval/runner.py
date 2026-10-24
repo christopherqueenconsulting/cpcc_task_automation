@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from cqc_cpcc.model_eval import cache_session, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.dataset import AUTHORS_IN_DATASET, EvalCase, checklist_model, error_definitions, rubric
 from cqc_cpcc.utilities.AI import model_registry
@@ -46,6 +47,8 @@ class CallRecord:
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     reasoning_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None  # prompt-cache usage the response reported (report-only)
+    cache_write_tokens: Optional[int] = None
     output_sha256: Optional[str] = None
     compile_gate: Optional[str] = None
     validity: Optional[str] = None  # validity-gate status ("ok" when graded by the model)
@@ -53,7 +56,11 @@ class CallRecord:
     prompt: Optional[str] = None  # "prompt_id@version" sent (config/prompt_registry.json)
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True)
+        data = asdict(self)
+        for name in ("cached_tokens", "cache_write_tokens"):
+            if data[name] is None:
+                del data[name]  # additive keys: rows that reported nothing are unchanged
+        return json.dumps(data, sort_keys=True)
 
 
 GradeFn = Callable[..., Awaitable]
@@ -182,8 +189,15 @@ async def run_model(
         profile=None,
         grade_fn: Optional[GradeFn] = None,
         on_record: Optional[Callable[[CallRecord], None]] = None,
+        session_id: Optional[str] = None,
+        warm_first: Optional[bool] = None,
 ) -> list[CallRecord]:
-    """Grade every case ``repeats`` times on ``model``; stop new calls when the budget runs out."""
+    """Grade every case ``repeats`` times on ``model``; stop new calls when the budget runs out.
+
+    Same prompt-cache handling as ``suites.base.run_suite`` (``cache_session.py``): ``session_id`` on every
+    request (side ``model-eval``; ``CQC_EVAL_SESSION_ID=0`` turns it off) and leader-first calls for cases that
+    share a static prefix (``CQC_EVAL_WARM_FIRST``; only with the production grader, never a ``grade_fn`` double).
+    """
     from cqc_cpcc.rubric_grading import grade_with_rubric
     from cqc_cpcc.utilities.AI import llm_gateway
 
@@ -191,7 +205,18 @@ async def run_model(
     semaphore = asyncio.Semaphore(concurrency)
     records: list[CallRecord] = []
 
+    sid = session_id if session_id is not None else cache_session.session_for_run(
+        "grading", model, effort, side="model-eval")
+    production = grade_fn is grade_with_rubric
+    if (cache_session.warm_first_enabled() if warm_first is None else warm_first) and sid is not None:
+        cache_session.warm_wait_s()  # a bad CQC_EVAL_WARM_WAIT_S stops the run before any call
+    use_warm = (cache_session.warm_first_enabled() if warm_first is None else warm_first) and sid is not None and production
+
     async def one(case: EvalCase, repeat: int, resolved) -> CallRecord:
+        with cache_session.record_scope(sid) as tap:
+            return await one_scoped(case, repeat, resolved, tap)
+
+    async def one_scoped(case: EvalCase, repeat: int, resolved, tap) -> CallRecord:
         async with semaphore:
             record = CallRecord(case.case_id, model, effort, repeat, ok=False)
             if budget.exhausted:
@@ -240,13 +265,45 @@ async def run_model(
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
                 record.reasoning_tokens = completion.reasoning_tokens
+                record.cached_tokens = completion.cached_tokens
+            used = tap.last()
+            if used is not None:
+                record.cache_write_tokens = used.cache_write_tokens
+                if record.cached_tokens is None:
+                    record.cached_tokens = used.cached_tokens
+                if record.reasoning_tokens is None:
+                    record.reasoning_tokens = used.reasoning_tokens
             budget.add(record.cost_usd)
             if on_record:
                 on_record(record)
             return record
 
-    with pinned_registry(model, effort, profile) as resolved:
-        jobs = [one(case, r, resolved) for r in range(repeats) for case in cases]
+    with pinned_registry(model, effort, profile) as resolved, cache_session.transport():
+        order = [(case, r) for r in range(repeats) for case in cases]
+        plan: dict = {}
+        if use_warm and len(order) > 1:
+            try:
+                by_case = await cache_session.render_keys(
+                    {c.case_id: (lambda c=c: _grade_once(c, perturb(c, seed), grade_fn)) for c in cases})
+                plan = cache_session.warm_plan([(c.case_id, r) for c, r in order], lambda job: by_case.get(job[0]))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - no grouping: every call runs at once, as before
+                logger.warning(f"[eval] warm-first grouping skipped: {type(e).__name__}: "
+                               f"{error_detail.redact_message(str(e), 120)}")
+                plan = {}
+
+        async def gated(case: EvalCase, repeat: int) -> CallRecord:
+            wait_for, lead = plan.get((case.case_id, repeat), (None, None))
+            if wait_for is not None:
+                await cache_session.wait_for_leader(wait_for)
+            try:
+                return await one(case, repeat, resolved)
+            finally:
+                if lead is not None:
+                    lead.set()
+
+        jobs = [gated(case, r) for case, r in order]
         for coro in asyncio.as_completed(jobs):
             records.append(await coro)
     return records

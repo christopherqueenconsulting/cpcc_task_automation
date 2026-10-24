@@ -581,6 +581,92 @@ That one call tripped the hard gate `errors.truncated > 0` and the strict inject
 - **Pass rule:** no threshold, gate, grader or `ab_decision` change. A truncated call that succeeds on
   retry is now scored as the successful attempt; a call that truncates twice still fails.
 
+##### Prompt caching in evals: `session_id` and warm-first
+
+Prompt evals and model evals send the same requests as the app (the same prompt builders and gateway) and now
+also use the provider's prompt cache the way the app can. Caching changes input pricing and latency only; it
+never changes an output, so no gate, grader, score or threshold reads any of this. Code:
+`src/cqc_cpcc/model_eval/cache_session.py`.
+
+- **What is sent.** OpenRouter's documented sticky-routing key `session_id` (body field, at most 256
+  characters) is added to every eval request: `cqc-eval-` plus a hash of suite, side (`head`, `base`,
+  `model-eval`), model, effort and run (`CQC_EVAL_RUN_ID`, else `GITHUB_RUN_ID`, else `local`); 41 characters,
+  no case id, name or student text. Whatever its source, a session id is reduced to `[A-Za-z0-9_-]` and 256
+  characters before it is sent. It goes in through a thin wrapper around the OpenRouter client that the eval
+  runners install for the length of a run, so the app's own requests are byte-identical (no `session_id`).
+  `provider.order` is never set (it would turn sticky routing off); model, schema and reasoning effort are
+  constant within a session.
+- **Environment variables** (read when a run starts, so they do not change a run already in flight; an
+  invalid value raises an error before any model call):
+
+  | Variable | Default | Accepted values |
+  |---|---|---|
+  | `CQC_EVAL_SESSION_ID` | on | `1`, `on`, `true`, `yes`; `0`, `off`, `false`, `no` (any case) |
+  | `CQC_EVAL_WARM_FIRST` | on exactly when the session id is on | same as above |
+  | `CQC_EVAL_WARM_WAIT_S` | `600` | a number from 1 to 7200 (seconds) |
+
+  Default on because the session id never reaches a request hash (the capture drops it, and the
+  identical-request fast path compares captures made without the runner), so that path is unaffected (tested).
+  The A/B sets `CQC_EVAL_SIDE=base` for the base subprocess.
+- **Layout (what `tests/unit/test_eval_prompt_cache.py` asserts for all 11 suites).** It renders up to 12 cases
+  per suite with the send refused. `grading`, `grading-levelband`, `exam-grading` and `grading-solution` send a
+  `system` + `user` pair, the system message is identical on every call, the fenced submission is in the
+  user message after its first half, and the prefix every rendered case shares is longer than 4,096
+  characters (measured 7,857 to 14,340). The other seven (`requirement-extraction`, `effort-recommendation`,
+  `requirement-solution-check`, `test-case-generation`, `digest`, `project-feedback`, `flowgorithm-grade`)
+  send a single `user` message and share fewer than 4,096 characters (measured 148 to 2,588). Token figures
+  are an estimate (4 characters per token); the providers' cache minimum is 1,024 tokens, so those seven
+  are not expected to hit the cache until their prompts get a system/user split (a prompt change, a
+  separate PR). No suite was changed here. The measured table is printed by
+  `pytest tests/unit/test_eval_prompt_cache.py -s -k "measured_prefix or judge_instructions"`.
+- **Warm first.** For each suite and side the runner renders every case's request once with the send refused
+  (no network, no cost), hashes the part before the first fence marker (system message plus instructions and
+  rubric; under 4,096 characters it is not grouped), and sends ONE call per group first. The rest of the group
+  starts when it has finished (a failed leader releases the group too), at the usual concurrency; groups do not
+  wait for each other and a case with no group runs at once. Cost: one call's latency per group, and a stalled
+  leader can delay its group's followers for up to `CQC_EVAL_WARM_WAIT_S` (default 600 s, then they go ahead
+  anyway). `CQC_EVAL_WARM_FIRST=0` removes the wait. The first call of a group pays the cache write
+  (1.25x on the cached part); later calls read at 0.1x.
+- **If the provider ignores `session_id`.** The run proceeds and scores are unchanged (the key only affects
+  routing). The symptom is a cached share near 0% and empty cache fields in Run stats. Separately, the seven
+  single-message suites cannot cache (1,024-token minimum), so a low share on those is expected. Whether
+  OpenRouter ignores or rejects an unknown body field on a given model/provider is NOT VERIFIED (no paid call
+  was made); the code does not special-case it. If a provider returned a 4xx for the key, those calls would fail
+  as transport errors (the eval layer does not retry a 4xx other than 408/429), the model's ok-rate would drop, and a
+  scheduled model-eval would fail its gates and promote nothing; the way out is `CQC_EVAL_SESSION_ID=0` (or a
+  revert), since the workflow is not edited here.
+- **Judges.** The pairwise judge (`anthropic/claude-haiku-5.5`) is left alone. OpenRouter does pass Anthropic
+  `cache_control` through (a `cache_control: {"type": "ephemeral"}` key on a content block, system messages
+  included; reads 0.1x, 5-minute writes 1.25x; minimum 512 tokens for Haiku 5.5, per the OpenRouter caching
+  guide, read 2026-10-24). But the judge's static text is 540 bytes, about 135 tokens (builder estimate:
+  `evals/judges/pairwise.md` with its `{placeholders}` removed, 4 bytes per token; the test prints it), split
+  around the per-case fields, so no breakpoint could reach the minimum, and changing that is a judge prompt
+  change (recalibration). Not done.
+- **Reading the new Run stats.** `ab.md` "Run stats" has a "Prompt cache" list per suite and side:
+  - *cached share*: cached prompt tokens / prompt tokens, over the rows whose response reported a cached count
+    (a row that reported none is not counted as a miss);
+  - *cache-write tokens*: prompt tokens the provider reported writing to its cache (billed at a premium);
+  - *reasoning tokens*: completion tokens spent on reasoning, as reported;
+  - *real cost*: the sum of `cost_usd` over rows whose cost is the response's real usage cost (estimated rows
+    left out; #453 semantics, retries stay budget-only).
+
+  A line saying the cached share differs by 20 points or more between head and base means the two sides were
+  not cached alike, usually a base on older code that sends no `session_id` and does not warm; a cost ratio for
+  that pair is then not strictly like-for-like. It is a note only: it never changes a score, a gate or a
+  verdict. `ab.json` `run_stats` gains `head_cache` and `base_cache`; each record gains `cached_tokens`,
+  `cache_write_tokens` and `reasoning_tokens` when the response reported them (old records load; unknown or
+  missing keys are ignored). `prompt_tokens_details.cache_write_tokens` is the field name from OpenRouter's
+  usage documentation and was not seen in a live response: if it is wrong, the field is silently omitted and
+  cache-write shows 0.
+- **Base on older code.** The base side runs the base checkout's code; see the 20-point note above.
+- **Expected effect (a formula, not a measurement).** On the input tokens of a group, cost falls by about
+  `cached_share x 0.9` of the input price, less the 1.25x write on each group's first call. The measured share
+  comes from the first A/B run after this change merges.
+- **Rollback.** Set `CQC_EVAL_SESSION_ID=0` and `CQC_EVAL_WARM_FIRST=0`: that reverts every behaviour change
+  of this PR except the added report fields. The switches are read at process start, so they do not change
+  a run already in flight (cancel it and dispatch again). A revert of the merge commit needs no change to
+  the `model-eval-state` branch.
+
 ##### Optional output-token cap: `CQC_EVAL_MAX_TOKENS` (diagnostic, off by default)
 
 - **Default unset: no change at all.** The eval pins `max_output_tokens` 32768 for every call as before,
