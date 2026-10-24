@@ -876,8 +876,8 @@ def test_several_solution_files_become_one_zip_the_loader_accepts(tmp_path):
 def test_a_path_outside_the_allowed_folders_is_refused(tmp_path, monkeypatch):
     f = tmp_path / "A.java"
     f.write_text("class A {}")
-    monkeypatch.setattr(ev, "readable_roots", lambda: [str(tmp_path / "elsewhere")])
-    with pytest.raises(ev.SolutionLoadError, match="outside the folders"):
+    monkeypatch.setattr("cqc_cpcc.utilities.utils.readable_roots", lambda: [str(tmp_path / "elsewhere")])
+    with pytest.raises(ev.SolutionLoadError, match="outside the folders|too large"):
         ev._combined_bytes([("A.java", str(f))])
     assert ev.load_solution([("A.java", str(f))]) is None
 
@@ -889,7 +889,7 @@ def test_a_symlink_pointing_out_of_the_allowed_folders_is_refused(tmp_path, monk
     (outside / "A.java").write_text("class A {}")
     link = inside / "A.java"
     link.symlink_to(outside / "A.java")
-    monkeypatch.setattr(ev, "readable_roots", lambda: [str(inside.resolve())])
+    monkeypatch.setattr("cqc_cpcc.utilities.utils.readable_roots", lambda: [str(inside.resolve())])
     with pytest.raises(ev.SolutionLoadError):
         ev._combined_bytes([("A.java", str(link))])
 

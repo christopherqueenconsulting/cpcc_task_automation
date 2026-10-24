@@ -54,7 +54,7 @@ from cqc_cpcc.utilities.AI import model_registry
 from cqc_cpcc.utilities.AI.model_registry import resolve as resolve_model
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.output_compare import Verdict
-from cqc_cpcc.utilities.utils import readable_roots
+from cqc_cpcc.utilities.utils import read_file_bytes
 
 #: Shown where programs cannot run: Streamlit Community Cloud, or ``CQC_EXECUTION=off``.
 NOTICE = ("Output check runs programs in a local Docker sandbox and is not available here. "
@@ -323,17 +323,10 @@ def _combined_bytes(solution_file_paths) -> tuple:
         name = os.path.basename(str(orig))
         if not (language_of_filename(name) or name.lower().endswith(".zip")):
             continue  # the uploader also takes .txt, .docx and .pdf: not runnable
-        # Confined to the allowed roots (temp dir, working dir) exactly as read_file does it: the
-        # normalize-then-startswith check is written out here so the open() below reads the resolved path.
-        resolved = os.path.realpath(str(temp))
-        for root in readable_roots():
-            if resolved == root or resolved.startswith(root + os.sep):
-                temp = resolved
-                break
-        else:
-            raise SolutionLoadError("the solution file is outside the folders the app may read")
-        with open(temp, "rb") as handle:
-            files.append((name, handle.read()))
+        try:
+            files.append((name, read_file_bytes(str(temp), max_bytes=pr.MAX_JOB_BYTES)))
+        except ValueError:
+            raise SolutionLoadError("the solution file is outside the folders the app may read, or too large") from None
     if not files:
         raise SolutionLoadError("no source file found in the solution")
     if len(files) == 1:
