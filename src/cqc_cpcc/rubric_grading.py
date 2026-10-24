@@ -434,6 +434,7 @@ async def grade_with_rubric(
         session_id: Optional[str] = None,
         effort: Optional[str] = None,
         execution_plan: Optional[ExecutionPlan] = None,
+        execution_owner: Optional[str] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -472,7 +473,10 @@ async def grade_with_rubric(
             marks each requirement; missing/partial ones become errors before scoring.
         execution_plan: Optional output-check plan (``execution_check.ExecutionPlan``). When given,
             the student's program runs in the sandbox on the plan's cases BEFORE the prompt is
-            built (``execution_gate.run_student_execution``). Only a verified result adds the
+            built (``execution_gate.run_student_execution``). ``execution_owner`` is the opaque job id the
+            sandbox containers are labelled with; a caller that runs under a ``GradingJob`` passes the job's
+            id so a Cancel can ``kill_orphans(owner)`` (that wiring is PR 10/15 work; only the parameter
+            lives here). Only a verified result adds the
             ``execution-evidence-section`` fragment to the prompt; a language mismatch, a student
             compile failure, ``CQC_EXECUTION=off`` or a runner error adds nothing and leaves the
             grade as it would be without a plan. ``None`` (the default) changes nothing at all:
@@ -527,7 +531,8 @@ async def grade_with_rubric(
 
         # The sandbox call blocks (Docker): a worker thread keeps the event loop free.
         try:
-            execution = await asyncio.to_thread(run_student_execution, execution_plan, source_files)
+            execution = await asyncio.to_thread(
+                run_student_execution, execution_plan, source_files, owner=execution_owner)
             if execution is not None and execution.has_evidence:
                 execution_evidence = execution_evidence_section(
                     execution_plan, execution.report, new_fence_nonce(), execution.stderr_by_case)

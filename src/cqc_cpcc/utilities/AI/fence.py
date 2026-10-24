@@ -18,9 +18,11 @@ sure no ``UNTRUSTED-`` is left, so removing one marker can never splice a new on
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import secrets
+import threading
 
 _MARKER = "UNTRUSTED-"
 _ALNUM = frozenset("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
@@ -30,11 +32,37 @@ _ANGLES = frozenset("<>")
 _PROCESS_KEY = secrets.token_bytes(32)
 
 
+#: Fixed key used only while a request capture runs (``deterministic_nonce``). It is public on purpose:
+#: a captured prompt is never sent to a model, so nothing is protected by hiding it.
+_CAPTURE_KEY = b"cqc-request-capture-key-not-a-secret"
+_deterministic = 0  # nesting depth, process wide: a capture runs on one event loop in one process
+_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def deterministic_nonce():
+    """For the duration of the block, nonces are reproducible across processes (HMAC under a fixed
+    capture key; with no parts, a fixed value). ONLY the prompt-evaluation request capture uses this,
+    so two captures of the same prompt are byte-identical and an unchanged suite can be skipped in an
+    A/B. Production calls never enter it: outside the block nonces are random per call, or keyed by the
+    per-process secret."""
+    global _deterministic
+    with _lock:
+        _deterministic += 1
+    try:
+        yield
+    finally:
+        with _lock:
+            _deterministic -= 1
+
+
 def new_fence_nonce(*parts: str) -> str:
-    """A fence nonce: random when no ``parts`` are given, else keyed by the process secret."""
-    if not parts:
+    """A fence nonce: random when no ``parts`` are given, else keyed by the process secret.
+    (Reproducible instead inside ``deterministic_nonce()``, i.e. only during a request capture.)"""
+    fixed = _deterministic > 0
+    if not parts and not fixed:
         return secrets.token_hex(8)
-    mac = hmac.new(_PROCESS_KEY, digestmod=hashlib.sha256)
+    mac = hmac.new(_CAPTURE_KEY if fixed else _PROCESS_KEY, digestmod=hashlib.sha256)
     for part in parts:
         mac.update((part or "").encode("utf-8") + b"\0")
     return mac.hexdigest()[:16]

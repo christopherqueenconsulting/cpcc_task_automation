@@ -38,7 +38,7 @@ HEADING = "## Program Output Check (computed by the app)"
 MAX_STDERR_CHARS = 400
 MAX_CELL_CHARS = 48
 
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 
 _MEANING = (
     "- match: same output (trailing spaces and blank lines are ignored)",

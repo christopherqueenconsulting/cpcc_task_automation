@@ -44,7 +44,6 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 from typing import Callable, Iterable, Optional, Sequence
 
 from cqc_cpcc.error_definitions_models import infer_execution_category
@@ -116,18 +115,67 @@ def course_of(error_id: str) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 # Error classification
 # --------------------------------------------------------------------------- #
+# Words that mean the error is about HOW the program is written, which matching output cannot
+# disprove. Over-matching only costs a missed removal (the safe direction). Every alternative is a
+# plain word or a short fixed phrase: no nested quantifiers.
 _STRUCTURAL = re.compile(
     r"\b(?:loops?|looping|methods?|functions?|arrays?|arraylists?|vectors?|constants?|const|classes|class|"
-    r"recursi(?:on|ve)|switch|iterat\w*)\b|\bwhile\s*\(|\bfor\s*\(|\bdo\s*-?\s*while\b",
+    r"recursi(?:on|ve)|switch|iterat\w*|if|else|nested|statements?|lists?|dictionary|dictionaries|tuples?|"
+    r"structs?|objects?|constructors?|getters?|setters?|prototypes?|void|final|named|data\s*type|reference|"
+    r"pointers?|parameters?|arguments?|operators?|ternary|boolean|while|for-?each|static|import|scanner)\b"
+    r"|\bmath\.|\bfor\s*\(|\bdo\s*-?\s*while\b|\bread(?:s|ing)?\s+(?:the\s+)?input",
+    re.IGNORECASE)
+
+# The program may print the right answers without computing them.
+_UNVERIFIABLE = re.compile(
+    r"hard-?cod|literal|constant answer|not calculat|does not calculate|does not compute|without comput|"
+    r"print(?:s|ed)? the (?:expected|answer|result|total)|fixed output|no computation|magic number|"
+    r"doesn.?t (?:calculate|compute)",
+    re.IGNORECASE)
+
+# The error cites a specific value, comparison or edge that the cases may not contain.
+_VALUE = re.compile(
+    r"(?<![\w.])-?\d+(?:\.\d+)?(?!\d|\.\d|\s*(?:decimal|digit|place))|[<>]=?|==|!=|"
+    r"\b(?:zero|negative|empty|exactly|equal|greater|less|boundary|edge|maximum|minimum|over|under|exceed\w*|"
+    r"above|below)\b",
     re.IGNORECASE)
 
 
+def _error_text(error: DetectedError, with_code: bool) -> str:
+    parts = [error.name or "", error.description or "", error.notes or ""]
+    if with_code:
+        parts.insert(0, (error.code or "").replace("_", " "))
+    return " ".join(parts)[:MAX_ERROR_TEXT_CHARS]
+
+
 def is_structural(error: DetectedError) -> bool:
-    """The error's code, name, description or notes names a loop, method, array, constant, class,
-    recursion or switch. The output check cannot judge those from output, so it never removes one."""
-    text = " ".join([(error.code or "").replace("_", " "), error.name or "", error.description or "",
-                     error.notes or ""])[:MAX_ERROR_TEXT_CHARS]
-    return bool(_STRUCTURAL.search(text))
+    """The error's code, name, description or notes names how the program is built (a loop, method,
+    array, constant, class, branch, data type, parameter, operator, ...). The output check cannot judge
+    that from output, so it never removes one."""
+    return bool(_STRUCTURAL.search(_error_text(error, True)))
+
+
+def is_unverifiable(error: DetectedError) -> bool:
+    """The error says the program does not really compute its output (hard-coded, a literal, a magic
+    number). A program can print the right answers without computing them, so matching output never
+    removes one."""
+    return bool(_UNVERIFIABLE.search(_error_text(error, True)))
+
+
+def cites_value(error: DetectedError) -> bool:
+    """The error text names a specific number, a comparison or an edge (zero, negative, over, exactly)."""
+    return bool(_VALUE.search(_error_text(error, False)))
+
+
+def hold_reason(error: DetectedError) -> Optional[str]:
+    """Why the gate must keep this error whatever the output says, or None."""
+    if is_structural(error):
+        return ("It names a structural requirement (how the code is written: a loop, branch, method, array, "
+                "constant, type, parameter or the like), which the output check cannot judge: kept.")
+    if is_unverifiable(error):
+        return ("It says the program does not really compute its output (hard-coded or similar), which "
+                "matching output cannot disprove: kept.")
+    return None
 
 
 def _defs_by_id(error_definitions: Optional[Sequence]) -> dict:
@@ -204,14 +252,29 @@ def is_single_word_misspelling(diff_excerpt: str) -> bool:
     if len(differing) != 1:
         return False
     e, a = differing[0]
-    return (e.isalpha() and a.isalpha() and len(e) >= 3 and len(a) >= 3 and e.lower() != a.lower()
-            and SequenceMatcher(None, e.lower(), a.lower()).ratio() >= 0.7)
+    return e.isalpha() and a.isalpha() and _is_typo(e.lower(), a.lower())
+
+
+def _is_typo(a: str, b: str) -> bool:
+    """Two different words of at least 5 letters that differ by one inserted or dropped letter, or by two
+    neighbouring letters swapped. A substitution (Pass/Past, five/fine) is a different word, not a typo."""
+    if len(a) < 5 or len(b) < 5 or a == b:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(diff) == 2 and diff[1] == diff[0] + 1 and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]]
+    short, long_ = sorted((a, b), key=len)
+    return len(long_) - len(short) == 1 and any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
+#: Control characters and invisible direction marks (zero-width, bidi embeddings and isolates).
+_HIDDEN = re.compile("[\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 def inert(text: str, limit: int = MAX_SNIPPET_CHARS) -> str:
     """Program text for a student-visible note: one line, no control characters, backticks turned
     into quotes, cut at ``limit``, in a code span so Markdown and HTML in it stay literal."""
-    one = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", text or "").split()).replace("`", "'")
+    one = " ".join(_HIDDEN.sub(" ", text or "").split()).replace("`", "'")
     if len(one) > limit:
         one = one[: limit - 3] + "..."
     return f"`{one}`" if one else "(nothing)"
@@ -234,6 +297,12 @@ class ExecutionBudget:
         from cqc_cpcc.utilities.program_runner import max_run_seconds
 
         return self.limit - self.spent >= max_run_seconds(n_cases, repeat)
+
+    def allows_cited_check(self, n_cases: int) -> bool:
+        """Room for the reference run (twice) and the student's run together, not each on its own."""
+        from cqc_cpcc.utilities.program_runner import max_run_seconds
+
+        return self.limit - self.spent >= max_run_seconds(n_cases, 2) + max_run_seconds(n_cases, 1)
 
 
 @dataclass
@@ -418,7 +487,7 @@ def check_cited_inputs(execution: StudentExecution, solution_files: Optional[lis
     if not stdins or not solution_files or not execution.files:
         return None
     n = len(stdins)
-    if not (execution.budget.allows(n, 2) and execution.budget.allows(n, 1)):
+    if not execution.budget.allows_cited_check(n):
         return None
     plan = execution.plan
     run = execution.runner or pr.run_program
@@ -628,14 +697,17 @@ def apply_execution_gate(
     pending = {}  # id(error) -> stdins to re-check
     to_remove = []
     for e in candidates:
-        if is_structural(e):
-            notes.append(note_kept(STAGE, e, "It names a structural requirement (a loop, method, array, constant "
-                                             "or class), which the output check cannot judge: kept."))
+        held = hold_reason(e)
+        if held:
+            notes.append(note_kept(STAGE, e, held))
             gate["kept"].append(e.code)
             continue
         cited = cited_inputs(e)
         if cited:
             pending[id(e)] = cited
+        elif cites_value(e):
+            notes.append(note_kept(STAGE, e, "Kept: it cites a specific value that cannot be re-run."))
+            gate["kept"].append(e.code)
         else:
             to_remove.append(e)
 
@@ -720,7 +792,7 @@ def _format_errors(plan, results, model_errors, cats, error_definitions, by_id, 
     replaced = []
     if candidates_ok:
         replaced = [e for e in model_errors if cats[id(e)] == CAT_FORMAT and (e.code or "").upper() not in wanted
-                    and not is_structural(e) and not cited_inputs(e)]
+                    and hold_reason(e) is None and not cited_inputs(e) and not cites_value(e)]
     return added, replaced
 
 

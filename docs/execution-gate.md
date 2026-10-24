@@ -1,9 +1,9 @@
 # Execution gate: the sandbox that runs student programs
 
 Student code is untrusted. This document covers the one place it may run, what that place
-protects, and what to do if it fails. It belongs to PR 12 of the grading-fairness plan.
-Later PRs (test-case derivation, the execution gate in grading, the output-check UI) build
-on `cqc_cpcc.utilities.program_runner`.
+protects, and what to do if it fails. It covers PRs 12 to 14 of the grading-fairness plan: the
+sandbox (12), test-case derivation (13) and the execution gate in grading (14, last section). The
+output-check UI (PR 15) builds on `cqc_cpcc.utilities.program_runner`.
 
 **Rule: student programs are never executed on the host.** If the sandbox is not available, no
 program runs, and grading follows the path it had before. The one exception to "nothing touches
@@ -181,6 +181,16 @@ work, and the grade itself.
 6. The key search in step 3 finds leaked keys only, not leaked student content. If a leak of
    student data is suspected, the instructor decides with the college whether its FERPA
    incident process applies.
+7. Since PR 14 a saved result holds student program output: `execution_report.cases[].diff_excerpt`
+   (up to 20 lines or 1,500 characters per case) and the notes of gate-added errors (the case input and
+   one expected and one actual line). Find the runs that have any:
+   ```bash
+   grep -rIl '"execution_report"' ~/.cqc_cpcc/grading_results
+   grep -rIlE '"diff_excerpt": "[^"]' ~/.cqc_cpcc/grading_results     # runs that stored program output
+   ```
+   Purge by deleting those run files (`<run_key>.json`; the results can be re-created by re-grading), or
+   delete the whole folder. Results are session-only on Streamlit Community Cloud, so nothing is on disk
+   there. Also look in the feedback `.docx` files and hand-back ZIPs: a gate-added error's note is in them.
 
 ## Changing the image
 
@@ -236,7 +246,12 @@ on the solution and on each student's program. Grading uses them through the pla
    The instructions and the solution go into the prompt inside a nonce fence, and any fence
    marker already in them is stripped. The nonce is a keyed hash (HMAC-SHA256) of the
    assignment text under a per-process secret: unguessable from outside, stable for one
-   assignment within a process, and not random per call.
+   assignment within a process, and not random per call. Because the secret differs between
+   processes, two processes would send different prompts for the same assignment, so the
+   prompt-evaluation request capture (and only it) wraps its work in `fence.deterministic_nonce()`,
+   which derives the nonce under a fixed, public capture key. That makes `test-case-generation`
+   request-identical between a base and a head process, so an unchanged suite is skipped in an A/B.
+   Production calls never enter the switch.
 3. `validate_cases_on_solution(...)`: one sandbox job runs every case twice on the solution.
    A case is dropped for a timeout, a crash, reading past the end of input, empty output,
    output that changes between the two runs, or output cut at the cap. A solution that does
@@ -401,6 +416,21 @@ note kept, `removed_by_instructor`); `reinstate` puts it back. The PR 15 UI call
 so with `CQC_EXECUTION=off` no solution text leaves the host. Otherwise it parses the sample runs,
 makes the one cached model call, validates the cases on the solution and returns the plan.
 
+```python
+plan, reason = await derive_execution_plan(instructions, solution_sources)
+if plan is None:       # the sandbox is off or missing; no model call was made. `reason` says why:
+    ...                #   "execution disabled (CQC_EXECUTION=off)", "docker not found on PATH",
+                       #   "docker daemon is not running", "exec-runner image is not built",
+                       #   "exec-runner image out of date, rebuild"
+elif not plan.enabled: # built, but unusable; `reason` is plan.disabled_reason, e.g.
+    ...                #   "the solution does not compile", "every case was dropped", "runner error code"
+else:
+    result = await grade_with_rubric(..., execution_plan=plan)
+```
+
+`solution_sources` comes from `execution_check.load_solution_sources`. The return shape is always
+`(plan_or_None, reason_string)`; `reason` is empty for a usable plan.
+
 ### Threat model addition
 
 The evidence fragment sends program output to the grading model. A hostile program can print text meant
@@ -414,5 +444,13 @@ added.
 ### Rollback
 
 `CQC_EXECUTION=off` (nothing runs, the prompt and the grade are as before). Removing the gate entirely
-is a revert of PR 14; nothing is persisted outside the result's reconciliation notes and
-`execution_report`.
+is a revert of PR 14, with two things a revert does not undo:
+
+- Saved results keep their `execution_report` (program output excerpts) and reconciliation notes. Purge
+  them as in step 7 of the incident path above.
+- An error the gate added stays in a saved result and in any feedback already produced. After a revert
+  there is no Remove control for it (the UI is PR 15), so removing one means re-grading that student or
+  editing the result by hand. Before reverting, use `reconciliation.remove_added` on the results that
+  matter, or re-grade the section.
+
+Nothing else is persisted.

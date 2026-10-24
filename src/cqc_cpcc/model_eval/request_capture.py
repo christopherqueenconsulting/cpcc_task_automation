@@ -151,7 +151,11 @@ async def capture_suite(suite_id: str) -> dict:
     outputs: dict = {}
     calls: dict = {}
     sink: list = []
-    with pinned_registry(model, effort, profile, roles=(suite.role,)):
+    from cqc_cpcc.utilities.AI.fence import deterministic_nonce
+
+    # The fence nonce is keyed by a per-process secret in production; a capture needs it reproducible
+    # so an unchanged prompt hashes the same in the head and base processes.
+    with pinned_registry(model, effort, profile, roles=(suite.role,)), deterministic_nonce():
         with _patched(sink, test_mode=False):
             for case in suite.cases():
                 sink.clear()

@@ -330,9 +330,23 @@ def test_a_structural_error_is_kept_even_when_every_case_matches():
     assert graded_score(result) == graded_score(unscored(loop))
 
 
-@pytest.mark.parametrize("text", [
+STRUCTURAL_PHRASES = [
     "the method is never called", "an array is not used", "constants are missing", "recursion required",
-    "uses while( x ) wrongly", "the for loop is missing", "a do-while loop", "wrong class design", "switch missing"])
+    "uses while( x ) wrongly", "the for loop is missing", "a do-while loop", "wrong class design", "switch missing",
+    "Uses separate if statements instead of the required if/else if chain", "Does not use a nested if as specified",
+    "Passes the argument by value instead of by reference", "Passes the value instead of a pointer",
+    "Declares the rate as int; wrong data type", "Uses a list instead of the required structure",
+    "Uses a dictionary instead of the required array", "Uses a tuple where a struct is required",
+    "Uses an object instead of the required structure", "Magic number 0.07 used instead of a named value",
+    "Uses a literal instead of a final value", "Does not use the required constructor",
+    "Does not use the required getter", "Does not call the setter", "Missing the required prototype",
+    "Does not use the required helper function", "Uses a while statement instead of a for each",
+    "Uses an if statement instead of a ternary", "Does not read the input from the user",
+    "Ignores Scanner input", "Does not use the required operator", "Does not use Math.pow",
+    "Does not use the required String method", "Uses the wrong boolean expression", "Missing static keyword"]
+
+
+@pytest.mark.parametrize("text", STRUCTURAL_PHRASES)
 def test_what_counts_as_structural(text):
     assert eg.is_structural(err("X", "Sequence error", "major", text))
 
@@ -481,7 +495,7 @@ def test_csc134_a_single_misspelled_output_word_becomes_the_misspelling_error():
     definitions = defs("CSC_134", "Project")
     plan = make_plan(cases=[TestCase(id=f"T{i}", stdin=f"{i}\n", source="llm", expected_output="Welcome back friend\n",
                                      validated=True) for i in (1, 2, 3)], conditions=[], condition_map={})
-    exe = run(plan, FakeRunner(student={f"T{i}": "Welcome bak friend\n" for i in (1, 2, 3)}))
+    exe = run(plan, FakeRunner(student={f"T{i}": "Welcome back freind\n" for i in (1, 2, 3)}))
     major = model_error(definitions, "MAJOR_FORMATTING", "output must match exactly")
     result, _ = gate(unscored(major), exe, definitions)
     [kept] = result.detected_errors
@@ -494,6 +508,22 @@ def test_csc134_a_single_misspelled_output_word_becomes_the_misspelling_error():
 def test_a_different_word_is_not_a_misspelling():
     assert not eg.is_single_word_misspelling("--- expected\n+++ actual\n@@\n-Hello world\n+Hello there")
     assert eg.is_single_word_misspelling("--- expected\n+++ actual\n@@\n-Hello world\n+Hello wrold")
+
+
+@pytest.mark.parametrize("expected,actual", [("Pass", "Past"), ("Male", "Mile"), ("five", "fine"),
+                                             ("Grade", "Grave"), ("Total", "Tonal")])
+def test_a_different_word_one_letter_away_is_not_a_typo(expected, actual):
+    assert not eg.is_single_word_misspelling(f"--- expected\n+++ actual\n@@\n-Result: {expected}\n+Result: {actual}")
+
+
+@pytest.mark.parametrize("expected,actual", [("friend", "freind"), ("Welcome", "Welcomee"), ("balance", "balace"),
+                                             ("percent", "percnet")])
+def test_a_dropped_added_or_swapped_letter_is_a_typo(expected, actual):
+    assert eg.is_single_word_misspelling(f"--- expected\n+++ actual\n@@\n-Result: {expected}\n+Result: {actual}")
+
+
+def test_two_extra_letters_are_not_a_typo():
+    assert not eg.is_single_word_misspelling("--- expected\n+++ actual\n@@\n-Welcome\n+Welcomeee")
 
 
 # --------------------------------------------------------------------------- #
@@ -666,7 +696,7 @@ async def test_the_stages_run_in_the_documented_order(mocker):
     real_run = eg.run_student_execution
     real_gate = eg.apply_execution_gate
 
-    def run_stage(plan, files):
+    def run_stage(plan, files, owner=None):
         seen.append("execution_run")
         return real_run(plan, files, runner=FakeRunner())
 
@@ -879,3 +909,228 @@ async def test_a_plan_is_built_from_samples_the_suggestion_and_a_validation_on_t
         solution_out=lambda stdin: f"Total: {stdin.strip()}\n"))
     assert plan is not None and plan.enabled and reason == "" and plan.independent_cases()
     assert plan.covered_by_independent("C1")
+
+
+# --------------------------------------------------------------------------- #
+# What matching output cannot disprove (instructor review of the gate)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("text", [
+    "Hard-codes the totals instead of computing them", "The program hardcodes the answer",
+    "Prints the expected total as a literal", "Uses a constant answer", "Does not calculate the tax",
+    "Does not compute the total", "Prints the result without computing it", "Prints the total directly",
+    "Fixed output for every input", "No computation is done", "Uses a magic number", "doesn't calculate anything"])
+def test_a_hard_coded_style_error_is_unverifiable(text):
+    assert eg.is_unverifiable(err("CSC_251_EXAM_1_OUTPUT_IMPACT_ERROR", "Output Impact Error", "major", text))
+
+
+def test_a_hard_coded_program_that_matches_every_case_keeps_the_error_with_a_note():
+    definitions = defs("CSC_251")
+    hard = model_error(definitions, "OUTPUT_IMPACT_ERROR", "Hard-codes the totals instead of computing them")
+    result, info = gate(unscored(hard), run(make_plan(), FakeRunner()), definitions)
+    assert codes(result) == [hard.code] and info["action"] == "kept"
+    assert any(n.action == "kept" and "does not really compute" in n.reason for n in result.reconciliation)
+
+
+@pytest.mark.parametrize("text", [
+    "wrong when the balance is 0", "wrong for age 17", "fails when sales exceed 1000", "wrong for a score of 90",
+    "wrong for x > 100", "breaks for a negative amount", "fails on an empty name", "off by one at the boundary",
+    "wrong when exactly equal"])
+def test_an_error_that_cites_a_value_the_cases_may_lack_is_kept(text):
+    definitions = defs("CSC_251")
+    cited = model_error(definitions, "OUTPUT_IMPACT_ERROR", text)
+    assert eg.cited_inputs(cited) == [] and eg.cites_value(cited)
+    result, _ = gate(unscored(cited), run(make_plan(), FakeRunner()), definitions)
+    assert codes(result) == [cited.code]
+    assert any("cannot be re-run" in n.reason for n in result.reconciliation)
+
+
+def test_an_error_with_no_value_is_still_removed_on_all_match():
+    definitions = defs("CSC_251")
+    plain = model_error(definitions, "OUTPUT_IMPACT_ERROR", "The printed total is wrong")
+    assert not eg.cites_value(plain) and not eg.cites_value(
+        model_error(definitions, "MINOR_FORMATTING", "Uses 2 decimal places"))
+    result, _ = gate(unscored(plain), run(make_plan(), FakeRunner()), definitions)
+    assert codes(result) == []
+
+
+def test_a_structural_phrasing_survives_an_all_match_run_in_the_whole_pipeline():
+    definitions = defs("CSC_251")
+    errors = [model_error(definitions, "SEQUENCE_AND_SELECTION_ERROR", t) for t in STRUCTURAL_PHRASES[9:14]]
+    result, _ = gate(unscored(*errors), run(make_plan(), FakeRunner()), definitions)
+    assert len(result.detected_errors) == 5
+    assert sum(1 for n in result.reconciliation if n.action == "kept") == 5
+
+
+def test_nondeterministic_student_output_is_a_difference_and_adds_nothing():
+    definitions = defs("CSC_251")
+    counter = iter(range(100))
+
+    class Random(FakeRunner):
+        def __call__(self, language, files, cases=(), **kw):
+            out = super().__call__(language, files, cases, **kw)
+            if files[0].content != SOLUTION:
+                out = pr.RunOutcome(status="ok", compile=out.compile, cases=tuple(
+                    case_outcome(c.id, f"Total: {next(counter)}.00\n") for c in out.cases))
+            return out
+
+    exe = run(make_plan(), Random())
+    result, info = gate(unscored(), exe, definitions)
+    assert info["mode"] == "differs" and not result.detected_errors and info["disagrees"]
+    model = three_model_errors(definitions)
+    kept, _ = gate(unscored(*model), run(make_plan(), Random()), definitions)
+    assert len(kept.detected_errors) == 3
+
+
+def test_a_student_that_reads_past_the_end_of_input_is_a_runtime_error_even_when_the_output_matches():
+    eof = case_outcome("T1", EXPECTED["T1"], status="RUNTIME_ERROR", exit_code=1, eof_error=True)
+    exe = run(make_plan(), FakeRunner(student={"T1": eof}))
+    assert exe.report.cases[0].verdict == "runtime_error"
+    assert exe.report.cases[0].detail == "reads_more_input" or exe.report.cases[0].detail
+    result, info = gate(unscored(*three_model_errors(defs("CSC_251"))), exe, defs("CSC_251"))
+    assert len(result.detected_errors) == 3 and info["mode"] == "differs"
+
+
+def test_a_student_that_leaves_input_unread_still_matches():
+    exe = run(make_plan(), FakeRunner())  # the fake never consumes stdin; matching output is a match
+    assert {c.verdict for c in exe.report.cases} == {"match"}
+
+
+def test_a_correct_but_slow_program_is_a_timeout_that_keeps_errors_and_adds_none():
+    definitions = defs("CSC_251")
+    slow = case_outcome("T2", EXPECTED["T2"], status="TIMEOUT", exit_code=None)
+    exe = run(make_plan(), FakeRunner(student={"T2": slow}))
+    assert exe.report.cases[1].verdict == "timeout"
+    result, info = gate(unscored(*three_model_errors(definitions)), exe, definitions)
+    assert len(result.detected_errors) == 3 and all(e.source == "model" for e in result.detected_errors)
+    nothing, _ = gate(unscored(), exe, definitions)
+    assert not nothing.detected_errors
+
+
+@pytest.mark.parametrize("course,assignment,spacing_severity,decimal_severity", [
+    ("CSC_251", "Exam1", "minor", "major"), ("CSC_134", "Project", "major", "minor"),
+    ("CSC_151", "Exam1", "minor", "minor")])
+def test_two_gate_added_errors_cost_at_most_one_major_and_one_minor(course, assignment, spacing_severity,
+                                                                    decimal_severity):
+    verdicts = [("format_only", "spacing"), ("format_only", "decimal_scale"), ("format_only", "number_format")]
+    result, _ = gate(unscored(), report_exec(make_plan(), verdicts), defs(course, assignment))
+    severities = [e.severity for e in result.detected_errors]
+    assert severities.count("major") <= 1 and severities.count("minor") <= 1
+    assert sorted(severities) == sorted({spacing_severity, decimal_severity})
+    assert len(set(codes(result))) == len(codes(result))
+
+
+def test_an_owner_id_reaches_the_sandbox_and_a_cited_check_must_fit_the_whole_budget():
+    seen = []
+
+    class Spy(FakeRunner):
+        def __call__(self, *a, owner=None, **k):
+            seen.append(owner)
+            return super().__call__(*a, owner=owner, **k)
+
+    exe = eg.run_student_execution(make_plan(), SOURCE_FILES, runner=Spy(), owner="job-7")
+    assert seen == ["job-7"] and exe.owner == "job-7"
+    budget = eg.ExecutionBudget()
+    both = pr.max_run_seconds(1, 2) + pr.max_run_seconds(1, 1)
+    budget.spent = budget.limit - both + 1
+    assert budget.allows(1, 2) and budget.allows(1, 1) and not budget.allows_cited_check(1)
+
+
+def test_invisible_direction_marks_are_removed_from_student_text():
+    assert eg.inert("a\u202eb\u200bc\u2066d") == "`a b c d`"
+    assert "\u202e" not in "\n".join(execution_evidence_section(
+        make_plan(), ExecutionReport(plan_hash="h", status="ok", cases=[
+            CaseResult(case_id="T\u202e1", verdict="match")]), "n"))
+
+
+# --------------------------------------------------------------------------- #
+# Branches of the pipeline that must never fail a grade
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_an_exception_in_the_gate_is_a_note_and_the_grade_goes_on(mocker):
+    mocker.patch("cqc_cpcc.rubric_grading.apply_compile_gate",
+                 lambda result, files, defs_=None: (result, {"ran": False, "action": "none"}))
+    mocker.patch.object(eg, "apply_execution_gate", side_effect=RuntimeError("boom"))
+    result, _ = await grade(mocker, plan=make_plan(), model_errors=three_model_errors(defs("CSC_251")),
+                            definitions=defs("CSC_251"), runner=FakeRunner())
+    assert len(result.detected_errors) == 3
+    assert any(n.stage == "execution" and "failed unexpectedly" in n.reason for n in result.reconciliation)
+
+
+@pytest.mark.asyncio
+async def test_the_job_owner_and_gate_report_reach_the_run(mocker):
+    seen = []
+    mocker.patch("cqc_cpcc.rubric_grading.apply_compile_gate",
+                 lambda result, files, defs_=None: (result, {"ran": False, "action": "none"}))
+    real = eg.run_student_execution
+    mocker.patch.object(eg, "run_student_execution",
+                        lambda plan, files, owner=None: seen.append(owner) or real(plan, files, runner=FakeRunner(),
+                                                                                  owner=owner))
+    report = {}
+    await grade(mocker, plan=make_plan(), definitions=defs("CSC_251"), execution_owner="job-9", gate_report=report)
+    assert seen == ["job-9"] and report["execution_run"]["status"] == "ok" and report["execution"]["verified"]
+
+
+def test_the_runner_status_is_rechecked_after_a_runner_error(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pr, "reset_runner_status_cache", lambda: calls.append(1))
+    run(make_plan(), FakeRunner(fail_from_call=0))
+    assert calls == [1]
+
+
+def test_cited_check_gives_up_on_a_bad_reference_run():
+    exe = run(make_plan(), FakeRunner(solution_out=lambda stdin: ""))  # the solution prints nothing: no reference
+    cited = model_error(defs("CSC_251"), "OUTPUT_IMPACT_ERROR", "The total is wrong when the input is 50")
+    result, _ = gate(unscored(cited), exe, defs("CSC_251"))
+    assert codes(result) == [cited.code]
+    assert eg.check_cited_inputs(exe, None, ["5\n"]) is None and eg.check_cited_inputs(exe, [], []) is None
+
+
+def test_the_phrasing_of_a_misspelling_route_needs_the_courses_misspelling_definition():
+    definitions = [d for d in defs("CSC_134", "Project") if not d.error_id.endswith("_MISSPELLING")]
+    plan = make_plan(cases=[TestCase(id=f"T{i}", stdin=f"{i}\n", source="llm", expected_output="Welcome back friend\n",
+                                     validated=True) for i in (1, 2, 3)], conditions=[], condition_map={})
+    exe = run(plan, FakeRunner(student={f"T{i}": "Welcome back freind\n" for i in (1, 2, 3)}))
+    major = model_error(defs("CSC_134", "Project"), "MAJOR_FORMATTING", "output must match exactly")
+    result, _ = gate(unscored(major), exe, definitions)
+    assert codes(result) == [major.code]
+
+
+# --------------------------------------------------------------------------- #
+# Reproducible nonce for request capture only
+# --------------------------------------------------------------------------- #
+def _nonce_in_new_process(deterministic: bool) -> str:
+    import os
+    import subprocess
+    import sys
+
+    code = ("from cqc_cpcc.utilities.AI import fence\n"
+            "import contextlib\n"
+            f"cm = fence.deterministic_nonce() if {deterministic} else contextlib.nullcontext()\n"
+            "with cm:\n    print(fence.new_fence_nonce('instructions', 'solution', 'java'))\n")
+    src = str(__import__("pathlib").Path(fence.__file__).resolve().parents[3])
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+                         env={**os.environ, "PYTHONPATH": src})
+    return out.stdout.strip()
+
+
+def test_the_nonce_is_reproducible_across_processes_only_inside_a_capture():
+    assert _nonce_in_new_process(True) == _nonce_in_new_process(True) != ""
+    assert _nonce_in_new_process(False) != _nonce_in_new_process(False)
+
+
+def test_production_nonces_stay_random_and_keyed_outside_the_switch():
+    with fence.deterministic_nonce():
+        inside = fence.new_fence_nonce("a"), fence.new_fence_nonce(), fence.new_fence_nonce()
+    assert inside[1] == inside[2]  # fixed while capturing
+    assert fence.new_fence_nonce() != fence.new_fence_nonce()
+    assert fence.new_fence_nonce("a") != inside[0]  # the per-process key, not the capture key
+    assert fence.new_fence_nonce("a") == fence.new_fence_nonce("a")
+
+
+def test_two_captures_of_the_test_case_prompt_are_identical():
+    from cqc_cpcc.model_eval.request_capture import capture_suite
+    import asyncio
+
+    first = asyncio.run(capture_suite("test-case-generation"))
+    second = asyncio.run(capture_suite("test-case-generation"))
+    assert first["requests"] == second["requests"]
