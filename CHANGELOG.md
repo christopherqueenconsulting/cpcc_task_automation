@@ -5,6 +5,49 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc6 - 2026-10-24
+
+Prerelease, on top of 0.2.0-rc5. Adds the Results "Solution" tab and a code-runner page, and fixes how the
+evaluation tooling counts the cost of retried calls and handles a truncated model call. Grading prompts and
+scoring are unchanged, so with the output check off, scores match rc5.
+
+What to check (about 5 minutes, synthetic submissions from `evals/datasets` only, never real student work):
+
+1. Grade one synthetic case with the output check off. Expected: grading and the score equal what rc5 gave
+   for the same input.
+2. Open Results. Expected: the tabs read Students, Solution, Hand back, Write to BrightSpace.
+3. Only if Docker is installed and running and the output check is on for the run: open the Solution tab, run
+   the solution on one case, and press "Open in new tab". Expected: the code-runner page shows the solution
+   and its output and no student name or score. Full steps: "Ten-minute operator check" in
+   [docs/execution-gate.md](docs/execution-gate.md).
+4. On Streamlit Community Cloud, or locally with `CQC_EXECUTION=off` in `.env` and a restart. Expected: the
+   Solution tab shows only the notice that the output check runs in a local Docker sandbox and is not
+   available here; "Open in new tab" opens a page with the same notice and no results.
+
+If a step fails, tell the maintainer and see the rollback section of [docs/RELEASING.md](docs/RELEASING.md).
+
+Not in this release: the system/user prompt split ("19b", https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/446, parked) and the eclipse-temurin 25 bump
+(https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/438). The pymupdf 2.0 warning in the rc5 entry still applies.
+
+- Solution tab and undocked code-runner page (PR 16): the Results "Solution" tab shows the instructor's
+  solution with OneCompiler and OnlineGDB links, can run it locally in the sandbox on a chosen case or typed
+  input, compares each student's stored output with the expected output, and warns when more than 80% of at
+  least three students differ on one case. "Open in new tab" opens the hidden `code_runner` page, which checks
+  the run key and the sandbox before reading anything and shows no student name or score. The workspace is
+  saved only while the sandbox was ready. The solution (never student work) goes to onecompiler.com only when
+  "Run in OneCompiler" is clicked. Merge `22bcfb9`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/451
+- Evaluation: a retried call now records its real usage cost in `cost_usd`; the failed attempts' estimates
+  are kept as a budget-only `retry_charge_usd`, so the A/B cost ratio is no longer inflated by retries. The
+  A/B report adds an "estimated-cost rows" line and flags `ESTIMATE-DRIVEN` when estimates are 10% or more of
+  a side's cost. Eval tooling only; grading is unchanged. Merge `23f2688`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/453
+- Evaluation: the eval runner retries a call that ended truncated (`finish_reason=length`) once and records the
+  first attempt in `error_detail`. The optional `CQC_EVAL_MAX_TOKENS` (1 to 65536) replaces the eval's own
+  32768 output-token limit; unset, requests are unchanged. Eval tooling only; grading is unchanged. Merge
+  `535ab91`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/455
+- Tests: the hung-primary / high-effort-fallback timing test uses a fake clock instead of the real one, so it
+  no longer flakes under CI load. Merge `c73d784`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/456
+- Docs: maintainer review guide refreshed. Merges `503553b` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/452), `bfc4b79` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/454) and https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/457.
+
 ## 0.2.0-rc5 - 2026-10-24
 
 Prerelease, on top of 0.2.0-rc4. Grading can now run each student's program in a local Docker sandbox and
