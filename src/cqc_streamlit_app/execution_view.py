@@ -54,7 +54,7 @@ from cqc_cpcc.utilities.AI import model_registry
 from cqc_cpcc.utilities.AI.model_registry import resolve as resolve_model
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.output_compare import Verdict
-from cqc_cpcc.utilities.utils import read_file_bytes
+from cqc_cpcc.utilities.utils import read_file
 
 #: Shown where programs cannot run: Streamlit Community Cloud, or ``CQC_EXECUTION=off``.
 NOTICE = ("Output check runs programs in a local Docker sandbox and is not available here. "
@@ -317,16 +317,26 @@ def parse_ignore_lines(text: str) -> list:
 
 
 def _combined_bytes(solution_file_paths) -> tuple:
-    """``(bytes, filename)`` for ``load_solution_sources``: one file as it is, several as a ZIP."""
+    """``(bytes, filename)`` for ``load_solution_sources``: one file as it is, several as a ZIP.
+
+    Source files only, read with ``utils.read_file`` (the reader the rest of the page uses, which
+    confines the path). A lone ``.zip`` solution is not taken in this version: upload the source
+    files directly.
+    """
     files = []
     for orig, temp in solution_file_paths:
         name = os.path.basename(str(orig))
-        if not (language_of_filename(name) or name.lower().endswith(".zip")):
+        if name.lower().endswith(".zip"):
+            raise SolutionLoadError("a ZIP solution is not supported here: upload the source files directly")
+        if not language_of_filename(name):
             continue  # the uploader also takes .txt, .docx and .pdf: not runnable
         try:
-            files.append((name, read_file_bytes(str(temp), max_bytes=pr.MAX_JOB_BYTES)))
+            text = read_file(str(temp), False)
         except ValueError:
-            raise SolutionLoadError("the solution file is outside the folders the app may read, or too large") from None
+            raise SolutionLoadError("the solution file is outside the folders the app may read") from None
+        if not text.strip():
+            raise SolutionLoadError("cannot read the solution")
+        files.append((name, text.encode("utf-8")))
     if not files:
         raise SolutionLoadError("no source file found in the solution")
     if len(files) == 1:

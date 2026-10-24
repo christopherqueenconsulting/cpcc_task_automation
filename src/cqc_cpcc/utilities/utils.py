@@ -602,37 +602,6 @@ Please manually review this video file for grading."""
     return str(contents)
 
 
-def read_file_bytes(file_path: str, max_bytes: int = 1_000_000) -> bytes:
-    """Return a file's raw bytes (at most ``max_bytes``; a bigger file raises ``ValueError``).
-
-    Same confinement as :func:`read_file`: the path is resolved and must sit under
-    :func:`readable_roots`; the guard is written out in the same shape so the ``open()`` below
-    reads the resolved path.
-    """
-    if not file_path:
-        raise ValueError("No file path given to read.")
-
-    unresolved = file_path
-    resolved = os.path.realpath(file_path)
-
-    for allowed_root in readable_roots():
-        if resolved == allowed_root or resolved.startswith(allowed_root + os.sep):
-            file_path = resolved
-            break
-    else:
-        raise ValueError(
-            "Refusing to read %r: it resolves to %r, which is outside the temp "
-            "directory and the working directory. Set %s if this location is "
-            "intentional." % (unresolved, resolved, _EXTRA_READABLE_ROOTS_ENV)
-        )
-
-    with open(file_path, mode='rb') as f:
-        data = f.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        raise ValueError("The file is larger than %d bytes." % max_bytes)
-    return data
-
-
 def read_files(file_paths: Union[str, List[str]], convert_to_markdown: bool = False) -> str:
     if isinstance(file_paths, str):
         # If a single string is provided, treat it as a file path

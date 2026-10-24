@@ -506,7 +506,8 @@ prompt then sees the evidence), is disabled while Docker is not ready or a job i
 session's original files. **Remove** (next to **Reinstate** in the Errors tab's scoring notes) takes out an
 error the output check added and re-scores deterministically; the note stays and Reinstate undoes it.
 
-**Known limits.** The cited-input re-check (PR 14, "Before removing an error that cites a concrete input")
+**Known limits.** A lone `.zip` solution is not taken in this version (the page says to upload the source
+files directly); several source files are packed in memory. The cited-input re-check (PR 14, "Before removing an error that cites a concrete input")
 needs the solution text in the prompt to hash to the plan's; the Grade Assignment page sends the solution
 as it has always done (file-name headers and code fences), which does not, so an error that cites a
 specific value is kept rather than re-checked. A restored run has no plan or test cases in the session, so

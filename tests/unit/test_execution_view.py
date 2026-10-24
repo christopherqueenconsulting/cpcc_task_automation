@@ -894,6 +894,14 @@ def test_a_symlink_pointing_out_of_the_allowed_folders_is_refused(tmp_path, monk
         ev._combined_bytes([("A.java", str(link))])
 
 
+def test_a_zip_solution_is_not_taken_and_says_so(tmp_path):
+    z = tmp_path / "sol.zip"
+    z.write_bytes(b"PK")
+    with pytest.raises(ev.SolutionLoadError, match="upload the source files directly"):
+        ev._combined_bytes([("sol.zip", str(z))])
+    assert ev.load_solution([("sol.zip", str(z))]) is None
+
+
 def test_a_missing_file_gets_a_fixed_message(tmp_path):
     assert ev.load_solution([("A.java", str(tmp_path / "gone.java"))]) is None
 
