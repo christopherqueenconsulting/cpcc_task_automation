@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import cache_session
+from cqc_cpcc.model_eval import cache_session, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.dataset import AUTHORS_IN_DATASET, EvalCase, checklist_model, error_definitions, rubric
 from cqc_cpcc.utilities.AI import model_registry
@@ -208,6 +208,8 @@ async def run_model(
     sid = session_id if session_id is not None else cache_session.session_for_run(
         "grading", model, effort, side="model-eval")
     production = grade_fn is grade_with_rubric
+    if (cache_session.warm_first_enabled() if warm_first is None else warm_first) and sid is not None:
+        cache_session.warm_wait_s()  # a bad CQC_EVAL_WARM_WAIT_S stops the run before any call
     use_warm = (cache_session.warm_first_enabled() if warm_first is None else warm_first) and sid is not None and production
 
     async def one(case: EvalCase, repeat: int, resolved) -> CallRecord:
@@ -287,7 +289,8 @@ async def run_model(
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001 - no grouping: every call runs at once, as before
-                logger.warning(f"[eval] warm-first grouping skipped: {type(e).__name__}: {str(e)[:200]}")
+                logger.warning(f"[eval] warm-first grouping skipped: {type(e).__name__}: "
+                               f"{error_detail.redact_message(str(e), 120)}")
                 plan = {}
 
         async def gated(case: EvalCase, repeat: int) -> CallRecord:

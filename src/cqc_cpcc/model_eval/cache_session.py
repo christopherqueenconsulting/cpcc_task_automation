@@ -19,8 +19,12 @@ app's prompt builders (the requests are built by the same code as the app's):
 * **Usage tap.** The response usage of the last gateway call of a record is read for cached tokens,
   cache-write tokens and reasoning tokens (``prompt_tokens_details`` / ``completion_tokens_details``).
 
-Switches (environment): ``CQC_EVAL_SESSION_ID`` (default on), ``CQC_EVAL_WARM_FIRST`` (default: on when
-the session id is on). ``0``/``off``/``false``/``no`` turns one off.
+Switches (environment, read when a run starts; an invalid value raises ``ValueError`` before any call):
+
+* ``CQC_EVAL_SESSION_ID``: default on. Accepts ``1``/``on``/``true``/``yes`` and ``0``/``off``/``false``/``no``.
+* ``CQC_EVAL_WARM_FIRST``: default on exactly when the session id is on. Same accepted values.
+* ``CQC_EVAL_WARM_WAIT_S``: longest a follower waits for its group's leader, in seconds. Default 600; a number
+  from 1 to 7200.
 """
 
 from __future__ import annotations
@@ -43,8 +47,12 @@ MAX_SESSION_ID_CHARS = 64
 #: Below about 1,024 tokens (the providers' minimum cacheable prefix) a prefix cannot hit, so there is
 #: nothing to warm. 4 characters per token is the usual rule of thumb.
 MIN_PREFIX_CHARS = 4096
-#: Longest a follower waits for its group's leader before it goes ahead anyway.
-MAX_WARM_WAIT_S = 1800.0
+ENV_WARM_WAIT = "CQC_EVAL_WARM_WAIT_S"
+#: Longest a follower waits for its group's leader before it goes ahead anyway (default; see ``warm_wait_s``).
+DEFAULT_WARM_WAIT_S = 600.0
+HARD_MAX_WARM_WAIT_S = 7200.0
+#: What may appear in a session id sent to the provider, and its length limit (OpenRouter allows 256).
+SESSION_ID_MAX_CHARS = 256
 FENCE_MARKER = "<<<UNTRUSTED"
 
 _OFF = ("0", "off", "false", "no")
@@ -70,6 +78,26 @@ def session_enabled() -> bool:
 def warm_first_enabled() -> bool:
     """Default: on exactly when the session id is on (warming without sticky routing proves nothing)."""
     return _flag(ENV_WARM, session_enabled())
+
+
+def warm_wait_s() -> float:
+    """``CQC_EVAL_WARM_WAIT_S`` (1 to 7200 seconds), else 600. Anything else raises ``ValueError``."""
+    raw = os.environ.get(ENV_WARM_WAIT)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_WARM_WAIT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not (1.0 <= value <= HARD_MAX_WARM_WAIT_S):
+        raise ValueError(f"{ENV_WARM_WAIT} must be a number from 1 to {HARD_MAX_WARM_WAIT_S:.0f}, got {raw!r}")
+    return value
+
+
+def clean_session_id(value) -> Optional[str]:
+    """``value`` limited to ``[A-Za-z0-9_-]`` and 256 characters; None when nothing is left."""
+    text = "".join(ch for ch in str(value or "") if ch.isascii() and (ch.isalnum() or ch in "_-"))
+    return text[:SESSION_ID_MAX_CHARS] or None
 
 
 def current_side() -> str:
@@ -149,9 +177,15 @@ class _Completions:
 
     async def create(self, **kwargs):
         sid = _session.get()
-        if sid:
-            extra = dict(kwargs.get("extra_body") or {})
+        extra = kwargs.get("extra_body")
+        if sid or (isinstance(extra, dict) and "session_id" in extra):
+            extra = dict(extra or {})
             extra.setdefault("session_id", sid)  # only ever this key: provider, model and schema stay as built
+            cleaned = clean_session_id(extra["session_id"])  # whatever its source, a safe id of at most 256 chars
+            if cleaned is None:
+                del extra["session_id"]
+            else:
+                extra["session_id"] = cleaned
             kwargs["extra_body"] = extra
         response = await self._inner.create(**kwargs)
         if self._tap is not None:
@@ -328,7 +362,10 @@ def warm_plan(order: Iterable, key_of: Callable[[Any], Optional[str]]) -> dict:
     return plan
 
 
-async def wait_for_leader(event: asyncio.Event, timeout: float = MAX_WARM_WAIT_S) -> None:
+async def wait_for_leader(event: asyncio.Event, timeout: Optional[float] = None) -> None:
+    """Wait for a group's leader; give up after ``timeout`` (``warm_wait_s()``) and go ahead."""
+    if timeout is None:
+        timeout = warm_wait_s()
     try:
         await asyncio.wait_for(event.wait(), timeout)
     except asyncio.TimeoutError:

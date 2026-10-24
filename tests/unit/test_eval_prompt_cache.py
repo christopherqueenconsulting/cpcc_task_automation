@@ -8,7 +8,6 @@ a run with the switches off is what it was before.
 
 import asyncio
 import json
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +19,7 @@ from cqc_cpcc.model_eval import request_capture as rc
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.suites import base
 from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client
+from tests.unit.virtual_clock import VirtualClockLoop
 from tests.unit.test_prompt_suites import _cases, _toy_suite
 
 pytestmark = pytest.mark.unit
@@ -43,10 +43,10 @@ def clean_env(monkeypatch):
 class FakeOpenRouter:
     """Records every request; answers like OpenRouter, with cache usage when asked."""
 
-    def __init__(self, delay=0.0, cached=0, write=0, reasoning=0, cost=0.001, fail_first=None, fail_n=3):
+    def __init__(self, yields=0, hold=None, cached=0, write=0, reasoning=0, cost=0.001, fail_first=None, fail_n=3):
         self.requests = []
         self.events = []
-        self.delay, self.cached, self.write, self.reasoning, self.cost = delay, cached, write, reasoning, cost
+        self.yields, self.hold, self.cached, self.write, self.reasoning, self.cost = yields, hold, cached, write, reasoning, cost
         self.fail_first, self.fail_n = fail_first, fail_n
         self.chat = SimpleNamespace(completions=self)
 
@@ -54,8 +54,10 @@ class FakeOpenRouter:
         index = len(self.requests)
         self.requests.append(kwargs)
         self.events.append(("start", kwargs["messages"][-1]["content"]))
-        if self.delay:
-            await asyncio.sleep(self.delay)
+        for _ in range(self.yields):  # lets other tasks run; ordering never depends on wall time
+            await asyncio.sleep(0)
+        if self.hold is not None:
+            await self.hold.wait()  # a call that never finishes (until the test sets the gate)
         self.events.append(("end", kwargs["messages"][-1]["content"]))
         if self.fail_first and index < self.fail_n:
             raise self.fail_first
@@ -277,7 +279,7 @@ class TestWarmFirst:
 
     @pytest.mark.parametrize("adaptive_mode", [False, True])
     async def test_the_leader_finishes_before_the_group_fans_out(self, monkeypatch, adaptive_mode):
-        client = FakeOpenRouter(delay=0.05)
+        client = FakeOpenRouter(yields=3)
         monkeypatch.setattr(openrouter_client, "_get_openrouter_client", lambda *a, **k: client)
         records, budget = await run(model_suite(), n=6, adaptive_mode=adaptive_mode, warm_first=True,
                                     prefix_keys=self.keys({}))
@@ -287,13 +289,13 @@ class TestWarmFirst:
         assert budget.reserved == 0.0 and budget.spent == pytest.approx(6 * 0.001)
 
     async def test_off_means_everything_starts_at_once(self, monkeypatch):
-        client = FakeOpenRouter(delay=0.05)
+        client = FakeOpenRouter(yields=3)
         monkeypatch.setattr(openrouter_client, "_get_openrouter_client", lambda *a, **k: client)
         await run(model_suite(), n=6, warm_first=False, concurrency=8)
         assert [k for k, _ in client.events][:6] == ["start"] * 6
 
     async def test_separate_groups_and_ungrouped_cases_do_not_wait_for_each_other(self, monkeypatch):
-        client = FakeOpenRouter(delay=0.05)
+        client = FakeOpenRouter(yields=3)
         monkeypatch.setattr(openrouter_client, "_get_openrouter_client", lambda *a, **k: client)
         mapping = {"c0": "A", "c1": "A", "c2": "B", "c3": "B", "c4": None}
         await run(model_suite(), n=5, warm_first=True, prefix_keys=self.keys(mapping))
@@ -315,13 +317,14 @@ class TestWarmFirst:
         assert len(records) == 4 and sum(r.ok for r in records) == 3
 
     async def test_cancelling_a_run_starts_no_follower(self, monkeypatch):
-        client = FakeOpenRouter(delay=5.0)
+        client = FakeOpenRouter(hold=asyncio.Event())
         monkeypatch.setattr(openrouter_client, "_get_openrouter_client", lambda *a, **k: client)
         budget = Budget(1000.0, 900.0)
         task = asyncio.create_task(base.run_suite(
             model_suite(), MODEL, None, _cases(5), 1, budget, adaptive_mode=True, max_concurrency=8,
             warm_first=True, prefix_keys=self.keys({})))
-        await asyncio.sleep(0.1)
+        for _ in range(50):
+            await asyncio.sleep(0)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
@@ -380,6 +383,9 @@ class TestLayoutOfTheRealSuites:
     """Eval requests are built by the app's own builders: static prefix first, fenced submission last."""
 
     SYSTEM_SUITES = ("grading", "grading-levelband", "exam-grading", "grading-solution")
+    SINGLE_SUITES = ("requirement-extraction", "effort-recommendation", "requirement-solution-check",
+                     "test-case-generation", "digest", "project-feedback", "flowgorithm-grade")
+    CASES_PER_SUITE = 12
 
     @pytest.fixture(scope="class")
     def rendered(self):
@@ -395,8 +401,9 @@ class TestLayoutOfTheRealSuites:
             model, effort = prompt_eval.incumbent_of(suite.role)
             profile = prompt_eval.profiles_for([model]).get(model)
             seen = {}
-            cases = suite.cases()[:12]
+            cases = suite.cases()[:self.CASES_PER_SUITE]
             original = openrouter_client._get_openrouter_client
+            current = [None]
 
             class Spy:
                 class chat:  # noqa: N801
@@ -406,7 +413,6 @@ class TestLayoutOfTheRealSuites:
                             seen[current[0]] = kwargs
                             raise cs._Rendered()
 
-            current = [None]
             with pinned_registry(model, effort, profile, roles=(suite.role,),
                                  max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS), deterministic_nonce():
                 openrouter_client._get_openrouter_client = lambda *a, **k: Spy()
@@ -421,28 +427,72 @@ class TestLayoutOfTheRealSuites:
                     openrouter_client._get_openrouter_client = original
             return seen
 
-        for sid in self.SYSTEM_SUITES:
+        for sid in self.SYSTEM_SUITES + self.SINGLE_SUITES:
             out[sid] = asyncio.run(one(sid))
         return out
+
+    @staticmethod
+    def flat(kwargs):
+        return "".join(f"[{m['role']}]{m['content']}" for m in kwargs["messages"])
+
+    @staticmethod
+    def shared_prefix(texts):
+        """Characters every text shares with the first one (the smallest such length)."""
+        first = texts[0]
+        best = len(first)
+        for other in texts[1:]:
+            n = 0
+            for x, y in zip(first, other):
+                if x != y:
+                    break
+                n += 1
+            best = min(best, n)
+        return best
+
+    def test_every_suite_layout_and_measured_prefix_lengths(self, rendered):
+        """Prints the measured table (run with -s); asserts the roles and the 4,096-character line per group."""
+        rows = []
+        for sid in self.SYSTEM_SUITES + self.SINGLE_SUITES:
+            requests = list(rendered[sid].values())
+            assert len(requests) >= 2, sid
+            roles = {tuple(m["role"] for m in r["messages"]) for r in requests}
+            shared = self.shared_prefix([self.flat(r) for r in requests])
+            system = {r["messages"][0]["content"] for r in requests if r["messages"][0]["role"] == "system"}
+            rows.append((sid, sorted(roles), len(requests), len(next(iter(system))) if system else 0, shared))
+            for r in requests:
+                assert "order" not in r["extra_body"]["provider"] and "session_id" not in r["extra_body"]
+            if sid in self.SYSTEM_SUITES:
+                assert roles == {("system", "user")} and len(system) == 1
+                assert shared > cs.MIN_PREFIX_CHARS, (sid, shared)
+            else:
+                assert roles == {("user",)}
+                assert shared < cs.MIN_PREFIX_CHARS, (sid, shared)
+        print("\nsuite | roles | cases rendered | system chars | shared prefix chars (all cases) | approx tokens (4 chars/token)")
+        for sid, roles, n, sys_chars, shared in rows:
+            print(f"{sid} | {roles} | {n} | {sys_chars} | {shared} | ~{shared // 4}")
 
     @pytest.mark.parametrize("sid", SYSTEM_SUITES)
     def test_static_system_message_first_and_submission_fenced_last(self, rendered, sid):
         requests = list(rendered[sid].values())
-        assert len(requests) >= 2
         for kwargs in requests:
-            messages = kwargs["messages"]
-            assert [m["role"] for m in messages] == ["system", "user"]
-            assert "<<<UNTRUSTED" in messages[1]["content"]
-            assert "order" not in kwargs["extra_body"]["provider"]  # sticky routing stays on
-            assert "session_id" not in kwargs["extra_body"]  # the app path adds none
+            assert "<<<UNTRUSTED" in kwargs["messages"][1]["content"]
         assert len({r["messages"][0]["content"] for r in requests}) == 1  # system message is identical per call
         keys = {cs.prefix_key(r["messages"]) for r in requests}
         assert None not in keys
-        # the static prefix of the user message stays ahead of the fence: the part after the first fence marker
-        # is the only part that holds the submission
         for kwargs in requests:
             user = kwargs["messages"][1]["content"]
             assert user.index("<<<UNTRUSTED") > len(user) // 2
+
+    def test_the_judge_instructions_are_far_below_a_cache_minimum(self):
+        """Estimate (4 bytes per token) of the pairwise judge template without its placeholders: ~135 tokens."""
+        import re
+        from pathlib import Path
+
+        text = Path("evals/judges/pairwise.md").read_text(encoding="utf-8")
+        static = re.sub(r"\{[a-z_]+\}", "", text)
+        tokens = len(static.encode("utf-8")) / 4
+        print(f"\npairwise judge static text: {len(static.encode('utf-8'))} bytes, ~{tokens:.0f} tokens (4 bytes/token)")
+        assert tokens < 512  # Claude Haiku 5.5 minimum cacheable prompt, per the OpenRouter guide
 
     async def test_cases_that_share_a_rubric_share_a_group(self):
         from cqc_cpcc.model_eval import prompt_eval
@@ -463,3 +513,82 @@ class TestLayoutOfTheRealSuites:
         assert len(by_key.get(None, [])) < len(cases) // 2  # only cases the validity gate stops send nothing
         assert max(len(v) for v in by_key.values()) >= 2  # real groups exist
         assert len(by_key) < len(cases)
+
+
+class TestSafetyAndSwitches:
+    async def test_every_session_id_is_clamped_whatever_its_source(self, fake):
+        with cs.transport(), cs.record_scope("bad id!/" + "x" * 400):
+            client = openrouter_client._get_openrouter_client()
+            await client.chat.completions.create(model="m", messages=[{"role": "user", "content": "x"}], extra_body={"seed": 1})
+            await client.chat.completions.create(
+                model="m", messages=[{"role": "user", "content": "x"}], extra_body={"session_id": "caller supplied/é " + "y" * 300})
+            await client.chat.completions.create(model="m", messages=[{"role": "user", "content": "x"}], extra_body={"session_id": "!!!"})
+        sent = [(r.get("extra_body") or {}).get("session_id") for r in fake.requests]
+        assert sent[0] == "badid" + "x" * 251 and len(sent[0]) == 256
+        assert sent[1] == "callersuppliedy" + "y" * 241 and len(sent[1]) == 256
+        assert sent[2] is None or "session_id" not in fake.requests[2]["extra_body"]
+        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        assert all(set(x) <= allowed for x in sent if x)
+        assert cs.clean_session_id("") is None and cs.clean_session_id("ok-1_") == "ok-1_"
+
+    def test_warm_wait_default_override_and_validation(self, monkeypatch):
+        assert cs.warm_wait_s() == 600.0
+        monkeypatch.setenv(cs.ENV_WARM_WAIT, "30")
+        assert cs.warm_wait_s() == 30.0
+        for bad in ("0", "-5", "abc", "99999", "nan"):
+            monkeypatch.setenv(cs.ENV_WARM_WAIT, bad)
+            with pytest.raises(ValueError):
+                cs.warm_wait_s()
+
+    @pytest.mark.parametrize("env, expected", [(None, 600.0), ("5", 5.0)])
+    def test_a_stalled_leader_delays_followers_only_up_to_the_wait(self, monkeypatch, env, expected):
+        if env:
+            monkeypatch.setenv(cs.ENV_WARM_WAIT, env)
+
+        async def go():
+            start = asyncio.get_running_loop().time()
+            await cs.wait_for_leader(asyncio.Event())  # a leader that never finishes
+            return asyncio.get_running_loop().time() - start
+
+        loop = VirtualClockLoop()  # virtual time: no real waiting
+        try:
+            assert loop.run_until_complete(go()) == pytest.approx(expected, abs=1.0)
+        finally:
+            loop.close()
+
+    async def test_a_bad_wait_setting_stops_the_run_before_any_call(self, fake, monkeypatch):
+        monkeypatch.setenv(cs.ENV_WARM_WAIT, "banana")
+        with pytest.raises(ValueError):
+            await run(model_suite(), n=3, warm_first=True, prefix_keys=TestWarmFirst.keys({}))
+        assert fake.requests == []
+
+    async def test_a_bad_switch_stops_the_run_before_any_call(self, fake, monkeypatch):
+        monkeypatch.setenv(cs.ENV_SESSION, "sometimes")
+        with pytest.raises(ValueError):
+            await run(model_suite(), n=3)
+        assert fake.requests == []
+
+    async def test_a_grouping_failure_logs_the_type_and_a_redacted_detail_only(self, fake, monkeypatch):
+        logged = []
+        monkeypatch.setattr(base.logger, "warning", lambda msg, *a, **k: logged.append(str(msg)))
+
+        async def broken(cases):
+            raise RuntimeError("render failed {'body': 'SENTINEL-STUDENT-TEXT'}")
+
+        await run(model_suite(), n=2, warm_first=True, prefix_keys=broken)
+        text = "\n".join(logged)
+        assert "RuntimeError" in text and "SENTINEL-STUDENT-TEXT" not in text
+
+    def test_records_from_jsonl_reads_old_and_new_rows(self, tmp_path):
+        from cqc_cpcc.model_eval.__main__ import _records_from_jsonl
+        from cqc_cpcc.model_eval.runner import CallRecord
+
+        old = {"case_id": "a", "model": "m", "effort": None, "repeat": 0, "ok": True}
+        new = CallRecord("b", "m", None, 0, ok=True, cached_tokens=10, cache_write_tokens=2, reasoning_tokens=3)
+        path = tmp_path / "raw.jsonl"
+        path.write_text(json.dumps(old) + "\n" + new.to_json() + "\n"
+                        + json.dumps({**old, "case_id": "c", "future": 1}) + "\n")
+        (records,) = _records_from_jsonl(path).values()
+        by = {r.case_id: r for r in records}
+        assert by["a"].cached_tokens is None and by["c"].cached_tokens is None
+        assert (by["b"].cached_tokens, by["b"].cache_write_tokens, by["b"].reasoning_tokens) == (10, 2, 3)

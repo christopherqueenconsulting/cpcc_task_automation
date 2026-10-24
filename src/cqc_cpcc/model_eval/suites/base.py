@@ -267,6 +267,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     # Off unless the caller asks (prompt_eval.run passes the CQC_EVAL_WARM_FIRST setting): the dry render calls
     # ``suite.invoke`` once per case, which a test double with side effects must not see unasked.
     use_warm = bool(warm_first) and sid is not None
+    if use_warm:
+        cache_session.warm_wait_s()  # a bad CQC_EVAL_WARM_WAIT_S stops the run before any call
 
     async def one(case: SuiteCase, repeat: int, resolved) -> SuiteRecord:
         with cache_session.record_scope(sid) as tap:
@@ -403,7 +405,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001 - no grouping: every call runs at once, as before
-                logger.warning(f"[prompt-eval:{suite.id}] warm-first grouping skipped: {type(e).__name__}: {str(e)[:200]}")
+                logger.warning(f"[prompt-eval:{suite.id}] warm-first grouping skipped: {type(e).__name__}: "
+                               f"{error_detail.redact_message(str(e), 120)}")
                 plan = {}
             if plan:
                 logger.info(f"[prompt-eval:{suite.id}] warm-first: {sum(1 for w, _l in plan.values() if w is None)} "
