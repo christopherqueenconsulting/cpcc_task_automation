@@ -490,6 +490,34 @@ class TestJudgePool:
         finally:
             adaptive.use_judge_pool(None)
 
+    async def test_judges_ask_goes_through_the_pool_without_judges_py_being_edited(self, monkeypatch):
+        from cqc_cpcc.model_eval import judges
+
+        n = {"i": 0}
+
+        async def fake_ask(judge_id, prompt, schema, judge_model):
+            n["i"] += 1
+            if n["i"] == 1:
+                raise RateLimitError()
+            return "verdict", 0.01
+
+        monkeypatch.setattr(adaptive, "_judge_route_installed", False)
+        monkeypatch.setattr(judges, "_ask", fake_ask)
+        real_sleep = asyncio.sleep
+
+        async def instant(_seconds):
+            await real_sleep(0)
+
+        monkeypatch.setattr(adaptive.asyncio, "sleep", instant)
+        judge = AdaptiveLimiter("judge", start=16, ceiling=16)
+        adaptive.use_judge_pool(judge)
+        try:
+            assert judges._ask is not fake_ask  # routed
+            out = await judges._ask("pairwise", "p", object, "anthropic/claude-haiku-5.5")
+        finally:
+            adaptive.use_judge_pool(None)
+        assert out == ("verdict", 0.01) and judge.stats.rate_limited == 1 and judge.limit == 8
+
     async def test_the_judge_pool_cap_is_enforced(self):
         judge = AdaptiveLimiter("judge", start=3, ceiling=3)
         adaptive.use_judge_pool(judge)

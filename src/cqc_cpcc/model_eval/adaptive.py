@@ -326,7 +326,7 @@ async def _reserve(budget, estimate: float, poll_s: float, sleep) -> bool:
 
 async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Awaitable[Any]], *,
                          budget=None, estimate: float = 0.0, held: Optional[Held] = None,
-                         sleep=asyncio.sleep, rng=None, poll_s: float = 0.05,
+                         sleep=None, rng=None, poll_s: float = 0.05,
                          rate_limit_retries: int = RATE_LIMIT_RETRIES,
                          in_flight_retries: int = IN_FLIGHT_RETRIES) -> Any:
     """Run ``make_call()`` under ``limiter``; retry a throttled call after a jittered wait.
@@ -337,6 +337,7 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
     (``budget.settle(held.amount, cost)``) once it knows what the call cost.
     """
     rng = rng or random
+    sleep = sleep or asyncio.sleep  # looked up now, so a test (or a faster clock) can replace it
     held = held if held is not None else Held()
     retries = {RATE_LIMIT: 0, IN_FLIGHT: 0}
     allowed = {RATE_LIMIT: rate_limit_retries, IN_FLIGHT: in_flight_retries}
@@ -393,8 +394,35 @@ _judge_limiter: contextvars.ContextVar[Optional[AdaptiveLimiter]] = contextvars.
 _judge_budget: contextvars.ContextVar = contextvars.ContextVar("ab_judge_budget", default=None)
 
 
+_judge_route_installed = False
+
+
+def _install_judge_route() -> None:
+    """Send every ``judges._ask`` through :func:`judge_call`, once per process.
+
+    ``judges.py`` is listed as a source file of the three judge prompts, so editing it would flag them
+    for recalibration; the pool is wired in from here instead. ``_ask`` is looked up by name in its
+    module at each call, so replacing the attribute is enough. With no pool set, :func:`judge_call`
+    calls straight through, so a run that never sets one behaves exactly as before.
+    """
+    global _judge_route_installed
+    if _judge_route_installed:
+        return
+    from cqc_cpcc.model_eval import judges
+
+    original = judges._ask
+
+    async def routed(judge_id, prompt, schema, judge_model):
+        return await judge_call(lambda: original(judge_id, prompt, schema, judge_model))
+
+    judges._ask = routed
+    _judge_route_installed = True
+
+
 def use_judge_pool(limiter: Optional[AdaptiveLimiter], budget=None, estimate: float = 0.0) -> None:
     """Route the judge calls made from this context (and tasks it creates) through ``limiter``."""
+    if limiter is not None:
+        _install_judge_route()
     _judge_limiter.set(limiter)
     _judge_budget.set((budget, estimate) if budget is not None and limiter is not None else None)
 

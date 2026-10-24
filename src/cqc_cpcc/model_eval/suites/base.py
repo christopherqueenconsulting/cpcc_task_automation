@@ -154,7 +154,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                     budget: Budget, concurrency: Optional[int] = None, profile=None,
                     on_record: Optional[Callable[[SuiteRecord], None]] = None,
                     adaptive_mode: Optional[bool] = None, max_concurrency: Optional[int] = None,
-                    pool_stats: Optional[list] = None, sleep=asyncio.sleep, rng=None) -> list[SuiteRecord]:
+                    pool_stats: Optional[list] = None, sleep=None, rng=None) -> list[SuiteRecord]:
     """Call the production function for every case ``repeats`` times on ``model``.
 
     The suite's role is pinned to ``model`` with no fallback, so a failure counts against
