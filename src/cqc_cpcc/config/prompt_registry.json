@@ -87,6 +87,31 @@
         "requirement-extraction"
       ]
     },
+    "test-case-generation": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Output check: stdin test cases for the instructor's solution (at most 6, a boundary case for every selection or loop condition the instructions name, and the condition-to-case map). Cached per assignment.",
+      "builder": "cqc_cpcc.test_case_generation:build_test_case_prompt",
+      "schema": "cqc_cpcc.test_case_generation:TestCaseSuggestion",
+      "call_sites": [
+        "cqc_cpcc.test_case_generation:suggest_test_cases"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/test_case_generation.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "fingerprint": "sha256:ad70c547125bf42d55e7e79b08f27e2b6d2acdb283c1a58c5dc3bbf9fdca7e1f",
+      "suites": [
+        "test-case-generation"
+      ]
+    },
     "exam-grading": {
       "version": 2,
       "status": "live",
