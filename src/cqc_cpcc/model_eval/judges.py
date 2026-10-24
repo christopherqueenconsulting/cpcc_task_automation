@@ -28,6 +28,7 @@ from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from cqc_cpcc.model_eval import adaptive
 from cqc_cpcc.utilities.logger import logger
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -214,8 +215,10 @@ async def _ask(judge_id: str, prompt: str, schema, judge_model: str):
     from cqc_cpcc.utilities.AI import llm_gateway
 
     # Role "feedback" only supplies request defaults; the judge model overrides it.
-    result = await llm_gateway.structured(role="feedback", prompt=prompt, schema_model=schema,
-                                          override=judge_model, prompt_id=f"judge-{judge_id}")
+    # The A/B gives judge calls their own pool (adaptive.judge_call); anywhere else this is a plain call.
+    result = await adaptive.judge_call(lambda: llm_gateway.structured(
+        role="feedback", prompt=prompt, schema_model=schema, override=judge_model,
+        prompt_id=f"judge-{judge_id}"))
     call = llm_gateway.last_call()
     cost = call.completion.cost_usd if call and call.completion and call.completion.cost_usd else 0.0
     return result, cost

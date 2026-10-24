@@ -95,6 +95,20 @@ alone was unsafe. It goes back once the digest prompt suite passes (see
   `{"start": "2026-12-01", "end": "2026-12-20", "reason": "finals"}`.
 - **Run locally**: `poetry run python -m cqc_cpcc.model_eval run --candidate <id> --dry-run`.
 
+## How many calls run at once
+
+The promotion run (`model-eval.yml`) and a plain `suite run` use a fixed number of calls in flight (4,
+`CQC_EVAL_CONCURRENCY`, whole numbers 1 to 256; anything else is an error, not a silent default). The
+**prompt A/B** uses adaptive pools instead: it starts at min(calls in the suite, 64) per side, halves on
+a 429 or an `openrouter_in_flight_budget` 402/403, earns a permit back per success window, retries
+throttled calls with full jitter (honouring `Retry-After`), keeps the judge in a separate pool (default
+16), and makes every call reserve its worst-case cost on the budget first so the key cap holds at any
+concurrency. Knobs: `--max-concurrency` / `CQC_AB_MAX_CONCURRENCY` (default 64, hard cap 256),
+`CQC_AB_JUDGE_CONCURRENCY` (16), `--concurrency` / `CQC_AB_START_CONCURRENCY`, `--adaptive` /
+`CQC_AB_ADAPTIVE=1` for a `suite run`. The rule, defaults and report fields are in
+[`PROMPTS.md`](PROMPTS.md) under "Adaptive concurrency". None of it changes what is measured or any
+threshold.
+
 ## What can go wrong and who hears about it
 
 | Situation | What happens |

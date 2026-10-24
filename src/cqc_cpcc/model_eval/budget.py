@@ -13,12 +13,20 @@ class Budget:
 
     ``stop_at`` sits below ``limit`` so calls already in flight (at most the runner's
     concurrency) cannot carry the run over ``limit``.
+
+    A fixed gap only covers a fixed number of calls in flight. The adaptive A/B runs up to 64 per
+    side, so each call also **reserves** its worst-case cost (:meth:`reserve`) before it is sent and
+    settles it when it finishes (:meth:`settle`). A call starts only while ``spent + reserved +
+    its estimate`` fits under ``limit``: the margin below ``limit`` is therefore always (calls in
+    flight x their estimate), whatever the concurrency. A call that does not fit waits for the
+    in-flight ones to settle; it is refused only when nothing in flight could make room.
     """
 
     limit: float
     stop_at: float
     spent: float = 0.0
     calls: int = 0
+    reserved: float = 0.0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self):
@@ -38,6 +46,34 @@ class Budget:
             self.spent += max(0.0, cost or 0.0)
             self.calls += 1
 
+    def reserve(self, estimate: float) -> str:
+        """Set aside ``estimate`` USD for one call about to be sent.
+
+        ``"ok"``: reserved, send it. ``"wait"``: it would not fit beside the calls already in flight,
+        try again once some settle. ``"exhausted"``: the budget is spent (``stop_at``), or the call
+        would pass ``limit`` even with nothing else in flight.
+        """
+        estimate = max(0.0, estimate or 0.0)
+        with self._lock:
+            if self.spent >= self.stop_at:
+                return "exhausted"
+            if self.spent + self.reserved + estimate <= self.limit + 1e-12:
+                self.reserved += estimate
+                return "ok"
+            return "wait" if self.reserved > 0 else "exhausted"
+
+    def unreserve(self, amount: float) -> None:
+        """Give back a reservation without spending (a call that was never sent, or cost nothing)."""
+        with self._lock:
+            self.reserved = max(0.0, self.reserved - max(0.0, amount or 0.0))
+
+    def settle(self, reserved: float, cost: float) -> None:
+        """Replace a call's reservation with what it really cost, in one step (no gap to slip through)."""
+        with self._lock:
+            self.reserved = max(0.0, self.reserved - max(0.0, reserved or 0.0))
+            self.spent += max(0.0, cost or 0.0)
+            self.calls += 1
+
     def can_afford(self, estimate: float) -> bool:
         return not self.exhausted and estimate <= self.remaining
 
@@ -52,7 +88,7 @@ class Budget:
         ``limit`` has to cover for every child at once.
         """
         total = float(sum(weights))
-        left_limit = max(self.limit - self.spent, 1e-9)
+        left_limit = max(self.limit - self.spent - self.reserved, 1e-9)
         left_stop = max(self.remaining, 1e-9)
         children = [Budget(limit=left_limit * w / total, stop_at=min(left_stop * w / total, left_limit * w / total))
                     for w in weights]

@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from cqc_cpcc.model_eval import prompt_eval, prompt_registry
+from cqc_cpcc.model_eval import adaptive, prompt_eval, prompt_registry
 from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 from cqc_cpcc.utilities.AI import model_registry
 
@@ -258,8 +258,9 @@ def _base_has_suite(worktree: Path, suite_id: str) -> bool:
     return init.exists() and f'"{suite_id}"' in init.read_text(encoding="utf-8")
 
 
-#: Model calls in flight on each side of an A/B (head and base run at the same time, so up to twice
-#: this many at once). The calls only wait on the network; 4 was the default for every run before.
+#: Fixed calls in flight on each side of the A/B before it became adaptive. Only a base that predates
+#: ``adaptive.py`` still runs at this number (it is given through ``CQC_EVAL_CONCURRENCY``); the head, and
+#: any base from this change on, start at min(calls, ``adaptive.DEFAULT_MAX_CONCURRENCY``) and adapt.
 AB_CONCURRENCY = 12
 
 
@@ -353,12 +354,13 @@ def _recorded_cost(raw: Path) -> float:
 
 def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Path,
               budget_usd: float, concurrency: Optional[int] = None,
-              environ: Optional[dict] = None) -> Optional[Path]:
+              environ: Optional[dict] = None, start_concurrency: Optional[int] = None) -> Optional[Path]:
     """Run the suite with the BASE code (prompt, schema, graders). None when the run failed.
 
-    The concurrency goes to the base code through ``CQC_EVAL_CONCURRENCY`` rather than a flag, so a
-    base that predates the setting simply runs at its own default instead of failing on an
-    argument it does not know.
+    The concurrency goes to the base code through environment variables rather than a flag, so a
+    base that predates a setting simply runs without it instead of failing on an argument it does
+    not know: ``CQC_AB_ADAPTIVE=1`` and ``CQC_AB_MAX_CONCURRENCY`` (the ceiling; ``concurrency``) for a
+    base that has adaptive pools, ``CQC_EVAL_CONCURRENCY`` (the old fixed number) for one that has not.
 
     The run has a hard time limit (``BASE_TIMEOUT_S``) and its own process group, so a stalled
     call cannot hold the A/B until the job limit and a cancelled A/B can stop it
@@ -376,7 +378,11 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
         args += ["--model", m]
     env = {**(os.environ if environ is None else environ), "PYTHONPATH": str(worktree / "src")}
     if concurrency:
-        env["CQC_EVAL_CONCURRENCY"] = str(concurrency)
+        env[adaptive.ENV_ADAPTIVE] = "1"
+        env[adaptive.ENV_MAX] = str(concurrency)
+        env["CQC_EVAL_CONCURRENCY"] = str(min(concurrency, AB_CONCURRENCY))
+    if start_concurrency:
+        env[adaptive.ENV_START] = str(start_concurrency)
     with _live_base_lock:
         if _base_stopped:
             print(f"[{suite_id}] base run not started: the A/B is being torn down")
@@ -648,16 +654,35 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
     return list(outcomes)
 
 
-def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[Path]) -> dict:
-    """Wall-clock and retry counts for one suite (a 429 or timeout the client retried), for the log."""
+def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[Path],
+               judge_pool: Optional[dict] = None, base_dir: Optional[Path] = None,
+               start_concurrency: Optional[int] = None) -> dict:
+    """Wall-clock, retry counts and the adaptive pools' counters for one suite, for the log.
+
+    ``concurrency`` is the ceiling on calls in flight per side (what it has always meant: the most
+    at once); ``head_pool`` / ``base_pool`` / ``judge_pool`` say what the pools really did (start,
+    min, max reached, final permits, and the 429 count). A base that predates the pools, or a run
+    that died before saving them, has no pool entry (None).
+    """
     def side(path):
         if path is None:
             return None
         recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
         return base.retry_stats(recs)
 
+    def pool(directory):
+        saved = prompt_eval.read_concurrency(directory) if directory is not None else None
+        return (saved or {}).get("calls")
+
+    head_pool = pool(head_raw.parent)
+    base_pool = pool(base_raw.parent if base_raw is not None else base_dir)
+    pools = [p for p in (head_pool, base_pool, judge_pool) if p]
     return {"elapsed_s": round(time.monotonic() - started, 1), "concurrency": workers,
-            "head": side(head_raw), "base": side(base_raw)}
+            "max_concurrency": workers, "start_concurrency": start_concurrency,
+            "head": side(head_raw), "base": side(base_raw),
+            "head_pool": head_pool, "base_pool": base_pool, "judge_pool": judge_pool,
+            "rate_limited": sum(p.get("rate_limited", 0) for p in pools),
+            "in_flight_budget": sum(p.get("in_flight_budget", 0) for p in pools)}
 
 
 def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
@@ -666,14 +691,25 @@ def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
         s = stats.get(name)
         return f"{name} {s['calls']} calls, {s['retried']} retried" if s else f"{name} none"
 
-    line = f"A/B {suite_id}: {part('head')}; {part('base')}; {stats['elapsed_s']:.0f}s at {stats['concurrency']} in flight"
+    line = f"A/B {suite_id}: {part('head')}; {part('base')}; {stats['elapsed_s']:.0f}s at up to {stats['concurrency']} in flight"
+    if stats.get("head_pool") or stats.get("base_pool") or stats.get("judge_pool"):
+        line += (f"; concurrency head [{adaptive.describe(stats.get('head_pool'))}]"
+                 f", base [{adaptive.describe(stats.get('base_pool'))}]"
+                 f", judge [{adaptive.describe(stats.get('judge_pool'))}]"
+                 f"; {stats.get('rate_limited', 0)} x 429 in all")
     return line + (f"; FAILED: see base/{suite_id}/run.log" if failed else "")
 
 
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
                     judges: bool = False, judge_model: Optional[str] = None, judge_cache: Optional[str] = None,
-                    concurrency: Optional[int] = None) -> dict:
+                    concurrency: Optional[int] = None, max_concurrency: Optional[int] = None) -> dict:
     """Run each suite at the base and head code on the same models and compare.
+
+    Each side runs an adaptive pool (``adaptive.py``): it starts at min(calls in the suite, ceiling),
+    halves on a 429 or an in-flight-budget 402/403 and earns permits back; the ceiling is
+    ``max_concurrency`` / ``CQC_AB_MAX_CONCURRENCY`` / 64. ``concurrency`` only sets the starting size.
+    The pairwise judge has its own, lower, pool. A setting outside 1 to 256 raises
+    ``adaptive.ConcurrencyError`` before any spend.
 
     The head and the base of a suite run at the same time, each with its own share of the budget,
     and the pairwise judge calls run in parallel. Which cases run, how often, on which models, how
@@ -685,14 +721,18 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
     out = out.resolve()  # the base runs in another working directory
     out.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    workers = base.eval_concurrency(default=AB_CONCURRENCY, value=concurrency)
+    workers = adaptive.ab_max_concurrency(max_concurrency)  # the ceiling per side
+    start_override = adaptive.ab_start_concurrency(concurrency)
+    judge_cap = adaptive.judge_max_concurrency()
     clean_environ = dict(os.environ)  # before any run pins the registry in this process (see _run_base)
     parsed = [parse_model(m) for m in models]
     # One budget for the whole A/B: head + base for every suite, judges included.
     budget = prompt_eval.shared_budget()
     estimate = 2 * prompt_eval.estimate_suites(suite_ids, parsed, repeats)
     print(f"A/B estimate ${estimate:.2f} (head + base); budget stops at ${budget.stop_at:.2f}; "
-          f"{workers} calls in flight per side")
+          f"up to {workers} calls in flight per side (adaptive; starts at "
+          f"{start_override or f'min(calls, {workers})'}), judge pool up to {judge_cap}; "
+          f"every call reserves its worst-case cost before it is sent, so the cap of ${budget.limit:.2f} holds")
     if estimate > budget.stop_at:
         raise SystemExit("the A/B estimate exceeds the prompt-eval budget; run fewer suites")
     worktree = _base_worktree(base_ref, out / "base-src")
@@ -715,7 +755,8 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             async def run_head():
                 try:
                     return await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"),
-                                                 budget=head_budget, concurrency=workers)
+                                                 budget=head_budget, concurrency=start_override,
+                                                 adaptive_mode=True, max_concurrency=workers)
                 except BaseException:
                     # a failed head makes the base's result worthless: stop paying for it, and keep one
                     # that has not started yet from starting
@@ -726,7 +767,7 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             if has_base:
                 jobs.append(asyncio.to_thread(_run_base, worktree, suite_id, labels, r, out / "base",
                                               min(base_share.remaining, base_estimate * 1.5), workers,
-                                              clean_environ))
+                                              clean_environ, start_override))
             # Wait for both even when one fails: the worktree is removed in `finally`, which must not
             # happen under a base run that is still going.
             outcomes = await asyncio.gather(*jobs, return_exceptions=True)
@@ -742,7 +783,8 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                 results[suite_id] = {"suite": suite_id, "status": "no-base",
                                      "reasons": [], "notes": ["the base ref has no such suite; absolute numbers only"],
                                      "models": {k: {"composite_head": v.get("composite")} for k, v in head.items()},
-                                     "run_stats": _run_stats(suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", None)}
+                                     "run_stats": _run_stats(suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", None,
+                                                         start_concurrency=start_override)}
                 continue
             base_raw = outcomes[1]
             if base_raw is None:
@@ -750,7 +792,9 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                 results[suite_id] = {"suite": suite_id, "status": "fail", "models": {}, "notes": [],
                                      "reasons": ["the base run failed, so the change could not be compared"],
                                      "run_stats": _run_stats(suite_started, workers,
-                                                             out / "head" / suite_id / "raw_outputs.jsonl", None)}
+                                                             out / "head" / suite_id / "raw_outputs.jsonl", None,
+                                                             base_dir=out / "base" / suite_id,
+                                                             start_concurrency=start_override)}
                 continue
             # Both sides are scored with the HEAD graders, so only the prompt differs. When the
             # PR changed the dataset, only cases whose inputs are unchanged are compared.
@@ -758,11 +802,17 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             head = _aggregates(suite, out / "head" / suite_id / "raw_outputs.jsonl", same)
             base_aggs = _aggregates(suite, base_raw, same)
             pairwise_scores, calibrated = {}, False
+            judge_pool = None
             if judges:
                 from cqc_cpcc.model_eval import judges as jm
                 jmodel = judge_model or jm.pick_judge_model()
                 calibrated = bool(jmodel) and jm.is_calibrated("pairwise", jmodel)
                 if jmodel:
+                    # the judge's own, lower, pool: it throttles on its own and never starves the calls
+                    judge_limiter = adaptive.AdaptiveLimiter("judge", start=judge_cap, ceiling=judge_cap)
+                    judge_profile = prompt_eval.profiles_for([suite_models[0][0]])[suite_models[0][0]]
+                    adaptive.use_judge_pool(judge_limiter, budget,
+                                            prompt_eval._dearest_call(suite, judge_profile, suite.cases()))
                     cache = jm.VerdictCache(Path(judge_cache) if judge_cache else out / "judge-cache", read_only=True)
                     head_recs = prompt_eval.read_records(out / "head" / suite_id / "raw_outputs.jsonl")
                     base_recs = prompt_eval.read_records(base_raw)
@@ -773,14 +823,17 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                         scores = await _pairwise_scores(
                             jm, suite, cases, [c for c in sorted(set(h0) & set(b0))
                                                if cases.get(c) is not None and cases[c].split == "holdout"],
-                            h0, b0, jmodel, cache, budget, workers)
+                            h0, b0, jmodel, cache, budget, judge_cap)
                         wins = [s for s in scores if s is not None]
                         pairwise_scores[label] = sum(wins) / len(wins) if wins else None
+                    judge_pool = judge_limiter.snapshot()
+                    adaptive.use_judge_pool(None)
             results[suite_id] = ab_decision(suite, head, base_aggs, pairwise_scores=pairwise_scores,
                                             judge_calibrated=calibrated, split=None if unchanged else "holdout")
             # Reporting only: nothing above or below reads it.
             results[suite_id]["run_stats"] = _run_stats(
-                suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", base_raw)
+                suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", base_raw,
+                judge_pool=judge_pool, start_concurrency=start_override)
             if unchanged:
                 results[suite_id]["notes"].append(
                     "prompts unchanged from the base: the paired test uses all cases when there are at least 30 "
@@ -794,10 +847,13 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             print(_stats_line(suite_id, r["run_stats"], failed=r["status"] == "fail"))
     overall = ("fail" if any(r["status"] == "fail" for r in results.values())
                else "pass" if results and all(r["status"] == "pass" for r in results.values()) else "pass-provisional")
+    rate_limited = sum((r.get("run_stats") or {}).get("rate_limited", 0) for r in results.values())
     report = {"base_ref": base_ref, "status": overall, "suites": results,
               "prompt_versions": {pid: e.version for pid, e in prompt_registry.load().prompts.items()},
-              "wall_clock_s": round(time.monotonic() - started, 1), "concurrency": workers}
-    print(f"A/B wall-clock {report['wall_clock_s']:.0f}s at {workers} calls in flight per side")
+              "wall_clock_s": round(time.monotonic() - started, 1), "concurrency": workers,
+              "max_concurrency": workers, "judge_max_concurrency": judge_cap, "rate_limited": rate_limited}
+    print(f"A/B wall-clock {report['wall_clock_s']:.0f}s at up to {workers} calls in flight per side; "
+          f"{rate_limited} x 429 in all")
     (out / "ab.json").write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     (out / "ab.md").write_text(ab_markdown(report), encoding="utf-8")
     return report
@@ -833,7 +889,30 @@ def ab_markdown(report: dict) -> str:
         for note in r.get("notes", []):
             lines.append(f"- `{suite_id}` {_safe(note)}")
     lines += ["", "🟡 = no regression, but the suite's thresholds are not calibrated yet."]
+    lines += _run_stats_markdown(report)
     return "\n".join(lines) + "\n"
+
+
+def _run_stats_markdown(report: dict) -> list:
+    """Wall clock and what each adaptive pool did (reporting only: no decision reads these lines)."""
+    rows = [(sid, r["run_stats"]) for sid, r in report["suites"].items() if r.get("run_stats")]
+    if not rows and "wall_clock_s" not in report:
+        return []
+    ceiling = report.get("max_concurrency", report.get("concurrency"))
+    lines = ["", "### Run stats", "",
+             f"Wall clock {report.get('wall_clock_s', 0):.1f} s, up to {ceiling} calls in flight per side "
+             f"(judge pool up to {report.get('judge_max_concurrency', 'n/a')}); "
+             f"{report.get('rate_limited', 0)} rate-limit (429) responses in all."]
+    if rows:
+        lines += ["", "| Suite | Seconds | Head pool | Base pool | Judge pool | 429s | In-flight-budget errors |",
+                  "|---|---|---|---|---|---|---|"]
+        for sid, st in rows:
+            lines.append(f"| `{sid}` | {st.get('elapsed_s', 0):.0f} | {adaptive.describe(st.get('head_pool'))} | "
+                         f"{adaptive.describe(st.get('base_pool'))} | {adaptive.describe(st.get('judge_pool'))} | "
+                         f"{st.get('rate_limited', 0)} | {st.get('in_flight_budget', 0)} |")
+        lines.append("")
+        lines.append("Pool columns read: starting permits, lowest, highest reached, final, 429s on that pool.")
+    return lines
 
 
 # --- Calibration: propose per-suite thresholds ----------------------------------------------
@@ -1036,9 +1115,13 @@ def cmd_prompt_ab(args) -> int:
     if not suites:
         print("no suites to compare")
         return 0
-    report = asyncio.run(prompt_ab(suites, args.base_ref, args.model or [], Path(args.out), args.repeats,
-                                   judges=args.judges, judge_model=args.judge_model, judge_cache=args.judge_cache,
-                                   concurrency=args.concurrency))
+    try:
+        report = asyncio.run(prompt_ab(suites, args.base_ref, args.model or [], Path(args.out), args.repeats,
+                                       judges=args.judges, judge_model=args.judge_model,
+                                       judge_cache=args.judge_cache, concurrency=args.concurrency,
+                                       max_concurrency=args.max_concurrency))
+    except adaptive.ConcurrencyError as e:
+        raise SystemExit(f"error: {e}")
     print((Path(args.out) / "ab.md").read_text(encoding="utf-8"))
     github_output(ab_status=report["status"])
     return 0
@@ -1165,8 +1248,13 @@ def add_parsers(sub) -> None:
     ab.add_argument("--judges", action="store_true")
     ab.add_argument("--judge-model", default=None)
     ab.add_argument("--judge-cache", default=None)
+    ab.add_argument("--max-concurrency", type=int, default=None,
+                    help=f"ceiling on model calls in flight per side (default {adaptive.DEFAULT_MAX_CONCURRENCY}, "
+                         f"or CQC_AB_MAX_CONCURRENCY; 1 to {adaptive.HARD_MAX_CONCURRENCY}, else an error). "
+                         "The pool starts at min(calls in the suite, ceiling) and halves on a 429.")
     ab.add_argument("--concurrency", type=int, default=None,
-                    help=f"model calls in flight per side (default {AB_CONCURRENCY}, or CQC_EVAL_CONCURRENCY)")
+                    help="starting size of each side's pool instead of min(calls, ceiling) "
+                         "(or CQC_AB_START_CONCURRENCY)")
     ab.set_defaults(func=cmd_prompt_ab)
 
     rq = sub.add_parser("prompt-requests", help="capture each suite's exact requests with no model call ($0)")
