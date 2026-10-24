@@ -295,7 +295,7 @@ def test_docker_not_ready_shows_a_notice_and_reads_nothing(monkeypatch, no_load)
     monkeypatch.setattr(ev, "on_community_cloud", lambda: False)
     monkeypatch.setattr(pr, "runner_status", lambda: pr.RunnerStatus(False, "docker not running"))
     at = _page_app(KEY).run()
-    assert solution_view.NOT_READY in _texts(at, "warning") and not at.code
+    assert solution_view.NOT_READY_PAGE in _texts(at, "warning") and not at.code
 
 
 def test_a_valid_key_with_no_saved_workspace_says_so(runner_on):
@@ -378,7 +378,9 @@ def test_the_notice_text_avoids_the_e2e_pattern():
     import re
     pattern = re.compile(r"(about \$|under \$0\.01).* on ")
     for text in (solution_view.SOLUTION_NOTICE, solution_view.NO_PLAN_CAPTION, solution_view.NOT_READY,
-                 solution_view.NO_WORKSPACE_PAGE, solution_view.NO_SOLUTION, solution_view.COHORT_NOTE):
+                 solution_view.NO_WORKSPACE_PAGE, solution_view.NO_SOLUTION, solution_view.NOT_READY_PAGE, solution_view.PURPOSE,
+                 solution_view.PURPOSE_COMPARE, solution_view.NO_LINK_NO_SAVE, solution_view.NO_LINK_NOT_READY,
+                 solution_view.COHORT_NOTE.format(case="T1")):
         assert "$" not in text and " on " not in text and not pattern.search(text)
 
 
@@ -503,3 +505,29 @@ def test_the_results_tabs_are_students_solution_hand_back_write_to_brightspace(r
         text = " ".join(str(e.value) for e in solution.caption) + " ".join(str(e.value) for e in solution.info)
         assert (solution_view.SOLUTION_NOTICE in text) is with_plan
         assert (solution_view.NO_SOLUTION in text) is (not with_plan)
+
+
+def test_the_purpose_line_comes_first_and_drops_compare_without_results(runner_on):
+    plan = _plan()
+    at = _tab_app([("Student Alpha", _result(_report(plan, ["text_differs", "match"])))], plan, SOURCES).run()
+    assert at.caption[0].value == solution_view.PURPOSE + solution_view.PURPOSE_COMPARE
+    assert "1 of 2 cases match." in _texts(at, "caption")
+    assert [s.value for s in at.subheader][:2] == ["Run locally", "Compare with the expected output"]
+    assert "do not use a student's work" in solution_view.SOLUTION_NOTICE.lower()
+
+
+def test_the_page_purpose_line_has_no_compare_clause_and_the_cohort_note_leads_with_the_action(runner_on):
+    plan = _plan()
+    results_store.save_run(KEY, "rubric", [(f"10{i} - S{i}", _result(_report(plan, ["text_differs", "match"])))
+                                           for i in range(3)], [],
+                           execution_workspace=xw.build_workspace(plan, SOURCES))
+    at = _page_app(KEY).run()
+    assert at.caption[0].value == solution_view.PURPOSE + "."
+    warning = [w.value for w in at.warning if "students differ" in w.value][0]
+    assert ". Check your solution and test case T1 first:" in warning
+
+
+def test_the_missing_link_is_explained(runner_off):
+    plan = _plan()
+    at = _tab_app([("Student Alpha", _result(_report(plan, ["match", "match"])))], plan, SOURCES).run()
+    assert solution_view.NO_LINK_NOT_READY in _texts(at, "caption")

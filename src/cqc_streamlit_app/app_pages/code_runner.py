@@ -36,7 +36,7 @@ def _render() -> None:
         st.info(execution_view.NOTICE, icon=":material/info:")
         return
     if not execution_view.runner_ready():
-        st.warning(solution_view.NOT_READY, icon=":material/warning:")
+        st.warning(solution_view.NOT_READY_PAGE, icon=":material/warning:")
         return
     workspace = results_store.load_execution_workspace(raw)
     if workspace is None:

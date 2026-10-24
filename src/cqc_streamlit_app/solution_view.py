@@ -27,19 +27,30 @@ from cqc_streamlit_app.code_viewer import render_submission_code
 #: Under the code. Read before any button is pressed. No agreement is in place with either site
 #: and their FERPA status has not been verified (docs/PRIVACY_AND_TELEMETRY.md).
 SOLUTION_NOTICE = ("Run in OneCompiler sends the SOLUTION code to onecompiler.com when you click it. "
-                   "Open in OnlineGDB opens a blank editor: the solution reaches onlinegdb.com only if you paste it. "
-                   "Nothing is sent until you click. No agreement is in place with either site, and their FERPA "
+                   "Open in OnlineGDB opens a blank editor: use the copy icon of the code block, then paste the solution "
+                   "there; it reaches onlinegdb.com only if you paste it. "
+                   "Nothing is sent until you click. Do not use a student's work as the solution: it is saved to disk "
+                   "and sent to OneCompiler when you click. No agreement is in place with either site, and their FERPA "
                    "status has not been verified. No student work is sent from this tab.")
 NO_SOLUTION = "No solution was added for this run, so there is nothing to show here."
 NO_PLAN_CAPTION = ("The output check was not set up for this run, so there is nothing to run locally and no "
                    "test cases to compare. The solution is shown as it was given to the AI review.")
 NO_WORKSPACE_PAGE = ("No saved workspace for this run. It is saved when the output check was used and the "
                      "sandbox was ready at the end of grading.")
-NOT_READY = ("The sandbox is not ready, so nothing can run here. Start Docker or build the sandbox image from "
-             "the Setup tab, then reload this page.")
+NOT_READY = ("The sandbox is not ready, so nothing can run here. Start Docker, then reload this page. If it "
+             "still fails, build the sandbox image from the Setup tab.")
+#: The undocked page has a Refresh button and no Setup tab of its own.
+NOT_READY_PAGE = ("The sandbox is not ready, so nothing can run here. Start Docker, then press Refresh. If it "
+                  "still fails, build the sandbox image from the Setup tab in the main app.")
+PURPOSE = ("Your solution, the expected output it gives for each test case, and how each student's program "
+           "compared. Run locally runs your solution only")
+PURPOSE_COMPARE = "; Compare reads what the output check already recorded."
+NO_LINK_NO_SAVE = "Open in new tab is not offered because results are kept for this session only here."
+NO_LINK_NOT_READY = "Open in new tab is not offered until the sandbox is ready."
+_STATUS_WORDS = {"OK": "Ran", "TIMEOUT": "Timed out", "RUNTIME_ERROR": "Crashed"}
 CUSTOM = "__custom__"
-COHORT_NOTE = ("For you only: this is not in any feedback, document or write-back. "
-               "Check the solution and this test case before you trust the differences.")
+COHORT_NOTE = ("Check your solution and test case {case} first: the expected output may be wrong, not the "
+               "students. This note is for you only; it is not in any feedback, document or write-back.")
 
 
 # --------------------------------------------------------------------------- #
@@ -89,7 +100,8 @@ def _show_outcome(outcome) -> None:
         st.code(execution_view._code(outcome.compile.stderr), language="text", wrap_lines=True)
         return
     for case in outcome.cases:
-        st.caption(f"Status: {safe_line(case.status)}" + (f" ({safe_line(case.reason)})" if case.reason else ""))
+        st.caption(f"Status: {_STATUS_WORDS.get(case.status, 'Did not run')}"
+                   + (f" ({safe_line(case.reason)})" if case.reason else ""))
         st.caption("Output")
         st.code(execution_view._code(case.stdout, "(no output)"), language="text", wrap_lines=True)
         if case.stderr:
@@ -102,7 +114,7 @@ def _case_label(case: dict) -> str:
 
 
 def _render_run_locally(workspace: dict, k: str) -> None:
-    st.markdown("**Run locally**")
+    st.subheader("Run locally", anchor=False)
     if execution_view.execution_unavailable_here():
         st.info(execution_view.NOTICE, icon=":material/info:")
         return
@@ -134,11 +146,11 @@ def _render_cohort(workspace: dict, reports: list) -> None:
     for case_id, differ, ran in cohort_warnings(reports, workspace["plan_hash"]):
         label = f" ({safe_line(labels[case_id])})" if labels.get(case_id) else ""
         st.warning(f"{differ} of {ran} students differ from the expected output on case "
-                   f"{safe_line(case_id)}{label}. {COHORT_NOTE}", icon=":material/groups:")
+                   f"{safe_line(case_id)}{label}. {COHORT_NOTE.format(case=safe_line(case_id))}", icon=":material/groups:")
 
 
 def _render_compare(workspace: dict, results: list, k: str) -> None:
-    st.markdown("**Compare with the expected output**")
+    st.subheader("Compare with the expected output", anchor=False)
     own = {sid: r.execution_report for sid, r in results
            if isinstance(getattr(r, "execution_report", None), dict)
            and r.execution_report.get("plan_hash") == workspace["plan_hash"]
@@ -151,6 +163,8 @@ def _render_compare(workspace: dict, results: list, k: str) -> None:
     report = own[sid]
     cases = {c["id"]: c for c in workspace["cases"]}
     verdicts = execution_view._VERDICT_TEXT
+    matched = sum(1 for r in report["cases"] if r.get("verdict") == "match")
+    st.caption(f"{matched} of {len(report['cases'])} cases match.")
     st.dataframe(
         [{"Case": execution_view._first_line(r.get("case_id"), 20),
           "Label": execution_view._first_line((cases.get(r.get("case_id")) or {}).get("label", "")),
@@ -183,13 +197,17 @@ def render_solution_workspace(workspace: dict, run_key: str, reports: list, resu
     ``results`` is the session's ``[(student id, result)]``; the undocked page passes none, so it
     never names a student. ``link`` adds the **Open in new tab** button."""
     k = run_key[:16]
+    st.caption(PURPOSE + (PURPOSE_COMPARE if results is not None else "."))
     _render_cohort(workspace, reports)
     st.caption(f"Language: {safe_line(workspace['language'])}"
                + (f" - main file: {safe_line(workspace['main'])}" if workspace.get("main") else ""))
     render_submission_code({f["name"]: f["content"] for f in workspace["files"]}, widget_key=f"solution_{k}",
                            notice=SOLUTION_NOTICE)
-    if link and results_store.is_hex_run_key(run_key) and results_store.persistence_enabled() \
-            and execution_view.runner_ready():
+    if link and not results_store.persistence_enabled():
+        st.caption(NO_LINK_NO_SAVE)
+    elif link and not execution_view.runner_ready():
+        st.caption(NO_LINK_NOT_READY)
+    elif link and results_store.is_hex_run_key(run_key):
         st.link_button("Open in new tab", f"code_runner?run={run_key}", icon=":material/open_in_new:",
                        help="Opens this workspace as its own page. The link holds only the run's key, "
                             "and the page shows nothing unless the sandbox is ready.")
