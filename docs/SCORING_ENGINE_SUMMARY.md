@@ -157,24 +157,45 @@ A requirement the model marks partial or missing becomes an error (`MISSING_REQU
 deterministic and uses no model call; the grading prompt and the answer schema are not changed (asking the
 model to link its own errors made it mark requirements partial far more often, PR 8).
 
-- **Kinds.** A requirement's kind (`format`, `input`, `valid`, `func`, `select`, `loop`, `calc`, `data`)
-  comes from its wording; a model error code maps to the kinds it can overlap (shared code tokens, with
-  per-course overrides, then description keywords for custom definitions). Unknown on either side means no pair.
+- **Kinds.** A requirement's kind (`format`, `print`, `input`, `valid`, `func`, `select`, `loop`, `calc`,
+  `data`) comes from its wording; a model error code maps to the kinds it can overlap (shared code tokens, with
+  per-course overrides, then whole-word description hints for custom definitions; a definition that talks about
+  comments, naming, indentation or style never pairs). Unknown on either side means no pair. A requirement that
+  forbids something ("must not use loops", "without functions", "rather than") has no kind. Formatting codes
+  (`OUTPUT_FORMATTING`, `DECIMAL_SCALE`, `*_FORMATTING`) pair only with a `format` requirement, which needs
+  explicit format wording (decimal places, currency, separators, spacing, sample output); "Show a menu" or
+  "Tell the user ..." is `print` and never pairs with them, and "Calculate the payment as currency" is left alone.
 - **Only unambiguous pairs.** The requirement has exactly one kind-matching model error and that error has
   exactly one kind-matching requirement (one-to-one). Anything else gets an instructor-only "possible overlap"
-  note and keeps both penalties.
+  note and keeps both penalties. For the general codes (`OUTPUT_IMPACT`, `CALCULATION`, `SEQUENCE...SELECTION`) a
+  kind match is not enough: the error's own description or notes must share a content word with the requirement,
+  otherwise it is a note only.
 - **Which one goes.** The lesser of the pair; at equal severity the requirement error is kept and the model
-  error dropped (tie rule A', reversible). A `MISSING_REQUIREMENT_*` error, an error backed by the compiler or
-  the execution check, and "Does Not Compile" are never dropped, so shallow-submission detection is unchanged.
-  Every drop is a suppressed `ReconciliationNote` (stage `overlap`) the instructor can Reinstate.
-- **Switch `CQC_REQUIREMENT_OVERLAP`.** `notes` (default): write the notes, drop nothing, scores identical to a
-  run without the stage. `drop`: apply the drops. `off`: skip the stage. Only `drop` enters the grading run
-  key (as `requirement_overlap`), so existing keys and cached results do not change in `notes`/`off`.
-  To enable the drop after a trial session: set `CQC_REQUIREMENT_OVERLAP=drop` in `.env` and restart; to go back,
-  remove it (results graded under `drop` re-grade because their key differed).
+  error dropped (tie rule A', reversible). A `MISSING_REQUIREMENT_*` error is never dropped. That is a CORE
+  requirement the model marked missing (major). A non-core "missing" requirement becomes
+  `PARTIAL_REQUIREMENT_*` (minor), so it can be dropped in favour of a major model error, like any partial.
+  Errors backed by the compiler or the execution check and "Does Not Compile" are never dropped either, so
+  shallow-submission detection is unchanged. Every drop is a suppressed `ReconciliationNote` (stage `overlap`)
+  the instructor can Reinstate; a code listed twice gets one note per entry, and a multi-occurrence entry says
+  how many times it was listed.
+- **Switch `CQC_REQUIREMENT_OVERLAP`** (also in `.env.example`). `notes` (default): write the notes, drop nothing,
+  scores identical to a run without the stage. `drop`: apply the drops. `off`: skip the stage. Only `drop`
+  enters the grading run key (as `requirement_overlap`), so existing keys and cached results do not change in
+  `notes`/`off`.
+- **First notes-mode session (before turning `drop` on).**
+  1. Grade a real session with the default (`notes`). Scores must equal what master gives.
+  2. Read every "Possible overlap" note in the drawer. Judge whether the two items really are the same defect.
+  3. Check that no note flags a `MISSING_REQUIREMENT_*`, a compiler error or Does Not Compile as the one to drop.
+  4. If the pairs look right, set `CQC_REQUIREMENT_OVERLAP=drop` in `.env`, restart, and re-grade (the key changes,
+     so it re-grades on its own).
+  5. Reinstate any drop that was wrong (Reinstate re-scores with no model call) and tell the builder which wording
+     was mis-paired.
+- **Rollback.** Remove the variable (or set `notes`) and restart, or revert the commit. Saved runs load either
+  way (no schema change); results graded under `drop` simply re-grade because their key differed.
 - **Offline gate.** `python scripts/requirement_overlap_rescore.py --raw-outputs <grading raw_outputs.jsonl>
   --extraction <requirement-extraction raw_outputs.jsonl>` re-scores saved outputs and reports rows changed, rows
-  that go down (must be 0), the `incomplete` mean, and classifier coverage.
+  that go down (must be 0), the `incomplete` mean, and classifier coverage. Saved outputs carry codes, not the
+  model's error descriptions, so general-code pairs cannot be confirmed there and show as notes.
 
 ## Testing
 

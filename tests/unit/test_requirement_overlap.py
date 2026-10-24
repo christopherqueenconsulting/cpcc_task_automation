@@ -40,11 +40,16 @@ CHECKLIST = rc.RequirementChecklist(requirements=[
 ])
 
 
-def _err(code, severity=None, source=None):
+def _err(code, severity=None, source=None, description=None, occurrences=1):
     if rc.is_requirement_error(code):
         severity = severity or ("major" if code.startswith("MISSING") else "minor")
     return DetectedError(code=code, name=code, severity=severity or _SEV.get(code, "minor"),
-                         description=code, occurrences=1, source=source)
+                         description=description or code, occurrences=occurrences, source=source)
+
+
+#: A catch-all model error that names what is wrong (a drop needs a shared word with the requirement).
+def _impact(description="The subtotal is computed wrongly"):
+    return _err(IMPACT, description=description)
 
 
 def _result(*errors):
@@ -76,10 +81,18 @@ KIND_TABLE = [
     ("Print the total with two decimal places", "format"),
     ("Display the average to one decimal place and display the letter grade", "format"),
     ("Print the monthly payment and total amount paid as currency", "format"),
-    ("Calculate and print the shipping cost with two decimal places", "format"),
+    ("Calculate and print the shipping cost with two decimal places", None),
+    ("Calculate the payment as currency", None),
+    ("Compute the monthly payment and show it as currency", None),
     ("When the user asks to see the balance, print it with two decimal places", "format"),
-    ("Show a menu with deposit, withdraw, balance, and quit options", "format"),
-    ("Tell the user whether each guess is too high or too low", "format"),
+    ("Show a menu with deposit, withdraw, balance, and quit options", "print"),
+    ("Tell the user whether each guess is too high or too low", "print"),
+    ("Print the longest word in the line", "print"),
+    ("Print the product quantity if it exists", "print"),
+    ("List every product whose quantity is below 5 as low stock", "print"),
+    ("The total must have two decimal places", "format"),
+    ("Output must match the sample output exactly", "format"),
+    ("Align the columns with consistent spacing", "format"),
     ("Use a Scanner to read an item price as a double and a quantity as an int", "input"),
     ("Read the loan amount, annual interest rate, and loan term in years", "input"),
     ("Prompt for and read the hours worked and hourly pay rate", "input"),
@@ -120,6 +133,12 @@ KIND_TABLE = [
     ("Start the account with a balance of $100", "data"),
     ("Display the invoice total with a dollar sign and a comma separator", "format"),
     # left alone
+    ("The program must not use loops", None),
+    ("Without using functions", None),
+    ("No global variables", None),
+    ("You may not use arrays", None),
+    ("Avoid using a switch statement", None),
+    ("Use a while loop instead of recursion", None),
     ("Use String methods rather than regular expressions to process the line", None),
     ("Do not perform additional input validation", None),
     ("Do not validate anything beyond what the assignment explicitly requires", None),
@@ -138,7 +157,7 @@ def test_the_table_has_at_least_40_phrasings_and_every_kind():
 
 
 FALLBACK_TABLE = [
-    ("The program should display a menu", "format"),
+    ("The program should display a menu", "print"),
     ("The program reads from the keyboard", "input"),
     ("Use an else branch for everything else", "select"),
     ("The program must compute a formula", "calc"),
@@ -166,7 +185,7 @@ def test_the_info_serialises_for_the_gate_report():
 
 def test_the_classifier_ignores_case_hyphens_and_curly_quotes():
     assert ro.requirement_kind("RE-PROMPT until valid") == "valid"
-    assert ro.requirement_kind("Print the product’s quantity if found") == "format"
+    assert ro.requirement_kind("Print the product’s quantity if found") == "print"
 
 
 ERROR_TABLE = [
@@ -182,7 +201,7 @@ ERROR_TABLE = [
     ("CSC_134_PROJECT_1_FUNCTION_PROTOTYPE_ERROR", {"func"}),
     ("CSC_151_EXAM_2_METHOD_ERRORS", {"func"}),
     ("CSC_151_EXAM_1_SCANNER_CLASS", {"input"}),
-    ("CSC_134_PROJECT_1_INCORRECT_DATA_TYPE", {"input", "data"}),
+    ("CSC_134_PROJECT_1_INCORRECT_DATA_TYPE", {"data"}),
     ("CSC_151_EXAM_1_NAMING_CONVENTION", set()),
     ("CSC_151_EXAM_1_INSUFFICIENT_DOCUMENTATION", set()),
     ("CSC_134_PROJECT_1_CONSTANTS_ERROR", set()),
@@ -208,6 +227,41 @@ def test_a_custom_error_is_read_from_its_description_but_style_codes_never_are()
     assert ro.error_kinds("CUSTOM_ROUNDING") == frozenset()
 
 
+@pytest.mark.parametrize("description", [
+    "Comments do not describe what the function does",
+    "A non-standard method of commenting",
+    "The program has a malfunction in the menu",
+    "Students must validate naming rules",
+    "Wrong indentation of the function body",
+])
+def test_a_custom_description_matches_whole_words_and_style_words_never_pair(description):
+    class Defn:
+        name = "Custom"
+    Defn.description = description
+    assert ro.error_kinds("CUSTOM_ERROR", Defn()) == frozenset()
+
+
+def test_a_custom_description_with_a_real_function_word_still_pairs():
+    class Defn:
+        name = "Custom"
+        description = "A function is called with the wrong arguments"
+    assert ro.error_kinds("CUSTOM_ERROR", Defn()) == {"func"}
+
+
+def test_formatting_codes_pair_only_with_explicit_format_wording():
+    checklist = rc.RequirementChecklist(requirements=[
+        rc.RequirementItem(id="R1", text="Show a menu with deposit, withdraw, and quit", weight="core"),
+        rc.RequirementItem(id="R2", text="Tell the user whether the guess is too high", weight="core"),
+        rc.RequirementItem(id="R3", text="Calculate the payment as currency", weight="core"),
+        rc.RequirementItem(id="R4", text="Print the total with two decimal places", weight="core")])
+    for rid in ("R1", "R2", "R3"):
+        for code in (FORMAT, "CSC_251_EXAM_1_DECIMAL_SCALE"):
+            result, notes, _ = _run([_err(code), _err(f"PARTIAL_REQUIREMENT_{rid}")], "drop", checklist)
+            assert len(result.detected_errors) == 2 and notes == [], (rid, code)
+    result, _, _ = _run([_err(FORMAT), _err("PARTIAL_REQUIREMENT_R4")], "drop", checklist)
+    assert _codes(result) == ["PARTIAL_REQUIREMENT_R4"]
+
+
 # --------------------------------------------------------------------------- pairing
 
 def test_a_tie_keeps_the_requirement_error_and_drops_the_model_error():
@@ -221,14 +275,14 @@ def test_a_tie_keeps_the_requirement_error_and_drops_the_model_error():
 
 
 def test_a_major_model_error_beats_a_minor_requirement_error():
-    result, notes, _ = _run([_err(IMPACT), _err("PARTIAL_REQUIREMENT_R2")], "drop")
+    result, notes, _ = _run([_impact(), _err("PARTIAL_REQUIREMENT_R2")], "drop")
     assert _codes(result) == [IMPACT]
     assert notes[0].code == "PARTIAL_REQUIREMENT_R2" and notes[0].kept_code == IMPACT
 
 
 def test_a_missing_requirement_error_is_never_dropped():
     # A major requirement error ties a major model error: the requirement stays.
-    result, _, _ = _run([_err(IMPACT), _err("MISSING_REQUIREMENT_R2")], "drop")
+    result, _, _ = _run([_impact(), _err("MISSING_REQUIREMENT_R2")], "drop")
     assert _codes(result) == ["MISSING_REQUIREMENT_R2"]
     # A lesser model error never outranks it either.
     result, _, _ = _run([_err(FORMAT), _err("MISSING_REQUIREMENT_R3")], "drop")
@@ -313,6 +367,8 @@ def test_notes_mode_changes_no_error_and_no_score_but_explains_the_overlap():
     assert _score(result) == _score(master) == 180
     [n] = notes
     assert n.action == "note" and not n.suppressed and "not applied" in n.reason
+    assert 'Requirement R3 ("Print the total with two decimal places")' in n.reason
+    assert "both are counted" in n.reason and "would be counted once" in n.reason
     assert n.code == FORMAT and n.kept_code == "PARTIAL_REQUIREMENT_R3" and info.dropped == []
 
 
@@ -321,7 +377,7 @@ def test_drop_mode_scores_as_simulated():
     assert _score(master) == 180  # two distinct minors
     dropped, _, _ = ro.reconcile_overlaps(master, CHECKLIST, None, "drop")
     assert _score(dropped) == 190  # counted once
-    major = _result(_err(IMPACT), _err("MISSING_REQUIREMENT_R2"))
+    major = _result(_impact(), _err("MISSING_REQUIREMENT_R2"))
     assert _score(major) == 140  # two majors
     after, _, _ = ro.reconcile_overlaps(major, CHECKLIST, None, "drop")
     assert _score(after) == 160  # one major, the requirement kept
@@ -342,7 +398,7 @@ def test_an_unknown_mode_falls_back_to_the_environment_default(monkeypatch):
 
 
 def test_the_stage_is_idempotent_and_deterministic():
-    master = _result(*PAIRS, _err(IMPACT), _err("PARTIAL_REQUIREMENT_R2"))
+    master = _result(*PAIRS, _impact(), _err("PARTIAL_REQUIREMENT_R2"))
     first, notes1, _ = ro.reconcile_overlaps(master, CHECKLIST, None, "drop")
     again, notes2, _ = ro.reconcile_overlaps(master, CHECKLIST, None, "drop")
     assert first.detected_errors == again.detected_errors and notes1 == notes2
@@ -538,3 +594,64 @@ def test_the_offline_gate_rescore_matches_the_scorer_and_never_goes_down(tmp_pat
     out = script.rescore(path, cases, rubrics)["rows"]
     assert len(out) == 1 and fmt
     assert out[0]["notes"] == out[0]["base"] and out[0]["drop"] >= out[0]["base"]
+
+
+# --------------------------------------------------------------------------- gauntlet round 1
+
+def test_a_catch_all_error_pairs_only_when_it_names_the_same_thing():
+    unrelated = _err(IMPACT, description="The menu loop never exits")
+    result, notes, info = _run([unrelated, _err("PARTIAL_REQUIREMENT_R2")], "drop")
+    assert len(result.detected_errors) == 2 and info.dropped == [] and info.unconfirmed == ["R2"]
+    assert [n.action for n in notes] == ["note"] and "both are counted" in notes[0].reason
+    assert _score(result) == 160  # both still counted: a major plus a minor
+    # No description at all (only the generic name) is not confirmation either.
+    result, _, _ = _run([_err(IMPACT), _err("PARTIAL_REQUIREMENT_R2")], "drop")
+    assert len(result.detected_errors) == 2
+    # The notes field counts as wording too.
+    with_notes = _err(IMPACT, description="Wrong result").model_copy(update={"notes": "subtotal off by one"})
+    result, _, _ = _run([with_notes, _err("PARTIAL_REQUIREMENT_R2")], "drop")
+    assert _codes(result) == [IMPACT]  # the major model error stays, the minor requirement error goes
+
+
+def test_formatting_codes_are_not_catch_alls():
+    assert ro.is_catch_all(IMPACT) and ro.is_catch_all(SEQ) and not ro.is_catch_all(FORMAT)
+
+
+def test_two_entries_sharing_a_code_each_leave_a_note_and_restore():
+    first = _err(FORMAT, occurrences=3)
+    second = _err(FORMAT)
+    master = _result(first, second, _err("PARTIAL_REQUIREMENT_R3"))
+    result, notes, _ = ro.reconcile_overlaps(master, CHECKLIST, None, "drop")
+    assert _codes(result) == ["PARTIAL_REQUIREMENT_R3"]
+    assert len(notes) == 2 and all(n.suppressed for n in notes)
+    assert "listed 3 times" in notes[0].reason and "times" not in notes[1].reason
+    final = result.model_copy(update={"reconciliation": notes})
+    back = rec.reinstate(final, RUBRIC, 0)
+    assert FORMAT in [e.code for e in back.detected_errors]
+    back2 = rec.reinstate(back, RUBRIC, 1)
+    assert back2.reconciliation[1].reinstated
+
+
+def test_a_dropped_requirement_error_names_the_requirement_and_the_kept_error():
+    _, notes, _ = _run([_err(IMPACT, description="Total is wrong"), _err(SEQ, description="x"),
+                        _err("PARTIAL_REQUIREMENT_R3")], "drop")
+    assert notes == []
+    _, notes, _ = _run([_impact(), _err("PARTIAL_REQUIREMENT_R2")], "drop")
+    assert 'Requirement R2 ("Compute the subtotal by multiplying price by quantity")' in notes[0].reason
+
+
+def test_the_run_key_wiring_is_at_the_grade_assignment_call_site():
+    import ast
+    src = Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "grade_assignment.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", getattr(n.func, "attr", "")) == "generate_grading_run_key"]
+    assert calls
+    kw = {k.arg: k.value for c in calls for k in c.keywords}
+    assert "requirement_overlap" in kw
+    assert getattr(kw["requirement_overlap"].func, "id", "") == "run_key_overlap"
+
+
+def test_the_environment_example_documents_the_switch():
+    text = (Path(__file__).resolve().parents[2] / ".env.example").read_text(encoding="utf-8")
+    assert ro.ENV_VAR in text and "notes" in text and "drop" in text and "off" in text
