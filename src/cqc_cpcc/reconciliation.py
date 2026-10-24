@@ -132,7 +132,7 @@ def remove_added(result: RubricAssessmentResult, rubric: Rubric, index: int) -> 
     if not 0 <= index < len(notes):
         raise ValueError(f"no reconciliation note {index}")
     n = notes[index]
-    if n.action != "added" or n.error is None:
+    if n.action != "added" or n.error is None or n.stage != "execution":
         raise ValueError(f"note {index} is not an error a stage added")
     if n.suppressed:
         raise ValueError(f"note {index} was already removed")
