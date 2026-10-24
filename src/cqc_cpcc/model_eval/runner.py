@@ -46,7 +46,6 @@ class CallRecord:
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     reasoning_tokens: Optional[int] = None
-    cached_tokens: Optional[int] = None
     output_sha256: Optional[str] = None
     compile_gate: Optional[str] = None
     validity: Optional[str] = None  # validity-gate status ("ok" when graded by the model)
@@ -241,7 +240,6 @@ async def run_model(
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
                 record.reasoning_tokens = completion.reasoning_tokens
-                record.cached_tokens = completion.cached_tokens
             budget.add(record.cost_usd)
             if on_record:
                 on_record(record)

@@ -234,6 +234,8 @@ def build_rubric_grading_system(rubric: Rubric, *, has_error_definitions: bool =
     p.append("- Use the exact criterion_id values from the rubric in the user message (e.g., 'documentation', "
              "not 'DOC'): results are matched to criteria by that id.")
     p.append("- Set total_points_earned to 0: the backend recalculates it from the criteria.")
+    p.append("- For scoring_mode manual, points_earned must be a number (0 to max_points), never null. "
+             "For level_band and error_count criteria it stays null.")
     p.append("- Per-criterion feedback is 2-3 sentences (100-150 characters); overall_feedback is 3-5 "
              "sentences (400-500 characters) summarizing the assessment. Use simple punctuation.")
     p.append("- Be objective, fair and constructive.")
@@ -267,7 +269,7 @@ def build_rubric_grading_system(rubric: Rubric, *, has_error_definitions: bool =
     p.append('   "selected_level_label": "Above Average", "evidence": null}')
     if has_manual_criteria:
         p.append(
-            "This rubric contains scoring_mode='manual' criteria: points_earned is a number for those "
+            "This rubric contains scoring_mode='manual' criteria: points_earned must be a number for those "
             "criteria. Only level_band and error_count criteria use null."
         )
     p.append("Each `detected_errors` item holds actual values too:")
@@ -337,6 +339,9 @@ def build_rubric_grading_messages(
 
     # Criteria breakdown
     prompt_parts.append("### Criteria")
+    # The schema types criterion_id as a plain string (no enum), so this line is the only guard.
+    prompt_parts.append("Use the exact criterion_id values shown below in your response.")
+    prompt_parts.append("")
     for criterion in rubric.criteria:
         if not criterion.enabled:
             continue  # Skip disabled criteria

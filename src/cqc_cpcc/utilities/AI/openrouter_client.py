@@ -109,7 +109,6 @@ class CompletionMetadata:
     attempts: int
     ok: bool = True
     cached_tokens: Optional[int] = None  # prompt tokens the provider served from its cache
-    cache_write_tokens: Optional[int] = None  # prompt tokens written to the cache (models with a write price)
 
 
 _last_completion: contextvars.ContextVar[Optional[CompletionMetadata]] = contextvars.ContextVar(
@@ -143,7 +142,6 @@ class _Spend:
         self.completion_tokens = 0
         self.reasoning_tokens = 0
         self.cached_tokens = 0
-        self.cache_write_tokens = 0
         self.last_response = None
 
     def add(self, response) -> None:
@@ -167,9 +165,6 @@ class _Spend:
         cached = getattr(prompt_details, "cached_tokens", None) if prompt_details else None
         if isinstance(cached, int):
             self.cached_tokens += cached
-        written = getattr(prompt_details, "cache_write_tokens", None) if prompt_details else None
-        if isinstance(written, int):
-            self.cache_write_tokens += written
 
     def metadata(self, requested_model: str, latency: float, ok: bool) -> CompletionMetadata:
         response = self.last_response
@@ -182,7 +177,6 @@ class _Spend:
             completion_tokens=self.completion_tokens or None,
             reasoning_tokens=self.reasoning_tokens or None,
             cached_tokens=self.cached_tokens or None,
-            cache_write_tokens=self.cache_write_tokens or None,
             cost_usd=self.cost,
             latency_seconds=latency,
             attempts=self.attempts,

@@ -208,7 +208,7 @@ class GradingJob:
                  deadline_s: Optional[float] = None, concurrency: Optional[int] = None,
                  base_results: Optional[list] = None, base_failures: Optional[list] = None,
                  greeting_names: Optional[dict] = None, meta: Optional[dict] = None,
-                 warm_first: Optional[bool] = None):
+                 warm_first: Optional[bool] = None, warm_timeout_s: Optional[float] = None):
         self.run_key = run_key
         self.submissions = dict(submissions)
         self.kwargs = dict(grade_kwargs)
@@ -223,6 +223,8 @@ class GradingJob:
         self._deadline_s = deadline_s if deadline_s is not None else default_deadline(self.kwargs)
         self._concurrency = concurrency or llm_limits.grading_concurrency()
         self._warm_first = warm_first_enabled() if warm_first is None else warm_first
+        # Safety valve: a first student that never answers must not hold the rest forever.
+        self._warm_timeout_s = warm_timeout_s if warm_timeout_s is not None else self._deadline_s
         self._warm_done: Optional[asyncio.Event] = None  # set when the first student has finished
         self._base_results = list(base_results or [])
         self._base_failures = list(base_failures or [])
@@ -403,7 +405,10 @@ class GradingJob:
         is_first = warm is not None and sid == next(iter(self.submissions))
         try:
             if warm is not None and not is_first:
-                await warm.wait()  # warm-first: the first student's call has finished (any outcome)
+                try:  # warm-first: the first student's call has finished (any outcome) ...
+                    await asyncio.wait_for(warm.wait(), self._warm_timeout_s)
+                except TimeoutError:  # ... or it has not answered within the deadline: go on without it
+                    logger.warning("Warm-first: the first student gave no result in time; grading the rest")
             async with semaphore:
                 await self._grade_student(sid)
         except asyncio.CancelledError:

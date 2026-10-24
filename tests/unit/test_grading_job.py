@@ -600,3 +600,22 @@ def test_the_warm_first_flag_reads_the_environment(monkeypatch):
     for value, expected in (("on", True), ("1", True), ("true", True), ("", False), ("off", False)):
         monkeypatch.setenv("CQC_GRADING_WARM_FIRST", value)
         assert grading_job.warm_first_enabled() is expected
+
+
+def test_warm_first_goes_on_after_the_timeout_when_the_first_student_never_answers(tmp_path):
+    names = ["Student A", "Student B", "Student C"]
+    job, gate, log = _ordered_job(tmp_path, names, warm_first=True, warm_timeout_s=0.3)
+    job.start()
+    assert _wait_for(lambda: {("end", "Student B"), ("end", "Student C")} <= set(log))  # A is still gated
+    assert ("end", "Student A") not in log
+    gate.set()
+    assert job.wait(10)
+    assert job.snapshot().counts[grading_job.DONE] == 3
+
+
+def test_a_single_student_job_is_not_held_by_warm_first(tmp_path):
+    job, gate, log = _ordered_job(tmp_path, ["Student A"], warm_first=True)
+    job.start()
+    assert _wait_for(lambda: ("start", "Student A") in log)
+    gate.set()
+    assert job.wait(10)

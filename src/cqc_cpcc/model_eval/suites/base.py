@@ -80,28 +80,6 @@ def cost_stats(records: list) -> dict:
             "retry_charge_usd": sum(getattr(r, "retry_charge_usd", 0.0) or 0.0 for r in calls)}
 
 
-def cache_stats(records: list) -> dict:
-    """Prompt-cache and reasoning usage over the calls (reporting only: no verdict reads this).
-
-    ``cached_share`` is cached prompt tokens over prompt tokens, taken over the rows that report
-    both; ``cost_per_call_usd`` is the mean real cost of the ok rows. Rows from before these keys
-    existed (or whose response had no usage detail) count as zero cached tokens and are not hidden:
-    ``rows_with_usage`` says how many rows carried the detail.
-    """
-    calls = [r for r in records if r.error_kind != "budget"]
-    with_usage = [r for r in calls if getattr(r, "cached_tokens", None) is not None
-                  or getattr(r, "reasoning_tokens", None) is not None]
-    prompt = sum(r.prompt_tokens or 0 for r in calls)
-    cached = sum(getattr(r, "cached_tokens", None) or 0 for r in calls)
-    ok_real = [r for r in calls if r.ok and not r.cost_estimated]
-    return {"calls": len(calls), "rows_with_usage": len(with_usage), "prompt_tokens": prompt,
-            "cached_tokens": cached, "cached_share": (cached / prompt) if prompt else 0.0,
-            "cache_write_tokens": sum(getattr(r, "cache_write_tokens", None) or 0 for r in calls),
-            "reasoning_tokens": sum(getattr(r, "reasoning_tokens", None) or 0 for r in calls),
-            "cost_usd": sum(r.cost_usd for r in calls),
-            "cost_per_call_usd": (sum(r.cost_usd for r in ok_real) / len(ok_real)) if ok_real else None}
-
-
 #: Suites with fewer scorable cases than this use absolute hard gates only; paired
 #: comparisons (bootstrap, Holm) need at least this many cases to mean anything.
 MIN_COMPARATIVE_CASES = 30
@@ -148,10 +126,6 @@ class SuiteRecord:
     prompt: Optional[str] = None  # "prompt_id@version" actually sent
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
-    #: Usage detail from the response (report-only; additive keys, absent from a row when the response had none).
-    reasoning_tokens: Optional[int] = None
-    cached_tokens: Optional[int] = None
-    cache_write_tokens: Optional[int] = None
     #: One entry per failed attempt (exception class, HTTP status, gateway code/type, redacted message,
     #: request id, latency, attempt number); see ``error_detail.py``. Empty for a call that never failed.
     error_detail: list = field(default_factory=list)
@@ -165,9 +139,6 @@ class SuiteRecord:
         data = asdict(self)
         if not data["error_detail"]:
             del data["error_detail"]  # additive key: rows of calls that never failed are unchanged
-        for key in ("reasoning_tokens", "cached_tokens", "cache_write_tokens"):
-            if data[key] is None:
-                del data[key]  # additive keys: rows written before them (or without usage) are unchanged
         if not data["retry_charge_usd"]:
             del data["retry_charge_usd"]  # additive key: absent unless a failed attempt was charged separately
         return json.dumps(data, sort_keys=True)
@@ -331,9 +302,6 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.model_used = completion.model
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
-                record.reasoning_tokens = completion.reasoning_tokens
-                record.cached_tokens = completion.cached_tokens
-                record.cache_write_tokens = completion.cache_write_tokens
             if held.transport_retries or held.truncated_retries:
                 record.attempts += held.transport_retries + held.truncated_retries  # the client's own tries plus ours
             # What this call's last attempt cost; earlier failed attempts were charged to the budget as they failed.

@@ -1,14 +1,10 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 """Prompt-cache layout, the optional session id, and the cache usage columns of the eval records."""
 
-import json
-
 import pytest
 
 from cqc_cpcc import prompt_cache
 from cqc_cpcc.grading_diagnostics import find_rubric
-from cqc_cpcc.model_eval import prompt_automation as pa
-from cqc_cpcc.model_eval.suites import base
 from cqc_cpcc.rubric_grading import build_rubric_grading_messages
 from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_messages
 
@@ -82,39 +78,3 @@ def test_the_session_id_is_deterministic_under_request_capture(monkeypatch):
         ids = {prompt_cache.session_id_for(*build_rubric_grading_messages(RUBRIC, "i", "s"),
                                            prompt_cache.RUBRIC_SUBMISSION_HEADING, "m", "high") for _ in range(3)}
     assert len(ids) == 1
-
-
-# --- eval records -------------------------------------------------------------------------------
-
-def _rec(**kw):
-    return base.SuiteRecord(suite="s", case_id=kw.pop("case_id", "c"), model="m", effort="high", repeat=0,
-                            ok=True, cost_usd=kw.pop("cost_usd", 0.01), **kw)
-
-
-def test_the_new_usage_keys_are_additive_and_old_rows_still_load():
-    old = json.loads(_rec(prompt_tokens=1000).to_json())
-    assert "cached_tokens" not in old and "reasoning_tokens" not in old and "cache_write_tokens" not in old
-    new = json.loads(_rec(prompt_tokens=1000, cached_tokens=800, reasoning_tokens=300, cache_write_tokens=100).to_json())
-    assert (new["cached_tokens"], new["reasoning_tokens"], new["cache_write_tokens"]) == (800, 300, 100)
-    again = base.SuiteRecord.from_json(json.dumps(new))
-    assert again.cached_tokens == 800
-    assert base.SuiteRecord.from_json(json.dumps(old)).cached_tokens is None
-
-
-def test_cache_stats_report_the_cached_share_and_cost_per_call():
-    rows = [_rec(prompt_tokens=1000, cached_tokens=0, reasoning_tokens=100, cost_usd=0.02, case_id="a"),
-            _rec(prompt_tokens=1000, cached_tokens=900, reasoning_tokens=200, cost_usd=0.01, case_id="b")]
-    stats = base.cache_stats(rows)
-    assert stats["prompt_tokens"] == 2000 and stats["cached_tokens"] == 900 and stats["cached_share"] == 0.45
-    assert stats["reasoning_tokens"] == 300 and stats["cost_per_call_usd"] == pytest.approx(0.015)
-    assert base.cache_stats([])["cached_share"] == 0.0
-
-
-def test_run_stats_markdown_lists_head_and_base_cache_use():
-    head = base.cache_stats([_rec(prompt_tokens=1000, cached_tokens=800, reasoning_tokens=5)])
-    basest = base.cache_stats([_rec(prompt_tokens=1000)])
-    report = {"suites": {"grading": {"run_stats": {"elapsed_s": 1, "head_cache": head, "base_cache": basest}}},
-              "wall_clock_s": 1.0}
-    text = "\n".join(pa._run_stats_markdown(report))
-    assert "Prompt cache (report-only" in text and "80% of 1000 prompt tokens cached" in text
-    assert "base: 0% of 1000" in text

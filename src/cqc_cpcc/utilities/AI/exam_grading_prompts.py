@@ -82,6 +82,9 @@ Grade exactly and only what the Exam Instructions specify.
   - Its type is the closest Major or Minor error type from the provided lists, written exactly as it appears in the list, word for word. Do not invent or reword a type.
   - Give line numbers or ranges and a minimal code snippet (only the necessary lines). Use "not_applicable" for line numbers when the code is missing or the location is ambiguous, and explain in the justification.
   - The explanation says what was required, how the submission falls short and why this severity applies. Describe the code ("the code fails to…"), not the student. State the requirement in simple text without R# references, and do not refer to the Reference Solution.
+- If an alternative implementation satisfies a requirement, mark it Meets.
+- Do not penalize style unless it violates a stated requirement.
+- Use only the provided Major and Minor error types.
 - Judge from the Exam Instructions and the submission. When runtime behavior is required but cannot be verified statically, reason from the code paths and state the assumption in the justification fields. If a requirement is ambiguous, state your interpretation there too.
 - Do not fabricate details. Where information is missing, set the field to null if the schema allows.
 

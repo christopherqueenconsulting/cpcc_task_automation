@@ -9,6 +9,12 @@ claim beyond the cited source. The prompt changes that used these guidelines are
 
 ---
 
+**Update 2026-10-24.** A second research pass on Luna's caching (OpenRouter, per-model prices) supersedes G22 and
+G24 on Luna's rates: gpt-6-luna cached input is $0.01 vs input $0.10 per 1M tokens and a 30-minute cache write is
+$0.125 per 1M (OpenAI pricing page and OpenRouter endpoints API; the 0.1x read and 1.25x write ratios are the
+GPT-5.6+ rates in OpenAI's prompt-caching guide). The 1,024-token minimum is stated for GPT-5.6 and later; that
+gpt-6-luna belongs to that group is an inference. The markings below are left as first written.
+
 # Prompt-writing guideline digest (grading call, openai/gpt-6-luna, effort high, JSON schema)
 
 Seen 2026-10-24. None of the pages state a publication date unless noted; "undated" below means that.
@@ -62,7 +68,7 @@ Source: same Anthropic mitigate-jailbreaks page. Confidence: high (Anthropic); f
 G9. Topic 3. OpenAI prompt-engineering guide: XML tags mark where a document starts and ends, attributes can carry metadata the instructions refer to; Markdown headers separate sections. Anthropic: wrap each document in its own tag with source metadata, consistent tag names.
 Sources: prompt-engineering guide above; Anthropic best practices ("Structure prompts with XML tags"). Confidence: high.
 
-G10. Topic 3 (nonce). NO primary source found on random per-call nonce delimiters. Unverified. Reasoning from the caching docs (G18): a nonce that appears in the instructions changes the prefix every call and kills cache hits. If a nonce is used, the instruction text must not contain it. Options: (a) fixed fence tags in the stable prefix, plus escaping/neutralising any closing-tag occurrence in the submission (JSON-encoding, G8); (b) put the nonce only in the variable tail (e.g. open and close markers placed in the user message) and have the stable developer message say "the submission is delimited by the markers given in the user message". Option (b) is my inference, not documented.
+G10. Topic 3 (nonce). NO primary source found on random per-call nonce delimiters. Unverified. Reasoning from the caching docs (G21, G28): a nonce that appears in the instructions changes the prefix every call and kills cache hits. If a nonce is used, the instruction text must not contain it. Options: (a) fixed fence tags in the stable prefix, plus escaping/neutralising any closing-tag occurrence in the submission (JSON-encoding, G8); (b) put the nonce only in the variable tail (e.g. open and close markers placed in the user message) and have the stable developer message say "the submission is delimited by the markers given in the user message". Option (b) is my inference, not documented.
 Confidence: unverified.
 
 G11. Topic 4 (structured outputs). Strict mode: every property in `required`, `additionalProperties: false`, optional values as nullable types. Give important keys clear names, titles and descriptions. The page says structured outputs reduce the need for strongly worded format prompts; the examples use short instructions.

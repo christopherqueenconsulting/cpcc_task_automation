@@ -152,18 +152,21 @@ for one assignment; the nonce appears only in the submission part at the end.
 Layout: the system message, then the assignment instructions, solution, rubric, error
 definitions and requirements are the same for every student of an assignment; the nonce, the
 fence and the submission come last (`tests/unit/test_prompt_cache.py` asserts the shared
-prefix is byte-identical). Optional levers, both off by default (the maintainer decides):
+prefix is byte-identical). Two optional levers, both off by default (the maintainer decides);
+accepted on values are `1`, `true`, `on`, `yes`:
 
-- `CQC_PROMPT_CACHE_KEY=on`: the grading calls send OpenRouter's `session_id` (sticky
-  routing to the provider that holds the cache), a hash of the static prefix, model and
-  effort; never student data (`prompt_cache.py`). Do not set `provider.order`: it disables
-  sticky routing.
-- `CQC_GRADING_WARM_FIRST=on`: the background grading job grades the first student alone,
-  then the rest, so the rest read the prefix the first call wrote. Adds one call of latency.
+- `CQC_PROMPT_CACHE_KEY`: the grading calls send OpenRouter's `session_id`, `cqc-` plus a hash
+  of the static prefix, model and effort; never student data (`prompt_cache.py`). The flag is
+  read on every call. To turn it off, unset it or set any other value; the next call sends no
+  id. Do not set `provider.order`: it disables sticky routing. Instructors with identical
+  material share an id (routing only).
+- `CQC_GRADING_WARM_FIRST`: the background grading job grades the first student alone, then
+  the rest, so the rest read the prefix the first call wrote; if the first gives no result
+  within the job's deadline the rest start anyway. It adds one call of latency. The flag is
+  read when a job starts: to turn it off, unset it or set any other value; a grade already
+  running keeps the setting it started with.
 
-Eval records carry `cached_tokens`, `cache_write_tokens` and `reasoning_tokens` when the response
-reports them; the A/B's Run stats list the cached-token share and cost per call, head against
-base (report-only).
+The eval side (cached-token telemetry, eval `session_id`, warm-first in the runner) is PR #463.
 
 ## Adding a prompt
 
