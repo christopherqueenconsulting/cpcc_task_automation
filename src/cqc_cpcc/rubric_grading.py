@@ -49,6 +49,7 @@ from cqc_cpcc.rubric_models import (
     Rubric,
     RubricAssessmentResult,
 )
+from cqc_cpcc import prompt_cache
 from cqc_cpcc.utilities.AI import llm_gateway, untrusted_fence
 from cqc_cpcc.utilities.code_preview import read_source_files as _read_source_files
 from cqc_cpcc.utilities.logger import logger
@@ -583,6 +584,11 @@ async def grade_with_rubric(
         requirements=requirements,
         execution_evidence=execution_evidence,
     )
+
+    # Off by default (CQC_PROMPT_CACHE_KEY): a hash of the static prefix, never student data.
+    if session_id is None:
+        session_id = prompt_cache.session_id_for(
+            system_message, prompt, prompt_cache.RUBRIC_SUBMISSION_HEADING, model_name, effort)
 
     logger.info(
         f"Grading with rubric '{rubric.rubric_id}': "

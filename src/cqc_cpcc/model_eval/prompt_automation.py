@@ -755,6 +755,12 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
         recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
         return base.cost_stats(recs)
 
+    def cache(path):
+        if path is None:
+            return None
+        recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
+        return base.cache_stats(recs)
+
     def pool(directory):
         saved = prompt_eval.read_concurrency(directory) if directory is not None else None
         return (saved or {}).get("calls")
@@ -769,6 +775,7 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
             "head_truncated": truncation(head_raw), "base_truncated": truncation(base_raw),
             "max_tokens_cap": adaptive.eval_max_tokens(),
             "head_cost": cost(head_raw), "base_cost": cost(base_raw),
+            "head_cache": cache(head_raw), "base_cache": cache(base_raw),
             "head_pool": head_pool, "base_pool": base_pool, "judge_pool": judge_pool,
             "rate_limited": sum(p.get("rate_limited", 0) for p in pools),
             "in_flight_budget": sum(p.get("in_flight_budget", 0) for p in pools)}
@@ -1108,6 +1115,28 @@ def _cost_markdown(rows: list) -> list:
             "reported one):", "", *lines] if lines else []
 
 
+def _cache_markdown(rows: list) -> list:
+    """Cached-token share, reasoning tokens and cost per call, head against base (reporting only)."""
+    lines = []
+    for sid, st in rows:
+        sides = {side: st.get(f"{side}_cache") for side in ("head", "base")}
+        if not any(s and s.get("calls") for s in sides.values()):
+            continue
+        cells = []
+        for side, s in sides.items():
+            if not s or not s.get("calls"):
+                cells.append(f"{side}: none")
+                continue
+            per_call = s.get("cost_per_call_usd")
+            cells.append(f"{side}: {s['cached_share']:.0%} of {s['prompt_tokens']} prompt tokens cached, "
+                         f"{s['cache_write_tokens']} written, {s['reasoning_tokens']} reasoning tokens, "
+                         + (f"${per_call:.5f}/call" if per_call is not None else "cost/call n/a")
+                         + f" ({s['rows_with_usage']}/{s['calls']} rows with usage detail)")
+        lines.append(f"- `{sid}` " + "; ".join(cells))
+    return ["", "Prompt cache (report-only; the cached share is cached over prompt tokens, the cost per call is "
+            "the mean real cost of ok rows):", "", *lines] if lines else []
+
+
 def _run_stats_markdown(report: dict) -> list:
     """Wall clock and what each adaptive pool did (reporting only: no decision reads these lines)."""
     rows = [(sid, r["run_stats"]) for sid, r in report["suites"].items() if r.get("run_stats")]
@@ -1130,6 +1159,7 @@ def _run_stats_markdown(report: dict) -> list:
         lines += _transport_markdown(rows)
         lines += _truncation_markdown(rows, max((st.get("max_tokens_cap") or 0) for _s, st in rows) or None)
         lines += _cost_markdown(rows)
+        lines += _cache_markdown(rows)
     return lines
 
 

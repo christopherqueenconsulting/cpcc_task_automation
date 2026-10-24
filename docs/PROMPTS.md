@@ -147,6 +147,24 @@ step-by-step procedure, no emphatic CRITICAL/MUST wording, each rule stated once
 contradictions removed. The system message and the static user prefix stay byte-identical
 for one assignment; the nonce appears only in the submission part at the end.
 
+### Prompt cache (v4)
+
+Layout: the system message, then the assignment instructions, solution, rubric, error
+definitions and requirements are the same for every student of an assignment; the nonce, the
+fence and the submission come last (`tests/unit/test_prompt_cache.py` asserts the shared
+prefix is byte-identical). Optional levers, both off by default (the maintainer decides):
+
+- `CQC_PROMPT_CACHE_KEY=on`: the grading calls send OpenRouter's `session_id` (sticky
+  routing to the provider that holds the cache), a hash of the static prefix, model and
+  effort; never student data (`prompt_cache.py`). Do not set `provider.order`: it disables
+  sticky routing.
+- `CQC_GRADING_WARM_FIRST=on`: the background grading job grades the first student alone,
+  then the rest, so the rest read the prefix the first call wrote. Adds one call of latency.
+
+Eval records carry `cached_tokens`, `cache_write_tokens` and `reasoning_tokens` when the response
+reports them; the A/B's Run stats list the cached-token share and cost per call, head against
+base (report-only).
+
 ## Adding a prompt
 
 `test_every_llm_call_site_is_registered` scans `src/` for `llm_gateway.structured(`,
