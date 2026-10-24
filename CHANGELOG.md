@@ -11,16 +11,24 @@ Prerelease, on top of 0.2.0-rc3. Grading can now check each requirement against 
 and the app can note (and, if you turn it on, remove) a double penalty when a requirement error and a model
 error describe the same defect. The rest is evaluation tooling and CI.
 
-What to check, in plain terms:
+What to check (about 10 minutes, one synthetic submission from `evals/datasets`, never real student work):
 
-- Upload a solution under Instructions, then press "Check all against the solution". A requirement the
-  solution does not do is suggested as not graded; you apply it with one click or by removing it from
-  "Requirements to grade". It is not pre-applied until a calibrated policy entry exists. With no solution,
-  nothing changes.
-- Overlap between a requirement error and a model error is only written as a note by default
-  (`CQC_REQUIREMENT_OVERLAP=notes`), so scores are the same as rc3. To remove the lesser duplicate set
-  `CQC_REQUIREMENT_OVERLAP=drop` in `.env` and restart; every drop is a note you can Reinstate.
-  `CQC_REQUIREMENT_OVERLAP=off` writes no notes.
+1. Grade it with no solution uploaded. Expected: the score equals what rc3 gave for the same input.
+2. Upload a solution under Instructions and press "Check all against the solution". Expected: suggestions
+   appear for requirements the solution does not do, and none is applied until you click it (or remove the
+   requirement from "Requirements to grade").
+3. With a requirement list, grade again (default `CQC_REQUIREMENT_OVERLAP=notes`). Expected: the "Scoring
+   notes" section may show "Possible overlap (not applied; both are counted now)" lines, and the score is
+   unchanged from step 1's mode.
+4. Set `CQC_REQUIREMENT_OVERLAP=drop` in `.env`, restart, re-grade. Expected: a dropped error appears in
+   "Scoring notes" with a Reinstate button, and Reinstate restores the notes-mode score.
+
+If a step fails, tell the EA and see the rollback section of [docs/RELEASING.md](docs/RELEASING.md).
+
+No app behaviour change from #426, #433, #435, #436, #439 (CI and eval tooling only). Scores match rc3
+unless `CQC_REQUIREMENT_OVERLAP=drop` is set.
+
+Not in this release: the execution gate (#434) and the effort recommendation judge (#428).
 
 - Requirements checked against the solution (`requirement_solution_check.py`, new prompt
   `requirement-solution-check`): one model call per assignment; only a "no" can make a requirement not
@@ -37,8 +45,10 @@ What to check, in plain terms:
 - Evaluation: the request capture pins the fence keys of `test-case-generation` and
   `requirement-solution-check`, so the identical-request fast path can skip them. Harness only; production
   keys stay random. Merge `2b102da`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/439
-- CI: workflow and Dependabot edits for the exec-runner sandbox image (a `docker` Dependabot entry, a hold on
-  base-image auto-merge, and a build step so the Docker integration tests run in CI). Merge `ae298b8`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/426
+- CI: workflow and Dependabot edits for the exec-runner sandbox image: a `docker` Dependabot entry, an
+  intended skip of auto-merge for base-image bumps (PR #426 lists this as "Known unverified"), and a build
+  step so the Docker integration tests run in CI. If the skip works, a docker base-image bump will not
+  auto-merge. Merge `ae298b8`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/426
 - Evaluation: per-suite request-identical fast path, and identical suites are skipped in a mixed A/B.
   Merge `6321194`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/433
 
