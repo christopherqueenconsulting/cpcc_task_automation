@@ -142,7 +142,8 @@ To put a tagged release in front of the instructor, after the Release run for th
 
 ```bash
 git fetch origin --tags
-git push origin vX.Y.Z:refs/heads/release     # a fast-forward when the tag is newer than release
+git rev-parse 'vX.Y.Z^{commit}'                        # pre-check: the commit the tag points at
+git push origin 'vX.Y.Z^{commit}:refs/heads/release'  # a fast-forward when the tag is newer than release
 ```
 
 An rc is live from that push, so move `release` to an rc only when Christopher has said to; the rc
@@ -155,7 +156,10 @@ To try a tag on a computer: `git fetch --tags && git checkout v0.2.0-rc1 && ./ru
 
 1. Find the last good tag: `git tag --sort=-v:refname` or the GitHub releases page.
 2. Roll the code back. Redeploy the last good tag at once with
-   `git push --force origin <tag>:refs/heads/release` (only Christopher force-pushes `release`).
+   `git rev-parse '<tag>^{commit}'` (pre-check: it must print the commit you expect), then
+   `git push --force origin '<tag>^{commit}:refs/heads/release'` (only Christopher force-pushes `release`).
+   The `^{commit}` form is needed because release tags are annotated: git may refuse to push a tag
+   object to a branch ref.
    Then fix forward on `master`: open a revert PR for the bad change (do not rewrite `master`),
    bump the version and add a CHANGELOG entry in the same PR so new grades are not stamped with
    the bad version, merge it and cut a release as above.

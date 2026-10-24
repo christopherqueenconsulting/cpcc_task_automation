@@ -5,6 +5,71 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc5 - 2026-10-24
+
+Prerelease, on top of 0.2.0-rc4. Grading can now run each student's program in a local Docker sandbox and
+compare its output with the instructor's solution (the "output check"). It is opt-in and off by default,
+and it is inert on Streamlit Community Cloud. This release also moves dependencies, including pymupdf 2.0,
+which has no macOS x86_64 wheel (see the warning below).
+
+What to check (about 10 minutes, synthetic submissions from `evals/datasets` only, never real student work):
+
+1. Do not turn the output check on. Grade one synthetic case. Expected: grading and the score equal what rc4
+   gave for the same input (the switch is off by default and no execution plan reaches grading).
+2. Only if Docker is installed and running: in Setup, add a synthetic solution, then turn on "Check each
+   program's output against the solution". Expected: "Output check is ready: Docker is running and the
+   sandbox image is built." (if the image is missing you see "Output check is not ready: exec-runner image is
+   not built." and a Build image button). Add inputs 5, 100, 0, press "Run solution on these inputs"; grade a
+   correct and a wrong student. Expected: the Output column reads "Match" and "Differs" and the drawer has an
+   Output tab. Full steps: "Ten-minute operator check" in [docs/execution-gate.md](docs/execution-gate.md).
+3. On Streamlit Community Cloud, or locally with `CQC_EXECUTION=off` in `.env` and a restart. Expected: under
+   "Output check (optional)" only the notice "Output check runs programs in a local Docker sandbox and is not
+   available here. Grading uses the AI review and the compile check. Run the app from your own computer to
+   use it."; no switch and no Build image button; grading is as in step 1.
+4. Upload a synthetic PDF as a submission. Expected: its text is extracted as before (pypdf 6.21.2, pymupdf 2.0).
+5. Intel Mac (macOS x86_64) only: `poetry install` now fails because pymupdf 2.0 has no wheel for that
+   platform and its source build fails (#445, #441). Use an Apple Silicon Mac, Linux or Docker; or, on that
+   machine only, set `pymupdf = ">=1,<2"` in `pyproject.toml` and run `poetry lock` locally and do not commit it.
+   The maintainer decides whether to revert d8d2bce (#441). Linux and Cloud installs are not affected.
+
+If a step fails, tell the EA and see the rollback section of [docs/RELEASING.md](docs/RELEASING.md).
+`CQC_EXECUTION=off` turns the output check off without a rollback.
+
+WARNING: pymupdf 2.0 (#441) has no macOS x86_64 wheel, so `poetry install` fails on an Intel Mac. Linux and
+Streamlit Community Cloud installs are unaffected (43 PDF tests passed on Linux, per #445).
+
+No app behaviour change from #448, #445 and #443 (eval tooling, CI and docs only). With the output check off,
+scores match rc4.
+
+Not in this release: the system/user prompt split ("19b", #446, pending the prompt A/B),
+the Solution tab (PR 16), and the eclipse-temurin 25 bump (#438).
+
+- Execution gate in grading (PR 14): `grade_with_rubric(..., execution_plan=None)` can run the student's
+  program in the sandbox on the instructor's test cases, compare output and judge the model's sequence,
+  output-value and output-format errors against it. Needs Docker locally (image
+  `cpcc_task_automation/exec-runner:1`); `CQC_EXECUTION=off` disables it. Nothing supplied a plan until
+  #444, and without a plan the prompt and score are unchanged. Merge `55372a4`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/434
+- Output-check UI and wiring (PR 15): Setup "Output check (optional)" with the switch "Check each program's
+  output against the solution" (off by default), a test-case table, "Run solution on these inputs", an
+  optional "Suggest test cases" (the only model call, only on press), an Output column and drawer tab, a
+  banner and re-grade for students with no output check, and Remove for gate-added errors. On Streamlit
+  Community Cloud or with `CQC_EXECUTION=off` it shows only a notice. Merge `3e9e85e`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/444
+- Evaluation: the eval runner retries transport errors (connection reset, timeout, 408, 5xx) up to
+  `CQC_EVAL_TRANSPORT_RETRIES` total attempts (default 3, cap 5; 1 turns it off) and records an
+  `error_detail` list in the records. CI and eval tooling only; grading is unchanged. Merge `5d7cb8a`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/448
+- Dependency: pypdf 6.21.1 to 6.21.2, which fixes three High-rated denial-of-service advisories in PDF
+  parsing (long runtimes on malformed cross-reference data, GHSA-6c7f-9265-g8fw, GHSA-jr96-gvgh-j3r4,
+  GHSA-gmh7-3g9r-mjh5). `poetry.lock` only. Merge `8360e54`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/449
+- Dependencies, python-security group: pypdf 6.20.1 to 6.21.1, certifi 2026.7.22 to 2026.10.19, nbconvert
+  7.17.1 to 7.17.2. Merge `7485f12`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/411
+- Dependencies, python-minor-patch group: langchain-core 1.6.12, openai 3.35.1, openrouter 1.3.70, pypdf
+  6.21.1, posthog 7.73.2, setuptools 84.2.1, pytest-mock 3.17.0. Merge `f3a4617`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/440
+- Dependency: pymupdf 1.28.2 to 2.0. No macOS x86_64 wheel: `poetry install` fails on an Intel Mac (see the
+  warning above). Linux and Cloud are fine. Merge `d8d2bce`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/441
+- CI: Dependabot ignores semver-major updates for `pymupdf` and `eclipse-temurin` (`.github/dependabot.yml`)
+  until they are evaluated; minor and patch updates still flow. Merge `7f4e864`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/445
+- Docs: maintainer review guide `docs/REVIEW-2026-10-26.md`. Merge `c491400`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/443
+
 ## 0.2.0-rc4 - 2026-10-24
 
 Prerelease, on top of 0.2.0-rc3. Grading can now check each requirement against the instructor's solution,
