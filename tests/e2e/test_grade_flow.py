@@ -94,7 +94,7 @@ async def _run_batch(page: Page, url: str, tmp_path, fresh: bool) -> int:
     await expect(grade).to_be_enabled(timeout=60000)
     await expect(grade).to_contain_text(f"Grade {students} submissions")
     # The batch preview flags the empty file before any AI call, and the cost is shown.
-    await expect(page.get_by_text(f"Batch: {students} student(s)")).to_be_visible()
+    await expect(page.get_by_text(f"Batch: {students} students")).to_be_visible()
     await expect(page.get_by_text(re.compile(r"^1 will be scored 0 without an AI call"))).to_be_visible()
     await expect(page.get_by_text("Needs review: Empty submission").first).to_be_attached()
     await expect(page.get_by_text(re.compile(r"(about \$|under \$0\.01).* on "))).to_be_visible()

@@ -228,6 +228,14 @@ def _render_requirement_solution_check() -> list[str]:
                                         "0123456789abcdef")]
 
 
+def _render_test_case_generation() -> list[str]:
+    from cqc_cpcc.test_case_generation import build_test_case_prompt
+
+    # A fixed nonce: the production call draws a fresh one per call, which the fingerprint
+    # must not depend on.
+    return [build_test_case_prompt(FIXTURE_INSTRUCTIONS, FIXTURE_SOLUTION, "java", "0123456789abcdef")]
+
+
 def _render_exam_grading() -> list[str]:
     from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_prompt
 
@@ -284,6 +292,9 @@ RENDERERS: dict[str, Callable[[], list[str]]] = {
     "requirements-section": _render_requirements_section,
     "requirement-extraction": _render_requirement_extraction,
     "requirement-solution-check": _render_requirement_solution_check,
+
+
+    "test-case-generation": _render_test_case_generation,
     "exam-grading": _render_exam_grading,
     "preprocessing-digest": _render_preprocessing_digest,
     "project-feedback": _render_project_feedback,
