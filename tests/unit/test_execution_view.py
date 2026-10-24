@@ -850,3 +850,107 @@ def test_a_frame_without_the_column_keeps_none():
     frame = pd.DataFrame([{"enabled": True, "error_id": "X_ONE", "name": "One", "severity_category": "minor",
                            "description": "d", "default_penalty_points": 0}])
     assert ga._build_error_definitions_from_df(frame)[0].execution_category is None
+
+
+# --------------------------------------------------------------------------- #
+# Reading the solution upload (path confinement) and remaining branches
+# --------------------------------------------------------------------------- #
+def test_one_solution_file_is_read_as_it_is(tmp_path):
+    f = tmp_path / "OrderTotal.java"
+    f.write_text(SOLUTION_SRC)
+    data, name = ev._combined_bytes([("sub/OrderTotal.java", str(f))])
+    assert name == "OrderTotal.java" and data.decode() == SOLUTION_SRC
+
+
+def test_several_solution_files_become_one_zip_the_loader_accepts(tmp_path):
+    (tmp_path / "A.java").write_text("class A {}")
+    (tmp_path / "B.java").write_text("class B {}")
+    (tmp_path / "notes.txt").write_text("skipped")
+    data, name = ev._combined_bytes([("A.java", str(tmp_path / "A.java")), ("B.java", str(tmp_path / "B.java")),
+                                     ("notes.txt", str(tmp_path / "notes.txt"))])
+    assert name == "solution.zip"
+    sources = ev.load_solution_sources(data, name)
+    assert sorted(f.name for f in sources.files) == ["A.java", "B.java"]
+
+
+def test_a_path_outside_the_allowed_folders_is_refused(tmp_path, monkeypatch):
+    f = tmp_path / "A.java"
+    f.write_text("class A {}")
+    monkeypatch.setattr(ev, "readable_roots", lambda: [str(tmp_path / "elsewhere")])
+    with pytest.raises(ev.SolutionLoadError, match="outside the folders"):
+        ev._combined_bytes([("A.java", str(f))])
+    assert ev.load_solution([("A.java", str(f))]) is None
+
+
+def test_a_symlink_pointing_out_of_the_allowed_folders_is_refused(tmp_path, monkeypatch):
+    inside, outside = tmp_path / "in", tmp_path / "out"
+    inside.mkdir()
+    outside.mkdir()
+    (outside / "A.java").write_text("class A {}")
+    link = inside / "A.java"
+    link.symlink_to(outside / "A.java")
+    monkeypatch.setattr(ev, "readable_roots", lambda: [str(inside.resolve())])
+    with pytest.raises(ev.SolutionLoadError):
+        ev._combined_bytes([("A.java", str(link))])
+
+
+def test_a_missing_file_gets_a_fixed_message(tmp_path):
+    assert ev.load_solution([("A.java", str(tmp_path / "gone.java"))]) is None
+
+
+def test_case_table_edits_fold_back_into_cases():
+    base = [TestCase(id="M1", label="One", stdin="5\n", source="manual", expected_output="x", validated=True),
+            TestCase(id="S1", label="Sample", stdin="9\n", source="sample", validated=True, expected_output="y")]
+    frame = ev.cases_frame(base, {"S1": "timeout"})
+    assert frame.loc[1, "Status"] == "Dropped: timed out"
+    frame.loc[0, "Label"] = "Renamed"
+    frame.loc[1, "Input"] = "10"
+    frame.loc[1, "Use"] = False
+    frame = pd.concat([frame, pd.DataFrame([{"Use": True, "Label": "", "Input": "", "id": None},
+                                            {"Use": True, "Label": "New", "Input": "1\\n2", "id": None}])])
+    out = {c.id: c for c in ev.fold_editor(base, frame)}
+    assert out["M1"].label == "Renamed" and out["M1"].validated
+    assert out["S1"].stdin == "10\n" and out["S1"].source == "manual" and not out["S1"].validated
+    assert not out["S1"].enabled
+    new = next(c for c in out.values() if c.label == "New")
+    assert new.stdin == "1\n2\n" and new.source == "manual" and new.id.startswith("M")
+
+
+def test_the_kind_and_status_columns_describe_each_case():
+    assert ev._kind(TestCase(id="T1", stdin="", boundary_of=["C1"], source="llm")) == "Boundary (C1)"
+    assert ev._kind(TestCase(id="S1", stdin="", source="sample")) == "Sample run"
+    assert ev._status_of(TestCase(id="S1", stdin="", source="sample", disagrees_with_instructions=True),
+                         {}).startswith("Differs")
+    assert ev._status_of(TestCase(id="M1", stdin="", validated=True), {}) == "Ready"
+
+
+def test_a_failed_validation_keeps_the_cases_and_says_why(ready, monkeypatch):
+    sol = SolutionSources("java", (SourceFile("A.java", "x"),))
+    cases = [TestCase(id="M1", label="One", stdin="5\n", source="manual")]
+    for outcome in (pr.RunOutcome(status="ok", compile=pr.CompileOutcome(ok=False)),
+                    pr.RunOutcome(status="runner_error", reason="docker_error"),
+                    pr.RunOutcome(status="runner_error", reason="unavailable")):
+        monkeypatch.setattr(pr, "run_program", lambda *a, _o=outcome, **k: _o)
+        state = {"base": cases, "conditions": [], "dropped": {}, "warnings": [], "validated": False,
+                 "message": "", "gen": 0, "shown": {}, "risks": []}
+        ev._validate(state, sol, cases, [])
+        assert state["validated"] is False and state["message"]
+        assert ev.build_plan_from(state, sol, state["base"], []) is None
+    ev._validate(state, sol, [cases[0].model_copy(update={"enabled": False})], [])
+    assert "Tick at least one" in state["message"]
+
+
+def test_a_suggestion_that_fails_leaves_the_cases_alone(ready):
+    sol = SolutionSources("java", (SourceFile("A.java", "x"),))
+    state = {"base": [], "conditions": [], "dropped": {}, "warnings": [], "validated": False,
+             "message": "", "gen": 0, "shown": {}, "risks": []}
+    with patch.object(tcg, "suggest_test_cases", AsyncMock(side_effect=RuntimeError("boom"))):
+        ev._suggest(state, sol, INSTRUCTIONS, [], [])
+    assert "could not be made" in state["message"] and state["conditions"] == []
+
+
+def test_the_drawer_labels_for_every_status_and_a_missing_report():
+    for status in ("skipped", "language_mismatch", "student_compile_failed", "runner_unavailable"):
+        assert ev._STATUS_TEXT[status]
+    assert ev.students_without_output_check([("A", SimpleNamespace(execution_report=None))]) == []
+    assert ev._code("") == "(nothing)" and ev._code("x" * 5000).endswith("(cut)")
