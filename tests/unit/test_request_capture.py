@@ -274,3 +274,61 @@ class TestRequestsIdentical:
         report = pa.requests_identical(["requirement-extraction"], "HEAD", tmp_path)
         assert report["identical"] is False
         assert "changed in the registry" in report["suites"]["requirement-extraction"]
+
+
+class TestFenceKeyPinned:
+    """The fence nonce is an HMAC under a per-process key; a capture pins it so two processes agree."""
+
+    def _suite(self, key, suite_id="test-case-generation"):
+        from cqc_cpcc import test_case_generation as tcg
+
+        tcg._PROCESS_KEY = key
+        return rc.capture([suite_id])["suites"][suite_id]
+
+    def test_two_processes_with_different_keys_capture_the_same_hashes(self, monkeypatch):
+        from cqc_cpcc import test_case_generation as tcg
+
+        monkeypatch.setattr(tcg, "_PROCESS_KEY", tcg._PROCESS_KEY)  # put back after the test
+        a = self._suite(b"a" * 32)
+        b = self._suite(b"b" * 32)
+        assert any(a["requests"].values())
+        assert a == b
+
+    def test_the_key_is_restored_and_differs_from_the_pin_outside_capture(self, monkeypatch):
+        from cqc_cpcc import requirement_solution_check as rsc
+        from cqc_cpcc import test_case_generation as tcg
+
+        monkeypatch.setattr(tcg, "_PROCESS_KEY", b"x" * 32)
+        monkeypatch.setattr(rsc, "_PROCESS_KEY", b"y" * 32)
+        before = tcg.new_fence_nonce("text")
+        rc.capture(["test-case-generation"])
+        assert tcg._PROCESS_KEY == b"x" * 32 and rsc._PROCESS_KEY == b"y" * 32
+        assert tcg.new_fence_nonce("text") == before
+        with rc._patched([], test_mode=True):
+            pinned = tcg.new_fence_nonce("text")
+        assert pinned != before and tcg._PROCESS_KEY == b"x" * 32
+
+    def test_the_key_is_restored_when_the_capture_is_interrupted(self, monkeypatch):
+        from cqc_cpcc import test_case_generation as tcg
+
+        monkeypatch.setattr(tcg, "_PROCESS_KEY", b"x" * 32)
+        with pytest.raises(RuntimeError):
+            with rc._patched([], test_mode=True):
+                raise RuntimeError("stop")
+        assert tcg._PROCESS_KEY == b"x" * 32
+
+    def test_two_separate_processes_write_identical_captures(self, tmp_path):
+        """A real fresh random key per process (the test sets none). One suite, to stay fast."""
+        import os
+        import subprocess
+        import sys
+
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+        outs = []
+        for n in (1, 2):
+            out = tmp_path / f"cap{n}.json"
+            subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests",
+                            "--suites", "test-case-generation", "--out", str(out)],
+                           check=True, env=env, capture_output=True, timeout=300)
+            outs.append(json.loads(out.read_text()))
+        assert outs[0] == outs[1]
