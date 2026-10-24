@@ -19,6 +19,7 @@ from typing import Optional
 
 from cqc_cpcc.model_eval import adaptive
 from cqc_cpcc.model_eval.budget import Budget
+from cqc_cpcc.model_eval import cache_session
 from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 from cqc_cpcc.model_eval.suites.base import SuiteRecord, aggregate, gate_failures, retry_stats, run_suite
 from cqc_cpcc.utilities.AI import model_registry
@@ -254,7 +255,7 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
             records = await run_suite(suite, model, effort, cases, repeats, budget,
                                       concurrency=concurrency, profile=profiles[model], on_record=save,
                                       adaptive_mode=adaptive_mode, max_concurrency=max_concurrency,
-                                      pool_stats=pool_stats)
+                                      pool_stats=pool_stats, warm_first=cache_session.warm_first_enabled())
             stats = retry_stats(records)
             print(f"[{suite_id}] {label_of(model, effort)}: {stats['calls']} calls, {stats['retried']} retried "
                   f"({stats['extra_attempts']} extra attempts)")

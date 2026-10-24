@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from cqc_cpcc.model_eval import adaptive, error_detail, prompt_eval, prompt_registry
+from cqc_cpcc.model_eval import adaptive, cache_session, error_detail, prompt_eval, prompt_registry
 from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 from cqc_cpcc.utilities.AI import model_registry
 
@@ -380,6 +380,7 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
     for m in models:
         args += ["--model", m]
     env = {**(os.environ if environ is None else environ), "PYTHONPATH": str(worktree / "src")}
+    env[cache_session.ENV_SIDE] = "base"  # the base's own cache session (a base without it ignores this)
     if concurrency:
         env[adaptive.ENV_ADAPTIVE] = "1"
         env[adaptive.ENV_MAX] = str(concurrency)
@@ -755,6 +756,12 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
         recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
         return base.cost_stats(recs)
 
+    def cache(path):
+        if path is None:
+            return None
+        recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
+        return base.cache_stats(recs)
+
     def pool(directory):
         saved = prompt_eval.read_concurrency(directory) if directory is not None else None
         return (saved or {}).get("calls")
@@ -769,6 +776,7 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
             "head_truncated": truncation(head_raw), "base_truncated": truncation(base_raw),
             "max_tokens_cap": adaptive.eval_max_tokens(),
             "head_cost": cost(head_raw), "base_cost": cost(base_raw),
+            "head_cache": cache(head_raw), "base_cache": cache(base_raw),
             "head_pool": head_pool, "base_pool": base_pool, "judge_pool": judge_pool,
             "rate_limited": sum(p.get("rate_limited", 0) for p in pools),
             "in_flight_budget": sum(p.get("in_flight_budget", 0) for p in pools)}
@@ -1108,6 +1116,35 @@ def _cost_markdown(rows: list) -> list:
             "reported one):", "", *lines] if lines else []
 
 
+def _cache_markdown(rows: list) -> list:
+    """Prompt-cache usage per suite and side (reporting only: no gate, grader or verdict reads it).
+
+    Caching changes input price and latency, never an output. Cached share = cached tokens / prompt tokens
+    of the rows that reported a cached count. Real cost leaves out rows whose cost is an estimate.
+    """
+    lines = []
+    for sid, st in rows:
+        for side in ("head", "base"):
+            part = st.get(f"{side}_cache")
+            if not part or not part.get("calls"):
+                continue
+            if part["rows_reporting"] == 0:
+                lines.append(f"- `{sid}` {side}: no cache usage reported ({part['calls']} calls); "
+                             f"reasoning {part['reasoning_tokens']:,} tokens; real cost ${part['real_cost_usd']:.4f}")
+                continue
+            lines.append(f"- `{sid}` {side}: cached {part['cached_share']:.0%} of prompt tokens "
+                         f"({part['cached_tokens']:,} of {part['prompt_tokens']:,}; {part['rows_reporting']}/{part['calls']} rows reported), "
+                         f"cache-write {part['cache_write_tokens']:,} tokens, reasoning {part['reasoning_tokens']:,} tokens, "
+                         f"real cost ${part['real_cost_usd']:.4f}")
+        h, b = st.get("head_cache"), st.get("base_cache")
+        if h and b and h.get("rows_reporting") and b.get("rows_reporting") \
+                and abs(h["cached_share"] - b["cached_share"]) >= 0.20:
+            lines.append(f"- `{sid}`: cached share differs by {abs(h['cached_share'] - b['cached_share']):.0%} between "
+                         f"head and base, so a cost ratio for this pair is not strictly like-for-like "
+                         f"(caching changes cost only, never an output)")
+    return ["", "Prompt cache (report only; caching changes input price and latency, never an output):", "", *lines] if lines else []
+
+
 def _run_stats_markdown(report: dict) -> list:
     """Wall clock and what each adaptive pool did (reporting only: no decision reads these lines)."""
     rows = [(sid, r["run_stats"]) for sid, r in report["suites"].items() if r.get("run_stats")]
@@ -1130,6 +1167,7 @@ def _run_stats_markdown(report: dict) -> list:
         lines += _transport_markdown(rows)
         lines += _truncation_markdown(rows, max((st.get("max_tokens_cap") or 0) for _s, st in rows) or None)
         lines += _cost_markdown(rows)
+        lines += _cache_markdown(rows)
     return lines
 
 

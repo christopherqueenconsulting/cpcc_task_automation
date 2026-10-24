@@ -109,6 +109,28 @@ concurrency. Knobs: `--max-concurrency` / `CQC_AB_MAX_CONCURRENCY` (default 64, 
 [`PROMPTS.md`](PROMPTS.md) under "Adaptive concurrency". None of it changes what is measured or any
 threshold.
 
+## Prompt caching in model evals
+
+The grading runs behind `model-eval.yml` use the same layout as the app (its prompt builders: static system
+message and rubric first, fenced submission last), send OpenRouter's `session_id` (side `model-eval`, one id per
+model, effort and run, no case data) and send one case per shared-prefix group first before the rest of the
+group fans out (`runner.run_model`, via `cache_session.py`; skipped when a test double replaces the grader).
+Caching changes input price and latency only: outputs, scores and every gate are unchanged.
+
+| Variable | Default | Accepted values |
+|---|---|---|
+| `CQC_EVAL_SESSION_ID` | on | `1`/`on`/`true`/`yes`, `0`/`off`/`false`/`no` |
+| `CQC_EVAL_WARM_FIRST` | on exactly when the session id is on | same |
+| `CQC_EVAL_WARM_WAIT_S` | `600` | a number from 1 to 7200 (seconds) |
+
+They are read when a run starts, so they do not change a run in flight (cancel and dispatch again); an invalid
+value aborts the run before any paid call. Setting the first two to `0` reverts every behaviour change; the
+workflow itself is not edited. If a provider were to reject the `session_id` key, an unattended weekly run
+would see failed calls, a low ok-rate and no promotion (NOT VERIFIED that any provider does). Raw records
+gain `cached_tokens` and `cache_write_tokens` when the response reported them. The layout measurements, the Run
+stats definitions and the caveat for a base ref on older code are in [`PROMPTS.md`](PROMPTS.md) under "Prompt
+caching in evals".
+
 ## What can go wrong and who hears about it
 
 | Situation | What happens |
