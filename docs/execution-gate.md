@@ -555,4 +555,26 @@ Strings below are copied from the code. Use synthetic programs only.
    disabled until Docker is back. After restarting Docker press it; only those students are graded again.
 10. **Remove.** On a student with a gate-added format error, Errors tab: **Remove** takes it out and re-scores;
     **Reinstate** puts it back. Neither calls the model.
-11. **Rollback.** `CQC_EXECUTION=off` and reload: step 1 again, and grading is as before the output check.
+11. **Solution tab.** After step 8, open Results, tab **Solution**. First line: "Your solution, the expected
+    output it gives for each test case, and how each student's program compared. Run locally runs your solution
+    only; Compare reads what the output check already recorded." Then the solution code, and under the buttons
+    the notice that starts "Run in OneCompiler sends the SOLUTION code to onecompiler.com when you click it."
+    Buttons: **Run in OneCompiler**, **Open in OnlineGDB**, **Run locally**, **Open in new tab**. Nothing is
+    sent or run until you press one. Under **Run locally** pick a case and press it: "Status: Ran" and the output
+    in a code block. Under **Compare with the expected output** pick the student that differs: "1 of 3 cases
+    match." and the expected output and differing lines in code blocks. If more than 80% of at least 3 students
+    differ on a case you also see "Check your solution and test case T1 first: the expected output may be wrong,
+    not the students."
+12. **Undocked page.** Press **Open in new tab**. The URL is `code_runner?run=<64 lowercase hex>`; the page title is
+    **Code runner** and it shows the same solution workspace without any student name. Press **Refresh** to read it
+    again. Edit the key to `nothex` or `../x`: "That link is not valid. Open the page again from the Solution tab."
+    Remove the `run` parameter: "Open this page with the Open in new tab button on a run's Solution tab." A valid
+    key with no saved workspace: "No saved workspace for this run. It is saved when the output check was used and
+    the sandbox was ready at the end of grading." With Docker stopped: "The sandbox is not ready, so nothing can
+    run here. Start Docker, then press Refresh. If it still fails, build the sandbox image from the Setup tab in
+    the main app."
+13. **Cloud or off, again.** With `CQC_EXECUTION=off` (or on Streamlit Community Cloud) the Solution tab shows the
+    notice from step 1 under **Run locally** and no **Run locally** button, and says "Open in new tab is not
+    offered until the sandbox is ready." (or, where results are not saved, "...kept for this session only
+    here."). The `code_runner` URL shows only that notice and reads no results.
+14. **Rollback.** `CQC_EXECUTION=off` and reload: step 1 again, and grading is as before the output check.

@@ -25,6 +25,14 @@ from cqc_cpcc.utilities.logger import logger
 MAX_RUNS = 20
 MAX_RUN_FILE_BYTES = 20 * 1024 * 1024  # a saved run bigger than this is not read back by a job's save
 _RUN_KEY_RE = re.compile(r"[0-9A-Za-z]{1,64}")
+# A real run key is a SHA-256 hex digest. The undocked code-runner page and the saved
+# execution workspace accept nothing else (fullmatch: no newline slips past the end).
+_HEX_RUN_KEY_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def is_hex_run_key(run_key) -> bool:
+    """True for exactly 64 lowercase hex characters, the only form a URL may carry."""
+    return isinstance(run_key, str) and _HEX_RUN_KEY_RE.fullmatch(run_key) is not None
 
 
 _ON = ("1", "true", "on", "yes")
@@ -69,11 +77,17 @@ def _path(run_key: str) -> Path:
 
 
 def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = None,
-             greeting_names: Optional[dict] = None, meta: Optional[dict] = None) -> None:
+             greeting_names: Optional[dict] = None, meta: Optional[dict] = None,
+             execution_workspace: Optional[dict] = None) -> None:
     """Write one run's results atomically (0600 file in a 0700 folder) and prune old runs.
 
     ``meta`` holds PII-free facts about how the run was graded (solution given, checklist
     size and hash, prompt version, model). Omitted, the saved file's existing meta is kept.
+    ``execution_workspace`` (PR 16) is the Solution tab's saved workspace
+    (``execution_workspace.build_workspace``): the instructor's solution and test cases, no
+    student data and no program output (that stays once, in each result's ``execution_report``).
+    Omitted, the saved file's existing workspace is kept; the caller passes one only while the
+    runner is available.
     Does nothing when :func:`persistence_enabled` is false (session-only hosts).
     """
     if not persistence_enabled():
@@ -87,11 +101,15 @@ def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = 
         # The prompt (llm_request) holds the whole submission: it is never written to disk.
         payload_results = [[sid, r.model_dump(mode="json", exclude={"llm_request"})] for sid, r in results]
     if meta is None:
-        meta = _saved_meta(run_key)
+        meta = _saved_field(run_key, "meta")
+    if execution_workspace is None:
+        execution_workspace = _saved_field(run_key, "execution_workspace")
     payload = {"run_key": run_key, "mode": mode, "saved_at": time.time(),
                "results": payload_results, "failures": list(failures or []),
                # Name to greet each student by ("" for a loose file named after nothing).
                "greeting_names": greeting_names, "meta": meta}
+    if execution_workspace is not None:
+        payload["execution_workspace"] = execution_workspace
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".run.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -105,11 +123,12 @@ def save_run(run_key: str, mode: str, results: list, failures: Optional[list] = 
     _prune(directory)
 
 
-def _saved_meta(run_key: str) -> Optional[dict]:
+def _saved_field(run_key: str, name: str) -> Optional[dict]:
     try:
-        return json.loads(_path(run_key).read_text(encoding="utf-8")).get("meta")
-    except (OSError, ValueError):
+        value = json.loads(_path(run_key).read_text(encoding="utf-8")).get(name)
+    except (OSError, ValueError, AttributeError):
         return None
+    return value if isinstance(value, dict) else None
 
 
 def remembered_effort(instructions_hash: str) -> Optional[str]:
@@ -160,6 +179,25 @@ def load_run(run_key: str) -> Optional[tuple]:
                    for sid, r in data["results"]]
         return results, list(data.get("failures") or [])
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        return None
+
+
+def load_execution_workspace(run_key: str) -> Optional[dict]:
+    """The Solution tab's saved workspace for ``run_key``, or ``None``.
+
+    ``None`` when persistence is off (Community Cloud), the key is not 64 hex characters, no
+    workspace was saved (the runner was off), or the file is unreadable. The workspace is
+    rebuilt field by field, so a hand-edited file cannot add anything."""
+    from cqc_cpcc.execution_workspace import clean_workspace
+
+    if not persistence_enabled() or not is_hex_run_key(run_key):
+        return None
+    try:
+        path = _path(run_key)
+        if path.stat().st_size > MAX_RUN_FILE_BYTES:
+            return None
+        return clean_workspace(json.loads(path.read_text(encoding="utf-8")).get("execution_workspace"))
+    except (OSError, ValueError, AttributeError, RecursionError):
         return None
 
 

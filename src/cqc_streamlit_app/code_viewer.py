@@ -49,8 +49,13 @@ def _show_file(code_file) -> None:
             height=CODE_HEIGHT if code_file.line_count > SCROLL_AFTER_LINES else "content")
 
 
-def render_submission_code(source_files: Optional[dict], widget_key: str) -> None:
-    """Show a student's submitted files; ``source_files`` is ``StudentSubmission.files``."""
+def render_submission_code(source_files: Optional[dict], widget_key: str,
+                           notice: Optional[str] = None) -> None:
+    """Show a student's submitted files; ``source_files`` is ``StudentSubmission.files``.
+
+    ``notice`` replaces the default student-code privacy sentence (the Solution tab sends the
+    solution, not a student's code). Given, it is shown under the buttons at all times, so the
+    instructor reads it before clicking; omitted, today's caption appears once the runner opens."""
     code_files, skipped = collect_code_files(source_files)
     if not code_files:
         if source_files:
@@ -99,9 +104,12 @@ def render_submission_code(source_files: Optional[dict], widget_key: str) -> Non
     actions.link_button("Open in OnlineGDB", onlinegdb_url(lang), icon=":material/open_in_new:",
                            help="OnlineGDB can't be pre-filled: copy the code with the icon on the "
                                 "code block and paste it there.")
+    if notice:
+        st.caption(notice)
     if not is_open:
         return
-    st.caption(RUNNER_NOTICE)
+    if not notice:
+        st.caption(RUNNER_NOTICE)
     if any(f.truncated for f in code_files):
         st.warning("Files longer than the preview limit are left out of the run.",
                    icon=":material/warning:")

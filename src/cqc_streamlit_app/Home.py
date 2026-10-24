@@ -11,17 +11,23 @@ from pathlib import Path
 import streamlit as st
 from cqc_streamlit_app.app_settings import load_settings
 from cqc_streamlit_app.initi_pages import init_session_state
-from cqc_streamlit_app.navigation import page_specs
+from cqc_streamlit_app.navigation import HIDDEN_PAGE_SPECS, page_specs
 
 PAGES_DIR = Path(__file__).resolve().parent / "app_pages"
 
 
 def build_navigation(show_legacy: bool) -> list:
     """A flat page list for the top navigation bar: every page stays one click away."""
-    return [
+    pages = [
         st.Page(str(PAGES_DIR / file), title=title, icon=icon, default=(i == 0))
         for i, (_section, file, title, icon) in enumerate(page_specs(show_legacy))
     ]
+    # Hidden pages are reachable by their URL only and never appear in the top bar.
+    pages += [
+        st.Page(str(PAGES_DIR / file), title=title, icon=icon, url_path=url_path, visibility="hidden")
+        for file, title, icon, url_path in HIDDEN_PAGE_SPECS
+    ]
+    return pages
 
 
 init_session_state()
