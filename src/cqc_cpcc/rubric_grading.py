@@ -41,6 +41,7 @@ from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUI
                                      note_kept, note_removed, tag_source)
 from cqc_cpcc.requirement_coverage import (apply_requirement_coverage, is_requirement_error,
                                            requirements_prompt_section)
+from cqc_cpcc.requirement_overlap import reconcile_overlaps
 from cqc_cpcc.rubric_models import (
     Criterion,
     CriterionResult,
@@ -879,8 +880,10 @@ async def _reconcile(
 
     Order: compile gate (a real compiler decides "Does Not Compile"), then the execution gate
     (the student's program output, when an execution plan was given), then requirement
-    coverage (unmet requirements become errors). A later PR adds the overlap stage here. An
-    error a stage drops is kept on its note, suppressed, for Reinstate.
+    coverage (unmet requirements become errors), then requirement overlap (one penalty per
+    issue; notes only unless ``CQC_REQUIREMENT_OVERLAP=drop``; it never drops an execution- or
+    compiler-sourced error). Backend scoring follows in ``grade_with_rubric``. An error a stage
+    drops is kept on its note, suppressed, for Reinstate.
     """
     from cqc_cpcc.utilities.compiler_gate import is_compile_error
 
@@ -975,6 +978,12 @@ async def _reconcile(
         for rid in coverage_info.get("unmarked", []):
             notes.append(note("requirement", f"The grader did not assess requirement {rid}; "
                                              "flagged for review, not counted.", requirement_id=rid))
+        # Overlap: a requirement error and a model error that describe the same issue are
+        # one penalty (decided from the text, never by the model). No-op in mode "off".
+        result, overlap_notes, overlap_info = reconcile_overlaps(result, requirements, error_definitions)
+        notes.extend(overlap_notes)
+        if gate_report is not None:
+            gate_report["overlap"] = overlap_info.as_dict()
     elif result.requirement_results:
         result = result.model_copy(update={"requirement_results": None})
 

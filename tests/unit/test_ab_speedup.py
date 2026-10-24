@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cqc_cpcc.model_eval import adaptive
 from cqc_cpcc.model_eval import prompt_automation as pa
 from cqc_cpcc.model_eval import prompt_eval
 from cqc_cpcc.model_eval.budget import Budget
@@ -42,11 +43,18 @@ class TestConcurrencySetting:
         assert base.eval_concurrency(value=3) == 3
         assert base.eval_concurrency(default=12) == 7
 
-    @pytest.mark.parametrize("bad", ["0", "-2", "33", "400", "many", "2.5"])
-    def test_nonsense_is_ignored_and_the_default_kept(self, monkeypatch, bad):
+    @pytest.mark.parametrize("bad", ["0", "-2", "257", "400", "many", "2.5"])
+    def test_nonsense_is_an_error_never_a_silent_default(self, monkeypatch, bad):
         monkeypatch.setenv("CQC_EVAL_CONCURRENCY", bad)
-        assert base.eval_concurrency() == 4
-        assert base.eval_concurrency(default=12) == 12
+        with pytest.raises(adaptive.ConcurrencyError):
+            base.eval_concurrency()
+        with pytest.raises(adaptive.ConcurrencyError):
+            base.eval_concurrency(default=12)
+
+    @pytest.mark.parametrize("wanted", [33, 64, 256])
+    def test_values_above_the_old_32_cap_are_honoured(self, monkeypatch, wanted):
+        monkeypatch.delenv("CQC_EVAL_CONCURRENCY", raising=False)
+        assert base.eval_concurrency(value=wanted) == wanted
 
     async def test_run_suite_never_has_more_calls_in_flight_than_asked(self, monkeypatch):
         from cqc_cpcc.utilities.AI import llm_gateway
@@ -503,12 +511,13 @@ class TestTheBaseRunsBesideTheHead:
         if r["status"] == "no-base":
             pytest.skip("no base run in this checkout")
         assert times["base"][0] < times["head"][1] and times["head"][0] < times["base"][1]  # they overlapped
-        assert budgets["concurrency"] == 5 and env_seen["args"][6] == 5  # same setting on both sides
+        # the starting size reaches the head's run; both sides get the same ceiling
+        assert budgets["concurrency"] == 5 and env_seen["args"][6] == 64
         # each side had its own share, and the head's spend was handed back to the whole
         assert budgets["head"].limit < prompt_eval.shared_budget().limit
-        assert report["concurrency"] == 5 and report["wall_clock_s"] > 0
+        assert report["concurrency"] == 64 and report["wall_clock_s"] > 0
         stats = r["run_stats"]
-        assert stats["concurrency"] == 5 and stats["head"]["calls"] > 0 and stats["base"]["calls"] > 0
+        assert stats["concurrency"] == 64 and stats["start_concurrency"] == 5 and stats["head"]["calls"] > 0 and stats["base"]["calls"] > 0
         assert r["status"] in ("pass", "pass-provisional")  # same answers both sides: no regression
 
     async def test_the_last_lines_of_the_log_sum_up_each_suite(self, tmp_path, monkeypatch, capsys):

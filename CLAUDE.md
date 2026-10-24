@@ -58,10 +58,13 @@ student work in a prompt renderer or eval fixture. Details: `docs/security-workf
 - In `grade_with_rubric` the order is the validity gate, then `run_student_execution` (only
   when an `execution_plan` is given; before the prompt), the prompt and model call, then
   `apply_compile_gate` (when source files are given), `apply_execution_gate` (when a plan was
-  given), `apply_requirement_coverage` (when requirements are given) and
-  `apply_backend_scoring`. With no plan, or when the output check is skipped or the runner cannot answer,
-  the prompt is byte-identical to the one without the output check (`docs/execution-gate.md`).
-  The middle stages run inside `_reconcile`, which tags each error's
+  given), `apply_requirement_coverage` (when requirements are given), `reconcile_overlaps`
+  (`requirement_overlap.py`: one penalty when a requirement error and a model error describe the
+  same issue; `CQC_REQUIREMENT_OVERLAP` = `notes` (default, drops nothing) | `drop` | `off`; it
+  never drops an execution- or compiler-sourced error) and `apply_backend_scoring`. With no plan,
+  or when the output check is skipped or the runner cannot answer, the prompt is byte-identical to
+  the one without the output check (`docs/execution-gate.md`). The middle stages run inside
+  `_reconcile`, which tags each error's
   `source` and records every decision as a `ReconciliationNote` (`reconciliation.py`); an
   error a stage drops lives on its note, suppressed, until the instructor reinstates it. A real compiler (`utilities/compiler_gate.py`), not the model,
   decides "Does Not Compile". "Cannot verify" must never be treated as "does not compile".

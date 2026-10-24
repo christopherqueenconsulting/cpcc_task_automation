@@ -39,6 +39,12 @@ FORMAT = 4
 
 ERROR = "error:"
 
+#: Fixed stand-in for the per-process fence keys while capturing. A fence nonce is an HMAC of the
+#: assignment text under a random key, so without this the prompt differs on every run.
+_PINNED_FENCE_KEY = b"request-capture-fixed-fence-key!"  # 32 bytes
+_FENCE_KEY_MODULES = ("cqc_cpcc.utilities.AI.fence", "cqc_cpcc.test_case_generation",
+                      "cqc_cpcc.requirement_solution_check")
+
 
 def _hash(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
@@ -65,14 +71,21 @@ class _CapturingClient:
 
 @contextmanager
 def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
-    """Replace the OpenRouter client, skip retry back-off sleeps and set test mode; restore after.
+    """Replace the OpenRouter client, skip retry back-off sleeps and set test mode and pin the fence keys; restore after.
 
     With ``calls``, every ``llm_gateway.structured`` call is also recorded there. PostHog LLM
     analytics is turned off, so refused sends are never reported as errors.
     """
+    import importlib
     import os
 
     from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client
+
+    # A module that has no per-process fence key of its own (the helper moved to utilities/AI/fence.py)
+    # is skipped. fence.deterministic_nonce() (entered in capture_suite) covers the shared helper too.
+    fence_modules = [m for m in (importlib.import_module(name) for name in _FENCE_KEY_MODULES)
+                     if getattr(m, "_PROCESS_KEY", None) is not None]
+    saved_keys = [m._PROCESS_KEY for m in fence_modules]
 
     saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
              llm_gateway.structured)
@@ -118,9 +131,13 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     if calls is not None:
         llm_gateway.structured = recording
     os.environ["POSTHOG_LLM_ANALYTICS"] = "false"
+    for m in fence_modules:
+        m._PROCESS_KEY = _PINNED_FENCE_KEY
     try:
         yield
     finally:
+        for m, key in zip(fence_modules, saved_keys):
+            m._PROCESS_KEY = key
         (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
          llm_gateway.structured) = saved
         if saved_analytics is None:

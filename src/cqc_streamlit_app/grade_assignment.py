@@ -3192,6 +3192,7 @@ async def get_rubric_based_exam_grading():
         generate_grading_run_key,
         hash_solution,
     )
+    from cqc_cpcc.requirement_overlap import run_key_overlap
     file_metadata = generate_file_metadata(student_submission_file_paths)
     error_definition_ids = [ed.error_id for ed in (effective_error_definitions or []) if ed.enabled]
     rubric_id = selected_rubric.rubric_id if use_rubric else "errors_only"
@@ -3218,6 +3219,8 @@ async def get_rubric_based_exam_grading():
         # cached results for it.
         solution_hash=hash_solution(assignment_solution_contents),
         prompt_version=prompt_tag("rubric-grading"),
+        # Only "drop" changes scores, so only "drop" re-grades; notes/off keep existing keys.
+        requirement_overlap=run_key_overlap(),
     )
 
     results_cache = (st.session_state.error_only_results_by_key if grading_mode == "errors_only"
