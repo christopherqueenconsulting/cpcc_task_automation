@@ -58,7 +58,7 @@ from cqc_cpcc.utilities.utils import read_file
 
 #: Shown where programs cannot run: Streamlit Community Cloud, or ``CQC_EXECUTION=off``.
 NOTICE = ("Output check runs programs in a local Docker sandbox and is not available here. "
-          "Grading uses the AI review and the compile check. Run the app on your own computer to use it.")
+          "Grading uses the AI review and the compile check. Run the app from your own computer to use it.")
 
 #: Shown, not hover help, directly under the output-check heading.
 SETUP_CAPTION = ("Output check is optional and off by default. It runs each student program in a local Docker "

@@ -102,7 +102,7 @@ def test_on_cloud_the_notice_shows_and_there_is_no_build_button(monkeypatch):
     assert [i.value for i in at.info] == [ev.NOTICE]
     assert ev.NOTICE == ("Output check runs programs in a local Docker sandbox and is not available here. "
                          "Grading uses the AI review and the compile check. "
-                         "Run the app on your own computer to use it.")
+                         "Run the app from your own computer to use it.")
     assert not at.button and not at.code
     assert at.session_state["ready"] is False
 
@@ -1057,3 +1057,15 @@ def test_a_disabled_build_button_says_why_in_text(monkeypatch):
 def test_the_editor_ignores_rows_past_the_cap():
     rows = [{"Use": True, "Label": f"L{i}", "Input": str(i), "id": None} for i in range(ev.MAX_EDITED_ROWS + 10)]
     assert len(ev.fold_editor([], pd.DataFrame(rows))) == tcg.MAX_PLAN_CASES
+
+
+def test_always_visible_setup_text_never_contains_the_word_on_with_spaces(monkeypatch, tmp_path):
+    """tests/e2e/test_grade_flow.py finds the cost line with a regex that joins a whole container's text
+    (money phrase, then anything, then " on "): a new " on " after it, in the same container, makes it match
+    twice. The text this PR shows without any click must stay clear of it."""
+    monkeypatch.setenv("CQC_EXECUTION", "off")
+    at = _setup_app(tmp_path).run()
+    shown = " ".join(str(e.value) for g in (at.markdown, at.caption, at.info, at.warning, at.subheader)
+                     for e in g) + " " + ev.SETUP_CAPTION
+    assert " on " not in shown, shown
+    assert " on " not in ev.NOTICE and " on " not in ev.SETUP_CAPTION

@@ -529,7 +529,7 @@ Strings below are copied from the code. Use synthetic programs only.
    Assignment, Setup. Under **Output check (optional)** you see "Output check is optional and off by default.
    It runs each student program in a local Docker sandbox and compares its output with your solution's." and the
    notice "Output check runs programs in a local Docker sandbox and is not available here. Grading uses the AI
-   review and the compile check. Run the app on your own computer to use it." Nothing else: no switch, no
+   review and the compile check. Run the app from your own computer to use it." Nothing else: no switch, no
    Build image. Unset `CQC_EXECUTION`.
 2. **Docker not running.** Quit Docker, reload. You see "Output check is not ready: docker daemon is not
    running." and a disabled **Build image** with "Build image is off because Docker is not ready (docker daemon
