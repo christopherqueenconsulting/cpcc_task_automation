@@ -66,3 +66,21 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+
+  # Sandbox image for student programs (docker/exec-runner). The base is pinned by digest.
+  # A change here edits the Dockerfile, so the hash test in tests/unit/test_program_runner.py
+  # fails until the version is bumped by hand; dependabot-auto-merge.yml also skips it.
+  - package-ecosystem: "docker"
+    directory: "/docker/exec-runner"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "docker"
+      - "exec-runner"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
