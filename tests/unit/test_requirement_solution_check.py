@@ -490,3 +490,22 @@ class TestSuite:
             output = await self.suite.invoke(case)
         assert seen["use_cache"] is False and seen["ids"] == ["R1", "R2", "R3", "R4", "R5"]
         assert self.suite.to_payload(output)["verdicts"][0]["status"] == "yes"
+
+
+def test_stripping_is_linear_and_removes_reassembled_markers():
+    import time
+
+    hostile = "<" * 200_000 + "UNTRUST" + "UNTRUSTED-" * 3 + "ED-" * 3 + ">" * 200_000
+    start = time.perf_counter()
+    out = rsc.strip_marker_word(hostile)
+    fenced = rsc.fence_untrusted("solution", hostile, "abc")
+    assert time.perf_counter() - start < 1.0
+    assert "UNTRUSTED-" not in out and "UNTRUSTED-" not in fenced.replace("<<<UNTRUSTED-abc ", "").replace(
+        "UNTRUSTED-abc>>>", "")
+    assert rsc.strip_marker_word("UNTRUST<x>ED-") == "UNTRUST<x>ED-"  # not a marker; left alone
+    assert rsc.strip_marker_word("a UNTRUSTUNTRUSTED-ED- b") == "a  b"
+
+
+def test_fenced_text_is_bounded():
+    fenced = rsc.fence_untrusted("solution", "x" * (rsc.MAX_FENCED_CHARS + 5000), "abc")
+    assert len(fenced) < rsc.MAX_FENCED_CHARS + 200

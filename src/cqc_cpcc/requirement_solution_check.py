@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 import secrets
 from collections import OrderedDict
 from typing import Annotated, Literal, Optional
@@ -65,7 +64,8 @@ class SolutionCheck(BaseModel):
 # --------------------------------------------------------------------------- #
 # Fence (local copy; PR 19 owns the shared helper)
 # --------------------------------------------------------------------------- #
-_FENCE_MARKER = re.compile(r"[<>]*UNTRUSTED-[0-9A-Za-z]*[<>]*")
+_MARKER_WORD = "UNTRUSTED-"
+MAX_FENCED_CHARS = 300_000  # per fenced text; the prompt is bounded before any stripping
 
 #: Random per process, never logged.
 _PROCESS_KEY = secrets.token_bytes(32)
@@ -79,9 +79,21 @@ def new_fence_nonce(*parts: str) -> str:
     return mac.hexdigest()[:16]
 
 
+def strip_marker_word(text: str) -> str:
+    """Remove every ``UNTRUSTED-``, including ones that only appear once an inner one is removed
+    (``UNTRUSTUNTRUSTED-ED-``). One linear pass with a check on the tail of the output: no regular
+    expression, so no input can make it slow."""
+    out: list[str] = []
+    for ch in text:
+        out.append(ch)
+        if ch == "-" and len(out) >= len(_MARKER_WORD) and "".join(out[-len(_MARKER_WORD):]) == _MARKER_WORD:
+            del out[-len(_MARKER_WORD):]
+    return "".join(out)
+
+
 def fence_untrusted(label: str, text: str, nonce: str) -> str:
     """``text`` between nonce markers, with any marker already in it removed first."""
-    body = _FENCE_MARKER.sub("", text or "")
+    body = strip_marker_word((text or "")[:MAX_FENCED_CHARS])
     return f"<<<UNTRUSTED-{nonce} {label}\n{body}\nUNTRUSTED-{nonce}>>>"
 
 
