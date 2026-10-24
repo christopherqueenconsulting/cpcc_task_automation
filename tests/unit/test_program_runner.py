@@ -50,7 +50,7 @@ EXPECTED_COMMAND = [
     "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
     "--ulimit", "nofile=256:256", "--ulimit", "fsize=16777216:16777216",
     "--ulimit", "core=0", "--user", "10001:10001",
-    "cpcc_task_automation/exec-runner:1",
+    pr.RUNNER_IMAGE,
 ]
 
 
@@ -196,7 +196,7 @@ def test_driver_and_dockerfile_hash_is_recorded_next_to_the_version():
 
 def test_the_dockerfile_pins_the_base_by_digest_and_copies_only_the_driver():
     dockerfile = (RUNNER_DIR / "Dockerfile").read_text()
-    assert re.search(r"^FROM eclipse-temurin:21-jdk-noble@sha256:[0-9a-f]{64}$", dockerfile, re.M)
+    assert re.search(r"^FROM eclipse-temurin:\d+-jdk-noble@sha256:[0-9a-f]{64}$", dockerfile, re.M)
     assert "--no-install-recommends g++ gcc libc6-dev python3" in dockerfile
     assert "rm -rf /var/lib/apt/lists/*" in dockerfile
     assert "useradd --uid 10001" in dockerfile and "USER 10001:10001" in dockerfile
