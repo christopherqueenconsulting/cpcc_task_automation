@@ -37,6 +37,11 @@ def static_prefix(system: str, user: str, heading: str) -> Optional[str]:
     from the first genuine opening marker (marker-shaped text in the assignment or in the submission
     is removed before the prompt is built, so the first one is the real fence), then the last
     ``heading`` before it, so nothing a student wrote can move the cut or enter the prefix.
+
+    Instructor-supplied text is not guarded the same way: if the assignment instructions themselves contain
+    ``heading``, the last occurrence before the fence is still the real one (the real heading comes after all
+    instructor text), so the prefix is unchanged. The documented failure mode is None (no fence or no heading
+    found), never a prefix that contains the submission.
     """
     marker = _OPENING_MARKER.search(user)
     if marker is None:

@@ -230,3 +230,22 @@ def test_session_id_helpers_cover_the_flag_values(monkeypatch):
         assert prompt_cache.enabled() is expected
     assert prompt_cache.static_prefix("s", "no fence here", "## X") is None
     assert prompt_cache.static_prefix("s", "<<<UNTRUSTED SUBMISSION 0123456789abcdef BEGIN>>>", "## X") is None
+
+
+def test_the_quality_line_is_in_the_rubric_system_message_only():
+    rubric_system, _ = build_rubric_grading_messages(RUBRIC, "x", "y", reference_solution="class S {}")
+    exam_system, _ = build_exam_grading_messages("x", "class S {}", "y", ["A"], ["b"])
+    line = ("Criteria that assess code quality, clarity, style or conventions are still judged on the "
+            "submission's own naming, structure and conventions against the rubric's level descriptions.")
+    assert "This applies to functional requirements only. " + line in rubric_system
+    assert line not in exam_system
+    # the shared fragment itself is unchanged
+    assert "functional requirements only" not in "\n".join(SOLUTION_RULES)
+    # without a solution the solution rules (and so this line) are absent
+    no_solution, _ = build_rubric_grading_messages(RUBRIC, "x", "y")
+    assert line not in no_solution
+
+
+def test_the_exam_prompt_says_wording_that_must_match_is_output_text_not_code_style():
+    system, _ = build_exam_grading_messages("x", "class S {}", "y", ["A"], ["b"])
+    assert "The wording that must match is the output text the user sees (prompts and output), not code style or names." in system

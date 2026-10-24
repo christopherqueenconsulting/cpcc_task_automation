@@ -168,6 +168,17 @@ accepted on values are `1`, `true`, `on`, `yes`:
 
 The eval side (cached-token telemetry, eval `session_id`, warm-first in the runner) is PR #463.
 
+### Quality numbers after an A/B
+
+`scripts/ab_quality_report.py` (stdlib and repo code, no network) reads the head and base
+`raw_outputs.jsonl` of a suite from the downloaded A/B artifact and prints the signed per-item score
+delta in percent of max points (mean, SD, the +/-1.5 and +/-2.5 bounds of the proposed pass rule), the
+manual-null and criterion_id mismatch counts, and per-criterion level changes. It reports; it gates
+nothing. The grading payload stores only the backend total, so the counts print "not recorded" until a
+payload carries a `criteria` list (see the script's docstring). Run:
+`python scripts/ab_quality_report.py --suite grading --head <artifact>/head/grading/raw_outputs.jsonl --base <artifact>/base/grading/raw_outputs.jsonl`.
+Tested on a synthetic artifact only.
+
 ## Adding a prompt
 
 `test_every_llm_call_site_is_registered` scans `src/` for `llm_gateway.structured(`,

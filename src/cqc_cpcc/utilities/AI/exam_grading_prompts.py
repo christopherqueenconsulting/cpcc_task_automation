@@ -73,6 +73,7 @@ The user message holds the Exam Instructions, the Reference Solution, the Major 
 
 ## Reference Solution (authoritative)
 {solution_rules}
+The wording that must match is the output text the user sees (prompts and output), not code style or names.
 
 ## What a correct result looks like
 Grade exactly and only what the Exam Instructions specify.
