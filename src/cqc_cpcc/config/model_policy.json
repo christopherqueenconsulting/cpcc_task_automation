@@ -304,6 +304,9 @@
         },
         "health_floor": 0.946,
         "repeats": 2
+      },
+      "grading-solution": {
+        "repeats": 4
       }
     }
   }
