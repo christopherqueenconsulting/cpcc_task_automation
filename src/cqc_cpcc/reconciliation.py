@@ -66,7 +66,8 @@ def describe(n: ReconciliationNote) -> str:
     head = {"removed": "Removed", "added": "Added", "kept": "Kept", "note": "Note"}.get(
         n.action, n.action.capitalize())
     name = n.error.name if n.error is not None else (n.code or "")
-    state = " (reinstated by the instructor)" if n.reinstated else ""
+    state = (" (removed by the instructor)" if n.removed_by_instructor
+             else " (reinstated by the instructor)" if n.reinstated else "")
     return f"{head}: {name}{state}. {n.reason}".strip() if name else f"{head}: {n.reason}".strip()
 
 
@@ -99,7 +100,7 @@ def reinstate(result: RubricAssessmentResult, rubric: Rubric, index: int) -> Rub
     key = ((n.error.code or "").strip().upper(), (n.error.severity or "").strip().lower())
     if not any(((e.code or "").strip().upper(), (e.severity or "").strip().lower()) == key for e in errors):
         errors.append(n.error)
-    notes[index] = n.model_copy(update={"suppressed": False, "reinstated": True})
+    notes[index] = n.model_copy(update={"suppressed": False, "reinstated": True, "removed_by_instructor": False})
     updated = result.model_copy(update={
         "detected_errors": errors,
         "reconciliation": notes,
@@ -108,6 +109,51 @@ def reinstate(result: RubricAssessmentResult, rubric: Rubric, index: int) -> Rub
     })
     scored = apply_backend_scoring(rubric, updated)
     logger.info("Reinstated %s (note %d): %s -> %s points", n.error.code, index,
+                result.total_points_earned, scored.total_points_earned)
+    return scored
+
+
+def remove_added(result: RubricAssessmentResult, rubric: Rubric, index: int) -> RubricAssessmentResult:
+    """Take out an error a backend stage ADDED (note ``index``) and re-score. Mirrors :func:`reinstate`.
+
+    Only a note whose action is ``added`` and that carries its error can be removed (today the
+    execution gate's format errors). The note stays, now ``suppressed`` and flagged
+    ``removed_by_instructor``, so the drawer shows what was removed and Reinstate can undo it.
+    Pure and deterministic. Raises ``ValueError`` when the note is not a removable gate-added
+    error, when it is already removed or its error is not in the list any more, when the result is
+    floored at 0, or when ``rubric`` is not the version the result was graded under.
+    """
+    from cqc_cpcc.rubric_grading import apply_backend_scoring
+    from cqc_cpcc.utilities.submission_validity import NO_WORK_STATUSES
+
+    if result.validity_status in NO_WORK_STATUSES:
+        raise ValueError("this result is floored at 0 (no gradeable work); re-grade it instead")
+    notes = list(result.reconciliation or [])
+    if not 0 <= index < len(notes):
+        raise ValueError(f"no reconciliation note {index}")
+    n = notes[index]
+    if n.action != "added" or n.error is None:
+        raise ValueError(f"note {index} is not an error a stage added")
+    if n.suppressed:
+        raise ValueError(f"note {index} was already removed")
+    if str(rubric.rubric_version) != str(result.rubric_version):
+        raise ValueError(f"rubric {rubric.rubric_id} is now version {rubric.rubric_version}; this result "
+                         f"was graded under {result.rubric_version}. Re-grade instead.")
+    key = ((n.error.code or "").strip().upper(), (n.error.severity or "").strip().lower())
+    errors = list(result.detected_errors or [])
+    kept = [e for e in errors
+            if ((e.code or "").strip().upper(), (e.severity or "").strip().lower()) != key or e.source != n.error.source]
+    if len(kept) == len(errors):
+        raise ValueError(f"the error behind note {index} is not in the result")
+    notes[index] = n.model_copy(update={"suppressed": True, "reinstated": False, "removed_by_instructor": True})
+    updated = result.model_copy(update={
+        "detected_errors": kept,
+        "reconciliation": notes,
+        "error_counts_by_severity": None,  # recompute from the remaining error list
+        "error_counts_by_id": None,
+    })
+    scored = apply_backend_scoring(rubric, updated)
+    logger.info("Removed %s (note %d): %s -> %s points", n.error.code, index,
                 result.total_points_earned, scored.total_points_earned)
     return scored
 

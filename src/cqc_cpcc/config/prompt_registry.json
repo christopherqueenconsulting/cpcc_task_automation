@@ -62,6 +62,26 @@
         "grading"
       ]
     },
+    "execution-evidence-section": {
+      "version": 1,
+      "status": "fragment",
+      "role": "grading",
+      "parent": "rubric-grading",
+      "description": "Output-check evidence embedded in the rubric grading prompt only after a verified run of the student's program: the app-computed verdict table first, then per-case diffs and stderr inside a per-call nonce fence (untrusted program output). Absent (the prompt is unchanged) when there is no plan or the check was skipped.",
+      "builder": "cqc_cpcc.execution_evidence:execution_evidence_section",
+      "schema": null,
+      "call_sites": [],
+      "source_files": [
+        "src/cqc_cpcc/execution_evidence.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/fence.py",
+        "src/cqc_cpcc/execution_gate.py"
+      ],
+      "graders": [],
+      "fingerprint": "sha256:a901e9322f8b011bdcb0a46d96a6544ec0888002618dba8b292e2796630a24c3",
+      "suites": []
+    },
     "requirement-extraction": {
       "version": 1,
       "status": "live",

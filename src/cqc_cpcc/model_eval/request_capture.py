@@ -41,8 +41,9 @@ ERROR = "error:"
 
 #: Fixed stand-in for the per-process fence keys while capturing. A fence nonce is an HMAC of the
 #: assignment text under a random key, so without this the prompt differs on every run.
-_PINNED_FENCE_KEY = b"request-capture-fixed-fence-key!"  # 32 bytes
-_FENCE_KEY_MODULES = ("cqc_cpcc.test_case_generation", "cqc_cpcc.requirement_solution_check")
+from cqc_cpcc.utilities.AI.fence import CAPTURE_KEY as _PINNED_FENCE_KEY  # noqa: E402  (one source of truth)
+_FENCE_KEY_MODULES = ("cqc_cpcc.utilities.AI.fence", "cqc_cpcc.test_case_generation",
+                      "cqc_cpcc.requirement_solution_check")
 
 
 def _hash(value) -> str:
@@ -80,8 +81,13 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
 
     from cqc_cpcc.utilities.AI import llm_gateway, openrouter_client, untrusted_fence
 
+    # Three mechanisms keep a capture reproducible and all are undone in ``finally``:
+    # the per-process fence keys below (a module without a key of its own is skipped), the shared
+    # ``untrusted_fence.new_nonce`` pin further down, and ``fence.deterministic_nonce()`` (entered in
+    # ``capture_suite``) for the PR 13/14 helper in ``utilities/AI/fence.py``.
     saved_nonce = untrusted_fence.new_nonce
-    fence_modules = [importlib.import_module(name) for name in _FENCE_KEY_MODULES]
+    fence_modules = [m for m in (importlib.import_module(name) for name in _FENCE_KEY_MODULES)
+                     if getattr(m, "_PROCESS_KEY", None) is not None]
     saved_keys = [m._PROCESS_KEY for m in fence_modules]
 
     saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
@@ -168,7 +174,11 @@ async def capture_suite(suite_id: str) -> dict:
     outputs: dict = {}
     calls: dict = {}
     sink: list = []
-    with pinned_registry(model, effort, profile, roles=(suite.role,)):
+    from cqc_cpcc.utilities.AI.fence import deterministic_nonce
+
+    # The fence nonce is keyed by a per-process secret in production; a capture needs it reproducible
+    # so an unchanged prompt hashes the same in the head and base processes.
+    with pinned_registry(model, effort, profile, roles=(suite.role,)), deterministic_nonce():
         with _patched(sink, test_mode=False):
             for case in suite.cases():
                 sink.clear()

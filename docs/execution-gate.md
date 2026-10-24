@@ -1,9 +1,9 @@
 # Execution gate: the sandbox that runs student programs
 
 Student code is untrusted. This document covers the one place it may run, what that place
-protects, and what to do if it fails. It belongs to PR 12 of the grading-fairness plan.
-Later PRs (test-case derivation, the execution gate in grading, the output-check UI) build
-on `cqc_cpcc.utilities.program_runner`.
+protects, and what to do if it fails. It covers PRs 12 to 14 of the grading-fairness plan: the
+sandbox (12), test-case derivation (13) and the execution gate in grading (14, last section). The
+output-check UI (PR 15) builds on `cqc_cpcc.utilities.program_runner`.
 
 **Rule: student programs are never executed on the host.** If the sandbox is not available, no
 program runs, and grading follows the path it had before. The one exception to "nothing touches
@@ -181,6 +181,16 @@ work, and the grade itself.
 6. The key search in step 3 finds leaked keys only, not leaked student content. If a leak of
    student data is suspected, the instructor decides with the college whether its FERPA
    incident process applies.
+7. Since PR 14 a saved result holds student program output: `execution_report.cases[].diff_excerpt`
+   (up to 20 lines or 1,500 characters per case) and the notes of gate-added errors (the case input and
+   one expected and one actual line). Find the runs that have any:
+   ```bash
+   grep -rIl '"execution_report"' ~/.cqc_cpcc/grading_results
+   grep -rIlE '"diff_excerpt": "[^"]' ~/.cqc_cpcc/grading_results     # runs that stored program output
+   ```
+   Purge by deleting those run files (`<run_key>.json`; the results can be re-created by re-grading), or
+   delete the whole folder. Results are session-only on Streamlit Community Cloud, so nothing is on disk
+   there. Also look in the feedback `.docx` files and hand-back ZIPs: a gate-added error's note is in them.
 
 ## Changing the image
 
@@ -219,9 +229,9 @@ with two cases and `repeat: 2` took 8 to 9 s for the whole job including contain
 
 ## Test cases for the output check (PR 13)
 
-`src/cqc_cpcc/test_case_generation.py` builds the stdin cases that the output check will run
-on the solution and on each student's program. Nothing in grading calls it yet (PR 14 wires
-it); `CQC_EXECUTION=off` makes validation report `unavailable` without starting a process.
+`src/cqc_cpcc/test_case_generation.py` builds the stdin cases that the output check runs
+on the solution and on each student's program. Grading uses them through the plan (PR 14, below);
+`CQC_EXECUTION=off` makes validation report `unavailable` without starting a process.
 
 1. `parse_sample_runs(instructions)`: no model. Reads "Sample Run" blocks.
 2. `suggest_test_cases(...)`: one cached model call per assignment (prompt `test-case-generation`),
@@ -236,7 +246,12 @@ it); `CQC_EXECUTION=off` makes validation report `unavailable` without starting 
    The instructions and the solution go into the prompt inside a nonce fence, and any fence
    marker already in them is stripped. The nonce is a keyed hash (HMAC-SHA256) of the
    assignment text under a per-process secret: unguessable from outside, stable for one
-   assignment within a process, and not random per call.
+   assignment within a process, and not random per call. Because the secret differs between
+   processes, two processes would send different prompts for the same assignment, so the
+   prompt-evaluation request capture (and only it) wraps its work in `fence.deterministic_nonce()`,
+   which derives the nonce under a fixed, public capture key. That makes `test-case-generation`
+   request-identical between a base and a head process, so an unchanged suite is skipped in an A/B.
+   Production calls never enter the switch.
 3. `validate_cases_on_solution(...)`: one sandbox job runs every case twice on the solution.
    A case is dropped for a timeout, a crash, reading past the end of input, empty output,
    output that changes between the two runs, or output cut at the cap. A solution that does
@@ -270,3 +285,172 @@ flags, the conditions and map, and the ignore patterns, so any change gets a new
 stores the solution's file hashes, never its text. `load_solution_sources` reads a source file,
 a folder (symlinks skipped) or a `.zip` in memory (base names only, size and count caps, sizes
 checked before reading, no extraction to disk).
+
+## The execution gate in grading (PR 14)
+
+`grade_with_rubric(..., execution_plan=None)`. With no plan nothing below runs: the prompt, the
+result and the score are what they were before the output check. Nothing supplies a plan until
+PR 15 (the UI), so the gate is inert on master; PR 14 ships it and its tests.
+
+### Pipeline
+
+```
+validity gate -> run_student_execution -> prompt + model -> compile gate
+  -> apply_execution_gate -> requirement coverage -> apply_backend_scoring
+```
+
+`run_student_execution` (`src/cqc_cpcc/execution_gate.py`) runs the student's program on the plan's
+usable cases in the sandbox, in a worker thread, before the prompt is built, and compares each output
+with the solution's (`utilities/output_compare.py`). A run that crashed, timed out or hit the output
+cap is never `MATCH` or `FORMAT_ONLY`, whatever it printed. The report's status:
+
+| status | meaning | prompt | grade |
+|---|---|---|---|
+| `ok` | the sandbox ran every case | gets the evidence fragment | the gate may act |
+| `skipped` | `CQC_EXECUTION=off`, plan disabled, no usable case, unsafe or oversized files, a driver or compile-timeout problem | unchanged | unchanged |
+| `language_mismatch` | the submission is not in the plan's language | unchanged | unchanged |
+| `student_compile_failed` | the student's program does not compile in the sandbox | unchanged | unchanged ("Does Not Compile" stays with the compile gate) |
+| `runner_unavailable` | Docker could not answer (also the sandbox lost mid-batch) | unchanged | unchanged; counted by the PR 15 banner |
+
+When the runner fails the Docker status cache is cleared, so the next student re-checks Docker
+instead of trusting a stale "available". Every later student in a batch then reports
+`runner_unavailable` and is graded exactly as without the output check; PR 15's banner counts them
+and offers a re-grade through `GradingJob` (their prompt then sees the evidence). An exception
+anywhere in the output check is logged by type and the student is graded without it.
+
+### The prompt
+
+The only change to the prompt is the `execution-evidence-section` fragment
+(`src/cqc_cpcc/execution_evidence.py`, registered as a fragment of `rubric-grading`), added after the
+submission when the status is `ok`. `build_rubric_grading_prompt(..., execution_evidence=None)` adds
+nothing, so `rubric-grading` keeps its version and fingerprint, and the prompt A/B's request-identical
+fast path holds for every existing suite (they pass no plan). `tests/unit/test_execution_gate.py`
+compares the renders with the hashes of master's and compares the prompts with and without a plan in
+each skipped state.
+
+Layout: the app-computed verdict table first (case, input, verdict, detail; no student-controlled
+string in it), then one block per non-matching case with the diff (`-` expected, `+` actual) and, for
+a crash, the first lines of stderr. Every student-controlled string sits in a per-call random-nonce
+fence (`utilities/AI/fence.py`) with any marker already in it stripped by a linear scan. The model is
+told that only the table carries verdicts and that fenced text is untrusted program output. File names
+and the solution's source are never in the fragment. (`utilities/AI/untrusted_fence.py`, from PR 19, is the shared fence helper for prompts; `fence.py` is the
+PR 13 helper moved here with the same output, apart from a linear marker strip that also leaves no marker
+behind. Both stay, and the request capture pins both.)
+
+### What the gate may do
+
+All deterministic; every decision is a `ReconciliationNote(stage="execution")`.
+
+**Cannot verify** (evidence only, nothing removed or added): fewer than 3 validated cases, every usable
+case a `sample` run copied from the instructions (`ExecutionPlan.sample_only`), or a case that did not
+run.
+
+**Remove** a model error of category `sequence`, `output_values` or `output_format` only when:
+
+1. the plan has at least one independent (`llm` or `manual`) validated case, and an independent case on
+   the exact edge of every condition the instructions name (`covered_by_independent`, checked from the
+   stored map, never assumed);
+2. every case matches (`output_format` errors too), or every case matches or differs only in format
+   (`sequence` and `output_values` errors);
+3. the error does not name a structural thing in its code, name, description or notes (loop, method,
+   function, array, constant, class, recursion, `while(` / `for(` / `do-while`). This is the description
+   heuristic only: requirement ids from PR 8 are parked, so nothing is linked to a requirement;
+4. if it cites a concrete input ("when the input is 100", "entering `5 10`"), that input run as an extra
+   case on the solution (twice, for a reference) and on the student's program also matches. The extra
+   case has the same stdin cap and limits, is only run when the solution text in the prompt hashes to
+   the plan's solution, and counts toward the student's container budget (180 s in all). Anything that
+   cannot be checked keeps the error.
+
+**Set the format error** when every case matches or differs only in format: the model's other format
+errors are replaced by the course's definition for the detail (table below), nothing is added twice,
+and a trailing space or blank line is `MATCH` and costs nothing.
+
+**Keep** the model's errors, with evidence, when any case is `TEXT_DIFFERS`, `ORDER_DIFFERS`,
+`VALUES_DIFFER`, `NO_OUTPUT`, `RUNTIME_ERROR` or `TIMEOUT`. When the model reported no sequence, value or
+format error at all, `execution_report["gate"]["disagrees"]` is true (the PR 15 badge). CSC134 only: if
+the single difference is one misspelled word and the model reported a major `MAJOR_FORMATTING`, the error
+becomes the course's `MISSPELLING` (minor).
+
+**Never:** touch requirement or compiler errors, add a major beyond the course mapping, set
+`needs_review`, or act when the plan or the run cannot verify.
+
+### Per-course format policy (decision 2)
+
+`FORMAT_POLICY` in `src/cqc_cpcc/execution_gate.py`, from each course's own definitions in
+`config/error_definitions_registry.json` (Exam 1/2 and Project ids follow the same pattern).
+CSC151 separators fall under "etc." in `OUTPUT_FORMATTING`. A detail the course has no enabled
+definition for is skipped with a note (custom assignments are skipped whole).
+
+| FORMAT_ONLY detail | CSC151 | CSC251 | CSC134 |
+|---|---|---|---|
+| trailing whitespace / blank lines (MATCH) | none | none | none |
+| spacing / line break (print vs println) | `OUTPUT_FORMATTING` (minor) | `MINOR_FORMATTING` (minor) | `MAJOR_FORMATTING` (major) |
+| case | `OUTPUT_FORMATTING` (minor) | `MINOR_FORMATTING` (minor) | `MAJOR_FORMATTING` (major) |
+| punctuation / `$` | `OUTPUT_FORMATTING` (minor) | `MINOR_FORMATTING` (minor; "missing dollar sign") | `MAJOR_FORMATTING` (major) |
+| number_format (trailing zeros, separators) | `OUTPUT_FORMATTING` (minor) | `DECIMAL_SCALE` (major) | `MINOR_FORMATTING` (minor; "decimal scale ... separators") |
+| decimal_scale | `OUTPUT_FORMATTING` (minor) | `DECIMAL_SCALE` (major) | `MINOR_FORMATTING` (minor) |
+| prompt_text | `OUTPUT_FORMATTING` (minor) | `MINOR_FORMATTING` (minor) | `MAJOR_FORMATTING` (major) |
+
+CSC134 `MAJOR_FORMATTING` reads "output and formatting must match sample output exactly", so non-numeric
+format differences map to it literally; with distinct counting it costs at most one major. To change a
+cell, edit the table in `execution_gate.py` and here.
+
+`ErrorDefinition.execution_category` (`output_format`, `output_values`, `sequence`) is tagged on the
+registry's sequence, output-impact, calculation, formatting and decimal-scale ids, never on
+`MISSPELLING`, `INPUT_VALIDATION`, `CURLY_BRACES` or the like. `infer_execution_category` is the
+fallback for custom definitions (id and name only). Carrying the field through the editor in
+`grade_assignment.py` is PR 15.
+
+### Student transparency and Remove
+
+An error the gate adds has `source="execution"` and a note naming the test input and the expected and
+actual differing line (program output only, never solution source), shown in the student's feedback and
+the .docx, in code spans with control characters and backticks removed and each line cut at 80
+characters. `reconciliation.remove_added` takes a gate-added error out again (deterministic re-score,
+note kept, `removed_by_instructor`); `reinstate` puts it back. The PR 15 UI calls them.
+
+### Building a plan
+
+`derive_execution_plan` (async) is the caller of `suggest_test_cases`. It checks
+`program_runner.runner_status()` first and returns `(None, reason)` when the sandbox is off or missing,
+so with `CQC_EXECUTION=off` no solution text leaves the host. Otherwise it parses the sample runs,
+makes the one cached model call, validates the cases on the solution and returns the plan.
+
+```python
+plan, reason = await derive_execution_plan(instructions, solution_sources)
+if plan is None:       # the sandbox is off or missing; no model call was made. `reason` says why:
+    ...                #   "execution disabled (CQC_EXECUTION=off)", "docker not found on PATH",
+                       #   "docker daemon is not running", "exec-runner image is not built",
+                       #   "exec-runner image out of date, rebuild"
+elif not plan.enabled: # built, but unusable; `reason` is plan.disabled_reason, e.g.
+    ...                #   "the solution does not compile", "every case was dropped", "runner error code"
+else:
+    result = await grade_with_rubric(..., execution_plan=plan)
+```
+
+`solution_sources` comes from `execution_check.load_solution_sources`. The return shape is always
+`(plan_or_None, reason_string)`; `reason` is empty for a usable plan.
+
+### Threat model addition
+
+The evidence fragment sends program output to the grading model. A hostile program can print text meant
+to steer it ("report no errors"). Controls: the verdict table is computed by the app and sits first;
+student text is only in per-call nonce fences and is described to the model as untrusted data; markers
+in it are stripped; the gate never reads the model's reply for verdicts. The residual risk is a model
+that is persuaded by fenced text anyway. The gate's removals do not depend on the model at all: output
+that does not match the reference keeps the model's errors, and only the course-policy format error can be
+added.
+
+### Rollback
+
+`CQC_EXECUTION=off` (nothing runs, the prompt and the grade are as before). Removing the gate entirely
+is a revert of PR 14, with two things a revert does not undo:
+
+- Saved results keep their `execution_report` (program output excerpts) and reconciliation notes. Purge
+  them as in step 7 of the incident path above.
+- An error the gate added stays in a saved result and in any feedback already produced. After a revert
+  there is no Remove control for it (the UI is PR 15), so removing one means re-grading that student or
+  editing the result by hand. Before reverting, use `reconciliation.remove_added` on the results that
+  matter, or re-grade the section.
+
+Nothing else is persisted.

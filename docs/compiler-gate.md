@@ -165,3 +165,10 @@ poetry run pytest tests/unit/test_compiler_gate.py tests/unit/test_backend_scori
 
 The toolchain-missing and timeout paths are tested with the compiler stubbed out, so
 the suite behaves the same on a machine with no JDK as on one with a full toolchain.
+
+## Related: the execution gate
+
+The execution gate (`docs/execution-gate.md`, PR 14) runs after this gate. A student program that
+fails to compile in the sandbox gives the output check no evidence and changes nothing: "Does Not
+Compile" is decided here, by the real compiler, and "cannot verify" never becomes a deduction in
+either gate.

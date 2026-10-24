@@ -213,6 +213,22 @@ def _render_requirements_section() -> list[str]:
     return ["\n".join(requirements_prompt_section(_fixture_checklist()))]
 
 
+def _render_execution_evidence_section() -> list[str]:
+    from cqc_cpcc.execution_check import CaseResult, ExecutionPlan, ExecutionReport, TestCase
+    from cqc_cpcc.execution_evidence import execution_evidence_section
+
+    plan = ExecutionPlan(language="java", solution_sha256="fixture", cases=[
+        TestCase(id="T1", label="Typical order", stdin="3\n10.00\n", source="llm", validated=True),
+        TestCase(id="T2", label="Negative count", stdin="-1\n10.00\n", source="llm", validated=True)])
+    report = ExecutionReport(plan_hash="fixture", status="ok", cases=[
+        CaseResult(case_id="T1", verdict="values_differ",
+                   diff_excerpt="--- expected\n+++ actual\n@@ -1 +1 @@\n-Total: 32.10\n+Total: 30.0"),
+        CaseResult(case_id="T2", verdict="match")])
+    # A fixed nonce: the production call draws a fresh one per call, which the fingerprint must not
+    # depend on.
+    return ["\n".join(execution_evidence_section(plan, report, "0123456789abcdef"))]
+
+
 def _render_requirement_extraction() -> list[str]:
     from cqc_cpcc.requirement_coverage import build_requirement_extraction_prompt
 
@@ -304,6 +320,7 @@ def _render_judge(judge_id: str) -> Callable[[], list[str]]:
 RENDERERS: dict[str, Callable[[], list[str]]] = {
     "rubric-grading": _render_rubric_grading,
     "requirements-section": _render_requirements_section,
+    "execution-evidence-section": _render_execution_evidence_section,
     "requirement-extraction": _render_requirement_extraction,
     "effort-recommendation": _render_effort_recommendation,
     "requirement-solution-check": _render_requirement_solution_check,

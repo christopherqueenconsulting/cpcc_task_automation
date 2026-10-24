@@ -281,14 +281,16 @@ class TestFenceKeyPinned:
 
     def _suite(self, key, suite_id="test-case-generation"):
         from cqc_cpcc import test_case_generation as tcg
+        from cqc_cpcc.utilities.AI import fence
 
-        tcg._PROCESS_KEY = key
+        fence._PROCESS_KEY = key
         return rc.capture([suite_id])["suites"][suite_id]
 
     def test_two_processes_with_different_keys_capture_the_same_hashes(self, monkeypatch):
         from cqc_cpcc import test_case_generation as tcg
+        from cqc_cpcc.utilities.AI import fence
 
-        monkeypatch.setattr(tcg, "_PROCESS_KEY", tcg._PROCESS_KEY)  # put back after the test
+        monkeypatch.setattr(fence, "_PROCESS_KEY", fence._PROCESS_KEY)  # put back after the test
         a = self._suite(b"a" * 32)
         b = self._suite(b"b" * 32)
         assert any(a["requests"].values())
@@ -297,25 +299,27 @@ class TestFenceKeyPinned:
     def test_the_key_is_restored_and_differs_from_the_pin_outside_capture(self, monkeypatch):
         from cqc_cpcc import requirement_solution_check as rsc
         from cqc_cpcc import test_case_generation as tcg
+        from cqc_cpcc.utilities.AI import fence
 
-        monkeypatch.setattr(tcg, "_PROCESS_KEY", b"x" * 32)
+        monkeypatch.setattr(fence, "_PROCESS_KEY", b"x" * 32)
         monkeypatch.setattr(rsc, "_PROCESS_KEY", b"y" * 32)
         before = tcg.new_fence_nonce("text")
         rc.capture(["test-case-generation"])
-        assert tcg._PROCESS_KEY == b"x" * 32 and rsc._PROCESS_KEY == b"y" * 32
+        assert fence._PROCESS_KEY == b"x" * 32 and rsc._PROCESS_KEY == b"y" * 32
         assert tcg.new_fence_nonce("text") == before
         with rc._patched([], test_mode=True):
             pinned = tcg.new_fence_nonce("text")
-        assert pinned != before and tcg._PROCESS_KEY == b"x" * 32
+        assert pinned != before and fence._PROCESS_KEY == b"x" * 32
 
     def test_the_key_is_restored_when_the_capture_is_interrupted(self, monkeypatch):
         from cqc_cpcc import test_case_generation as tcg
+        from cqc_cpcc.utilities.AI import fence
 
-        monkeypatch.setattr(tcg, "_PROCESS_KEY", b"x" * 32)
+        monkeypatch.setattr(fence, "_PROCESS_KEY", b"x" * 32)
         with pytest.raises(RuntimeError):
             with rc._patched([], test_mode=True):
                 raise RuntimeError("stop")
-        assert tcg._PROCESS_KEY == b"x" * 32
+        assert fence._PROCESS_KEY == b"x" * 32
 
     def test_two_separate_processes_write_identical_captures(self, tmp_path):
         """A real fresh random key per process (the test sets none). One suite, to stay fast."""

@@ -34,6 +34,7 @@ from typing import Optional
 
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
+from cqc_cpcc.execution_check import ExecutionPlan
 from cqc_cpcc.prompts.markers import UNTRUSTED_NOTE, neutralize_markers
 from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES
 from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUIREMENT, note, note_added,
@@ -151,6 +152,7 @@ def build_rubric_grading_prompt(
         reference_solution: Optional[str] = None,
         error_definitions: Optional[list[ErrorDefinition]] = None,
         requirements=None,
+        execution_evidence: Optional[list[str]] = None,
 ) -> str:
     """Build a deterministic prompt for rubric-based grading.
     
@@ -161,6 +163,10 @@ def build_rubric_grading_prompt(
         reference_solution: Optional reference solution for comparison
         error_definitions: Optional list of ErrorDefinition objects to check against
         requirements: Optional ``RequirementChecklist``; the model marks each one
+        execution_evidence: Optional lines of the ``execution-evidence-section`` fragment
+            (``execution_evidence.execution_evidence_section``), added after the submission only
+            for a real, verified output-check result. None or empty adds nothing: the prompt is
+            then byte-for-byte what it was before the output check existed.
         
     Returns:
         Formatted prompt string for OpenAI
@@ -298,6 +304,10 @@ def build_rubric_grading_prompt(
         prompt_parts.append(student_submission)
     prompt_parts.append("")
 
+    # What running the program showed (only for a verified output-check result)
+    if execution_evidence:
+        prompt_parts.extend(execution_evidence)
+
     # Grading instructions - GPT-5.2 methodology
     prompt_parts.append("## Grading Instructions")
     prompt_parts.append(
@@ -424,6 +434,8 @@ async def grade_with_rubric(
         correlation_id: Optional[str] = None,
         session_id: Optional[str] = None,
         effort: Optional[str] = None,
+        execution_plan: Optional[ExecutionPlan] = None,
+        execution_owner: Optional[str] = None,
 ) -> RubricAssessmentResult:
     """Grade a student submission using a rubric.
     
@@ -460,6 +472,16 @@ async def grade_with_rubric(
             accepted type; with no other files the submission is ``wrong_type``.
         requirements: Optional ``RequirementChecklist`` for the assignment. The model
             marks each requirement; missing/partial ones become errors before scoring.
+        execution_plan: Optional output-check plan (``execution_check.ExecutionPlan``). When given,
+            the student's program runs in the sandbox on the plan's cases BEFORE the prompt is
+            built (``execution_gate.run_student_execution``). ``execution_owner`` is the opaque job id the
+            sandbox containers are labelled with; a caller that runs under a ``GradingJob`` passes the job's
+            id so a Cancel can ``kill_orphans(owner)`` (that wiring is PR 10/15 work; only the parameter
+            lives here). Only a verified result adds the
+            ``execution-evidence-section`` fragment to the prompt; a language mismatch, a student
+            compile failure, ``CQC_EXECUTION=off`` or a runner error adds nothing and leaves the
+            grade as it would be without a plan. ``None`` (the default) changes nothing at all:
+            the prompt and the result are what they were before the output check.
 
     Returns:
         RubricAssessmentResult with complete grading breakdown
@@ -498,6 +520,29 @@ async def grade_with_rubric(
             logger.warning("Validity gate: %s — scoring 0 without an LLM call", validity.status)
             return build_invalid_submission_result(rubric, validity)
 
+    # Execution run: the student's program on the plan's cases, in the sandbox, before the prompt.
+    # Order: validity gate -> execution run -> prompt + model -> compile gate -> execution gate ->
+    # requirement coverage -> backend scoring.
+    execution = None
+    execution_evidence = None
+    if execution_plan is not None:
+        from cqc_cpcc.execution_evidence import execution_evidence_section
+        from cqc_cpcc.execution_gate import run_student_execution
+        from cqc_cpcc.utilities.AI.fence import new_fence_nonce
+
+        # The sandbox call blocks (Docker): a worker thread keeps the event loop free.
+        try:
+            execution = await asyncio.to_thread(
+                run_student_execution, execution_plan, source_files, owner=execution_owner)
+            if execution is not None and execution.has_evidence:
+                execution_evidence = execution_evidence_section(
+                    execution_plan, execution.report, new_fence_nonce(), execution.stderr_by_case)
+        except Exception as exc:  # noqa: BLE001 - the output check must never fail a grade
+            logger.warning("Output check failed (%s): graded without it", type(exc).__name__)
+            execution, execution_evidence = None, None
+        if gate_report is not None and execution is not None:
+            gate_report["execution_run"] = {"status": execution.report.status, "reason": execution.report.reason}
+
     # Build the prompt
     prompt = build_rubric_grading_prompt(
         rubric=rubric,
@@ -506,6 +551,7 @@ async def grade_with_rubric(
         reference_solution=reference_solution,
         error_definitions=error_definitions,
         requirements=requirements,
+        execution_evidence=execution_evidence,
     )
 
     logger.info(
@@ -570,7 +616,8 @@ async def grade_with_rubric(
         # Reconcile the model's errors against hard evidence (compile gate, then requirement
         # coverage), recording each decision as an instructor note, BEFORE scoring.
         result = await _reconcile(result, source_files=source_files, error_definitions=error_definitions,
-                                  requirements=requirements, gate_report=gate_report)
+                                  requirements=requirements, gate_report=gate_report,
+                                  execution=execution, reference_solution=reference_solution)
 
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
@@ -826,13 +873,17 @@ async def _reconcile(
         error_definitions: Optional[list],
         requirements,
         gate_report: Optional[dict],
+        execution=None,
+        reference_solution: Optional[str] = None,
 ) -> RubricAssessmentResult:
     """Run the evidence stages in pipeline order and record each decision as a note.
 
-    Order: compile gate (a real compiler decides "Does Not Compile"), then requirement
+    Order: compile gate (a real compiler decides "Does Not Compile"), then the execution gate
+    (the student's program output, when an execution plan was given), then requirement
     coverage (unmet requirements become errors), then requirement overlap (one penalty per
-    issue; notes only unless ``CQC_REQUIREMENT_OVERLAP=drop``). A later PR adds the execution
-    stage before coverage. An error a stage drops is kept on its note, suppressed, for Reinstate.
+    issue; notes only unless ``CQC_REQUIREMENT_OVERLAP=drop``; it never drops an execution- or
+    compiler-sourced error). Backend scoring follows in ``grade_with_rubric``. An error a stage
+    drops is kept on its note, suppressed, for Reinstate.
     """
     from cqc_cpcc.utilities.compiler_gate import is_compile_error
 
@@ -882,6 +933,22 @@ async def _reconcile(
             notes.append(note("compile", f"Compile check skipped ({gate_info.get('reason') or 'not verifiable'}); "
                                          "the model's compile judgment stands."))
         result = result.model_copy(update={"detected_errors": current})
+
+    # Execution gate: the student's program output decides sequence, output-value and output-format
+    # errors only on hard evidence (docs/execution-gate.md). Inert without an execution plan.
+    if execution is not None:
+        from cqc_cpcc.execution_gate import apply_execution_gate
+
+        try:
+            gated, exec_info = apply_execution_gate(
+                result.model_copy(update={"reconciliation": notes}), execution, error_definitions,
+                reference_solution=reference_solution)
+            result, notes = gated, list(gated.reconciliation or [])
+            if gate_report is not None:
+                gate_report["execution"] = exec_info
+        except Exception as exc:  # noqa: BLE001 - the output check must never fail a grade
+            logger.warning("Execution gate failed (%s): graded without it", type(exc).__name__)
+            notes.append(note("execution", "The output check failed unexpectedly: graded without it."))
 
     # Requirement coverage: unimplemented requirements become errors, so incomplete
     # work cannot outscore complete work with mistakes.

@@ -496,11 +496,14 @@ class TestInertWhenExecutionIsOff:
         plan = tcg.build_plan(SOLUTION, result, all_cases=_cases("1\n"))
         assert plan.enabled is False and plan.cases and not plan.usable_cases()
 
-    def test_grading_does_not_call_this_module_yet(self):
+    def test_grading_never_derives_cases(self):
+        # PR 14: grading takes a finished plan (execution_check types) and runs it, but it never builds
+        # one, so it cannot call the model that suggests cases. Only execution_gate.derive_execution_plan
+        # does, after checking that the sandbox is on (nothing leaves the host when it is off).
         src = Path(__file__).resolve().parents[2] / "src" / "cqc_cpcc"
         for name in ("rubric_grading.py", "exam_review.py", "reconciliation.py"):
-            text = (src / name).read_text(encoding="utf-8")
-            assert "test_case_generation" not in text and "execution_check" not in text
+            assert "test_case_generation" not in (src / name).read_text(encoding="utf-8")
+        assert "execution_check" not in (src / "exam_review.py").read_text(encoding="utf-8")
 
 
 class TestBuildPlan:
