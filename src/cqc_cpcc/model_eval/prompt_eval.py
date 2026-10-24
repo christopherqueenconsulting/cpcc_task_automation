@@ -17,8 +17,9 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from cqc_cpcc.model_eval import adaptive
 from cqc_cpcc.model_eval.budget import Budget
-from cqc_cpcc.model_eval.suites import SUITE_MODULES, get_suite
+from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 from cqc_cpcc.model_eval.suites.base import SuiteRecord, aggregate, gate_failures, retry_stats, run_suite
 from cqc_cpcc.utilities.AI import model_registry
 
@@ -63,6 +64,31 @@ def shared_budget(budget_usd: Optional[float] = None) -> Budget:
     policy = model_registry.load_policy().prompt_eval
     limit = min(budget_usd or policy.budget_usd, policy.budget_usd)
     return Budget(limit=limit, stop_at=min(policy.stop_at_usd, limit * 0.9))
+
+
+def _dearest_call(suite, profile, cases: list) -> float:
+    """The dearest single call of ``suite`` on ``profile`` by the same estimate as :func:`estimate`."""
+    pricing = profile.pricing
+    return max((suite.estimate_prompt_tokens(c) * pricing.prompt_per_mtok
+                + ASSUMED_OUTPUT_TOKENS * pricing.completion_per_mtok) / 1e6 for c in cases) if cases else 0.0
+
+
+CONCURRENCY_FILE = "concurrency.json"
+
+
+def write_concurrency(out_dir: Path, calls: Optional[dict], judge: Optional[dict]) -> None:
+    """Save the pools' counters beside ``raw_outputs.jsonl`` so the A/B can report the base side too."""
+    (out_dir / CONCURRENCY_FILE).write_text(
+        json.dumps({"calls": calls, "judge": judge}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_concurrency(path: Path) -> Optional[dict]:
+    """``{"calls": ..., "judge": ...}`` saved by a run that used adaptive pools, else None (a base
+    that predates them, or a run that failed before writing)."""
+    try:
+        return json.loads((path / CONCURRENCY_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 def estimate_suites(suite_ids: list, models: list, repeats: Optional[int] = None) -> float:
@@ -176,7 +202,8 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
               dry_run: bool = False, run_label: Optional[str] = None, run_id: Optional[str] = None,
               case_ids: Optional[set] = None, judges: bool = False, judge_model: Optional[str] = None,
               judge_cache: Optional[str] = None, judge_cache_read_only: bool = False,
-              budget: Optional[Budget] = None, concurrency: Optional[int] = None) -> dict:
+              budget: Optional[Budget] = None, concurrency: Optional[int] = None,
+              adaptive_mode: Optional[bool] = None, max_concurrency: Optional[int] = None) -> dict:
     """Evaluate ``suite_id`` on ``models`` (default: the role's incumbent)."""
     suite = get_suite(suite_id)
     policy = model_registry.load_policy().prompt_eval
@@ -212,14 +239,22 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
             raw.flush()
 
         judge_scores = {}
+        pool_stats: list = []
+        judge_pool = None
         if judges:
             from cqc_cpcc.model_eval import judges as jm
             judge_model = judge_model or jm.pick_judge_model()
             cache = jm.VerdictCache(Path(judge_cache) if judge_cache else out_dir / "judge-cache",
                                     read_only=judge_cache_read_only)
+            if adaptive.adaptive_enabled(adaptive_mode):  # judges get their own, lower, pool
+                cap = adaptive.judge_max_concurrency()
+                judge_pool = adaptive.AdaptiveLimiter("judge", start=cap, ceiling=cap)
+                adaptive.use_judge_pool(judge_pool, budget, _dearest_call(suite, profiles[models[0][0]], cases) * adaptive.JUDGE_ESTIMATE_FACTOR)
         for model, effort in models:
             records = await run_suite(suite, model, effort, cases, repeats, budget,
-                                      concurrency=concurrency, profile=profiles[model], on_record=save)
+                                      concurrency=concurrency, profile=profiles[model], on_record=save,
+                                      adaptive_mode=adaptive_mode, max_concurrency=max_concurrency,
+                                      pool_stats=pool_stats)
             stats = retry_stats(records)
             print(f"[{suite_id}] {label_of(model, effort)}: {stats['calls']} calls, {stats['retried']} retried "
                   f"({stats['extra_attempts']} extra attempts)")
@@ -230,6 +265,10 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
             if any(r.error_kind == "budget" for r in records):
                 status = "incomplete_budget"
                 break
+    if pool_stats or judge_pool is not None:
+        adaptive.use_judge_pool(None)
+        write_concurrency(out_dir, adaptive.combine("calls", pool_stats),
+                          judge_pool.snapshot() if judge_pool is not None else None)
     sc = scorecard(suite, aggregates, {
         "run_label": run_label or dt.date.today().isoformat(), "run_id": run_id,
         "cases": len(cases), "repeats": repeats, "status": status,
@@ -275,6 +314,12 @@ def cmd_suite(args) -> int:
     models = [parse_model(m) for m in (args.model or [])]
     suite_ids = list(SUITE_MODULES) if args.suite == "all" else args.suite.split(",")
     budget = shared_budget(args.budget)
+    try:  # a bad setting is an error before any spend, never a silent fallback
+        adaptive.ab_max_concurrency(args.max_concurrency)
+        base.eval_concurrency(value=args.concurrency)
+        adaptive.judge_max_concurrency()
+    except adaptive.ConcurrencyError as e:
+        raise SystemExit(f"error: {e}")
     if not args.dry_run and not args.limit:
         total = estimate_suites(suite_ids, models, args.repeats)
         print(f"estimated total ${total:.2f}; budget stops at ${budget.stop_at:.2f}")
@@ -285,5 +330,6 @@ def cmd_suite(args) -> int:
                         args.dry_run, args.label, args.run_id, judges=args.judges,
                         judge_model=args.judge_model, judge_cache=args.judge_cache,
                         judge_cache_read_only=args.judge_cache_read_only, budget=budget,
-                        concurrency=args.concurrency))
+                        concurrency=args.concurrency, adaptive_mode=True if args.adaptive else None,
+                        max_concurrency=args.max_concurrency))
     return 0

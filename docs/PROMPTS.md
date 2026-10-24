@@ -308,12 +308,10 @@ wrong-file-type submissions, are answered by the validity gate before any call);
   (`budget_usd` 15, stopping at `stop_at_usd` 13.5) is the one it always was. The base is still a
   separate process on the base's own code, started from the environment as it was before the head
   pinned its temporary registry.
-- **12 calls in flight per side** (24 at once) instead of 4. Set `--concurrency N` on `prompt-ab`
-  or `suite run`, or `CQC_EVAL_CONCURRENCY=N` (whole numbers 1 to 32; anything else is ignored with
-  a warning). Every other run (`suite run`, the model-eval runner) keeps its default of 4. The base
-  receives the number through the environment, so a base that predates the setting runs at its own
-  default instead of failing on an unknown flag.
-- **The pairwise judge calls run in parallel** with the same limit. The scores are collected in case
+- **Adaptive calls in flight per side** instead of 4 (then a fixed 12): see "Adaptive concurrency"
+  below. Every other run (`suite run` without `--adaptive`, the model-eval runner) keeps its fixed
+  default of 4.
+- **The pairwise judge calls run in parallel**, in a pool of their own (see below). The scores are collected in case
   order, so the mean is the one the sequential loop computed.
 - **Nothing that decides changed:** the same cases, repeats, models and effort, both sides scored with
   the head graders, the same paired tests and pass rules. Records arrive in a different order, and
@@ -326,18 +324,96 @@ wrong-file-type submissions, are answered by the validity gate before any call);
 - **Retries are logged.** A rate limit (429) or timeout goes through the same client retry as before;
   one summary line per suite at the end of the log (`A/B <suite>: head N calls, R retried; base ...`;
   the workflow shows only the last 60 lines) and `ab.json` (`run_stats`: calls, calls that needed a
-  retry, extra attempts, seconds) show how many. If a run shows many retried calls, lower the number.
-  The retry has no jitter, so 24 calls that hit a limit together retry together; this change does not
-  touch the client.
-- **Budget overshoot:** calls already in flight when a side reaches its stop can still finish. The
-  gap between `stop_at_usd` and `budget_usd` ($1.50) has to cover every call in flight. The dearest
-  single call in those five runs cost $0.0033, so 24 in flight is about $0.08 and even the largest
-  setting (32 per side, 64 at once) is about $0.21.
+  retry, extra attempts, seconds, and the pools' counters) show how many.
+  The client's own retries inside one attempt are unchanged (fixed 1 s, 2 s, no jitter: it is a shared
+  file, and editing it would re-run every suite's paid A/B). The wait **between** attempts is the new
+  jittered one described below.
+- **Budget overshoot:** every call reserves its worst-case cost before it is sent (see "Budget
+  margin" below), so the gap between `stop_at_usd` and `budget_usd` no longer has to be sized for a
+  particular number of calls in flight.
 - **Who gets it:** the dispatch runs `prompt-ab` from the PR's own checkout, so the speed-up applies
   to A/Bs of PRs that contain this change (merge `master` into an older branch first). The base side
   only speeds up once the base branch has it too.
-- **Rollback:** `git revert`; or set `CQC_EVAL_CONCURRENCY=4` in the workflow's environment (a
-  workflow edit, Christopher's) to keep the code and slow the A/B down.
+- **Rollback:** `git revert`, or see the adaptive rollback below.
+
+**Adaptive concurrency.** OpenRouter publishes no concurrency or requests-per-minute cap for a paid
+key; its real gates are credit and the in-flight budget (a 402/403 whose body says
+`limit_source: openrouter_in_flight_budget`), plus whatever the vendor behind a model throttles with
+a 429. So each side starts wide and lets the answers steer it. In run
+[40033879399](https://github.com/christopherqueenconsulting/cpcc_task_automation/actions/runs/40033879399)
+(12 in flight per side) the log had 33 "rate-limited by anthropic/claude-haiku-5.5" warnings, and 9 haiku
+judge calls fell back to `openai/gpt-5-mini` (the log shows "Attempt 3/3" failed lines; each fallback line reads
+`[feedback] anthropic/claude-haiku-5.5 failed (... 429 ...); retrying once on fallback openai/gpt-5-mini`).
+All of it was on the judge and none on `gpt-6-luna`: the judge needs its own, lower, limit. What the
+fallback calls returned was not checked. The
+code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does not touch
+`openai_client.py`, `openrouter_client.py` or `llm_gateway.py`, which every registered prompt shares).
+
+- **Start and ceiling.** Each side (head, and base in its own process) starts at
+  `min(calls in the suite, ceiling)` permits: `grading` is 360 calls per side, so 64. The ceiling
+  is `--max-concurrency N` on `prompt-ab` and `suite run`, else `CQC_AB_MAX_CONCURRENCY`, else **64**.
+  `--concurrency N` (or `CQC_AB_START_CONCURRENCY`) sets a smaller starting size. There is no silent
+  fallback: a value that is not a whole number from 1 to the **hard cap of 256** stops the command
+  with `error: max concurrency=... is outside 1 to 256` before any spend (the old rule quietly
+  replaced anything above 32 with 4 or 12).
+- **AIMD, per pool.** A **throttle** is a 429, or a 402/403 whose body names
+  `openrouter_in_flight_budget` (an out-of-credit 402 or a real permission error is not one, and is
+  not retried). A throttle **halves** the permits (never below 1). A burst of throttles from calls
+  that started before the last halving counts as one halving. Every **success window** adds one permit
+  (never above the ceiling): a window is `max(4, current permits)` successful calls in a row with no
+  throttle in between, and a throttle restarts the count. A call that was throttled inside the client
+  and then succeeded does not count as a success.
+- **Retries between attempts.** A throttled call gives its permit back, waits, and tries again. The
+  wait is **full jitter**, `uniform(0, min(60 s, 2 s x 2^n))`, and never less than the server's
+  `Retry-After` (capped at 120 s), which is a floor with the jitter added on top so calls held back by
+  the same 429 do not return together. A 429 gets **8** such retries, an in-flight-budget error
+  **2**; every other error is raised on its first failure exactly as before. A retried call returns
+  the output it would have returned the first time and scoring does not depend on order, so a 429
+  storm and a calm run give the same results (a test checks this with a fake client).
+- **Judge pool.** The pairwise judge (haiku) runs in a separate pool: ceiling
+  `CQC_AB_JUDGE_CONCURRENCY`, default **16**, same hard cap, its own AIMD. A grader's 429 never
+  shrinks the judge's pool and the judge's never shrinks the graders'.
+- **Budget margin.** `Budget.reserve` sets aside a call's worst-case cost (its estimate with the full
+  output allowance) before the call is sent, and `Budget.settle` replaces it with the real cost in one
+  step. A call starts only while `spent + reserved + its estimate` fits under `budget_usd`, so the
+  margin below the cap is always (calls in flight x their estimate), whatever the concurrency. A call
+  that does not fit waits for the ones in flight to settle; it is refused (recorded as `budget`, as
+  before) only when `stop_at_usd` is reached or nothing in flight could make room. Judge calls reserve
+  the suite's dearest call estimate. A failed attempt frees its reservation before its retry.
+  Worst case in flight is printed at the start (`up to N calls in flight per side ...`).
+- **What the run reports.** The summary line per suite, `ab.json` `run_stats` and `ab.md` ("Run
+  stats") give, per pool (head, base, judge): starting permits, lowest, highest reached, final, and the
+  429 count, plus `elapsed_s` and the report's `wall_clock_s`. Existing keys are unchanged; new keys
+  are `max_concurrency`, `start_concurrency`, `head_pool`, `base_pool`, `judge_pool`, `rate_limited`,
+  `in_flight_budget` (per suite) and `max_concurrency`, `judge_max_concurrency`, `rate_limited`
+  (report). The base saves its pool to `base/<suite>/concurrency.json`; a base that predates this
+  change has none and is reported as `none`, and runs at the old fixed 12 through
+  `CQC_EVAL_CONCURRENCY` (the new code reads that variable only for a non-adaptive run).
+- **Compare the next A/B against run 40033879399** (4 suites at 12 in flight per side, `wall_clock_s`
+  657.4) **per suite, from the `run_stats.elapsed_s` in that run's `ab.json` artifact (artifact id 12536757139; the
+  per-suite and total figures here come from it, not from the log)**, and only for `grading` (360 calls per
+  side, 439.7 s there), `grading-levelband` (36 calls, 63.9 s) and `requirement-extraction` (144 calls,
+  106.8 s). Not `grading-solution`: that run made 108 calls per side (54 cases x 2 repeats) and
+  `master` now sets 4 repeats (#435), about 216. The 657.4 s total is not comparable when the suite mix
+  differs.
+- **Budget guarantee.** The reservation keeps spend under `budget_usd` only while each call's real cost
+  is at most its estimate (the estimate uses the full output allowance). A call that costs more
+  overshoots by the difference, at most (calls in flight x the underestimate): the $15 limit sits well
+  under the key's own cap, which has to absorb it. A missing, NaN or non-positive estimate is refused
+  (fail closed), never run free. Judge calls reserve the suite's dearest call estimate x 1.25 (the
+  judge model's price is not looked up); at most the judge pool's 16 calls can underestimate. Residual:
+  a model priced at 0 (a free model) has no usable estimate, so its calls would be recorded as `budget`
+  skips by the reserve guard.
+- **Changes in behaviour to know about.** `prompt-ab --concurrency N` is now only the **starting** size
+  (the ceiling stays 64 unless `--max-concurrency`). A bad `CQC_AB_MAX_CONCURRENCY` or
+  `CQC_AB_JUDGE_CONCURRENCY` now raises on a plain `suite run` too, not only in the A/B.
+- **First A/B after this merges:** the base side still runs the old code (fixed 12, 3 client
+  attempts, no retry layer), so a 429 storm could fail base calls the head would have retried. Run
+  40033879399 had 0 grader retries on both sides, so the risk is low; it ends once the base ref has this change.
+- **Rollback and canary (a `.github` edit, Tier 2, not part of this PR):** revert the PR, or add the
+  new lines `CQC_AB_MAX_CONCURRENCY=12` and `CQC_AB_START_CONCURRENCY=12` to the env of
+  `prompt-eval.yml` (none exist there today). Recommended for the first real A/B: add
+  `CQC_AB_MAX_CONCURRENCY=32` the same way as a canary, then remove it.
 
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.
