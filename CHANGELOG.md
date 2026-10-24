@@ -64,6 +64,7 @@ the Solution tab (PR 16), and the eclipse-temurin 25 bump (#438).
   7.17.1 to 7.17.2. Merge `7485f12`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/411
 - Dependencies, python-minor-patch group: langchain-core 1.6.12, openai 3.35.1, openrouter 1.3.70, pypdf
   6.21.1, posthog 7.73.2, setuptools 84.2.1, pytest-mock 3.17.0. Merge `f3a4617`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/440
+- Dependency: openrouter 1.3.70 to 1.3.71 (python-minor-patch group). Merge `9588138`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/447
 - Dependency: pymupdf 1.28.2 to 2.0. No macOS x86_64 wheel: `poetry install` fails on an Intel Mac (see the
   warning above). Linux and Cloud are fine. Merge `d8d2bce`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/441
 - CI: Dependabot ignores semver-major updates for `pymupdf` and `eclipse-temurin` (`.github/dependabot.yml`)
