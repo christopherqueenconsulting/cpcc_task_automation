@@ -47,7 +47,7 @@ from cqc_cpcc.rubric_grading import (
     rubric_scores_errors,
 )
 from cqc_cpcc.utilities.AI import llm_limits, llm_progress
-from cqc_streamlit_app import execution_view, results_store
+from cqc_streamlit_app import execution_view, results_store, solution_view
 from cqc_streamlit_app.effort_recommendation_ui import preapply_for, render_effort_recommendation
 from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_cpcc.utilities.submission_validity import (
@@ -2834,7 +2834,10 @@ def remember_results(run_key: str, grading_mode: str) -> None:
                           # After a restart the inputs are gone: keep the names the saved run had.
                           or st.session_state.get("greeting_names_by_key", {}).get(run_key))
         results_store.save_run(run_key, grading_mode, results, failures, greeting_names=greeting_names,
-                               meta=_run_meta(run_key, grading_mode))
+                               meta=_run_meta(run_key, grading_mode),
+                               # None unless the output check was used and the sandbox is ready.
+                               execution_workspace=(None if grading_mode == "errors_only"
+                                                    else solution_view.workspace_to_save(run_key)))
     except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
         logger.warning(f"Could not save grading results to disk: {type(e).__name__}")
 
@@ -4329,8 +4332,8 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
 
     # Students, hand-back and write-back as tabs: each is one click away with no scrolling,
     # however long the class list is.
-    students_tab, handback_tab, writeback_tab = st.tabs(
-        ["Students", "Hand back", "Write to BrightSpace"], key=f"results_sections_{run_key}")
+    students_tab, solution_tab, handback_tab, writeback_tab = st.tabs(
+        ["Students", "Solution", "Hand back", "Write to BrightSpace"], key=f"results_sections_{run_key}")
     with students_tab:
         _render_effort_banner(run_key, all_results, "students")
         _render_no_output_check_banner(run_key, all_results)
@@ -4371,6 +4374,9 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
 
     with students_tab.expander("Compiler check tally (this session)", icon=":material/fact_check:"):
         render_compile_gate_summary()
+
+    with solution_tab:
+        solution_view.render_solution_tab(run_key, all_results)
 
     with handback_tab:
         _render_effort_banner(run_key, all_results, "handback")
