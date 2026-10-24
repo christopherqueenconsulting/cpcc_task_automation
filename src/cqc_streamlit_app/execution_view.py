@@ -541,6 +541,8 @@ def render_output_check_setup(instructions: str, solution_file_paths) -> Optiona
         st.info("Press Run solution on these inputs. Grading is unchanged until at least one case is ready.",
                 icon=":material/info:")
         return None
+    # Kept for this session so the Results "Solution" tab can show and run the solution.
+    st.session_state.setdefault("output_check_sources", {})[plan.plan_hash] = sources
     usable = plan.usable_cases()
     st.success(f"{len(usable)} test case(s) ready ({len(plan.independent_cases())} not copied from the "
                "instructions).", icon=":material/check_circle:")
