@@ -19,10 +19,12 @@ import re
 from typing import Optional
 
 MESSAGE_LIMIT = 300
-QUOTE_LIMIT = 80
+QUOTE_LIMIT = 20  # a quoted span longer than this is dropped (it may be echoed request text)
+QUOTE_TOTAL = 60  # all quoted spans kept in one message add up to at most this many characters
 _QUOTE_CHARS = "\"'`"
 _FIELD_LIMIT = 80
 _ID_HEADERS = {"request_id": "x-request-id", "generation_id": "x-generation-id"}
+_REMOVED = "[content removed]"
 
 _SECRETS = (
     re.compile(r"(?i)\bbearer\s+\S+"),
@@ -32,13 +34,20 @@ _SECRETS = (
     re.compile(r"\b(?:ghp|gho|ghs|github_pat|xox[abp]|AKIA|AIza)[A-Za-z0-9_\-]{8,}"),
     re.compile(r"\b[A-Za-z0-9_\-+/=]{32,}\b"),  # any long opaque token (keys, JWT pieces, hashes)
 )
-_KEY_ENV_VARS = ("OPENROUTER_API_KEY", "OPENAI_API_KEY")
+_SECRET_ENV_NAME = re.compile(r"(?i)KEY|TOKEN|SECRET")
 
 
 def _drop_long_quotes(text: str) -> str:
-    """Replace each quoted span longer than ``QUOTE_LIMIT`` (and an unterminated long tail) with a marker."""
-    text = text.replace('\\"', '"').replace("\\'", "'")
-    out = []
+    """Drop quoted spans longer than ``QUOTE_LIMIT`` (and any past ``QUOTE_TOTAL`` in all).
+
+    A quote character that occurs an odd number of times cannot be paired, so everything from its first
+    occurrence on is treated as quoted and dropped. Quote marks are never unescaped: a backslash before one
+    changes nothing, so an escaped quote cannot flip the pairing.
+    """
+    odd = [text.find(c) for c in _QUOTE_CHARS if text.count(c) % 2]
+    if odd:
+        text = text[:min(odd)] + _REMOVED
+    out, kept = [], 0
     i, n = 0, len(text)
     while i < n:
         ch = text[i]
@@ -47,27 +56,52 @@ def _drop_long_quotes(text: str) -> str:
             i += 1
             continue
         end = text.find(ch, i + 1)
-        if end == -1:  # no closing quote: everything after the opener is quoted content
-            tail = text[i + 1:]
-            out.append(ch + ("[content removed]" if len(tail) > QUOTE_LIMIT else tail))
+        if end == -1:  # cannot happen after the parity rule; fail closed anyway
+            out.append(_REMOVED)
             break
         inner = text[i + 1:end]
-        out.append(ch + ("[content removed]" if len(inner) > QUOTE_LIMIT else inner) + ch)
+        if len(inner) > QUOTE_LIMIT or kept + len(inner) > QUOTE_TOTAL:
+            out.append(ch + _REMOVED + ch)
+        else:
+            kept += len(inner)
+            out.append(ch + inner + ch)
         i = end + 1
     return "".join(out)
 
 
+def _secret_env_values():
+    for name, value in os.environ.items():
+        if value and len(value) >= 12 and _SECRET_ENV_NAME.search(name):
+            yield value
+
+
 def redact_message(message, limit: int = MESSAGE_LIMIT) -> str:
-    """``message`` with long quoted spans and credential-looking tokens removed, cut to ``limit`` chars."""
+    """``message`` with the repr of any body, long quoted spans and credential-looking tokens removed.
+
+    Everything from the first ``{`` on is dropped: an SDK error's text is ``Error code: N - {dict repr}``
+    and the repr can hold the provider's echo of the request. Then quoted spans are dropped, secrets
+    scrubbed (including the value of any environment variable named like KEY, TOKEN or SECRET), and the
+    first ``limit`` characters kept.
+    """
     text = " ".join(str(message if message is not None else "").split())
+    text = text.split("{", 1)[0]
     text = _drop_long_quotes(text)
-    for name in _KEY_ENV_VARS:
-        value = os.environ.get(name)
-        if value and len(value) >= 8:
-            text = text.replace(value, "[redacted]")
+    for value in _secret_env_values():
+        text = text.replace(value, "[redacted]")
     for pattern in _SECRETS:
         text = pattern.sub("[redacted]", text)
     return text[:limit]
+
+
+def failure_message(error: BaseException):
+    """The text to redact for ``error``: the gateway's own ``error.message`` string when the body has one
+    (never the dict repr, whose ``metadata.raw`` can echo the request), else the exception's text."""
+    for e in _chain(error):
+        body = getattr(e, "body", None)
+        body = body.get("error", body) if isinstance(body, dict) else None
+        if isinstance(body, dict) and isinstance(body.get("message"), str):
+            return body["message"]
+    return str(error)
 
 
 def _chain(error: BaseException):
@@ -125,7 +159,7 @@ def describe_failure(error: BaseException, attempt: int, latency_s: Optional[flo
         "exception": type(error).__name__,
         "chain": [type(e).__name__ for e in _chain(error)][1:5],
         "status": http_status(error),
-        "message": redact_message(error),
+        "message": redact_message(failure_message(error)),
         "latency_s": round(latency_s, 3) if latency_s is not None else None,
         "retried": retried,
     }

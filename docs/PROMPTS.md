@@ -422,33 +422,55 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
 
 **Transport retries and the failure detail (eval runner only).** A call that fails with a transport
 error is tried again by the runner (`adaptive.py`, used by `run_suite` in both adaptive and fixed mode),
-because run 40081366835 (PR #446) lost 7 head-side calls (6 in `grading`, 1 in `grading-solution`;
-the base side had 0) to `error_kind: transport` with `attempts: 1`, and each failed call scored 0 on
-every grader. The artifact rows held no status or gateway body, so the cause could not be read.
+because run 40081366835 (PR #446) lost 7 head-side calls to `error_kind: transport` with `attempts: 1`
+(re-counted from the downloaded artifact: `grading` 6 of 388 rows, `grading-solution` 1 of 216, latencies
+26.1 to 30.5 s; the base side had 0 in all five suites) and each failed call scored 0 on every grader. The
+artifact rows held no status or gateway body, so the cause could not be read.
 
 - **What is retried:** a connection reset or abort, a read or connect timeout, a 408, a 5xx (500, 502,
   503, 504 ...), and an `OpenAITransportError` that carries no status. **Not retried:** a schema or
   validation error, a refusal, a truncation, any other 4xx, a cancellation, a budget refusal. A 429 and
-  the in-flight-budget 402/403 keep their own retry above, unchanged.
+  the in-flight-budget 402/403 keep their own retry above, unchanged. The runner's `classify_error`
+  works on the message text, so a 5xx whose text mentions `json`, `schema` or `validation` is classed
+  as a schema error and is not retried (safe: it under-retries).
 - **How many:** `CQC_EVAL_TRANSPORT_RETRIES` = total attempts per call, default **3**, hard cap **5**
   (1 turns it off). A value that is not a whole number from 1 to 5 stops the run before any call, like
-  the `CQC_AB_*` variables. The wait before a retry is full jitter, `uniform(0, min(30, 2 x 2^n))` seconds
-  (`adaptive.backoff_s`), at most 30 s each, so at most 120 s extra per call.
-- **Budget:** every retry reserves the estimate before it is sent, like the first attempt. A failed
-  attempt may have been billed, so it is charged at the estimate when it fails (the reservation becomes
-  spend) and added to that record's `cost_usd` (`cost_estimated: true`). Permits and reservations are
-  freed before the wait, so a cancellation during a backoff leaks neither.
+  the `CQC_AB_*` variables. The wait before a retry is `backoff_s`: full jitter,
+  `uniform(0, min(30, 2 x 2^n))` seconds, plus the server's `Retry-After` as a floor when it sends one;
+  the sum is capped at 30 s per wait, so at most 120 s extra per call. These outer attempts multiply
+  with the gateway client's own retries (up to 3 each); only the outer attempt is charged.
+- **Budget, adaptive mode (the A/B):** every retry reserves the estimate before it is sent, like the
+  first attempt. A failed attempt may have been billed, so when it fails its reservation becomes spend at
+  the estimate, and the same amount is added to that record's `cost_usd` (`cost_estimated: true`).
+  Permit and reservation are freed before the wait, so a cancel during a backoff leaks neither.
+- **Budget, fixed mode (`suite run` without `CQC_AB_ADAPTIVE`):** no reservation exists. A failed attempt
+  that will be retried is added to the budget at the estimate when it fails; the retry is sent only while
+  `spent + estimate` still fits under `stop_at`, checked before the wait and again after it, else the
+  last transport error is kept and nothing more is sent. The call gives its concurrency slot back during
+  the wait and takes one again after it.
+- **Cost of a failure:** the worst case per failed call is (attempts - 1) x estimate on top of the final
+  attempt: 2 extra at the default, 4 at the cap. A failed attempt is charged at the estimate even if
+  nothing was billed, so a burst of failures can reach `stop_at` early; that fails closed (the remaining
+  cases get `error_kind: budget`).
 - **Records:** `attempts` is the client's own tries plus the runner's retries, so `retried`,
   `extra_attempts` and `retry_rate` in `ab.json` / `ab.md` count them. Scoring is untouched: a call that
   still fails after its attempts is a failed call and scores 0, as before.
 - **`error_detail`:** every failed attempt (final or retried) adds one entry to the row's
   `error_detail` list: `attempt`, `exception`, `chain` (cause class names), `status`, gateway `code` /
   `type` / `provider`, `request_id` / `generation_id` from the response headers, `message`, `latency_s`,
-  `retried`. The message is redacted (`error_detail.py`): quoted spans over 80 characters are removed,
-  anything credential-shaped (Bearer, `sk-...`, `api_key=...`, long opaque tokens, the configured key) is
-  replaced, then the first 300 characters are kept. The key is absent on a row that never failed, and
-  `SuiteRecord.from_json` ignores keys it does not know, so older readers and rows still work (a base ref
-  without this change simply has no `error_detail`).
+  `retried`. The message comes from the gateway's own `error.message` string (never the dict repr, whose
+  `metadata.raw` can echo the request); everything from the first `{` is dropped, quoted spans over 20
+  characters are removed (60 in all per message, and a quote character with no partner drops the rest of
+  the message), credential-looking text and the value of any environment variable named like `KEY`,
+  `TOKEN` or `SECRET` are replaced, and the first 300 characters are kept. Text that echoes a request
+  with no quotes and no braces is only cut to 300 characters, so treat the file as private.
+- **Where it lives:** `error_detail` is written only to the records JSONL artifact (`raw_outputs.jsonl`),
+  which must stay private. It never goes into a PR comment: the comment and `ab.md` carry counts keyed by
+  status or exception class only. The key is absent from a row that never failed, and
+  `SuiteRecord.from_json` ignores keys it does not know. A reader from before this change
+  (`SuiteRecord(**json)`) would raise on a row that has it, so do not feed new artifacts to old code; and
+  the A/B base side runs the old code (no retries, no `error_detail`), so its retry stats are not like
+  for like.
 - **Report:** `ab.md` "Run stats" adds `head transport failures: N (final) / M (retried), by status: ...`
   (and the same for the base when it has any); `ab.json` `run_stats` gains `head_transport` and
   `base_transport`. No verdict reads them.

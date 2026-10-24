@@ -379,6 +379,8 @@ class Held:
     #: One ``error_detail`` entry per failed attempt, in order.
     detail: list = field(default_factory=list)
     last_error: Optional[BaseException] = None
+    #: True when the call's last failed attempt is already in ``charged`` (fixed mode, refused after a wait).
+    final_billed: bool = False
 
 
 async def _reserve(budget, estimate: float, poll_s: float, sleep) -> bool:
@@ -502,17 +504,28 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
 
 
 async def retry_transport(make_call: Callable[[], Awaitable[Any]], *, held: Held, estimate: float = 0.0,
-                          sleep=None, rng=None, max_attempts: Optional[int] = None, clock=None) -> Any:
+                          sleep=None, rng=None, max_attempts: Optional[int] = None, clock=None,
+                          budget=None, release=None, reacquire=None) -> Any:
     """Fixed-concurrency twin of :func:`throttled_call`'s transport retry (no pool, no reservation).
 
     Same rules: a transport failure is tried again up to ``max_attempts`` in all after a full-jitter wait of
-    at most 30 s; anything else is raised at once. Failed attempts are charged at ``estimate`` into
-    ``held.charged`` (the caller adds that to the record's cost) and listed in ``held.detail``.
+    at most 30 s; anything else is raised at once. Fixed mode reserves nothing, so the budget is guarded
+    another way: when an attempt fails and a retry is still allowed, its ``estimate`` is added to the
+    ``budget`` right then (it may have been billed) and to ``held.charged``, and the retry goes ahead only
+    while ``budget.spent + estimate`` still fits under ``stop_at``. Otherwise (and again after the wait, in
+    case other calls spent the room meanwhile) the last transport error is raised and nothing more is sent.
+    The attempt that ends the call is charged by the caller, except after a wait that ended in a refusal:
+    that attempt was already charged, so ``held.final_billed`` tells the caller not to charge it twice.
+    ``release`` / ``reacquire`` give the caller's concurrency slot back during the wait and take it again.
     """
     rng = rng or random
     sleep = sleep or asyncio.sleep
     clock = clock or time.monotonic
     max_attempts = transport_attempts(max_attempts)
+
+    def room() -> bool:
+        return budget is None or (not budget.exhausted and budget.spent + estimate <= budget.stop_at)
+
     failures = 0
     sends = 0
     while True:
@@ -523,13 +536,26 @@ async def retry_transport(make_call: Callable[[], Awaitable[Any]], *, held: Held
         except Exception as error:  # noqa: BLE001 - classified below
             retryable = transport_retryable(error)
             failures += 1 if retryable else 0
-            again = retryable and failures < max_attempts
+            # the failed attempt is charged now (below) only if a retry follows; so check the room it leaves
+            again = (retryable and failures < max_attempts and
+                     (budget is None or (not budget.exhausted and budget.spent + 2 * estimate <= budget.stop_at)))
             _note_failure(held, error, sends, started, clock, again)
             if not again:
                 raise
             held.charged += estimate
+            if budget is not None:
+                budget.add(estimate)
             held.transport_retries += 1
+            if release is not None:
+                release()
             await sleep(_transport_wait(error, failures, rng))
+            if reacquire is not None:
+                await reacquire()
+            if not room():  # others spent the budget while this call waited
+                held.detail[-1]["retried"] = False
+                held.transport_retries -= 1
+                held.final_billed = True
+                raise
 
 
 # --- The judge pool, set once per run ------------------------------------------------------

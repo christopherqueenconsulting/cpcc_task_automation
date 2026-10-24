@@ -444,7 +444,7 @@ class TestRedaction:
     def test_headers_and_body_fields_are_read_but_the_body_is_not_copied(self):
         d = error_detail.describe_failure(gateway_502(), attempt=2, latency_s=26.25, retried=True)
         assert d == {"attempt": 2, "exception": "StatusError", "status": 502, "latency_s": 26.25, "retried": True,
-                     "message": "Error code: 502 - Provider returned error", "code": "502", "type": "upstream",
+                     "message": "Provider returned error", "code": "502", "type": "upstream",
                      "provider": "Acme", "request_id": "req-123", "generation_id": "gen-9"}
 
     def test_a_wrapped_error_reports_the_cause_chain_and_status(self):
@@ -480,3 +480,134 @@ class TestRunStatsReport:
         text = "\n".join(pa._run_stats_markdown(report))
         assert "head transport failures: 2 (final) / 3 (retried), by status: 502 x4, timeout x1" in text
         assert "base transport" not in text
+
+
+# --- fixed mode: slot and budget around a retry -------------------------------------------------
+
+class TestFixedModeRetry:
+    async def test_the_slot_is_free_during_the_backoff(self, test_mode):
+        """concurrency=1: a second queued call runs while the first one waits to retry."""
+        order, seen, saw = [], {}, {}
+        inner = _toy_suite()
+
+        async def invoke(case):
+            n = seen[case.case_id] = seen.get(case.case_id, 0) + 1
+            order.append((case.case_id, n))
+            if case.case_id == "c0" and n == 1:
+                raise gateway_502()
+            return "ok"
+
+        async def sleeper(_seconds):
+            for _ in range(20):  # let the queued call take the freed slot
+                await asyncio.sleep(0)
+            saw["order"] = list(order)
+
+        suite = base.Suite(**{**inner.__dict__, "invoke": invoke})
+        records = await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(2), 1, Budget(1000.0, 900.0),
+                                       concurrency=1, sleep=sleeper, rng=Top(False))
+        assert ("c1", 1) in saw["order"]  # c1 ran during c0's backoff
+        assert all(r.ok for r in records) and {r.case_id: r.attempts for r in records} == {"c0": 2, "c1": 1}
+
+    async def test_a_spent_budget_stops_the_retries_and_keeps_the_last_error(self):
+        budget, sends = Budget(limit=1.0, stop_at=0.5), []
+
+        async def call():
+            sends.append(1)
+            raise StatusError(503, message="Service Unavailable")
+
+        async def one():
+            held = adaptive.Held()
+            with pytest.raises(StatusError):
+                await adaptive.retry_transport(call, held=held, estimate=0.3, sleep=Sleeps(), rng=Top(),
+                                               budget=budget, max_attempts=5)
+            return held
+
+        helds = await asyncio.gather(*[one() for _ in range(8)])
+        assert len(sends) == 8  # the 8 first sends only: no room for a retry, so none was sent
+        assert budget.spent <= budget.stop_at + 1e-9
+        assert all(h.detail[-1]["retried"] is False for h in helds)  # every call ended on its last transport error
+
+    async def test_a_retry_is_charged_into_the_budget_once_and_the_record_agrees(self, test_mode):
+        suite, _ = flaky_suite([gateway_502()] * 2)
+        budget = Budget(1000.0, 900.0)
+        records = await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(1), 1, budget,
+                                       concurrency=1, sleep=Sleeps(), rng=Top(False))
+        r = records[0]
+        assert r.ok and r.attempts == 3 and r.cost_estimated
+        assert budget.spent == pytest.approx(r.cost_usd)  # charged as each attempt failed, not again at the end
+
+    async def test_a_budget_spent_during_the_wait_stops_the_resend(self):
+        budget, held, sends = Budget(limit=10.0, stop_at=5.0), adaptive.Held(), []
+
+        async def call():
+            sends.append(1)
+            raise StatusError(503, message="Service Unavailable")
+
+        async def sleeper(_s):
+            budget.add(10.0)  # other calls spend everything while this one waits
+
+        with pytest.raises(StatusError):
+            await adaptive.retry_transport(call, held=held, estimate=0.3, sleep=sleeper, rng=Top(), budget=budget)
+        assert len(sends) == 1 and held.final_billed and held.detail[-1]["retried"] is False
+
+    async def test_run_suite_keeps_the_transport_error_when_the_budget_runs_out(self, test_mode):
+        suite, seen = flaky_suite([gateway_502()] * 3)
+        records = await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(1), 1, Budget(1e-6, 1e-12),
+                                       concurrency=1, sleep=Sleeps(), rng=Top())
+        assert seen == {"c0": 1}
+        assert not records[0].ok and records[0].error_kind == "transport" and records[0].attempts == 1
+
+    async def test_cancelling_during_the_backoff_does_not_release_the_slot_twice(self, test_mode):
+        suite, _ = flaky_suite([gateway_502()] * 3)
+        gate = asyncio.Event()
+
+        async def sleeper(_s):
+            gate.set()
+            await asyncio.sleep(3600)
+
+        task = asyncio.create_task(base.run_suite(suite, "openai/gpt-5-mini", None, _cases(1), 1,
+                                                  Budget(1000.0, 900.0), concurrency=1, sleep=sleeper, rng=Top()))
+        await gate.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+# --- redaction: echoes of the request ---------------------------------------------------------
+
+CANARY = "CANARY-SUBMISSION-TEXT-7c1e"
+
+
+class TestRedactionEchoes:
+    def test_the_dict_repr_of_an_sdk_error_never_reaches_the_message(self):
+        raw = "He said \\'hi\\' then " + CANARY + " " + "z" * 200
+        err = StatusError(502, message=f"Error code: 502 - {{'error': {{'message': 'x', 'metadata': {{'raw': '{raw}'}}}}}}",
+                          body={"error": {"message": "x", "metadata": {"raw": raw}}})
+        text = json.dumps(error_detail.describe_failure(err, 1))
+        assert CANARY not in text and "zzzz" not in text
+        # an error without a parsed body: the repr is cut at its first brace
+        bare = Exception(f"Error code: 502 - {{'error': {{'metadata': {{'raw': '{raw}'}}}}}}")
+        assert CANARY not in error_detail.describe_failure(bare, 1)["message"]
+        wrapped = OpenAITransportError(f"OpenRouter API error: BadRequestError 400: Error code: 400 - {{'raw': '{raw}'}}")
+        assert CANARY not in error_detail.describe_failure(wrapped, 1)["message"]
+
+    def test_an_odd_number_of_embedded_quotes_cannot_flip_the_pairing(self):
+        for echo in (f'say "{CANARY} it\'s x" tail "{CANARY}', f"it's {CANARY} and \"{CANARY}\" end \"x"):
+            assert CANARY not in error_detail.redact_message("Upstream error: " + echo)
+
+    def test_an_unquoted_echo_is_cut_to_the_limit(self):
+        out = error_detail.redact_message(CANARY + " " + "word " * 200)
+        assert len(out) <= 300
+
+    def test_many_short_quoted_spans_cannot_reassemble_a_long_echo(self):
+        import re
+
+        text = " ".join(f'"{"abcdefghij" * 2}"' for _ in range(20))  # twenty 20-character spans
+        out = error_detail.redact_message(text)
+        assert sum(len(m) for m in re.findall(r'"([^"]*)"', out) if "removed" not in m) <= 100
+
+    def test_the_value_of_any_key_token_or_secret_variable_is_scrubbed(self, monkeypatch):
+        monkeypatch.setenv("MY_SERVICE_TOKEN", "tok_abcdefgh1234")
+        monkeypatch.setenv("SHORT_KEY", "tiny")
+        out = error_detail.redact_message("failed with tok_abcdefgh1234 and tiny")
+        assert "tok_abcdefgh1234" not in out and "tiny" in out

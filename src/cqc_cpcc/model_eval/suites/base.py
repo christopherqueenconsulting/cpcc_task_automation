@@ -203,8 +203,19 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     async def one(case: SuiteCase, repeat: int, resolved) -> SuiteRecord:
         record = SuiteRecord(suite.id, case.case_id, model, effort, repeat)
         held = adaptive.Held()
-        if semaphore is not None:
+        slot = {"held": False}  # whether this call holds a fixed-mode slot right now
+
+        async def take_slot():
             await semaphore.acquire()
+            slot["held"] = True
+
+        def give_slot():
+            if slot["held"]:
+                slot["held"] = False
+                semaphore.release()
+
+        if semaphore is not None:
+            await take_slot()
         try:
             if semaphore is not None and budget.exhausted:
                 record.error_kind = "budget"
@@ -219,7 +230,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 if limiter is None:
                     output = await adaptive.retry_transport(
                         lambda: suite.invoke(case), held=held, estimate=estimate, sleep=sleep, rng=rng,
-                        max_attempts=attempts_allowed, clock=clock)
+                        max_attempts=attempts_allowed, clock=clock, budget=budget,
+                        release=give_slot, reacquire=take_slot)
                 else:
                     output = await adaptive.throttled_call(
                         limiter, lambda: suite.invoke(case), budget=budget, estimate=estimate,
@@ -236,7 +248,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 if held.last_error is not e:  # failed outside the model call (e.g. building the payload)
                     held.detail.append(error_detail.describe_failure(e, len(held.detail) + 1))
                 logger.warning(f"[prompt-eval:{suite.id}] {model} {case.case_id}#{repeat}: "
-                               f"{record.error_kind}: {error_detail.redact_message(e)}")
+                               f"{record.error_kind}: {error_detail.redact_message(error_detail.failure_message(e))}")
             call = llm_gateway.last_call()
             if call is before:
                 call = None
@@ -265,8 +277,10 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.cost_usd += held.charged
                 record.cost_estimated = True
             record.error_detail = list(held.detail)
+            if held.final_billed:  # the last failed attempt was charged when it failed; do not charge it again
+                record.cost_usd = held.charged
             if limiter is None:
-                budget.add(record.cost_usd)
+                budget.add(max(0.0, record.cost_usd - held.charged))  # failed attempts were added as they failed
             else:
                 # reservation -> real spend in one step; the failed attempts were settled when they failed
                 budget.settle(held.amount, record.cost_usd - held.charged)
@@ -276,7 +290,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
             return record
         finally:
             if semaphore is not None:
-                semaphore.release()
+                give_slot()  # not a second release if the call gave its slot back for a backoff
             if held.amount:  # an error path that never reached the settle above
                 budget.unreserve(held.amount)
 
