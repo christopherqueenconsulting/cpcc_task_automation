@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional, Sequence
 
 from cqc_cpcc.error_definitions_models import infer_execution_category
-from cqc_cpcc.execution_evidence import clean_text
+from cqc_cpcc.execution_evidence import clean_block, clean_text
 from cqc_cpcc.execution_check import (CaseResult, ExecutionPlan, ExecutionReport, SolutionSources,
                                       TestCase)
 from cqc_cpcc.reconciliation import SOURCE_EXECUTION, may_drop, note, note_kept, note_removed
@@ -419,9 +419,9 @@ def run_student_execution(plan: Optional[ExecutionPlan], source_files: Optional[
             continue
         cmp = _judge(case.expected_output or "", case.expected_reads, got, plan.ignore_patterns)
         results.append(CaseResult(case_id=case.id, verdict=cmp.verdict.value, detail=cmp.detail,
-                                  similarity=round(cmp.similarity, 4), diff_excerpt=cmp.diff_excerpt))
+                                  similarity=round(cmp.similarity, 4), diff_excerpt=clean_block(cmp.diff_excerpt)))
         if cmp.verdict in (Verdict.RUNTIME_ERROR, Verdict.TIMEOUT) and got.stderr:
-            exe.stderr_by_case[case.id] = got.stderr[:MAX_STDERR_CHARS]
+            exe.stderr_by_case[case.id] = clean_block(got.stderr)[:MAX_STDERR_CHARS]
     exe.report = ExecutionReport(plan_hash=plan.plan_hash, status="ok", cases=results)
     logger.info("Output check: %d case(s) run, verdicts=%s", len(results),
                 sorted({r.verdict for r in results}))
@@ -804,6 +804,8 @@ def _route_misspelling(plan, results, model_errors, cats, error_definitions, err
     format_errors = [e for e in model_errors if cats[id(e)] == CAT_FORMAT and str(e.severity).lower() == "major"]
     if not format_errors:
         return False
+    # Validate every error first, so nothing is changed unless all of them can be routed.
+    routes = []
     for e in format_errors:
         course = course_of(e.code)
         if course not in MISSPELLING_COURSES:
@@ -811,6 +813,8 @@ def _route_misspelling(plan, results, model_errors, cats, error_definitions, err
         definition = _find_definition(error_definitions, course, MISSPELLING_SUFFIX)
         if definition is None or str(definition.severity_category).lower() != "minor":
             return False
+        routes.append((e, definition))
+    for e, definition in routes:
         miss = DetectedError(code=definition.error_id, name=definition.name, severity="minor",
                              description=definition.description, occurrences=1,
                              notes=_transparency_note(plan, bad[:1]).replace("Output check:", "Output check (spelling):", 1),

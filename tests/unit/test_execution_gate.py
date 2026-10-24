@@ -1150,3 +1150,18 @@ def test_every_control_separator_and_direction_character_is_stripped_from_studen
     report = ExecutionReport(plan_hash="h", status="ok", cases=[CaseResult(case_id="T1" + "".join(hidden), verdict="match")])
     text = "\n".join(execution_evidence_section(plan, report, "n"))
     assert not any(ch in text for ch in hidden if ch != "\n")
+
+
+def test_direction_and_zero_width_characters_in_program_output_reach_neither_the_report_nor_the_prompt():
+    from cqc_cpcc.execution_evidence import clean_block
+
+    assert clean_block("a\u202eb\u200bc\n\td\x85e\u2028f") == "a b c\n\td e f"
+    bad = case_outcome("T1", "Total:\u202e 99.00\u200b\n")
+    crashed = case_outcome("T2", EXPECTED["T2"] + "\u202e", status="RUNTIME_ERROR", exit_code=1,
+                           stderr="boom\u200d\u2029x\n\tat line")
+    exe = run(make_plan(), FakeRunner(student={"T1": bad, "T2": crashed}))
+    text = "\n".join(execution_evidence_section(exe.plan, exe.report, "n", exe.stderr_by_case))
+    stored = exe.report.model_dump_json() + str(exe.stderr_by_case)
+    for ch in ("\u202e", "\u200b", "\u2066", "\u200d", "\u2029"):
+        assert ch not in text and ch not in stored
+    assert "boom  x\n\tat line" in text  # line breaks and tabs are kept

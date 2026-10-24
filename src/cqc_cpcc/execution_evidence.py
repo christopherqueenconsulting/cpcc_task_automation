@@ -47,6 +47,16 @@ _HIDDEN_CODE_POINTS = (
 _HIDDEN_TABLE = {cp: " " for cp in _HIDDEN_CODE_POINTS}
 
 
+#: The same set, but a multi-line block keeps its tabs and line breaks.
+_BLOCK_TABLE = {cp: " " for cp in _HIDDEN_CODE_POINTS - {0x09, 0x0A}}
+
+
+def clean_block(text: str) -> str:
+    """``text`` with the hidden and direction characters of :func:`clean_text` turned into spaces, but
+    ``\\n`` and ``\\t`` kept. For diffs and stderr, which are multi-line."""
+    return (text or "").translate(_BLOCK_TABLE)
+
+
 def clean_text(text: str) -> str:
     """``text`` with every control, separator and invisible direction character turned into a space."""
     return (text or "").translate(_HIDDEN_TABLE)
@@ -112,8 +122,8 @@ def execution_evidence_section(
             continue
         if r.diff_excerpt:
             lines += [fence_untrusted(f"case {_cell(r.case_id)} differences (- expected, + actual)",
-                                      r.diff_excerpt, nonce), ""]
+                                      clean_block(r.diff_excerpt), nonce), ""]
         stderr = (stderr_by_case or {}).get(r.case_id)
         if stderr:
-            lines += [fence_untrusted(f"case {_cell(r.case_id)} error output", stderr[:MAX_STDERR_CHARS], nonce), ""]
+            lines += [fence_untrusted(f"case {_cell(r.case_id)} error output", clean_block(stderr)[:MAX_STDERR_CHARS], nonce), ""]
     return lines

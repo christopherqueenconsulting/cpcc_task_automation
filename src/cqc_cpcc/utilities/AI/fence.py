@@ -45,7 +45,10 @@ def deterministic_nonce():
     capture key; with no parts, a fixed value). ONLY the prompt-evaluation request capture uses this,
     so two captures of the same prompt are byte-identical and an unchanged suite can be skipped in an
     A/B. Production calls never enter it: outside the block nonces are random per call, or keyed by the
-    per-process secret."""
+    per-process secret.
+
+    The switch is a process-wide counter (not per thread). Only ``model_eval/request_capture`` (the CI
+    and eval command line) enters it; the app never does."""
     global _deterministic
     with _lock:
         _deterministic += 1
