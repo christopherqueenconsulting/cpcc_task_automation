@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import adaptive, error_detail
+from cqc_cpcc.model_eval import adaptive, cache_session, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, classify_error, pinned_registry
 from cqc_cpcc.utilities.AI import model_registry
@@ -80,6 +80,25 @@ def cost_stats(records: list) -> dict:
             "retry_charge_usd": sum(getattr(r, "retry_charge_usd", 0.0) or 0.0 for r in calls)}
 
 
+def cache_stats(records: list) -> dict:
+    """Prompt-cache usage of a side (reporting only: no verdict reads this).
+
+    ``cached_share`` is cached tokens over the prompt tokens of the rows that reported a cached count
+    (a row that reported none is not counted as a miss). ``real_cost_usd`` leaves out rows whose cost is
+    an estimate. Caching changes cost and latency only, never an output.
+    """
+    calls = [r for r in records if r.error_kind != "budget"]
+    reporting = [r for r in calls if getattr(r, "cached_tokens", None) is not None]
+    prompt = sum(r.prompt_tokens or 0 for r in reporting)
+    cached = sum(r.cached_tokens or 0 for r in reporting)
+    return {"calls": len(calls), "rows_reporting": len(reporting), "prompt_tokens": prompt,
+            "cached_tokens": cached, "cached_share": (cached / prompt) if prompt > 0 else 0.0,
+            "cache_write_tokens": sum(getattr(r, "cache_write_tokens", None) or 0 for r in calls),
+            "reasoning_tokens": sum(getattr(r, "reasoning_tokens", None) or 0 for r in calls),
+            "completion_tokens": sum(r.completion_tokens or 0 for r in calls),
+            "real_cost_usd": sum(r.cost_usd for r in calls if not r.cost_estimated)}
+
+
 #: Suites with fewer scorable cases than this use absolute hard gates only; paired
 #: comparisons (bootstrap, Holm) need at least this many cases to mean anything.
 MIN_COMPARATIVE_CASES = 30
@@ -134,9 +153,17 @@ class SuiteRecord:
     #: the aggregate and the cost ratio read ``cost_usd`` alone. 0.0 when the charge is already inside
     #: ``cost_usd`` (a final failure, or a cost that is itself an estimate).
     retry_charge_usd: float = 0.0
+    #: Prompt-cache usage the response reported for the call the record keeps (report-only, additive; None
+    #: when the response reported nothing). ``cache_write_tokens`` is billed at a premium by some providers.
+    cached_tokens: Optional[int] = None
+    cache_write_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
 
     def to_json(self) -> str:
         data = asdict(self)
+        for name in ("cached_tokens", "cache_write_tokens", "reasoning_tokens"):
+            if data[name] is None:
+                del data[name]  # additive keys: rows that reported nothing are unchanged
         if not data["error_detail"]:
             del data["error_detail"]  # additive key: rows of calls that never failed are unchanged
         if not data["retry_charge_usd"]:
@@ -191,7 +218,9 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                     on_record: Optional[Callable[[SuiteRecord], None]] = None,
                     adaptive_mode: Optional[bool] = None, max_concurrency: Optional[int] = None,
                     pool_stats: Optional[list] = None, sleep=None, rng=None,
-                    transport_attempts: Optional[int] = None, clock=None) -> list[SuiteRecord]:
+                    transport_attempts: Optional[int] = None, clock=None,
+                    session_id: Optional[str] = None, warm_first: Optional[bool] = None,
+                    prefix_keys: Optional[Callable] = None) -> list[SuiteRecord]:
     """Call the production function for every case ``repeats`` times on ``model``.
 
     The suite's role is pinned to ``model`` with no fallback, so a failure counts against
@@ -209,6 +238,13 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     full-jitter wait of at most 30 s; the record keeps the total in ``attempts`` and one ``error_detail``
     entry per failed attempt. A failed attempt may have been billed, so it is charged at the call's
     estimate (added to the record's ``cost_usd``). Nothing about scoring changes.
+
+    Prompt cache (``cache_session.py``): every request carries OpenRouter's ``session_id`` (``session_id``, else
+    a hash of suite, side, model, effort and run; off with ``CQC_EVAL_SESSION_ID=0``), and calls that share a
+    static prefix go leader first, followers after (``warm_first=True``; ``prompt_eval.run`` passes
+    ``CQC_EVAL_WARM_FIRST``). ``prefix_keys`` is
+    an async ``(cases) -> {case_id: key or None}`` that replaces the dry render of each case. Neither changes
+    what is asked or how it is scored.
     """
     from cqc_cpcc.utilities.AI import llm_gateway
 
@@ -227,7 +263,16 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     else:
         semaphore = asyncio.Semaphore(eval_concurrency(value=concurrency))
 
+    sid = session_id if session_id is not None else cache_session.session_for_run(suite.id, model, effort)
+    # Off unless the caller asks (prompt_eval.run passes the CQC_EVAL_WARM_FIRST setting): the dry render calls
+    # ``suite.invoke`` once per case, which a test double with side effects must not see unasked.
+    use_warm = bool(warm_first) and sid is not None
+
     async def one(case: SuiteCase, repeat: int, resolved) -> SuiteRecord:
+        with cache_session.record_scope(sid) as tap:
+            return await one_scoped(case, repeat, resolved, tap)
+
+    async def one_scoped(case: SuiteCase, repeat: int, resolved, tap) -> SuiteRecord:
         record = SuiteRecord(suite.id, case.case_id, model, effort, repeat)
         held = adaptive.Held()
         slot = {"held": False}  # whether this call holds a fixed-mode slot right now
@@ -302,6 +347,17 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.model_used = completion.model
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
+            used = tap.last()  # the usage of the call the record keeps (report-only)
+            if completion is not None and getattr(completion, "cached_tokens", None) is not None:
+                record.cached_tokens = completion.cached_tokens
+            elif used is not None:
+                record.cached_tokens = used.cached_tokens
+            if completion is not None and getattr(completion, "reasoning_tokens", None) is not None:
+                record.reasoning_tokens = completion.reasoning_tokens
+            elif used is not None:
+                record.reasoning_tokens = used.reasoning_tokens
+            if used is not None:
+                record.cache_write_tokens = used.cache_write_tokens
             if held.transport_retries or held.truncated_retries:
                 record.attempts += held.transport_retries + held.truncated_retries  # the client's own tries plus ours
             # What this call's last attempt cost; earlier failed attempts were charged to the budget as they failed.
@@ -334,8 +390,36 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
 
     records: list[SuiteRecord] = []
     with pinned_registry(model, effort, profile, roles=(suite.role,),
-                         max_output_tokens=cap or DEFAULT_MAX_OUTPUT_TOKENS) as resolved:
-        jobs = [one(case, r, resolved) for r in range(repeats) for case in cases]
+                         max_output_tokens=cap or DEFAULT_MAX_OUTPUT_TOKENS) as resolved, cache_session.transport():
+        order = [(case, r) for r in range(repeats) for case in cases]
+        plan: dict = {}
+        if use_warm and len(order) > 1:
+            try:
+                if prefix_keys is not None:
+                    by_case = await prefix_keys(cases)
+                else:
+                    by_case = await cache_session.render_keys({c.case_id: (lambda c=c: suite.invoke(c)) for c in cases})
+                plan = cache_session.warm_plan([(c.case_id, r) for c, r in order], lambda job: by_case.get(job[0]))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - no grouping: every call runs at once, as before
+                logger.warning(f"[prompt-eval:{suite.id}] warm-first grouping skipped: {type(e).__name__}: {str(e)[:200]}")
+                plan = {}
+            if plan:
+                logger.info(f"[prompt-eval:{suite.id}] warm-first: {sum(1 for w, _l in plan.values() if w is None)} "
+                            f"group(s), {sum(1 for w, _l in plan.values() if w is not None)} follower call(s)")
+
+        async def gated(case: SuiteCase, repeat: int) -> SuiteRecord:
+            wait_for, lead = plan.get((case.case_id, repeat), (None, None))
+            if wait_for is not None:
+                await cache_session.wait_for_leader(wait_for)  # holds no slot while it waits
+            try:
+                return await one(case, repeat, resolved)
+            finally:
+                if lead is not None:
+                    lead.set()  # also on a failure, a budget refusal or a cancellation
+
+        jobs = [gated(case, r) for case, r in order]
         for coro in asyncio.as_completed(jobs):
             records.append(await coro)
     if limiter is not None:

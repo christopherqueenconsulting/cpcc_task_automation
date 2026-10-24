@@ -327,7 +327,9 @@ def _records_from_jsonl(path: Path) -> dict[str, list[CallRecord]]:
     out: dict[str, list[CallRecord]] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
-            r = CallRecord(**json.loads(line))
+            data = json.loads(line)
+            known = {f for f in CallRecord.__dataclass_fields__}
+            r = CallRecord(**{k: v for k, v in data.items() if k in known})
             label = f"{r.model}@{r.effort}" if r.effort else r.model
             out.setdefault(label, []).append(r)
     return out

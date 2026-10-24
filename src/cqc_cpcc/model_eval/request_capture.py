@@ -60,6 +60,11 @@ class _CapturingCompletions:
         self._sink = sink
 
     async def create(self, **kwargs):
+        # The harness's cache session id (cache_session.py) is routing, not content: it never enters the hash,
+        # so a capture is the same with the switch on or off and against a base that never sent one.
+        extra = kwargs.get("extra_body")
+        if isinstance(extra, dict) and "session_id" in extra:
+            kwargs = {**kwargs, "extra_body": {k: v for k, v in extra.items() if k != "session_id"}}
         self._sink.append(_hash(kwargs))
         raise _NotSent("request captured, not sent")
 

@@ -109,6 +109,18 @@ concurrency. Knobs: `--max-concurrency` / `CQC_AB_MAX_CONCURRENCY` (default 64, 
 [`PROMPTS.md`](PROMPTS.md) under "Adaptive concurrency". None of it changes what is measured or any
 threshold.
 
+## Prompt caching in model evals
+
+The grading runs behind `model-eval.yml` use the same layout as the app (the app's prompt builders: static system
+message and rubric first, fenced submission last), send OpenRouter's `session_id` (side `model-eval`, one id per
+model and effort and run, no case data) and call one case per shared-prefix group first before the rest of the
+group fans out (`runner.run_model`, via `cache_session.py`; skipped when a test double replaces the grader).
+Caching changes input price and latency only: outputs, scores and every gate are unchanged. Switches:
+`CQC_EVAL_SESSION_ID=0` and `CQC_EVAL_WARM_FIRST=0` turn it off (the workflow itself is not edited). Raw records
+gain `cached_tokens` and `cache_write_tokens` when the response reported them. Details, layout findings, the
+Run stats lines and the caveat for a base ref on older code are in [`PROMPTS.md`](PROMPTS.md) under "Prompt
+caching in evals".
+
 ## What can go wrong and who hears about it
 
 | Situation | What happens |
