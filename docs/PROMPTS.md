@@ -212,6 +212,89 @@ capture, runs the full paid A/B as before.
 - **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
   (issue #406) is the follow-up for that.
 
+**Per suite, not per PR.** The base capture runs the base's own code. A suite the base does not
+know (the PR adds it: #428, #429 and #432 did) used to make the single base command exit
+non-zero, leave the base side empty and report "capture formats differ" for every suite, so one
+new suite cost the whole list its $0 path (and a paid A/B of suites whose requests were
+byte-identical showed only noise). Now each suite is judged on its own:
+
+- A suite the base does not list is `new suite: no base side` and is never sent to the base.
+- The rest are captured in one base subprocess. If it exits non-zero, or writes anything that is
+  not a JSON object, each suite is retried alone (up to 4 in parallel, same timeout). A suite
+  that still fails is `base capture failed: <short reason>`; the others compare normally.
+- A timeout is not retried: every suite in that batch is `base capture failed: timed out`.
+- Fail-closed rules are unchanged for everything else: a crash, a different capture format, a
+  changed model registry or client setting, a missing capture, different cases, a changed
+  request, gateway call or answer handling, or a changed registry prompt means that suite is
+  not identical. stderr is capped at 500 characters in the log.
+- `requests.json` keeps `suites` (reason or `null` per suite) and `identical` (true only when
+  ALL suites are identical: the workflow's `request_identical` output), and adds
+  `identical_suites`, `changed_suites` and `verdicts` (`{suite: {identical, reason}}`).
+
+**Request-identical suites inside a mixed A/B (`identical-skipped`).** When some suites are
+identical and others are not (a new suite, or a real prompt change), the workflow still runs the
+paid A/B because `request_identical` is false. `prompt-ab` now runs the same $0 check first
+(`prompt-requests-identical` in a subprocess with no API key and no `GITHUB_OUTPUT`) and does
+not run the identical suites. Each is recorded in `ab.json` / `ab.md` with status
+`identical-skipped` ("requests, gateway calls and outputs identical to the base: not re-run,
+$0") and counts as a pass in the overall status. No threshold, margin or decision function
+changed: the only new status is this one. Any doubt runs the suite: a check that errors, times
+out or returns no head capture skips nothing; an explicit `--model` skips nothing (the capture
+pins the incumbent only). This needs no workflow change: the workflow passes the suites and
+uploads `ab.json`.
+
+What turns the skip off (each makes every suite run paid):
+
+| Where | Setting | Reaches `prompt-ab` as |
+|---|---|---|
+| Maintainer dispatch, mode `ab` | `full_ab: true` | `FULL_AB=true` (dispatch step env) |
+| Repository variable | `PROMPT_EVAL_FAST_PATH=off` (Christopher's switch, any case) | `FAST_PATH=off` (dispatch step env) |
+| Any process that runs `prompt-ab` | `CQC_AB_SKIP_IDENTICAL=0` (or `off`, `false`, `no`) | itself |
+
+The pull-request `ab` job (workflow `prompt-eval.yml`, step "A/B base vs head prompts") exports
+none of `FULL_AB`, `FAST_PATH` or `CQC_AB_SKIP_IDENTICAL`. So in a PR run the variable
+`PROMPT_EVAL_FAST_PATH=off` does **not** reach the skip, and `CQC_AB_SKIP_IDENTICAL` cannot be
+set without editing the workflow YAML (a `.github/` change). There, only such a workflow edit or
+reverting this change turns the skip off; a maintainer who wants a full paid A/B of a PR uses the
+dispatch with `full_ab: true`. (`PROMPT_EVAL_FAST_PATH=off` does stop the `detect` job's
+whole-PR fast path in a PR run, as before.)
+
+What the reviewer sees for a skipped suite: the PR comment embeds `ab.md`, which has the table row
+`| suite | all | n/a | n/a | 0 | identical to the base, not re-run | 0 | ✅ identical-skipped |` and the
+note `requests, gateway calls and outputs identical to the base: not re-run, $0`; the base-branch
+check lists it as `identical-skipped` too, or as a failure naming the difference.
+
+Cost of the check: it adds a $0 capture before the paid run. Measured (builder's local run, warm
+cache, `prompt-requests-identical --suites grading-levelband,digest --base-ref origin/master`):
+8.3 s wall clock for two suites. Larger suites with more cases take longer (the unit suite's
+cold, loaded capture setup of several suites took 242 s); the whole check is cut off after 30
+minutes (`IDENTICAL_CHECK_TIMEOUT_S`) and then every suite runs paid, so the worst case is 30
+minutes added to an A/B whose job limit is 240 minutes. The capture subprocesses run in their own
+process group, which is killed on a timeout.
+
+The skip carries its evidence: `ab.json` has `request_capture`, the head's capture of just the
+skipped suites. `ab-base-rule` and `dispatch-report` run `prompt-ab-decide` from the base
+branch's checkout; for each required suite recorded as `identical-skipped` it re-captures the
+base side with the base's own code, compares it with the saved head capture, and checks that
+every registry prompt the suite uses is unchanged. A mismatch, a missing capture, a crashing
+capture or a suite the base does not know makes that suite `fail`. A required suite that is
+neither skipped-and-verified nor run with saved outputs fails as before. Because the base
+branch's code does the re-check, the base branch must contain this change before a PR's
+`identical-skipped` suites are accepted; until then they fail the base check, which is the safe
+direction. For the same reason the `ab` job runs the PR head's `prompt-ab`: a PR opened before
+this change merges never skips a suite until it merges master.
+
+*Threat model of the skip.* The PR's code produces its own side: the head capture, `ab.json`
+and the `identical-skipped` status. A hostile author can forge a head capture equal to the
+base's, and nothing re-runs the head code in the base job. That is the same limit the whole-PR
+fast path has ("guards against honest mistakes, not a hostile author"), and why the gauntlet
+reviews gate changes. What the PR's code cannot do: make the base side match (the base capture
+runs the base branch's code in a checkout the PR cannot change), change a prompt unnoticed (the
+registry comparison reads the PR's registry file as data), or skip a suite the base's detection
+requires without the base re-verifying it. The base's re-check is the veto: it recomputes the
+base capture itself and compares byte for byte. Not covered, as for the whole-PR path: how the
+code handles real, varied model answers.
+
 **How fast the A/B runs.** A paid A/B used to take 67 to 82 minutes for three or four suites (the
 dispatch job's duration in runs 39966026743, 39978967241 and 39988799201 on 2026-10-23: 67, 68 and
 82 minutes) because every call waited its turn: four calls in flight, the head run first, then the
