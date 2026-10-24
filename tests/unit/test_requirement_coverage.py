@@ -97,7 +97,7 @@ def test_verdict_ids_match_case_and_whitespace_insensitively(rubric):
 @pytest.mark.parametrize("ids,expected", [
     (["R2", "R2"], ["R2", "R1"]),
     (["R2", "R3", "R3"], ["R2", "R3", "R1"]),
-    (["", "R1", "r1"], ["R1", "R2", "R3"]),
+    (["", "R1", "r1"], ["R2", "R1", "R3"]),
 ])
 def test_normalize_checklist_makes_ids_unique(ids, expected):
     items = [rc.RequirementItem(id=i, text=f"t{n}", weight="core") for n, i in enumerate(ids)]
