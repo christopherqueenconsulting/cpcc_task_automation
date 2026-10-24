@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from cqc_cpcc.model_eval import adaptive, prompt_eval, prompt_registry
+from cqc_cpcc.model_eval import adaptive, error_detail, prompt_eval, prompt_registry
 from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 from cqc_cpcc.utilities.AI import model_registry
 
@@ -735,6 +735,12 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
         recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
         return base.retry_stats(recs)
 
+    def transport(path):
+        if path is None:
+            return None
+        recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
+        return error_detail.transport_failure_stats(recs)
+
     def pool(directory):
         saved = prompt_eval.read_concurrency(directory) if directory is not None else None
         return (saved or {}).get("calls")
@@ -745,6 +751,7 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
     return {"elapsed_s": round(time.monotonic() - started, 1), "concurrency": workers,
             "max_concurrency": workers, "start_concurrency": start_concurrency,
             "head": side(head_raw), "base": side(base_raw),
+            "head_transport": transport(head_raw), "base_transport": transport(base_raw),
             "head_pool": head_pool, "base_pool": base_pool, "judge_pool": judge_pool,
             "rate_limited": sum(p.get("rate_limited", 0) for p in pools),
             "in_flight_budget": sum(p.get("in_flight_budget", 0) for p in pools)}
@@ -1014,6 +1021,26 @@ def ab_markdown(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _transport_markdown(rows: list) -> list:
+    """Transport failures per side (reporting only: no verdict reads these lines)."""
+    lines = []
+    for side in ("head", "base"):
+        total = {"final": 0, "retried": 0, "by_status": {}}
+        for _sid, st in rows:
+            part = st.get(f"{side}_transport")
+            if not part:
+                continue
+            total["final"] += part.get("final", 0)
+            total["retried"] += part.get("retried", 0)
+            for key, n in (part.get("by_status") or {}).items():
+                total["by_status"][key] = total["by_status"].get(key, 0) + n
+        if total["final"] or total["retried"]:
+            by = ", ".join(f"{k} x{n}" for k, n in sorted(total["by_status"].items())) or "none"
+            lines.append(f"- {side} transport failures: {total['final']} (final) / {total['retried']} (retried), "
+                         f"by status: {by}")
+    return ["", *lines] if lines else []
+
+
 def _run_stats_markdown(report: dict) -> list:
     """Wall clock and what each adaptive pool did (reporting only: no decision reads these lines)."""
     rows = [(sid, r["run_stats"]) for sid, r in report["suites"].items() if r.get("run_stats")]
@@ -1033,6 +1060,7 @@ def _run_stats_markdown(report: dict) -> list:
                          f"{st.get('rate_limited', 0)} | {st.get('in_flight_budget', 0)} |")
         lines.append("")
         lines.append("Pool columns read: starting permits, lowest, highest reached, final, 429s on that pool.")
+        lines += _transport_markdown(rows)
     return lines
 
 

@@ -420,6 +420,40 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
   `prompt-eval.yml` (none exist there today). Recommended for the first real A/B: add
   `CQC_AB_MAX_CONCURRENCY=32` the same way as a canary, then remove it.
 
+**Transport retries and the failure detail (eval runner only).** A call that fails with a transport
+error is tried again by the runner (`adaptive.py`, used by `run_suite` in both adaptive and fixed mode),
+because run 40081366835 (PR #446) lost 7 head-side calls (6 in `grading`, 1 in `grading-solution`;
+the base side had 0) to `error_kind: transport` with `attempts: 1`, and each failed call scored 0 on
+every grader. The artifact rows held no status or gateway body, so the cause could not be read.
+
+- **What is retried:** a connection reset or abort, a read or connect timeout, a 408, a 5xx (500, 502,
+  503, 504 ...), and an `OpenAITransportError` that carries no status. **Not retried:** a schema or
+  validation error, a refusal, a truncation, any other 4xx, a cancellation, a budget refusal. A 429 and
+  the in-flight-budget 402/403 keep their own retry above, unchanged.
+- **How many:** `CQC_EVAL_TRANSPORT_RETRIES` = total attempts per call, default **3**, hard cap **5**
+  (1 turns it off). A value that is not a whole number from 1 to 5 stops the run before any call, like
+  the `CQC_AB_*` variables. The wait before a retry is full jitter, `uniform(0, min(30, 2 x 2^n))` seconds
+  (`adaptive.backoff_s`), at most 30 s each, so at most 120 s extra per call.
+- **Budget:** every retry reserves the estimate before it is sent, like the first attempt. A failed
+  attempt may have been billed, so it is charged at the estimate when it fails (the reservation becomes
+  spend) and added to that record's `cost_usd` (`cost_estimated: true`). Permits and reservations are
+  freed before the wait, so a cancellation during a backoff leaks neither.
+- **Records:** `attempts` is the client's own tries plus the runner's retries, so `retried`,
+  `extra_attempts` and `retry_rate` in `ab.json` / `ab.md` count them. Scoring is untouched: a call that
+  still fails after its attempts is a failed call and scores 0, as before.
+- **`error_detail`:** every failed attempt (final or retried) adds one entry to the row's
+  `error_detail` list: `attempt`, `exception`, `chain` (cause class names), `status`, gateway `code` /
+  `type` / `provider`, `request_id` / `generation_id` from the response headers, `message`, `latency_s`,
+  `retried`. The message is redacted (`error_detail.py`): quoted spans over 80 characters are removed,
+  anything credential-shaped (Bearer, `sk-...`, `api_key=...`, long opaque tokens, the configured key) is
+  replaced, then the first 300 characters are kept. The key is absent on a row that never failed, and
+  `SuiteRecord.from_json` ignores keys it does not know, so older readers and rows still work (a base ref
+  without this change simply has no `error_detail`).
+- **Report:** `ab.md` "Run stats" adds `head transport failures: N (final) / M (retried), by status: ...`
+  (and the same for the base when it has any); `ab.json` `run_stats` gains `head_transport` and
+  `base_transport`. No verdict reads them.
+- **Rollback:** revert the PR. Set `CQC_EVAL_TRANSPORT_RETRIES=1` to turn the retry off without a revert.
+
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.
 A second job, `ab-base-rule` (and `dispatch-report` for a maintainer `ab` run), re-checks it:
