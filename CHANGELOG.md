@@ -5,6 +5,40 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc3 - 2026-10-23
+
+Prerelease, on top of 0.2.0-rc2. Grading now runs in the background with a live table and a Cancel button,
+and on Streamlit Community Cloud the results are no longer saved on the server. Check both with the rc
+checklist in [docs/RELEASING.md](docs/RELEASING.md).
+
+What to check, in plain terms:
+
+- Press Grade on a small batch. A live table shows each student's status, which model is answering, and
+  how long it has waited. Cancel grading keeps the students who already finished. A request that was
+  already sent may still be charged.
+- If a student fails, Retry the failed ones, or use another model for just those students; they are merged
+  into the same run.
+- While a grading run is working, Grade, Clear results, Re-grade, Compare and Keep are paused for every
+  session on the same server. Restart the app to clear a stuck run.
+- On the Mac, finished students are saved as they finish, so a closed tab does not lose them. On Streamlit
+  Community Cloud nothing is saved on the server: keep the page open and download the results. To get the old
+  behaviour back on Cloud set `CQC_RESULTS_PERSIST=on` in the app's secrets. Set `CQC_RESULTS_PERSIST=off` on any
+  shared host that is not Streamlit Community Cloud.
+- If anything looks wrong, set `CQC_GRADING_JOB=off` in `.env` and restart: grading goes back to the old
+  one-student-at-a-time path.
+- The test-case code below is not connected to grading, so there is nothing to check for it.
+
+- Background grading job: `grading_job.py` with ten states, a live view, Cancel selected and Cancel grading,
+  Retry failed, "Use another model" for the failed students (with the effort box), saves after each student,
+  a link token in the page address (whoever has that link can watch or cancel the run, so do not share it), at most four live runs, and one shared
+  limit on model calls. Results are session-only on Streamlit Community Cloud (a missing `/mount/src`
+  means a local machine; `CQC_RESULTS_PERSIST=on|off` overrides). `CQC_GRADING_JOB=off` keeps the old
+  path. #430
+- Test-case derivation for the future output check (`test_case_generation.py`, `execution_check.py`, the
+  `test-case-generation` prompt and its eval suite): reads sample runs from the instructions, suggests up
+  to six stdin cases with one model call, and runs them on the reference solution in the Docker sandbox.
+  Nothing in grading calls it yet and `CQC_EXECUTION=off` keeps it inert. #429
+
 ## 0.2.0-rc2 - 2026-10-23
 
 Prerelease, on top of 0.2.0-rc1. The reasoning effort can now differ per run, which changes the student
