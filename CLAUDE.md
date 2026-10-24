@@ -72,6 +72,9 @@ student work in a prompt renderer or eval fixture. Details: `docs/security-workf
 - Student programs run only in the Docker sandbox (`utilities/program_runner.py`, image in
   `docker/exec-runner/`), never on the host; `CQC_EXECUTION=off` turns it off. The compile gate
   uses it when available. See `docs/execution-gate.md`.
+- The output check (`docs/execution-gate.md`) is opt-in on the Setup tab; its `plan_hash` joins the run key
+  only when a plan exists. It runs programs only in the Docker sandbox, never on the host, and
+  `CQC_EXECUTION=off` (or Streamlit Cloud) leaves grading exactly as it was.
 - BrightSpace write-back defaults to `dry_run=True`. Assignment write-back saves a draft;
   quiz write-back publishes to the student immediately. See "Writing Grades Back to
   BrightSpace" in `docs/ARCHITECTURE.md`.
