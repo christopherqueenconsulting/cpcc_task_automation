@@ -43,6 +43,7 @@ def generate_grading_run_key(
         solution_hash: Optional[str] = None,
         prompt_version: Optional[str] = None,
         requirement_overlap: Optional[str] = None,
+        plan_hash: Optional[str] = None,
 ) -> str:
     """Generate a deterministic hash key from grading inputs.
     
@@ -71,6 +72,9 @@ def generate_grading_run_key(
         requirement_overlap: ``requirement_overlap.run_key_overlap()``: ``"drop"`` when the
             overlap stage removes errors (it changes scores), else ``None`` so keys of
             ``notes``/``off`` runs stay exactly as before
+        plan_hash: ``ExecutionPlan.plan_hash`` of the output check, when the instructor turned
+            it on, so a different set of test cases, expected outputs or ignore patterns never
+            serves cached results. ``None`` (no plan) leaves the key exactly as it was
         
     Returns:
         SHA256 hash string (64 hex characters)
@@ -104,6 +108,8 @@ def generate_grading_run_key(
         inputs["prompt_version"] = prompt_version
     if requirement_overlap is not None:
         inputs["requirement_overlap"] = requirement_overlap
+    if plan_hash is not None:
+        inputs["plan_hash"] = plan_hash
 
     # Serialize to JSON with sorted keys for determinism
     json_str = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
