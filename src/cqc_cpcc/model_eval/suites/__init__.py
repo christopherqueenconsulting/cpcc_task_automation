@@ -10,6 +10,7 @@ SUITE_MODULES = {
     "grading": "cqc_cpcc.model_eval.suites.grading",
     "grading-levelband": "cqc_cpcc.model_eval.suites.levelband",
     "requirement-extraction": "cqc_cpcc.model_eval.suites.requirements",
+    "effort-recommendation": "cqc_cpcc.model_eval.suites.effort_recommendation",
     "requirement-solution-check": "cqc_cpcc.model_eval.suites.solution_check",
     "test-case-generation": "cqc_cpcc.model_eval.suites.stdin_cases",
     "exam-grading": "cqc_cpcc.model_eval.suites.exam",

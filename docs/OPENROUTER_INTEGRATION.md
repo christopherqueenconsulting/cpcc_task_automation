@@ -271,6 +271,18 @@ keep the new result. The effort used is stamped on each result as `model@effort`
 effort is remembered, with a hash of the instructions and no student data, in the saved run's meta
 and pre-selected for the next section of the same assignment.
 
+The Setup tab's **Recommend effort** button (then **Skip** while it runs, **Apply <effort> effort** and **Recommend again** afterwards) asks the grading model, at low effort, which effort
+the assignment needs (`cqc_cpcc/effort_recommendation.py`, prompt `effort-recommendation`). It sends
+the assignment instructions and the instructor's solution (never a student submission, inside a
+random-nonce fence) and returns an effort, a confidence and up to three reasons. It has its own
+bound, `CQC_EFFORT_JUDGE_TIMEOUT_S` (default 30 s), one attempt and no fallback model
+(`llm_gateway.structured(..., request_timeout=, max_attempts=1, allow_fallback=False)`), and runs on
+a worker thread with a Skip button, so the page stays usable. Low confidence, a failure or a timeout
+keep the default effort; the answer is never below medium unless the counted signals (a solution file
+is added, few requirements, no exact-output rule) agree. It is advice only (Apply button) until the
+`effort-recommendation` suite is calibrated in `model_policy.json`, which is edited by hand. The
+answer is cached per instructions, solution, counted signals, model and prompt version.
+
 While a student grades, the status label shows the model, the attempt (`attempt 2/3`) and the last
 failure (`timed out after 180 s`). The `openai` SDK logger is held at WARNING, and its warnings are
 copied into the app log with student names redacted.

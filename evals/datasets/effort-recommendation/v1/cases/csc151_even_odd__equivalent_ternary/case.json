@@ -1,0 +1,44 @@
+{
+  "case_id": "csc151_even_odd__equivalent_ternary",
+  "language": "java",
+  "role": "grading",
+  "course_id": "CSC_151",
+  "assignment_id": "Exam1",
+  "rubric_id": "csc151_java_exam_rubric",
+  "instructions": "Write a Java program named EvenOdd.java that:\n1. Uses a Scanner to read one whole number.\n2. Prints Even if the number is even and Odd if it is odd.\nFollow Java naming conventions and comment your code.\n",
+  "files": [
+    "EvenOdd.java"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Use a Scanner to read one whole number.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Print Even for an even number and Odd for an odd number.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [],
+    "acceptable_error_ids": [],
+    "max_occurrences": {},
+    "requirements": {},
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [],
+  "tags": [
+    "clean",
+    "equivalent"
+  ],
+  "twin_of": "csc151_even_odd__solution_format",
+  "labels_reviewed_by": null,
+  "reference_solution_file": "solution/EvenOdd.java"
+}

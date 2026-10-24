@@ -120,3 +120,57 @@ threshold.
 | The winner gets worse on another prompt of its roles | cross-suite gate fails; nothing is promoted; issue opened |
 | Model changed on master | issue "Model change on master: git pull + restart" (+ ClickUp task if configured) |
 | Auto-merge refused | comment on the PR explaining why, label switched to `blocked-on-chris` |
+
+## Effort recommendation: measuring the right effort
+
+The `effort-recommendation` prompt suite scores the Setup tab's effort judge against *measured* ground truth,
+not against `high`. Ground truth needs a paid run, so it is a separate, human-started step
+(see `evals/datasets/effort-recommendation/v1/README.md` for the dataset):
+
+```bash
+# <model> is the registry grading model (src/cqc_cpcc/config/model_registry.json): openai/gpt-6-luna.
+# Its registry effort is high, and `run` starts that incumbent (<model>@high) by itself, so only
+# the two lower efforts are named as candidates.
+
+# 1. cost first (no model call)
+poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
+  --candidate openai/gpt-6-luna@low --candidate openai/gpt-6-luna@medium --repeats 3 --dry-run
+# 2. the paid run: worst case. Step 1 prints the current cost (the author's local dry run printed $0.9713 on 2026-10-23;
+#    that is not a recorded artifact). Step 2 spends it.
+poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
+  --candidate openai/gpt-6-luna@low --candidate openai/gpt-6-luna@medium --repeats 3 --out evals/runs/effort-truth
+# 3. derive the ground truth (no model call); --write puts ground_truth.json in the dataset directory
+poetry run python -m cqc_cpcc.model_eval effort-truth --raw evals/runs/effort-truth/raw_outputs.jsonl --write
+```
+
+Then, by hand:
+
+1. Commit `evals/datasets/effort-recommendation/v1/ground_truth.json` (the report says `not informative` and
+   writes no truth when fewer than 3 assignments separate; then stop here).
+2. Add an `effort-recommendation` entry under `prompt_eval.suites` in `src/cqc_cpcc/config/model_policy.json`
+   with `"calibrated": true`, and the prompt version under `prompt_eval.calibrated_versions`. This file is
+   Christopher's: it is edited by hand only, and the bot guard rejects agent edits. Set the floor only
+   when at least 10 non-injection answers were confident (count them in the suite run's
+   `raw_outputs.jsonl`, field `payload.confidence`, source `judge`) and `confident_not_under` is 1.0.
+
+If nobody runs this, the recommendation stays display-only (Apply button, never selected for you) and the
+suite's graders that need ground truth return nothing. The ground truth belongs to one model, this dataset
+version and its content, and the prompt version it was calibrated on: change any of them and measure again
+(a stale report is ignored with a warning).
+
+**Limits.** These are short single-class labs. They cannot show that a real multi-file project needs
+`high`, so a low ground truth here says nothing about such work. A recommendation is advice for one
+assignment; the instructor still chooses one effort for the whole run.
+
+For each assignment the right effort is the lowest one no worse than `high`, beyond noise (high against
+itself across repeats), on level-band agreement, missed bug twins and harshness on equivalent cases.
+When no assignment shows a difference beyond the noise the report says `not informative`, writes no
+ground truth, and the judge stays display-only. The report also lists each counted signal's
+association with the ground truth, the medium-versus-high balance (so the registry default can be
+reviewed) and how many assignments were decided by a single measure. The policy floor that lets the
+recommendation be pre-selected is an entry for `effort-recommendation` in `model_policy.json`
+(`calibrated: true` and `calibrated_versions` at the current prompt version), edited by hand.
+
+Note on A/B dispatches: in `ab` mode the workflow does not read `dry_run`, so an `ab` dispatch with
+`dry_run=true` still spends money (a pre-existing property of the `ab` branch of `prompt-eval.yml`). Use the
+`run` dry-run above for a cost estimate.

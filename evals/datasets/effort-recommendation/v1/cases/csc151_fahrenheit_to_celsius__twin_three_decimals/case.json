@@ -1,0 +1,58 @@
+{
+  "case_id": "csc151_fahrenheit_to_celsius__twin_three_decimals",
+  "language": "java",
+  "role": "grading",
+  "course_id": "CSC_151",
+  "assignment_id": "Exam1",
+  "rubric_id": "csc151_java_exam_rubric",
+  "instructions": "Write a Java program named FahrenheitToCelsius.java that:\n1. Uses a Scanner to read a temperature in Fahrenheit (double).\n2. Converts it to Celsius with the formula (F - 32) * 5 / 9. Use a named constant for 32.\n3. Prints Celsius: X.X with one decimal place.\nFollow Java naming conventions and comment your code.\n",
+  "files": [
+    "FahrenheitToCelsius.java"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Use a Scanner to read the Fahrenheit temperature as a double.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Convert to Celsius with (F - 32) * 5 / 9, using a named constant for 32.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Print Celsius: X.X with one decimal place.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [
+      "CSC_151_EXAM_1_OUTPUT_FORMATTING"
+    ],
+    "acceptable_error_ids": [],
+    "max_occurrences": {},
+    "requirements": {
+      "R3": [
+        "met",
+        "partial"
+      ]
+    },
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [
+    "three_decimals"
+  ],
+  "tags": [
+    "bug",
+    "slight_format"
+  ],
+  "twin_of": "csc151_fahrenheit_to_celsius__solution_format",
+  "labels_reviewed_by": null,
+  "reference_solution_file": "solution/FahrenheitToCelsius.java"
+}

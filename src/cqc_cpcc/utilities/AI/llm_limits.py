@@ -33,6 +33,8 @@ TIMEOUT_SLACK_S = 5.0
 BACKOFF_S_PER_MODEL = 10.0
 DEADLINE_MARGIN_S = 60.0
 DEFAULT_GRADING_CONCURRENCY = 4
+# The effort recommendation (advice before grading) has its own short bound.
+DEFAULT_EFFORT_JUDGE_TIMEOUT_S = 30.0
 # Upper bounds for values read from the environment, so a typo cannot mean days or a flood.
 MAX_TIMEOUT_S = 3600.0
 MAX_GRADING_CONCURRENCY = 32
@@ -116,3 +118,8 @@ def grading_concurrency() -> int:
     """How many students grade at once: ``CQC_GRADING_CONCURRENCY``, default 4."""
     return min(_positive("CQC_GRADING_CONCURRENCY", int) or DEFAULT_GRADING_CONCURRENCY,
                MAX_GRADING_CONCURRENCY)
+
+
+def effort_judge_timeout() -> float:
+    """Seconds the effort recommendation may take: ``CQC_EFFORT_JUDGE_TIMEOUT_S``, default 30."""
+    return min(_positive("CQC_EFFORT_JUDGE_TIMEOUT_S") or DEFAULT_EFFORT_JUDGE_TIMEOUT_S, MAX_TIMEOUT_S)

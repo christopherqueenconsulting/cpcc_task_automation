@@ -1,0 +1,60 @@
+{
+  "case_id": "csc134_tip_calculator__twin_no_precision",
+  "language": "cpp",
+  "role": "grading",
+  "course_id": "CSC_134",
+  "assignment_id": "Project",
+  "rubric_id": "csc134_cpp_exam_rubric",
+  "instructions": "Write a C++ program in a file named tip.cpp that:\n1. Prompts for the bill amount (double) and a service rating from 1 to 3 (int).\n2. Uses a 20% tip for a rating of 3 and a 15% tip for any other rating. Use named constants.\n3. Prints Tip: $X.XX with two decimal places.\nUse curly braces on every control structure, consistent indentation and comments.\n",
+  "files": [
+    "tip.cpp"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Prompt for and read the bill amount and the service rating.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Use a 20% tip for a rating of 3 and 15% otherwise, with named constants.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Print Tip: $X.XX with two decimal places.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [
+      "CSC_134_PROJECT_1_MINOR_FORMATTING"
+    ],
+    "acceptable_error_ids": [
+      "CSC_134_PROJECT_1_MAJOR_FORMATTING"
+    ],
+    "max_occurrences": {},
+    "requirements": {
+      "R3": [
+        "met",
+        "partial"
+      ]
+    },
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [
+    "no_precision"
+  ],
+  "tags": [
+    "bug",
+    "slight_format"
+  ],
+  "twin_of": "csc134_tip_calculator__solution_format",
+  "labels_reviewed_by": null,
+  "reference_solution_file": "solution/tip.cpp"
+}
