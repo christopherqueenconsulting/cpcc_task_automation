@@ -47,7 +47,7 @@ from cqc_cpcc.rubric_grading import (
     rubric_scores_errors,
 )
 from cqc_cpcc.utilities.AI import llm_limits, llm_progress
-from cqc_streamlit_app import results_store
+from cqc_streamlit_app import execution_view, results_store
 from cqc_streamlit_app.effort_recommendation_ui import preapply_for, render_effort_recommendation
 from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_cpcc.utilities.submission_validity import (
@@ -643,6 +643,19 @@ def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
     return RubricOverrides(criterion_overrides=criterion_overrides)
 
 
+_EXECUTION_CATEGORIES = ("output_format", "output_values", "sequence")
+#: What the editor shows for each saved value; the saved value stays one of the three ids.
+_EXECUTION_CATEGORY_LABELS = {"output_format": "Wording or layout of the output",
+                              "output_values": "Wrong numbers or values",
+                              "sequence": "Wrong order of steps"}
+
+
+def _category_cell(value) -> Optional[str]:
+    """An editor cell -> ``execution_category``: one of the three values, else None."""
+    text = "" if value is None or (isinstance(value, float) and pd.isna(value)) else str(value).strip()
+    return text if text in _EXECUTION_CATEGORIES else None
+
+
 def _build_error_definitions_from_df(error_df: pd.DataFrame) -> list[ErrorDefinition]:
     updated_errors = []
     for _, row in error_df.iterrows():
@@ -653,7 +666,10 @@ def _build_error_definitions_from_df(error_df: pd.DataFrame) -> list[ErrorDefini
             severity_category=str(row["severity_category"]).strip(),
             enabled=bool(row["enabled"]),
             default_penalty_points=int(row["default_penalty_points"]) if pd.notna(
-                row["default_penalty_points"]) else None
+                row["default_penalty_points"]) else None,
+            # Output-check role (docs/execution-gate.md): blank means none, the gate infers one
+            # from the id and name. Rows from a frame without the column keep None.
+            execution_category=_category_cell(row.get("execution_category")),
         )
         updated_errors.append(error)
     return updated_errors
@@ -861,10 +877,12 @@ def _render_error_definitions_editor(registry, course_id, selected_assignment_id
             "severity_category": error.severity_category,
             "description": error.description,
             "default_penalty_points": error.default_penalty_points or 0,
+            "execution_category": error.execution_category,
         })
 
     error_df = pd.DataFrame(error_data) if error_data else pd.DataFrame(columns=[
-        "enabled", "error_id", "name", "severity_category", "description", "default_penalty_points"
+        "enabled", "error_id", "name", "severity_category", "description", "default_penalty_points",
+        "execution_category",
     ])
 
     # Editable data editor
@@ -889,6 +907,14 @@ def _render_error_definitions_editor(registry, course_id, selected_assignment_id
                 "Penalty Points",
                 min_value=0,
                 help="Default point deduction"
+            ),
+            "execution_category": st.column_config.SelectboxColumn(
+                "Output check role",
+                options=list(_EXECUTION_CATEGORIES),
+                required=False,
+                format_func=lambda v: _EXECUTION_CATEGORY_LABELS.get(v, str(v)),
+                help="Which kind of output difference this error covers when the output check is on. "
+                     "Leave blank if none."
             ),
         },
         key=f"error_definitions_editor_{course_id}_{selected_assignment_id}"
@@ -1387,6 +1413,7 @@ async def grade_single_rubric_student(
         course_name: str,
         requirements: Optional[RequirementChecklist] = None,
         effort: Optional[str] = None,
+        execution_plan=None,
 ) -> tuple[str, RubricAssessmentResult | None]:
     """Grade a single student submission with rubric using async OpenAI call.
     
@@ -1473,6 +1500,7 @@ async def grade_single_rubric_student(
                         # The Debug tab looks records up by this id.
                         correlation_id=grading_correlation_id,
                         effort=effort,
+                        execution_plan=execution_plan,
                     )
 
             status.update(label=f"{status_label} | Processing results...")
@@ -1687,6 +1715,7 @@ async def process_rubric_grading_batch(
         run_key: str,
         requirements: Optional[RequirementChecklist] = None,
         effort: Optional[str] = None,
+        execution_plan=None,
 ) -> None:
     """Process a batch of student submissions with async grading.
     
@@ -1730,6 +1759,8 @@ async def process_rubric_grading_batch(
             temperature=temperature,
             requirements=requirements,
             effort=effort,
+            # Only with an output-check plan, so a run without one keeps exactly today's inputs.
+            **({"execution_plan": execution_plan} if execution_plan is not None else {}),
         ),
     }
 
@@ -1751,6 +1782,7 @@ async def process_rubric_grading_batch(
             course_name=course_name,
             requirements=requirements,
             effort=effort,
+            execution_plan=execution_plan,
         )
         tasks.append(task)
 
@@ -3101,6 +3133,15 @@ async def get_rubric_based_exam_grading():
                 assignment_instructions_content, instructions_source_id, assignment_solution_contents)
         st.session_state["active_requirement_checklist"] = requirements_checklist
 
+        # Output check (PR 15): the notice or Build image, then the test-case table. No plan means
+        # grading is exactly what it was before it existed.
+        execution_plan = None
+        if grading_mode != "errors_only":
+            st.subheader("Output check (optional)", anchor=False)
+            st.caption(execution_view.SETUP_CAPTION)
+            execution_plan = execution_view.render_output_check_setup(
+                assignment_instructions_content, solution_file_paths)
+
         with st.expander("Advanced options", icon=":material/tune:"):
             if use_error_definitions:
                 effective_error_definitions = error_definitions_editor()
@@ -3231,6 +3272,8 @@ async def get_rubric_based_exam_grading():
         prompt_version=prompt_tag("rubric-grading"),
         # Only "drop" changes scores, so only "drop" re-grades; notes/off keep existing keys.
         requirement_overlap=run_key_overlap(),
+        # Only with an output-check plan; a run without one keeps the key it always had.
+        plan_hash=execution_plan.plan_hash if execution_plan is not None else None,
     )
 
     results_cache = (st.session_state.error_only_results_by_key if grading_mode == "errors_only"
@@ -3330,7 +3373,8 @@ async def get_rubric_based_exam_grading():
                              reference_solution=assignment_solution_contents,
                              error_definitions=effective_error_definitions, model_name=selected_model,
                              temperature=0.0,  # Temperature not used with OpenRouter
-                             requirements=requirements_checklist, effort=selected_effort))
+                             requirements=requirements_checklist, effort=selected_effort,
+                             **({"execution_plan": execution_plan} if execution_plan is not None else {})))
                 else:
                     await process_rubric_grading_batch(
                         submission_file_paths=student_submission_file_paths,
@@ -3345,6 +3389,7 @@ async def get_rubric_based_exam_grading():
                         run_key=current_run_key,
                         requirements=requirements_checklist,
                         effort=selected_effort,
+                        execution_plan=execution_plan,
                     )
                 produced = (st.session_state.error_only_results_by_key if grading_mode == "errors_only"
                             else st.session_state.grading_results_by_key)
@@ -3495,9 +3540,11 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
         st.warning(f"{_review_status_label(result)}: {result.validity_reason}", icon=":material/flag:")
     _render_solution_similarity(result)
 
-    labels = (["Feedback", "Criteria", "Errors", "Requirements", "Code", "LLM Prompt"]
-              + (["Debug"] if CQC_OPENAI_DEBUG else []))
+    has_output = isinstance(getattr(result, "execution_report", None), dict)
+    labels = (["Feedback", "Criteria", "Errors", "Requirements"] + (["Output"] if has_output else [])
+              + ["Code", "LLM Prompt"] + (["Debug"] if CQC_OPENAI_DEBUG else []))
     tabs = st.tabs(labels)
+    tab_of = dict(zip(labels, tabs))
     with tabs[0]:
         feedback = build_student_feedback(
             result, student_name=student_name if greeting_name is ... else greeting_name)
@@ -3557,13 +3604,18 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
             )
         else:
             st.caption("No requirement checklist was used for this result.")
-    with tabs[4]:
+    if has_output:
+        with tab_of["Output"]:
+            plan = (st.session_state.get("grading_inputs_by_key", {}).get(run_key, {})
+                    .get("kwargs", {}).get("execution_plan"))
+            execution_view.render_output_check(result.execution_report, plan)
+    with tab_of["Code"]:
         from cqc_streamlit_app.code_viewer import render_submission_code
         render_submission_code(source_files, widget_key=student_name)
-    with tabs[5]:
+    with tab_of["LLM Prompt"]:
         _render_llm_prompt_tab(result, student_name, f"{run_key}_{student_name}" if run_key else student_name)
     if CQC_OPENAI_DEBUG:
-        with tabs[6]:
+        with tab_of["Debug"]:
             from cqc_streamlit_app.utils import render_openai_debug_panel
             # The id the grading call was filed under, so the panel finds its records.
             correlation_id = correlation_id or (getattr(result, "llm_request", None) or {}).get("correlation_id")
@@ -3616,8 +3668,9 @@ def _render_scoring_notes(result, run_key: str, student_id: Optional[str]) -> No
     if not notes:
         return
     st.markdown("**Scoring notes**")
-    st.caption("Not for the student. Reinstate puts a removed error back and recomputes the "
-               "score without a model call; there is no undo short of re-grading.")
+    st.caption("Not for the student. Remove: take out an error the output check added. "
+               "Reinstate: put back an error that was removed. "
+               "Neither calls the model. To undo either, re-grade the student.")
     for i, n in enumerate(notes):
         with st.container(horizontal=True):
             # Error names come from the model: never live Markdown.
@@ -3627,6 +3680,13 @@ def _render_scoring_notes(result, run_key: str, student_id: Optional[str]) -> No
                 st.button("Reinstate", key=f"reinstate_{run_key}_{student_id}_{i}",
                           on_click=_reinstate_error, args=(run_key, student_id, i), disabled=busy,
                           help="Wait for the grading in progress to finish first." if busy else None)
+            elif (n.stage == "execution" and n.action == "added" and not n.suppressed
+                  and n.error is not None and run_key and student_id):
+                busy = _run_is_grading(run_key)
+                st.button("Remove", key=f"remove_added_{run_key}_{student_id}_{i}",
+                          on_click=_remove_added_error, args=(run_key, student_id, i), disabled=busy,
+                          help="Wait for the grading in progress to finish first." if busy else
+                          "Take this error out and recompute the score. Reinstate undoes it.")
 
 
 def _reinstate_error(run_key: str, student_id: str, index: int) -> None:
@@ -3644,6 +3704,26 @@ def _reinstate_error(run_key: str, student_id: str, index: int) -> None:
         updated = reinstate(result, rubric, index)
     except ValueError as e:  # a stale note (double click, older drawer) or an edited rubric
         st.toast(f"Could not reinstate: {e}", icon=":material/error:")
+        return
+    _replace_result(run_key, student_id, updated)
+
+
+def _remove_added_error(run_key: str, student_id: str, index: int) -> None:
+    """Take an error the output check added out again for one student and save the re-scored
+    result (``reconciliation.remove_added``; the note stays and Reinstate can undo it)."""
+    from cqc_cpcc.grading_diagnostics import find_rubric
+    from cqc_cpcc.reconciliation import remove_added
+
+    result = dict(st.session_state.grading_results_by_key.get(run_key, [])).get(student_id)
+    rubric = find_rubric(result.rubric_id) if result is not None else None
+    if result is None or rubric is None:
+        st.toast("Could not remove: the result or its rubric is no longer available. "
+                 "Re-grade this student instead.", icon=":material/error:")
+        return
+    try:
+        updated = remove_added(result, rubric, index)
+    except ValueError as e:  # a stale note (double click, older drawer) or an edited rubric
+        st.toast(f"Could not remove: {e}", icon=":material/error:")
         return
     _replace_result(run_key, student_id, updated)
 
@@ -3770,6 +3850,57 @@ def _regrade_others(run_key: str, student_ids: list[str], effort: Optional[str])
     st.session_state[f"effort_notice_{run_key}"] = notice or (
         f"Re-graded {len(added)} of {len(student_ids)} student(s) at {_effort_phrase(effort)}.")
     st.rerun()
+
+
+def _render_no_output_check_banner(run_key: str, all_results) -> None:
+    """Docker could not answer for some students, so they were graded without the output check.
+    Offers a full re-grade of just those students (through the grading job, under this run key),
+    with the count and the estimated model cost next to the button."""
+    ids = execution_view.students_without_output_check(all_results)
+    if not ids:
+        return
+    n = len(ids)
+    with st.container(border=True):
+        st.warning(f"{_plural(n, 'student has', 'students have')} no output check. Docker could not run their "
+                   "programs, so they were graded by the AI review and the compile check alone.",
+                   icon=":material/dns:")
+        inputs = st.session_state.get("grading_inputs_by_key", {}).get(run_key)
+        if not inputs or inputs["kwargs"].get("execution_plan") is None:
+            st.caption(_files_gone_message())
+            return
+        total = _regrade_cost_caption(inputs, ids)
+        st.caption(f"Re-grading replaces the results of {_plural(n, 'student')} with new grades from "
+                   f"{_run_model(inputs)} that also see their program's output. It costs money ({total}) "
+                   "and cannot be undone.")
+        ready = execution_view.runner_ready()
+        if not ready:
+            st.caption("Docker is not ready. Start Docker (or build the image in Setup), then re-grade.")
+        busy = _run_is_grading(run_key)
+        job_mode = _job_mode_enabled()
+        if busy:
+            st.caption("Wait for the current grading run to finish, then re-grade.")
+        elif not job_mode:
+            st.caption("Re-grading needs the background grading job (CQC_GRADING_JOB is off).")
+        if st.button(f"Re-grade {_plural(n, 'student')} with output check", key=f"regrade_output_{run_key}",
+                     icon=":material/refresh:", disabled=busy or not ready or not job_mode):
+            _launch_regrade_job(run_key, list(ids))
+
+
+def _regrade_cost_caption(inputs: dict, student_ids: list) -> str:
+    """Estimated model cost of re-grading ``student_ids`` (one call each)."""
+    kwargs = inputs["kwargs"]
+    model = kwargs.get("model_name")
+    try:
+        chars = sum(os.path.getsize(path) for sid in student_ids
+                    for path in (getattr(inputs["submissions"].get(sid), "files", None) or {}).values()
+                    if os.path.exists(path))
+        resolved = resolve_model("grading", model, effort_override=kwargs.get("effort"))
+        cost = model_registry.estimate_cost(
+            resolved, len(student_ids) * (3500 + len(kwargs.get("assignment_instructions") or "") // 4)
+            + chars // 4, len(student_ids) * 2500)
+    except Exception:  # noqa: BLE001 - an estimate never blocks a re-grade
+        return "cost unknown"
+    return "cost unknown" if cost is None else (f"roughly ${cost:.2f} for all" if cost >= 0.01 else "below one cent")
 
 
 def _estimated_one_cost(instructions: str, submission_files: dict, model: str,
@@ -4127,11 +4258,14 @@ def _summary_rows(all_results, failed_student_ids) -> list[dict]:
             "Level": _get_band_or_level_label(result) or "",
             "Like the solution": _similarity_label(result),
             "Model": getattr(result, "graded_with_model", None) or "",
+            # Instructor-only: what the output check found ("" when it did not apply).
+            "Output": execution_view.execution_summary_label(result),
         })
     possible = next((r.total_points_possible for _, r in all_results if r is not None), 0)
     for failed_id in failed_student_ids:
         rows.append({"Student": failed_id, "Status": "Failed", "Score": 0.0, "Points Earned": None,
-                     "Points Possible": possible, "Level": "", "Like the solution": "", "Model": ""})
+                     "Points Possible": possible, "Level": "", "Like the solution": "", "Model": "",
+                     "Output": ""})
     return rows
 
 
@@ -4199,13 +4333,14 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         ["Students", "Hand back", "Write to BrightSpace"], key=f"results_sections_{run_key}")
     with students_tab:
         _render_effort_banner(run_key, all_results, "students")
+        _render_no_output_check_banner(run_key, all_results)
     students_tab.caption("Click a row to open that student's full result.")
     # Problems first, then by student.
     rows = sorted(rows, key=lambda r: (r["Status"] in ("Graded",) or r["Status"].endswith(")"), r["Student"]))
     summary_df = pd.DataFrame(rows)
     # Rebuilt each render so the feedback ZIP's summary sheet follows review changes.
     # (The model column is for the instructor's screen only; it stays out of the hand-back files.)
-    st.session_state[f"grading_summary_df_{run_key}"] = summary_df.drop(columns=["Score", "Model"])
+    st.session_state[f"grading_summary_df_{run_key}"] = summary_df.drop(columns=["Score", "Model", "Output"])
     selection = students_tab.dataframe(
         summary_df,
         hide_index=True,
@@ -4213,6 +4348,7 @@ def display_cached_grading_results(run_key: str, course_name: str) -> None:
         selection_mode="single-row",
         key=f"results_table_{run_key}",
         column_order=["Student", "Status", "Score", "Points Earned", "Points Possible", "Level"]
+        + (["Output"] if any(r["Output"] for r in rows) else [])
         + (["Model"] if len({r["Model"] for r in rows if r["Model"]}) > 1 else []),
         column_config={
             "Score": st.column_config.ProgressColumn("Score", format="%.0f%%", min_value=0, max_value=100),
