@@ -46,7 +46,10 @@
     ],
     "acceptable_error_ids": [
       "CSC_134_PROJECT_1_CONSTANTS_ERROR",
-      "CSC_134_PROJECT_1_OUTPUT_IMPACT_ERROR"
+      "CSC_134_PROJECT_1_OUTPUT_IMPACT_ERROR",
+      "CSC_134_PROJECT_1_INCORRECT_FILENAME",
+      "CSC_134_PROJECT_1_FILENAME_CLASS_MISMATCH",
+      "CSC_134_PROJECT_1_NAMING_CONVENTION"
     ],
     "max_occurrences": {},
     "requirements": {
