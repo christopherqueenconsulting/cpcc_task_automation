@@ -160,6 +160,20 @@ def _id_key(requirement_id: Optional[str]) -> str:
     return (requirement_id or "").strip().upper()
 
 
+_ID_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+MAX_ID_CHARS = 12
+
+
+def safe_requirement_id(raw: Optional[str]) -> str:
+    """The id in upper case when it is 1 to 12 letters, digits, ``_`` or ``-``; else ``""``.
+    A loop over the characters, not a regular expression. Ids end up in labels and captions, so
+    anything else (Markdown, a URL, spaces) is replaced by a generated id."""
+    rid = (raw or "").strip().upper()
+    if not rid or len(rid) > MAX_ID_CHARS or any(ch not in _ID_CHARS for ch in rid):
+        return ""
+    return rid
+
+
 def normalize_checklist(checklist: RequirementChecklist) -> RequirementChecklist:
     """Drop blanks, cap the length and make ids unique (case-insensitively)."""
     seen: set[str] = set()
@@ -169,7 +183,7 @@ def normalize_checklist(checklist: RequirementChecklist) -> RequirementChecklist
         text = (r.text or "").strip()
         if not text:
             continue
-        rid = (r.id or "").strip().upper()
+        rid = safe_requirement_id(r.id)
         while not rid or rid in seen:
             n += 1
             rid = f"R{n}"

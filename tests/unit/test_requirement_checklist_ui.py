@@ -352,3 +352,36 @@ def test_the_reason_a_button_is_off_comes_before_the_button():
                      if e.type in ("button", "caption"))
     assert flat.index("The next button is off because there is no solution yet.") < flat.index(
         "Check all against the solution")
+
+
+def test_a_hostile_id_and_text_never_reach_a_label_or_caption():
+    evil_id, evil_text = "![x](http://evil.example/a.png)", "![x](http://evil.example/b.png)"
+    page = Page(check=AsyncMock(return_value=_verdicts(r1="no", r2="no", r3="yes")))
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    edits = {"edited_rows": {0: {"id": evil_id, "text": evil_text}}, "added_rows": [], "deleted_rows": []}
+    _edit(page, edits)
+    page.run()
+    assert page.out.requirements[0].id == "R1"  # replaced by a safe id
+    page.click("Check all against the solution", editor_state=_edit(page, edits))
+    shown = ([b.label for b in page.at.button] + page.captions + [i.value for i in page.at.info]
+             + [w.value for w in page.at.warning])
+    for m in page.at.multiselect:
+        shown += [str(o) for o in m.options] + [str(v) for v in m.value]
+    assert shown and all("![" not in t and "](" not in t for t in shown), [t for t in shown if "![" in t]
+
+
+def test_a_duplicate_id_inherits_nothing_from_the_first_owner():
+    from cqc_streamlit_app.grade_assignment import _checklist_from_editor
+    import pandas as pd
+
+    base = rc.RequirementChecklist(requirements=[
+        rc.RequirementItem(id="R1", text="a", weight="core"),
+        rc.RequirementItem(id="R2", text="Applies a discount", weight="core", graded=False, hand_ungraded=True)])
+    frame = pd.DataFrame([
+        {"id": "R2", "text": "Applies a discount", "weight": "core"},
+        {"id": "r2", "text": "A second row typed with the same id", "weight": "core"}])
+    out = _checklist_from_editor(frame, base).requirements
+    assert [r.id for r in out] == ["R2", "R1"]
+    assert (out[0].graded, out[0].hand_ungraded) == (False, True)
+    assert (out[1].graded, out[1].hand_ungraded) == (True, False)

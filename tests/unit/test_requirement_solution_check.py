@@ -613,3 +613,30 @@ def test_a_broken_report_hook_does_not_break_the_scorecard():
     with patch.object(sc, "pooled_false_no", side_effect=RuntimeError("boom")):
         text = prompt_eval.to_markdown(card)
     assert "extra report" in text and "RuntimeError" in text and "boom" not in text
+
+
+def test_removing_the_solution_does_not_regrade_a_requirement_the_instructor_removed():
+    item = _checklist()
+    item.requirements[1].solution_status = "no"
+    item.requirements[1].graded = False
+    item.requirements[1].hand_ungraded = True
+    item.requirements[0].solution_status = "no"
+    item.requirements[0].graded = False  # left out by the check itself
+    out = rsc.clear_check(item)
+    assert out.requirements[1].graded is False and out.requirements[1].hand_ungraded
+    assert out.requirements[0].graded is True
+    assert all(r.solution_status is None for r in out.requirements)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("r1", "R1"), (" Req-2_a ", "REQ-2_A"), ("", ""), (None, ""), ("![x](http://evil/a.png)", ""),
+    ("R 1", ""), ("A" * 13, ""), ("A" * 12, "A" * 12)])
+def test_requirement_ids_are_whitelisted_without_a_regular_expression(raw, expected):
+    assert rc.safe_requirement_id(raw) == expected
+
+
+def test_normalize_replaces_an_unsafe_id():
+    items = [rc.RequirementItem(id="![x](http://evil/a.png)", text="t", weight="core"),
+             rc.RequirementItem(id="R1", text="u", weight="core")]
+    out = rc.normalize_checklist(rc.RequirementChecklist(requirements=items))
+    assert [r.id for r in out.requirements] == ["R1", "R2"]  # unsafe id became R1; the real R1 is then a duplicate

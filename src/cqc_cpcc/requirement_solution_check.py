@@ -327,12 +327,12 @@ def apply_suggestions(checklist: RequirementChecklist, ids: Optional[list] = Non
 def clear_check(checklist: RequirementChecklist) -> RequirementChecklist:
     """Forget the check (the solution was removed): statuses and evidence go, and an item the
     check had marked not graded is graded again, because with no solution nothing is authority
-    for leaving it out. Items the instructor unticked by hand (no status) stay unticked."""
+    for leaving it out. Items the instructor removed by hand (``hand_ungraded``) stay removed."""
     items = []
     for item in checklist.requirements:
         update = {"solution_status": None, "solution_evidence": None}
-        if item.solution_status == "no":
-            update["graded"] = True
+        if item.solution_status == "no" and not item.hand_ungraded:
+            update["graded"] = True  # an item the instructor removed by hand stays removed
         items.append(item.model_copy(update=update))
     return RequirementChecklist(requirements=items)
 

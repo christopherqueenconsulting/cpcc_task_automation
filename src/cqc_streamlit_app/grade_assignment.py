@@ -34,6 +34,7 @@ from cqc_cpcc.requirement_coverage import (
     extract_requirements,
     instructions_hash,
     normalize_checklist,
+    safe_requirement_id,
 )
 from cqc_cpcc.requirement_solution_check import solution_label
 from cqc_cpcc import effort_compare, grading_job
@@ -2476,14 +2477,15 @@ def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist) -> 
     verdict only while its text is the text that was checked."""
     old = {r.id.strip().upper(): r for r in base.requirements}
     items = []
+    inherited: set[str] = set()  # a duplicate id inherits nothing: only its first row does
     for i, row in enumerate(edited.to_dict("records"), start=1):
         text = str(row.get("text") or "").strip()
         if not text or text == "nan":
             continue
         weight = row.get("weight") if row.get("weight") in ("core", "secondary") else "core"
-        rid = str(row.get("id") or "").strip()
-        rid = rid if rid and rid != "nan" else f"R{i}"
-        prior = old.get(rid.upper())
+        rid = safe_requirement_id(str(row.get("id") or "")) or f"R{i}"
+        prior = old.get(rid) if rid not in inherited else None
+        inherited.add(rid)
         same = prior is not None and (prior.text or "").strip() == text
         items.append(RequirementItem(
             id=rid, text=text, weight=weight, graded=prior.graded if prior is not None else True,
@@ -2589,7 +2591,7 @@ def render_requirement_checklist(instructions: str, source_id: str,
     chosen = st.multiselect(
         "Requirements to grade (remove one to stop grading it)",
         options=ids, default=[r.id for r in pre.requirements if r.graded],
-        format_func=lambda i: f"{i}: {texts[i][:80]}",
+        format_func=lambda i: f"{_inert_model_text(i)}: {_inert_model_text(texts[i][:80])}",
         key=f"requirements_graded_{tag}_{generations.get(key, 0)}_{ids_digest}",
         help="A requirement that is removed will not be used to deduct points. Add it back to undo.")
     items = []
@@ -2676,17 +2678,17 @@ def _render_solution_check(key: str, tag: str, instructions: str, solution: Opti
 
     if any(r.solution_status for r in current.requirements):
         st.caption("Solution check: " + "; ".join(
-            f"{r.id} {rsc.solution_label(r)}" for r in current.requirements))
+            f"{_inert_model_text(r.id)} {rsc.solution_label(r)}" for r in current.requirements))
     suggested = rsc.suggested_ids(current)
     if suggested:
-        names = ", ".join(suggested)
+        names = ", ".join(_inert_model_text(rid) for rid in suggested)
         st.info(f"The check suggests your solution does not do: {names}. This is only a suggestion. "
                 "A student should not lose points for what your solution leaves out, so you may stop "
                 "grading these.", icon=":material/lightbulb:")
         by_id = {r.id: r for r in current.requirements}
         for rid in suggested:
             if by_id[rid].solution_evidence:
-                st.caption(f"{rid}: {_inert_model_text(by_id[rid].solution_evidence)}")
+                st.caption(f"{_inert_model_text(rid)}: {_inert_model_text(by_id[rid].solution_evidence)}")
         if not pre_apply:
             st.caption("Nothing has changed yet. The check is not yet proven accurate, so it only "
                        "suggests. Click the button, or remove them from the Requirements to grade list, "
@@ -2697,7 +2699,7 @@ def _render_solution_check(key: str, tag: str, instructions: str, solution: Opti
     not_graded = [r for r in current.requirements if not r.graded]
     if not_graded:
         st.caption("Not graded (will not be used to deduct points): "
-                   + "; ".join(f"{r.id} {_inert_model_text(r.text)}" for r in not_graded))
+                   + "; ".join(f"{_inert_model_text(r.id)} {_inert_model_text(r.text)}" for r in not_graded))
     unclear = [r.id for r in current.requirements if r.solution_status == "unclear"]
     if unclear:
         st.caption(f"The check could not tell for {', '.join(unclear)}. They stay graded. "
@@ -2708,7 +2710,7 @@ def _render_solution_check(key: str, tag: str, instructions: str, solution: Opti
             st.caption("You changed some requirements after they were checked. Re-check them to "
                        "update their Solution does it answer.")
         for rid in edited_rows:
-            if st.button(f"Re-check {rid}", key=f"recheck_solution_{tag}_{rid}", icon=":material/refresh:",
+            if st.button(f"Re-check {_inert_model_text(rid)}", key=f"recheck_solution_{tag}_{rid}", icon=":material/refresh:",
                          help="You changed this requirement after it was checked."):
                 run_check({rid})
     _after_check_notes(instructions, current)
