@@ -441,7 +441,7 @@ artifact rows held no status or gateway body, so the cause could not be read.
   with the gateway client's own retries (up to 3 each); only the outer attempt is charged.
 - **Budget, adaptive mode (the A/B):** every retry reserves the estimate before it is sent, like the
   first attempt. A failed attempt may have been billed, so when it fails its reservation becomes spend at
-  the estimate, and the same amount is added to that record's `cost_usd` (`cost_estimated: true`).
+  the estimate. Where that amount is recorded depends on the call's outcome: see "Cost accounting" below.
   Permit and reservation are freed before the wait, so a cancel during a backoff leaks neither.
 - **Budget, fixed mode (`suite run` without `CQC_AB_ADAPTIVE`):** no reservation exists. A failed attempt
   that will be retried is added to the budget at the estimate when it fails; the retry is sent only while
@@ -452,6 +452,32 @@ artifact rows held no status or gateway body, so the cause could not be read.
   attempt: 2 extra at the default, 4 at the cap. A failed attempt is charged at the estimate even if
   nothing was billed, so a burst of failures can reach `stop_at` early; that fails closed (the remaining
   cases get `error_kind: budget`).
+- **Cost accounting: the gate's cost is the real cost; the budget stays conservative.** A call that
+  retried and then succeeded used to carry its real usage cost plus the failed attempts' estimates in
+  one `cost_usd` with `cost_estimated: true`, so the cost-per-call ratio (the 1.5 gate) read estimates.
+  From the analysis of the artifacts of run 40094273402 (PR #446): 26 of the head's calls and 6 of the
+  base's were retried; every one had token counts and a result, and the estimated charges were 42% and
+  35% of the head's total cost in `grading` and `grading-solution`. Now, for a call that ends `ok` with a
+  usage cost reported by the response (`completion.cost_usd`): `cost_usd` is that real cost,
+  `cost_estimated` is `false`, and the failed attempts' estimates go to the new additive field
+  `retry_charge_usd`. The budget is charged `cost_usd + retry_charge_usd`, exactly the amount it was
+  charged before, so the key cap cannot be overshot. The gate, `aggregate`, `cost_per_call` and the cost
+  ratio read `cost_usd` only. When the call ends in a final failure, or no usage cost was ever reported,
+  nothing changes: `cost_usd` holds the estimate plus the failed attempts, `cost_estimated: true`,
+  `retry_charge_usd` absent. The key is omitted from a row without a separate charge, and
+  `SuiteRecord.from_json` ignores keys it does not know.
+- **Reading the Run stats cost lines:** `ab.md` "Run stats" adds, per suite and side,
+  `estimated-cost rows: N of M calls (X% of cost)`, plus `budget-only retry charge $Y` when there is one.
+  A side whose estimated rows are 10% or more of its cost is marked `ESTIMATE-DRIVEN`: its cost ratio
+  mostly measures the estimate, not usage. `ab.json` `run_stats` gains `head_cost` and `base_cost`
+  (`calls`, `estimated_rows`, `estimated_cost_usd`, `estimated_share`, `retry_charge_usd`); the log line
+  `A/B <suite>:` ends with the same counts, and `zero-cost rows with tokens: N` counts rows whose cost is 0 although
+  tokens were reported (a sign the response carried no cost). No verdict reads them. The A/B base side runs the OLD code
+  (the base ref), so its retried rows still carry the estimate inside `cost_usd` until the base ref
+  includes this change: expect `ESTIMATE-DRIVEN` on the base side for a run made before then. With a new-code head and an old-code base the cost
+  ratio is UNDERSTATED (the head looks cheaper): the flag warns per side but does not correct it. Merge
+  this change to master before dispatching an A/B whose base ref should have it. Rows
+  already written by older code are not rewritten when an artifact is rescored.
 - **Records:** `attempts` is the client's own tries plus the runner's retries, so `retried`,
   `extra_attempts` and `retry_rate` in `ab.json` / `ab.md` count them. Scoring is untouched: a call that
   still fails after its attempts is a failed call and scores 0, as before.
@@ -467,14 +493,18 @@ artifact rows held no status or gateway body, so the cause could not be read.
 - **Where it lives:** `error_detail` is written only to the records JSONL artifact (`raw_outputs.jsonl`),
   which must stay private. It never goes into a PR comment: the comment and `ab.md` carry counts keyed by
   status or exception class only. The key is absent from a row that never failed, and
-  `SuiteRecord.from_json` ignores keys it does not know. A reader from before this change
-  (`SuiteRecord(**json)`) would raise on a row that has it, so do not feed new artifacts to old code; and
-  the A/B base side runs the old code (no retries, no `error_detail`), so its retry stats are not like
+  `SuiteRecord.from_json` ignores keys it does not know, so an older reader loads a newer row without
+  error and simply does not see the key; and the A/B base side runs the old code (no retries, no `error_detail`), so its retry stats are not like
   for like.
 - **Report:** `ab.md` "Run stats" adds `head transport failures: N (final) / M (retried), by status: ...`
   (and the same for the base when it has any); `ab.json` `run_stats` gains `head_transport` and
   `base_transport`. No verdict reads them.
 - **Rollback:** revert the PR. Set `CQC_EVAL_TRANSPORT_RETRIES=1` to turn the retry off without a revert.
+  Reverting the cost-accounting change alone (`fix(eval): record the real usage cost of retried calls`)
+  restores the old `cost_usd` (estimate folded in) and drops `retry_charge_usd` and the cost lines;
+  old (or reverted) code loads new rows without error but silently IGNORES `retry_charge_usd`, so its
+  `_recorded_cost` and budget accounting undercount those rows by the failed-attempt charge (their
+  `cost_usd` holds only the real cost).
 
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.
