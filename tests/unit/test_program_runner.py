@@ -50,7 +50,7 @@ EXPECTED_COMMAND = [
     "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
     "--ulimit", "nofile=256:256", "--ulimit", "fsize=16777216:16777216",
     "--ulimit", "core=0", "--user", "10001:10001",
-    "cpcc_task_automation/exec-runner:1",
+    pr.RUNNER_IMAGE,
 ]
 
 
