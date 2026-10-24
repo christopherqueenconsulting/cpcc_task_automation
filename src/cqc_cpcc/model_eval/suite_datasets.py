@@ -89,7 +89,9 @@ def _exam_values(assignment_key: str, error_ids: list, prefix: str) -> list:
     members = {**MinorErrorType.__members__, **MajorErrorType.__members__}
     out = []
     for error_id in error_ids:
-        name = EXAM_ENUMS[assignment_key][error_id[len(prefix):]]
+        name = EXAM_ENUMS[assignment_key].get(error_id[len(prefix):])
+        if name is None:  # e.g. the file-name ids of the file_name twin: the exam lists do not offer them
+            continue
         out.append(members[name].value)
     return sorted(set(out))
 

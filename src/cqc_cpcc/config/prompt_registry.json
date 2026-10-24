@@ -3,7 +3,7 @@
   "_owner": "human. Every LLM prompt the app sends is listed here; see docs/PROMPTS.md. The model-promotion bot must never edit this file.",
   "prompts": {
     "rubric-grading": {
-      "version": 2,
+      "version": 3,
       "status": "live",
       "role": "grading",
       "description": "Main rubric grading (Grade Assignment page, rubric mode): error detection, per-criterion levels/feedback, requirement marking.",
@@ -23,7 +23,8 @@
         "poetry.lock",
         "src/cqc_cpcc/rubric_models.py",
         "src/cqc_cpcc/utilities/zip_grading_utils.py",
-        "src/cqc_cpcc/scoring/"
+        "src/cqc_cpcc/scoring/",
+        "src/cqc_cpcc/utilities/AI/untrusted_fence.py"
       ],
       "graders": [
         "ok_rate",
@@ -34,7 +35,7 @@
         "requirement_agreement",
         "injection_pass_rate"
       ],
-      "fingerprint": "sha256:d7a9889859242e70e15dd31186e637ecbe18a533f4b3be247742d9307e59c0e4",
+      "fingerprint": "sha256:59c70ededfd7caed3e8d69392a989b63914431ce9694d6758689348a264a2774",
       "suites": [
         "grading",
         "grading-levelband",
@@ -184,7 +185,7 @@
       ]
     },
     "exam-grading": {
-      "version": 2,
+      "version": 3,
       "status": "live",
       "role": "grading",
       "description": "Exam grading (Grade Assignment page, exam mode via CodeGrader): major/minor error detection against the course's error enums.",
@@ -203,9 +204,10 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock",
         "src/cqc_cpcc/exam_review.py",
-        "src/cqc_cpcc/utilities/utils.py"
+        "src/cqc_cpcc/utilities/utils.py",
+        "src/cqc_cpcc/utilities/AI/untrusted_fence.py"
       ],
-      "fingerprint": "sha256:f8ec5d378510b97b4fb1aad93e1c3a24318fb9d5a9baf6cb4723d2a785b3f2a5",
+      "fingerprint": "sha256:74f33e8d90fecab7318385e4a10a4e3a7fd009df84af0e4236dbf752f2fe1499",
       "suites": [
         "exam-grading"
       ]
