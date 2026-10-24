@@ -39,26 +39,26 @@ class FakeRun:
     def __init__(self, bad=(), mode="exit", all_fail=False):
         self.calls, self.bad, self.mode, self.all_fail = [], set(bad), mode, all_fail
 
-    def __call__(self, cmd, **kw):
+    def __call__(self, cmd, *, cwd, env, timeout):
         suites = cmd[cmd.index("--suites") + 1].split(",")
         out = Path(cmd[cmd.index("--out") + 1])
         self.calls.append(suites)
-        assert "OPENROUTER_API_KEY" not in kw["env"]
+        assert "OPENROUTER_API_KEY" not in env and "GITHUB_OUTPUT" not in env
         if self.mode == "timeout":
-            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+            raise subprocess.TimeoutExpired(cmd, timeout)
         if self.all_fail or self.bad & set(suites):
             if self.mode == "garbage":
                 out.write_text("{not json")
-                return subprocess.CompletedProcess(cmd, 0, "", "")
-            return subprocess.CompletedProcess(cmd, 3, "", "Traceback\nValueError: boom " + "x" * 3000)
+                return 0, ""
+            return 3, "Traceback\nValueError: boom " + "x" * 3000
         out.write_text(json.dumps(_cap(*suites)))
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+        return 0, ""
 
 
 class TestCaptureBase:
     def test_a_new_suite_does_not_poison_the_others(self, worktree, tmp_path, monkeypatch):
         fake = FakeRun()
-        monkeypatch.setattr(pa.subprocess, "run", fake)
+        monkeypatch.setattr(pa, "_run_capture", fake)
         captures, failures = pa.capture_base(worktree, ["a", "brand-new", "b"], tmp_path)
         assert failures == {"brand-new": "new suite: no base side"}
         assert set(captures) == {"a", "b"}
@@ -66,13 +66,13 @@ class TestCaptureBase:
 
     def test_only_new_suites_means_no_subprocess(self, worktree, tmp_path, monkeypatch):
         fake = FakeRun()
-        monkeypatch.setattr(pa.subprocess, "run", fake)
+        monkeypatch.setattr(pa, "_run_capture", fake)
         captures, failures = pa.capture_base(worktree, ["x", "y"], tmp_path)
         assert captures == {} and set(failures) == {"x", "y"} and fake.calls == []
 
     def test_one_suite_crashing_is_isolated_by_the_retry(self, worktree, tmp_path, monkeypatch, capsys):
         fake = FakeRun(bad={"b"})
-        monkeypatch.setattr(pa.subprocess, "run", fake)
+        monkeypatch.setattr(pa, "_run_capture", fake)
         captures, failures = pa.capture_base(worktree, ["a", "b", "c"], tmp_path)
         assert set(captures) == {"a", "c"}
         assert failures["b"].startswith("base capture failed: exit 3")
@@ -80,36 +80,36 @@ class TestCaptureBase:
         assert len(capsys.readouterr().out) < 3 * (pa.STDERR_CAP + 400)  # stderr is capped
 
     def test_every_suite_crashing_fails_every_suite(self, worktree, tmp_path, monkeypatch):
-        monkeypatch.setattr(pa.subprocess, "run", FakeRun(all_fail=True))
+        monkeypatch.setattr(pa, "_run_capture", FakeRun(all_fail=True))
         captures, failures = pa.capture_base(worktree, ["a", "b"], tmp_path)
         assert captures == {} and set(failures) == {"a", "b"}
         assert all(v.startswith("base capture failed") for v in failures.values())
 
     def test_a_single_crashing_suite_is_not_retried_twice(self, worktree, tmp_path, monkeypatch):
         fake = FakeRun(all_fail=True)
-        monkeypatch.setattr(pa.subprocess, "run", fake)
+        monkeypatch.setattr(pa, "_run_capture", fake)
         _, failures = pa.capture_base(worktree, ["a"], tmp_path)
         assert fake.calls == [["a"]] and "exit 3" in failures["a"]
 
     def test_a_timeout_fails_closed_without_a_retry(self, worktree, tmp_path, monkeypatch):
         fake = FakeRun(mode="timeout")
-        monkeypatch.setattr(pa.subprocess, "run", fake)
+        monkeypatch.setattr(pa, "_run_capture", fake)
         captures, failures = pa.capture_base(worktree, ["a", "b"], tmp_path)
         assert captures == {} and failures == {"a": "base capture failed: timed out",
                                                "b": "base capture failed: timed out"}
         assert len(fake.calls) == 1
 
     def test_malformed_json_fails_closed(self, worktree, tmp_path, monkeypatch):
-        monkeypatch.setattr(pa.subprocess, "run", FakeRun(all_fail=True, mode="garbage"))
+        monkeypatch.setattr(pa, "_run_capture", FakeRun(all_fail=True, mode="garbage"))
         captures, failures = pa.capture_base(worktree, ["a", "b"], tmp_path)
         assert captures == {} and all("unreadable capture" in v for v in failures.values())
 
     def test_json_that_is_not_an_object_fails_closed(self, worktree, tmp_path, monkeypatch):
         def run(cmd, **kw):
             Path(cmd[cmd.index("--out") + 1]).write_text("[1, 2]")
-            return subprocess.CompletedProcess(cmd, 0, "", "")
+            return 0, ""
 
-        monkeypatch.setattr(pa.subprocess, "run", run)
+        monkeypatch.setattr(pa, "_run_capture", run)
         captures, failures = pa.capture_base(worktree, ["a"], tmp_path)
         assert captures == {} and "not an object" in failures["a"]
 
@@ -176,16 +176,17 @@ class TestRequestsIdenticalPerSuite:
 
 class TestIdenticalForAb:
     def _run(self, monkeypatch, out, report=None, fail=None):
-        def run(cmd, **kw):
-            assert "OPENROUTER_API_KEY" not in kw["env"] and "GITHUB_OUTPUT" not in kw["env"]
+        def run(cmd, *, cwd, env, timeout):
+            assert "OPENROUTER_API_KEY" not in env and "GITHUB_OUTPUT" not in env
+            assert timeout == pa.IDENTICAL_CHECK_TIMEOUT_S == 1800
             if fail:
                 raise fail
             scratch = Path(cmd[cmd.index("--out") + 1])
             scratch.mkdir(parents=True, exist_ok=True)
             (scratch / "requests.json").write_text(json.dumps(report))
-            return subprocess.CompletedProcess(cmd, 0, "", "")
+            return 0, ""
 
-        monkeypatch.setattr(pa.subprocess, "run", run)
+        monkeypatch.setattr(pa, "_run_capture", run)
 
     def test_only_the_identical_suites_are_dropped(self, tmp_path, monkeypatch):
         head = _cap("a", "b", "c", change=("b",))
@@ -196,8 +197,7 @@ class TestIdenticalForAb:
         assert saved["format"] == rc.FORMAT and saved["settings"] == FMT_SETTINGS
         assert not (tmp_path / "skip-check").exists()
 
-    @pytest.mark.parametrize("fail", [subprocess.TimeoutExpired("x", 1),
-                                      subprocess.CalledProcessError(1, "x"), OSError("no")])
+    @pytest.mark.parametrize("fail", [subprocess.TimeoutExpired("x", 1), RuntimeError("exit 1"), OSError("no")])
     def test_any_error_runs_every_suite(self, tmp_path, monkeypatch, fail):
         self._run(monkeypatch, tmp_path, fail=fail)
         assert pa._identical_for_ab(["a"], "origin/master", tmp_path) == ([], {})
@@ -331,3 +331,117 @@ class TestBaseRuleReverifiesTheSkip:
         monkeypatch.setattr(pa, "suites_from_data", lambda *a, **k: {"digest": "test"})
         out = self._out(tmp_path, None, status="pass")
         assert self._decide(out)["combined_status"] == "fail"  # 'pass' without saved outputs is not a skip
+
+
+class TestOverridesForceThePaidRun:
+    """full_ab and the PROMPT_EVAL_FAST_PATH=off variable reach prompt-ab as FULL_AB / FAST_PATH (dispatch step)."""
+
+    @pytest.fixture(autouse=True)
+    def clean_env(self, monkeypatch):
+        for name in (pa.SKIP_IDENTICAL_ENV, "FULL_AB", "FAST_PATH"):
+            monkeypatch.delenv(name, raising=False)
+
+    def test_the_pr_ab_job_exports_none_of_them_so_the_skip_is_on(self):
+        assert pa.skip_identical_enabled() is True
+
+    @pytest.mark.parametrize("name,value", [("FULL_AB", "true"), ("FULL_AB", "TRUE"), ("FAST_PATH", "off"),
+                                            ("FAST_PATH", "OFF"), (pa.SKIP_IDENTICAL_ENV, "0"),
+                                            (pa.SKIP_IDENTICAL_ENV, "off")])
+    def test_each_override_turns_the_skip_off(self, monkeypatch, name, value):
+        monkeypatch.setenv(name, value)
+        assert pa.skip_identical_enabled() is False
+
+    @pytest.mark.parametrize("name,value", [("FULL_AB", "false"), ("FULL_AB", ""), ("FAST_PATH", "on"),
+                                            ("FAST_PATH", "")])
+    def test_other_values_leave_it_on(self, monkeypatch, name, value):
+        monkeypatch.setenv(name, value)
+        assert pa.skip_identical_enabled() is True
+
+    async def test_prompt_ab_runs_everything_paid_under_full_ab(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setenv("CQC_TEST_MODE", "true")
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        monkeypatch.setenv("FULL_AB", "true")
+        calls = []
+        monkeypatch.setattr(pa, "_identical_for_ab", lambda *a: calls.append(a) or (["requirement-extraction"], {}))
+        report = await pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path, repeats=1)
+        assert calls == [] and report["suites"]["requirement-extraction"]["status"] != pa.IDENTICAL_SKIPPED
+
+    async def test_no_base_worktree_is_created_when_every_suite_is_skipped(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pa, "_identical_for_ab", lambda *a: (["flowgorithm-grade"], {"suites": {}}))
+
+        def no_worktree(*a, **k):
+            raise AssertionError("a base worktree was created")
+
+        monkeypatch.setattr(pa, "_base_worktree", no_worktree)
+        report = await pa.prompt_ab(["flowgorithm-grade"], "HEAD", [], tmp_path, repeats=1)
+        assert report["status"] == "pass"
+
+
+class TestCaptureProcessGroup:
+    def test_a_timeout_kills_the_whole_process_group(self, tmp_path):
+        import os
+        import sys
+        import time
+
+        pidfile = tmp_path / "child.pid"
+        code = ("import subprocess, sys, time; "
+                "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); "
+                f"open({str(pidfile)!r}, 'w').write(str(p.pid)); time.sleep(120)")
+        with pytest.raises(subprocess.TimeoutExpired):
+            pa._run_capture([sys.executable, "-c", code], cwd=tmp_path, env=dict(os.environ), timeout=3)
+        child = int(pidfile.read_text())
+        for _ in range(50):
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            os.kill(child, 9)
+            pytest.fail("the grandchild outlived the timeout")
+
+    def test_exit_code_and_stderr_come_back(self, tmp_path):
+        import os
+        import sys
+
+        code, err = pa._run_capture([sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(4)"],
+                                    cwd=tmp_path, env=dict(os.environ), timeout=30)
+        assert (code, err) == (4, "boom")
+
+
+class TestMixedReportInTheBaseRule:
+    """One verified skip next to one suite the A/B really ran: each is decided its own way."""
+
+    def test_a_verified_skip_and_a_run_suite_both_count(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        monkeypatch.setenv("CQC_TEST_MODE", "true")
+        monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+        monkeypatch.setenv("CQC_AB_SKIP_IDENTICAL", "0")
+        import asyncio
+
+        report = asyncio.run(pa.prompt_ab(["requirement-extraction"], "HEAD", [], tmp_path))
+        if report["suites"]["requirement-extraction"]["status"] == "no-base":
+            pytest.skip("no base run in this checkout")
+        ab = json.loads((tmp_path / "ab.json").read_text())
+        ab["suites"]["digest"] = {"suite": "digest", "status": pa.IDENTICAL_SKIPPED, "models": {}, "reasons": [],
+                                  "notes": []}
+        ab["request_capture"] = rc.capture(["digest"])
+        (tmp_path / "ab.json").write_text(json.dumps(ab))
+        monkeypatch.setattr(pa, "suites_from_data",
+                            lambda *a, **k: {"requirement-extraction": "t", "digest": "t"})
+        sha = _git_head()
+        decided = pa.decide_with_this_rule(tmp_path, pa.REPO_ROOT, sha, sha)
+        assert decided["suites"]["digest"]["status"] == pa.IDENTICAL_SKIPPED
+        assert decided["suites"]["requirement-extraction"]["status"] in ("pass", "pass-provisional")
+        assert decided["status"] in ("pass", "pass-provisional") and decided["combined_status"] != "fail"
+        # a forged capture vetoes the skipped suite on its own; the run suite keeps its result
+        requests = ab["request_capture"]["suites"]["digest"]["requests"]
+        requests[next(iter(requests))] = ["forged"]
+        (tmp_path / "ab.json").write_text(json.dumps(ab))
+        decided = pa.decide_with_this_rule(tmp_path, pa.REPO_ROOT, sha, sha)
+        assert decided["suites"]["digest"]["status"] == "fail"
+        assert decided["suites"]["requirement-extraction"]["status"] in ("pass", "pass-provisional")
+        assert decided["combined_status"] == "fail"

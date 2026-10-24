@@ -567,8 +567,23 @@ SKIP_IDENTICAL_ENV = "CQC_AB_SKIP_IDENTICAL"
 SKIP_NOTE = "requests, gateway calls and outputs identical to the base: not re-run, $0"
 
 
+#: Longest the whole $0 check may take (30 minutes). Past it the check is abandoned and every suite runs
+#: paid, so the skip can add at most this much to an A/B (the ``ab`` job's own limit is 240 minutes).
+IDENTICAL_CHECK_TIMEOUT_S = 30 * 60
+
+
 def skip_identical_enabled() -> bool:
-    return os.environ.get(SKIP_IDENTICAL_ENV, "1").strip().lower() not in ("0", "off", "false", "no")
+    """False when any switch says to run every suite paid.
+
+    ``CQC_AB_SKIP_IDENTICAL=0``; the dispatch step's ``FULL_AB=true`` (maintainer override) and
+    ``FAST_PATH=off`` (the repository variable ``PROMPT_EVAL_FAST_PATH``, Christopher's switch), which
+    the dispatch step exports to this process. The PR ``ab`` job exports none of them.
+    """
+    if os.environ.get(SKIP_IDENTICAL_ENV, "1").strip().lower() in ("0", "off", "false", "no"):
+        return False
+    if os.environ.get("FULL_AB", "").strip().lower() == "true":
+        return False
+    return os.environ.get("FAST_PATH", "").strip().lower() != "off"
 
 
 def _verify_skipped(skipped: list, report: dict, head_reg, base_reg) -> dict:
@@ -760,7 +775,7 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
           f"{workers} calls in flight per side")
     if estimate > budget.stop_at:
         raise SystemExit("the A/B estimate exceeds the prompt-eval budget; run fewer suites")
-    worktree = _base_worktree(base_ref, out / "base-src")
+    worktree = _base_worktree(base_ref, out / "base-src") if suite_ids else None  # all skipped: nothing to run
     results = {}
     _allow_base()
     try:
@@ -852,7 +867,9 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                     "(the Paired test column names the split); the pairwise judge still scores holdout only")
     finally:
         _terminate_live_base(stop_new=True)  # a cancelled or failed A/B must not leave a base run under its worktree
-        subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
+        if worktree is not None:
+            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT,
+                           capture_output=True)
         _allow_base()
     results = {**skipped_results, **results}
     for suite_id, r in results.items():  # last lines of the log: the workflow shows only its tail
@@ -881,10 +898,12 @@ def _identical_for_ab(suite_ids: list, base_ref: str, out: Path) -> tuple:
     env.pop("GITHUB_OUTPUT", None)  # the check must not set the workflow's own outputs
     scratch = out / "skip-check"
     try:
-        subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests-identical", "--suites",
-                        ",".join(suite_ids), "--base-ref", base_ref, "--out", str(scratch)],
-                       cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=2 * BASE_CAPTURE_TIMEOUT_S,
-                       check=True)
+        returncode, _err = _run_capture([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests-identical",
+                                         "--suites", ",".join(suite_ids), "--base-ref", base_ref,
+                                         "--out", str(scratch)],
+                                        cwd=REPO_ROOT, env=env, timeout=IDENTICAL_CHECK_TIMEOUT_S)
+        if returncode != 0:
+            raise RuntimeError(f"exit {returncode}")
         report = json.loads((scratch / "requests.json").read_text(encoding="utf-8"))
         identical = [s for s in suite_ids if (report.get("suites") or {}).get(s, "x") is None]
         head = report.get("head") or {}
@@ -1157,6 +1176,28 @@ class _CaptureTimeout(Exception):
     pass
 
 
+def _run_capture(cmd: list, *, cwd: Path, env: dict, timeout: float) -> tuple:
+    """Run a capture subprocess in its own process group; ``(returncode, stderr)``.
+
+    On a timeout the whole group is stopped (TERM, then KILL), so a grandchild does not outlive the
+    run and hold the temporary base worktree open, and ``subprocess.TimeoutExpired`` is raised.
+    """
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)
+    try:
+        _out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _signal_group(proc, signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        _signal_group(proc, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)
+        _reap(proc)
+        raise
+    return proc.returncode, err or ""
+
+
 def _base_capture_once(worktree: Path, suite_ids: list, file: Path, timeout: int) -> dict:
     """One ``prompt-requests`` subprocess of the BASE code. Returns the parsed capture.
 
@@ -1164,19 +1205,19 @@ def _base_capture_once(worktree: Path, suite_ids: list, file: Path, timeout: int
     a missing file or malformed JSON. Nothing is trusted unless it parses to a dict.
     """
     # No API key: the capture never sends, and a path that bypassed it could not either.
-    env = {k: v for k, v in os.environ.items() if k not in ("OPENROUTER_API_KEY", "OPENAI_API_KEY")}
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "GITHUB_OUTPUT")}
     env["PYTHONPATH"] = str(worktree / "src")
     try:
-        result = subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests", "--suites",
-                                 ",".join(suite_ids), "--out", str(file)],
-                                cwd=worktree, env=env, capture_output=True, text=True, timeout=timeout)
+        returncode, stderr = _run_capture([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests",
+                                           "--suites", ",".join(suite_ids), "--out", str(file)],
+                                          cwd=worktree, env=env, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         raise _CaptureTimeout() from e
-    if result.returncode != 0:
-        tail = (result.stderr or "").strip().splitlines()[-1:] or [""]
-        print(f"base capture of {','.join(suite_ids)} exited {result.returncode}: "
-              f"{(result.stderr or '')[-STDERR_CAP:]}")
-        raise RuntimeError(f"exit {result.returncode}: {tail[0][:120]}")
+    if returncode != 0:
+        tail = (stderr or "").strip().splitlines()[-1:] or [""]
+        print(f"base capture of {','.join(suite_ids)} exited {returncode}: {(stderr or '')[-STDERR_CAP:]}")
+        raise RuntimeError(f"exit {returncode}: {tail[0][:120]}")
     try:
         data = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:

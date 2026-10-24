@@ -240,8 +240,37 @@ not run the identical suites. Each is recorded in `ab.json` / `ab.md` with statu
 $0") and counts as a pass in the overall status. No threshold, margin or decision function
 changed: the only new status is this one. Any doubt runs the suite: a check that errors, times
 out or returns no head capture skips nothing; an explicit `--model` skips nothing (the capture
-pins the incumbent only); `CQC_AB_SKIP_IDENTICAL=0` (or `off`, `false`, `no`) turns it off.
-This needs no workflow change: the workflow passes the suites and uploads `ab.json`.
+pins the incumbent only). This needs no workflow change: the workflow passes the suites and
+uploads `ab.json`.
+
+What turns the skip off (each makes every suite run paid):
+
+| Where | Setting | Reaches `prompt-ab` as |
+|---|---|---|
+| Maintainer dispatch, mode `ab` | `full_ab: true` | `FULL_AB=true` (dispatch step env) |
+| Repository variable | `PROMPT_EVAL_FAST_PATH=off` (Christopher's switch, any case) | `FAST_PATH=off` (dispatch step env) |
+| Any process that runs `prompt-ab` | `CQC_AB_SKIP_IDENTICAL=0` (or `off`, `false`, `no`) | itself |
+
+The pull-request `ab` job (workflow `prompt-eval.yml`, step "A/B base vs head prompts") exports
+none of `FULL_AB`, `FAST_PATH` or `CQC_AB_SKIP_IDENTICAL`. So in a PR run the variable
+`PROMPT_EVAL_FAST_PATH=off` does **not** reach the skip, and `CQC_AB_SKIP_IDENTICAL` cannot be
+set without editing the workflow YAML (a `.github/` change). There, only such a workflow edit or
+reverting this change turns the skip off; a maintainer who wants a full paid A/B of a PR uses the
+dispatch with `full_ab: true`. (`PROMPT_EVAL_FAST_PATH=off` does stop the `detect` job's
+whole-PR fast path in a PR run, as before.)
+
+What the reviewer sees for a skipped suite: the PR comment embeds `ab.md`, which has the table row
+`| suite | all | n/a | n/a | 0 | identical to the base, not re-run | 0 | ✅ identical-skipped |` and the
+note `requests, gateway calls and outputs identical to the base: not re-run, $0`; the base-branch
+check lists it as `identical-skipped` too, or as a failure naming the difference.
+
+Cost of the check: it adds a $0 capture before the paid run. Measured (builder's local run, warm
+cache, `prompt-requests-identical --suites grading-levelband,digest --base-ref origin/master`):
+8.3 s wall clock for two suites. Larger suites with more cases take longer (the unit suite's
+cold, loaded capture setup of several suites took 242 s); the whole check is cut off after 30
+minutes (`IDENTICAL_CHECK_TIMEOUT_S`) and then every suite runs paid, so the worst case is 30
+minutes added to an A/B whose job limit is 240 minutes. The capture subprocesses run in their own
+process group, which is killed on a timeout.
 
 The skip carries its evidence: `ab.json` has `request_capture`, the head's capture of just the
 skipped suites. `ab-base-rule` and `dispatch-report` run `prompt-ab-decide` from the base
@@ -252,7 +281,8 @@ capture or a suite the base does not know makes that suite `fail`. A required su
 neither skipped-and-verified nor run with saved outputs fails as before. Because the base
 branch's code does the re-check, the base branch must contain this change before a PR's
 `identical-skipped` suites are accepted; until then they fail the base check, which is the safe
-direction.
+direction. For the same reason the `ab` job runs the PR head's `prompt-ab`: a PR opened before
+this change merges never skips a suite until it merges master.
 
 *Threat model of the skip.* The PR's code produces its own side: the head capture, `ab.json`
 and the `identical-skipped` status. A hostile author can forge a head capture equal to the
