@@ -82,8 +82,8 @@ labels come from construction and are drafts until reviewed.
 | `grading-levelband` | rubric-grading | 18 | CSC-113 reflections, strong/weak per criterion | allowed level per criterion, score range, feedback length |
 | `requirement-extraction` | requirement-extraction | 36 | 12 assignments x numbered/bulleted/prose; style rules that must not become items | recall, precision, one item per step, R1..Rn ids |
 | `effort-recommendation` | effort-recommendation | 15 | 12 synthetic assignments (CSC 151 Java, CSC 134 C++, CSC 251 Java) + 3 injection twins, each with 4 labeled grading cases (`cases/`) for measuring the right effort | confident answers not below the measured effort, not over, safety floor, supported efforts, 1-3 reasons, injection |
-| `exam-grading` | exam-grading | 74 | v2 programs mapped to exam error types | type F1, offered types only, major/minor severity, injection, no solution leak |
-| `project-feedback` | project-feedback | 74 | v2 programs mapped to FeedbackType | type F1, explanation present, no solution leak, injection |
+| `exam-grading` | exam-grading | 81 | v2 programs mapped to exam error types | type F1, offered types only, major/minor severity, injection, no solution leak |
+| `project-feedback` | project-feedback | 81 | v2 programs mapped to FeedbackType | type F1, explanation present, no solution leak, injection |
 | `flowgorithm-grade` | flowgorithm-grade | 24 | 3 flowcharts x 8 broken-criteria variants | grade in range, deduction F1, valid criteria, arithmetic, no leak |
 | `digest` | preprocessing-digest | 16 | 2 multi-file Java projects, seeded defects, a removed method | defect coverage, fact retention, files, completeness, compression |
 
