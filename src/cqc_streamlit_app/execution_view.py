@@ -58,11 +58,23 @@ from cqc_cpcc.utilities.utils import read_file
 
 #: Shown where programs cannot run: Streamlit Community Cloud, or ``CQC_EXECUTION=off``.
 NOTICE = ("Output check runs programs in a local Docker sandbox and is not available here. "
-          "Grading uses the AI review and the compile check.")
+          "Grading uses the AI review and the compile check. Run the app on your own computer to use it.")
+
+#: Shown, not hover help, directly under the output-check heading.
+SETUP_CAPTION = ("Output check is optional and off by default. It runs each student program in a local Docker "
+                 "sandbox and compares its output with your solution's.")
+VERDICT_HELP = ("Match: same output. Format only: same content, spacing or case differs. Different values: numbers "
+                "differ. Different order: same lines, wrong order. Different words: text differs. No output / "
+                "Crashed / Timed out / Did not run: the program printed nothing, failed, ran too long, or was "
+                "not run.")
+DISAGREES_LABEL = "Differs (AI found no output error)"
+DISAGREES_CAPTION = ("The programs print different output, but the AI review reported no output error. "
+                     "Check this student by hand.")
 
 #: Longest code block shown for one input, expected output or difference.
 MAX_SHOWN_CHARS = 4000
 MAX_IGNORE_LINES = 20
+MAX_EDITED_ROWS = 50
 MAX_IGNORE_CHARS = 80
 BUILD_TIMEOUT_SECONDS = 900
 
@@ -172,13 +184,11 @@ def _start_build_clicked() -> None:
     start_image_build()
 
 
-@st.fragment(run_every=2.0)
+@st.fragment(run_every=5.0)
 def _build_progress() -> None:
-    snap = build_state()
-    if snap["state"] != "running":
+    if build_state()["state"] != "running":
         st.rerun()
-    st.info(f"Building the sandbox image... {time.time() - snap['started']:.0f} s. "
-            "You can keep using the page; this can take a few minutes the first time.",
+    st.info("Building the image... this can take a few minutes. You can keep using the page.",
             icon=":material/hourglass_top:")
 
 
@@ -212,6 +222,9 @@ def render_runner_status() -> bool:
         st.button("Build image", key="exec_build_image", icon=":material/build:", disabled=not can_build,
                   on_click=_start_build_clicked,
                   help=None if can_build else "Start Docker first, then reload this page.")
+        if not can_build:
+            st.caption(f"Build image is off because Docker is not ready ({safe_line(reason)}). "
+                       "Start Docker, then reload this page.")
     st.caption("Or build it yourself in a terminal:")
     st.code(shlex.join(pr.build_image_command()), language="bash")
     return False
@@ -285,7 +298,7 @@ def fold_editor(base: Sequence[TestCase], edited) -> list:
     by_id = {c.id: c for c in base}
     used = set(by_id)
     out = []
-    for row in edited.to_dict("records"):
+    for row in edited.to_dict("records")[:MAX_EDITED_ROWS]:
         rid = _text(row.get("id")).strip()
         label = " ".join(_text(row.get("Label")).split())
         raw = _text(row.get("Input"))
@@ -481,10 +494,17 @@ def render_output_check_setup(instructions: str, solution_file_paths) -> Optiona
         cases_frame(state["base"], state["dropped"]), key=f"output_cases_{key}_{state['gen']}",
         hide_index=True, num_rows="dynamic", column_order=CASE_COLUMNS,
         column_config={
-            "Use": st.column_config.CheckboxColumn("Use", default=True, width="small"),
+            "Use": st.column_config.CheckboxColumn("Use", default=True, width="small",
+                                                 help="Tick to include this case when the solution is run."),
             "Label": st.column_config.TextColumn("Label", max_chars=tcg.MAX_LABEL_CHARS),
-            "Kind": st.column_config.TextColumn("Kind", disabled=True, width="small"),
-            "Source": st.column_config.TextColumn("Source", disabled=True, width="small"),
+            "Kind": st.column_config.TextColumn(
+                "Kind", disabled=True, width="small",
+                help="Boundary: sits on the exact edge of a condition. Sample run: from the instructions. "
+                     "Typical: any other input."),
+            "Source": st.column_config.TextColumn(
+                "Source", disabled=True, width="small",
+                help="Where the input came from: sample (a sample run in the instructions), manual (typed by "
+                     "you) or llm (suggested by the AI)."),
             "Input": st.column_config.TextColumn("Input", help="What the program reads. \\n starts a new line."),
             "Status": st.column_config.TextColumn("Status", disabled=True),
             "Expected": st.column_config.TextColumn("Expected", disabled=True,
@@ -499,7 +519,8 @@ def render_output_check_setup(instructions: str, solution_file_paths) -> Optiona
 
     with st.container(horizontal=True, vertical_alignment="center"):
         run_clicked = st.button("Run solution on these inputs", key=f"output_run_{key}",
-                                icon=":material/play_arrow:", disabled=not any(c.enabled for c in cases))
+                                icon=":material/play_arrow:", disabled=not any(c.enabled for c in cases),
+                                help=None if any(c.enabled for c in cases) else "Tick at least one case.")
         suggest_clicked = st.button("Suggest test cases", key=f"output_suggest_{key}",
                                     icon=":material/auto_awesome:")
     if run_clicked:
@@ -562,7 +583,7 @@ def _label_from_report(report: dict) -> str:
     gate = report.get("gate") or {}
     label = _MODE_TEXT.get(gate.get("mode"), "Checked")
     if gate.get("disagrees"):
-        return f"{label} (disagrees)"
+        return DISAGREES_LABEL
     if gate.get("mode") in ("match", "format_only") and not gate.get("verified"):
         return f"{label} (evidence only)"
     return label
@@ -591,6 +612,8 @@ def render_output_check(report: dict, plan: Optional[ExecutionPlan] = None) -> N
     uncovered = gate.get("uncovered_conditions") or []
     if uncovered:
         st.caption("No ready test case on the exact edge of: " + ", ".join(safe_line(str(u)) for u in uncovered) + ".")
+    if gate.get("disagrees"):
+        st.caption(DISAGREES_CAPTION)
     results = report.get("cases") or []
     if not results:
         return
@@ -600,6 +623,7 @@ def render_output_check(report: dict, plan: Optional[ExecutionPlan] = None) -> N
     else:
         st.caption("The test cases of this run are not in this session, so inputs and expected output are not "
                    "shown. The verdicts and differences below are from the run.")
+    st.caption(VERDICT_HELP)
     st.dataframe(
         [{"Case": _first_line(r.get("case_id"), 20), "Label": _first_line(getattr(known.get(r.get("case_id")), "label", "")),
           "Verdict": _VERDICT_TEXT.get(r.get("verdict"), "Unknown"), "Detail": _first_line(r.get("detail"), 30)}

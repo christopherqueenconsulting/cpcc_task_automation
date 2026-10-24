@@ -644,6 +644,10 @@ def display_rubric_overrides_editor(rubric: Rubric) -> RubricOverrides:
 
 
 _EXECUTION_CATEGORIES = ("output_format", "output_values", "sequence")
+#: What the editor shows for each saved value; the saved value stays one of the three ids.
+_EXECUTION_CATEGORY_LABELS = {"output_format": "Wording or layout of the output",
+                              "output_values": "Wrong numbers or values",
+                              "sequence": "Wrong order of steps"}
 
 
 def _category_cell(value) -> Optional[str]:
@@ -908,9 +912,9 @@ def _render_error_definitions_editor(registry, course_id, selected_assignment_id
                 "Output check role",
                 options=list(_EXECUTION_CATEGORIES),
                 required=False,
-                help="Which output difference this error is for when the output check is on: "
-                     "output_format, output_values or sequence. Leave blank for none (the check then "
-                     "guesses from the id and name)."
+                format_func=lambda v: _EXECUTION_CATEGORY_LABELS.get(v, str(v)),
+                help="Which kind of output difference this error covers when the output check is on. "
+                     "Leave blank if none."
             ),
         },
         key=f"error_definitions_editor_{course_id}_{selected_assignment_id}"
@@ -3134,6 +3138,7 @@ async def get_rubric_based_exam_grading():
         execution_plan = None
         if grading_mode != "errors_only":
             st.subheader("Output check (optional)", anchor=False)
+            st.caption(execution_view.SETUP_CAPTION)
             execution_plan = execution_view.render_output_check_setup(
                 assignment_instructions_content, solution_file_paths)
 
@@ -3663,9 +3668,9 @@ def _render_scoring_notes(result, run_key: str, student_id: Optional[str]) -> No
     if not notes:
         return
     st.markdown("**Scoring notes**")
-    st.caption("Not for the student. Reinstate puts a removed error back and recomputes the "
-               "score without a model call; there is no undo short of re-grading. Remove takes out "
-               "an error the output check added, the same way, and Reinstate brings it back.")
+    st.caption("Not for the student. Remove: take out an error the output check added. "
+               "Reinstate: put back an error that was removed. "
+               "Neither calls the model. To undo either, re-grade the student.")
     for i, n in enumerate(notes):
         with st.container(horizontal=True):
             # Error names come from the model: never live Markdown.

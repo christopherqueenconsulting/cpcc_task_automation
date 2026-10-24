@@ -101,7 +101,8 @@ def test_on_cloud_the_notice_shows_and_there_is_no_build_button(monkeypatch):
     _no_errors(at)
     assert [i.value for i in at.info] == [ev.NOTICE]
     assert ev.NOTICE == ("Output check runs programs in a local Docker sandbox and is not available here. "
-                         "Grading uses the AI review and the compile check.")
+                         "Grading uses the AI review and the compile check. "
+                         "Run the app on your own computer to use it.")
     assert not at.button and not at.code
     assert at.session_state["ready"] is False
 
@@ -568,7 +569,7 @@ def test_the_output_label_covers_every_state():
     assert ev.execution_summary_label(mk(_report(plan, ["match", "format_only", "match"], mode="format_only"))) == "Format only"
     assert ev.execution_summary_label(mk(_report(plan, ["match", "text_differs", "match"]))) == "Differs"
     assert ev.execution_summary_label(
-        mk(_report(plan, ["match", "text_differs", "match"], disagrees=True))) == "Differs (disagrees)"
+        mk(_report(plan, ["match", "text_differs", "match"], disagrees=True))) == "Differs (AI found no output error)"
     assert ev.execution_summary_label(mk({"status": "runner_unavailable"})) == "No output check"
     assert ev.execution_summary_label(mk({"status": "skipped"})) == "Not checked"
     assert ev.execution_summary_label(mk({"status": "student_compile_failed"})) == "Does not compile"
@@ -630,7 +631,7 @@ def test_the_output_column_shows_the_disagrees_badge():
     at = _results_app(results, plan).run()
     _no_errors(at)
     frame = at.dataframe[0].value
-    assert dict(zip(frame["Student"], frame["Output"])) == {"Student Alpha": "Differs (disagrees)",
+    assert dict(zip(frame["Student"], frame["Output"])) == {"Student Alpha": "Differs (AI found no output error)",
                                                             "Student Bravo": "Match"}
 
 
@@ -962,3 +963,97 @@ def test_the_drawer_labels_for_every_status_and_a_missing_report():
         assert ev._STATUS_TEXT[status]
     assert ev.students_without_output_check([("A", SimpleNamespace(execution_report=None))]) == []
     assert ev._code("") == "(nothing)" and ev._code("x" * 5000).endswith("(cut)")
+
+
+# --------------------------------------------------------------------------- #
+# Round 1 review: exports, caps, plain wording
+# --------------------------------------------------------------------------- #
+def _leaky_result():
+    added = _gate_added_result()
+    error = added.detected_errors[0].model_copy(
+        update={"notes": "Output check: the expected line was `ok` but your program printed `SECRETOUT`."})
+    note = added.reconciliation[0].model_copy(
+        update={"error": error, "reason": "Output check: your program printed `SECRETOUT`."})
+    return added.model_copy(update={
+        "detected_errors": [error], "reconciliation": [note],
+        "execution_report": {"status": "ok", "cases": [{"case_id": "T1", "verdict": "text_differs",
+                                                        "diff_excerpt": "-ok\n+SECRETOUT"}]}})
+
+
+def test_the_json_export_carries_no_program_output():
+    from cqc_cpcc.result_card_export import result_card_json
+    exported = result_card_json("Student Alpha", _leaky_result())
+    assert "SECRETOUT" not in exported and "execution_report" not in exported
+    data = json.loads(exported)["result"]
+    note = data["reconciliation"][0]
+    assert (note["stage"], note["action"]) == ("execution", "added")
+    assert note["code"] == data["detected_errors"][0]["code"]
+    assert data["detected_errors"][0]["notes"] is None
+
+
+def test_the_instructor_sections_of_the_markdown_card_carry_no_program_output():
+    from cqc_cpcc.result_card_export import result_card_markdown
+    card = result_card_markdown("Student Alpha", _leaky_result())
+    before, after = card.split("## Feedback for the student")
+    assert "SECRETOUT" not in before
+    # The student's own feedback keeps the capped note the gate wrote for the student.
+    assert "SECRETOUT" in after
+
+
+def test_a_gate_added_note_is_capped_before_it_reaches_student_feedback():
+    from cqc_cpcc import execution_gate as eg
+    from cqc_cpcc.student_feedback_builder import build_student_feedback
+    plan = _plan(cases=[TestCase(id="T1", label="Big", stdin="9" * 500 + "\n", source="llm",
+                                 expected_output="x", validated=True)], conditions=[], condition_map={})
+    note = eg._transparency_note(plan, [CaseResult(case_id="T1", verdict="text_differs",
+                                                   diff_excerpt="-" + "A" * 500 + "\n+" + "B" * 500)])
+    assert len(note) < 400 and "A" * 100 not in note and "B" * 100 not in note and "9" * 100 not in note
+    added = _gate_added_result()
+    error = added.detected_errors[0].model_copy(update={"notes": note})
+    feedback = build_student_feedback(added.model_copy(update={"detected_errors": [error]}),
+                                      student_name="Student Alpha")
+    assert "A" * 100 not in feedback and "9" * 100 not in feedback
+
+
+def test_remove_added_only_takes_out_what_the_output_check_added():
+    from cqc_cpcc.grading_diagnostics import find_rubric
+    from cqc_cpcc.reconciliation import remove_added
+    added = _gate_added_result()
+    other = added.model_copy(update={
+        "reconciliation": [added.reconciliation[0].model_copy(update={"stage": "requirement"})]})
+    with pytest.raises(ValueError, match="not an error a stage added"):
+        remove_added(other, find_rubric(added.rubric_id), 0)
+
+
+def test_the_error_definition_roles_have_plain_labels_and_save_the_ids():
+    from cqc_streamlit_app import grade_assignment as ga
+    assert ga._EXECUTION_CATEGORY_LABELS == {"output_format": "Wording or layout of the output",
+                                             "output_values": "Wrong numbers or values",
+                                             "sequence": "Wrong order of steps"}
+    assert set(ga._EXECUTION_CATEGORY_LABELS) == set(ga._EXECUTION_CATEGORIES)
+
+
+def test_the_disagrees_drawer_says_to_check_by_hand_and_the_verdict_words_are_explained():
+    plan = _plan()
+    result = _result(execution_report=_report(plan, ["match", "text_differs", "match"], disagrees=True))
+    tab = _tab(_drawer_app(result, plan), "Output")
+    captions = [c.value for c in tab.caption]
+    assert ev.DISAGREES_CAPTION in captions and ev.VERDICT_HELP in captions
+    assert "Check this student by hand." in ev.DISAGREES_CAPTION
+
+
+def test_the_run_button_explains_itself_when_no_case_is_ticked(ready, tmp_path):
+    at = _turn_on(_setup_app(tmp_path))
+    run = _button(at, "Run solution on these inputs")
+    assert run.disabled and run.help == "Tick at least one case."
+
+
+def test_a_disabled_build_button_says_why_in_text(monkeypatch):
+    monkeypatch.setattr(pr, "runner_status", lambda: pr.RunnerStatus(False, "docker daemon is not running"))
+    at = _status_app().run()
+    assert any("Build image is off because Docker is not ready" in c.value for c in at.caption)
+
+
+def test_the_editor_ignores_rows_past_the_cap():
+    rows = [{"Use": True, "Label": f"L{i}", "Input": str(i), "id": None} for i in range(ev.MAX_EDITED_ROWS + 10)]
+    assert len(ev.fold_editor([], pd.DataFrame(rows))) == tcg.MAX_PLAN_CASES

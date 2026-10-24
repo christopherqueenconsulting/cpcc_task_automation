@@ -490,10 +490,11 @@ exactly what it was. `execution_plan` rides in the grade kwargs, through `Gradin
 
 **Results.** The summary table gets an **Output** column when any result has an output-check report:
 Match, Format only, Differs, each with "(evidence only)" when the check could not change the grade, and
-"Differs (disagrees)" when the model reported no output error but the programs differ (PR 14's
-`gate.disagrees`); also "No output check", "Not checked" and "Does not compile". It is for the instructor's
+"Differs (AI found no output error)" when the model reported no output error but the programs differ (PR 14's
+`gate.disagrees`; the drawer then says "Check this student by hand."); also "No output check", "Not checked" and "Does not compile". It is for the instructor's
 screen and stays out of the hand-back summary. The student drawer gets an **Output** tab (only for results
-with a report): a table of cases and verdicts, then for every case that did not match its input, the
+with a report): a table of cases and verdicts (Match, Format only, Different words, Different order, Different values, No
+output, Crashed, Timed out, Did not run; a caption above the table explains each), then for every case that did not match its input, the
 solution's expected output and the differing lines. Those three are shown in `st.code` only, never
 Markdown, after control and direction characters are replaced; any other text from a program, the model or
 a file goes through `reconciliation.safe_line`. The program's own full output is not kept (that is PR 16),
@@ -505,6 +506,10 @@ output check**. The button starts a `GradingJob` for just those students under t
 prompt then sees the evidence), is disabled while Docker is not ready or a job is running, and needs the
 session's original files. **Remove** (next to **Reinstate** in the Errors tab's scoring notes) takes out an
 error the output check added and re-scores deterministically; the note stays and Reinstate undoes it.
+The error-definitions editor's **Output check role** column shows "Wording or layout of the output",
+"Wrong numbers or values" and "Wrong order of steps" and saves `output_format`, `output_values` and `sequence`.
+The result-card JSON export and the instructor sections of the Markdown card leave out the output-check report
+and the program-output lines of a gate-added error's note (the student's own feedback keeps the capped note).
 
 **Known limits.** A lone `.zip` solution is not taken in this version (the page says to upload the source
 files directly); several source files are packed in memory. The cited-input re-check (PR 14, "Before removing an error that cites a concrete input")
@@ -514,3 +519,40 @@ specific value is kept rather than re-checked. A restored run has no plan or tes
 its Output tab shows verdicts and differing lines but not inputs.
 
 **Rollback.** `CQC_EXECUTION=off` hides all of it behind the notice, or `git revert` the PR.
+
+
+### Ten-minute operator check
+
+Strings below are copied from the code. Use synthetic programs only.
+
+1. **Cloud or off.** Set `CQC_EXECUTION=off` (or open the app on Streamlit Community Cloud), reload, open Grade
+   Assignment, Setup. Under **Output check (optional)** you see "Output check is optional and off by default.
+   It runs each student program in a local Docker sandbox and compares its output with your solution's." and the
+   notice "Output check runs programs in a local Docker sandbox and is not available here. Grading uses the AI
+   review and the compile check. Run the app on your own computer to use it." Nothing else: no switch, no
+   Build image. Unset `CQC_EXECUTION`.
+2. **Docker not running.** Quit Docker, reload. You see "Output check is not ready: docker daemon is not
+   running." and a disabled **Build image** with "Build image is off because Docker is not ready (docker daemon
+   is not running). Start Docker, then reload this page." **Suggest test cases** is not offered.
+3. **Image missing.** Start Docker, `docker rmi cpcc_task_automation/exec-runner:1`, reload. "Output check is not
+   ready: exec-runner image is not built." with an enabled **Build image** and the `docker build --tag ...`
+   command. Press it: "Building the image... this can take a few minutes." When it ends the page shows the ready
+   line.
+4. **Ready.** "Output check is ready: Docker is running and the sandbox image is built."
+5. **Switch.** Add a synthetic solution (a program that reads a number and prints `Total: ` and twice the number).
+   The switch "Check each program's output against the solution" is off. Turn it on.
+6. **Cases.** Add three rows (inputs `5`, `100`, `0`), press **Run solution on these inputs**. Expect Status
+   "Ready" and Expected "Total: 10" and so on, then "3 test case(s) ready (3 not copied from the instructions)."
+   With no case ticked the button is disabled ("Tick at least one case.").
+7. **Suggest.** Read the cost beside **Suggest test cases** ("Estimated cost: ..."); it also says no student
+   work is sent. Press it only if you accept the cost; up to six `llm` rows appear.
+8. **Grade.** Upload two synthetic students (one correct, one that prints `n * 3`) and grade. In Results, the
+   **Output** column reads "Match" and "Differs" (or "Differs (AI found no output error)" if the AI reported
+   nothing). Open the second student: the **Output** tab lists the verdicts (Different values) and shows input,
+   expected output and the differing lines in code blocks.
+9. **Docker lost.** While a batch grades, quit Docker. Later students show "No output check"; the Students tab
+   shows "N students have no output check" with the estimated cost and **Re-grade N students with output check**,
+   disabled until Docker is back. After restarting Docker press it; only those students are graded again.
+10. **Remove.** On a student with a gate-added format error, Errors tab: **Remove** takes it out and re-scores;
+    **Reinstate** puts it back. Neither calls the model.
+11. **Rollback.** `CQC_EXECUTION=off` and reload: step 1 again, and grading is as before the output check.
