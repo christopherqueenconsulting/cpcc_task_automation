@@ -132,6 +132,31 @@
         "test-case-generation"
       ]
     },
+    "requirement-solution-check": {
+      "version": 1,
+      "status": "live",
+      "role": "grading",
+      "description": "Checks each requirement of the checklist against the instructor's solution (yes, no or unclear). One call per assignment, cached. Only a no can make a requirement not graded; it never sees a submission.",
+      "builder": "cqc_cpcc.requirement_solution_check:build_solution_check_prompt",
+      "schema": "cqc_cpcc.requirement_solution_check:SolutionCheck",
+      "call_sites": [
+        "cqc_cpcc.requirement_solution_check:check_requirements_against_solution"
+      ],
+      "source_files": [
+        "src/cqc_cpcc/requirement_solution_check.py"
+      ],
+      "shared_files": [
+        "src/cqc_cpcc/utilities/AI/llm_gateway.py",
+        "src/cqc_cpcc/utilities/AI/openrouter_client.py",
+        "src/cqc_cpcc/utilities/AI/schema_normalizer.py",
+        "src/cqc_cpcc/utilities/AI/model_registry.py",
+        "poetry.lock"
+      ],
+      "fingerprint": "sha256:49e1ae9932aaddf5af124db669df3cb54ec24212c242ae438b9e41690652ec2a",
+      "suites": [
+        "requirement-solution-check"
+      ]
+    },
     "exam-grading": {
       "version": 2,
       "status": "live",
