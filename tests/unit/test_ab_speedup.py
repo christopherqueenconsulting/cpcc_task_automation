@@ -23,6 +23,13 @@ from tests.unit.test_prompt_suites import _cases, _toy_suite
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _no_identical_skip(monkeypatch):
+    """These tests run the paid-path A/B on purpose; the identical-request skip has its own tests."""
+    monkeypatch.setenv("CQC_AB_SKIP_IDENTICAL", "0")
+
+
+
 class TestConcurrencySetting:
     def test_the_default_stays_4_and_the_ab_default_is_12(self, monkeypatch):
         monkeypatch.delenv("CQC_EVAL_CONCURRENCY", raising=False)
