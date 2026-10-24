@@ -244,7 +244,7 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
             if adaptive.adaptive_enabled(adaptive_mode):  # judges get their own, lower, pool
                 cap = adaptive.judge_max_concurrency()
                 judge_pool = adaptive.AdaptiveLimiter("judge", start=cap, ceiling=cap)
-                adaptive.use_judge_pool(judge_pool, budget, _dearest_call(suite, profiles[models[0][0]], cases))
+                adaptive.use_judge_pool(judge_pool, budget, _dearest_call(suite, profiles[models[0][0]], cases) * adaptive.JUDGE_ESTIMATE_FACTOR)
         for model, effort in models:
             records = await run_suite(suite, model, effort, cases, repeats, budget,
                                       concurrency=concurrency, profile=profiles[model], on_record=save,

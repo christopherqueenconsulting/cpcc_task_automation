@@ -435,6 +435,63 @@ class TestBudgetMargin:
         assert seen == [3.0, 3.0] and held.amount == 3.0  # never 6.0: one reservation per call
 
 
+class TestReviewFixes:
+    @pytest.mark.parametrize("bad", [0, 0.0, -1.0, None, float("nan"), float("inf"), "x"])
+    def test_an_estimate_that_cannot_bound_the_call_is_refused_not_run_free(self, bad):
+        b = Budget(limit=10.0, stop_at=9.0)
+        assert b.reserve(bad) == "exhausted" and b.reserved == 0.0
+
+    async def test_an_unpriced_call_is_recorded_as_a_budget_skip(self, test_mode, monkeypatch):
+        from cqc_cpcc.utilities.AI import model_registry
+
+        monkeypatch.setattr(model_registry, "estimate_cost", lambda *a, **k: None)
+        records = await base.run_suite(_toy_suite(), "openai/gpt-5-mini", None, _cases(3), 1, Budget(1000.0, 900.0),
+                                       adaptive_mode=True, max_concurrency=4)
+        assert {r.error_kind for r in records} == {"budget"}
+
+    async def test_cancel_while_waiting_for_budget_room_does_not_leak_the_permit(self):
+        budget = Budget(limit=2.0, stop_at=1.9)
+        assert budget.reserve(1.5) == "ok"  # something in flight, so the next one "waits"
+        pool = AdaptiveLimiter("calls", start=2, ceiling=2)
+
+        async def never():
+            return 1
+
+        task = asyncio.create_task(adaptive.throttled_call(pool, never, budget=budget, estimate=1.0))
+        await asyncio.sleep(0.12)
+        assert pool.active == 1  # holding a permit, polling for room
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert pool.active == 0
+
+    async def test_a_real_cost_above_the_estimate_overshoots_by_at_most_the_difference_per_call(self):
+        budget = Budget(limit=10.0, stop_at=9.0)
+        pool = AdaptiveLimiter("calls", start=64, ceiling=64)
+
+        async def call():
+            await asyncio.sleep(0.005)
+            return "ok"
+
+        async def one():
+            held = adaptive.Held()
+            if await adaptive.throttled_call(pool, call, budget=budget, estimate=1.0, held=held) is not adaptive.SKIPPED:
+                budget.settle(held.amount, 1.2)  # underestimated by 20%
+
+        await asyncio.gather(*[one() for _ in range(100)])
+        # the guarantee needs estimate >= cost; when it fails the overshoot is bounded by in-flight x gap
+        assert budget.spent == pytest.approx(12.0) and budget.spent <= budget.limit + 10 * 0.2 + 1e-9
+        assert budget.reserved == pytest.approx(0.0)
+
+    def test_a_bare_429_in_free_text_is_not_a_throttle(self):
+        assert adaptive.classify_throttle(RuntimeError("processed 429 records, schema failed")) is None
+        assert adaptive.classify_throttle(RuntimeError("case id 4290 and 429")) is None
+        assert adaptive.classify_throttle(RuntimeError("Error code: 429 - slow down")) == adaptive.RATE_LIMIT
+
+    def test_the_judge_estimate_carries_a_safety_factor(self):
+        assert adaptive.JUDGE_ESTIMATE_FACTOR == 1.25
+
+
 # --- the judge pool ---------------------------------------------------------------------------
 
 class TestJudgePool:

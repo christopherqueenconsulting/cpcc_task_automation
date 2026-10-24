@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 from dataclasses import dataclass, field
 
@@ -53,7 +54,12 @@ class Budget:
         try again once some settle. ``"exhausted"``: the budget is spent (``stop_at``), or the call
         would pass ``limit`` even with nothing else in flight.
         """
-        estimate = max(0.0, estimate or 0.0)
+        try:
+            estimate = float(estimate)
+        except (TypeError, ValueError):
+            return "exhausted"
+        if not math.isfinite(estimate) or estimate <= 0:
+            return "exhausted"  # no usable price: a call that cannot be bounded must not run for free
         with self._lock:
             if self.spent >= self.stop_at:
                 return "exhausted"

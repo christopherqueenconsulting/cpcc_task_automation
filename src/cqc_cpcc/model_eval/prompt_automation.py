@@ -893,7 +893,8 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                     judge_limiter = adaptive.AdaptiveLimiter("judge", start=judge_cap, ceiling=judge_cap)
                     judge_profile = prompt_eval.profiles_for([suite_models[0][0]])[suite_models[0][0]]
                     adaptive.use_judge_pool(judge_limiter, budget,
-                                            prompt_eval._dearest_call(suite, judge_profile, suite.cases()))
+                                            prompt_eval._dearest_call(suite, judge_profile, suite.cases())
+                                            * adaptive.JUDGE_ESTIMATE_FACTOR)
                     cache = jm.VerdictCache(Path(judge_cache) if judge_cache else out / "judge-cache", read_only=True)
                     head_recs = prompt_eval.read_records(out / "head" / suite_id / "raw_outputs.jsonl")
                     base_recs = prompt_eval.read_records(base_raw)

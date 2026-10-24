@@ -198,6 +198,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 if limiter is None:
                     output = await suite.invoke(case)
                 else:
+                    # no price -> 0.0 -> the budget refuses the call (fail closed), it never runs unbounded
                     estimate = model_registry.estimate_cost(
                         resolved, suite.estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0
                     output = await adaptive.throttled_call(

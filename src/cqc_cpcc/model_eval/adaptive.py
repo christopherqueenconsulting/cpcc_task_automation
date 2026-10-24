@@ -60,6 +60,10 @@ BACKOFF_BASE_S = 2.0
 BACKOFF_CAP_S = 60.0
 RETRY_AFTER_CAP_S = 120.0
 
+#: Judge calls reserve the suite's dearest call estimate times this (the judge prompt holds two outputs and the
+#: judge model's price is not looked up), so a judge call that costs a little more than a grader call still fits.
+JUDGE_ESTIMATE_FACTOR = 1.25
+
 IN_FLIGHT_MARKER = "openrouter_in_flight_budget"
 RATE_LIMIT = "rate_limit"
 IN_FLIGHT = "in_flight_budget"
@@ -153,7 +157,10 @@ def classify_throttle(error: BaseException) -> Optional[str]:
             return RATE_LIMIT
     for e in chain:
         text = _text_of(e)
-        if "rate limit" in text or "rate-limit" in text or re.search(r"\b429\b", text):
+        # text is only a fallback for wrappers that dropped the status; a bare "429" elsewhere in a message
+        # (a count, an id) is not a throttle
+        if ("rate limit" in text or "rate-limit" in text
+                or re.search(r"(error code|status(?: code)?)[:= ]+429\b", text)):
             return RATE_LIMIT
     return None
 
@@ -344,7 +351,12 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
     while True:
         epoch = await limiter.acquire()
         if budget is not None:
-            if not await _reserve(budget, estimate, poll_s, sleep):
+            try:
+                granted = await _reserve(budget, estimate, poll_s, sleep)
+            except BaseException:  # cancelled while waiting for room: the permit must not leak
+                limiter.release()
+                raise
+            if not granted:
                 limiter.release()
                 return SKIPPED
             held.amount = estimate
