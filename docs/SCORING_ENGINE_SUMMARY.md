@@ -148,6 +148,34 @@ run keys change back and session caches re-grade on their own. A revert does not
 written to BrightSpace: assignment drafts and quiz grades (published on write) stay as written until they
 are re-graded and written again. Rolling back is Christopher's call.
 
+### One penalty per issue: requirement overlap
+
+A requirement the model marks partial or missing becomes an error (`MISSING_REQUIREMENT_<id>` major,
+`PARTIAL_REQUIREMENT_<id>` minor), and the model also lists its own errors, so one defect (for example
+`Print the total with two decimal places` marked partial next to `OUTPUT_FORMATTING`) can be charged twice.
+`requirement_overlap.reconcile_overlaps` pairs them after requirement coverage and before scoring. It is
+deterministic and uses no model call; the grading prompt and the answer schema are not changed (asking the
+model to link its own errors made it mark requirements partial far more often, PR 8).
+
+- **Kinds.** A requirement's kind (`format`, `input`, `valid`, `func`, `select`, `loop`, `calc`, `data`)
+  comes from its wording; a model error code maps to the kinds it can overlap (shared code tokens, with
+  per-course overrides, then description keywords for custom definitions). Unknown on either side means no pair.
+- **Only unambiguous pairs.** The requirement has exactly one kind-matching model error and that error has
+  exactly one kind-matching requirement (one-to-one). Anything else gets an instructor-only "possible overlap"
+  note and keeps both penalties.
+- **Which one goes.** The lesser of the pair; at equal severity the requirement error is kept and the model
+  error dropped (tie rule A', reversible). A `MISSING_REQUIREMENT_*` error, an error backed by the compiler or
+  the execution check, and "Does Not Compile" are never dropped, so shallow-submission detection is unchanged.
+  Every drop is a suppressed `ReconciliationNote` (stage `overlap`) the instructor can Reinstate.
+- **Switch `CQC_REQUIREMENT_OVERLAP`.** `notes` (default): write the notes, drop nothing, scores identical to a
+  run without the stage. `drop`: apply the drops. `off`: skip the stage. Only `drop` enters the grading run
+  key (as `requirement_overlap`), so existing keys and cached results do not change in `notes`/`off`.
+  To enable the drop after a trial session: set `CQC_REQUIREMENT_OVERLAP=drop` in `.env` and restart; to go back,
+  remove it (results graded under `drop` re-grade because their key differed).
+- **Offline gate.** `python scripts/requirement_overlap_rescore.py --raw-outputs <grading raw_outputs.jsonl>
+  --extraction <requirement-extraction raw_outputs.jsonl>` re-scores saved outputs and reports rows changed, rows
+  that go down (must be 0), the `incomplete` mean, and classifier coverage.
+
 ## Testing
 
 ### New Tests (37 total)
