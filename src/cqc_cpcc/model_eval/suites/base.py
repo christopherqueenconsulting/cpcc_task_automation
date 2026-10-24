@@ -18,11 +18,11 @@ import hashlib
 import json
 import statistics
 import zlib
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import adaptive
+from cqc_cpcc.model_eval import adaptive, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.runner import classify_error, pinned_registry
 from cqc_cpcc.utilities.AI import model_registry
@@ -107,13 +107,21 @@ class SuiteRecord:
     prompt: Optional[str] = None  # "prompt_id@version" actually sent
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
+    #: One entry per failed attempt (exception class, HTTP status, gateway code/type, redacted message,
+    #: request id, latency, attempt number); see ``error_detail.py``. Empty for a call that never failed.
+    error_detail: list = field(default_factory=list)
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True)
+        data = asdict(self)
+        if not data["error_detail"]:
+            del data["error_detail"]  # additive key: rows of calls that never failed are unchanged
+        return json.dumps(data, sort_keys=True)
 
     @classmethod
     def from_json(cls, line: str) -> "SuiteRecord":
-        return cls(**json.loads(line))
+        data = json.loads(line)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})  # tolerate keys a newer writer added
 
 
 @dataclass(frozen=True)
@@ -156,7 +164,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                     budget: Budget, concurrency: Optional[int] = None, profile=None,
                     on_record: Optional[Callable[[SuiteRecord], None]] = None,
                     adaptive_mode: Optional[bool] = None, max_concurrency: Optional[int] = None,
-                    pool_stats: Optional[list] = None, sleep=None, rng=None) -> list[SuiteRecord]:
+                    pool_stats: Optional[list] = None, sleep=None, rng=None,
+                    transport_attempts: Optional[int] = None, clock=None) -> list[SuiteRecord]:
     """Call the production function for every case ``repeats`` times on ``model``.
 
     The suite's role is pinned to ``model`` with no fallback, so a failure counts against
@@ -168,10 +177,17 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     ``CQC_AB_MAX_CONCURRENCY`` or 64; AIMD and jittered retries live in ``adaptive.py``, and every call
     reserves its worst-case cost on the budget before it is sent. The pool's counters are appended
     to ``pool_stats`` (a list) when one is given.
+
+    A call that fails with a transport error (a reset, a timeout, a 408 or 5xx) is tried again, up to
+    ``transport_attempts`` tries in all (``CQC_EVAL_TRANSPORT_RETRIES``, default 3, at most 5), after a
+    full-jitter wait of at most 30 s; the record keeps the total in ``attempts`` and one ``error_detail``
+    entry per failed attempt. A failed attempt may have been billed, so it is charged at the call's
+    estimate (added to the record's ``cost_usd``). Nothing about scoring changes.
     """
     from cqc_cpcc.utilities.AI import llm_gateway
 
     use_adaptive = adaptive.adaptive_enabled(adaptive_mode)
+    attempts_allowed = adaptive.transport_attempts(transport_attempts)  # a bad setting stops the run before any call
     limiter = None
     semaphore = None
     if use_adaptive:
@@ -187,8 +203,19 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     async def one(case: SuiteCase, repeat: int, resolved) -> SuiteRecord:
         record = SuiteRecord(suite.id, case.case_id, model, effort, repeat)
         held = adaptive.Held()
-        if semaphore is not None:
+        slot = {"held": False}  # whether this call holds a fixed-mode slot right now
+
+        async def take_slot():
             await semaphore.acquire()
+            slot["held"] = True
+
+        def give_slot():
+            if slot["held"]:
+                slot["held"] = False
+                semaphore.release()
+
+        if semaphore is not None:
+            await take_slot()
         try:
             if semaphore is not None and budget.exhausted:
                 record.error_kind = "budget"
@@ -197,15 +224,18 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
             # call made before this case (a judge, an earlier suite). Only a new one is ours.
             before = llm_gateway.last_call()
             try:
+                # no price -> 0.0 -> the budget refuses the call (fail closed), it never runs unbounded
+                estimate = model_registry.estimate_cost(
+                    resolved, suite.estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0
                 if limiter is None:
-                    output = await suite.invoke(case)
+                    output = await adaptive.retry_transport(
+                        lambda: suite.invoke(case), held=held, estimate=estimate, sleep=sleep, rng=rng,
+                        max_attempts=attempts_allowed, clock=clock, budget=budget,
+                        release=give_slot, reacquire=take_slot)
                 else:
-                    # no price -> 0.0 -> the budget refuses the call (fail closed), it never runs unbounded
-                    estimate = model_registry.estimate_cost(
-                        resolved, suite.estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0
                     output = await adaptive.throttled_call(
                         limiter, lambda: suite.invoke(case), budget=budget, estimate=estimate,
-                        held=held, sleep=sleep, rng=rng)
+                        held=held, sleep=sleep, rng=rng, max_transport_attempts=attempts_allowed, clock=clock)
                     if output is adaptive.SKIPPED:
                         record.error_kind = "budget"
                         return record
@@ -215,8 +245,10 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                     json.dumps(record.payload, sort_keys=True).encode()).hexdigest()
             except Exception as e:  # noqa: BLE001 - every failure is a data point
                 record.error_kind = classify_error(e)
+                if held.last_error is not e:  # failed outside the model call (e.g. building the payload)
+                    held.detail.append(error_detail.describe_failure(e, len(held.detail) + 1))
                 logger.warning(f"[prompt-eval:{suite.id}] {model} {case.case_id}#{repeat}: "
-                               f"{record.error_kind}: {str(e)[:200]}")
+                               f"{record.error_kind}: {error_detail.redact_message(error_detail.failure_message(e))}")
             call = llm_gateway.last_call()
             if call is before:
                 call = None
@@ -239,17 +271,26 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.model_used = completion.model
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
+            if held.transport_retries:
+                record.attempts += held.transport_retries  # the client's own tries plus ours
+            if held.charged:  # earlier failed attempts, already charged to the budget at the estimate
+                record.cost_usd += held.charged
+                record.cost_estimated = True
+            record.error_detail = list(held.detail)
+            if held.final_billed:  # the last failed attempt was charged when it failed; do not charge it again
+                record.cost_usd = held.charged
             if limiter is None:
-                budget.add(record.cost_usd)
+                budget.add(max(0.0, record.cost_usd - held.charged))  # failed attempts were added as they failed
             else:
-                budget.settle(held.amount, record.cost_usd)  # reservation -> real spend in one step
+                # reservation -> real spend in one step; the failed attempts were settled when they failed
+                budget.settle(held.amount, record.cost_usd - held.charged)
                 held.amount = 0.0
             if on_record:
                 on_record(record)
             return record
         finally:
             if semaphore is not None:
-                semaphore.release()
+                give_slot()  # not a second release if the call gave its slot back for a backoff
             if held.amount:  # an error path that never reached the settle above
                 budget.unreserve(held.amount)
 

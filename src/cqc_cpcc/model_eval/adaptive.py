@@ -14,6 +14,11 @@ whatever the upstream vendor throttles (a 429). So the A/B starts wide and lets 
   flight, a throttled call is retried after a **jittered** wait (``Retry-After`` is a floor, full
   jitter on top), and 429s get more retries than the in-flight budget error. Every other error is
   raised on the first failure exactly as before.
+* **Transport failures** (a connection reset, a read/connect timeout, a 408 or 5xx from the gateway, an
+  ``OpenAITransportError`` with no status) are retried too, up to ``CQC_EVAL_TRANSPORT_RETRIES`` total attempts
+  (default 3, hard cap 5), after a full-jitter wait of at most 30 s. A schema or validation error, a
+  refusal, a truncation, any 4xx other than 408/429, a cancellation and a budget refusal are never retried.
+  Each retry reserves the budget like a first attempt, and a failed attempt is charged at its estimate.
 * The retry, jitter and ``Retry-After`` logic lives here, not in ``openai_client`` / ``openrouter_client``
   (shared files of every registered prompt: editing them would re-run every suite's paid A/B). The
   client keeps its own short fixed-backoff retries inside one attempt; this layer sits outside them.
@@ -31,9 +36,11 @@ import contextvars
 import os
 import random
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
+from cqc_cpcc.model_eval import error_detail
 from cqc_cpcc.utilities.AI import llm_progress
 from cqc_cpcc.utilities.logger import logger
 
@@ -48,6 +55,7 @@ ENV_MAX = "CQC_AB_MAX_CONCURRENCY"
 ENV_JUDGE = "CQC_AB_JUDGE_CONCURRENCY"
 ENV_ADAPTIVE = "CQC_AB_ADAPTIVE"
 ENV_START = "CQC_AB_START_CONCURRENCY"
+ENV_TRANSPORT = "CQC_EVAL_TRANSPORT_RETRIES"
 
 #: Successes in a row (no throttle between them) that earn one permit back is ``max(WINDOW_MIN, permits)``.
 WINDOW_MIN = 4
@@ -59,6 +67,12 @@ IN_FLIGHT_RETRIES = 2
 BACKOFF_BASE_S = 2.0
 BACKOFF_CAP_S = 60.0
 RETRY_AFTER_CAP_S = 120.0
+
+#: Total attempts per call for a transport failure (the first try plus the retries). 1 turns retrying off.
+DEFAULT_TRANSPORT_ATTEMPTS = 3
+HARD_MAX_TRANSPORT_ATTEMPTS = 5
+#: Longest single wait before a transport retry. With the 5-attempt cap the added wait is at most 4 x 30 s.
+TRANSPORT_SLEEP_CAP_S = 30.0
 
 #: Judge calls reserve the suite's dearest call estimate times this (the judge prompt holds two outputs and the
 #: judge model's price is not looked up), so a judge call that costs a little more than a grader call still fits.
@@ -106,6 +120,17 @@ def ab_start_concurrency(value=None) -> Optional[int]:
     """An explicit starting pool size (``value``, else ``CQC_AB_START_CONCURRENCY``), or None for the default."""
     raw = value if value is not None else os.environ.get(ENV_START)
     return None if raw in (None, "") else parse_concurrency(raw, "start concurrency")
+
+
+def transport_attempts(value=None) -> int:
+    """Total attempts per call for a transport failure: ``value``, else ``CQC_EVAL_TRANSPORT_RETRIES``, else 3.
+
+    A value that is not a whole number from 1 to 5 raises :class:`ConcurrencyError` (no silent fallback).
+    """
+    raw = value if value is not None else os.environ.get(ENV_TRANSPORT)
+    if raw in (None, ""):
+        return DEFAULT_TRANSPORT_ATTEMPTS
+    return parse_concurrency(raw, "transport attempts", HARD_MAX_TRANSPORT_ATTEMPTS)
 
 
 def adaptive_enabled(value: Optional[bool] = None) -> bool:
@@ -186,6 +211,35 @@ def retry_after_s(error: BaseException) -> Optional[float]:
             if seconds == seconds and seconds not in (float("inf"), float("-inf")):
                 return min(max(seconds, 0.0), RETRY_AFTER_CAP_S)
     return None
+
+
+_TRANSPORT_TYPE_NAMES = frozenset({
+    "OpenAITransportError", "APIConnectionError", "APITimeoutError", "ConnectError", "ConnectTimeout",
+    "ReadTimeout", "ReadError", "WriteError", "WriteTimeout", "PoolTimeout", "RemoteProtocolError",
+    "ServerDisconnectedError", "ClientConnectionError", "TimeoutException", "InternalServerError",
+})
+
+
+def transport_retryable(error: BaseException) -> bool:
+    """True for a transient transport failure worth another try.
+
+    Yes: a connection reset/aborted, a read/connect timeout, a 408 or 5xx, an ``OpenAITransportError`` that
+    carries no status. No: a throttle (429 and the in-flight budget have their own retry), any other 4xx,
+    a schema/validation error, a refusal, a truncation (the runner classifies those), a cancellation.
+    """
+    if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+        return False
+    if classify_throttle(error) is not None:
+        return False
+    from cqc_cpcc.model_eval.runner import classify_error  # lazy: runner does not import this module
+
+    if classify_error(error) != "transport":
+        return False
+    status = error_detail.http_status(error)
+    if status is not None:
+        return status == 408 or 500 <= status <= 599
+    return any(isinstance(e, (ConnectionError, TimeoutError)) or type(e).__name__ in _TRANSPORT_TYPE_NAMES
+               for e in _chain(error))
 
 
 def backoff_s(attempt: int, retry_after: Optional[float], rng, base: float = BACKOFF_BASE_S,
@@ -318,6 +372,15 @@ class Held:
     """What the caller must settle against the budget: the reservation of the last attempt."""
 
     amount: float = 0.0
+    #: Estimates already charged to the budget for earlier attempts that failed (they may have been billed).
+    charged: float = 0.0
+    #: Retries made after a transport failure (the record's ``attempts`` adds these to the client's own).
+    transport_retries: int = 0
+    #: One ``error_detail`` entry per failed attempt, in order.
+    detail: list = field(default_factory=list)
+    last_error: Optional[BaseException] = None
+    #: True when the call's last failed attempt is already in ``charged`` (fixed mode, refused after a wait).
+    final_billed: bool = False
 
 
 async def _reserve(budget, estimate: float, poll_s: float, sleep) -> bool:
@@ -331,23 +394,42 @@ async def _reserve(budget, estimate: float, poll_s: float, sleep) -> bool:
         await sleep(poll_s)  # "wait": the calls holding reservations will settle
 
 
+def _transport_wait(error: BaseException, failures: int, rng) -> float:
+    """Wait before transport retry number ``failures`` (1 for the first): full jitter, at most 30 s."""
+    return min(TRANSPORT_SLEEP_CAP_S, backoff_s(failures - 1, retry_after_s(error), rng))
+
+
+def _note_failure(held: Held, error: BaseException, attempt: int, started: float, clock, retried: bool) -> None:
+    held.last_error = error
+    held.detail.append(error_detail.describe_failure(error, attempt, clock() - started, retried))
+
+
 async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Awaitable[Any]], *,
                          budget=None, estimate: float = 0.0, held: Optional[Held] = None,
                          sleep=None, rng=None, poll_s: float = 0.05,
                          rate_limit_retries: int = RATE_LIMIT_RETRIES,
-                         in_flight_retries: int = IN_FLIGHT_RETRIES) -> Any:
+                         in_flight_retries: int = IN_FLIGHT_RETRIES,
+                         max_transport_attempts: Optional[int] = None, clock=None) -> Any:
     """Run ``make_call()`` under ``limiter``; retry a throttled call after a jittered wait.
 
     Returns the call's result, or :data:`SKIPPED` when the budget refused it. Raises the call's own
-    error: at once for anything that is not a throttle, and after the retries for a throttle.
+    error: at once for anything that is neither a throttle nor a transport failure, and after the
+    retries otherwise. A transport failure (:func:`transport_retryable`) gets up to
+    ``max_transport_attempts`` tries in all (``CQC_EVAL_TRANSPORT_RETRIES``, default 3); every try
+    reserves the budget first, and a failed one is charged at ``estimate`` (it may have been billed).
     ``held.amount`` is left holding the last attempt's budget reservation; the caller settles it
-    (``budget.settle(held.amount, cost)``) once it knows what the call cost.
+    (``budget.settle(held.amount, cost)``) once it knows what the call cost. ``held.charged`` is what
+    earlier failed attempts already cost and ``held.detail`` lists every failed attempt.
     """
     rng = rng or random
     sleep = sleep or asyncio.sleep  # looked up now, so a test (or a faster clock) can replace it
+    clock = clock or time.monotonic
     held = held if held is not None else Held()
+    max_transport = transport_attempts(max_transport_attempts)
     retries = {RATE_LIMIT: 0, IN_FLIGHT: 0}
     allowed = {RATE_LIMIT: rate_limit_retries, IN_FLIGHT: in_flight_retries}
+    transport_failures = 0
+    sends = 0
     while True:
         epoch = await limiter.acquire()
         if budget is not None:
@@ -358,9 +440,13 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
                 raise
             if not granted:
                 limiter.release()
+                if transport_failures and held.last_error is not None:
+                    raise held.last_error  # the budget is spent: report the failure it left behind
                 return SKIPPED
             held.amount = estimate
         seen = {"n": 0}
+        sends += 1
+        started = clock()
 
         def sink(event, _seen=seen, _epoch=epoch):
             # the client emits one "rate limited" per 429 it retries, so the pool learns at once,
@@ -379,10 +465,28 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
             limiter.release()
             kind = classify_throttle(error)
             if kind is None:
-                raise  # not a throttle: raised on the first failure, exactly as before
+                if not transport_retryable(error):
+                    _note_failure(held, error, sends, started, clock, False)
+                    raise  # not a throttle or a transport failure: raised on the first failure, as before
+                transport_failures += 1
+                again = transport_failures < max_transport
+                _note_failure(held, error, sends, started, clock, again)
+                if not again:
+                    raise
+                if budget is not None:  # a failed send may have been billed: charge the estimate, free the slot
+                    budget.settle(held.amount, estimate)
+                    held.charged += estimate
+                    held.amount = 0.0
+                else:
+                    held.charged += estimate
+                held.transport_retries += 1  # visible as the record's extra attempts, not in the pool's throttle counters
+                await sleep(_transport_wait(error, transport_failures, rng))
+                continue
             if kind == IN_FLIGHT or seen["n"] == 0:
                 limiter.on_throttle(kind, epoch)
-            if retries[kind] >= allowed[kind]:
+            gave_up = retries[kind] >= allowed[kind]
+            _note_failure(held, error, sends, started, clock, not gave_up)
+            if gave_up:
                 limiter.stats.gave_up += 1
                 raise
             if budget is not None:  # the failed attempt sent nothing that costs; free its reservation
@@ -397,6 +501,61 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
         if seen["n"] == 0:
             limiter.on_success()
         return result
+
+
+async def retry_transport(make_call: Callable[[], Awaitable[Any]], *, held: Held, estimate: float = 0.0,
+                          sleep=None, rng=None, max_attempts: Optional[int] = None, clock=None,
+                          budget=None, release=None, reacquire=None) -> Any:
+    """Fixed-concurrency twin of :func:`throttled_call`'s transport retry (no pool, no reservation).
+
+    Same rules: a transport failure is tried again up to ``max_attempts`` in all after a full-jitter wait of
+    at most 30 s; anything else is raised at once. Fixed mode reserves nothing, so the budget is guarded
+    another way: when an attempt fails and a retry is still allowed, its ``estimate`` is added to the
+    ``budget`` right then (it may have been billed) and to ``held.charged``, and the retry goes ahead only
+    while ``budget.spent + estimate`` still fits under ``stop_at``. Otherwise (and again after the wait, in
+    case other calls spent the room meanwhile) the last transport error is raised and nothing more is sent.
+    The attempt that ends the call is charged by the caller, except after a wait that ended in a refusal:
+    that attempt was already charged, so ``held.final_billed`` tells the caller not to charge it twice.
+    ``release`` / ``reacquire`` give the caller's concurrency slot back during the wait and take it again.
+    """
+    rng = rng or random
+    sleep = sleep or asyncio.sleep
+    clock = clock or time.monotonic
+    max_attempts = transport_attempts(max_attempts)
+
+    def room() -> bool:
+        return budget is None or (not budget.exhausted and budget.spent + estimate <= budget.stop_at)
+
+    failures = 0
+    sends = 0
+    while True:
+        sends += 1
+        started = clock()
+        try:
+            return await make_call()
+        except Exception as error:  # noqa: BLE001 - classified below
+            retryable = transport_retryable(error)
+            failures += 1 if retryable else 0
+            # the failed attempt is charged now (below) only if a retry follows; so check the room it leaves
+            again = (retryable and failures < max_attempts and
+                     (budget is None or (not budget.exhausted and budget.spent + 2 * estimate <= budget.stop_at)))
+            _note_failure(held, error, sends, started, clock, again)
+            if not again:
+                raise
+            held.charged += estimate
+            if budget is not None:
+                budget.add(estimate)
+            held.transport_retries += 1
+            if release is not None:
+                release()
+            await sleep(_transport_wait(error, failures, rng))
+            if reacquire is not None:
+                await reacquire()
+            if not room():  # others spent the budget while this call waited
+                held.detail[-1]["retried"] = False
+                held.transport_retries -= 1
+                held.final_billed = True
+                raise
 
 
 # --- The judge pool, set once per run ------------------------------------------------------
