@@ -13,6 +13,13 @@ from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _no_identical_skip(monkeypatch):
+    """These tests run the paid-path A/B on purpose; the identical-request skip has its own tests."""
+    monkeypatch.setenv("CQC_AB_SKIP_IDENTICAL", "0")
+
+
+
 @pytest.fixture
 def uncalibrated_policy(tmp_path, monkeypatch):
     """The policy as shipped before the first calibration: every suite report-only."""

@@ -13,6 +13,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -524,13 +525,23 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
     elif required and report is None:
         status = "not-run"
     else:
+        pr_suites = (report or {}).get("suites", {})
+        skipped = sorted(s for s in required if (pr_suites.get(s) or {}).get("status") == IDENTICAL_SKIPPED)
+        skip_reasons = _verify_skipped(skipped, report, head_reg, base_reg) if skipped else {}
         for suite_id in sorted(required):
-            results[suite_id] = _decide_suite(suite_id, (report or {}).get("suites", {}).get(suite_id), out,
+            if suite_id in skip_reasons:  # re-verified here with the base's code, not trusted from the PR
+                reason = skip_reasons[suite_id]
+                results[suite_id] = {"suite": suite_id, "models": {},
+                                     "status": IDENTICAL_SKIPPED if reason is None else "fail",
+                                     "reasons": [] if reason is None else [f"requests differ from the base: {reason}"],
+                                     "notes": [SKIP_NOTE] if reason is None else []}
+                continue
+            results[suite_id] = _decide_suite(suite_id, pr_suites.get(suite_id), out,
                                               head_root, changed, head_reg, base_reg,
                                               {r: role(c) for r, c in head_roles.items()})
         statuses = [r["status"] for r in results.values()]
         status = ("fail" if "fail" in statuses
-                  else "pass" if all(s == "pass" for s in statuses) else "pass-provisional")
+                  else "pass" if all(s in PASSING for s in statuses) else "pass-provisional")
     pr_status = (report or {}).get("status")
     if status in ("fail", "not-run", "request-identical"):
         combined = status
@@ -545,6 +556,45 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
                                            encoding="utf-8")
     (out / "base-rule.md").write_text(base_rule_markdown(decided), encoding="utf-8")
     return decided
+
+
+#: A suite whose requests, gateway calls and outputs are byte-identical to the base's is not re-run; it
+#: counts as a pass (docs/PROMPTS.md, "Request-identical suites inside a mixed A/B").
+IDENTICAL_SKIPPED = "identical-skipped"
+PASSING = ("pass", IDENTICAL_SKIPPED)
+#: Set to 0/off/false/no to run every suite in the paid A/B even when its requests are identical.
+SKIP_IDENTICAL_ENV = "CQC_AB_SKIP_IDENTICAL"
+SKIP_NOTE = "requests, gateway calls and outputs identical to the base: not re-run, $0"
+
+
+def skip_identical_enabled() -> bool:
+    return os.environ.get(SKIP_IDENTICAL_ENV, "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def _verify_skipped(skipped: list, report: dict, head_reg, base_reg) -> dict:
+    """``{suite_id: reason or None}`` for suites the PR's A/B recorded as identical-skipped.
+
+    Re-captures the BASE side with THIS checkout's code (the base branch, in ab-base-rule) and compares
+    it with the head capture saved in ``ab.json``. Any error, a missing capture, a suite this checkout does
+    not know, or a changed prompt is a reason (the suite then fails)."""
+    from cqc_cpcc.model_eval import request_capture
+
+    saved = report.get("request_capture") or {}
+    known = [s for s in skipped if s in SUITE_MODULES]
+    reasons = {s: "the base branch has no such suite, so its rule cannot judge it" for s in skipped if s not in known}
+    if not known:
+        return reasons
+    try:
+        base_capture = request_capture.capture(sorted(known))
+    except Exception as e:  # noqa: BLE001 - fail closed
+        return {**reasons, **{s: f"base capture failed: {type(e).__name__}" for s in known}}
+    compared = request_capture.compare(saved, base_capture, sorted(known))
+    fingerprints = {p: e.fingerprint for p, e in head_reg.prompts.items()}
+    for suite_id, reason in compared.items():
+        if reason is None and not same_prompts(head_reg, base_reg, fingerprints, suite_id):
+            reason = "a prompt this suite uses changed in the registry"
+        reasons[suite_id] = reason
+    return reasons
 
 
 def _decide_suite(suite_id: str, pr_result: Optional[dict], out: Path, head_root: Path, changed: list,
@@ -672,8 +722,12 @@ def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
 
 async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
                     judges: bool = False, judge_model: Optional[str] = None, judge_cache: Optional[str] = None,
-                    concurrency: Optional[int] = None) -> dict:
+                    concurrency: Optional[int] = None, skip_identical: Optional[bool] = None) -> dict:
     """Run each suite at the base and head code on the same models and compare.
+
+    Suites whose requests, gateway calls and outputs are byte-identical to the base's (and whose prompts
+    are unchanged) are not run: they are recorded as ``identical-skipped`` and count as a pass. Any doubt
+    runs the suite. ``skip_identical=False`` or ``CQC_AB_SKIP_IDENTICAL=0`` turns this off.
 
     The head and the base of a suite run at the same time, each with its own share of the budget,
     and the pairwise judge calls run in parallel. Which cases run, how often, on which models, how
@@ -688,6 +742,17 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
     workers = base.eval_concurrency(default=AB_CONCURRENCY, value=concurrency)
     clean_environ = dict(os.environ)  # before any run pins the registry in this process (see _run_base)
     parsed = [parse_model(m) for m in models]
+    skipped_results: dict = {}
+    request_capture_saved: dict = {}
+    # Only for the incumbent model: the capture pins no candidate, so an explicit --model always runs.
+    if (skip_identical if skip_identical is not None else skip_identical_enabled()) and suite_ids and not models:
+        identical, request_capture_saved = _identical_for_ab(suite_ids, base_ref, out)
+        for suite_id in identical:
+            skipped_results[suite_id] = {"suite": suite_id, "status": IDENTICAL_SKIPPED, "models": {},
+                                         "reasons": [], "notes": [SKIP_NOTE]}
+        suite_ids = [s for s in suite_ids if s not in skipped_results]
+        if skipped_results:
+            print(f"identical to the base, not re-run ($0): {', '.join(sorted(skipped_results))}")
     # One budget for the whole A/B: head + base for every suite, judges included.
     budget = prompt_eval.shared_budget()
     estimate = 2 * prompt_eval.estimate_suites(suite_ids, parsed, repeats)
@@ -789,28 +854,63 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
         _terminate_live_base(stop_new=True)  # a cancelled or failed A/B must not leave a base run under its worktree
         subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
         _allow_base()
+    results = {**skipped_results, **results}
     for suite_id, r in results.items():  # last lines of the log: the workflow shows only its tail
         if r.get("run_stats"):
             print(_stats_line(suite_id, r["run_stats"], failed=r["status"] == "fail"))
     overall = ("fail" if any(r["status"] == "fail" for r in results.values())
-               else "pass" if results and all(r["status"] == "pass" for r in results.values()) else "pass-provisional")
+               else "pass" if results and all(r["status"] in PASSING for r in results.values()) else "pass-provisional")
     report = {"base_ref": base_ref, "status": overall, "suites": results,
               "prompt_versions": {pid: e.version for pid, e in prompt_registry.load().prompts.items()},
               "wall_clock_s": round(time.monotonic() - started, 1), "concurrency": workers}
+    if skipped_results:  # the head side of the skip, for ab-base-rule to re-verify against the base's own capture
+        report["request_capture"] = request_capture_saved
     print(f"A/B wall-clock {report['wall_clock_s']:.0f}s at {workers} calls in flight per side")
     (out / "ab.json").write_text(json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8")
     (out / "ab.md").write_text(ab_markdown(report), encoding="utf-8")
     return report
 
 
+def _identical_for_ab(suite_ids: list, base_ref: str, out: Path) -> tuple:
+    """``(identical suite ids, head capture of those)``; ``([], {})`` on any doubt.
+
+    Runs ``prompt-requests-identical`` in a subprocess with no API key (the head capture is this
+    checkout's code; it must not hold a key), in a scratch directory under ``out``.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("OPENROUTER_API_KEY", "OPENAI_API_KEY")}
+    env.pop("GITHUB_OUTPUT", None)  # the check must not set the workflow's own outputs
+    scratch = out / "skip-check"
+    try:
+        subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests-identical", "--suites",
+                        ",".join(suite_ids), "--base-ref", base_ref, "--out", str(scratch)],
+                       cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=2 * BASE_CAPTURE_TIMEOUT_S,
+                       check=True)
+        report = json.loads((scratch / "requests.json").read_text(encoding="utf-8"))
+        identical = [s for s in suite_ids if (report.get("suites") or {}).get(s, "x") is None]
+        head = report.get("head") or {}
+        saved = {"format": head.get("format"), "settings": head.get("settings"),
+                 "suites": {s: (head.get("suites") or {}).get(s) for s in identical}}
+        if not identical or any(v is None for v in saved["suites"].values()):
+            return [], {}
+        return identical, saved
+    except Exception as e:  # noqa: BLE001 - any doubt runs the suite
+        print(f"identical-request check failed ({type(e).__name__}); running every suite")
+        return [], {}
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def ab_markdown(report: dict) -> str:
     from cqc_cpcc.model_eval.scorecard import _safe
 
-    icon = {"pass": "✅", "pass-provisional": "🟡", "fail": "❌", "no-base": "ℹ️"}
+    icon = {"pass": "✅", "pass-provisional": "🟡", "fail": "❌", "no-base": "ℹ️", IDENTICAL_SKIPPED: "✅"}
     lines = [f"## Prompt A/B {icon.get(report['status'], '')} {report['status']}", "",
              f"Head vs base `{_safe(report['base_ref'])}`, scored with the head graders.", "",
              "| Suite | Model | Base | Head | Δ | Paired test | Cost × | Status |", "|---|---|---|---|---|---|---|---|"]
     for suite_id, r in report["suites"].items():
+        if r["status"] == IDENTICAL_SKIPPED:
+            lines.append(f"| `{suite_id}` | all | n/a | n/a | 0 | identical to the base, not re-run | 0 | "
+                         f"{icon[IDENTICAL_SKIPPED]} {IDENTICAL_SKIPPED} |")
         for label, m in (r.get("models") or {}).items():
             if "comparative" not in m:
                 test = "n/a"
@@ -1044,11 +1144,114 @@ def cmd_prompt_ab(args) -> int:
     return 0
 
 
+#: One base capture (all suites, or one suite on its own) that has not finished after this long is killed
+#: and counts as failed: those suites are not identical and run paid.
+BASE_CAPTURE_TIMEOUT_S = 900
+#: Suites captured at the base in parallel when the all-suites capture failed and each is retried alone.
+BASE_CAPTURE_POOL = 4
+#: Longest stderr tail printed for a failed base capture (the capture handles no student data; this keeps logs short).
+STDERR_CAP = 500
+
+
+class _CaptureTimeout(Exception):
+    pass
+
+
+def _base_capture_once(worktree: Path, suite_ids: list, file: Path, timeout: int) -> dict:
+    """One ``prompt-requests`` subprocess of the BASE code. Returns the parsed capture.
+
+    Raises ``_CaptureTimeout`` on a timeout and ``RuntimeError`` (short message) on a non-zero exit,
+    a missing file or malformed JSON. Nothing is trusted unless it parses to a dict.
+    """
+    # No API key: the capture never sends, and a path that bypassed it could not either.
+    env = {k: v for k, v in os.environ.items() if k not in ("OPENROUTER_API_KEY", "OPENAI_API_KEY")}
+    env["PYTHONPATH"] = str(worktree / "src")
+    try:
+        result = subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests", "--suites",
+                                 ",".join(suite_ids), "--out", str(file)],
+                                cwd=worktree, env=env, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise _CaptureTimeout() from e
+    if result.returncode != 0:
+        tail = (result.stderr or "").strip().splitlines()[-1:] or [""]
+        print(f"base capture of {','.join(suite_ids)} exited {result.returncode}: "
+              f"{(result.stderr or '')[-STDERR_CAP:]}")
+        raise RuntimeError(f"exit {result.returncode}: {tail[0][:120]}")
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise RuntimeError(f"unreadable capture ({type(e).__name__})") from e
+    if not isinstance(data, dict):
+        raise RuntimeError("capture is not an object")
+    return data
+
+
+def capture_base(worktree: Path, suite_ids: list, tmp: Path, timeout: int = BASE_CAPTURE_TIMEOUT_S,
+                 pool: int = BASE_CAPTURE_POOL) -> tuple:
+    """Capture ``suite_ids`` with the base code, one suite never poisoning another.
+
+    Returns ``(captures, failures)``: ``captures[suite_id]`` is the base's capture dict for that suite
+    (its own ``format`` and ``settings`` included) and ``failures[suite_id]`` is the reason it has none.
+    A suite the base does not know is 'new suite: no base side' and is never run there. The rest go in
+    ONE subprocess; if that exits non-zero or returns garbage, each is retried in its own subprocess
+    (parallel, ``pool`` at a time). A timeout is not retried: it fails closed for the whole batch.
+    Every failure leaves the suite not identical, so it runs in the paid A/B.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    captures: dict = {}
+    failures: dict = {}
+    known = []
+    for suite_id in suite_ids:
+        if _base_has_suite(worktree, suite_id):
+            known.append(suite_id)
+        else:
+            failures[suite_id] = "new suite: no base side"
+    if not known:
+        return captures, failures
+    try:
+        data = _base_capture_once(worktree, known, tmp / "base-requests.json", timeout)
+        for suite_id in known:
+            captures[suite_id] = data
+        return captures, failures
+    except _CaptureTimeout:
+        print("the base capture timed out")
+        return captures, {**failures, **{s: "base capture failed: timed out" for s in known}}
+    except RuntimeError as e:
+        first_error = str(e)
+        print(f"base capture of all suites failed ({first_error}); retrying each suite alone")
+    if len(known) == 1:  # the retry would repeat the same run
+        failures[known[0]] = f"base capture failed: {first_error}"
+        return captures, failures
+
+    def one(suite_id):
+        try:
+            return suite_id, _base_capture_once(worktree, [suite_id], tmp / f"base-requests-{suite_id}.json", timeout), None
+        except _CaptureTimeout:
+            return suite_id, None, "base capture failed: timed out"
+        except Exception as err:  # noqa: BLE001 - any failure of this suite fails this suite closed
+            return suite_id, None, f"base capture failed: {err}"
+
+    with ThreadPoolExecutor(max_workers=max(1, min(pool, len(known)))) as ex:
+        for suite_id, data, reason in ex.map(one, known):
+            if reason is None:
+                captures[suite_id] = data
+            else:
+                failures[suite_id] = reason
+    return captures, failures
+
+
 def requests_identical(suite_ids: list, base_ref: str, out: Path) -> dict:
     """Capture each suite's requests at the head (this checkout) and at ``base_ref``; compare.
 
-    Any failure (no base command, a crash, a different format) leaves the suite "not
-    identical", so the full A/B runs.
+    Each suite is judged on its own: a suite the base does not know, or whose base capture crashes,
+    is marked just that suite (see ``capture_base``). Any failure (a crash, a timeout, a different
+    format, a changed registry or client setting, a changed prompt) leaves the suite "not identical",
+    so the paid A/B runs it.
+
+    The report keeps ``suites`` (``{suite_id: reason or None}``) and ``identical`` (ALL suites
+    identical, what the workflow reads) and adds ``identical_suites`` / ``changed_suites``
+    (lists, in the order given) and ``verdicts`` (``{suite_id: {"identical": bool, "reason": ...}}``).
     """
     import tempfile
 
@@ -1057,31 +1260,27 @@ def requests_identical(suite_ids: list, base_ref: str, out: Path) -> dict:
     out = out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     head = request_capture.capture(suite_ids)
-    base: dict = {}
     with tempfile.TemporaryDirectory() as tmp:  # outside out/, so the base source never lands in an artifact
         worktree = _base_worktree(base_ref, Path(tmp) / "base-src")
-        base_file = Path(tmp) / "base-requests.json"
         try:
-            # No API key: the capture never sends, and a path that bypassed it could not either.
-            env = {k: v for k, v in os.environ.items() if k not in ("OPENROUTER_API_KEY", "OPENAI_API_KEY")}
-            env["PYTHONPATH"] = str(worktree / "src")
-            result = subprocess.run([sys.executable, "-m", "cqc_cpcc.model_eval", "prompt-requests", "--suites",
-                                     ",".join(suite_ids), "--out", str(base_file)],
-                                    cwd=worktree, env=env, capture_output=True, text=True, timeout=900)
-            if result.returncode == 0:
-                base = json.loads(base_file.read_text(encoding="utf-8"))
-            else:
-                print(result.stderr[-2000:])
-        except subprocess.TimeoutExpired:
-            print("the base capture timed out")
+            captures, failures = capture_base(worktree, list(suite_ids), Path(tmp))
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=REPO_ROOT, capture_output=True)
-    reasons = request_capture.compare(head, base, suite_ids)
+    reasons: dict = {}
+    for suite_id in suite_ids:
+        if suite_id in failures:
+            reasons[suite_id] = failures[suite_id]
+        else:
+            reasons[suite_id] = request_capture.compare(head, captures[suite_id], [suite_id])[suite_id]
     for suite_id in suite_ids:  # the capture sees fixed-answer calls only: every prompt must also be unchanged
         if reasons[suite_id] is None and not prompts_unchanged(suite_id, base_ref):
             reasons[suite_id] = "a prompt this suite uses changed in the registry"
     report = {"base_ref": base_ref, "suites": reasons,
-              "identical": bool(suite_ids) and all(r is None for r in reasons.values()), "head": head}
+              "identical": bool(suite_ids) and all(r is None for r in reasons.values()),
+              "identical_suites": [s for s in suite_ids if reasons[s] is None],
+              "changed_suites": [s for s in suite_ids if reasons[s] is not None],
+              "verdicts": {s: {"identical": reasons[s] is None, "reason": reasons[s]} for s in suite_ids},
+              "head": head}
     (out / "requests.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
 
