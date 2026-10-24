@@ -90,7 +90,7 @@ def test_nonces_differ_per_call_when_not_given():
 
 def test_the_rubric_system_message_holds_the_rules_and_the_user_message_the_data():
     system, user = rubric_messages(reference_solution=SOLUTION)
-    for text in ("scoring_mode='level_band'", "Scope Discipline", "Output Requirements", "Return DATA VALUES"):
+    for text in ("- level_band:", "Scope Discipline", "Output Requirements", "Return DATA VALUES"):
         assert text in system and text not in user
     for text in ("## Assignment Instructions", "Write OrderTotal.", "## Grading Rubric:", "### Criteria", SOLUTION):
         assert text in user and text not in system

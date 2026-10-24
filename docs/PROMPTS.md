@@ -139,6 +139,14 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
 - **A version bump re-grades**, as above. **Rollback:** `git revert`; the version in the run
   key goes back.
 
+## Guidelines and v4
+
+The system and user messages follow `docs/PROMPT_GUIDELINES.md` (a sourced digest; items it
+marks unverified are not used). `rubric-grading` v4 and `exam-grading` v4 apply it: no
+step-by-step procedure, no emphatic CRITICAL/MUST wording, each rule stated once, the
+contradictions removed. The system message and the static user prefix stay byte-identical
+for one assignment; the nonce appears only in the submission part at the end.
+
 ## Adding a prompt
 
 `test_every_llm_call_site_is_registered` scans `src/` for `llm_gateway.structured(`,
