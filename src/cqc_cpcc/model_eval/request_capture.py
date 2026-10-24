@@ -164,7 +164,8 @@ def settings() -> dict:
 async def capture_suite(suite_id: str) -> dict:
     """``{"requests": {case: [hashes]}, "calls": {case: [hashes]}, "outputs": {case: hash}}`` per case."""
     from cqc_cpcc.model_eval import prompt_eval
-    from cqc_cpcc.model_eval.runner import pinned_registry
+    from cqc_cpcc.model_eval import adaptive
+    from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, pinned_registry
     from cqc_cpcc.model_eval.suites import get_suite
 
     suite = get_suite(suite_id)
@@ -178,7 +179,8 @@ async def capture_suite(suite_id: str) -> dict:
 
     # The fence nonce is keyed by a per-process secret in production; a capture needs it reproducible
     # so an unchanged prompt hashes the same in the head and base processes.
-    with pinned_registry(model, effort, profile, roles=(suite.role,)), deterministic_nonce():
+    with pinned_registry(model, effort, profile, roles=(suite.role,),
+                         max_output_tokens=adaptive.eval_max_tokens() or DEFAULT_MAX_OUTPUT_TOKENS), deterministic_nonce():
         with _patched(sink, test_mode=False):
             for case in suite.cases():
                 sink.clear()

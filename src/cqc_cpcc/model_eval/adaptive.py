@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextvars
+import math
 import os
 import random
 import re
@@ -56,6 +57,7 @@ ENV_JUDGE = "CQC_AB_JUDGE_CONCURRENCY"
 ENV_ADAPTIVE = "CQC_AB_ADAPTIVE"
 ENV_START = "CQC_AB_START_CONCURRENCY"
 ENV_TRANSPORT = "CQC_EVAL_TRANSPORT_RETRIES"
+ENV_MAX_TOKENS = "CQC_EVAL_MAX_TOKENS"
 
 #: Successes in a row (no throttle between them) that earn one permit back is ``max(WINDOW_MIN, permits)``.
 WINDOW_MIN = 4
@@ -73,6 +75,13 @@ DEFAULT_TRANSPORT_ATTEMPTS = 3
 HARD_MAX_TRANSPORT_ATTEMPTS = 5
 #: Longest single wait before a transport retry. With the 5-attempt cap the added wait is at most 4 x 30 s.
 TRANSPORT_SLEEP_CAP_S = 30.0
+
+#: A truncated call (finish_reason=length) is tried once more: its own budget, apart from the transport tries.
+TRUNCATED_RETRIES = 1
+#: Longest wait before that retry (the jittered backoff for the first retry is at most 2 s anyway).
+TRUNCATED_SLEEP_CAP_S = 10.0
+#: Hard cap for ``CQC_EVAL_MAX_TOKENS``; a larger value is an error.
+HARD_MAX_EVAL_TOKENS = 65536
 
 #: Judge calls reserve the suite's dearest call estimate times this (the judge prompt holds two outputs and the
 #: judge model's price is not looked up), so a judge call that costs a little more than a grader call still fits.
@@ -131,6 +140,18 @@ def transport_attempts(value=None) -> int:
     if raw in (None, ""):
         return DEFAULT_TRANSPORT_ATTEMPTS
     return parse_concurrency(raw, "transport attempts", HARD_MAX_TRANSPORT_ATTEMPTS)
+
+
+def eval_max_tokens(value=None) -> Optional[int]:
+    """The optional output-token cap for eval calls: ``value``, else ``CQC_EVAL_MAX_TOKENS``, else None (no cap).
+
+    None leaves every request exactly as before. A value that is not a whole number from 1 to 65536 raises
+    :class:`ConcurrencyError` (no silent fallback).
+    """
+    raw = value if value is not None else os.environ.get(ENV_MAX_TOKENS)
+    if raw in (None, ""):
+        return None
+    return parse_concurrency(raw, "max tokens", HARD_MAX_EVAL_TOKENS)
 
 
 def adaptive_enabled(value: Optional[bool] = None) -> bool:
@@ -240,6 +261,75 @@ def transport_retryable(error: BaseException) -> bool:
         return status == 408 or 500 <= status <= 599
     return any(isinstance(e, (ConnectionError, TimeoutError)) or type(e).__name__ in _TRANSPORT_TYPE_NAMES
                for e in _chain(error))
+
+
+#: The gateway's own message for an output-token-limit stop (openrouter_client); the only text match kept.
+TRUNCATION_MESSAGE = "TRUNCATED by the output token limit"
+
+
+def _has_length_marker(error: BaseException) -> bool:
+    """True when ``error`` (or what it was raised from) carries the explicit finish_reason=length marker."""
+    for e in error_detail._chain(error):
+        if getattr(e, "finish_reason", None) == "length":
+            return True
+        if any("finish_reason=length" in str(v) for v in (getattr(e, "validation_errors", None) or [])):
+            return True
+        text = str(e)
+        if "finish_reason=length" in text or TRUNCATION_MESSAGE in text:
+            return True
+    return False
+
+
+def truncation_retryable(error: BaseException) -> bool:
+    """True for a call that ended on the output-token limit (finish_reason=length), worth one more try.
+
+    Needs the explicit marker (``finish_reason == "length"`` on the error, ``finish_reason=length`` in its
+    validation errors or text, or the gateway's own "TRUNCATED by the output token limit" message), not just
+    the word "truncated": a 5xx or a provider error that mentions truncation is not a runaway output. A 4xx,
+    a throttle, a schema error, a refusal and a cancellation never match.
+    """
+    if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+        return False
+    status = error_detail.http_status(error)
+    if status is not None and 400 <= status <= 499:
+        return False  # a 4xx is the request's fault, whatever its text says
+    if classify_throttle(error) is not None or (status is not None and status >= 500):
+        return False
+    from cqc_cpcc.model_eval.runner import classify_error  # lazy: runner does not import this module
+
+    return classify_error(error) == "truncated" and _has_length_marker(error)
+
+
+def _last_gateway_call():
+    from cqc_cpcc.utilities.AI import llm_gateway  # lazy: keeps this module light
+
+    return llm_gateway.last_call()
+
+
+def attempt_usage(error: BaseException, before) -> dict:
+    """What a truncated attempt is known to have used: finish_reason, token counts and real cost.
+
+    Read from the error when it carries them, else from the gateway's record of the attempt (a record that
+    is not the one seen before the attempt). Missing values are left out; ``cost_usd`` is only a usable
+    reported cost (finite, >= 0), so the caller charges the estimate otherwise.
+    """
+    usage: dict = {}
+    for key in ("finish_reason", "completion_tokens", "prompt_tokens"):
+        value = getattr(error, key, None)
+        if value is not None:
+            usage[key] = value
+    call = _last_gateway_call()
+    completion = getattr(call, "completion", None) if call is not None and call is not before else None
+    if completion is not None:
+        for key in ("completion_tokens", "prompt_tokens"):
+            if key not in usage and getattr(completion, key, None) is not None:
+                usage[key] = getattr(completion, key)
+        cost = getattr(completion, "cost_usd", None)
+        if (isinstance(cost, (int, float)) and not isinstance(cost, bool)
+                and math.isfinite(cost) and cost >= 0):
+            usage["cost_usd"] = float(cost)
+    usage.setdefault("finish_reason", "length")  # a truncation is, by definition, finish_reason=length
+    return usage
 
 
 def backoff_s(attempt: int, retry_after: Optional[float], rng, base: float = BACKOFF_BASE_S,
@@ -376,9 +466,13 @@ class Held:
     charged: float = 0.0
     #: Retries made after a transport failure (the record's ``attempts`` adds these to the client's own).
     transport_retries: int = 0
+    #: Retries made after a truncated attempt (0 or 1); added to the record's ``attempts`` like the above.
+    truncated_retries: int = 0
     #: One ``error_detail`` entry per failed attempt, in order.
     detail: list = field(default_factory=list)
     last_error: Optional[BaseException] = None
+    #: True when ``last_error`` was a truncation (which retry counter to give back if the budget refuses it).
+    last_error_truncated: bool = False
     #: True when the call's last failed attempt is already in ``charged`` (fixed mode, refused after a wait).
     final_billed: bool = False
 
@@ -399,9 +493,20 @@ def _transport_wait(error: BaseException, failures: int, rng) -> float:
     return min(TRANSPORT_SLEEP_CAP_S, backoff_s(failures - 1, retry_after_s(error), rng))
 
 
-def _note_failure(held: Held, error: BaseException, attempt: int, started: float, clock, retried: bool) -> None:
+def _truncated_wait(rng) -> float:
+    """Wait before the one retry of a truncated call: short full-jitter backoff, at most 10 s."""
+    return min(TRUNCATED_SLEEP_CAP_S, backoff_s(0, None, rng))
+
+
+def _note_failure(held: Held, error: BaseException, attempt: int, started: float, clock, retried: bool,
+                  usage: Optional[dict] = None) -> None:
     held.last_error = error
-    held.detail.append(error_detail.describe_failure(error, attempt, clock() - started, retried))
+    held.detail.append(error_detail.describe_failure(error, attempt, clock() - started, retried, usage))
+
+
+def _truncated_charge(usage: dict, estimate: float) -> float:
+    """What a truncated attempt cost the budget: its real usage cost when reported, else the estimate."""
+    return usage["cost_usd"] if "cost_usd" in usage else estimate
 
 
 async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Awaitable[Any]], *,
@@ -440,13 +545,23 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
                 raise
             if not granted:
                 limiter.release()
-                if transport_failures and held.last_error is not None:
-                    raise held.last_error  # the budget is spent: report the failure it left behind
+                if (transport_failures or held.truncated_retries) and held.last_error is not None:
+                    # the budget is spent: report the failure it left behind. That attempt was charged when it
+                    # failed (held.charged), so it is no longer "retried" and must not be charged again.
+                    if held.detail:
+                        held.detail[-1]["retried"] = False
+                    if held.truncated_retries and held.last_error_truncated:
+                        held.truncated_retries -= 1
+                    elif held.transport_retries:
+                        held.transport_retries -= 1
+                    held.final_billed = True
+                    raise held.last_error
                 return SKIPPED
             held.amount = estimate
         seen = {"n": 0}
         sends += 1
         started = clock()
+        before = _last_gateway_call()
 
         def sink(event, _seen=seen, _epoch=epoch):
             # the client emits one "rate limited" per 429 it retries, so the pool learns at once,
@@ -465,6 +580,21 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
             limiter.release()
             kind = classify_throttle(error)
             if kind is None:
+                if truncation_retryable(error):
+                    usage = attempt_usage(error, before)
+                    again = held.truncated_retries < TRUNCATED_RETRIES
+                    _note_failure(held, error, sends, started, clock, again, usage)
+                    held.last_error_truncated = True
+                    if not again:
+                        raise  # truncated twice: a final failure with both attempts in error_detail
+                    charge = _truncated_charge(usage, estimate)  # real cost when known, else the estimate
+                    if budget is not None:
+                        budget.settle(held.amount, charge)
+                    held.charged += charge
+                    held.amount = 0.0
+                    held.truncated_retries += 1
+                    await sleep(_truncated_wait(rng))
+                    continue
                 if not transport_retryable(error):
                     _note_failure(held, error, sends, started, clock, False)
                     raise  # not a throttle or a transport failure: raised on the first failure, as before
@@ -531,29 +661,42 @@ async def retry_transport(make_call: Callable[[], Awaitable[Any]], *, held: Held
     while True:
         sends += 1
         started = clock()
+        before = _last_gateway_call()
         try:
             return await make_call()
         except Exception as error:  # noqa: BLE001 - classified below
+            truncated = truncation_retryable(error)
             retryable = transport_retryable(error)
             failures += 1 if retryable else 0
+            usage = attempt_usage(error, before) if truncated else None
             # the failed attempt is charged now (below) only if a retry follows; so check the room it leaves
-            again = (retryable and failures < max_attempts and
-                     (budget is None or (not budget.exhausted and budget.spent + 2 * estimate <= budget.stop_at)))
-            _note_failure(held, error, sends, started, clock, again)
+            fits = budget is None or (not budget.exhausted and budget.spent + 2 * estimate <= budget.stop_at)
+            if truncated:
+                again = held.truncated_retries < TRUNCATED_RETRIES and fits
+            else:
+                again = retryable and failures < max_attempts and fits
+            _note_failure(held, error, sends, started, clock, again, usage)
             if not again:
                 raise
-            held.charged += estimate
+            charge = _truncated_charge(usage, estimate) if truncated else estimate
+            held.charged += charge
             if budget is not None:
-                budget.add(estimate)
-            held.transport_retries += 1
+                budget.add(charge)
+            if truncated:
+                held.truncated_retries += 1
+            else:
+                held.transport_retries += 1
             if release is not None:
                 release()
-            await sleep(_transport_wait(error, failures, rng))
+            await sleep(_truncated_wait(rng) if truncated else _transport_wait(error, failures, rng))
             if reacquire is not None:
                 await reacquire()
             if not room():  # others spent the budget while this call waited
                 held.detail[-1]["retried"] = False
-                held.transport_retries -= 1
+                if truncated:
+                    held.truncated_retries -= 1
+                else:
+                    held.transport_retries -= 1
                 held.final_billed = True
                 raise
 
