@@ -137,6 +137,33 @@ def test_the_table_has_at_least_40_phrasings_and_every_kind():
     assert {k for _, k in KIND_TABLE if k} == set(ro.ALL_KINDS)
 
 
+FALLBACK_TABLE = [
+    ("The program should display a menu", "format"),
+    ("The program reads from the keyboard", "input"),
+    ("Use an else branch for everything else", "select"),
+    ("The program must compute a formula", "calc"),
+    ("The program needs a variable for the rate", "data"),
+    ("Use a constant for the tax rate", "data"),
+    ("Select a random card", "calc"),
+    ("Use a Scanner object", "input"),
+    ("Use a switch", "select"),
+    ("Use Math.pow for the exponent", "calc"),
+    ("The weather is nice", None),
+]
+
+
+@pytest.mark.parametrize("text,kind", FALLBACK_TABLE)
+def test_requirement_kind_keyword_fallback(text, kind):
+    assert ro.requirement_kind(text) == kind
+
+
+def test_the_info_serialises_for_the_gate_report():
+    _, _, info = _run([_err(FORMAT), _err("PARTIAL_REQUIREMENT_R3")], "notes")
+    d = info.as_dict()
+    assert d["mode"] == "notes" and d["matched"] == [["R3", "PARTIAL_REQUIREMENT_R3", FORMAT]]
+    assert d["requirements"] == 1 and d["classified"] == 1 and d["dropped"] == []
+
+
 def test_the_classifier_ignores_case_hyphens_and_curly_quotes():
     assert ro.requirement_kind("RE-PROMPT until valid") == "valid"
     assert ro.requirement_kind("Print the product’s quantity if found") == "format"
