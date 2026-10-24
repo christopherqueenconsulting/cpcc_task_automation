@@ -177,8 +177,9 @@ Every OpenRouter request is bounded (`src/cqc_cpcc/utilities/AI/llm_limits.py`):
 
 The per-student deadline also covers the compile check (`COMPILE_TIMEOUT_SECONDS`, 45 s in
 `utilities/compiler_gate.py`), which runs in a worker thread so other students keep moving.
-"Retry failed" re-grades one student at a time; it stops at the first student that times out
-and leaves the rest failed, so a model that is down cannot hold the page for hours.
+With the background job off (`CQC_GRADING_JOB=off`), "Retry failed" re-grades one student at a time;
+it stops at the first student that times out and leaves the rest failed, so a model that is down
+cannot hold the page for hours. With the job on, students run in parallel and each has its own deadline.
 
 Extracting the requirement checklist at Setup has no student deadline but the same per-request
 rules, so a hung model can hold that spinner for up to about 19 minutes (high effort) before its
@@ -189,6 +190,71 @@ Cost: with SDK retries off, one student can be billed for at most 3 attempts on 
 
 Rollback: revert the PR that added these limits, or raise `CQC_LLM_TIMEOUT` and
 `CQC_GRADING_STUDENT_DEADLINE_S` as a stopgap.
+
+### Background grading job
+
+On the rubric path the Grade button starts a `GradingJob` (`src/cqc_cpcc/grading_job.py`) on its own
+thread and event loop, so the page can show it and stop it. `CQC_GRADING_JOB=off` keeps the old
+synchronous batch.
+
+- **Per student:** wait for one of `CQC_GRADING_CONCURRENCY` slots (default 4), then run under
+  `llm_progress.progress_scope` and `asyncio.timeout(student_deadline())`. States: queued, preparing,
+  calling, retrying, scoring, done, needs review, failed, timed out, cancelled.
+- **Live view:** a fragment redraws every second with a progress bar and a table (Student, Status,
+  Model, Attempt, Waiting, Last issue). A call waiting longer than max(60 s, half its timeout) shows a
+  slow-model warning. "Cancel selected" and "Cancel grading" end calls at once; a request already
+  sent may still be billed, and a compile check already running finishes first.
+- **Saved as it goes:** the worker saves each finished student under the run's lock
+  (`cqc_cpcc/run_locks.py`, shared with Reinstate, re-run merges and "Keep" after an effort
+  comparison), so a closed tab loses at most the students in flight. Results persistence is off on
+  Streamlit Community Cloud unless `CQC_RESULTS_PERSIST=on` (the Mac keeps it on disk).
+- **Reattaching:** the job is kept in memory under a random token, written to `?job=` in the page
+  URL. A reloaded page reattaches only by presenting that token; a page without it, or with a wrong
+  or expired one (15 minutes after the job ends), sees nothing of the job. Nothing lists the jobs.
+- **Failed, timed out and cancelled students** come back as retryable failures. "Retry N failed"
+  re-grades them with the run's own model; "Use another model" picks a model (and a reasoning effort)
+  and merges the results under the original run key, with the model shown per student.
+- **Telemetry:** counts only (students, succeeded, failed, cancelled, timed out).
+
+Only one job runs per run key (a second start says "This run is already grading."), at most four
+jobs run at once in the process, and one process-wide limit (`CQC_GRADING_CONCURRENCY`) is shared by
+all jobs for model calls, so several sessions do not multiply the spend. A page without the `?job=`
+token shows a notice that a run is working in the background and disables Grade, Retry, Use another
+model and the review buttons until it ends. A job's saves are merged onto the saved file's current
+results, so one job never wipes students another saved.
+
+While ANY job is live, every session in the process is blocked from starting or changing a run
+(`_run_is_grading` ends with `return grading_job.active_count() > 0`), including a tab that holds the
+token for a different run. Grade, Retry, Use another model, Clear results and the review buttons are
+paused for everyone, not only the session that started it, so one stuck job locks everyone until it
+ends: restart the app to clear it. Because of this the 4-job cap is reachable only by a race. The
+process-wide call limit is read once, at first use; restart the app to change
+`CQC_GRADING_CONCURRENCY`. The wait for a call slot counts against the student's deadline, so a stuck
+slot cannot hold a job forever.
+
+Rollback: `CQC_GRADING_JOB=off`, then `git revert`.
+
+#### Hang or stuck job
+
+1. Open the link you started the run from (it has `?job=`) and press Cancel grading. Students already
+   finished keep their results.
+2. If the page cannot reach the job, restart the app. The in-memory job is lost. Finished students are
+   in `~/.cqc_cpcc/grading_results` on the Mac (`CQC_GRADING_RESULTS_DIR`); on Streamlit Community Cloud
+   nothing is saved, so grade again.
+3. To go back to grading inside the page, set `CQC_GRADING_JOB=off` in `.env` and restart. The flag is
+   read each time Grade is pressed.
+4. The app log is in `logs/` in the repository (or the terminal / Streamlit Cloud "Manage app" log).
+   Student names there are aliased.
+
+#### Not done yet
+
+- The per-student effort compare is still synchronous.
+- The errors-only batch is still synchronous.
+- A job is lost when the app restarts, and its token expires 15 minutes after it ends.
+- A tab without the token cannot see or cancel a job.
+- One stuck job pauses Grade and the review buttons for every session in the process until it ends or the app restarts.
+- `openrouter_client.py` logs some provider error text (`{e}`) that can echo the provider's wording:
+  a follow-up, not part of this change.
 
 ### Reasoning effort per run
 
