@@ -102,6 +102,9 @@ async def structured(
         session_id: Optional[str] = None,
         system: Optional[str] = None,
         effort_override: Optional[str] = None,
+        request_timeout: Optional[float] = None,
+        max_attempts: Optional[int] = None,
+        allow_fallback: bool = True,
 ) -> T:
     """Return a ``schema_model`` instance for ``prompt`` using ``role``'s model.
 
@@ -123,6 +126,12 @@ async def structured(
         effort_override: Reasoning effort that replaces the role's effort for this call
             when the model supports it (otherwise none is sent and the provider default
             applies). Ignored under ``use_auto_route``, which takes no effort.
+        request_timeout: Seconds one request may take; replaces the role's timeout
+            (``llm_limits.request_timeout``) when set.
+        max_attempts: Total attempts on one model (the default is the client's three);
+            ``1`` means a single try.
+        allow_fallback: ``False`` never retries on the role's fallback model, so a failure
+            or timeout raises after the primary's attempts.
     """
     _last_call.set(None)
     if use_auto_route and effort_override:
@@ -143,7 +152,8 @@ async def structured(
             "params": model_registry.build_request_params(resolved), "correlation_id": correlation_id}))
         return result
 
-    send = dict(correlation_id=correlation_id, session_id=session_id, system=system)
+    send = dict(correlation_id=correlation_id, session_id=session_id, system=system,
+                request_timeout=request_timeout, max_attempts=max_attempts)
     try:
         result = await _complete(resolved, prompt, schema_model, use_auto_route, **send)
         _last_call.set(_call_record(resolved, resolved.model, False, prompt=tag))
@@ -151,7 +161,7 @@ async def structured(
     except (OpenAISchemaValidationError, OpenAITransportError) as primary_error:
         # Record what the failed call spent, so callers (the eval budget) can charge it.
         _last_call.set(_call_record(resolved, resolved.model, False, prompt=tag))
-        if use_auto_route or not resolved.fallback:
+        if use_auto_route or not resolved.fallback or not allow_fallback:
             raise
         logger.warning(
             f"[{role}] {resolved.model} failed ({type(primary_error).__name__}: "
@@ -176,21 +186,23 @@ def _is_test_mode() -> bool:
 
 
 async def _complete(resolved, prompt, schema_model, use_auto_route, *, correlation_id=None,
-                    session_id=None, system=None):
+                    session_id=None, system=None, request_timeout=None, max_attempts=None):
     if use_auto_route:
         # The router picks the model, so only model-independent params apply.
         resolved = resolved.model_copy(update={"profile": None})
+    attempts = {} if max_attempts is None else {"max_retries": max(1, int(max_attempts))}
     return await openrouter_client.get_openrouter_completion(
         prompt=prompt,
         schema_model=schema_model,
         use_auto_route=use_auto_route,
         model_name=None if use_auto_route else resolved.model,
         extra_params=model_registry.build_request_params(resolved),
-        request_timeout=llm_limits.request_timeout(
+        request_timeout=request_timeout or llm_limits.request_timeout(
             resolved.role, None if use_auto_route else resolved.reasoning_effort),
         correlation_id=correlation_id,
         session_id=session_id,
         system=system,
+        **attempts,
     )
 
 

@@ -1,0 +1,60 @@
+{
+  "case_id": "csc134_rectangle__twin_no_precision",
+  "language": "cpp",
+  "role": "grading",
+  "course_id": "CSC_134",
+  "assignment_id": "Project",
+  "rubric_id": "csc134_cpp_exam_rubric",
+  "instructions": "Write a C++ program in a file named rectangle.cpp that:\n1. Prompts for the length and width of a rectangle (both doubles).\n2. Computes the area and the perimeter.\n3. Prints Area: X.XX and Perimeter: X.XX with two decimal places.\nUse consistent indentation and comments.\n",
+  "files": [
+    "rectangle.cpp"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Prompt for and read the length and width as doubles.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Compute the area and the perimeter.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Print Area and Perimeter with two decimal places.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [
+      "CSC_134_PROJECT_1_MINOR_FORMATTING"
+    ],
+    "acceptable_error_ids": [
+      "CSC_134_PROJECT_1_MAJOR_FORMATTING"
+    ],
+    "max_occurrences": {},
+    "requirements": {
+      "R3": [
+        "met",
+        "partial"
+      ]
+    },
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [
+    "no_precision"
+  ],
+  "tags": [
+    "bug",
+    "slight_format"
+  ],
+  "twin_of": "csc134_rectangle__solution_format",
+  "labels_reviewed_by": null,
+  "reference_solution_file": "solution/rectangle.cpp"
+}

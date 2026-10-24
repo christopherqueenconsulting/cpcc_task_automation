@@ -1,0 +1,73 @@
+{
+  "case_id": "csc251_shopping_cart__twin_println_final",
+  "language": "java",
+  "role": "grading",
+  "course_id": "CSC_251",
+  "assignment_id": "Exam1",
+  "rubric_id": "csc151_java_exam_rubric",
+  "instructions": "Write a Java program named ShoppingCart.java that:\n1. Uses a Scanner to read item prices (double) into an ArrayList<Double> until the user enters 0.\n2. Rejects a negative price and asks again.\n3. Has a method totalPrice(ArrayList<Double> prices) that returns the sum of the prices.\n4. Has a method applyCoupon(double total) that takes 10% off when the total is 100 or more.\n5. Prints Cart is empty when no price was entered. Otherwise prints Items: N, Total: X.XX and\n   Final: X.XX (two decimal places).\nUse named constants for the coupon rate and the coupon minimum, follow Java naming conventions\nand comment your code.\n",
+  "files": [
+    "ShoppingCart.java"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Read prices into an ArrayList<Double> until the user enters 0.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Reject a negative price and ask again.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Return the sum of the prices from totalPrice(ArrayList<Double>).",
+      "weight": "core"
+    },
+    {
+      "id": "R4",
+      "text": "Take 10% off in applyCoupon when the total is 100 or more.",
+      "weight": "core"
+    },
+    {
+      "id": "R5",
+      "text": "Print Cart is empty when no price was entered.",
+      "weight": "core"
+    },
+    {
+      "id": "R6",
+      "text": "Otherwise print Items, Total and Final with two decimal places.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [
+      "CSC_251_EXAM_1_MINOR_FORMATTING"
+    ],
+    "acceptable_error_ids": [],
+    "max_occurrences": {},
+    "requirements": {
+      "R6": [
+        "met",
+        "partial"
+      ]
+    },
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [
+    "println_final"
+  ],
+  "tags": [
+    "bug",
+    "slight_format"
+  ],
+  "twin_of": "csc251_shopping_cart__solution_format",
+  "labels_reviewed_by": null,
+  "reference_solution_file": "solution/ShoppingCart.java"
+}
