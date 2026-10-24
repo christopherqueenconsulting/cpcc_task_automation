@@ -15,6 +15,10 @@ some mistakes. Coverage fixes that:
        missing core requirement                    -> MISSING_REQUIREMENT_<id> (major)
        partial requirement, or missing secondary   -> PARTIAL_REQUIREMENT_<id> (minor)
 
+A requirement the instructor's solution does not do (``graded`` False, set from
+``requirement_solution_check``) is listed as not required and never costs a student anything;
+the decision is recorded as a "solution" reconciliation note.
+
 Style, naming, formatting and documentation are deliberately NOT requirements: the
 error definitions already cover them, and listing them twice would double-penalize.
 """
