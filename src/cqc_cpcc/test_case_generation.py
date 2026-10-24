@@ -22,9 +22,9 @@ program runs.
 Untrusted text: the instructions and the solution go into the prompt inside a nonce fence,
 with any fence marker already in them stripped. The nonce is a keyed hash (HMAC-SHA256) of
 the assignment text under a per-process secret: unguessable from outside, stable for one
-assignment within a process, not random per call. (PR 19 owns the shared helper
-``utilities/AI/untrusted_fence.py``; this module has a minimal local equivalent until it
-lands.)
+assignment within a process, not random per call. The helper lives in ``utilities/AI/fence.py``
+(moved there unchanged in PR 14 so the output check's evidence can share it; PR 19 owns the
+long-term shared helper ``utilities/AI/untrusted_fence.py``).
 
 PR 14 contract: ``suggest_test_cases`` has no ``CQC_EXECUTION=off`` switch. It would still
 send the solution to the model provider, so the caller must check
@@ -34,9 +34,7 @@ send the solution to the model provider, so the caller must check
 from __future__ import annotations
 
 import hashlib
-import hmac
 import re
-import secrets
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Annotated, Callable, Iterable, Literal, Mapping, Optional, Sequence, Union
@@ -52,6 +50,7 @@ from cqc_cpcc.execution_check import (
     SolutionSources,
     TestCase,
 )
+from cqc_cpcc.utilities.AI.fence import fence_untrusted, new_fence_nonce  # noqa: F401  (re-exported)
 from cqc_cpcc.utilities.logger import logger
 
 MAX_LLM_CASES = 6
@@ -287,33 +286,6 @@ class TestCaseSuggestion(BaseModel):
     cases: Annotated[list[SuggestedCase], Field(
         default_factory=list,
         description=f"Between 1 and {MAX_LLM_CASES} stdin test cases")]
-
-
-_FENCE_MARKER = re.compile(r"[<>]*UNTRUSTED-[0-9A-Za-z]*[<>]*")
-
-
-#: Random per process, never logged. The nonce for an assignment is a keyed hash of its text,
-#: so it cannot be guessed from outside, differs between processes, and is the same for the
-#: same assignment within one (the prompt evaluation's request capture needs a stable prompt).
-_PROCESS_KEY = secrets.token_bytes(32)
-
-
-def new_fence_nonce(*parts: str) -> str:
-    """A fence nonce: random when no ``parts`` are given, else keyed by the process secret."""
-    if not parts:
-        return secrets.token_hex(8)
-    mac = hmac.new(_PROCESS_KEY, digestmod=hashlib.sha256)
-    for part in parts:
-        mac.update((part or "").encode("utf-8") + b"\0")
-    return mac.hexdigest()[:16]
-
-
-def fence_untrusted(label: str, text: str, nonce: str) -> str:
-    """``text`` between nonce markers. The nonce is a keyed hash (HMAC) of the assignment text
-    under a per-process secret (see ``new_fence_nonce``), not random per call. Any marker already
-    in the text is removed first, so it cannot close the fence early or forge a second one."""
-    body = _FENCE_MARKER.sub("", text or "")
-    return f"<<<UNTRUSTED-{nonce} {label}\n{body}\nUNTRUSTED-{nonce}>>>"
 
 
 _LANGUAGE_NAMES = {"java": "Java", "cpp": "C++", "c": "C", "python": "Python"}

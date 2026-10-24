@@ -399,6 +399,9 @@ class ReconciliationNote(BaseModel):
     error: Optional[DetectedError] = None
     suppressed: bool = False
     reinstated: bool = False
+    #: A gate-ADDED error the instructor took out again (``reconciliation.remove_added``).
+    #: ``suppressed`` is then True so Reinstate can put it back.
+    removed_by_instructor: bool = False
 
 
 class RubricAssessmentResult(BaseModel):

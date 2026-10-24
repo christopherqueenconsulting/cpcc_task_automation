@@ -288,7 +288,13 @@ def _format_error_for_student(error) -> str:
     lines.append(f"  - **{error.name}**: {error.description}")
 
     # Additional context if available
-    if error.notes:
+    if error.notes and getattr(error, "source", None) == "execution":
+        # An error the output check added: the note names the test input and the expected and actual
+        # line (program output only, never the solution's source). It is written by the gate, in code
+        # spans, so the score-word filter below must not drop it (a line can contain "%", "/" or
+        # "points").
+        lines.append("    " + " ".join(error.notes.split()))
+    elif error.notes:
         # Filter out technical details, keep student-relevant info
         notes_filtered = _filter_score_mentions(error.notes)
         if notes_filtered.strip():
