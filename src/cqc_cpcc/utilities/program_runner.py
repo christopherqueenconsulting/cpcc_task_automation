@@ -39,13 +39,13 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 # Image identity. All four values must move together; a unit test enforces it.
 # --------------------------------------------------------------------------- #
-RUNNER_VERSION = "1"
+RUNNER_VERSION = "2"
 RUNNER_IMAGE = f"cpcc_task_automation/exec-runner:{RUNNER_VERSION}"
 RUNNER_VERSION_LABEL = "org.cqc.exec-runner.version"
 # sha256 over the bytes of docker/exec-runner/driver.py followed by docker/exec-runner/Dockerfile.
 # Editing either file changes this; bump RUNNER_VERSION (and the tag, label and compose
 # image) and update the hash. tests/unit/test_program_runner.py fails otherwise.
-RUNNER_SOURCE_SHA256 = "e1099e73162526fe53a11b2ce3396a72fb30bc7fbd39bea650edc045544b2124"
+RUNNER_SOURCE_SHA256 = "575d2774eddb3ae8fe457ca8111248e8121412c218e1b4ea81cd42c747bea102"
 
 # --------------------------------------------------------------------------- #
 # Limits. The driver enforces the same numbers; keep them in step with driver.py.

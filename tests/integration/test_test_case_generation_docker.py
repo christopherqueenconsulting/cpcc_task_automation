@@ -5,7 +5,7 @@
 Skipped when Docker, its daemon or the image is missing, exactly like
 tests/integration/test_program_runner_docker.py. Build the image first:
 
-    docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner
+    docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner
 
 The solutions here run INSIDE the container only.
 """

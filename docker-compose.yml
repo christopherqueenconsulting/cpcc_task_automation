@@ -61,7 +61,7 @@ services:
         profiles: ["exec"]
         build:
           context: ./docker/exec-runner
-        image: cpcc_task_automation/exec-runner:1
+        image: cpcc_task_automation/exec-runner:2
         network_mode: none
         read_only: true
         user: "10001:10001"

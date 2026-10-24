@@ -5,6 +5,8 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Sandbox: the exec-runner image moves from eclipse-temurin 21 to 25 (image tag `:2`, supersedes #438). CI host Java (`actions/setup-java` in `model-eval.yml` and `prompt-eval.yml`) moves to 25 too. REBUILD REQUIRED: `docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner`. Until you rebuild, Output check shows "exec-runner image is not built" with a **Build image** button (the `:2` tag does not exist yet; "exec-runner image out of date, rebuild" appears only when a `:2` image carries the wrong version label). Optional cleanup after upgrade: `docker rmi cpcc_task_automation/exec-runner:1` (unused now; frees disk).
+
 ## 0.2.0-rc6 - 2026-10-24
 
 Prerelease, on top of 0.2.0-rc5. Adds the Results "Solution" tab and a code-runner page, and fixes how the

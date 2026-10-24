@@ -88,9 +88,9 @@ updates:
       - "dependencies"
       - "docker"
       - "exec-runner"
-    # Parked major bump: eclipse-temurin 25 needs a human PR (RUNNER_VERSION 2,
-    # RUNNER_SOURCE_SHA256, compose tag, test regex, docs; sandbox on JDK 25 vs CI host
-    # JDK 21). See PR #438. Remove this rule once that PR is merged or closed.
+    # The sandbox moved to eclipse-temurin 25 (PR supersedes #438). Later semver-major bumps
+    # still need a human PR (RUNNER_VERSION, RUNNER_SOURCE_SHA256, compose tag, test regex,
+    # docs, CI host Java).
     ignore:
       - dependency-name: "eclipse-temurin"
         update-types: ["version-update:semver-major"]
