@@ -342,7 +342,7 @@ key; its real gates are credit and the in-flight budget (a 402/403 whose body sa
 a 429. So each side starts wide and lets the answers steer it. In run
 [40033879399](https://github.com/christopherqueenconsulting/cpcc_task_automation/actions/runs/40033879399)
 (12 in flight per side) the log had 33 "rate-limited by anthropic/claude-haiku-5.5" warnings, and 9 haiku
-judge calls used up all 3 client attempts and fell back to `openai/gpt-5-mini` (each log line reads
+judge calls fell back to `openai/gpt-5-mini` (the log shows "Attempt 3/3" failed lines; each fallback line reads
 `[feedback] anthropic/claude-haiku-5.5 failed (... 429 ...); retrying once on fallback openai/gpt-5-mini`).
 All of it was on the judge and none on `gpt-6-luna`: the judge needs its own, lower, limit. What the
 fallback calls returned was not checked. The
@@ -390,7 +390,8 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
   change has none and is reported as `none`, and runs at the old fixed 12 through
   `CQC_EVAL_CONCURRENCY` (the new code reads that variable only for a non-adaptive run).
 - **Compare the next A/B against run 40033879399** (4 suites at 12 in flight per side, `wall_clock_s`
-  657.4) **per suite, from `ab.json` `run_stats.elapsed_s`**, and only for `grading` (360 calls per
+  657.4) **per suite, from the `run_stats.elapsed_s` in that run's `ab.json` artifact (artifact id 12536757139; the
+  per-suite and total figures here come from it, not from the log)**, and only for `grading` (360 calls per
   side, 439.7 s there), `grading-levelband` (36 calls, 63.9 s) and `requirement-extraction` (144 calls,
   106.8 s). Not `grading-solution`: that run made 108 calls per side (54 cases x 2 repeats) and
   `master` now sets 4 repeats (#435), about 216. The 657.4 s total is not comparable when the suite mix
@@ -400,7 +401,9 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
   overshoots by the difference, at most (calls in flight x the underestimate): the $15 limit sits well
   under the key's own cap, which has to absorb it. A missing, NaN or non-positive estimate is refused
   (fail closed), never run free. Judge calls reserve the suite's dearest call estimate x 1.25 (the
-  judge model's price is not looked up); at most the judge pool's 16 calls can underestimate.
+  judge model's price is not looked up); at most the judge pool's 16 calls can underestimate. Residual:
+  a model priced at 0 (a free model) has no usable estimate, so its calls would be recorded as `budget`
+  skips by the reserve guard.
 - **Changes in behaviour to know about.** `prompt-ab --concurrency N` is now only the **starting** size
   (the ceiling stays 64 unless `--max-concurrency`). A bad `CQC_AB_MAX_CONCURRENCY` or
   `CQC_AB_JUDGE_CONCURRENCY` now raises on a plain `suite run` too, not only in the A/B.
