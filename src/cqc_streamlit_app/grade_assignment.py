@@ -34,6 +34,7 @@ from cqc_cpcc.requirement_coverage import (
     extract_requirements,
     instructions_hash,
     normalize_checklist,
+    assign_ids,
     safe_requirement_id,
 )
 from cqc_cpcc.requirement_solution_check import solution_label
@@ -2476,16 +2477,17 @@ def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist) -> 
     """The checklist the table now describes (graded as in ``base``). A row keeps its solution
     verdict only while its text is the text that was checked."""
     old = {r.id.strip().upper(): r for r in base.requirements}
-    items = []
-    inherited: set[str] = set()  # a duplicate id inherits nothing: only its first row does
-    for i, row in enumerate(edited.to_dict("records"), start=1):
+    rows = []
+    for row in edited.to_dict("records"):
         text = str(row.get("text") or "").strip()
-        if not text or text == "nan":
-            continue
+        if text and text != "nan":
+            rows.append((row, text))
+    ids = assign_ids([str(row.get("id") or "") for row, _ in rows], reserved=old)
+    items = []
+    for (row, text), (rid, own) in zip(rows, ids):
         weight = row.get("weight") if row.get("weight") in ("core", "secondary") else "core"
-        rid = safe_requirement_id(str(row.get("id") or "")) or f"R{i}"
-        prior = old.get(rid) if rid not in inherited else None
-        inherited.add(rid)
+        # A row whose id was unsafe or already taken never inherits a real requirement's state.
+        prior = old.get(rid) if own else None
         same = prior is not None and (prior.text or "").strip() == text
         items.append(RequirementItem(
             id=rid, text=text, weight=weight, graded=prior.graded if prior is not None else True,
@@ -2702,7 +2704,7 @@ def _render_solution_check(key: str, tag: str, instructions: str, solution: Opti
                    + "; ".join(f"{_inert_model_text(r.id)} {_inert_model_text(r.text)}" for r in not_graded))
     unclear = [r.id for r in current.requirements if r.solution_status == "unclear"]
     if unclear:
-        st.caption(f"The check could not tell for {', '.join(unclear)}. They stay graded. "
+        st.caption(f"The check could not tell for {', '.join(_inert_model_text(u) for u in unclear)}. They stay graded. "
                    "Remove them from the Requirements to grade list if your solution does not do them.")
     if any(r.solution_status for r in base.requirements):
         edited_rows = rsc.edited_ids(base, current)

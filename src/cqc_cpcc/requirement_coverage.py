@@ -174,20 +174,36 @@ def safe_requirement_id(raw: Optional[str]) -> str:
     return rid
 
 
+def assign_ids(raw_ids: list, reserved=()) -> list:
+    """``[(id, own)]`` for rows in order. A row keeps its own id (``own`` True) when it is safe and
+    no earlier row has it; otherwise it gets the next free ``R{n}`` (``own`` False), skipping the
+    ids of every row (so a real id later in the list is never taken), the ``reserved`` ids and the
+    ones already handed out. A generated id never belongs to a row that already had it."""
+    safe = [safe_requirement_id(raw) for raw in raw_ids]
+    taken = {s for s in safe if s} | {(r or "").strip().upper() for r in reserved}
+    seen: set[str] = set()
+    out = []
+    for sid in safe:
+        if sid and sid not in seen:
+            seen.add(sid)
+            out.append((sid, True))
+            continue
+        n = 1
+        while f"R{n}" in taken or f"R{n}" in seen:
+            n += 1
+        new = f"R{n}"
+        seen.add(new)
+        out.append((new, False))
+    return out
+
+
 def normalize_checklist(checklist: RequirementChecklist) -> RequirementChecklist:
     """Drop blanks, cap the length and make ids unique (case-insensitively)."""
-    seen: set[str] = set()
+    rows = [r for r in (checklist.requirements or []) if (r.text or "").strip()]
+    ids = assign_ids([r.id for r in rows])
     items: list[RequirementItem] = []
-    n = 0
-    for r in checklist.requirements or []:
+    for r, (rid, _own) in zip(rows, ids):
         text = (r.text or "").strip()
-        if not text:
-            continue
-        rid = safe_requirement_id(r.id)
-        while not rid or rid in seen:
-            n += 1
-            rid = f"R{n}"
-        seen.add(rid)
         items.append(RequirementItem(id=rid, text=text, weight=r.weight, graded=r.graded,
                                      solution_status=r.solution_status,
                                      solution_evidence=r.solution_evidence,

@@ -362,7 +362,7 @@ def test_a_hostile_id_and_text_never_reach_a_label_or_caption():
     edits = {"edited_rows": {0: {"id": evil_id, "text": evil_text}}, "added_rows": [], "deleted_rows": []}
     _edit(page, edits)
     page.run()
-    assert page.out.requirements[0].id == "R1"  # replaced by a safe id
+    assert page.out.requirements[0].id == "R4"  # replaced by the next free safe id
     page.click("Check all against the solution", editor_state=_edit(page, edits))
     shown = ([b.label for b in page.at.button] + page.captions + [i.value for i in page.at.info]
              + [w.value for w in page.at.warning])
@@ -382,6 +382,43 @@ def test_a_duplicate_id_inherits_nothing_from_the_first_owner():
         {"id": "R2", "text": "Applies a discount", "weight": "core"},
         {"id": "r2", "text": "A second row typed with the same id", "weight": "core"}])
     out = _checklist_from_editor(frame, base).requirements
-    assert [r.id for r in out] == ["R2", "R1"]
+    assert [r.id for r in out] == ["R2", "R3"]
     assert (out[0].graded, out[0].hand_ungraded) == (False, True)
     assert (out[1].graded, out[1].hand_ungraded) == (True, False)
+
+
+def test_an_unsafe_id_row_never_inherits_and_the_real_row_keeps_its_id_and_state():
+    import pandas as pd
+
+    from cqc_streamlit_app.grade_assignment import _checklist_from_editor
+
+    base = rc.RequirementChecklist(requirements=[
+        rc.RequirementItem(id="R1", text="one", weight="core", graded=False, hand_ungraded=True),
+        rc.RequirementItem(id="R2", text="two", weight="core"),
+        rc.RequirementItem(id="R3", text="three", weight="core", graded=False, hand_ungraded=True)])
+    for unsafe in ("R 1", "R1​", "![x](http://evil/a.png)", "R" + "1" * 20):
+        frame = pd.DataFrame([
+            {"id": unsafe, "text": "typed row", "weight": "core"},
+            {"id": "R1", "text": "one", "weight": "core"},
+            {"id": "R3", "text": "three", "weight": "core"}])
+        out = {r.text: r for r in _checklist_from_editor(frame, base).requirements}
+        assert (out["typed row"].graded, out["typed row"].hand_ungraded) == (True, False), unsafe
+        assert out["typed row"].id not in ("R1", "R2", "R3")  # a free id: R2 is a base id too
+        assert out["one"].id == "R1" and (out["one"].graded, out["one"].hand_ungraded) == (False, True)
+        assert out["three"].id == "R3" and (out["three"].graded, out["three"].hand_ungraded) == (False, True)
+
+
+def test_ids_with_underscore_or_dash_render_escaped():
+    answer = _verdicts(r1="yes", r2="unclear", r3="yes")
+    page = Page(check=AsyncMock(return_value=answer))
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    edits = {"edited_rows": {1: {"id": "r_2-x"}}, "added_rows": [], "deleted_rows": []}
+    _edit(page, edits)
+    page.run()
+    assert page.out.requirements[1].id == "R_2-X"
+    page.check.return_value = rsc.SolutionCheck(verdicts=[
+        rsc.SolutionVerdict(requirement_id="R_2-X", does_it="unclear", evidence="e")])
+    page.click("Check all against the solution", editor_state=_edit(page, edits))
+    text = " ".join(page.captions)
+    assert "R\\_2-X" in text and "R_2-X" not in text.replace("R\\_2-X", "")

@@ -639,4 +639,4 @@ def test_normalize_replaces_an_unsafe_id():
     items = [rc.RequirementItem(id="![x](http://evil/a.png)", text="t", weight="core"),
              rc.RequirementItem(id="R1", text="u", weight="core")]
     out = rc.normalize_checklist(rc.RequirementChecklist(requirements=items))
-    assert [r.id for r in out.requirements] == ["R1", "R2"]  # unsafe id became R1; the real R1 is then a duplicate
+    assert [r.id for r in out.requirements] == ["R2", "R1"]  # the real R1 keeps its id
