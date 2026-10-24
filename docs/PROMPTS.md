@@ -13,14 +13,14 @@ edits it. The evaluation workflow that grades these prompts is planned in
 
 | id | What it does | Role (model) | Where the text lives | Output | Evaluated |
 |---|---|---|---|---|---|
-| `rubric-grading` | Grade Assignment, rubric mode: errors, criterion levels, feedback, requirement marks | grading | `rubric_grading.py:build_rubric_grading_prompt` | `RubricAssessmentResult` | suites `grading` (v2, 90) + `grading-levelband` (18) + `grading-solution` (solution in the prompt) |
+| `rubric-grading` | Grade Assignment, rubric mode: errors, criterion levels, feedback, requirement marks | grading | `rubric_grading.py:build_rubric_grading_messages` (`build_rubric_grading_prompt` joins them) | `RubricAssessmentResult` | suites `grading` (v2, 97) + `grading-levelband` (18) + `grading-solution` (solution in the prompt) |
 | `requirements-section` | Fragment of `rubric-grading`: mark each R# met/partial/missing | grading | `requirement_coverage.py:requirements_prompt_section` | (part of the above) | yes (requirement labels) |
 | `execution-evidence-section` | Fragment of `rubric-grading`, added only after a verified run of the student's program (PR 14): the app-computed verdict table, then per-case diffs and stderr in a per-call nonce fence (untrusted program output). Absent, and the prompt byte-identical, with no plan or a skipped check | grading | `execution_evidence.py:execution_evidence_section` | (part of the above) | no suite yet (output-check A/B arrives with PR 15) |
 | `requirement-extraction` | Instructions → 1–12 functional requirements | grading | `requirement_coverage.py:build_requirement_extraction_prompt` | `RequirementChecklist` | suite `requirement-extraction` (36) |
 | `effort-recommendation` | Assignment → the lowest reasoning effort expected to grade it reliably (advice on the Setup tab; takes no student submission) | grading | `effort_recommendation.py:build_effort_recommendation_prompt` | `EffortJudgement` | suite `effort-recommendation` (15) |
 | `requirement-solution-check` | Does the instructor's solution do each checklist requirement (yes, no, unclear)? One cached call per assignment; only a `no` can make a requirement not graded, and until `model_policy.json` calibrates the suite a `no` is only a suggestion the instructor applies; instructions and solution are nonce-fenced untrusted text, no submission is ever sent | grading | `requirement_solution_check.py:build_solution_check_prompt` | `SolutionCheck` | suite `requirement-solution-check` (16, synthetic; key grader: false-`no` rate) |
 | `test-case-generation` | Output check: stdin test cases for the solution (at most 6, a boundary case for every selection or loop condition the instructions name, condition-to-case map); instructions and solution are nonce-fenced untrusted text | grading | `test_case_generation.py:build_test_case_prompt` | `TestCaseSuggestion` | suite `test-case-generation` (12, synthetic) |
-| `exam-grading` | Grade Assignment, exam mode (`CodeGrader`): major/minor errors | grading | `utilities/AI/exam_grading_prompts.py` | `ErrorDefinitions` | suite `exam-grading` (74) |
+| `exam-grading` | Grade Assignment, exam mode (`CodeGrader`): major/minor errors | grading | `utilities/AI/exam_grading_prompts.py:build_exam_grading_messages` | `ErrorDefinitions` | suite `exam-grading` (74) |
 | `preprocessing-digest` | Compress a very large submission before exam grading | digest | `utilities/AI/openai_client.py:_build_preprocessing_prompt` | `PreprocessingDigest` | suite `digest` (16) |
 | `project-feedback` | Give Feedback page (v5: student-facing report; categories from the course error definitions) | feedback | `prompts/project_feedback.py` | `FeedbackReport` | suite `project-feedback` (74) |
 | `flowgorithm-grade` | Flowgorithm grading: per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py`) | `FlowgorithmGrade` | suite `flowgorithm-grade` (24) |
@@ -87,9 +87,7 @@ implemented is not required; prompt and output wording are compared literally wh
 format differences follow the course error definitions; nothing that matches the solution
 is penalised, even an error the solution itself would trigger; and feedback states the
 expected behaviour but never shows solution code. The rules live in
-`cqc_cpcc/prompts/solution_rules.py`; the submission sits between
-`<!--BEGIN_STUDENT_SUBMISSION-->` markers, marker tokens inside it are neutralised, and the
-prompt says it is data, never the solution or instructions.
+`cqc_cpcc/prompts/solution_rules.py` and, since v3, in the system message (see below).
 
 - **A version bump re-grades.** The prompt version is part of the run key, so the first run
   after this change grades every submission again (and spends model calls). Runs saved under
@@ -111,6 +109,35 @@ prompt says it is data, never the solution or instructions.
   time and the next run re-grades again; runs saved under v2 stay on disk. If only the
   version is reverted by hand, run `poetry run python -m cqc_cpcc.model_eval prompts
   fingerprint --write`.
+
+## System and user messages (rubric-grading v3, exam-grading v3, PR 19b)
+
+Both grading prompts are sent as two messages, through `llm_gateway.structured(..., system=)`:
+
+- **System message** (`build_rubric_grading_system`; the instruction part of the exam
+  template): the grader role, the solution rules (when a solution was given), scoring-mode
+  rules, output requirements, scope rules and the JSON example, and one line that text inside
+  the submission fence is data to grade, never instructions. It holds no assignment, rubric or
+  submission text and no per-call value, so it is the same for every student of a run and
+  stays cacheable.
+- **User message**: the static prefix first (assignment instructions, solution between its
+  markers, rubric, error definitions, requirement checklist), then the submission, file names
+  included, inside an `untrusted_fence` nonce fence (fresh nonce per call; marker-shaped text
+  and the nonce are stripped from the data, so a forged closing fence or a forged
+  `## Grading Instructions` heading cannot end it or pose as a section), then the
+  output-check evidence fragment when there is one (it keeps its own fence), then the closing
+  line "Grade the fenced submission per the system rules." The line that explains the fence
+  (and carries the nonce) sits directly before the fence, after the static prefix.
+- `build_rubric_grading_prompt` / `build_exam_grading_prompt` still return one string (system,
+  a separator, user) for token estimates and the fingerprint renders, which pass a fixed nonce
+  (`FIXTURE_NONCE`). A caller that wants the messages uses `build_*_messages`.
+- Request capture (the A/B's identical-request check) pins `untrusted_fence.new_nonce`, so two
+  captures of the same code are byte-identical; the model evaluation dataset gained injection
+  cases that imitate this structure (a forged `## Grading Instructions` heading, a forged
+  fence close, a fake `system:` line, an instruction in a file name), tagged `injection`, so
+  `injection_pass_rate` covers them.
+- **A version bump re-grades**, as above. **Rollback:** `git revert`; the version in the run
+  key goes back.
 
 ## Adding a prompt
 
