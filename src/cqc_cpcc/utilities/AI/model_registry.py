@@ -19,12 +19,22 @@ Model resolution order (first match wins):
 1. ``override`` argument (Settings-page pin, eval harness)
 2. ``CQC_MODEL_<ROLE>`` environment variable (fast rollback)
 3. the registry file (``CQC_MODEL_REGISTRY_PATH`` replaces the checked-in one)
+
+Reasoning effort resolves the same way, and only to a value the model's profile lists:
+
+1. ``effort_override`` argument (the per-run choice on the Grade Assignment page)
+2. ``CQC_REASONING_EFFORT_<ROLE>`` environment variable
+3. the role's ``reasoning_effort`` in the registry file
+
+An effort the model does not support is never sent: the call gets the provider default
+and ``ResolvedModel.reasoning_effort_dropped`` is set.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import warnings
@@ -36,6 +46,12 @@ from pydantic import ConfigDict, BaseModel, Field, field_validator, model_valida
 _CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 DEFAULT_REGISTRY_PATH = _CONFIG_DIR / "model_registry.json"
 DEFAULT_POLICY_PATH = _CONFIG_DIR / "model_policy.json"
+
+logger = logging.getLogger(__name__)
+
+# Every reasoning effort a Settings pin or the per-run selectbox may offer. A model's own
+# profile narrows this to what it supports.
+KNOWN_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 ROLES = ("grading", "digest", "feedback", "flowgorithm")
 Role = Literal["grading", "digest", "feedback", "flowgorithm"]
@@ -250,6 +266,9 @@ class ResolvedModel(BaseModel):
     provider: ProviderPreferences
     source: Literal["override", "env", "registry"]
     registry_revision: str
+    # Set when an effort was asked for (per-run choice or CQC_REASONING_EFFORT_<ROLE>) that
+    # this model does not support: no effort is sent and the provider default applies.
+    reasoning_effort_dropped: bool = False
 
     @property
     def config_hash(self) -> str:
@@ -321,8 +340,23 @@ def normalize_model_id(model_id: str) -> str:
     return f"openai/{model_id}"
 
 
-def resolve(role: Role, override: Optional[str] = None) -> ResolvedModel:
-    """Resolve the model and request settings for ``role``."""
+def _requested_effort(role: str, effort_override: Optional[str]) -> tuple[Optional[str], str]:
+    """The effort asked for and where it came from: ``(value, "override" | "env")``."""
+    if effort_override and effort_override.strip():
+        return effort_override.strip().lower(), "override"
+    env_value = os.environ.get(f"CQC_REASONING_EFFORT_{role.upper()}", "").strip().lower()
+    return (env_value or None), "env"
+
+
+def resolve(role: Role, override: Optional[str] = None,
+            effort_override: Optional[str] = None) -> ResolvedModel:
+    """Resolve the model and request settings for ``role``.
+
+    ``effort_override`` is the per-run reasoning effort. One the model supports replaces
+    the role's effort; an unsupported one gives no effort and sets
+    ``reasoning_effort_dropped``. ``CQC_REASONING_EFFORT_<ROLE>`` is checked the same way
+    when there is no override.
+    """
     if role not in ROLES:
         raise ModelRegistryError(f"Unknown role {role!r}; expected one of {ROLES}")
     registry = load_registry()
@@ -344,6 +378,20 @@ def resolve(role: Role, override: Optional[str] = None) -> ResolvedModel:
         # let the provider default apply.
         effort = None
 
+    dropped = False
+    requested, requested_from = _requested_effort(role, effort_override)
+    if requested:
+        supported = profile.reasoning_efforts if profile is not None else []
+        if requested in KNOWN_EFFORTS and requested in supported:
+            effort = requested
+        else:
+            # Never pass an unchecked value on to the provider.
+            effort, dropped = None, True
+            if requested_from == "env":
+                logger.warning(
+                    "Ignoring CQC_REASONING_EFFORT_%s=%r: %s does not support it (supported: %s).",
+                    role.upper(), requested[:32], model, ", ".join(supported) or "none")
+
     max_output = role_cfg.max_output_tokens
     if profile is not None:
         max_output = min(max_output, profile.max_completion_tokens)
@@ -359,7 +407,24 @@ def resolve(role: Role, override: Optional[str] = None) -> ResolvedModel:
         provider=policy.provider,
         source=source,
         registry_revision=registry.revision,
+        reasoning_effort_dropped=dropped,
     )
+
+
+def resolve_fallback(primary: ResolvedModel, effort_override: Optional[str] = None) -> ResolvedModel:
+    """The role's fallback model, at the per-run effort when it supports it, else at the
+    role's own effort. ``primary.fallback`` must be set."""
+    fallback = resolve(primary.role, override=primary.fallback, effort_override=effort_override)  # type: ignore[arg-type]
+    if effort_override and fallback.reasoning_effort_dropped:
+        fallback = resolve(primary.role, override=primary.fallback)  # type: ignore[arg-type]
+    return fallback
+
+
+def supported_efforts(model: str) -> list[str]:
+    """Reasoning efforts the registry profiles ``model`` as accepting (empty when none or
+    the model has no profile)."""
+    profile = load_registry().models.get(normalize_model_id(model))
+    return [e for e in profile.reasoning_efforts if e in KNOWN_EFFORTS] if profile else []
 
 
 def build_request_params(resolved: ResolvedModel) -> dict:

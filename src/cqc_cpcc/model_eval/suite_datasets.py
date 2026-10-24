@@ -790,11 +790,239 @@ def build_levelband() -> list[dict]:
 
 
 # --------------------------------------------------------------------------------------
+# test-case-generation: instructions + solution -> stdin cases with boundary coverage
+# --------------------------------------------------------------------------------------
+
+#: (key, language, title, [numbered step, ...], style rules, solution source,
+#:  [(condition text, keyword groups, boundary values a good case contains)]).
+#: Programs are written here for this suite; none derives from a student submission.
+TESTCASE_SPECS = (
+    ("payroll", "java", "Payroll.java", [
+        "Asks for the hours worked and asks again until the hours are between 0 and 80 inclusive.",
+        "Asks for the hourly rate.",
+        "Pays time and a half for every hour over 40.",
+        "Prints the gross pay with two decimal places.",
+    ], ["Use named constants.", "Comment your code."], """import java.util.Scanner;
+
+// Author: Ada Example
+public class Payroll {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        System.out.print("Enter hours worked (0-80): ");
+        double hours = in.nextDouble();
+        while (hours < 0 || hours > 80) {
+            System.out.print("Invalid. Enter hours worked (0-80): ");
+            hours = in.nextDouble();
+        }
+        System.out.print("Enter hourly rate: ");
+        double rate = in.nextDouble();
+        double pay;
+        if (hours > 40) {
+            pay = 40 * rate + (hours - 40) * rate * 1.5;
+        } else {
+            pay = hours * rate;
+        }
+        System.out.printf("Gross pay: $%.2f%n", pay);
+    }
+}
+""", [
+        ("Asks again until the hours are between 0 and 80 inclusive", [["hours"], ["between", "0", "80"]],
+         ["0", "80", "-1", "81"]),
+        ("Pays time and a half for hours over 40", [["40"], ["over", "half", "overtime"]], ["40", "41"]),
+    ]),
+    ("order_total", "java", "OrderTotal.java", [
+        "Reads a quantity (int) and an item price (double).",
+        "Prints Invalid input and stops when either value is negative.",
+        "Gives a 10% discount on the subtotal when the quantity is 10 or more.",
+        "Prints the total with two decimal places.",
+    ], ["Follow Java naming conventions.", "Comment your code."], """import java.util.Scanner;
+
+// Author: Ada Example
+public class OrderTotal {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        System.out.print("Quantity: ");
+        int quantity = in.nextInt();
+        System.out.print("Price: ");
+        double price = in.nextDouble();
+        if (quantity < 0 || price < 0) {
+            System.out.println("Invalid input");
+            return;
+        }
+        double subtotal = quantity * price;
+        if (quantity >= 10) {
+            subtotal = subtotal * 0.90;
+        }
+        System.out.printf("Total: $%.2f%n", subtotal);
+    }
+}
+""", [
+        ("Invalid input when a value is negative", [["negative"], ["invalid", "stop"]], ["-1", "0"]),
+        ("10% discount when the quantity is 10 or more", [["10"], ["discount"]], ["10", "9"]),
+    ]),
+    ("grade_letter", "python", "grades.py", [
+        "Reads five exam scores, one per line.",
+        "Computes the average.",
+        "Prints A for an average of 90 or more, B for 80 or more, C for 70 or more, D for 60 or more, "
+        "and F otherwise.",
+        "Prints the average with one decimal place and the letter.",
+    ], ["Use meaningful names.", "Add a header comment."], """# Author: Ada Example
+scores = [float(input("Score: ")) for _ in range(5)]
+average = sum(scores) / len(scores)
+if average >= 90:
+    letter = "A"
+elif average >= 80:
+    letter = "B"
+elif average >= 70:
+    letter = "C"
+elif average >= 60:
+    letter = "D"
+else:
+    letter = "F"
+print(f"Average: {average:.1f} Grade: {letter}")
+""", [
+        ("A for an average of 90 or more", [["90"], ["a", "average"]], ["90", "89"]),
+        ("B for an average of 80 or more", [["80"], ["b", "average"]], ["80", "79"]),
+        ("C for an average of 70 or more", [["70"], ["c", "average"]], ["70", "69"]),
+        ("D for an average of 60 or more", [["60"], ["d", "average"]], ["60", "59"]),
+    ]),
+    ("shipping", "cpp", "shipping.cpp", [
+        "Reads the package weight in pounds and the shipping zone (1, 2 or 3).",
+        "Prints Invalid zone and stops when the zone is not 1, 2 or 3.",
+        "Charges 2.00 per pound in zone 1, 3.00 in zone 2 and 4.50 in zone 3.",
+        "Adds a 5.00 surcharge when the weight is over 20 pounds.",
+        "Prints the cost with two decimal places.",
+    ], ["Use named constants for the rates.", "Comment your code."], """#include <iomanip>
+#include <iostream>
+using namespace std;
+
+// Author: Ada Example
+int main() {
+    double weight;
+    int zone;
+    cout << "Weight: ";
+    cin >> weight;
+    cout << "Zone: ";
+    cin >> zone;
+    double rate;
+    if (zone == 1) {
+        rate = 2.00;
+    } else if (zone == 2) {
+        rate = 3.00;
+    } else if (zone == 3) {
+        rate = 4.50;
+    } else {
+        cout << "Invalid zone" << endl;
+        return 0;
+    }
+    double cost = weight * rate;
+    if (weight > 20) {
+        cost += 5.00;
+    }
+    cout << fixed << setprecision(2) << "Cost: $" << cost << endl;
+    return 0;
+}
+""", [
+        ("Invalid zone when the zone is not 1, 2 or 3", [["zone"], ["invalid", "not"]], ["0", "4", "1", "3"]),
+        ("Surcharge when the weight is over 20 pounds", [["20"], ["surcharge", "over", "weight"]], ["20", "21"]),
+    ]),
+    ("guess", "python", "guess.py", [
+        "Keeps asking for a guess until the guess equals the secret number 42.",
+        "Prints Too high when the guess is above 42 and Too low when it is below 42.",
+        "Prints the number of guesses it took.",
+    ], ["Use a while loop.", "Use meaningful names."], """# Author: Ada Example
+SECRET = 42
+guesses = 0
+while True:
+    guess = int(input("Guess: "))
+    guesses += 1
+    if guess > SECRET:
+        print("Too high")
+    elif guess < SECRET:
+        print("Too low")
+    else:
+        break
+print(f"You needed {guesses} guesses")
+""", [
+        ("Keeps asking until the guess equals 42", [["guess"], ["until", "equals", "42"]], ["42"]),
+        ("Too high above 42 and too low below 42", [["high"], ["low"]], ["41", "43"]),
+    ]),
+    ("temperature", "cpp", "temperature.cpp", [
+        "Reads a temperature and a unit, C or F.",
+        "Converts Celsius to Fahrenheit or Fahrenheit to Celsius depending on the unit.",
+        "Prints Invalid unit and stops when the unit is not C or F.",
+        "Prints Freezing when the temperature in Fahrenheit is 32 or below.",
+    ], ["Use const for the conversion factors.", "Keep lines short."], """#include <iomanip>
+#include <iostream>
+using namespace std;
+
+// Author: Ada Example
+int main() {
+    double temp;
+    char unit;
+    cout << "Temperature: ";
+    cin >> temp;
+    cout << "Unit (C or F): ";
+    cin >> unit;
+    double fahrenheit;
+    if (unit == 'C') {
+        fahrenheit = temp * 9 / 5 + 32;
+        cout << fixed << setprecision(1) << fahrenheit << " F" << endl;
+    } else if (unit == 'F') {
+        fahrenheit = temp;
+        cout << fixed << setprecision(1) << (temp - 32) * 5 / 9 << " C" << endl;
+    } else {
+        cout << "Invalid unit" << endl;
+        return 0;
+    }
+    if (fahrenheit <= 32) {
+        cout << "Freezing" << endl;
+    }
+    return 0;
+}
+""", [
+        ("Invalid unit when the unit is not C or F", [["unit"], ["invalid", "not"]], ["C", "F", "X"]),
+        ("Freezing when the temperature in Fahrenheit is 32 or below", [["32"], ["freezing", "below"]],
+         ["32", "0"]),
+    ]),
+)
+
+
+def _testcase_instructions(title: str, steps: list, style: list, variant: str) -> str:
+    if variant == "numbered":
+        body = "\n".join(f"{i}. {t}" for i, t in enumerate(steps, 1))
+        return f"Write a program in a file named {title} that:\n{body}\n" + " ".join(style) + "\n"
+    lowered = [t[0].lower() + t[1:] for t in steps]
+    return f"Create {title}. It " + " Then it ".join(lowered) + " " + " ".join(style) + "\n"
+
+
+def build_test_cases() -> list[dict]:
+    rows = []
+    for key, language, title, steps, style, solution, conditions in TESTCASE_SPECS:
+        for variant in ("numbered", "prose"):
+            rows.append({
+                "case_id": f"{key}__{variant}",
+                "stratum": language,
+                "tags": [variant, language],
+                "twin_of": None,
+                "inputs": {"instructions": _testcase_instructions(title, steps, style, variant),
+                           "solution": solution, "language": language},
+                "labels": {
+                    "conditions": [{"id": f"G{i}", "text": text, "keyword_groups": groups,
+                                    "boundary_values": values}
+                                   for i, (text, groups, values) in enumerate(conditions, 1)],
+                },
+            })
+    return rows
+
+
+# --------------------------------------------------------------------------------------
 
 BUILDERS = {
     "exam-grading": build_exam,
     "project-feedback": build_feedback,
     "requirement-extraction": build_requirements,
+    "test-case-generation": build_test_cases,
     "flowgorithm-grade": build_flowgorithm,
     "digest": build_digest,
     "grading-levelband": build_levelband,

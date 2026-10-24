@@ -39,8 +39,9 @@ alone was unsafe. It goes back once the digest prompt suite passes (see
 3. **Hard gates** (any failure blocks): call success rate, no refusals or truncations, no
    invented error ids, retry rate, every prompt-injection twin resisted, minimum F1 and
    score accuracy, latency, cost per submission, the model actually served, and policy.
-   Eval calls use the same request timeouts as the app (grading 180 s, see
-   `docs/OPENROUTER_INTEGRATION.md`), so a candidate slower than that fails its calls
+   Eval calls use the same request timeouts as the app (grading 180 s at low effort, scaled
+   to 270 s at the registry's high effort; see `docs/OPENROUTER_INTEGRATION.md`), so a
+   candidate slower than that fails its calls
    instead of passing slowly. Set `CQC_LLM_TIMEOUT_GRADING` to evaluate a slower model.
 4. **Promotion paths**:
    - *better*: composite score at least 0.03 higher (95% interval above zero), nothing

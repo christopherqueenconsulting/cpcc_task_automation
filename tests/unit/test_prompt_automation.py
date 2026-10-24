@@ -13,6 +13,13 @@ from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _no_identical_skip(monkeypatch):
+    """These tests run the paid-path A/B on purpose; the identical-request skip has its own tests."""
+    monkeypatch.setenv("CQC_AB_SKIP_IDENTICAL", "0")
+
+
+
 @pytest.fixture
 def uncalibrated_policy(tmp_path, monkeypatch):
     """The policy as shipped before the first calibration: every suite report-only."""
@@ -441,7 +448,8 @@ async def test_suite_gate_runs_the_other_suites_of_the_roles(tmp_path, monkeypat
 
     monkeypatch.setattr(prompt_eval, "run", small_run)
     report = await pa.suite_gate("openai/gpt-6-luna@high", "openai/gpt-5-mini", ["grading"], tmp_path)
-    assert set(ran) == {"grading-levelband", "grading-solution", "requirement-extraction", "exam-grading"}
+    assert set(ran) == {"grading-levelband", "grading-solution", "requirement-extraction", "exam-grading",
+                       "test-case-generation"}
     assert report["status"] == "pass"  # same canned answers for both models
     assert json.loads((tmp_path / "cross_suite.json").read_text())["candidate"] == "openai/gpt-5-mini"
 

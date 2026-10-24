@@ -5,6 +5,70 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc3 - 2026-10-23
+
+Prerelease, on top of 0.2.0-rc2. Grading now runs in the background with a live table and a Cancel button,
+and on Streamlit Community Cloud the results are no longer saved on the server. Check both with the rc
+checklist in [docs/RELEASING.md](docs/RELEASING.md).
+
+What to check, in plain terms:
+
+- Press Grade on a small batch. A live table shows each student's status, which model is answering, and
+  how long it has waited. Cancel grading keeps the students who already finished. A request that was
+  already sent may still be charged.
+- If a student fails, Retry the failed ones, or use another model for just those students; they are merged
+  into the same run.
+- While a grading run is working, Grade, Clear results, Re-grade, Compare and Keep are paused for every
+  session on the same server. Restart the app to clear a stuck run.
+- On the Mac, finished students are saved as they finish, so a closed tab does not lose them. On Streamlit
+  Community Cloud nothing is saved on the server: keep the page open and download the results. To get the old
+  behaviour back on Cloud set `CQC_RESULTS_PERSIST=on` in the app's secrets. Set `CQC_RESULTS_PERSIST=off` on any
+  shared host that is not Streamlit Community Cloud.
+- If anything looks wrong, set `CQC_GRADING_JOB=off` in `.env` and restart: grading goes back to the old
+  one-student-at-a-time path.
+- The test-case code below is not connected to grading, so there is nothing to check for it.
+
+- Background grading job: `grading_job.py` with ten states, a live view, Cancel selected and Cancel grading,
+  Retry failed, "Use another model" for the failed students (with the effort box), saves after each student,
+  a link token in the page address (whoever has that link can watch or cancel the run, so do not share it), at most four live runs, and one shared
+  limit on model calls. Results are session-only on Streamlit Community Cloud (a missing `/mount/src`
+  means a local machine; `CQC_RESULTS_PERSIST=on|off` overrides). `CQC_GRADING_JOB=off` keeps the old
+  path. #430
+- Test-case derivation for the future output check (`test_case_generation.py`, `execution_check.py`, the
+  `test-case-generation` prompt and its eval suite): reads sample runs from the instructions, suggests up
+  to six stdin cases with one model call, and runs them on the reference solution in the Docker sandbox.
+  Nothing in grading calls it yet and `CQC_EXECUTION=off` keeps it inert. #429
+
+## 0.2.0-rc2 - 2026-10-23
+
+Prerelease, on top of 0.2.0-rc1. The reasoning effort can now differ per run, which changes the student
+time limit and the model label on saved results; the compile check runs in a Docker sandbox when one is
+available. Check both with the rc checklist in [docs/RELEASING.md](docs/RELEASING.md).
+
+What to check, in plain terms:
+
+- A new reasoning-effort box sits next to the model on the Grade Assignment page. Leave it on its default
+  and grading is exactly as in rc1, and results saved in rc1 still match.
+- Docker is optional. Without it, and on Streamlit Community Cloud where there is no Docker, the compile
+  check uses the compiler on the host as before and nothing changes for you.
+- Nothing in this release runs a student's program. The sandbox is only used to compile, for now.
+
+- Reasoning effort per grading run: a selectbox next to the model (options come from the model's profile),
+  a banner when the students in one run were graded at different efforts, "Re-grade this student at another
+  effort" with a cost estimate, a neutral side-by-side result and a Keep button that replaces the stored
+  result, and a pin per role on the Settings page. With the default choice the grading run key is
+  unchanged, so saved results from rc1 still match. The built-in model timeouts now scale with effort
+  (low x1, medium x1.25, high x1.5) and the per-student time limit is the sum over the primary and fallback
+  model: 1180 s at the registry's current high effort, 820 s at low (it was 800 s). #425
+- Docker sandbox for student programs (`docker/exec-runner`, `cqc_cpcc.utilities.program_runner`): no
+  network, read-only root, memory, process and output limits, results read through hard caps. Nothing in
+  grading runs a student program yet. The compile check uses the sandbox when Docker and the image are
+  available and falls back to the host `g++` or `javac` (with the include guard) when they are not. A
+  sandbox failure is "cannot verify", never "does not compile". To use it, build the image once
+  (optional; rebuild it if you built one before 2026-10-23):
+  `docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner`. The Dependabot and CI edits for
+  the image are a separate pull request and are not part of this release. #424
+
 ## 0.2.0-rc1 - 2026-10-23
 
 Prerelease. Everything here can change a score or a grading decision for the same input, so this build is checked
