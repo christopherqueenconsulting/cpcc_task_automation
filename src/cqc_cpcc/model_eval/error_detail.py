@@ -14,6 +14,7 @@ copied: only the short ``code`` / ``type`` / ``provider_name`` fields and the id
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from typing import Optional
@@ -151,9 +152,17 @@ def _header(error: BaseException, name: str) -> Optional[str]:
         return None
 
 
+#: Usage fields a truncated attempt adds to its entry (all plain numbers or a short word).
+USAGE_FIELDS = ("finish_reason", "completion_tokens", "prompt_tokens", "cost_usd")
+
+
 def describe_failure(error: BaseException, attempt: int, latency_s: Optional[float] = None,
-                     retried: bool = False) -> dict:
-    """The ``error_detail`` entry for one failed attempt. Contains no prompt, submission or key."""
+                     retried: bool = False, usage: Optional[dict] = None) -> dict:
+    """The ``error_detail`` entry for one failed attempt. Contains no prompt, submission or key.
+
+    ``usage`` (a truncated attempt's ``finish_reason`` / token counts / real cost, when known) is added as
+    plain numbers; a value that is not a finite number (or, for ``finish_reason``, a short word) is dropped.
+    """
     detail = {
         "attempt": attempt,
         "exception": type(error).__name__,
@@ -179,7 +188,20 @@ def describe_failure(error: BaseException, attempt: int, latency_s: Optional[flo
             value = _header(e, header)
             if value:
                 detail.setdefault(key, value)
+    for key, value in (usage or {}).items():
+        if key == "finish_reason":
+            value = _short(value)
+        elif key == "cost_usd":
+            value = round(float(value), 6) if _is_number(value) and value >= 0 else None
+        else:
+            value = int(value) if _is_number(value) and value >= 0 else None
+        if key in USAGE_FIELDS and value is not None:
+            detail[key] = value
     return {k: v for k, v in detail.items() if v not in (None, [])}
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def transport_failure_stats(records: list) -> dict:
@@ -193,9 +215,20 @@ def transport_failure_stats(records: list) -> dict:
         failed_for_good = not getattr(r, "ok", False) and getattr(r, "error_kind", None) == "transport"
         final += failed_for_good
         for d in details:
+            if d.get("finish_reason") == "length":
+                continue  # a truncated attempt: counted by truncation_stats, not as a transport failure
             if d.get("retried"):
                 retried += 1
             if d.get("retried") or (failed_for_good and d is details[-1]):
                 key = str(d.get("status") or d.get("exception") or "unknown")
                 by_status[key] = by_status.get(key, 0) + 1
     return {"final": final, "retried": retried, "by_status": dict(sorted(by_status.items()))}
+
+
+def truncation_stats(records: list) -> dict:
+    """Truncated calls for the run-stats block: ``final`` (the call ended truncated) and ``retried`` (a truncated
+    attempt that was tried again, whatever the retry's outcome). Reporting only: no verdict reads this."""
+    final = sum(1 for r in records if not getattr(r, "ok", False) and getattr(r, "error_kind", None) == "truncated")
+    retried = sum(1 for r in records for d in (getattr(r, "error_detail", None) or [])
+                  if d.get("finish_reason") == "length" and d.get("retried"))
+    return {"final": final, "retried": retried}

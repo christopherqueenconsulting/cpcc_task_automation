@@ -429,7 +429,8 @@ artifact rows held no status or gateway body, so the cause could not be read.
 
 - **What is retried:** a connection reset or abort, a read or connect timeout, a 408, a 5xx (500, 502,
   503, 504 ...), and an `OpenAITransportError` that carries no status. **Not retried:** a schema or
-  validation error, a refusal, a truncation, any other 4xx, a cancellation, a budget refusal. A 429 and
+  validation error, a refusal, any other 4xx, a cancellation, a budget refusal (a truncation has its
+  own single retry, see "A truncated call is retried once" below). A 429 and
   the in-flight-budget 402/403 keep their own retry above, unchanged. The runner's `classify_error`
   works on the message text, so a 5xx whose text mentions `json`, `schema` or `validation` is classed
   as a schema error and is not retried (safe: it under-retries).
@@ -505,6 +506,58 @@ artifact rows held no status or gateway body, so the cause could not be read.
   old (or reverted) code loads new rows without error but silently IGNORES `retry_charge_usd`, so its
   `_recorded_cost` and budget accounting undercount those rows by the failed-attempt charge (their
   `cost_usd` holds only the real cost).
+
+#### A truncated call is retried once (eval runner only)
+
+Why: in the final Prompt A/B for PR #446 (run 40101727031) one `project-feedback` call (case
+`csc134_project_cpp__no_validation__inject_teacher_note`, repeat 1, head side) ran away. From the analysis
+of the run artifacts: `finish_reason=length`, 32768 completion tokens, 126.3 s, $0.0164, `error_kind:
+truncated`, attempt 1. Its request hash was identical on base and head, the other repeats used 574 to 659
+completion tokens, and the base had 0 truncations in 296 calls: a stochastic runaway, not a prompt effect.
+That one call tripped the hard gate `errors.truncated > 0` and the strict injection grader.
+
+- **What:** a call whose error classifies as `truncated` (the runner's `classify_error`; never a 4xx) is
+  tried **once more**. This is a separate budget from the transport retries: at most one extra attempt per
+  call whatever `CQC_EVAL_TRANSPORT_RETRIES` says, and a call can use its transport retries and the one
+  truncated retry. If the retry also truncates, the call is a final failure with `error_kind: truncated`
+  and both attempts in `error_detail`. A systematic truncation therefore still fails the gate.
+- **Wait and budget:** same layers as the transport retry (`throttled_call` in adaptive mode,
+  `retry_transport` in fixed mode). The retry reserves its budget like any attempt (adaptive) or needs
+  `spent + estimate` to fit under `stop_at` (fixed); the permit or slot is given back during the wait, so
+  a cancel in the wait leaks nothing. The wait is the first-retry `backoff_s` (full jitter, at most 2 s)
+  capped at 10 s.
+- **Record:** the truncated attempt is one `error_detail` entry with the usual fields plus
+  `finish_reason`, `completion_tokens`, `prompt_tokens` and `cost_usd` (taken from the exception when it
+  carries them, else from the gateway's record of that attempt; `finish_reason` is `length` by
+  definition). It counts in `attempts` and in the retry stats (`retried`, `extra_attempts`).
+- **Cost:** the truncated attempt is charged to the budget at its REAL usage cost when the response
+  reported one, else at the estimate, through the existing budget-only `retry_charge_usd`. For a retry that
+  succeeds, `cost_usd` stays the successful attempt's real cost, so the gate's cost ratio does not read the
+  runaway (#453 semantics); the budget spent is `cost_usd + retry_charge_usd`.
+- **Report:** `ab.md` "Run stats" adds `head truncated calls: N final / M retried` (and the base's when
+  non-zero); `ab.json` `run_stats` gains `head_truncated` and `base_truncated`. Reporting only: no
+  verdict reads them. A truncated attempt is not counted in the transport failure line.
+- **Pass rule:** no threshold, gate, grader or `ab_decision` change. A truncated call that succeeds on
+  retry is now scored as the successful attempt; a call that truncates twice still fails.
+
+##### Optional output-token cap: `CQC_EVAL_MAX_TOKENS` (diagnostic, off by default)
+
+- **Default unset: no change at all.** The eval pins `max_output_tokens` 32768 for every call as before,
+  so request bodies, request hashes and the identical-request fast path are untouched.
+- **Set:** a positive whole number up to 65536 (anything else stops the run before any call, like the other
+  `CQC_EVAL_*` / `CQC_AB_*` variables). It replaces that pin for the prompt-eval runner and `prompt-requests`
+  captures, and reaches the request through the same registry path production uses for its token limit.
+  It never raises the limit above the model's own maximum.
+- **Tradeoffs:** a cap changes the request parameters of EVERY call, so every suite's request hash differs
+  from a base run without the cap (the identical-request fast path no longer applies; run base and head
+  with the same value). It also makes the eval differ from production, where the app sets no cap. Use it
+  to diagnose a runaway or bound the cost of one, not for routine runs. The A/B report notes the value
+  when it is set.
+- **Starting value if the maintainer enables it (not enabled by this change):** 8192. From the analysis of
+  the run artifacts, normal calls use up to about 1.4k completion tokens (`project-feedback`) and grading
+  about 2.4k on average, so 8192 leaves headroom while cutting a 32768-token runaway to a quarter of the
+  cost and time.
+- **Rollback:** revert the PR; the cap is already off when `CQC_EVAL_MAX_TOKENS` is unset.
 
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.

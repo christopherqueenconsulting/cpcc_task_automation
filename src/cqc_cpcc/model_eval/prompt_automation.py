@@ -743,6 +743,12 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
         recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
         return error_detail.transport_failure_stats(recs)
 
+    def truncation(path):
+        if path is None:
+            return None
+        recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
+        return error_detail.truncation_stats(recs)
+
     def cost(path):
         if path is None:
             return None
@@ -760,6 +766,8 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
             "max_concurrency": workers, "start_concurrency": start_concurrency,
             "head": side(head_raw), "base": side(base_raw),
             "head_transport": transport(head_raw), "base_transport": transport(base_raw),
+            "head_truncated": truncation(head_raw), "base_truncated": truncation(base_raw),
+            "max_tokens_cap": adaptive.eval_max_tokens(),
             "head_cost": cost(head_raw), "base_cost": cost(base_raw),
             "head_pool": head_pool, "base_pool": base_pool, "judge_pool": judge_pool,
             "rate_limited": sum(p.get("rate_limited", 0) for p in pools),
@@ -1037,6 +1045,24 @@ def ab_markdown(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _truncation_markdown(rows: list, cap=None) -> list:
+    """Truncated calls per side, and the output-token cap when one is set (reporting only)."""
+    lines = []
+    for side in ("head", "base"):
+        final = retried = 0
+        for _sid, st in rows:
+            part = st.get(f"{side}_truncated")
+            if part:
+                final += part.get("final", 0)
+                retried += part.get("retried", 0)
+        if final or retried:
+            lines.append(f"- {side} truncated calls: {final} final / {retried} retried")
+    if cap:
+        lines.append(f"- output-token cap CQC_EVAL_MAX_TOKENS={cap} was set: every request differs from a run "
+                     f"without it, and from production, which sets no cap")
+    return ["", *lines] if lines else []
+
+
 def _transport_markdown(rows: list) -> list:
     """Transport failures per side (reporting only: no verdict reads these lines)."""
     lines = []
@@ -1102,6 +1128,7 @@ def _run_stats_markdown(report: dict) -> list:
         lines.append("")
         lines.append("Pool columns read: starting permits, lowest, highest reached, final, 429s on that pool.")
         lines += _transport_markdown(rows)
+        lines += _truncation_markdown(rows, max((st.get("max_tokens_cap") or 0) for _s, st in rows) or None)
         lines += _cost_markdown(rows)
     return lines
 

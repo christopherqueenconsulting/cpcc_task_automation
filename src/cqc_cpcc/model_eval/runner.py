@@ -59,8 +59,12 @@ class CallRecord:
 GradeFn = Callable[..., Awaitable]
 
 
+#: The output-token limit the eval pins for every call unless ``CQC_EVAL_MAX_TOKENS`` lowers it (prompt evals only).
+DEFAULT_MAX_OUTPUT_TOKENS = 32768
+
+
 @contextlib.contextmanager
-def pinned_registry(model: str, effort: Optional[str], profile=None, max_output_tokens: int = 32768,
+def pinned_registry(model: str, effort: Optional[str], profile=None, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
                     roles: tuple = ("grading",)):
     """Temporarily point the registry's ``roles`` at ``model`` with no fallback.
 

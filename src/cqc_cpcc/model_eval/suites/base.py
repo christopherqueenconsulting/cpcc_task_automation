@@ -25,7 +25,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from cqc_cpcc.model_eval import adaptive, error_detail
 from cqc_cpcc.model_eval.budget import Budget
-from cqc_cpcc.model_eval.runner import classify_error, pinned_registry
+from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, classify_error, pinned_registry
 from cqc_cpcc.utilities.AI import model_registry
 from cqc_cpcc.utilities.logger import logger
 
@@ -214,6 +214,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
 
     use_adaptive = adaptive.adaptive_enabled(adaptive_mode)
     attempts_allowed = adaptive.transport_attempts(transport_attempts)  # a bad setting stops the run before any call
+    cap = adaptive.eval_max_tokens()  # None (the default) leaves every request as it was
     limiter = None
     semaphore = None
     if use_adaptive:
@@ -301,8 +302,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.model_used = completion.model
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
-            if held.transport_retries:
-                record.attempts += held.transport_retries  # the client's own tries plus ours
+            if held.transport_retries or held.truncated_retries:
+                record.attempts += held.transport_retries + held.truncated_retries  # the client's own tries plus ours
             # What this call's last attempt cost; earlier failed attempts were charged to the budget as they failed.
             own_cost = record.cost_usd
             if held.charged and record.ok and real_usage:
@@ -332,7 +333,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 budget.unreserve(held.amount)
 
     records: list[SuiteRecord] = []
-    with pinned_registry(model, effort, profile, roles=(suite.role,)) as resolved:
+    with pinned_registry(model, effort, profile, roles=(suite.role,),
+                         max_output_tokens=cap or DEFAULT_MAX_OUTPUT_TOKENS) as resolved:
         jobs = [one(case, r, resolved) for r in range(repeats) for case in cases]
         for coro in asyncio.as_completed(jobs):
             records.append(await coro)
