@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import statistics
 import zlib
 from dataclasses import asdict, dataclass, field, fields
@@ -72,7 +73,9 @@ def cost_stats(records: list) -> dict:
     estimated = [r for r in calls if r.cost_estimated]
     total = sum(r.cost_usd for r in calls)
     est_cost = sum(r.cost_usd for r in estimated)
+    zero_with_tokens = sum(1 for r in calls if r.ok and not r.cost_usd and (r.prompt_tokens or 0) > 0)
     return {"calls": len(calls), "estimated_rows": len(estimated), "cost_usd": total,
+            "zero_cost_rows_with_tokens": zero_with_tokens,
             "estimated_cost_usd": est_cost, "estimated_share": (est_cost / total) if total > 0 else 0.0,
             "retry_charge_usd": sum(getattr(r, "retry_charge_usd", 0.0) or 0.0 for r in calls)}
 
@@ -278,9 +281,12 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
             completion = call.completion if call else None
             if call is not None:
                 record.prompt = call.prompt
-            real_usage = completion is not None and completion.cost_usd is not None
+            reported = completion.cost_usd if completion is not None else None
+            # a usable usage cost is a finite number >= 0; anything else is treated as "no cost reported"
+            real_usage = (isinstance(reported, (int, float)) and not isinstance(reported, bool)
+                          and math.isfinite(reported) and reported >= 0)
             if real_usage:
-                record.cost_usd = completion.cost_usd
+                record.cost_usd = float(reported)
             elif record.ok and llm_gateway._is_test_mode():
                 record.cost_usd = 0.0  # canned CQC_TEST_MODE response: no model call
             elif record.ok and call is None and record.payload.get("validity") not in (None, "ok"):

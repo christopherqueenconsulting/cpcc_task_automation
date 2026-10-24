@@ -117,6 +117,14 @@ class TestRetriedCallKeepsItsRealCost:
         assert all(r.retry_charge_usd == 0.0 and "retry_charge_usd" not in r.to_json() for r in records)
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -0.5])
+async def test_a_non_finite_or_negative_reported_cost_is_not_trusted(bad):
+    suite, _ = fake_client_suite(0, _meta(bad))
+    records, budget = await _run(suite, False, n=2)
+    assert all(r.cost_estimated and r.cost_usd > 0 and r.cost_usd < float("inf") for r in records)
+    assert budget.spent == pytest.approx(sum(r.cost_usd for r in records))
+
+
 @pytest.mark.parametrize("adaptive_mode", [True, False])
 class TestTheGateSeesRealCosts:
     async def test_identical_real_call_costs_give_ratio_one_even_when_head_retried(
@@ -155,6 +163,15 @@ class TestReportingAndBackCompat:
                                  base.SuiteRecord("s", "c", "m", None, 0, error_kind="budget")])
         assert stats["calls"] == 4 and stats["estimated_rows"] == 1
         assert stats["estimated_share"] == pytest.approx(0.018 / 0.020)
+
+    def test_zero_cost_rows_that_reported_tokens_are_counted_and_shown(self):
+        zero = base.SuiteRecord("s", "c", "m", None, 0, ok=True, cost_usd=0.0, prompt_tokens=100)
+        quiet = base.SuiteRecord("s", "c", "m", None, 0, ok=True, cost_usd=0.0)  # test mode / validity gate: no tokens
+        stats = base.cost_stats([zero, quiet, self._rec(0.001)])
+        assert stats["zero_cost_rows_with_tokens"] == 1
+        report = {"wall_clock_s": 1.0, "max_concurrency": 4,
+                  "suites": {"s": {"status": "pass", "run_stats": {"elapsed_s": 1, "head_cost": stats}}}}
+        assert "zero-cost rows with tokens: 1" in "\n".join(pa._run_stats_markdown(report))
 
     def test_run_stats_block_shows_estimated_rows_per_side_and_flags_estimate_driven_cost(self):
         report = {"wall_clock_s": 1.0, "max_concurrency": 4, "suites": {"grading": {"status": "pass", "run_stats": {

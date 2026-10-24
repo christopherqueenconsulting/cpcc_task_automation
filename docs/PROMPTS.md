@@ -471,9 +471,12 @@ artifact rows held no status or gateway body, so the cause could not be read.
   A side whose estimated rows are 10% or more of its cost is marked `ESTIMATE-DRIVEN`: its cost ratio
   mostly measures the estimate, not usage. `ab.json` `run_stats` gains `head_cost` and `base_cost`
   (`calls`, `estimated_rows`, `estimated_cost_usd`, `estimated_share`, `retry_charge_usd`); the log line
-  `A/B <suite>:` ends with the same counts. No verdict reads them. The A/B base side runs the OLD code
+  `A/B <suite>:` ends with the same counts, and `zero-cost rows with tokens: N` counts rows whose cost is 0 although
+  tokens were reported (a sign the response carried no cost). No verdict reads them. The A/B base side runs the OLD code
   (the base ref), so its retried rows still carry the estimate inside `cost_usd` until the base ref
-  includes this change: expect `ESTIMATE-DRIVEN` on the base side for a run made before then. Rows
+  includes this change: expect `ESTIMATE-DRIVEN` on the base side for a run made before then. With a new-code head and an old-code base the cost
+  ratio is UNDERSTATED (the head looks cheaper): the flag warns per side but does not correct it. Merge
+  this change to master before dispatching an A/B whose base ref should have it. Rows
   already written by older code are not rewritten when an artifact is rescored.
 - **Records:** `attempts` is the client's own tries plus the runner's retries, so `retried`,
   `extra_attempts` and `retry_rate` in `ab.json` / `ab.md` count them. Scoring is untouched: a call that
@@ -490,17 +493,18 @@ artifact rows held no status or gateway body, so the cause could not be read.
 - **Where it lives:** `error_detail` is written only to the records JSONL artifact (`raw_outputs.jsonl`),
   which must stay private. It never goes into a PR comment: the comment and `ab.md` carry counts keyed by
   status or exception class only. The key is absent from a row that never failed, and
-  `SuiteRecord.from_json` ignores keys it does not know. A reader from before this change
-  (`SuiteRecord(**json)`) would raise on a row that has it, so do not feed new artifacts to old code; and
-  the A/B base side runs the old code (no retries, no `error_detail`), so its retry stats are not like
+  `SuiteRecord.from_json` ignores keys it does not know, so an older reader loads a newer row without
+  error and simply does not see the key; and the A/B base side runs the old code (no retries, no `error_detail`), so its retry stats are not like
   for like.
 - **Report:** `ab.md` "Run stats" adds `head transport failures: N (final) / M (retried), by status: ...`
   (and the same for the base when it has any); `ab.json` `run_stats` gains `head_transport` and
   `base_transport`. No verdict reads them.
 - **Rollback:** revert the PR. Set `CQC_EVAL_TRANSPORT_RETRIES=1` to turn the retry off without a revert.
   Reverting the cost-accounting change alone (`fix(eval): record the real usage cost of retried calls`)
-  restores the old `cost_usd` (estimate folded in) and drops `retry_charge_usd` and the cost lines; a
-  reader from before it raises on a row that has `retry_charge_usd`, so do not feed new artifacts to old code.
+  restores the old `cost_usd` (estimate folded in) and drops `retry_charge_usd` and the cost lines;
+  old (or reverted) code loads new rows without error but silently IGNORES `retry_charge_usd`, so its
+  `_recorded_cost` and budget accounting undercount those rows by the failed-attempt charge (their
+  `cost_usd` holds only the real cost).
 
 **Both rules must pass.** The A/B runs the PR's own code, including this rule and the
 detection that picks the suites, so a PR could relax the rule that judges it or skip a suite.

@@ -1074,6 +1074,8 @@ def _cost_markdown(rows: list) -> list:
                 part.get("estimated_rows") and share >= ESTIMATE_DRIVEN_SHARE) else ""
             extra = part.get("retry_charge_usd") or 0.0
             charge = f"; budget-only retry charge ${extra:.4f}" if extra else ""
+            if part.get("zero_cost_rows_with_tokens"):
+                charge += f"; zero-cost rows with tokens: {part['zero_cost_rows_with_tokens']}"
             lines.append(f"- `{sid}` {side}: estimated-cost rows: {part['estimated_rows']} of {part['calls']} calls "
                          f"({share:.0%} of cost){charge}{flag}")
     return ["", "Cost input (cost per call is built from `cost_usd`, the real usage cost where the response "
