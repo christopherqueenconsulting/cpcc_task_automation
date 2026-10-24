@@ -32,7 +32,7 @@ What to check (about 10 minutes, synthetic submissions from `evals/datasets` onl
    machine only, set `pymupdf = ">=1,<2"` in `pyproject.toml` and run `poetry lock` locally and do not commit it.
    The maintainer decides whether to revert d8d2bce (#441). Linux and Cloud installs are not affected.
 
-If a step fails, tell the EA and see the rollback section of [docs/RELEASING.md](docs/RELEASING.md).
+If a step fails, tell the maintainer and see the rollback section of [docs/RELEASING.md](docs/RELEASING.md).
 `CQC_EXECUTION=off` turns the output check off without a rollback.
 
 WARNING: pymupdf 2.0 (#441) has no macOS x86_64 wheel, so `poetry install` fails on an Intel Mac. Linux and
@@ -93,7 +93,7 @@ What to check (about 10 minutes, one synthetic submission from `evals/datasets`,
    sets the Reasoning effort setting; "Skip" leaves the registry default; merely viewing a recommendation does
    not change the score of a graded submission.
 
-If a step fails, tell the EA and see the rollback section of [docs/RELEASING.md](docs/RELEASING.md).
+If a step fails, tell the maintainer and see the rollback section of [docs/RELEASING.md](docs/RELEASING.md).
 
 No app behaviour change from #426, #433, #435, #436, #439 (CI and eval tooling only). Scores match rc3
 unless `CQC_REQUIREMENT_OVERLAP=drop` is set.
