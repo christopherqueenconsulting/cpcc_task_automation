@@ -15,6 +15,10 @@ some mistakes. Coverage fixes that:
        missing core requirement                    -> MISSING_REQUIREMENT_<id> (major)
        partial requirement, or missing secondary   -> PARTIAL_REQUIREMENT_<id> (minor)
 
+A requirement the instructor's solution does not do (``graded`` False, set from
+``requirement_solution_check``) is listed as not required and never costs a student anything;
+the decision is recorded as a "solution" reconciliation note.
+
 Style, naming, formatting and documentation are deliberately NOT requirements: the
 error definitions already cover them, and listing them twice would double-penalize.
 """
@@ -26,6 +30,7 @@ import json
 from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 from cqc_cpcc.rubric_models import DetectedError, RubricAssessmentResult
 from cqc_cpcc.utilities.logger import logger
@@ -58,6 +63,15 @@ class RequirementItem(BaseModel):
         Literal["core", "secondary"],
         Field(description="core = central to the assignment; secondary = a smaller required detail")
     ]
+    # Backend-only (never in the model's schema, so the extraction and grading prompts are
+    # unchanged). No docstring on this class: a docstring would become the schema description.
+    # ``graded`` False = the instructor's solution does not do this, so it is not required.
+    graded: SkipJsonSchema[bool] = True
+    # What the solution check found for this item: yes, no, unclear; None = never checked.
+    solution_status: SkipJsonSchema[Optional[Literal["yes", "no", "unclear"]]] = None
+    solution_evidence: SkipJsonSchema[Optional[str]] = None
+    # The instructor removed this requirement from the list to grade. A check never changes it.
+    hand_ungraded: SkipJsonSchema[bool] = False
 
 
 class RequirementChecklist(BaseModel):
@@ -71,11 +85,21 @@ def instructions_hash(instructions: str) -> str:
     return hashlib.sha256((instructions or "").strip().encode("utf-8")).hexdigest()
 
 
+def _hash_fields(item: "RequirementItem") -> dict:
+    data = {"id": item.id, "text": item.text, "weight": item.weight}
+    if not item.graded:
+        data["graded"] = False
+    return data
+
+
 def checklist_hash(checklist: Optional[RequirementChecklist]) -> Optional[str]:
     """Stable hash of a checklist (for the grading run key); None when there is none."""
     if not checklist or not checklist.requirements:
         return None
-    payload = json.dumps([r.model_dump() for r in checklist.requirements], sort_keys=True)
+    # The solution check's verdicts and evidence do not change how a student is graded, so they
+    # stay out of the hash; ``graded`` enters only when False. A checklist nobody changed hashes
+    # exactly as it did before these fields existed (cached results stay valid).
+    payload = json.dumps([_hash_fields(r) for r in checklist.requirements], sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -136,46 +160,99 @@ def _id_key(requirement_id: Optional[str]) -> str:
     return (requirement_id or "").strip().upper()
 
 
+_ID_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+MAX_ID_CHARS = 12
+
+
+def safe_requirement_id(raw: Optional[str]) -> str:
+    """The id in upper case when it is 1 to 12 letters, digits, ``_`` or ``-``; else ``""``.
+    A loop over the characters, not a regular expression. Ids end up in labels and captions, so
+    anything else (Markdown, a URL, spaces) is replaced by a generated id."""
+    rid = (raw or "").strip().upper()
+    if not rid or len(rid) > MAX_ID_CHARS or any(ch not in _ID_CHARS for ch in rid):
+        return ""
+    return rid
+
+
+def assign_ids(raw_ids: list, reserved=()) -> list:
+    """``[(id, own)]`` for rows in order. A row keeps its own id (``own`` True) when it is safe and
+    no earlier row has it; otherwise it gets the next free ``R{n}`` (``own`` False), skipping the
+    ids of every row (so a real id later in the list is never taken), the ``reserved`` ids and the
+    ones already handed out. A generated id never belongs to a row that already had it."""
+    safe = [safe_requirement_id(raw) for raw in raw_ids]
+    taken = {s for s in safe if s} | {(r or "").strip().upper() for r in reserved}
+    seen: set[str] = set()
+    out = []
+    for sid in safe:
+        if sid and sid not in seen:
+            seen.add(sid)
+            out.append((sid, True))
+            continue
+        n = 1
+        while f"R{n}" in taken or f"R{n}" in seen:
+            n += 1
+        new = f"R{n}"
+        seen.add(new)
+        out.append((new, False))
+    return out
+
+
 def normalize_checklist(checklist: RequirementChecklist) -> RequirementChecklist:
     """Drop blanks, cap the length and make ids unique (case-insensitively)."""
-    seen: set[str] = set()
+    rows = [r for r in (checklist.requirements or []) if (r.text or "").strip()]
+    ids = assign_ids([r.id for r in rows])
     items: list[RequirementItem] = []
-    n = 0
-    for r in checklist.requirements or []:
+    for r, (rid, _own) in zip(rows, ids):
         text = (r.text or "").strip()
-        if not text:
-            continue
-        rid = (r.id or "").strip().upper()
-        while not rid or rid in seen:
-            n += 1
-            rid = f"R{n}"
-        seen.add(rid)
-        items.append(RequirementItem(id=rid, text=text, weight=r.weight))
+        items.append(RequirementItem(id=rid, text=text, weight=r.weight, graded=r.graded,
+                                     solution_status=r.solution_status,
+                                     solution_evidence=r.solution_evidence,
+                                     hand_ungraded=r.hand_ungraded))
         if len(items) >= MAX_REQUIREMENTS:
             break
     return RequirementChecklist(requirements=items)
 
 
 def requirements_prompt_section(checklist: Optional[RequirementChecklist]) -> list[str]:
-    """Prompt lines asking the model to mark each requirement."""
+    """Prompt lines asking the model to mark each requirement.
+
+    Items the instructor's solution does not do (``graded`` False) are listed apart as not
+    required and are not marked. With none of those the text is exactly what it always was.
+    """
     if not checklist or not checklist.requirements:
         return []
-    lines = [
-        "## Requirement Checklist",
-        "Mark EVERY requirement below in `requirement_results` with its exact id:",
-        "- met: fully implemented and working as required",
-        "- partial: attempted, but incomplete or not working as required",
-        "- missing: not implemented at all",
-        "Unimplemented functionality is a MISSING requirement, not an absence of errors: "
-        "a short or unfinished program must have its unimplemented requirements marked missing. "
-        "Do not ALSO report a detected error for functionality that is entirely missing; "
-        "the missing requirement already accounts for it. Likewise, do not mark a "
-        "requirement partial only because of an error you already reported for it.",
-        "",
-    ]
-    for r in checklist.requirements:
-        lines.append(f"- **{r.id}** ({r.weight}): {r.text}")
-    lines.append("")
+    graded = [r for r in checklist.requirements if r.graded]
+    not_required = [r for r in checklist.requirements if not r.graded]
+    if not_required and not graded:
+        lines = ["## Requirement Checklist",
+                 "No requirement needs a mark for this assignment: leave `requirement_results` empty.",
+                 ""]
+    else:
+        lines = [
+            "## Requirement Checklist",
+            "Mark EVERY requirement below in `requirement_results` with its exact id:",
+            "- met: fully implemented and working as required",
+            "- partial: attempted, but incomplete or not working as required",
+            "- missing: not implemented at all",
+            "Unimplemented functionality is a MISSING requirement, not an absence of errors: "
+            "a short or unfinished program must have its unimplemented requirements marked missing. "
+            "Do not ALSO report a detected error for functionality that is entirely missing; "
+            "the missing requirement already accounts for it. Likewise, do not mark a "
+            "requirement partial only because of an error you already reported for it.",
+            "",
+        ]
+        for r in graded:
+            lines.append(f"- **{r.id}** ({r.weight}): {r.text}")
+        lines.append("")
+    if not_required:
+        lines.append("## Not required (the solution does not do these)")
+        lines.append("The instructor's solution does not do the following, so they are not required "
+                     "and a submission is not graded on them. Do not mark them in "
+                     "`requirement_results`, and do not report a detected error because a "
+                     "submission lacks them:")
+        for r in not_required:
+            lines.append(f"- **{r.id}**: {r.text}")
+        lines.append("")
     return lines
 
 
@@ -189,12 +266,17 @@ def apply_requirement_coverage(
     reported in ``info["unmarked"]`` and do not change the score (no guessing).
     """
     info = {"applied": False, "missing": [], "partial": [], "unmarked": []}
+    ungraded: list[str] = []
     if not checklist or not checklist.requirements:
         return result, info
 
     by_id = {_id_key(r.requirement_id): r for r in (result.requirement_results or [])}
     errors = [e for e in (result.detected_errors or []) if not is_requirement_error(e.code)]
     for req in checklist.requirements:
+        if not req.graded:
+            # The solution does not do it: never a deduction, whatever the model answered.
+            ungraded.append(req.id)
+            continue
         verdict = by_id.get(_id_key(req.id))
         if verdict is None:
             info["unmarked"].append(req.id)
@@ -224,6 +306,9 @@ def apply_requirement_coverage(
                                       + "; ".join(f"{rid} ({texts[rid]})" for rid in info["unmarked"])
                                       + ". Accepting keeps the score as if they were met.")
 
+    if ungraded:
+        # Only present when something is ungraded, so the info of an ordinary run is unchanged.
+        info["ungraded"] = ungraded
     info["applied"] = True
     result = result.model_copy(update={
         **update,

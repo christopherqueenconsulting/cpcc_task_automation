@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+from cqc_cpcc.model_eval import adaptive
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.runner import classify_error, pinned_registry
 from cqc_cpcc.utilities.AI import model_registry
@@ -30,31 +31,26 @@ from cqc_cpcc.utilities.logger import logger
 REPO_ROOT = Path(__file__).resolve().parents[4]
 DATASETS_ROOT = REPO_ROOT / "evals" / "datasets"
 
-#: Model calls in flight per run. 4 is the long-standing default; the A/B raises it (see
-#: ``prompt_automation.AB_CONCURRENCY``) because it only waits on the network.
+#: Model calls in flight per run when nothing else is asked for (a plain ``suite run``). The prompt
+#: A/B does not use a fixed number: it starts wide and adapts (``adaptive.py``), up to its ceiling.
 DEFAULT_CONCURRENCY = 4
-MAX_CONCURRENCY = 32  # a typo (400) must not fan out a rate-limit storm
+#: Sanity cap for any concurrency setting. A value above it is an error (``ConcurrencyError``), never
+#: silently replaced by a smaller number: asking for 400 and quietly getting 4 hid a 90-minute slowdown.
+MAX_CONCURRENCY = adaptive.HARD_MAX_CONCURRENCY
 
 
 def eval_concurrency(default: int = DEFAULT_CONCURRENCY, value=None) -> int:
     """``value``, else the ``CQC_EVAL_CONCURRENCY`` environment variable, else ``default``.
 
-    Anything that is not a whole number from 1 to ``MAX_CONCURRENCY`` is ignored with a warning.
+    A setting that is not a whole number from 1 to ``MAX_CONCURRENCY`` raises
+    :class:`adaptive.ConcurrencyError` (the CLI turns it into an exit message).
     """
     import os
 
     raw = value if value is not None else os.environ.get("CQC_EVAL_CONCURRENCY")
     if raw in (None, ""):
         return default
-    try:
-        n = int(raw)
-    except (TypeError, ValueError):
-        n = 0
-    if not 1 <= n <= MAX_CONCURRENCY:
-        logger.warning(f"[prompt-eval] concurrency {raw!r} is not a whole number from 1 to {MAX_CONCURRENCY}; "
-                       f"using {default}")
-        return default
-    return n
+    return adaptive.parse_concurrency(raw, "concurrency", MAX_CONCURRENCY)
 
 
 def retry_stats(records: list) -> dict:
@@ -143,6 +139,8 @@ class Suite:
     estimate_prompt_tokens: Callable[[SuiteCase], int]
     judges: tuple = ()  # judge ids (report-only until calibrated)
     description: str = ""
+    #: Optional: ``report(model_scorecard) -> list[str]`` extra markdown lines for one model.
+    report: Optional[Callable[[dict], list]] = None
 
     @property
     def dataset_dir(self) -> Path:
@@ -156,27 +154,61 @@ class Suite:
 
 async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list, repeats: int,
                     budget: Budget, concurrency: Optional[int] = None, profile=None,
-                    on_record: Optional[Callable[[SuiteRecord], None]] = None) -> list[SuiteRecord]:
+                    on_record: Optional[Callable[[SuiteRecord], None]] = None,
+                    adaptive_mode: Optional[bool] = None, max_concurrency: Optional[int] = None,
+                    pool_stats: Optional[list] = None, sleep=None, rng=None) -> list[SuiteRecord]:
     """Call the production function for every case ``repeats`` times on ``model``.
 
     The suite's role is pinned to ``model`` with no fallback, so a failure counts against
     the model under test. New calls stop once the budget is spent.
+
+    Fixed mode (the default): ``concurrency`` calls in flight (``eval_concurrency``).
+    Adaptive mode (``adaptive_mode``, or ``CQC_AB_ADAPTIVE=1``): the pool starts at
+    ``min(calls, ceiling)`` (or ``concurrency`` when given), the ceiling being ``max_concurrency``,
+    ``CQC_AB_MAX_CONCURRENCY`` or 64; AIMD and jittered retries live in ``adaptive.py``, and every call
+    reserves its worst-case cost on the budget before it is sent. The pool's counters are appended
+    to ``pool_stats`` (a list) when one is given.
     """
     from cqc_cpcc.utilities.AI import llm_gateway
 
-    semaphore = asyncio.Semaphore(eval_concurrency(value=concurrency))
+    use_adaptive = adaptive.adaptive_enabled(adaptive_mode)
+    limiter = None
+    semaphore = None
+    if use_adaptive:
+        ceiling = adaptive.ab_max_concurrency(max_concurrency)
+        total = max(1, len(cases) * repeats)
+        wanted = adaptive.ab_start_concurrency(concurrency)
+        start = min(total, ceiling) if wanted is None else min(wanted, ceiling)
+        limiter = adaptive.AdaptiveLimiter("calls", start=start, ceiling=ceiling)
+        logger.info(f"[prompt-eval:{suite.id}] adaptive concurrency: start {start}, ceiling {ceiling}")
+    else:
+        semaphore = asyncio.Semaphore(eval_concurrency(value=concurrency))
 
     async def one(case: SuiteCase, repeat: int, resolved) -> SuiteRecord:
-        async with semaphore:
-            record = SuiteRecord(suite.id, case.case_id, model, effort, repeat)
-            if budget.exhausted:
+        record = SuiteRecord(suite.id, case.case_id, model, effort, repeat)
+        held = adaptive.Held()
+        if semaphore is not None:
+            await semaphore.acquire()
+        try:
+            if semaphore is not None and budget.exhausted:
                 record.error_kind = "budget"
                 return record
             # A task inherits the context it was created in, so last_call() can still hold a
             # call made before this case (a judge, an earlier suite). Only a new one is ours.
             before = llm_gateway.last_call()
             try:
-                output = await suite.invoke(case)
+                if limiter is None:
+                    output = await suite.invoke(case)
+                else:
+                    # no price -> 0.0 -> the budget refuses the call (fail closed), it never runs unbounded
+                    estimate = model_registry.estimate_cost(
+                        resolved, suite.estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0
+                    output = await adaptive.throttled_call(
+                        limiter, lambda: suite.invoke(case), budget=budget, estimate=estimate,
+                        held=held, sleep=sleep, rng=rng)
+                    if output is adaptive.SKIPPED:
+                        record.error_kind = "budget"
+                        return record
                 record.payload = suite.to_payload(output)
                 record.ok = True
                 record.output_sha256 = hashlib.sha256(
@@ -207,16 +239,30 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.model_used = completion.model
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
-            budget.add(record.cost_usd)
+            if limiter is None:
+                budget.add(record.cost_usd)
+            else:
+                budget.settle(held.amount, record.cost_usd)  # reservation -> real spend in one step
+                held.amount = 0.0
             if on_record:
                 on_record(record)
             return record
+        finally:
+            if semaphore is not None:
+                semaphore.release()
+            if held.amount:  # an error path that never reached the settle above
+                budget.unreserve(held.amount)
 
     records: list[SuiteRecord] = []
     with pinned_registry(model, effort, profile, roles=(suite.role,)) as resolved:
         jobs = [one(case, r, resolved) for r in range(repeats) for case in cases]
         for coro in asyncio.as_completed(jobs):
             records.append(await coro)
+    if limiter is not None:
+        snap = limiter.snapshot()
+        logger.info(f"[prompt-eval:{suite.id}] concurrency: {adaptive.describe(snap)}")
+        if pool_stats is not None:
+            pool_stats.append(snap)
     return records
 
 

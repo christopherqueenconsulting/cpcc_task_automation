@@ -751,7 +751,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     st.add_argument("--limit", type=int, default=None, help="first N cases only (smoke)")
     st.add_argument("--budget", type=float, default=None)
     st.add_argument("--concurrency", type=int, default=None,
-                    help="model calls in flight (default 4, or CQC_EVAL_CONCURRENCY)")
+                    help="model calls in flight (default 4, or CQC_EVAL_CONCURRENCY; 1 to 256, else an error); "
+                         "with --adaptive, the pool's starting size")
+    st.add_argument("--adaptive", action="store_true",
+                    help="adaptive concurrency (AIMD) instead of a fixed number; also CQC_AB_ADAPTIVE=1")
+    st.add_argument("--max-concurrency", type=int, default=None,
+                    help="adaptive ceiling on calls in flight (default 64, or CQC_AB_MAX_CONCURRENCY; 1 to 256, "
+                         "else an error)")
     st.add_argument("--out", default="evals/runs/suites")
     st.add_argument("--raw", default=None, help="score: raw_outputs.jsonl to re-score")
     st.add_argument("--label", default=None)

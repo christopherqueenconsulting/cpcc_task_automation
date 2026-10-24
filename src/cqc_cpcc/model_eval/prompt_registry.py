@@ -233,6 +233,15 @@ def _render_effort_recommendation() -> list[str]:
                                                nonce="0123456789abcdef")]
 
 
+def _render_requirement_solution_check() -> list[str]:
+    from cqc_cpcc.requirement_solution_check import build_solution_check_prompt
+
+    # A fixed nonce: the production call derives one from the text, which the fingerprint must
+    # not depend on.
+    return [build_solution_check_prompt(FIXTURE_INSTRUCTIONS, _fixture_checklist(), FIXTURE_SOLUTION,
+                                        "0123456789abcdef")]
+
+
 def _render_test_case_generation() -> list[str]:
     from cqc_cpcc.test_case_generation import build_test_case_prompt
 
@@ -297,6 +306,7 @@ RENDERERS: dict[str, Callable[[], list[str]]] = {
     "requirements-section": _render_requirements_section,
     "requirement-extraction": _render_requirement_extraction,
     "effort-recommendation": _render_effort_recommendation,
+    "requirement-solution-check": _render_requirement_solution_check,
     "test-case-generation": _render_test_case_generation,
     "exam-grading": _render_exam_grading,
     "preprocessing-digest": _render_preprocessing_digest,
