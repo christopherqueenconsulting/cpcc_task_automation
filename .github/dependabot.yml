@@ -28,6 +28,13 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+    # Parked major bump: pymupdf 2.0 has no macOS x86_64 wheel and its sdist build
+    # fails, so `poetry install` fails on an Intel Mac (Linux CI is fine; 43 PDF tests
+    # pass on Linux). See PR #441. Remove this rule once pymupdf ships a macOS x86_64
+    # wheel or the maintainer decides to drop Intel Mac support, then bump by hand.
+    ignore:
+      - dependency-name: "pymupdf"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "chore"
       include: "scope"
@@ -81,6 +88,12 @@ updates:
       - "dependencies"
       - "docker"
       - "exec-runner"
+    # Parked major bump: eclipse-temurin 25 needs a human PR (RUNNER_VERSION 2,
+    # RUNNER_SOURCE_SHA256, compose tag, test regex, docs; sandbox on JDK 25 vs CI host
+    # JDK 21). See PR #438. Remove this rule once that PR is merged or closed.
+    ignore:
+      - dependency-name: "eclipse-temurin"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "chore"
       include: "scope"
