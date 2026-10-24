@@ -347,7 +347,9 @@ def _recorded_cost(raw: Path) -> float:
     if raw.exists():
         for line in raw.read_text(encoding="utf-8").splitlines():
             try:
-                total += float(json.loads(line).get("cost_usd") or 0.0)
+                row = json.loads(line)
+                # the budget was charged the failed attempts too (retry_charge_usd), which cost_usd does not hold
+                total += float(row.get("cost_usd") or 0.0) + float(row.get("retry_charge_usd") or 0.0)
             except (ValueError, TypeError, AttributeError):
                 continue
     return total
@@ -741,6 +743,12 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
         recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
         return error_detail.transport_failure_stats(recs)
 
+    def cost(path):
+        if path is None:
+            return None
+        recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
+        return base.cost_stats(recs)
+
     def pool(directory):
         saved = prompt_eval.read_concurrency(directory) if directory is not None else None
         return (saved or {}).get("calls")
@@ -752,6 +760,7 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
             "max_concurrency": workers, "start_concurrency": start_concurrency,
             "head": side(head_raw), "base": side(base_raw),
             "head_transport": transport(head_raw), "base_transport": transport(base_raw),
+            "head_cost": cost(head_raw), "base_cost": cost(base_raw),
             "head_pool": head_pool, "base_pool": base_pool, "judge_pool": judge_pool,
             "rate_limited": sum(p.get("rate_limited", 0) for p in pools),
             "in_flight_budget": sum(p.get("in_flight_budget", 0) for p in pools)}
@@ -763,7 +772,14 @@ def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
         s = stats.get(name)
         return f"{name} {s['calls']} calls, {s['retried']} retried" if s else f"{name} none"
 
+    def estimated(name):
+        c = stats.get(f"{name}_cost")
+        return f"{name} {c['estimated_rows']}/{c['calls']} ({c['estimated_share']:.0%} of cost)" if c else None
+
     line = f"A/B {suite_id}: {part('head')}; {part('base')}; {stats['elapsed_s']:.0f}s at up to {stats['concurrency']} in flight"
+    est = [e for e in (estimated("head"), estimated("base")) if e]
+    if est:
+        line += f"; estimated-cost rows: {', '.join(est)}"
     if stats.get("head_pool") or stats.get("base_pool") or stats.get("judge_pool"):
         line += (f"; concurrency head [{adaptive.describe(stats.get('head_pool'))}]"
                  f", base [{adaptive.describe(stats.get('base_pool'))}]"
@@ -1041,6 +1057,29 @@ def _transport_markdown(rows: list) -> list:
     return ["", *lines] if lines else []
 
 
+#: A side's cost is called estimate-driven in the report when estimates are at least this share of it (report only).
+ESTIMATE_DRIVEN_SHARE = 0.10
+
+
+def _cost_markdown(rows: list) -> list:
+    """Per side: how many rows carry an estimated cost and what share of the cost they are (reporting only)."""
+    lines = []
+    for sid, st in rows:
+        for side in ("head", "base"):
+            part = st.get(f"{side}_cost")
+            if not part or not part.get("calls"):
+                continue
+            share = part.get("estimated_share") or 0.0
+            flag = " - ESTIMATE-DRIVEN: read this side's cost ratio with care" if (
+                part.get("estimated_rows") and share >= ESTIMATE_DRIVEN_SHARE) else ""
+            extra = part.get("retry_charge_usd") or 0.0
+            charge = f"; budget-only retry charge ${extra:.4f}" if extra else ""
+            lines.append(f"- `{sid}` {side}: estimated-cost rows: {part['estimated_rows']} of {part['calls']} calls "
+                         f"({share:.0%} of cost){charge}{flag}")
+    return ["", "Cost input (cost per call is built from `cost_usd`, the real usage cost where the response "
+            "reported one):", "", *lines] if lines else []
+
+
 def _run_stats_markdown(report: dict) -> list:
     """Wall clock and what each adaptive pool did (reporting only: no decision reads these lines)."""
     rows = [(sid, r["run_stats"]) for sid, r in report["suites"].items() if r.get("run_stats")]
@@ -1061,6 +1100,7 @@ def _run_stats_markdown(report: dict) -> list:
         lines.append("")
         lines.append("Pool columns read: starting permits, lowest, highest reached, final, 429s on that pool.")
         lines += _transport_markdown(rows)
+        lines += _cost_markdown(rows)
     return lines
 
 

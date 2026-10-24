@@ -61,6 +61,22 @@ def retry_stats(records: list) -> dict:
             "extra_attempts": sum((r.attempts or 1) - 1 for r in retried)}
 
 
+def cost_stats(records: list) -> dict:
+    """How much of the cost the gate reads is an estimate (reporting only: no verdict reads this).
+
+    ``cost_usd`` is what the cost ratio is built from; a row is estimated when OpenRouter reported no usage
+    cost for it (``cost_estimated``). ``retry_charge_usd`` is the budget-only charge for failed attempts of
+    calls whose own cost is real: it is not part of ``cost_usd``.
+    """
+    calls = [r for r in records if r.error_kind != "budget"]
+    estimated = [r for r in calls if r.cost_estimated]
+    total = sum(r.cost_usd for r in calls)
+    est_cost = sum(r.cost_usd for r in estimated)
+    return {"calls": len(calls), "estimated_rows": len(estimated), "cost_usd": total,
+            "estimated_cost_usd": est_cost, "estimated_share": (est_cost / total) if total > 0 else 0.0,
+            "retry_charge_usd": sum(getattr(r, "retry_charge_usd", 0.0) or 0.0 for r in calls)}
+
+
 #: Suites with fewer scorable cases than this use absolute hard gates only; paired
 #: comparisons (bootstrap, Holm) need at least this many cases to mean anything.
 MIN_COMPARATIVE_CASES = 30
@@ -110,11 +126,18 @@ class SuiteRecord:
     #: One entry per failed attempt (exception class, HTTP status, gateway code/type, redacted message,
     #: request id, latency, attempt number); see ``error_detail.py``. Empty for a call that never failed.
     error_detail: list = field(default_factory=list)
+    #: Budget-only charge for earlier FAILED attempts of an ok call whose ``cost_usd`` is the real usage cost
+    #: of the successful attempt. The budget spent for the record is ``cost_usd + retry_charge_usd``; the gate,
+    #: the aggregate and the cost ratio read ``cost_usd`` alone. 0.0 when the charge is already inside
+    #: ``cost_usd`` (a final failure, or a cost that is itself an estimate).
+    retry_charge_usd: float = 0.0
 
     def to_json(self) -> str:
         data = asdict(self)
         if not data["error_detail"]:
             del data["error_detail"]  # additive key: rows of calls that never failed are unchanged
+        if not data["retry_charge_usd"]:
+            del data["retry_charge_usd"]  # additive key: absent unless a failed attempt was charged separately
         return json.dumps(data, sort_keys=True)
 
     @classmethod
@@ -255,7 +278,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
             completion = call.completion if call else None
             if call is not None:
                 record.prompt = call.prompt
-            if completion is not None and completion.cost_usd is not None:
+            real_usage = completion is not None and completion.cost_usd is not None
+            if real_usage:
                 record.cost_usd = completion.cost_usd
             elif record.ok and llm_gateway._is_test_mode():
                 record.cost_usd = 0.0  # canned CQC_TEST_MODE response: no model call
@@ -273,17 +297,24 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.completion_tokens = completion.completion_tokens
             if held.transport_retries:
                 record.attempts += held.transport_retries  # the client's own tries plus ours
-            if held.charged:  # earlier failed attempts, already charged to the budget at the estimate
+            # What this call's last attempt cost; earlier failed attempts were charged to the budget as they failed.
+            own_cost = record.cost_usd
+            if held.charged and record.ok and real_usage:
+                # The successful attempt reported its usage: cost_usd stays that real cost (what the gate and the
+                # cost ratio read) and the failed attempts' estimates are kept apart, as a budget-only charge.
+                record.retry_charge_usd = held.charged
+            elif held.charged:  # a final failure, or no usage reported: the estimate stays in the record
                 record.cost_usd += held.charged
                 record.cost_estimated = True
+                if held.final_billed:  # the last failed attempt was charged when it failed; do not charge it again
+                    record.cost_usd = held.charged
+                    own_cost = 0.0
             record.error_detail = list(held.detail)
-            if held.final_billed:  # the last failed attempt was charged when it failed; do not charge it again
-                record.cost_usd = held.charged
             if limiter is None:
-                budget.add(max(0.0, record.cost_usd - held.charged))  # failed attempts were added as they failed
+                budget.add(max(0.0, own_cost))  # failed attempts were added as they failed
             else:
                 # reservation -> real spend in one step; the failed attempts were settled when they failed
-                budget.settle(held.amount, record.cost_usd - held.charged)
+                budget.settle(held.amount, own_cost)
                 held.amount = 0.0
             if on_record:
                 on_record(record)
@@ -408,6 +439,8 @@ def aggregate(suite: Suite, cases: list, records: list[SuiteRecord],
         "per_stratum": {s: _mean(cs.composite for cs in per_case if cs.stratum == s) for s in strata},
         "cost_usd": sum(r.cost_usd for r in records),
         "cost_per_call": (sum(r.cost_usd for r in attempted) / len(attempted)) if attempted else None,
+        "retry_charge_usd": sum(r.retry_charge_usd or 0.0 for r in records),  # budget only: not in cost_usd
+        "estimated_cost_rows": sum(1 for r in attempted if r.cost_estimated),
         "latency_p95_s": _percentile([r.latency_s for r in ok if r.latency_s is not None], 95),
         "prompt_versions": sorted({r.prompt for r in ok if r.prompt}),
         "judges": judge_scores or {},
