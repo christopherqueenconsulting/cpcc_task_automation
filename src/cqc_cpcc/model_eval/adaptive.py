@@ -18,6 +18,8 @@ whatever the upstream vendor throttles (a 429). So the A/B starts wide and lets 
   ``OpenAITransportError`` with no status) are retried too, up to ``CQC_EVAL_TRANSPORT_RETRIES`` total attempts
   (default 3, hard cap 5), after a full-jitter wait of at most 30 s. A schema or validation error, a
   refusal, a truncation, any 4xx other than 408/429, a cancellation and a budget refusal are never retried.
+  An account-level spending limit (HTTP 402, or 403 "Budget limit exceeded"; ``account_limit.py``) is never
+  retried either: it stops the whole run.
   Each retry reserves the budget like a first attempt, and a failed attempt is charged at its estimate.
 * The retry, jitter and ``Retry-After`` logic lives here, not in ``openai_client`` / ``openrouter_client``
   (shared files of every registered prompt: editing them would re-run every suite's paid A/B). The
@@ -41,7 +43,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import error_detail
+from cqc_cpcc.model_eval import account_limit, error_detail
 from cqc_cpcc.utilities.AI import llm_progress
 from cqc_cpcc.utilities.logger import logger
 
@@ -537,12 +539,20 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
     sends = 0
     while True:
         epoch = await limiter.acquire()
+        if account_limit.tripped():  # the run was aborted while this call waited for a permit: send nothing
+            limiter.release()
+            raise account_limit.RunAborted(account_limit.STATUS)
         if budget is not None:
             try:
                 granted = await _reserve(budget, estimate, poll_s, sleep)
             except BaseException:  # cancelled while waiting for room: the permit must not leak
                 limiter.release()
                 raise
+            if account_limit.tripped():
+                if granted:
+                    budget.unreserve(estimate)
+                limiter.release()
+                raise account_limit.RunAborted(account_limit.STATUS)
             if not granted:
                 limiter.release()
                 if (transport_failures or held.truncated_retries) and held.last_error is not None:
@@ -580,6 +590,15 @@ async def throttled_call(limiter: AdaptiveLimiter, make_call: Callable[[], Await
             limiter.release()
             kind = classify_throttle(error)
             if kind is None:
+                if account_limit.is_account_limit(error):
+                    # The account's spending limit: no call of this run can succeed, so it is never retried, the
+                    # call did not run (nothing is charged) and the whole run is told to stop.
+                    _note_failure(held, error, sends, started, clock, False)
+                    if budget is not None:
+                        budget.unreserve(held.amount)
+                    held.amount = 0.0
+                    account_limit.note_if_account_limit(error)
+                    raise
                 if truncation_retryable(error):
                     usage = attempt_usage(error, before)
                     again = held.truncated_retries < TRUNCATED_RETRIES
@@ -659,12 +678,17 @@ async def retry_transport(make_call: Callable[[], Awaitable[Any]], *, held: Held
     failures = 0
     sends = 0
     while True:
+        account_limit.check()  # an aborted run starts no further attempt
         sends += 1
         started = clock()
         before = _last_gateway_call()
         try:
             return await make_call()
         except Exception as error:  # noqa: BLE001 - classified below
+            if account_limit.is_account_limit(error):  # never retried, never charged; the run stops
+                _note_failure(held, error, sends, started, clock, False)
+                account_limit.note_if_account_limit(error)
+                raise
             truncated = truncation_retryable(error)
             retryable = transport_retryable(error)
             failures += 1 if retryable else 0
