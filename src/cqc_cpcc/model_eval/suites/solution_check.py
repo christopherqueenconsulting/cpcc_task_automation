@@ -66,6 +66,45 @@ def _complete(case, payload) -> float:
                       for rid in case.labels["expected"]) else 0.0
 
 
+def wilson_upper(k: int, n: int, z: float = 1.96) -> float:
+    """Upper end of the Wilson 95% interval for k events in n trials."""
+    if n <= 0:
+        return 1.0
+    p = k / n
+    denom = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    margin = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5)
+    return min(1.0, (centre + margin) / denom)
+
+
+def pooled_false_no(per_case: list) -> tuple[int, int]:
+    """(false "no" answers, requirements the solution does or partly does) pooled over the cases.
+    With repeats the per-case score is a mean, so k is the mean count, rounded."""
+    doing = {c.case_id: sum(1 for e in c.labels["expected"].values() if e in ("yes", "unclear"))
+             for c in get_cases()}
+    k = n = 0.0
+    for row in per_case:
+        d = doing.get(row["case_id"], 0)
+        score = (row.get("graders") or {}).get("no_false")
+        if d and score is not None:
+            k += (1 - score) * d
+            n += d
+    return round(k), int(n)
+
+
+def get_cases() -> list:
+    return load_jsonl_cases(SUITE.dataset_dir)
+
+
+def report(model_scorecard: dict) -> list:
+    k, n = pooled_false_no(model_scorecard.get("per_case") or [])
+    if not n:
+        return []
+    return [f"- false \"no\": {k} of {n} requirements the solution does or partly does "
+            f"({k / n:.1%}; Wilson 95% upper bound {wilson_upper(k, n):.1%}). Do not set the ceiling "
+            "from this dataset alone: zero false \"no\" in 100 trials still leaves an upper bound near 3.7%."]
+
+
 SUITE = Suite(
     id="requirement-solution-check", prompt_id="requirement-solution-check", role="grading",
     dataset="requirement-solution-check/v1", load_cases=load_jsonl_cases, invoke=invoke, to_payload=to_payload,
@@ -79,4 +118,5 @@ SUITE = Suite(
     estimate_prompt_tokens=lambda c: chars_to_tokens(c.inputs["instructions"], c.inputs["solution"]) + 40 * len(
         c.inputs["requirements"]),
     description="Requirement checklist checked against the instructor's solution (false-'no' rate is the key grader).",
+    report=report,
 )

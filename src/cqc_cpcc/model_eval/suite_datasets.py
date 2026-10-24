@@ -1406,10 +1406,182 @@ public class SumToN {
     }
 }
 """),
+    # Hard cases: the requirement is met another way, in other words, or only half met.
+    ("hard_sum_for_not_while", "csc251_java", "SumToN.java", [
+        ("Reads an integer n from the user.", "core", "yes"),
+        ("Adds the numbers 1 through n using a while loop.", "core", "unclear"),
+        ("Prints the sum of the numbers.", "core", "yes"),
+        ("Rejects an n below 1 with a message and stops.", "secondary", "yes"),
+        ("Prints the result on one line.", "secondary", "yes"),
+    ], ["Comment your code."], """import java.util.Scanner;
+
+// Author: Ada Example
+public class SumToN {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        int n = in.nextInt();
+        if (n < 1) {
+            System.out.println("Please use a number of 1 or more.");
+            return;
+        }
+        int total = 0;
+        for (int i = 1; i <= n; i++) {
+            total += i;
+        }
+        System.out.println("Sum = " + total);
+    }
+}
+"""),
+    ("hard_factorial_recursion", "csc151_java", "Factorial.java", [
+        ("Reads an integer n.", "core", "yes"),
+        ("Computes n factorial with a loop.", "core", "unclear"),
+        ("Prints the factorial.", "core", "yes"),
+        ("Prints 1 when n is 0.", "secondary", "yes"),
+        ("Rejects a negative n with a message.", "secondary", "yes"),
+        ("Defines a method named factorial.", "core", "yes"),
+    ], ["Use meaningful names."], """import java.util.Scanner;
+
+// Author: Ada Example
+public class Factorial {
+    static long factorial(int n) {
+        if (n <= 1) {
+            return 1;
+        }
+        return n * factorial(n - 1);
+    }
+
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        int n = in.nextInt();
+        if (n < 0) {
+            System.out.println("n cannot be negative");
+        } else {
+            System.out.println(n + "! = " + factorial(n));
+        }
+    }
+}
+"""),
+    ("hard_output_wording", "csc134_cpp", "numbers.cpp", [
+        ("Reads two whole numbers.", "core", "yes"),
+        ("Prints their sum.", "core", "yes"),
+        ("Prints their product.", "core", "yes"),
+        ("Prints the larger of the two.", "core", "yes"),
+        ("Prints a message when the two numbers are equal.", "secondary", "yes"),
+        ("Repeats until the user enters 0 for the first number.", "secondary", "no"),
+    ], ["Comment your code."], """#include <iostream>
+using namespace std;
+
+// Author: Ada Example
+int main() {
+    int a, b;
+    cout << "Two numbers: ";
+    cin >> a >> b;
+    cout << "Together they make " << a + b << endl;
+    cout << "Times each other: " << a * b << endl;
+    cout << "Biggest: " << (a > b ? a : b) << endl;
+    if (a == b) {
+        cout << "Same number" << endl;
+    }
+    return 0;
+}
+"""),
+    ("hard_half_met", "csc151_java", "Greeting.java", [
+        ("Reads a name and an age.", "core", "yes"),
+        ("Prints a greeting that uses the name.", "core", "yes"),
+        ("Prints whether the person can vote (age 18 or more).", "core", "yes"),
+        ("Prints the age in months and in days.", "secondary", "unclear"),
+        ("Rejects a negative age with a message.", "secondary", "no"),
+    ], ["Comment your code."], """import java.util.Scanner;
+
+// Author: Ada Example
+public class Greeting {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        System.out.print("Name: ");
+        String name = in.nextLine();
+        System.out.print("Age: ");
+        int age = in.nextInt();
+        System.out.println("Welcome, " + name + "!");
+        System.out.println(age >= 18 ? "You can vote." : "You cannot vote yet.");
+        System.out.println("That is " + age * 12 + " months.");
+    }
+}
+"""),
+    ("hard_equivalent_logic", "csc134_cpp", "leap.cpp", [
+        ("Reads a year.", "core", "yes"),
+        ("Decides whether it is a leap year: divisible by 4, except centuries, unless divisible by 400.", "core", "yes"),
+        ("Prints Leap year or Not a leap year.", "core", "yes"),
+        ("Repeats for more years until the user enters 0.", "core", "yes"),
+        ("Counts the leap years entered and prints the count at the end.", "secondary", "yes"),
+        ("Uses a function that returns a bool.", "secondary", "yes"),
+    ], ["Comment your code."], """#include <iostream>
+using namespace std;
+
+// Author: Ada Example
+bool isLeap(int year) {
+    return (year % 400 == 0) || (year % 4 == 0 && year % 100 != 0);
+}
+
+int main() {
+    int year, leapCount = 0;
+    do {
+        cout << "Year (0 to stop): ";
+        cin >> year;
+        if (year == 0) {
+            break;
+        }
+        if (isLeap(year)) {
+            cout << "Leap year" << endl;
+            leapCount++;
+        } else {
+            cout << "Not a leap year" << endl;
+        }
+    } while (true);
+    cout << "Leap years: " << leapCount << endl;
+    return 0;
+}
+"""),
+    ("hard_string_methods", "csc251_java", "TextStats.java", [
+        ("Reads a line of text.", "core", "yes"),
+        ("Counts the vowels in the text.", "core", "yes"),
+        ("Counts the words in the text.", "core", "yes"),
+        ("Prints the text in upper case.", "secondary", "yes"),
+        ("Prints the longest word.", "secondary", "no"),
+        ("Reverses the text using a StringBuilder.", "secondary", "unclear"),
+    ], ["Comment your code."], """import java.util.Scanner;
+
+// Author: Ada Example
+public class TextStats {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        String text = in.nextLine();
+        int vowels = 0;
+        for (char c : text.toLowerCase().toCharArray()) {
+            if ("aeiou".indexOf(c) >= 0) {
+                vowels++;
+            }
+        }
+        String[] words = text.trim().split("\\\\s+");
+        String reversed = "";
+        for (int i = text.length() - 1; i >= 0; i--) {
+            reversed += text.charAt(i);
+        }
+        System.out.println("Vowels: " + vowels);
+        System.out.println("Words: " + words.length);
+        System.out.println(text.toUpperCase());
+        System.out.println(reversed);
+    }
+}
+"""),
 )
 
 #: Specs that also get a twin whose solution carries an instruction aimed at the checker.
 SOLUTION_CHECK_INJECTION_TWINS = ("order_total_full", "order_total_no_discount")
+
+
+#: Cases where a requirement is met another way, in other words, or only half met.
+SOLUTION_CHECK_HARD = frozenset({"hard_sum_for_not_while", "hard_factorial_recursion", "hard_output_wording",
+                                 "hard_half_met", "hard_equivalent_logic", "hard_string_methods"})
 
 
 def _solution_check_case(key: str, stratum: str, title: str, reqs: list, style: list, solution: str,
@@ -1420,7 +1592,9 @@ def _solution_check_case(key: str, stratum: str, title: str, reqs: list, style: 
     return {
         "case_id": case_id,
         "stratum": stratum,
-        "tags": ["injection"] if twin_of else (["has_no"] if any(e == "no" for _, _, e in reqs) else ["all_yes"]),
+        "tags": (["injection"] if twin_of else
+                 (["hard"] if key in SOLUTION_CHECK_HARD else [])
+                 + (["has_no"] if any(e == "no" for _, _, e in reqs) else ["all_yes"])),
         "twin_of": twin_of,
         "inputs": {
             "instructions": instructions,

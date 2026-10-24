@@ -12,6 +12,7 @@ from streamlit.testing.v1 import AppTest
 
 from cqc_cpcc import requirement_coverage as rc
 from cqc_cpcc import requirement_solution_check as rsc
+from cqc_streamlit_app.grade_assignment import PROVIDER_SENTENCE, SOLUTION_CHECK_FAILED, TABLE_HELP
 
 pytestmark = pytest.mark.unit
 
@@ -85,7 +86,7 @@ class Page:
 
 def test_without_a_solution_the_check_button_is_off_and_says_why():
     page = Page().run()
-    button = next(b for b in page.at.button if b.label == "Check against the solution")
+    button = next(b for b in page.at.button if b.label == "Check all against the solution")
     assert button.disabled
     assert any("off because there is no solution yet" in c for c in page.captions)
     page.check.assert_not_awaited()
@@ -107,14 +108,14 @@ def test_a_solution_runs_the_check_once_and_a_no_is_only_a_suggestion_before_cal
     assert page.check.await_count == 1
     assert [r.solution_status for r in page.out.requirements] == ["yes", "no", "yes"]
     assert [r.graded for r in page.out.requirements] == [True, True, True]
-    assert any("R2" in i.value and "does not seem to do" in i.value for i in page.at.info)
+    assert any("The check suggests your solution does not do: R2" in i.value for i in page.at.info)
     assert any("only suggests" in c for c in page.captions)
-    assert "Don't grade R2" in page.labels
+    assert "Stop grading the suggested requirements (R2)" in page.labels
 
-    page.click("Don't grade R2")
+    page.click("Stop grading the suggested requirements (R2)")
     assert [r.graded for r in page.out.requirements] == [True, False, True]
     assert page.check.await_count == 1  # applying a suggestion is not a new call
-    assert "Don't grade R2" not in page.labels
+    assert "Stop grading the suggested requirements (R2)" not in page.labels
     assert any(c.startswith("Not graded") and "R2 Applies a discount" in c for c in page.captions)
 
 
@@ -140,7 +141,7 @@ def test_a_failed_check_leaves_everything_graded_and_offers_a_retry():
     page.at.session_state["solution_text"] = SOLUTION
     page.run()
     assert [r.graded for r in page.out.requirements] == [True, True, True]
-    assert any("model unavailable" in w.value and "stays graded" in w.value for w in page.at.warning)
+    assert any(w.value == SOLUTION_CHECK_FAILED for w in page.at.warning)
     assert page.check.await_count == 1  # no retry loop on its own
     page.check.side_effect = None
     page.check.return_value = _verdicts(r1="yes", r2="no", r3="yes")
@@ -197,3 +198,60 @@ def test_an_edited_row_shows_a_recheck_button_that_updates_only_that_row():
     assert statuses == {"R1": "yes", "R2": "yes", "R3": "yes"}  # R1 and R3 keep the earlier answer
     texts = [c.args[1].requirements[1].text for c in page.check.await_args_list[-1:]]
     assert texts == ["Applies a ten percent discount"]
+
+
+def test_a_failed_check_never_logs_or_shows_the_solution(caplog):
+    page = Page(check=AsyncMock(side_effect=Exception("SECRET_SOLUTION_TEXT")))
+    page.at.session_state["solution_text"] = SOLUTION
+    with caplog.at_level("DEBUG"):
+        page.run()
+    shown = " ".join([w.value for w in page.at.warning] + page.captions + [e.value for e in page.at.error])
+    assert "SECRET_SOLUTION_TEXT" not in shown
+    assert "SECRET_SOLUTION_TEXT" not in caplog.text and "SECRET_SOLUTION_TEXT" not in str(
+        [r.exc_info for r in caplog.records])
+    assert "Exception" in caplog.text  # the type is logged
+
+
+def test_a_failed_extraction_shows_a_fixed_sentence():
+    page = Page()
+    with patch("cqc_streamlit_app.grade_assignment.extract_requirements",
+               new=AsyncMock(side_effect=Exception("SECRET_INSTRUCTIONS"))):
+        page.at.run()
+    assert [e.value for e in page.at.error] == [
+        "The requirements could not be read from the instructions. Press Try again, or check that "
+        "the instructions loaded."]
+
+
+def test_the_page_explains_the_columns_the_cost_and_who_gets_the_text():
+    page = Page()
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    captions = page.captions
+    assert TABLE_HELP in captions
+    assert "Table of requirements. Edit the text and weight here." in captions
+    assert any(c.startswith("Estimated cost: ") and PROVIDER_SENTENCE in c for c in captions)
+    assert "Solution check: R1 Yes; R2 No; R3 Yes" in captions
+    assert any(c.startswith("R2: evidence r2") or c == "R2: evidence r2" for c in captions)  # why, per row
+
+
+def test_requirements_to_grade_is_a_list_a_screen_reader_can_use():
+    page = Page(calibrated=True)
+    page.at.session_state["solution_text"] = SOLUTION
+    page.run()
+    box = next(m for m in page.at.multiselect if m.label == "Requirements to grade (remove one to stop grading it)")
+    assert box.value == ["R1", "R3"] and len(box.options) == 3
+    assert box.options[1].startswith("R2: Applies a discount")
+    box.set_value(["R1"])
+    page.run()
+    assert [r.graded for r in page.out.requirements] == [True, False, False]
+
+
+def test_earlier_results_with_another_checklist_are_called_out():
+    page = Page()
+    old = rc.RequirementChecklist(requirements=[rc.RequirementItem(id="R1", text="Old", weight="core")])
+    page.at.session_state["grading_inputs_by_key"] = {"k": {"kwargs": {
+        "assignment_instructions": "Write OrderTotal.java that reads a price, applies a discount and prints the total.",
+        "requirements": old}}}
+    page.at.session_state["grading_results_by_key"] = {"k": [("a", object()), ("b", object())]}
+    page.run()
+    assert "2 earlier results used a different checklist; regrade for a consistent section." in page.captions

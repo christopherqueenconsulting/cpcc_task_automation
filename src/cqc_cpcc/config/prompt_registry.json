@@ -132,7 +132,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:b62b00c59977f0266440fb21294e88cfe5c6342c4c54327044422ab77aa774a2",
+      "fingerprint": "sha256:49e1ae9932aaddf5af124db669df3cb54ec24212c242ae438b9e41690652ec2a",
       "suites": [
         "requirement-solution-check"
       ]

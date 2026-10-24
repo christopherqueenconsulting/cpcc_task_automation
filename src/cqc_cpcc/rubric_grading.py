@@ -900,9 +900,12 @@ async def _reconcile(
         by_id = {r.id: r for r in requirements.requirements}
         for rid in coverage_info.get("ungraded", []):
             item = by_id.get(rid)
-            why = f" ({item.solution_evidence})" if item is not None and item.solution_evidence else ""
-            notes.append(note("solution", f"Requirement {rid} is not graded: the instructor's solution "
-                                          f"does not do it{why}. It costs nothing.", requirement_id=rid))
+            # The model's evidence (it may quote the solution) stays on the checklist view, never here.
+            if item is not None and item.solution_status == "no":
+                reason = f"Requirement {rid} is not graded: the instructor's solution does not do it. It costs nothing."
+            else:
+                reason = f"Requirement {rid} is not graded (the instructor turned it off). It costs nothing."
+            notes.append(note("solution", reason, requirement_id=rid))
         for rid in coverage_info.get("unmarked", []):
             notes.append(note("requirement", f"The grader did not assess requirement {rid}; "
                                              "flagged for review, not counted.", requirement_id=rid))

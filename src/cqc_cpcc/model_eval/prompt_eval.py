@@ -143,6 +143,8 @@ def to_markdown(sc: dict) -> str:
     for label, m in sc["models"].items():
         for failure in m["health"]["failures"]:
             lines.append(f"- `{_safe(label)}`: {_safe(failure)}")
+        if suite.report is not None:
+            lines.extend(suite.report(m))
         for judge, j in (m.get("judges") or {}).items():
             lines.append(f"- `{_safe(label)}` judge `{judge}`: mean {_fmt(j.get('mean'))} "
                          f"({'counts' if j.get('calibrated') else 'report-only'})")

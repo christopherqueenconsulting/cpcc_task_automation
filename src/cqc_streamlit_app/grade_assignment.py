@@ -2441,17 +2441,31 @@ def _extraction_cost_caption(instructions: str) -> str:
 SOLUTION_FILE_TYPES = ["txt", "docx", "pdf", "java", "cpp", "sas", "zip", "py", "c", "h", "hpp", "cc"]
 
 
+PROVIDER_SENTENCE = ("Your instructions and your solution are sent to the AI model provider. "
+                     "No student work is sent.")
+EXTRACTION_FAILED = ("The requirements could not be read from the instructions. Press Try again, "
+                     "or check that the instructions loaded.")
+SOLUTION_CHECK_FAILED = ("The check could not finish, so no requirement was changed. Every requirement "
+                         "stays graded. Press \"Try the check again\", or untick Graded yourself.")
+TABLE_HELP = (
+    "Solution does it: Yes means your solution does this requirement. No means it does not. "
+    "Unclear means the check could not tell. A No is only a suggestion; nothing changes until you "
+    "accept it. Graded: when a requirement is not graded, it will not be used to deduct points. "
+    "Unclear stays graded. To undo, tick it again.")
+
+
 def _checklist_frame(checklist: RequirementChecklist) -> pd.DataFrame:
-    """The editor's table: what the instructor can edit plus the read-only solution column."""
+    """The editor's table: what the instructor can edit plus the read-only solution column.
+    Graded is set with the list under the table, which a screen reader can use."""
     return pd.DataFrame(
-        [{"id": r.id, "text": r.text, "weight": r.weight,
-          "solution": solution_label(r), "graded": r.graded} for r in checklist.requirements],
-        columns=["id", "text", "weight", "solution", "graded"])
+        [{"id": r.id, "text": r.text, "weight": r.weight, "solution": solution_label(r)}
+         for r in checklist.requirements],
+        columns=["id", "text", "weight", "solution"])
 
 
 def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist) -> Optional[RequirementChecklist]:
-    """The checklist the table now describes. A row keeps its solution verdict only while its
-    text is the text that was checked."""
+    """The checklist the table now describes (graded as in ``base``). A row keeps its solution
+    verdict only while its text is the text that was checked."""
     old = {r.id.strip().upper(): r for r in base.requirements}
     items = []
     for i, row in enumerate(edited.to_dict("records"), start=1):
@@ -2461,15 +2475,29 @@ def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist) -> 
         weight = row.get("weight") if row.get("weight") in ("core", "secondary") else "core"
         rid = str(row.get("id") or "").strip()
         rid = rid if rid and rid != "nan" else f"R{i}"
-        graded_cell = row.get("graded")
-        graded = True if graded_cell is None or pd.isna(graded_cell) else bool(graded_cell)
         prior = old.get(rid.upper())
         same = prior is not None and (prior.text or "").strip() == text
         items.append(RequirementItem(
-            id=rid, text=text, weight=weight, graded=graded,
+            id=rid, text=text, weight=weight, graded=prior.graded if prior is not None else True,
             solution_status=prior.solution_status if same else None,
             solution_evidence=prior.solution_evidence if same else None))
     return normalize_checklist(RequirementChecklist(requirements=items)) if items else None
+
+
+def _earlier_results_note(instructions: str, current: RequirementChecklist) -> Optional[str]:
+    """How many results in this session were graded with a different checklist."""
+    now = checklist_hash(current)
+    other = 0
+    for run_key, inputs in st.session_state.get("grading_inputs_by_key", {}).items():
+        kwargs = (inputs or {}).get("kwargs") or {}
+        if (kwargs.get("assignment_instructions") or "") != instructions:
+            continue
+        if checklist_hash(kwargs.get("requirements")) != now:
+            other += len(st.session_state.get("grading_results_by_key", {}).get(run_key) or [])
+    if not other:
+        return None
+    return (f"{other} earlier result{'s' if other != 1 else ''} used a different checklist; "
+            "regrade for a consistent section.")
 
 
 def render_requirement_checklist(instructions: str, source_id: str,
@@ -2482,7 +2510,7 @@ def render_requirement_checklist(instructions: str, source_id: str,
 
     With a ``solution``, one more call checks each requirement against it (once per solution,
     then on request). A requirement the solution does not do is shown with "No" and can be left
-    out of the grading with the Graded box.
+    out of the grading in the "Requirements to grade" list.
 
     Returns the checklist to grade with, or None when coverage is off or extraction failed.
     """
@@ -2499,12 +2527,12 @@ def render_requirement_checklist(instructions: str, source_id: str,
     tag = key[:12]
     cost = _extraction_cost_caption(instructions)
     if key not in store:
-        with st.spinner(f"Reading the instructions for the checklist ({cost})..."):
+        with st.spinner(f"Reading the instructions for the checklist (estimated cost: {cost})..."):
             try:
                 store[key] = run_coroutine_blocking(extract_requirements(instructions))
             except Exception as e:  # noqa: BLE001 - shown to the instructor
-                logger.error(f"Requirement extraction failed: {type(e).__name__}", exc_info=True)
-                st.error(f"Could not extract requirements: {e}")
+                logger.error(f"Requirement extraction failed ({type(e).__name__}).")
+                st.error(EXTRACTION_FAILED)
                 if st.button("Try again", key=f"retry_requirements_{tag}", icon=":material/refresh:"):
                     st.rerun()
                 return None
@@ -2519,6 +2547,8 @@ def render_requirement_checklist(instructions: str, source_id: str,
         st.rerun()
 
     base = store[key]
+    st.caption(TABLE_HELP)
+    st.caption("Table of requirements. Edit the text and weight here.")
     edited = st.data_editor(
         _checklist_frame(base),
         key=f"requirements_editor_{tag}_{generations.get(key, 0)}",
@@ -2531,15 +2561,23 @@ def render_requirement_checklist(instructions: str, source_id: str,
                 "Weight", options=["core", "secondary"], required=True, default="core"),
             "solution": st.column_config.TextColumn(
                 "Solution does it", width="small", disabled=True,
-                help="Whether your solution does this. Set by the check below; you cannot edit it."),
-            "graded": st.column_config.CheckboxColumn(
-                "Graded", default=True,
-                help="Untick to stop grading this requirement. Do that for anything your solution does not do."),
+                help="Whether your solution does this requirement: Yes, No or Unclear. "
+                     "You cannot edit it here."),
         },
     )
-    current = _checklist_from_editor(edited, base)
-    if current is None:
+    pre = _checklist_from_editor(edited, base)
+    if pre is None:
         return None
+    ids = [r.id for r in pre.requirements]
+    texts = {r.id: r.text for r in pre.requirements}
+    chosen = st.multiselect(
+        "Requirements to grade (remove one to stop grading it)",
+        options=ids, default=[r.id for r in pre.requirements if r.graded],
+        format_func=lambda i: f"{i}: {texts[i][:80]}",
+        key=f"requirements_graded_{tag}_{generations.get(key, 0)}",
+        help="A requirement that is removed will not be used to deduct points. Add it back to undo.")
+    current = RequirementChecklist(requirements=[
+        r.model_copy(update={"graded": r.id in chosen}) for r in pre.requirements])
     return _render_solution_check(key, tag, instructions, solution, base, current)
 
 
@@ -2565,71 +2603,93 @@ def _render_solution_check(key: str, tag: str, instructions: str, solution: Opti
         if any(r.solution_status for r in current.requirements):
             checked_for.pop(key, None)
             commit(rsc.clear_check(current))
-        st.button("Check against the solution", key=f"check_solution_{tag}", icon=":material/fact_check:",
+        st.caption("Add a solution above and each requirement is checked against it, so you can "
+                   "leave out what the solution does not do. " + PROVIDER_SENTENCE)
+        st.button("Check all against the solution", key=f"check_solution_{tag}", icon=":material/fact_check:",
                   disabled=True)
-        st.caption("This button is off because there is no solution yet. Add one above and each "
-                   "requirement is checked against it, so you can leave out what the solution does not do.")
+        st.caption("This button is off because there is no solution yet.")
+        _after_check_notes(instructions, current)
         return current
 
     solution_id = hash_solution(solution)
-    # Cheapest setting that is still honest: a "no" only suggests until the suite is calibrated.
+    # A "no" only suggests until the suite is calibrated in model_policy.json.
     pre_apply = rsc.policy_floor_met()
     cost = _extraction_cost_caption(instructions + "\n" + solution)
+    st.caption(f"Estimated cost: {cost}. " + PROVIDER_SENTENCE)
 
     def run_check(only_ids: Optional[set] = None) -> None:
-        with st.spinner(f"Checking the requirements against the solution ({cost})..."):
+        with st.spinner(f"Checking the requirements against the solution (estimated cost: {cost})..."):
             try:
                 answer = run_coroutine_blocking(
                     rsc.check_requirements_against_solution(instructions, current, solution))
-            except Exception as e:  # noqa: BLE001 - shown to the instructor; grading is not blocked
-                logger.error(f"Solution check failed: {e}", exc_info=True)
-                failures[key] = (solution_id, str(e))
+            except Exception as e:  # noqa: BLE001 - grading is not blocked; the text can hold the solution
+                logger.error(f"Solution check failed ({type(e).__name__}).")
+                failures[key] = solution_id
                 return
         failures.pop(key, None)
         commit(rsc.apply_check(current, answer, pre_apply=pre_apply, only_ids=only_ids))
 
-    failed = failures.get(key)
-    if checked_for.get(key) != solution_id and not (failed and failed[0] == solution_id):
+    failed = failures.get(key) == solution_id
+    if checked_for.get(key) != solution_id and not failed:
         checked_for[key] = solution_id
         run_check()  # once per solution; it redraws the page when it succeeds
-        failed = failures.get(key)
-    if failed and failed[0] == solution_id:
-        st.warning(f"Could not check the requirements against the solution: {failed[1]} "
-                   "Every requirement stays graded.", icon=":material/warning:")
+        failed = failures.get(key) == solution_id
+    if failed:
+        st.warning(SOLUTION_CHECK_FAILED, icon=":material/warning:")
         if st.button("Try the check again", key=f"retry_solution_check_{tag}", icon=":material/refresh:"):
             failures.pop(key, None)
             checked_for.pop(key, None)
             st.rerun()
 
     if st.button("Check all against the solution", key=f"check_solution_{tag}", icon=":material/fact_check:",
-                 help=f"Asks the model once whether the solution does each requirement ({cost})."):
+                 help=f"Asks the model once whether the solution does each requirement (estimated cost: {cost})."):
         run_check()
 
+    if any(r.solution_status for r in current.requirements):
+        st.caption("Solution check: " + "; ".join(
+            f"{r.id} {rsc.solution_label(r)}" for r in current.requirements))
     suggested = rsc.suggested_ids(current)
     if suggested:
-        st.info("The solution does not seem to do: " + ", ".join(suggested)
-                + ". A student should not lose points for what the solution leaves out.",
-                icon=":material/lightbulb:")
+        names = ", ".join(suggested)
+        st.info(f"The check suggests your solution does not do: {names}. This is only a suggestion. "
+                "A student should not lose points for what your solution leaves out, so you may stop "
+                "grading these.", icon=":material/lightbulb:")
+        by_id = {r.id: r for r in current.requirements}
+        for rid in suggested:
+            if by_id[rid].solution_evidence:
+                st.caption(f"{rid}: {by_id[rid].solution_evidence}")
         if not pre_apply:
-            st.caption("This check has not been calibrated yet, so it only suggests. Nothing changes "
-                       "until you click, or untick Graded yourself.")
-        if st.button("Don't grade " + ", ".join(suggested), key=f"apply_solution_suggestions_{tag}",
-                     icon=":material/check:", type="primary"):
+            st.caption("Nothing has changed yet. The check is not yet proven accurate, so it only "
+                       "suggests. Click the button, or untick Graded, to stop grading these. "
+                       "To undo, tick Graded again.")
+        if st.button(f"Stop grading the suggested requirements ({names})",
+                     key=f"apply_solution_suggestions_{tag}", icon=":material/check:", type="primary"):
             commit(rsc.apply_suggestions(current))
     not_graded = [r for r in current.requirements if not r.graded]
     if not_graded:
-        st.caption("Not graded (they cost students nothing): "
+        st.caption("Not graded (will not be used to deduct points): "
                    + "; ".join(f"{r.id} {r.text}" for r in not_graded))
     unclear = [r.id for r in current.requirements if r.solution_status == "unclear"]
     if unclear:
-        st.caption("The check could not tell for " + ", ".join(unclear)
-                   + ". They stay graded; untick Graded if your solution does not do them.")
+        st.caption(f"The check could not tell for {', '.join(unclear)}. They stay graded. "
+                   "Untick Graded if your solution does not do them.")
     if any(r.solution_status for r in base.requirements):
-        for rid in rsc.edited_ids(base, current):
+        edited_rows = rsc.edited_ids(base, current)
+        if edited_rows:
+            st.caption("You changed some requirements after they were checked. Re-check them to "
+                       "update their Solution does it answer.")
+        for rid in edited_rows:
             if st.button(f"Re-check {rid}", key=f"recheck_solution_{tag}_{rid}", icon=":material/refresh:",
                          help="You changed this requirement after it was checked."):
                 run_check({rid})
+    _after_check_notes(instructions, current)
     return current
+
+
+def _after_check_notes(instructions: str, current: RequirementChecklist) -> None:
+    note_text = _earlier_results_note(instructions, current)
+    if note_text:
+        st.caption(note_text)
 
 
 GRADE_STAGES = ("Setup", "Submissions & run", "Results & review")
@@ -2988,7 +3048,8 @@ async def get_rubric_based_exam_grading():
         st.subheader("Solution (optional)", anchor=False)
         st.caption("Your reference solution. The grader compares each submission with it, and it "
                    "decides which requirements below count: a student is not marked down for "
-                   "something your solution does not do.")
+                   "something your solution does not do. " + PROVIDER_SENTENCE + " The requirement check "
+                   "runs automatically once when you add a solution.")
         solution_file_paths = add_flexible_upload_element(
             "Solution file(s) (optional)",
             SOLUTION_FILE_TYPES,
