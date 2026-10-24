@@ -3900,7 +3900,7 @@ def _regrade_cost_caption(inputs: dict, student_ids: list) -> str:
             + chars // 4, len(student_ids) * 2500)
     except Exception:  # noqa: BLE001 - an estimate never blocks a re-grade
         return "cost unknown"
-    return "cost unknown" if cost is None else (f"about ${cost:.2f} for all" if cost >= 0.01 else "under $0.01")
+    return "cost unknown" if cost is None else (f"roughly ${cost:.2f} for all" if cost >= 0.01 else "below one cent")
 
 
 def _estimated_one_cost(instructions: str, submission_files: dict, model: str,

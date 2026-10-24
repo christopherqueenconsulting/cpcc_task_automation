@@ -379,7 +379,7 @@ def _suggestion_cost_caption(instructions: str, solution_text: str) -> str:
         cost = model_registry.estimate_cost(resolved, (len(instructions) + len(solution_text)) // 4 + 900, 1200)
     except Exception:  # noqa: BLE001 - an estimate never blocks the button
         cost = None
-    return f"about ${cost:.4f}" if cost else "a fraction of a cent"
+    return f"roughly ${cost:.4f}" if cost else "a fraction of a cent"
 
 
 # --------------------------------------------------------------------------- #

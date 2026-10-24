@@ -721,7 +721,7 @@ def test_the_banner_names_the_students_the_cost_and_offers_the_regrade(ready):
     _no_errors(at)
     tab = _tab(at, "Students")
     assert any("2 students have no output check" in w.value for w in tab.warning)
-    assert any("2 students" in c.value and "costs money" in c.value and "$" in c.value
+    assert any("2 students" in c.value and "costs money" in c.value and ("$" in c.value or "below one cent" in c.value)
                and "cannot be undone" in c.value for c in tab.caption)
     button = next(b for b in tab.button if b.key == f"regrade_output_{RUN_KEY}")
     assert button.label == "Re-grade 2 students with output check" and not button.disabled
