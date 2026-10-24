@@ -592,3 +592,36 @@ class TestSafetyAndSwitches:
         by = {r.case_id: r for r in records}
         assert by["a"].cached_tokens is None and by["c"].cached_tokens is None
         assert (by["b"].cached_tokens, by["b"].cache_write_tokens, by["b"].reasoning_tokens) == (10, 2, 3)
+
+
+class TestAppSideSessionIdMeetsTheEvalSession:
+    """PR 464: the app can send its own session_id (CQC_PROMPT_CACHE_KEY); the eval's wins inside a run."""
+
+    async def test_a_caller_supplied_app_id_wins_inside_a_run_and_exactly_one_is_sent(self, fake):
+        # cache_session uses setdefault: an id already in the request (the app flag) is kept, only cleaned.
+        with cs.transport(), cs.record_scope("cqc-eval-run1"):
+            await llm_gateway.structured("feedback", "hello", Out, system="S", session_id="cqc-app-abc")
+        body = fake.requests[0]["extra_body"]
+        assert body["session_id"] == "cqc-app-abc"
+        assert list(body).count("session_id") == 1
+
+    async def test_inside_a_run_without_an_app_id_the_eval_id_is_sent(self, fake):
+        with cs.transport(), cs.record_scope("cqc-eval-run1"):
+            await llm_gateway.structured("feedback", "hello", Out, system="S")
+        assert fake.requests[0]["extra_body"]["session_id"] == "cqc-eval-run1"
+
+    async def test_without_an_eval_session_the_app_id_is_sent_as_is(self, fake):
+        with cs.transport():
+            await llm_gateway.structured("feedback", "hello", Out, system="S", session_id="cqc-app-abc")
+        assert fake.requests[0]["extra_body"]["session_id"] == "cqc-app-abc"
+
+    async def test_with_neither_nothing_is_sent(self, fake):
+        await llm_gateway.structured("feedback", "hello", Out, system="S")
+        assert "session_id" not in (fake.requests[0].get("extra_body") or {})
+
+    async def test_the_capture_hash_is_the_same_with_the_app_flag_on_or_off(self, monkeypatch):
+        monkeypatch.delenv("CQC_PROMPT_CACHE_KEY", raising=False)
+        off = await rc.capture_suite("exam-grading")
+        monkeypatch.setenv("CQC_PROMPT_CACHE_KEY", "on")
+        on = await rc.capture_suite("exam-grading")
+        assert off == on and any(off["requests"].values())

@@ -166,7 +166,11 @@ accepted on values are `1`, `true`, `on`, `yes`:
   read when a job starts: to turn it off, unset it or set any other value; a grade already
   running keeps the setting it started with.
 
-The eval side (cached-token telemetry, eval `session_id`, warm-first in the runner) is PR #463.
+The eval side (cached-token telemetry, the eval `session_id`, warm-first in the runner) is #463; see
+[Prompt caching in evals](#prompt-caching-in-evals-session_id-and-warm-first). Inside an eval run exactly one
+`session_id` is sent: the eval wrapper uses `setdefault`, so an id already in the request (this flag on) is kept
+and the eval's is not added; leave `CQC_PROMPT_CACHE_KEY` unset in eval runs so each side keeps its own id. The
+request-capture hash ignores `session_id` whatever its source.
 
 ### Quality numbers after an A/B
 
@@ -633,7 +637,7 @@ never changes an output, so no gate, grader, score or threshold reads any of thi
   `model-eval`), model, effort and run (`CQC_EVAL_RUN_ID`, else `GITHUB_RUN_ID`, else `local`); 41 characters,
   no case id, name or student text. Whatever its source, a session id is reduced to `[A-Za-z0-9_-]` and 256
   characters before it is sent. It goes in through a thin wrapper around the OpenRouter client that the eval
-  runners install for the length of a run, so the app's own requests are byte-identical (no `session_id`).
+  runners install for the length of a run, so the app's own requests are byte-identical (no `session_id`, unless the app-side `CQC_PROMPT_CACHE_KEY` is on, in which case that id is kept).
   `provider.order` is never set (it would turn sticky routing off); model, schema and reasoning effort are
   constant within a session.
 - **Environment variables** (read when a run starts, so they do not change a run already in flight; an
