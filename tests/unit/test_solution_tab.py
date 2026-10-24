@@ -364,7 +364,10 @@ def test_the_tab_with_a_plan_shows_the_solution_the_notice_and_the_options(runne
     assert not at.exception, at.exception
     assert any("OrderTotal" in c.value for c in at.code)
     notice = [c.value for c in at.caption if "SOLUTION" in c.value][0]
-    assert "onecompiler.com" in notice and "onlinegdb.com" in notice and "No student work" in notice
+    # The notice is prose, not a URL: match the site names as whole words.
+    import re
+    assert re.search(r"\bonecompiler\.com\b", notice) and re.search(r"\bonlinegdb\.com\b", notice)
+    assert "No student work" in notice
     assert "FERPA" in notice and "No agreement" in notice
     labels = [b.label for b in at.button]
     assert "Run in OneCompiler" in labels and "Run locally" in labels
