@@ -3,8 +3,11 @@
 
 Three parts, kept apart so the logic is testable without a browser:
 
-* :func:`align_rows` (pure): ``difflib.SequenceMatcher`` opcodes on lines become aligned rows, with
-  blank filler rows so the two panes stay row-for-row level, plus word-level spans inside changed lines.
+* :func:`align_rows` (pure): lines are aligned on normalised keys (indentation, spacing, case, numbers,
+  dates and times ignored), so lines that differ only in those still sit side by side; lines in a changed
+  block are paired by similarity; each changed row says how it differs (whitespace, case, punctuation,
+  number format, value, wording) by the verdict's own rules. Blank filler rows keep the two panes
+  row-for-row level, and changed lines carry word-level spans.
 * :func:`build_side_by_side_html` (pure): one self-contained HTML page. Program text is untrusted, so it
   travels only as JSON inside a ``<script>`` (``<``, ``>``, ``&`` escaped, so it can never close the
   element or open a comment) and is drawn with ``textContent``. No network, no external script, font or
@@ -29,6 +32,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from cqc_cpcc.execution_evidence import clean_block
+from cqc_cpcc.utilities import output_compare as oc
 
 #: Rows (both panes) above which the page is not built; the Unified view is shown with a notice. A pair
 #: inside the page's own diff guard (5,000 lines each) can reach 10,000 rows, so this never refuses
@@ -45,6 +49,19 @@ MAX_INTRALINE_WORK = 1_000_000
 MAX_CACHED_ROW_SETS = 20
 #: A changed line pair that shares less than this fraction of its characters is highlighted whole.
 MIN_INTRALINE_SIMILARITY = 0.3
+
+#: Two lines are paired as "changed" (side by side) when their keys are at least this alike (0 to 1).
+PAIR_MIN_RATIO = 0.6
+#: How many following unmatched lines of the other side a line is compared with when looking for its pair.
+PAIR_WINDOW = 12
+#: Keys are compared on at most this many characters when pairing (longer lines pair on their start).
+PAIR_KEY_CHARS = 120
+#: Total pairing work per pair of texts: the sum of ``len(key_a) * len(key_b)`` over the full comparisons
+#: made. Past it, lines are paired on the cheap upper-bound test only, so alignment stays bounded.
+MAX_PAIR_WORK = 3_000_000
+#: Above this many line pairs the line alignment turns difflib's popular-line heuristic (``autojunk``)
+#: on, which is fast and a little less exact; below it the alignment is exact.
+MAX_EXACT_ALIGN_CELLS = 4_000_000
 
 PANE_HEIGHT_PX = 420
 #: A row is 1.6em of a 0.8rem font = 20.48px at the default size; the pane is sized in rem so it grows
@@ -65,6 +82,15 @@ COMPUTE_SIDE_NOTICE = ("This pair of outputs is large, so the side-by-side view 
                        "The unified diff is below.")
 
 KIND_EQUAL, KIND_CHANGED, KIND_REMOVED, KIND_ADDED = "eq", "chg", "del", "ins"
+CLASS_BLANK = "blank"
+
+#: Visible tag and spoken name of each class of difference. The summary and screen readers use the spoken name.
+CLASS_TAG = {oc.LINE_WHITESPACE: "spacing", oc.LINE_CASE: "case", oc.LINE_PUNCTUATION: "punctuation",
+             oc.LINE_NUMBER_FORMAT: "number format", oc.LINE_VALUE: "value", oc.LINE_WORDING: "wording",
+             CLASS_BLANK: "blank line"}
+CLASS_SPOKEN = {oc.LINE_WHITESPACE: "whitespace only", oc.LINE_CASE: "case only",
+                oc.LINE_PUNCTUATION: "punctuation only", oc.LINE_NUMBER_FORMAT: "number format only",
+                oc.LINE_VALUE: "value only", oc.LINE_WORDING: "wording", CLASS_BLANK: "blank line"}
 
 #: Text that may be drawn: either one string, or ``[[piece, highlighted(0/1)], ...]`` for a changed line.
 Segments = Union[str, list]
@@ -79,6 +105,8 @@ class AlignedRow:
     expected: Optional[Segments]
     actual_no: Optional[int]
     actual: Optional[Segments]
+    #: Changed rows: one of ``output_compare.LINE_CLASSES``. A removed or added blank line: ``CLASS_BLANK``.
+    cls: str = ""
 
 
 class SideBySideTooLarge(ValueError):
@@ -124,36 +152,125 @@ def _word_segments(a: str, b: str, budget: list) -> tuple[Segments, Segments]:
     return pieces(ta, 0), pieces(tb, 1)
 
 
+def _key(text: str, *, mask: bool) -> str:
+    """What alignment compares: spacing collapsed and trimmed, case folded and, with ``mask``, dates,
+    times and numbers replaced by ``#``. Alignment only decides which lines sit side by side; the class
+    of each pair says what differs, so ignoring these never hides a difference, it only stops it
+    breaking the match."""
+    key = " ".join(text.split()).casefold()
+    return oc.mask_values(key) if mask else key
+
+
+class _Pairer:
+    """Pairs the lines of a changed block by similarity, in order, within a work budget."""
+
+    def __init__(self) -> None:
+        self.work = MAX_PAIR_WORK
+
+    def ratio(self, ka: str, kb: str) -> float:
+        a, b = ka[:PAIR_KEY_CHARS], kb[:PAIR_KEY_CHARS]
+        sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+        if sm.real_quick_ratio() < PAIR_MIN_RATIO or sm.quick_ratio() < PAIR_MIN_RATIO:
+            return 0.0
+        cost = len(a) * len(b)
+        if cost > self.work:
+            return sm.quick_ratio()  # budget spent: the cheap upper bound decides
+        self.work -= cost
+        return sm.ratio()
+
+    def pair(self, ka: Sequence[str], kb: Sequence[str]) -> list:
+        """Ordered ``(i, j)`` steps over a block: a pair, ``(i, None)`` only in A, ``(None, j)`` only in
+        B. Each A line takes the most alike B line among the next ``PAIR_WINDOW`` unpaired ones (the
+        earliest of equals) when it reaches ``PAIR_MIN_RATIO``; B lines passed over are only in B.
+        Both sides keep their order."""
+        steps: list = []
+        jcur = 0
+        for i, a in enumerate(ka):
+            best, best_j = 0.0, None
+            for j in range(jcur, min(jcur + PAIR_WINDOW, len(kb))):
+                r = 1.0 if a == kb[j] else self.ratio(a, kb[j])
+                if r > best:
+                    best, best_j = r, j
+                    if r >= 1.0:
+                        break
+            if best_j is not None and best >= PAIR_MIN_RATIO:
+                steps.extend((None, j) for j in range(jcur, best_j))
+                steps.append((i, best_j))
+                jcur = best_j + 1
+            else:
+                steps.append((i, None))
+        steps.extend((None, j) for j in range(jcur, len(kb)))
+        return steps
+
+
 def align_rows(expected: str, actual: str) -> list[AlignedRow]:
     """The aligned rows of two outputs.
 
     Lines are split as ``full_unified_diff`` splits them (``str.splitlines``, so CRLF and a lone CR end
-    a line and a trailing newline adds no row) and compared as they are, so a line is "changed" here
-    exactly when the unified view shows it as changed. The stored texts are already what
-    ``comparable_output`` produces (trailing spaces and trailing blank lines gone). Hidden and
+    a line and a trailing newline adds no row). They are aligned in three passes, each on what the one
+    before left over: lines equal once spacing and case are ignored; then lines equal once numbers,
+    dates and times are masked too (so ``Total: 5`` meets ``Total: 9`` without first-pass anchors being
+    thrown off by numbered lines); then, in what is still unmatched, lines paired by similarity
+    (:class:`_Pairer`). Blank lines never anchor a pass. A row is ``eq`` only when the two lines are identical; a pair that differs is
+    ``chg`` with a class (:func:`output_compare.classify_line_pair`, the verdict's own rules). Hidden and
     direction characters are turned into spaces in what is drawn, as ``clean_block`` does everywhere
-    else; the comparison uses the raw lines."""
-    a_raw, b_raw = expected.splitlines(), actual.splitlines()
-    a_txt, b_txt = [clean_block(x) for x in a_raw], [clean_block(x) for x in b_raw]
+    else. The stored texts are already what ``comparable_output`` produces."""
+    a_txt = [clean_block(x) for x in expected.splitlines()]
+    b_txt = [clean_block(x) for x in actual.splitlines()]
+    exact = ([_key(x, mask=False) for x in a_txt], [_key(x, mask=False) for x in b_txt])
+    ka, kb = [_key(x, mask=True) for x in a_txt], [_key(x, mask=True) for x in b_txt]
+    passes = (exact, (ka, kb))
     rows: list[AlignedRow] = []
     budget = MAX_INTRALINE_PAIRS
     work = [MAX_INTRALINE_WORK]
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a_raw, b_raw).get_opcodes():
-        if tag == "equal":
-            rows.extend(AlignedRow(KIND_EQUAL, i + 1, a_txt[i], j + 1, b_txt[j])
-                        for i, j in zip(range(i1, i2), range(j1, j2)))
-            continue
-        paired = min(i2 - i1, j2 - j1) if tag == "replace" else 0
-        for k in range(paired):
-            i, j = i1 + k, j1 + k
-            if budget > 0:
-                budget -= 1
-                left, right = _word_segments(a_txt[i], b_txt[j], work)
+    pairer = _Pairer()
+
+    def changed(i: int, j: int) -> None:
+        nonlocal budget
+        cls = oc.classify_line_pair(a_txt[i], b_txt[j])
+        if cls == oc.LINE_SAME:
+            rows.append(AlignedRow(KIND_EQUAL, i + 1, a_txt[i], j + 1, b_txt[j]))
+            return
+        if budget > 0:
+            budget -= 1
+            left, right = _word_segments(a_txt[i], b_txt[j], work)
+        else:
+            left, right = a_txt[i], b_txt[j]
+        rows.append(AlignedRow(KIND_CHANGED, i + 1, left, j + 1, right, cls))
+
+    def gap(i1: int, i2: int, j1: int, j2: int) -> None:
+        """Lines between two anchors (or the ends): paired by similarity, the rest only on one side."""
+        for i, j in pairer.pair(ka[i1:i2], kb[j1:j2]):
+            if i is not None and j is not None:
+                changed(i1 + i, j1 + j)
+            elif i is not None:
+                line = a_txt[i1 + i]
+                rows.append(AlignedRow(KIND_REMOVED, i1 + i + 1, line, None, None, "" if line.strip() else CLASS_BLANK))
             else:
-                left, right = a_txt[i], b_txt[j]
-            rows.append(AlignedRow(KIND_CHANGED, i + 1, left, j + 1, right))
-        rows.extend(AlignedRow(KIND_REMOVED, i + 1, a_txt[i], None, None) for i in range(i1 + paired, i2))
-        rows.extend(AlignedRow(KIND_ADDED, None, None, j + 1, b_txt[j]) for j in range(j1 + paired, j2))
+                line = b_txt[j1 + j]
+                rows.append(AlignedRow(KIND_ADDED, None, None, j1 + j + 1, line, "" if line.strip() else CLASS_BLANK))
+
+    def region(level: int, i1: int, i2: int, j1: int, j2: int) -> None:
+        if level == len(passes):
+            gap(i1, i2, j1, j2)
+            return
+        ea, eb = passes[level]
+        # Anchors are the lines with text whose keys match. Blank lines never anchor (any blank matches
+        # any other, which would drag the real lines out of line); they fall in the gaps.
+        na = [i for i in range(i1, i2) if ea[i].strip()]
+        nb = [j for j in range(j1, j2) if eb[j].strip()]
+        junk = len(na) * len(nb) > MAX_EXACT_ALIGN_CELLS
+        sm = difflib.SequenceMatcher(None, [ea[i] for i in na], [eb[j] for j in nb], autojunk=junk)
+        pi, pj = i1, j1
+        for a0, b0, size in sm.get_matching_blocks():
+            for k in range(size):
+                i, j = na[a0 + k], nb[b0 + k]
+                region(level + 1, pi, i, pj, j)
+                changed(i, j)
+                pi, pj = i + 1, j + 1
+        region(level + 1, pi, i2, pj, j2)
+
+    region(0, 0, len(ka), 0, len(kb))
     return rows
 
 
@@ -162,10 +279,20 @@ def count_rows(rows: Sequence[AlignedRow]) -> dict:
     return {k: sum(1 for r in rows if r.kind == k) for k in (KIND_CHANGED, KIND_REMOVED, KIND_ADDED)}
 
 
+def count_classes(rows: Sequence[AlignedRow]) -> dict:
+    """Changed rows by class, in the ladder's order; classes with no rows are left out."""
+    counts = {c: sum(1 for r in rows if r.kind == KIND_CHANGED and r.cls == c) for c in oc.LINE_CLASSES}
+    return {c: n for c, n in counts.items() if n}
+
+
 def summary_text(rows: Sequence[AlignedRow]) -> str:
     n = count_rows(rows)
-    return (f"{n[KIND_CHANGED]:,} changed, {n[KIND_REMOVED]:,} only in expected output, "
-            f"{n[KIND_ADDED]:,} only in student output. {len(rows):,} rows in all.")
+    classes = count_classes(rows)
+    detail = f" ({', '.join(f'{v:,} {CLASS_SPOKEN[c]}' for c, v in classes.items())})" if classes else ""
+    blanks = sum(1 for r in rows if r.cls == CLASS_BLANK)
+    tail = f" Blank lines among the unmatched rows: {blanks:,}." if blanks else ""
+    return (f"{n[KIND_CHANGED]:,} changed{detail}, {n[KIND_REMOVED]:,} only in expected output, "
+            f"{n[KIND_ADDED]:,} only in student output. {len(rows):,} rows in all.{tail}")
 
 
 def pane_height(rows: Sequence[AlignedRow]) -> int:
@@ -189,7 +316,7 @@ def _json_for_script(value) -> str:
 
 
 def _row_json(row: AlignedRow) -> list:
-    return [row.kind, row.expected_no, row.expected, row.actual_no, row.actual]
+    return [row.kind, row.expected_no, row.expected, row.actual_no, row.actual, row.cls]
 
 
 _CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
@@ -217,6 +344,7 @@ body{padding:2px 2px 8px}
 .g{position:sticky;left:0;flex:none;display:flex;background:var(--gutbg);border-right:1px solid var(--line)}
 .n{width:5ch;padding:0 6px 0 4px;text-align:right;color:var(--gut)}
 .m{width:2ch;text-align:center;font-weight:700;user-select:none}
+.c{flex:none;width:13ch;padding:0 4px;overflow:hidden;white-space:nowrap;color:var(--gut);font-size:0.7rem;user-select:none}
 .t{flex:1 0 auto;padding-right:12px}
 .sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);
 white-space:nowrap;border:0}
@@ -233,21 +361,22 @@ function fill(box,idx,nIdx,cls,mark,who,lead){
   var frag=document.createDocumentFragment();
   D.rows.forEach(function(r){
     var row=document.createElement('div'),n=document.createElement('span'),m=document.createElement('span'),
-      t=document.createElement('span'),g=document.createElement('span'),v=r[idx],k=r[0];
-    row.className='r';g.className='g';n.className='n';m.className='m';t.className='t';
-    m.setAttribute('aria-hidden','true');
+      t=document.createElement('span'),g=document.createElement('span'),c=document.createElement('span'),v=r[idx],k=r[0],q=r[5];
+    row.className='r';g.className='g';n.className='n';m.className='m';t.className='t';c.className='c';
+    m.setAttribute('aria-hidden','true');c.setAttribute('aria-hidden','true');
     if(v===null){row.className+=' fl';row.setAttribute('aria-hidden','true');}
     else{
       var ls=document.createElement('span');ls.className='sr';ls.textContent='Line ';
       n.appendChild(ls);n.appendChild(document.createTextNode(String(r[nIdx])));
       if(k!=='eq'){row.className+=' '+cls;m.textContent=mark;
         var ps=document.createElement('span');ps.className='sr';
-        ps.textContent=(k==='chg'?'Changed line, '+who+': ':lead);t.appendChild(ps);}
+        ps.textContent=(k==='chg'?'Changed line, '+who+(q?', '+D.say[q]:'')+': ':(q?lead.replace(' line',' '+D.say[q]):lead));
+        t.appendChild(ps);if(q){c.textContent=D.tag[q];}}
       if(typeof v==='string'){t.textContent=v;}
       else{v.forEach(function(p){var s=document.createElement('span');
         if(p[1]){s.className='w';}s.textContent=p[0];t.appendChild(s);});}
     }
-    g.appendChild(n);g.appendChild(m);row.appendChild(g);row.appendChild(t);frag.appendChild(row);
+    g.appendChild(n);g.appendChild(m);g.appendChild(c);row.appendChild(g);row.appendChild(t);frag.appendChild(row);
   });
   box.appendChild(frag);
 }
@@ -278,7 +407,7 @@ def build_side_by_side_html(rows: Sequence[AlignedRow], labels: Sequence[str] = 
     if len(rows) > MAX_SIDE_ROWS:
         raise SideBySideTooLarge(f"{len(rows):,} rows is over the limit of {MAX_SIDE_ROWS:,}")
     exp_label, act_label = labels
-    data = _json_for_script({"rows": [_row_json(r) for r in rows], "summary": summary_text(rows)})
+    data = _json_for_script({"rows": [_row_json(r) for r in rows], "summary": summary_text(rows), "tag": CLASS_TAG, "say": CLASS_SPOKEN})
     # The labels sit in attributes, so they are escaped as HTML; they are fixed strings, not program text.
     def esc(s) -> str:
         return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -293,8 +422,9 @@ def build_side_by_side_html(rows: Sequence[AlignedRow], labels: Sequence[str] = 
 <body>
 <p id="sum" role="status"></p>
 <p id="key">Markers: <b>-</b> is in the expected output, <b>+</b> is in the student output. A marker on both sides
-means the line differs (the differing words are underlined), though the difference may be only spacing or case.
-Hatched rows are blank here because the other side has an extra line. Both panes scroll together.</p>
+means the two lines were paired because they are alike but differ (the differing words are underlined); the tag
+beside the marker says how: spacing, case, punctuation, number format, value (same words, other numbers) or wording.
+Lines that differ only in spacing or case are not a different answer unless your course counts them. Hatched rows are blank here because the other side has an extra line. Both panes scroll together.</p>
 <div class="grid">
 <div class="col"><h2 id="te">{esc(exp_label)}</h2>
 <div id="pe" class="pane" role="region" tabindex="0" aria-label="{esc(exp_label)}"><div class="rows"></div></div></div>

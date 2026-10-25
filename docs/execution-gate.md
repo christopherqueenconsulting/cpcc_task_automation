@@ -641,8 +641,20 @@ has no line, and the differing words underlined inside a changed line. The panes
 left and right, and both are keyboard-focusable regions named "Expected output" and "Student output". It is one
 sandboxed iframe (`st.iframe`, else `components.html`) built in-process: program text is embedded only as escaped
 JSON and drawn with `textContent`, the page has a Content-Security-Policy with no network, and nothing is logged or
-sent anywhere. Rows come from `difflib.SequenceMatcher` on lines (`diff_view.align_rows`), so a row is "changed" there
-exactly when the unified view shows it as changed. Lines do not wrap (long lines scroll sideways); the Unified view
+sent anywhere. Rows come from `diff_view.align_rows`, which aligns the two outputs in three passes, each on what the one before
+left over: lines equal once spacing and case are ignored; lines equal once numbers, dates and times are masked too
+(`output_compare.mask_values`); then lines in a still-unmatched block are paired by similarity (character ratio of the
+masked keys at least 0.6, in order, within a work budget `MAX_PAIR_WORK`). Blank lines never anchor a pass. A row is
+`eq` only when the two lines are identical, so indentation, case or number differences no longer push everything out
+of line; the text shown is always the original. Each changed (paired) row is tagged with how it differs, by the
+verdict's own rules (`output_compare.classify_line_pair`): *spacing* (indentation, inner spacing), *case*,
+*punctuation*, *number format* (`3.5` / `3.50`), *value* (same words, other numbers, dates or times) or *wording*. A
+removed or added blank line is tagged *blank line*. The tag is text beside the line number (and spoken by a screen
+reader), never colour alone, and the summary counts them ("9 changed (6 whitespace only, 1 case only, 1 value only,
+1 wording), ..."). The tag describes the pair on its own: a case-only or whitespace-only row is FORMAT_ONLY in the
+verdict, scored by the course's error definitions, and a value-only row is a difference unless the case is flagged
+"values may differ". The unified view is still plain `difflib` on the raw lines and can show more changed lines than
+the side-by-side view pairs. Lines do not wrap (long lines scroll sideways); the Unified view
 is always one click away.
 Two big-input guards: a pair of outputs over 5,000 lines, or more than 4,000,000 line pairs
 (`MAX_DIFF_LINES`, `MAX_DIFF_CELLS`; difflib is quadratic), is not diffed automatically. The page says so,
