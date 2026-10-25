@@ -126,7 +126,7 @@ def test_counts_and_summary_and_heights():
     rows = dv.align_rows("a\nb\nc", "a\nB\nc\nd")
     assert dv.count_rows(rows) == {"chg": 1, "del": 0, "ins": 1}
     assert "1 changed" in dv.summary_text(rows) and "4 rows" in dv.summary_text(rows)
-    assert dv.pane_height(rows) == 4 * dv.ROW_HEIGHT_PX + 20
+    assert dv.pane_height(rows) == 4 * dv.ROW_HEIGHT_PX + 24
     assert dv.pane_height(dv.align_rows("\n".join(map(str, range(500))), "x")) == dv.PANE_HEIGHT_PX
     assert dv.iframe_height(rows) == dv.pane_height(rows) + dv.CHROME_HEIGHT_PX
 
@@ -220,6 +220,90 @@ def test_the_diff_view_module_never_logs_prints_or_touches_telemetry():
 def test_the_model_side_does_not_know_the_view():
     root = Path(dv.__file__).parents[1] / "cqc_cpcc"
     assert not [p for p in root.rglob("*.py") if "diff_view" in p.read_text()]
+
+
+def _palettes():
+    light_css, dark_css = dv._STYLE.split("@media (prefers-color-scheme:dark)")
+    grab = lambda css: dict(re.findall(r"--([a-z]+):(#[0-9a-f]{6})", css))  # noqa: E731
+    light = grab(light_css)
+    return {"light": light, "dark": {**light, **grab(dark_css)}}
+
+
+def _lum(h):
+    ch = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in ch]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast(a, b):
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+#: (foreground, background) pairs that carry text, and pairs that are UI boundaries or focus.
+TEXT_PAIRS = [("fg", "bg"), ("fg", "rm"), ("fg", "add"), ("fg", "rmw"), ("fg", "addw"), ("muted", "bg"),
+              ("gut", "gutbg"), ("fg", "gutbg")]
+UI_PAIRS = [("line", "bg"), ("focus", "bg"), ("line", "gutbg")]
+
+
+def test_every_text_and_ui_colour_pair_meets_wcag_in_both_palettes():
+    report = []
+    for name, pal in _palettes().items():
+        for fg, bg in TEXT_PAIRS:
+            ratio = _contrast(pal[fg], pal[bg])
+            report.append(f"{name} {fg} {pal[fg]} on {bg} {pal[bg]} = {ratio:.2f}")
+            assert ratio >= 4.5, report[-1]
+        for fg, bg in UI_PAIRS:
+            ratio = _contrast(pal[fg], pal[bg])
+            report.append(f"{name} {fg} {pal[fg]} vs {bg} {pal[bg]} = {ratio:.2f}")
+            assert ratio >= 3.0, report[-1]
+    assert len(report) == 2 * (len(TEXT_PAIRS) + len(UI_PAIRS))
+
+
+def test_row_markup_gives_screen_readers_line_numbers_and_the_kind_of_change():
+    html = dv.build_side_by_side_html(dv.align_rows("a\nb\nc", "a\nB\nc\nd"))
+    script = html.split("<script>")[1]
+    assert "'Line '" in script and "'Removed line: '" in script and "'Added line: '" in script
+    assert "'Changed line, '+who+': '" in script and "'expected'" in script and "'student'" in script
+    assert "m.setAttribute('aria-hidden','true')" in script  # the visual -/+ marker
+    assert "n.setAttribute('aria-hidden'" not in script  # line numbers stay readable
+    assert script.count("row.setAttribute('aria-hidden','true')") == 1  # filler rows only
+    assert ".sr{position:absolute" in html and "clip:rect(0,0,0,0)" in html
+
+
+def test_the_page_scrolls_and_sizes_in_relative_units_so_nothing_is_clipped():
+    html = dv.build_side_by_side_html(dv.align_rows("a", "b"))
+    assert "html{overflow:auto}" in html
+    assert "height:1.6em" in html and "--ph:" in html and "rem}" in html
+    assert not re.search(r"font:\s*\d+(\.\d+)?px", html) and "height:20px" not in html
+    assert dv.CHROME_HEIGHT_PX >= 160
+
+
+def test_the_legend_and_summary_wording():
+    html = dv.build_side_by_side_html(dv.align_rows("a", "b"))
+    assert "rows in all" in html and "only spacing or case" in " ".join(html.split())
+    assert "Hatched rows are blank here because the other side has an extra line" in html
+    assert "blank filler" not in html
+
+
+def test_word_level_work_is_bounded_by_a_total_budget():
+    import time
+    exp = "\n".join("!" * 400 for _ in range(1500))
+    act = "\n".join("!" * 399 + "?" for _ in range(1500))
+    started = time.monotonic()
+    rows = dv.align_rows(exp, act)
+    assert time.monotonic() - started < 5
+    assert len(rows) == 1500 and all(r.kind == "chg" for r in rows)
+    assert sum(isinstance(r.expected, list) for r in rows) < 50  # the rest are highlighted whole
+
+
+def test_old_row_sets_are_evicted(monkeypatch):
+    monkeypatch.setattr(dv, "MAX_CACHED_ROW_SETS", 2)
+    fake = SimpleNamespace(session_state={})
+    with patch.object(dv, "st", fake):
+        for k in ("k1", "k2", "k3"):
+            dv._keep_rows(k, [k])
+    assert [k for k in fake.session_state if k.startswith("k")] == ["k2", "k3"]
 
 
 # --------------------------------------------------------------------------- #
@@ -402,3 +486,31 @@ def test_the_sentinel_is_not_logged_or_sent_to_telemetry(caplog):
         assert not at.exception
     assert SENTINEL in EMBEDS[-1][0]  # it IS in the page handed to the iframe
     assert SENTINEL not in caplog.text and SENTINEL not in repr(sent)
+
+
+def test_the_iframe_has_a_title_and_each_toggle_a_distinct_label():
+    seen = {}
+
+    def page():
+        from unittest.mock import patch
+
+        import streamlit as st
+
+        from cqc_streamlit_app import diff_view as dview
+        from cqc_streamlit_app import execution_view as view
+
+        with patch.object(st, "iframe", lambda html, **kw: st.session_state.__setitem__("alt", kw.get("alt"))):
+            view.render_case_diff({"case_id": "T1", "expected_output": "a", "actual_output": "b"}, scope="a")
+            view.render_case_diff({"case_id": "T2", "expected_output": "a", "actual_output": "b"}, scope="b")
+
+    at = AppTest.from_function(page, default_timeout=30).run()
+    assert not at.exception
+    assert at.session_state["alt"] == dv.IFRAME_TITLE
+    assert [r.label for r in at.radio] == ["Diff view for case T1", "Diff view for case T2"]
+    seen.clear()
+
+
+def test_one_term_student_output_in_the_unified_captions():
+    at = _app(_case(), mode="Unified")
+    texts = [str(c.value) for c in at.caption]
+    assert any("+ student output" in t for t in texts) and not any("this program" in t for t in texts)

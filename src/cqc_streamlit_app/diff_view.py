@@ -38,13 +38,21 @@ MAX_SIDE_ROWS = 10_000
 MAX_INTRALINE_CHARS = 400
 #: Word-level comparisons per pair of texts; past this, changed lines are highlighted whole.
 MAX_INTRALINE_PAIRS = 1_500
+#: Total word-level work per pair of texts: the sum of ``len(tokens_a) * len(tokens_b)`` over the lines
+#: compared. A line pair that would pass this budget is highlighted whole, so alignment stays bounded.
+MAX_INTRALINE_WORK = 1_000_000
+#: Row sets kept in ``st.session_state`` at once; the oldest are dropped.
+MAX_CACHED_ROW_SETS = 20
 #: A changed line pair that shares less than this fraction of its characters is highlighted whole.
 MIN_INTRALINE_SIMILARITY = 0.3
 
 PANE_HEIGHT_PX = 420
-ROW_HEIGHT_PX = 20
-#: Vertical space the iframe needs besides the panes: summary line, legend, pane titles, scrollbar.
-CHROME_HEIGHT_PX = 112
+#: A row is 1.6em of a 0.8rem font = 20.48px at the default size; the pane is sized in rem so it grows
+#: with the browser's text size. The iframe's own height is a pixel estimate with generous margin for the
+#: summary, legend, titles and scrollbars; the page itself scrolls if zoom or a narrow width needs more.
+ROW_HEIGHT_PX = 21
+CHROME_HEIGHT_PX = 170
+IFRAME_TITLE = "Expected and student output, side by side"
 
 DEFAULT_LABELS = ("Expected output", "Student output")
 MODE_SIDE, MODE_UNIFIED = "Side by side", "Unified"
@@ -83,12 +91,16 @@ class SideBySideTooLarge(ValueError):
 _TOKEN = re.compile(r"\s+|\w+|[^\w\s]")
 
 
-def _word_segments(a: str, b: str) -> tuple[Segments, Segments]:
+def _word_segments(a: str, b: str, budget: list) -> tuple[Segments, Segments]:
     """``a`` and ``b`` as pieces with the changed words flagged, or the plain strings when the lines
     are too long, too alike in nothing, or identical."""
     if a == b or max(len(a), len(b)) > MAX_INTRALINE_CHARS:
         return a, b
     ta, tb = _TOKEN.findall(a), _TOKEN.findall(b)
+    work = len(ta) * len(tb)
+    if work > budget[0]:
+        return a, b
+    budget[0] -= work
     sm = difflib.SequenceMatcher(None, ta, tb, autojunk=False)
     ops = sm.get_opcodes()
     same = sum(len("".join(ta[i1:i2])) for tag, i1, i2, _, _ in ops if tag == "equal")
@@ -125,6 +137,7 @@ def align_rows(expected: str, actual: str) -> list[AlignedRow]:
     a_txt, b_txt = [clean_block(x) for x in a_raw], [clean_block(x) for x in b_raw]
     rows: list[AlignedRow] = []
     budget = MAX_INTRALINE_PAIRS
+    work = [MAX_INTRALINE_WORK]
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a_raw, b_raw).get_opcodes():
         if tag == "equal":
             rows.extend(AlignedRow(KIND_EQUAL, i + 1, a_txt[i], j + 1, b_txt[j])
@@ -135,7 +148,7 @@ def align_rows(expected: str, actual: str) -> list[AlignedRow]:
             i, j = i1 + k, j1 + k
             if budget > 0:
                 budget -= 1
-                left, right = _word_segments(a_txt[i], b_txt[j])
+                left, right = _word_segments(a_txt[i], b_txt[j], work)
             else:
                 left, right = a_txt[i], b_txt[j]
             rows.append(AlignedRow(KIND_CHANGED, i + 1, left, j + 1, right))
@@ -151,13 +164,13 @@ def count_rows(rows: Sequence[AlignedRow]) -> dict:
 
 def summary_text(rows: Sequence[AlignedRow]) -> str:
     n = count_rows(rows)
-    return (f"{n[KIND_CHANGED]:,} changed, {n[KIND_REMOVED]:,} only in expected, "
-            f"{n[KIND_ADDED]:,} only in student output. {len(rows):,} rows.")
+    return (f"{n[KIND_CHANGED]:,} changed, {n[KIND_REMOVED]:,} only in expected output, "
+            f"{n[KIND_ADDED]:,} only in student output. {len(rows):,} rows in all.")
 
 
 def pane_height(rows: Sequence[AlignedRow]) -> int:
     """Pane height in pixels: the whole text when it is short, else a fixed scrolling box."""
-    return min(PANE_HEIGHT_PX, len(rows) * ROW_HEIGHT_PX + 20)
+    return min(PANE_HEIGHT_PX, len(rows) * ROW_HEIGHT_PX + 24)
 
 
 def iframe_height(rows: Sequence[AlignedRow]) -> int:
@@ -182,29 +195,31 @@ def _row_json(row: AlignedRow) -> list:
 _CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
 
 _STYLE = """
-:root{color-scheme:light dark;--fg:#1f2328;--bg:#ffffff;--muted:#59636e;--line:#d1d9e0;--gut:#59636e;
---gutbg:#f6f8fa;--rm:#ffebe9;--rmw:#ffb8b0;--add:#dafbe1;--addw:#8fe3a3;--fill:#eef1f4;--hatch:#c3cbd4;
+:root{color-scheme:light dark;--fg:#1f2328;--bg:#ffffff;--muted:#59636e;--line:#7a838d;--gut:#4b5560;
+--gutbg:#f6f8fa;--rm:#ffebe9;--rmw:#ffb8b0;--add:#dafbe1;--addw:#8fe3a3;--fill:#eef1f4;--hatch:#9aa4af;
 --focus:#0550ae}
-@media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--bg:#0d1117;--muted:#9aa4af;--line:#3d444d;
---gut:#9aa4af;--gutbg:#161b22;--rm:#5a1e24;--rmw:#a8333d;--add:#17432a;--addw:#2a7a47;--fill:#161b22;
---hatch:#3d444d;--focus:#79c0ff}}
+@media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--bg:#0d1117;--muted:#9aa4af;--line:#7d8590;
+--gut:#9aa4af;--gutbg:#161b22;--rm:#5a1e24;--rmw:#a8333d;--add:#17432a;--addw:#2a7543;--fill:#161b22;
+--hatch:#6e7681;--focus:#79c0ff}}
 *{box-sizing:border-box}
+html{overflow:auto}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
-font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
-body{padding:2px 2px 0}
+font:0.875rem/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+body{padding:2px 2px 8px}
 #sum{margin:0 0 2px;font-weight:600}
-#key{margin:0 0 6px;color:var(--muted);font-size:13px}
+#key{margin:0 0 6px;color:var(--muted);font-size:0.8125rem}
 .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
-.col h2{margin:0 0 2px;font-size:13px;font-weight:600}
-.pane{height:var(--ph);overflow:auto;border:1px solid var(--line);border-radius:4px;background:var(--bg)}
+.col h2{margin:0 0 2px;font-size:0.8125rem;font-weight:600}
+.pane{position:relative;height:var(--ph);min-height:4rem;overflow:auto;border:1px solid var(--line);border-radius:4px;background:var(--bg)}
 .pane:focus-visible{outline:3px solid var(--focus);outline-offset:-3px}
-.rows{min-width:max-content;font:12.5px/20px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.r{display:flex;height:20px;white-space:pre}
-.g{position:sticky;left:0;flex:none;display:flex;background:var(--gutbg);border-right:1px solid var(--line);
-user-select:none}
+.rows{min-width:max-content;font:0.8rem/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.r{display:flex;height:1.6em;white-space:pre}
+.g{position:sticky;left:0;flex:none;display:flex;background:var(--gutbg);border-right:1px solid var(--line)}
 .n{width:5ch;padding:0 6px 0 4px;text-align:right;color:var(--gut)}
-.m{width:2ch;text-align:center;font-weight:700}
+.m{width:2ch;text-align:center;font-weight:700;user-select:none}
 .t{flex:1 0 auto;padding-right:12px}
+.sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);
+white-space:nowrap;border:0}
 .rm{background:var(--rm)}.add{background:var(--add)}
 .fl{background:repeating-linear-gradient(135deg,var(--fill) 0 6px,var(--hatch) 6px 7px)}
 .rm .w{background:var(--rmw);text-decoration:underline;text-decoration-style:wavy}
@@ -214,17 +229,20 @@ user-select:none}
 _SCRIPT = """
 (function(){
 var D=JSON.parse(document.getElementById('d').textContent);
-function fill(box,idx,nIdx,cls,mark){
+function fill(box,idx,nIdx,cls,mark,who,lead){
   var frag=document.createDocumentFragment();
   D.rows.forEach(function(r){
     var row=document.createElement('div'),n=document.createElement('span'),m=document.createElement('span'),
       t=document.createElement('span'),g=document.createElement('span'),v=r[idx],k=r[0];
     row.className='r';g.className='g';n.className='n';m.className='m';t.className='t';
-    n.setAttribute('aria-hidden','true');
+    m.setAttribute('aria-hidden','true');
     if(v===null){row.className+=' fl';row.setAttribute('aria-hidden','true');}
     else{
-      n.textContent=String(r[nIdx]);
-      if(k!=='eq'){row.className+=' '+cls;m.textContent=mark;}
+      var ls=document.createElement('span');ls.className='sr';ls.textContent='Line ';
+      n.appendChild(ls);n.appendChild(document.createTextNode(String(r[nIdx])));
+      if(k!=='eq'){row.className+=' '+cls;m.textContent=mark;
+        var ps=document.createElement('span');ps.className='sr';
+        ps.textContent=(k==='chg'?'Changed line, '+who+': ':lead);t.appendChild(ps);}
       if(typeof v==='string'){t.textContent=v;}
       else{v.forEach(function(p){var s=document.createElement('span');
         if(p[1]){s.className='w';}s.textContent=p[0];t.appendChild(s);});}
@@ -234,7 +252,7 @@ function fill(box,idx,nIdx,cls,mark){
   box.appendChild(frag);
 }
 var pe=document.getElementById('pe'),pa=document.getElementById('pa');
-fill(pe.firstChild,2,1,'rm','-');fill(pa.firstChild,4,3,'add','+');
+fill(pe.firstChild,2,1,'rm','-','expected','Removed line: ');fill(pa.firstChild,4,3,'add','+','student','Added line: ');
 document.getElementById('sum').textContent=D.summary;
 var driver=null;
 ['wheel','pointerdown','keydown','focus','touchstart'].forEach(function(ev){
@@ -271,11 +289,12 @@ def build_side_by_side_html(rows: Sequence[AlignedRow], labels: Sequence[str] = 
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="{_CSP}">
 <title>Expected and student output, side by side</title>
-<style>{_STYLE}:root{{--ph:{pane_height(rows)}px}}</style></head>
+<style>{_STYLE}:root{{--ph:{pane_height(rows) / 16:.2f}rem}}</style></head>
 <body>
 <p id="sum" role="status"></p>
-<p id="key">Markers: <b>-</b> only in expected, <b>+</b> only in student output, a marker on both sides means
-the line differs (the differing words are underlined). Hatched rows are blank filler. Both panes scroll together.</p>
+<p id="key">Markers: <b>-</b> is in the expected output, <b>+</b> is in the student output. A marker on both sides
+means the line differs (the differing words are underlined), though the difference may be only spacing or case.
+Hatched rows are blank here because the other side has an extra line. Both panes scroll together.</p>
 <div class="grid">
 <div class="col"><h2 id="te">{esc(exp_label)}</h2>
 <div id="pe" class="pane" role="region" tabindex="0" aria-label="{esc(exp_label)}"><div class="rows"></div></div></div>
@@ -294,9 +313,9 @@ def _embed(html: str, height: int) -> None:
     """Draw the page in a sandboxed iframe. ``st.iframe`` where this Streamlit has it (it replaces
     ``components.v1.html``, which is deprecated), else ``components.html``. One seam, patched in tests."""
     if hasattr(st, "iframe"):
-        st.iframe(html, height=height)
+        st.iframe(html, height=height, alt=IFRAME_TITLE)
     else:  # pragma: no cover - older Streamlit
-        components.html(html, height=height, scrolling=False)
+        components.html(html, height=height, scrolling=True)
 
 
 def _within_guard(expected: str, actual: str, max_lines: int, max_cells: int) -> bool:
@@ -320,6 +339,16 @@ def current_mode() -> str:
     return mode if mode in (MODE_SIDE, MODE_UNIFIED) else MODE_SIDE
 
 
+def _keep_rows(key: str, rows: list) -> list:
+    """Store ``rows`` and drop the oldest stored row sets beyond ``MAX_CACHED_ROW_SETS``."""
+    st.session_state[key] = rows
+    order = [k for k in st.session_state.get("sbsrows_order", []) if k != key] + [key]
+    for old in order[:-MAX_CACHED_ROW_SETS]:
+        st.session_state.pop(old, None)
+    st.session_state["sbsrows_order"] = order[-MAX_CACHED_ROW_SETS:]
+    return rows
+
+
 def _rows_for(expected: str, actual: str, scope: str, *, guarded: bool) -> Optional[list]:
     """The aligned rows, kept in ``st.session_state`` (keyed by scope and a hash of both texts).
 
@@ -329,16 +358,16 @@ def _rows_for(expected: str, actual: str, scope: str, *, guarded: bool) -> Optio
     key = f"sbsrows_{hashlib.sha1(scope.encode()).hexdigest()[:8]}_{digest}"
     cached = st.session_state.get(key)
     if cached is None and not guarded:
-        cached = st.session_state[key] = align_rows(expected, actual)
+        cached = _keep_rows(key, align_rows(expected, actual))
     elif cached is None:
         st.caption(COMPUTE_SIDE_NOTICE)
         if st.button(COMPUTE_SIDE_LABEL, key=key + "_btn", icon=":material/vertical_split:"):
-            cached = st.session_state[key] = align_rows(expected, actual)
+            cached = _keep_rows(key, align_rows(expected, actual))
     return cached
 
 
 def render_diff(expected: str, actual: str, *, scope: str, render_unified: Callable[[], None],
-                max_lines: int, max_cells: int) -> None:
+                max_lines: int, max_cells: int, title: str = "") -> None:
     """The differences of one case: a **Side by side | Unified** choice (side by side first, remembered
     for the session), then the chosen view. ``render_unified`` draws the existing unified diff; it is also
     the fallback whenever the side-by-side view cannot be shown. The caller has already passed the
@@ -346,7 +375,7 @@ def render_diff(expected: str, actual: str, *, scope: str, render_unified: Calla
     key = _WIDGET_PREFIX + hashlib.sha1(scope.encode()).hexdigest()[:12]
     if key not in st.session_state:
         st.session_state[key] = current_mode()
-    st.radio("Diff view", [MODE_SIDE, MODE_UNIFIED], key=key, horizontal=True, on_change=_on_mode_change,
+    st.radio(f"Diff view for case {title}" if title else "Diff view", [MODE_SIDE, MODE_UNIFIED], key=key, horizontal=True, on_change=_on_mode_change,
              args=(key,), help="Side by side shows the expected and the student output next to each other, "
              "scrolling together. Unified is one list of - and + lines.")
     if st.session_state.get(key) != MODE_SIDE:

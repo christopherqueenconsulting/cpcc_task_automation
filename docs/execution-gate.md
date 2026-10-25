@@ -622,7 +622,11 @@ Two big-input guards: a pair of outputs over 5,000 lines, or more than 4,000,000
 shows the short excerpt and offers **Compute full diff anyway**; the result is cached in the session. The side-by-side
 rows follow the same guard: inside it they are built on the spot; over it they wait for a second button, **Compute
 side-by-side view** (cached the same way); and a pair of more than 10,000 rows in all (`MAX_SIDE_ROWS`) always
-falls back to Unified with a notice. Word-level highlighting is skipped for lines over 400 characters.
+falls back to Unified with a notice. Word-level highlighting is skipped for lines over 400 characters and is
+bounded by a total work budget per pair of texts (`MAX_INTRALINE_WORK`), so a long run of similar long lines is
+highlighted whole. A screen reader hears "Line N", then "Removed line:", "Added line:" or "Changed line, expected:" /
+"Changed line, student:" before a differing row; filler rows are hidden from it. The page sizes in rem and scrolls
+itself when a narrow width or zoom needs more room.
 Identical stored texts show "No differences in the stored text after normalization." A diff over 2,000 lines is collapsed behind **Show all N lines** with a 50-line preview and the count
 said out loud; nothing is cut silently. Input and expected output are shown the same way (no more
 `... (cut)`).

@@ -661,7 +661,7 @@ def _diff_lines(expected: str, actual: str, scope: str, r: dict) -> Optional[lis
 
 
 def _render_unified(diff: list, scope: str) -> None:
-    st.caption(f"Differences (- expected, + this program), complete: {len(diff):,} lines")
+    st.caption(f"Differences (- expected output, + student output), complete: {len(diff):,} lines")
     show_text("\n".join(diff), scope=scope + "|diff", language="diff", line_numbers=True, wrap=False)
 
 
@@ -678,12 +678,13 @@ def render_case_diff(r: dict, *, scope: str) -> None:
         diff = _diff_lines(expected, actual, scope, r)
         if diff is not None:
             diff_view.render_diff(expected, actual, scope=scope, max_lines=MAX_DIFF_LINES, max_cells=MAX_DIFF_CELLS,
+                                  title=safe_line(_first_line(r.get("case_id"), 20)),
                                   render_unified=lambda: _render_unified(diff, scope))
             return
         if not r.get("diff_excerpt"):
             return
     if r.get("diff_excerpt"):
-        st.caption("Differences (- expected, + this program), short excerpt")
+        st.caption("Differences (- expected output, + student output), short excerpt")
         st.caption(OMITTED_NOTICE if r.get("outputs_omitted") else OLD_RUN_NOTICE)
         show_text(r.get("diff_excerpt"), scope=scope + "|excerpt", language="diff")
 
