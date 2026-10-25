@@ -13,6 +13,7 @@ from typing import Annotated, Optional
 from pydantic import BaseModel, Field
 
 from cqc_cpcc.prompts.flowgorithm import FLOWGORITHM_GRADE_PROMPT
+from cqc_cpcc.utilities.fprg_sanitize import sanitize_fprg
 from cqc_cpcc.utilities.logger import logger
 
 
@@ -87,6 +88,7 @@ async def grade_flowgorithm(assignment: str, rubric_criteria_markdown_table: str
     """Grade one submission on the registry's ``flowgorithm`` role (``model_name`` overrides)."""
     from cqc_cpcc.utilities.AI import llm_gateway
 
+    submission = sanitize_fprg(submission)  # author/identity attributes and e-mails never leave
     prompt = build_flowgorithm_prompt(assignment, rubric_criteria_markdown_table, submission,
                                       submission_file_name, total_possible_points)
     use_auto_route = model_name == "openrouter/auto"
