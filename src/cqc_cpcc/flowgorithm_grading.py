@@ -14,6 +14,7 @@ from typing import Annotated, Optional
 from pydantic import BaseModel, Field
 
 from cqc_cpcc.prompts.flowgorithm import FLOWGORITHM_GRADE_PROMPT
+from cqc_cpcc.utilities.AI import untrusted_fence
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias, scrub
 
@@ -48,14 +49,24 @@ def file_name_alias(file_name: str) -> str:
 
 
 def build_flowgorithm_prompt(assignment: str, rubric_criteria_markdown_table: str, submission: str,
-                             submission_file_name: str, total_possible_points: str) -> str:
+                             submission_file_name: str, total_possible_points: str,
+                             nonce: Optional[str] = None) -> str:
     """The prompt text. ``grade_flowgorithm`` passes the alias from :func:`file_name_alias`;
-    the name is also run through ``scrub`` here as a second layer for any other caller."""
+    the name is also run through ``scrub`` here as a second layer for any other caller.
+
+    The file name and the submission are untrusted, so each sits where it always did but
+    inside a nonce fence (``utilities/AI/untrusted_fence``). The line that carries the per-call
+    nonce is directly above the first fence, after all the static text before it. ``nonce`` is
+    fixed only for prompt fingerprints; real calls leave it unset.
+    """
+    nonce = nonce or untrusted_fence.new_nonce()
     submission_file_name = scrub(submission_file_name)
     return FLOWGORITHM_GRADE_PROMPT.strip().format(
         assignment=assignment,
-        submission_file_name=submission_file_name,
-        submission=submission,
+        submission_file_name_fence="\n".join([
+            untrusted_fence.instruction_line(nonce),
+            untrusted_fence.fence("Submission File Name", submission_file_name, nonce)]),
+        submission_fence=untrusted_fence.fence("Submission", submission, nonce),
         rubric_criteria_markdown_table=rubric_criteria_markdown_table,
         total_possible_points=total_possible_points,
     )

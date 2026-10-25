@@ -1,5 +1,5 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
-"""Flowgorithm grading on the LLM gateway (prompt flowgorithm-grade v2)."""
+"""Flowgorithm grading on the LLM gateway (prompt flowgorithm-grade v3)."""
 
 from unittest.mock import AsyncMock
 
@@ -81,7 +81,7 @@ from types import SimpleNamespace  # noqa: E402
 
 from cqc_cpcc.utilities import pii_redaction  # noqa: E402
 
-_ALIAS_RE = re.compile(r"Submission File Name:\nstudent_[0-9a-f]{8}\.fprg\n")
+_ALIAS_RE = re.compile(r"BEGIN>>>\nstudent_[0-9a-f]{8}\.fprg\n<<<UNTRUSTED SUBMISSION FILE NAME [0-9a-f]{16} END>>>")
 
 
 def _sent(mocker):

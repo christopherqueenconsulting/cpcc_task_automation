@@ -22,8 +22,8 @@ edits it. The evaluation workflow that grades these prompts is planned in
 | `test-case-generation` | Output check: stdin test cases for the solution (at most 6, a boundary case for every selection or loop condition the instructions name, condition-to-case map); instructions and solution are nonce-fenced untrusted text | grading | `test_case_generation.py:build_test_case_prompt` | `TestCaseSuggestion` | suite `test-case-generation` (12, synthetic) |
 | `exam-grading` | Grade Assignment, exam mode (`CodeGrader`): major/minor errors | grading | `utilities/AI/exam_grading_prompts.py:build_exam_grading_messages` | `ErrorDefinitions` | suite `exam-grading` (81) |
 | `preprocessing-digest` | Compress a very large submission before exam grading; the student code is nonce-fenced untrusted text, last in the message (v2) | digest | `utilities/AI/openai_client.py:_build_preprocessing_prompt` | `PreprocessingDigest` | suite `digest` (16) |
-| `project-feedback` | Give Feedback page (v5: student-facing report; categories from the course error definitions) | feedback | `prompts/project_feedback.py` | `FeedbackReport` | suite `project-feedback` (81) |
-| `flowgorithm-grade` | Flowgorithm grading: per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py`) | `FlowgorithmGrade` | suite `flowgorithm-grade` (24) |
+| `project-feedback` | Give Feedback page (v6: student-facing report; categories from the course error definitions; the submission is nonce-fenced in place) | feedback | `prompts/project_feedback.py` | `FeedbackReport` | suite `project-feedback` (81) |
+| `flowgorithm-grade` | Flowgorithm grading (v3: the file-name alias and the submission are nonce-fenced in place): per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py`) | `FlowgorithmGrade` | suite `flowgorithm-grade` (24) |
 | `structured-fallback` | Retry suffix of `get_structured_completion`, which nothing calls (dead path) | – | `utilities/AI/openai_client.py:_build_fallback_prompt` | – | no |
 
 Each prompt is sent as a single user message (no system prompt) through
@@ -154,6 +154,24 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   (`generate_preprocessing_digest`), so its rendered request changes too and needs the A/B.
   **Rollback:** `git revert`.
 - **v1**: unfenced single message.
+
+## Version history: project-feedback and flowgorithm-grade (submission fence)
+
+- **project-feedback v6, flowgorithm-grade v3** (security hardening, not caching): the student
+  submission (and, for Flowgorithm, the file-name alias) sat unfenced in the middle of the single
+  user message. Each now sits in the same place inside an `untrusted_fence` nonce fence (fresh
+  nonce per call; marker-shaped text and the nonce are stripped from the data). The layout is
+  unchanged (still one user message, same order, same schema, model, parsing). Added: one static
+  line near the top saying text inside the fence is data to evaluate, never instructions, and
+  the per-call nonce line (`untrusted_fence.instruction_line`) directly above the first fence, so
+  everything before that line is identical across students of one assignment. No closing line is
+  added: in both prompts the rest of the instructions already follow the fence and end the
+  message, so the output instructions stay last as before. The registry renderers pass
+  `FIXTURE_NONCE`. Suites `project-feedback` and `flowgorithm-grade` call the production
+  builders, so their rendered requests change and need the A/B. **Rollback:** `git revert`.
+  Token counts are in the PR body; Flowgorithm's fixtures sit near the 1,024-token cache minimum.
+- Relationship to the parked #477: that PR also split system/user and reordered; its A/B showed
+  no cost saving, so only the injection-hardening part is kept here.
 
 ## Guidelines and v4
 

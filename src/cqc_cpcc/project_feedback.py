@@ -521,9 +521,18 @@ class FeedbackGiver:
     def category_name(self, category_id: str) -> str:
         return next((c.name for c in self.categories if c.id == category_id), category_id)
 
-    def build_prompt(self, student_submission: str) -> str:
-        """The exact prompt ``generate_feedback`` sends for this submission."""
+    def build_prompt(self, student_submission: str, nonce: str | None = None) -> str:
+        """The exact prompt ``generate_feedback`` sends for this submission.
+
+        The submission is untrusted, so it sits where it always did but inside a nonce fence
+        (``utilities/AI/untrusted_fence``); the line that carries the per-call nonce is directly
+        above it, after all the static text before it. ``nonce`` is fixed only for prompt
+        fingerprints; real calls leave it unset.
+        """
         from cqc_cpcc.prompts.project_feedback import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
+        from cqc_cpcc.utilities.AI import untrusted_fence
+
+        nonce = nonce or untrusted_fence.new_nonce()
 
         categories = "\n".join(f"- {c.id} | {c.name} | {c.severity} | {c.description}"
                                for c in self.categories) or "N/A"
@@ -531,7 +540,8 @@ class FeedbackGiver:
             course_name=self.course_name,
             assignment=self.assignment_instructions,
             solution=self.assignment_solution,
-            submission=student_submission,
+            submission_fence="\n".join([untrusted_fence.instruction_line(nonce),
+                                        untrusted_fence.fence("Submission", student_submission, nonce)]),
             feedback_categories=categories,
             extra_guidance=self.extra_guidance or "None",
         )
