@@ -748,3 +748,57 @@ def test_a_variance_that_cannot_be_confirmed_is_never_kept():
 
 def test_a_sample_check_that_hits_a_bad_ignore_pattern_does_not_disagree():
     assert tcg._sample_disagrees("a", "b", ["("]) is False
+
+
+def test_a_declined_case_is_never_ticked_again_by_the_suggestion_or_the_solution_runs():
+    solution = _solution()
+    base = TestCase(id="T1", stdin="1\n", source="llm", values_may_differ=True, variance_reason=tcg.REASON_MODEL)
+    frame = ev.cases_frame([base])
+    frame.loc[0, "May differ"] = False
+    [declined] = ev.fold_editor([base], frame)
+    assert declined.values_may_differ is False and declined.variance_declined is True
+    assert tcg.flag_cases([declined], "the solution prints a random value")[0].values_may_differ is False
+    runner = _scripted("Roll: 4\nTotal: 9\n", ["Roll: 5\nTotal: 9\n", "Roll: 6\nTotal: 9\n"])
+    res = tcg.validate_cases_on_solution(solution, [declined], runner=runner, variance_suggested=True)
+    assert res.cases == [] and [d.reason for d in res.dropped] == ["nondeterministic"]
+    # Ticking again clears the decision.
+    frame2 = ev.cases_frame([declined])
+    frame2.loc[0, "May differ"] = True
+    [again] = ev.fold_editor([declined], frame2)
+    assert again.values_may_differ and again.variance_declined is False
+
+
+def test_the_declined_field_is_in_the_hash_only_when_set():
+    plain = ExecutionPlan(language="java", solution_sha256="ab", cases=[TestCase(id="T1", stdin="1\n")])
+    declined = ExecutionPlan(language="java", solution_sha256="ab",
+                             cases=[TestCase(id="T1", stdin="1\n", variance_declined=True)])
+    assert plain.plan_hash != declined.plan_hash
+    assert ExecutionPlan.model_validate({"language": "java", "solution_sha256": "ab",
+                                         "cases": [{"id": "T1", "stdin": "1\n"}]}).plan_hash == plain.plan_hash
+
+
+def test_many_nondeterministic_cases_cost_two_extra_sandbox_jobs_not_two_each():
+    calls = []
+
+    def run(language, files, cases=(), *, mode="run", main=None, repeat=1, owner=None, **kw):
+        calls.append((repeat, len(cases)))
+        stdout = "Roll: 4\n" if repeat == 2 else "Roll: 5\n"
+        return pr.RunOutcome(status="ok", compile=pr.CompileOutcome(ok=True), cases=tuple(
+            _outcome_for(c.id, stdout, nondeterministic=repeat == 2) for c in cases))
+    cases = [TestCase(id=f"T{i}", stdin=f"{i}\n", source="llm", values_may_differ=True) for i in range(1, 7)]
+    res = tcg.validate_cases_on_solution(_solution(), cases, runner=run)
+    assert len(res.cases) == 6 and calls == [(2, 6), (1, 6), (1, 6)]
+
+
+def test_a_crash_keeps_the_marker_counts_and_the_rejection_flag():
+    class Got:
+        status, exit_code, eof_error, stdout_truncated, reason = "OK", 1, False, False, ""
+        stdout = "Roll: 6\nTotal: 10\n"
+        stdin_reads, segmented = (), False
+
+    cmp = eg._judge("Roll: 3\nTotal: 10\n", [], Got, [],
+                    TestCase(id="T1", values_may_differ=True, varying_markers=["Roll:"]))
+    assert cmp.verdict is Verdict.RUNTIME_ERROR and (cmp.excluded_lines, cmp.total_lines) == (1, 2)
+    wide = eg._judge("Roll: 3\nTotal: 10\n", [], Got, [],
+                     TestCase(id="T1", values_may_differ=True, varying_markers=["Roll:", "Total:"]))
+    assert wide.verdict is Verdict.RUNTIME_ERROR and wide.markers_rejected is True

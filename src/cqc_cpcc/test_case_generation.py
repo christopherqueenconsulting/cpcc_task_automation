@@ -623,15 +623,21 @@ def validate_cases_on_solution(
         return result
 
     by_id = {c.id: c for c in outcome.cases}
+    # Cases the flag (or the instructions' suggestion) lets through when the solution differs between runs.
+    # An instructor who unticked the box has declined: such a case is dropped like any nondeterministic one.
+    candidates = [(c, by_id[c.id]) for c in pool
+                  if c.id in by_id and _drop_reason(by_id[c.id]) == "nondeterministic"
+                  and (c.values_may_differ or (variance_suggested and not c.variance_declined))]
+    confirmed = _variance_confined_batch(run, solution, sandbox_files, candidates, owner) if candidates else {}
     kept = []
     for case in pool:
         got = by_id.get(case.id)
         reason = "crash" if got is None else _drop_reason(got)
         proven = False
-        if reason == "nondeterministic" and (case.values_may_differ or variance_suggested):
+        if reason == "nondeterministic" and case.id in confirmed:
             # The solution really prints something different each run. Keep the case only when the
             # difference is confined to what the flag allows (the marker lines, or numbers and dates).
-            confined = _variance_confined(run, solution, sandbox_files, case, got, owner)
+            confined = confirmed[case.id]
             if confined == "ok":
                 reason, proven = None, True
             elif confined == "words":
@@ -673,37 +679,66 @@ def validate_cases_on_solution(
     return result
 
 
-def _variance_confined(run, solution, sandbox_files, case, first, owner) -> str:
-    """Run the solution twice more on this case and compare every pair of the three outputs.
+def _run_ok(got) -> bool:
+    return not (got.status != "OK" or got.exit_code not in (0, None) or got.eof_error or got.stdout_truncated
+                or not got.stdout.strip())
 
-    Returns ``"ok"`` when the outputs differ only where the flag allows (the marker lines, or numbers,
-    dates and times), ``"words"`` when they differ in other words, ``"other"`` when it cannot be confirmed
-    (empty or cut output, a failed run).
+
+def _variance_confined_batch(run, solution, sandbox_files, items, owner) -> dict:
+    """Run the solution twice more on ALL ``items`` ``[(case, first_outcome)]`` at once (two sandbox jobs
+    however many cases there are) and compare every pair of the three outputs of each.
+
+    ``{case id: status}``: ``"ok"`` when the outputs differ only where the flag allows (the marker lines,
+    or numbers, dates and times), ``"words"`` when they differ in other words, ``"other"`` when it cannot be
+    confirmed (empty or cut output, a failed run).
     """
     from cqc_cpcc.utilities import program_runner as pr
     from cqc_cpcc.utilities.output_compare import Verdict, compare_output, mask_varying
 
-    if first.stdout_truncated or not first.stdout.strip():
-        return "other"
-    outputs = [first.stdout]
+    status: dict = {}
+    live = []
+    for case, first in items:
+        if first.stdout_truncated or not first.stdout.strip():
+            status[case.id] = "other"
+        else:
+            live.append((case, first))
+    outputs = {case.id: [first.stdout] for case, first in live}
     for _ in range(2):
+        if not live:
+            break
         try:
-            again = run(solution.language, sandbox_files, [pr.SandboxCase(case.id, case.stdin)], mode="run",
-                        main=solution.main, repeat=1, owner=owner)
-        except Exception:  # noqa: BLE001 - cannot confirm, so the case is dropped
-            return "other"
-        if again.status != "ok" or again.compile is None or not again.compile.ok or not again.cases:
-            return "other"
-        got = again.cases[0]
-        if (got.status != "OK" or got.exit_code not in (0, None) or got.eof_error or got.stdout_truncated
-                or not got.stdout.strip()):
-            return "other"
-        outputs.append(got.stdout)
-    for i, j in ((0, 1), (0, 2), (1, 2)):
-        cmp = compare_output(outputs[i], outputs[j], values_may_differ=True, varying_markers=case.varying_markers)
-        if cmp.verdict not in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER):
-            return "words" if mask_varying(outputs[i]) != mask_varying(outputs[j]) else "other"
-    return "ok"
+            again = run(solution.language, sandbox_files, [pr.SandboxCase(c.id, c.stdin) for c, _f in live],
+                        mode="run", main=solution.main, repeat=1, owner=owner)
+        except Exception:  # noqa: BLE001 - cannot confirm, so the cases are dropped
+            again = None
+        if again is None or again.status != "ok" or again.compile is None or not again.compile.ok:
+            status.update({c.id: "other" for c, _f in live})
+            live = []
+            break
+        by_id = {c.id: c for c in again.cases}
+        still = []
+        for case, first in live:
+            got = by_id.get(case.id)
+            if got is None or not _run_ok(got):
+                status[case.id] = "other"
+                continue
+            outputs[case.id].append(got.stdout)
+            still.append((case, first))
+        live = still
+    for case, _first in live:
+        a, b, c = outputs[case.id]
+        status[case.id] = "ok"
+        for x, y in ((a, b), (a, c), (b, c)):
+            cmp = compare_output(x, y, values_may_differ=True, varying_markers=case.varying_markers)
+            if cmp.verdict not in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER):
+                status[case.id] = "words" if mask_varying(x) != mask_varying(y) else "other"
+                break
+    return status
+
+
+def _variance_confined(run, solution, sandbox_files, case, first, owner) -> str:
+    """One case through :func:`_variance_confined_batch`."""
+    return _variance_confined_batch(run, solution, sandbox_files, [(case, first)], owner)[case.id]
 
 
 _DROP_TEXT = {
@@ -989,5 +1024,5 @@ def flag_cases(cases: Iterable[TestCase], reason: str) -> list:
     cases = list(cases)
     if not reason:
         return cases
-    return [c if c.values_may_differ and c.variance_reason == reason
+    return [c if c.variance_declined or (c.values_may_differ and c.variance_reason == reason)
             else c.model_copy(update={"values_may_differ": True, "variance_reason": reason}) for c in cases]

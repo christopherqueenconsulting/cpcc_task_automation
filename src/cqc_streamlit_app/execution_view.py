@@ -295,7 +295,8 @@ def _status_of(case: TestCase, dropped: dict) -> str:
 
 CASE_COLUMNS = ["Use", "Label", "Kind", "Source", "Input", "May differ", "Varies on", "Status", "Expected", "id"]
 MAY_DIFFER_WHOLE = ("May differ: numbers, dates, times, weekdays and number words are ignored in this case; "
-                    "wording, labels and layout are still compared. If the case prints varying words (a greeting, a "
+                    "wording, labels and layout are still compared. A wrong player or option number or number word "
+                    "(Player one, Option two) is not detected. If the case prints varying words (a greeting, a "
                     "card name, rock, paper or scissors), enter the label of that line in Varies on.")
 
 
@@ -347,7 +348,9 @@ def fold_editor(base: Sequence[TestCase], edited, variance_reason: str = "") -> 
         if vary is not None and bool(vary) != old.values_may_differ:
             # The instructor's toggle wins over the detection and the model.
             update.update(values_may_differ=bool(vary), varying_markers=[] if not vary else old.varying_markers,
-                          variance_reason=MARKED_BY_YOU if vary else "")
+                          variance_reason=MARKED_BY_YOU if vary else "",
+                          # An untick is a decision: no detection or solution run may tick it again.
+                          variance_declined=not vary)
         flagged = update.get("values_may_differ", old.values_may_differ)
         if flagged and row.get("Varies on") is not None:
             text = _text(row.get("Varies on"))

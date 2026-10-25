@@ -1104,3 +1104,17 @@ def test_two_different_solution_runs_prove_it_and_mark_the_case(ready, tmp_path,
     assert any("numbers, dates, times, weekdays and number words are ignored" in c.value for c in at.caption)
     assert not any("whole case is not compared" in c.value for c in at.caption)
     assert any("enter the label of that line in Varies on" in c.value for c in at.caption)
+
+
+def test_an_untick_sticks_when_run_solution_is_pressed_again(ready, tmp_path, monkeypatch):
+    monkeypatch.setattr(pr, "run_program", VaryingSolutionRunner())
+    at = _turn_on(_setup_app(tmp_path, "Write Dice.java. It prints a random number from 1 to 6."))
+    rows = [{"Label": "Roll", "Input": "5"}]
+    _add_rows(at, rows)
+    _press(at, "Run solution on these inputs", _edit(rows))
+    assert at.session_state["plan"].cases[0].values_may_differ  # proven by the solution's runs
+    _press(at, "Run solution on these inputs", _edit(edited={0: {"May differ": False}}))
+    [state] = at.session_state["output_check_state"].values()
+    [case] = state["base"]
+    assert case.values_may_differ is False and case.variance_declined is True
+    assert state["dropped"] == {case.id: "nondeterministic"} and at.session_state["plan"] is None

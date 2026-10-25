@@ -341,7 +341,8 @@ def _judge(expected: str, expected_reads: Sequence[int], got, ignore_patterns: S
                             varying_markers=case.varying_markers if case else ())
     if cmp.verdict in (Verdict.MATCH, Verdict.FORMAT_ONLY, Verdict.VALUES_MAY_DIFFER) and (
             got.status != "OK" or run.crashed or got.stdout_truncated):
-        return oc.CaseComparison(Verdict.RUNTIME_ERROR, got.reason or oc.CRASH, cmp.similarity, cmp.diff_excerpt)
+        return oc.CaseComparison(Verdict.RUNTIME_ERROR, got.reason or oc.CRASH, cmp.similarity, cmp.diff_excerpt,
+                                 cmp.excluded_lines, cmp.total_lines, cmp.markers_rejected)
     return cmp
 
 

@@ -83,6 +83,8 @@ class TestCase(BaseModel):
     varying_markers: list[str] = Field(default_factory=list)
     #: A fixed sentence saying why the flag was set (never student or instruction text).
     variance_reason: str = ""
+    #: The instructor unticked May differ: nothing (suggestion, solution runs) may tick it again.
+    variance_declined: bool = False
 
     @field_validator("varying_markers", mode="before")
     @classmethod
@@ -139,7 +141,8 @@ class ExecutionPlan(BaseModel):
                  "enabled": c.enabled,
                  "disagrees": c.disagrees_with_instructions, "review": c.needs_review,
                  # Only when set, so the hash of every plan without the flag is unchanged.
-                 **({"vary": True, "markers": sorted(c.varying_markers)} if c.values_may_differ else {})}
+                 **({"vary": True, "markers": sorted(c.varying_markers)} if c.values_may_differ else {}),
+                 **({"declined": True} if c.variance_declined else {})}
                 for c in self.cases
             ],
             "conditions": [(c.id, c.text, c.kind) for c in self.conditions],
