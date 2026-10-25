@@ -53,7 +53,7 @@ from cqc_cpcc.utilities import program_runner as pr
 from cqc_cpcc.utilities.AI import model_registry
 from cqc_cpcc.utilities.AI.model_registry import resolve as resolve_model
 from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.output_compare import Verdict
+from cqc_cpcc.utilities.output_compare import Verdict, full_unified_diff
 from cqc_cpcc.utilities.utils import read_file
 
 #: Shown where programs cannot run: Streamlit Community Cloud, or ``CQC_EXECUTION=off``.
@@ -71,8 +71,16 @@ DISAGREES_LABEL = "Differs (AI found no output error)"
 DISAGREES_CAPTION = ("The programs print different output, but the AI review reported no output error. "
                      "Check this student by hand.")
 
-#: Longest code block shown for one input, expected output or difference.
-MAX_SHOWN_CHARS = 4000
+#: A text of more lines than this is not drawn until the person presses "Show all N lines" (a preview of
+#: the first PREVIEW_LINES is drawn meanwhile). Nothing is ever dropped without saying so.
+MAX_AUTO_SHOWN_LINES = 2000
+PREVIEW_LINES = 50
+#: Blocks taller than this many lines scroll inside a box of that height instead of growing the page.
+SCROLL_AFTER_LINES = 18
+SCROLL_HEIGHT_PX = 380
+OLD_RUN_NOTICE = ("This run was saved before full diffs were kept: re-run the output check for the complete diff.")
+OMITTED_NOTICE = ("The full outputs were too large to keep with the saved run, so only the short excerpt is "
+                  "shown. Run the program yourself for the complete output.")
 MAX_IGNORE_LINES = 20
 MAX_EDITED_ROWS = 50
 MAX_IGNORE_CHARS = 80
@@ -597,13 +605,51 @@ def students_without_output_check(results) -> list:
 
 
 def _code(text: Optional[str], empty: str = "(nothing)") -> str:
+    """``text`` cleaned of hidden and direction characters; ``empty`` when blank. Never cut."""
     shown = clean_block(text or "")
-    if len(shown) > MAX_SHOWN_CHARS:
-        shown = shown[:MAX_SHOWN_CHARS] + "\n... (cut)"
     return shown if shown.strip() else empty
 
 
-def render_output_check(report: dict, plan: Optional[ExecutionPlan] = None) -> None:
+def show_text(text: Optional[str], *, scope: str, language: str = "text", empty: str = "(nothing)",
+              line_numbers: bool = False, wrap: bool = True) -> None:
+    """Program text in ``st.code`` only (never Markdown or HTML), in full.
+
+    A long text scrolls inside a fixed-height box. Over ``MAX_AUTO_SHOWN_LINES`` lines it is
+    collapsed behind a **Show all N lines** button, with a preview and the line count said out loud.
+    ``scope`` makes the button's key unique on the page."""
+    shown = _code(text, empty)
+    lines = shown.count("\n") + 1
+    key = "showall_" + hashlib.sha1(f"{scope}|{language}|{len(shown)}".encode()).hexdigest()[:16]
+    if lines > MAX_AUTO_SHOWN_LINES and not st.session_state.get(key):
+        st.caption(f"{lines:,} lines: showing the first {PREVIEW_LINES}.")
+        st.code("\n".join(shown.split("\n")[:PREVIEW_LINES]), language=language, wrap_lines=wrap)
+        st.button(f"Show all {lines:,} lines", key=key, icon=":material/unfold_more:",
+                  on_click=st.session_state.__setitem__, args=(key, True))
+        return
+    st.code(shown, language=language, line_numbers=line_numbers and lines > 1, wrap_lines=wrap,
+            height=SCROLL_HEIGHT_PX if lines > SCROLL_AFTER_LINES else "content")
+
+
+def render_case_diff(r: dict, *, scope: str) -> None:
+    """The differences of one non-matching case: the complete diff built here from the stored outputs,
+    or (runs saved before they were kept) the short excerpt with a notice."""
+    expected, actual = r.get("expected_output") or "", r.get("actual_output") or ""
+    if r.get("output_cut_by_runner"):
+        st.warning("The program's output was cut by the runner at 64 KB, so the diff below stops where "
+                   "the output stopped.", icon=":material/content_cut:")
+    if expected or actual:
+        diff = full_unified_diff(expected, actual)
+        if diff:
+            st.caption(f"Differences (- expected, + this program), complete: {len(diff):,} lines")
+            show_text("\n".join(diff), scope=scope + "|diff", language="diff", line_numbers=True, wrap=False)
+            return
+    if r.get("diff_excerpt"):
+        st.caption("Differences (- expected, + this program), short excerpt")
+        st.caption(OMITTED_NOTICE if r.get("outputs_omitted") else OLD_RUN_NOTICE)
+        show_text(r.get("diff_excerpt"), scope=scope + "|excerpt", language="diff")
+
+
+def render_output_check(report: dict, plan: Optional[ExecutionPlan] = None, scope: str = "") -> None:
     """One student's output check. Program text is shown in ``st.code`` only."""
     st.caption(_STATUS_TEXT.get(report.get("status"), "Output check status unknown."))
     gate = report.get("gate") or {}
@@ -639,9 +685,7 @@ def render_output_check(report: dict, plan: Optional[ExecutionPlan] = None) -> N
                     + f" - {_VERDICT_TEXT.get(r.get('verdict'), 'Unknown')}")
         if case is not None:
             st.caption("Input")
-            st.code(_code(case.stdin, "(no input)"), language="text", wrap_lines=True)
+            show_text(case.stdin, scope=f"{scope}|{r.get('case_id')}|in", empty="(no input)")
             st.caption("Expected output (your solution)")
-            st.code(_code(case.expected_output), language="text", wrap_lines=True)
-        if r.get("diff_excerpt"):
-            st.caption("Differences (- expected, + this program)")
-            st.code(_code(r.get("diff_excerpt")), language="diff", wrap_lines=True)
+            show_text(case.expected_output, scope=f"{scope}|{r.get('case_id')}|exp")
+        render_case_diff(r, scope=f"{scope}|{r.get('case_id')}")

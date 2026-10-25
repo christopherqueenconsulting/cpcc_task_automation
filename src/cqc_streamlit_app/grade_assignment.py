@@ -3617,7 +3617,7 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
         with tab_of["Output"]:
             plan = (st.session_state.get("grading_inputs_by_key", {}).get(run_key, {})
                     .get("kwargs", {}).get("execution_plan"))
-            execution_view.render_output_check(result.execution_report, plan)
+            execution_view.render_output_check(result.execution_report, plan, scope=f"{run_key}|{student_name}")
     with tab_of["Code"]:
         from cqc_streamlit_app.code_viewer import render_submission_code
         render_submission_code(source_files, widget_key=student_name)

@@ -202,10 +202,11 @@ work, and the grade itself.
    incident process applies.
 7. Since PR 14 a saved result holds student program output: `execution_report.cases[].diff_excerpt`
    (up to 20 lines or 1,500 characters per case) and the notes of gate-added errors (the case input and
-   one expected and one actual line). Find the runs that have any:
+   one expected and one actual line), and since the full-diff change also `expected_output` and
+   `actual_output` (the whole compared texts of non-matching cases). Find the runs that have any:
    ```bash
    grep -rIl '"execution_report"' ~/.cqc_cpcc/grading_results
-   grep -rIlE '"diff_excerpt": "[^"]' ~/.cqc_cpcc/grading_results     # runs that stored program output
+   grep -rIlE '"(diff_excerpt|actual_output)": "[^"]' ~/.cqc_cpcc/grading_results     # runs that stored program output
    ```
    Purge by deleting those run files (`<run_key>.json`; the results can be re-created by re-grading), or
    delete the whole folder. Results are session-only on Streamlit Community Cloud, so nothing is on disk
@@ -597,3 +598,26 @@ Strings below are copied from the code. Use synthetic programs only.
     offered until the sandbox is ready." (or, where results are not saved, "...kept for this session only
     here."). The `code_runner` URL shows only that notice and reads no results.
 14. **Rollback.** `CQC_EXECUTION=off` and reload: step 1 again, and grading is as before the output check.
+## Output tab: the complete diff
+
+The prompt still gets the capped `diff_excerpt` (20 lines or 1,500 characters), byte for byte as before.
+The Output tab and the Solution tab show the whole diff instead. Each non-matching case also stores the
+two compared texts (`CaseResult.expected_output` and `actual_output`: ignored lines dropped, trailing
+blanks trimmed), and the page builds the whole unified diff from them (`output_compare.full_unified_diff`,
+no line or character cap). It is drawn with `st.code` in a fixed-height scrolling box with line numbers.
+A diff over 2,000 lines is collapsed behind **Show all N lines** with a 50-line preview and the count
+said out loud; nothing is cut silently. Input and expected output are shown the same way (no more
+`... (cut)`).
+
+- Bounds: the runner stops a program's stdout at 64 KB and sets `output_cut_by_runner`, which the page
+  shows as a warning. Each stored text is at most 64 KB and one student's report at most 512,000
+  characters; over either, the texts are left out, `outputs_omitted` is set and the page shows the short
+  excerpt with a notice.
+- Runs saved before this change have only the excerpt. The page shows it with "This run was saved before
+  full diffs were kept: re-run the output check for the complete diff." The new fields default to empty,
+  so old results files load unchanged.
+- The stored texts stay local to the results file: not in telemetry, logs, the prompt, the feedback
+  `.docx`, write-back, the result-card exports or the hand-back ZIP (tests in
+  `tests/unit/test_output_full_diff.py`).
+- Rollback: revert the PR. Saved results keep the extra keys, which older code ignores. Purge as in
+  step 7 of the incident path.
