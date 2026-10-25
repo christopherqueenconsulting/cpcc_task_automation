@@ -245,6 +245,7 @@ async def run_model(
                 batch.bind_case(case)
                 batch.set_item_estimate(model_registry.estimate_cost(
                     resolved, estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0)
+                batch.set_sync_timeout(batch.normal_timeout(resolved.role, resolved.reasoning_effort))
             try:
                 result, gate = await _grade_once(case, perturb(case, seed), grade_fn)
                 record.ok = True
