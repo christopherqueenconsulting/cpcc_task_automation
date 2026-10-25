@@ -26,6 +26,7 @@ name, an id or a score.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import threading
 import time
@@ -174,6 +175,16 @@ def model_effort_label(model: str, effort: Optional[str]) -> str:
     return f"{model}@{effort}" if effort else model
 
 
+def warm_first_enabled() -> bool:
+    """``CQC_GRADING_WARM_FIRST`` on/1/true/yes: grade the first student alone, then the rest.
+
+    The first call writes the shared prompt prefix (assignment, rubric, solution) into the
+    provider's prompt cache; the others then read it instead of racing to write it. Off by
+    default: it adds one call's latency before the fan-out starts.
+    """
+    return os.environ.get("CQC_GRADING_WARM_FIRST", "").strip().lower() in ("1", "true", "on", "yes")
+
+
 def default_deadline(kwargs: dict) -> float:
     """One student's whole grading limit for these grading settings (both models, at the effort each runs at)."""
     auto = kwargs.get("model_name") == AUTO_ROUTE_MODEL
@@ -196,7 +207,8 @@ class GradingJob:
                  grade: Optional[GradeFn] = None,
                  deadline_s: Optional[float] = None, concurrency: Optional[int] = None,
                  base_results: Optional[list] = None, base_failures: Optional[list] = None,
-                 greeting_names: Optional[dict] = None, meta: Optional[dict] = None):
+                 greeting_names: Optional[dict] = None, meta: Optional[dict] = None,
+                 warm_first: Optional[bool] = None, warm_timeout_s: Optional[float] = None):
         self.run_key = run_key
         self.submissions = dict(submissions)
         self.kwargs = dict(grade_kwargs)
@@ -210,6 +222,10 @@ class GradingJob:
         self._grade = grade
         self._deadline_s = deadline_s if deadline_s is not None else default_deadline(self.kwargs)
         self._concurrency = concurrency or llm_limits.grading_concurrency()
+        self._warm_first = warm_first_enabled() if warm_first is None else warm_first
+        # Safety valve: a first student that never answers must not hold the rest forever.
+        self._warm_timeout_s = warm_timeout_s if warm_timeout_s is not None else self._deadline_s
+        self._warm_done: Optional[asyncio.Event] = None  # set when the first student has finished
         self._base_results = list(base_results or [])
         self._base_failures = list(base_failures or [])
         self._greeting_names = greeting_names
@@ -333,6 +349,7 @@ class GradingJob:
     @telemetry.tracked_run("rubric_grading")
     async def _main(self, loop: asyncio.AbstractEventLoop) -> None:
         semaphore = asyncio.Semaphore(self._concurrency)
+        self._warm_done = asyncio.Event() if self._warm_first and len(self.submissions) > 1 else None
         with self._lock:
             self._loop = loop
             for sid in self.submissions:
@@ -384,7 +401,14 @@ class GradingJob:
                 p.model, p.state, p.attempt_started = event.model, SCORING, None
 
     async def _grade_one(self, sid: str, semaphore: asyncio.Semaphore) -> None:
+        warm = self._warm_done
+        is_first = warm is not None and sid == next(iter(self.submissions))
         try:
+            if warm is not None and not is_first:
+                try:  # warm-first: the first student's call has finished (any outcome) ...
+                    await asyncio.wait_for(warm.wait(), self._warm_timeout_s)
+                except TimeoutError:  # ... or it has not answered within the deadline: go on without it
+                    logger.warning("Warm-first: the first student gave no result in time; grading the rest")
             async with semaphore:
                 await self._grade_student(sid)
         except asyncio.CancelledError:
@@ -396,6 +420,9 @@ class GradingJob:
         except Exception as e:  # noqa: BLE001 - one student's failure must not stop the others
             logger.error(f"Error grading student {alias(sid)}: {type(e).__name__}", exc_info=True)
             self._finish(sid, FAILED, _plain_issue(e))
+        finally:
+            if is_first:
+                warm.set()
 
     async def _grade_student(self, sid: str) -> None:
         from cqc_cpcc.utilities.zip_grading_utils import build_submission_text_with_token_limit

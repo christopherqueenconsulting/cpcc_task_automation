@@ -539,3 +539,83 @@ def test_a_cleared_run_is_not_brought_back_by_a_later_save(tmp_path, monkeypatch
     gate.set()
     assert job.wait(10)
     assert results_store.load_run(RUN_KEY) is None
+
+
+# --- warm-first (CQC_GRADING_WARM_FIRST): the first student alone, then the rest ------------------
+
+def _ordered_job(tmp_path, names, first_fails=False, **extra):
+    """A job whose first student waits on a gate; ``log`` records the order of starts and ends."""
+    gate = threading.Event()
+    log = []
+
+    async def behave(text, **kwargs):
+        text = next(n for n in names if n in text)  # the submission text carries the student's name
+        log.append(("start", text))
+        if text == names[0]:
+            await asyncio.get_running_loop().run_in_executor(None, gate.wait, 30)
+            if first_fails:
+                raise RuntimeError("model said no")
+        log.append(("end", text))
+        return _result()
+
+    return _job(tmp_path, names, behave, **extra), gate, log
+
+
+def test_warm_first_holds_the_rest_until_the_first_student_finishes(tmp_path):
+    names = ["Student A", "Student B", "Student C", "Student D"]
+    job, gate, log = _ordered_job(tmp_path, names, warm_first=True)
+    job.start()
+    assert _wait_for(lambda: ("start", "Student A") in log)
+    time.sleep(0.2)  # the others would have started by now if they were not held
+    assert log == [("start", "Student A")]
+    gate.set()
+    assert job.wait(10)
+    assert log.index(("end", "Student A")) < min(log.index(("start", n)) for n in names[1:])
+    assert job.snapshot().counts[grading_job.DONE] == 4
+
+
+def test_warm_first_releases_the_rest_when_the_first_student_fails(tmp_path):
+    names = ["Student A", "Student B", "Student C"]
+    job, gate, log = _ordered_job(tmp_path, names, first_fails=True, warm_first=True)
+    job.start()
+    assert _wait_for(lambda: ("start", "Student A") in log)
+    gate.set()
+    assert job.wait(10)
+    counts = job.snapshot().counts
+    assert counts[grading_job.FAILED] == 1 and counts[grading_job.DONE] == 2
+
+
+def test_by_default_every_student_starts_without_waiting_for_the_first(tmp_path, monkeypatch):
+    monkeypatch.delenv("CQC_GRADING_WARM_FIRST", raising=False)
+    names = ["Student A", "Student B", "Student C"]
+    job, gate, log = _ordered_job(tmp_path, names)
+    job.start()
+    assert _wait_for(lambda: {("start", n) for n in names} <= set(log))  # all started, A still gated
+    assert ("end", "Student A") not in log
+    gate.set()
+    assert job.wait(10)
+
+
+def test_the_warm_first_flag_reads_the_environment(monkeypatch):
+    for value, expected in (("on", True), ("1", True), ("true", True), ("", False), ("off", False)):
+        monkeypatch.setenv("CQC_GRADING_WARM_FIRST", value)
+        assert grading_job.warm_first_enabled() is expected
+
+
+def test_warm_first_goes_on_after_the_timeout_when_the_first_student_never_answers(tmp_path):
+    names = ["Student A", "Student B", "Student C"]
+    job, gate, log = _ordered_job(tmp_path, names, warm_first=True, warm_timeout_s=0.3)
+    job.start()
+    assert _wait_for(lambda: {("end", "Student B"), ("end", "Student C")} <= set(log))  # A is still gated
+    assert ("end", "Student A") not in log
+    gate.set()
+    assert job.wait(10)
+    assert job.snapshot().counts[grading_job.DONE] == 3
+
+
+def test_a_single_student_job_is_not_held_by_warm_first(tmp_path):
+    job, gate, log = _ordered_job(tmp_path, ["Student A"], warm_first=True)
+    job.start()
+    assert _wait_for(lambda: ("start", "Student A") in log)
+    gate.set()
+    assert job.wait(10)

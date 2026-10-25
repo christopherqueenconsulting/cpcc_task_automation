@@ -537,6 +537,8 @@ async def _get_openrouter_completion_impl(
                 # OpenRouter's stable per-run id: lets the provider route the run's calls to
                 # the same prompt cache.
                 extra_body["user"] = session_id
+                # OpenRouter's documented sticky-routing key (max 256 characters).
+                extra_body["session_id"] = session_id[:256]
             if extra_body:
                 api_kwargs["extra_body"] = extra_body
 

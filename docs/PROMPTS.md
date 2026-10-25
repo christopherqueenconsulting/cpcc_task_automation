@@ -139,6 +139,50 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
 - **A version bump re-grades**, as above. **Rollback:** `git revert`; the version in the run
   key goes back.
 
+## Guidelines and v4
+
+The system and user messages follow `docs/PROMPT_GUIDELINES.md` (a sourced digest; items it
+marks unverified are not used). `rubric-grading` v4 applies it (`exam-grading` stays at v3: the exam v4 rewrite was reverted, no measurable gain across two A/B runs): no
+step-by-step procedure, no emphatic CRITICAL/MUST wording, each rule stated once, the
+contradictions removed. The system message and the static user prefix stay byte-identical
+for one assignment; the nonce appears only in the submission part at the end.
+
+### Prompt cache (v4)
+
+Layout: the system message, then the assignment instructions, solution, rubric, error
+definitions and requirements are the same for every student of an assignment; the nonce, the
+fence and the submission come last (`tests/unit/test_prompt_cache.py` asserts the shared
+prefix is byte-identical). Two optional levers, both off by default (the maintainer decides);
+accepted on values are `1`, `true`, `on`, `yes`:
+
+- `CQC_PROMPT_CACHE_KEY`: the rubric grading calls send OpenRouter's `session_id`, `cqc-` plus a hash
+  of the static prefix, model and effort; never student data (`prompt_cache.py`). The flag is
+  read on every call. To turn it off, unset it or set any other value; the next call sends no
+  id. Do not set `provider.order`: it disables sticky routing. Instructors with identical
+  material share an id (routing only).
+- `CQC_GRADING_WARM_FIRST`: the background grading job grades the first student alone, then
+  the rest, so the rest read the prefix the first call wrote; if the first gives no result
+  within the job's deadline the rest start anyway. It adds one call of latency. The flag is
+  read when a job starts: to turn it off, unset it or set any other value; a grade already
+  running keeps the setting it started with.
+
+The eval side (cached-token telemetry, the eval `session_id`, warm-first in the runner) is #463; see
+[Prompt caching in evals](#prompt-caching-in-evals-session_id-and-warm-first). Inside an eval run exactly one
+`session_id` is sent: the eval wrapper uses `setdefault`, so an id already in the request (this flag on) is kept
+and the eval's is not added; leave `CQC_PROMPT_CACHE_KEY` unset in eval runs so each side keeps its own id. The
+request-capture hash ignores `session_id` whatever its source.
+
+### Quality numbers after an A/B
+
+`scripts/ab_quality_report.py` (stdlib and repo code, no network) reads the head and base
+`raw_outputs.jsonl` of a suite from the downloaded A/B artifact and prints the signed per-item score
+delta in percent of max points (mean, SD, the +/-1.5 and +/-2.5 bounds of the proposed pass rule), the
+manual-null and criterion_id mismatch counts, and per-criterion level changes. It reports; it gates
+nothing. The grading payload stores only the backend total, so the counts print "not recorded" until a
+payload carries a `criteria` list (see the script's docstring). Run:
+`python scripts/ab_quality_report.py --suite grading --head <artifact>/head/grading/raw_outputs.jsonl --base <artifact>/base/grading/raw_outputs.jsonl`.
+Tested on a synthetic artifact only.
+
 ## Adding a prompt
 
 `test_every_llm_call_site_is_registered` scans `src/` for `llm_gateway.structured(`,
@@ -657,7 +701,7 @@ never changes an output, so no gate, grader, score or threshold reads any of thi
   `model-eval`), model, effort and run (`CQC_EVAL_RUN_ID`, else `GITHUB_RUN_ID`, else `local`); 41 characters,
   no case id, name or student text. Whatever its source, a session id is reduced to `[A-Za-z0-9_-]` and 256
   characters before it is sent. It goes in through a thin wrapper around the OpenRouter client that the eval
-  runners install for the length of a run, so the app's own requests are byte-identical (no `session_id`).
+  runners install for the length of a run, so the app's own requests are byte-identical (no `session_id`, unless the app-side `CQC_PROMPT_CACHE_KEY` is on, in which case that id is kept).
   `provider.order` is never set (it would turn sticky routing off); model, schema and reasoning effort are
   constant within a session.
 - **Environment variables** (read when a run starts, so they do not change a run already in flight; an
