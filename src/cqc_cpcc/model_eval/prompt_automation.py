@@ -1324,7 +1324,11 @@ def record(scorecards_dir: Path, history_path: Path, status_path: Path, sha: str
     unreliable = sorted({r["suite"] for r in rows if r.get("unreliable")})
     for suite_id in unreliable:
         if master_dir is not None:
-            (Path(master_dir) / suite_id / "raw_outputs.jsonl").unlink(missing_ok=True)
+            target = baseline_guard.suite_dir_under(Path(master_dir), suite_id, SUITE_MODULES)
+            if target is None:
+                print(f"note: not withdrawing outputs for {suite_id!r}: not a known suite under {master_dir}")
+                continue
+            (target / "raw_outputs.jsonl").unlink(missing_ok=True)
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with history_path.open("a", encoding="utf-8") as fh:
         for row in rows:

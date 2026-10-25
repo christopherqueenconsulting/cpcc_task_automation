@@ -783,7 +783,8 @@ keeps that from happening. It reads only fields old rows already carry.
 
 - **Unreliable** means more than 20% of the suite's attempted calls failed (exactly 20% is still fine; calls
   skipped for the local budget do not count), or any call hit the account limit (`error_kind`
-  `account_limit`, or HTTP 402 / a 403 naming a budget, key or credit limit in `error_detail`). An old
+  `account_limit`, or HTTP 402 / a 403 whose stored message contains one of: budget, limit, credit, quota,
+  spend, insufficient, payment required; the list is `_LIMIT_WORDS` in `baseline_guard.py`). An old
   history row without those fields is judged by the `ok_rate` its gate text recorded, or by every grader
   being 0. The share is `MAX_FAILED_SHARE`; `CQC_BASELINE_MAX_FAILED_SHARE` (a number from 0 up to, not
   including, 1) overrides it and a bad value is an error.
@@ -799,7 +800,8 @@ keeps that from happening. It reads only fields old rows already carry.
 - **The state writer does not advance on it.** `prompt-record` still appends the attempt, marked
   `"unreliable": <reason>` (plus `ok_rate` and `errors`), but the status page keeps the previous good row. With
   `--master-dir <saved master outputs>` it also deletes that suite's `raw_outputs.jsonl` so the failed run
-  cannot become the next baseline.
+  cannot become the next baseline. The suite name must be a known suite and its resolved path must stay inside
+  `--master-dir`; anything else is skipped with a note.
 - **How a poisoned baseline is superseded.** The next master run of that suite that passes the check writes a
   reliable row and reliable outputs, and both replace the stale ones. Until then the suite has no baseline.
 

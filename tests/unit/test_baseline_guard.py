@@ -2,8 +2,8 @@
 """A saved suite result whose calls mostly failed is never used as a baseline (all fixtures synthetic)."""
 
 import asyncio
-import dataclasses
 import json
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -243,3 +243,68 @@ class TestStatusAndStateWriter:
         solution = next(line for line in text.splitlines() if "`grading-solution`" in line)
         assert "stale (failed calls)" in solution
         assert pa.needs_work(old) == {}
+
+
+class TestHardening:
+    def test_one_of_four_failed_is_flagged(self):
+        assert bg.saved_output_is_unreliable(records(4, 1)) is not None  # 25%: tiny suites are strict
+
+    def test_non_numeric_ok_rate_is_unreliable_not_a_crash(self, tmp_path):
+        for bad in ("high", [1], {"x": 1}, float("nan"), True):
+            assert bg.saved_output_is_unreliable({"ok_rate": bad, "composite": 0.9}) == "ok_rate unreadable"
+        result = pa.record(card(tmp_path, ok_rate="n/a"), tmp_path / "h.jsonl", tmp_path / "S.md", "a", "u")
+        assert "grading" in result["unreliable"]
+
+    def test_all_graders_zero_heuristic_needs_ok_rate_absent(self):
+        legit = {"ok_rate": 1.0, "composite": 0.0, "graders": {"f1": 0.0, "g": 0.0}}
+        assert bg.saved_output_is_unreliable(legit) is None
+        assert bg.saved_output_is_unreliable({"composite": 0.0, "graders": {"f1": 0.0}}) is not None
+
+    def test_programmatic_threshold_is_validated(self):
+        assert bg.saved_output_is_unreliable(records(10, 5), threshold=Fraction(1, 2)) is None
+        assert bg.saved_output_is_unreliable(records(10, 5), threshold="0.4") is not None
+        for bad in (1, "1", -0.1, "abc", 2):
+            with pytest.raises(bg.BaselineGuardError):
+                bg.saved_output_is_unreliable(records(4, 1), threshold=bad)
+
+    def test_master_dir_deletion_is_confined(self, tmp_path):
+        master = tmp_path / "master"
+        for sid in ("grading", "digest"):
+            (master / sid).mkdir(parents=True)
+            (master / sid / "raw_outputs.jsonl").write_text("{}\n")
+        outside = tmp_path / "x"
+        outside.mkdir()
+        (outside / "raw_outputs.jsonl").write_text("keep\n")
+        bad = card(tmp_path, composite=0.0, ok_rate=0.0, errors={"transport": 9})
+        # a reliable suite's file survives; the unreliable known suite's is withdrawn
+        pa.record(bad, tmp_path / "h.jsonl", tmp_path / "S.md", "a", "u", master_dir=master)
+        assert not (master / "grading" / "raw_outputs.jsonl").exists()
+        assert (master / "digest" / "raw_outputs.jsonl").exists()
+        # '../x' and unknown suite ids touch nothing
+        for sid in ("../x", "nope", "digest/../../x"):
+            scdir = tmp_path / "evil" / "evil"
+            scdir.mkdir(parents=True, exist_ok=True)
+            (scdir / "scorecard.json").write_text(json.dumps({
+                "suite": sid, "prompt_id": "rubric-grading", "status": "complete",
+                "models": {"m": {"ok_rate": 0.0, "errors": {}, "composite": 0, "graders": {}, "judges": {}}}}))
+            pa.record(tmp_path / "evil", tmp_path / "h2.jsonl", tmp_path / "S2.md", "a", "u", master_dir=master)
+        assert (outside / "raw_outputs.jsonl").read_text() == "keep\n"
+        assert (master / "digest" / "raw_outputs.jsonl").exists()
+
+    def test_reliable_run_keeps_its_raw_file(self, tmp_path):
+        master = tmp_path / "master" / "grading"
+        master.mkdir(parents=True)
+        (master / "raw_outputs.jsonl").write_text("{}\n")
+        pa.record(card(tmp_path, ok_rate=1.0), tmp_path / "h.jsonl", tmp_path / "S.md", "a", "u",
+                  master_dir=tmp_path / "master")
+        assert (master / "raw_outputs.jsonl").exists()
+
+    def test_unknown_suite_is_ignored_with_a_note(self, tmp_path, capsys):
+        (tmp_path / "master").mkdir()
+        d = tmp_path / "cards" / "nope"
+        d.mkdir(parents=True)
+        (d / "scorecard.json").write_text(json.dumps({
+            "suite": "nope", "prompt_id": "rubric-grading", "status": "complete",
+            "models": {"m": {"ok_rate": 0.0, "composite": 0, "graders": {}, "judges": {}}}}))
+        pa.record(tmp_path / "cards", tmp_path / "h.jsonl", tmp_path / "S.md", "a", "u", master_dir=tmp_path / "master")
+        assert "not a known suite" in capsys.readouterr().out

@@ -13,6 +13,7 @@ row), so old rows load unchanged.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from fractions import Fraction
@@ -34,18 +35,23 @@ class BaselineGuardError(ValueError):
     """A bad override of the failed-share threshold (never silently ignored)."""
 
 
+def validate_share(value: Any, name: str = "max_failed_share") -> Fraction:
+    """``value`` as an exact fraction, or :class:`BaselineGuardError` unless it is at least 0 and below 1."""
+    try:
+        share = Fraction(str(value).strip()) if not isinstance(value, Fraction) else value
+    except (ValueError, ZeroDivisionError):
+        raise BaselineGuardError(f"{name}={value!r} is not a number") from None
+    if not 0 <= share < 1:
+        raise BaselineGuardError(f"{name}={value!r} must be at least 0 and below 1")
+    return share
+
+
 def max_failed_share() -> Fraction:
     """The threshold: ``CQC_BASELINE_MAX_FAILED_SHARE`` (a number from 0 up to, not including, 1) or 20%."""
     raw = os.environ.get(ENV_MAX_FAILED_SHARE)
     if raw is None or not raw.strip():
         return MAX_FAILED_SHARE
-    try:
-        value = Fraction(raw.strip())
-    except (ValueError, ZeroDivisionError):
-        raise BaselineGuardError(f"{ENV_MAX_FAILED_SHARE}={raw!r} is not a number") from None
-    if not 0 <= value < 1:
-        raise BaselineGuardError(f"{ENV_MAX_FAILED_SHARE}={raw!r} must be at least 0 and below 1")
-    return value
+    return validate_share(raw, ENV_MAX_FAILED_SHARE)
 
 
 def _get(obj: Any, name: str, default: Any = None) -> Any:
@@ -102,16 +108,23 @@ def _from_summary(row: dict, threshold: Fraction) -> Optional[str]:
     if isinstance(errors, dict) and errors.get(ACCOUNT_LIMIT_KIND):
         return "a call hit the account or budget limit"
     ok_rate = row.get("ok_rate")
-    if ok_rate is None:  # an old history row: the gate text still carries the rate it failed on
+    from_gate_text = ok_rate is None
+    if from_gate_text:  # an old history row: the gate text still carries the rate it failed on
         for text in (row.get("health") or {}).get("failures") or []:
             m = _OK_RATE_FAILURE.search(str(text))
             if m:
-                ok_rate = float(m.group(1))
+                ok_rate = m.group(1)
                 break
     if ok_rate is not None:
-        share = Fraction(str(round(1 - float(ok_rate), 6)))
+        try:
+            rate = float(ok_rate)
+            if isinstance(ok_rate, bool) or not math.isfinite(rate):
+                raise ValueError(ok_rate)
+            share = Fraction(str(round(1 - rate, 6)))
+        except (ValueError, TypeError):
+            return "ok_rate unreadable"  # unknown reliability is treated as unreliable
         if share > threshold:
-            return f"{share:.0%} of calls failed (ok rate {float(ok_rate):.3f})"
+            return f"{share:.0%} of calls failed (ok rate {rate:.3f})"
         return None
     graders = row.get("graders") or {}
     values = [v for v in graders.values() if isinstance(v, (int, float))]
@@ -128,7 +141,7 @@ def saved_output_is_unreliable(saved: Any, threshold: Optional[Fraction] = None)
     more than the threshold (20%) of the attempted calls failed, or any call hit the account/budget
     limit (``error_kind`` ``account_limit``, or HTTP 402 / a 403 naming a limit in ``error_detail``).
     """
-    threshold = max_failed_share() if threshold is None else threshold
+    threshold = max_failed_share() if threshold is None else validate_share(threshold)
     if isinstance(saved, (list, tuple)):
         return _from_records(list(saved), threshold)
     if isinstance(saved, dict):
@@ -154,6 +167,16 @@ def raw_outputs_unreliable(path: Path, threshold: Optional[Fraction] = None) -> 
             except ValueError:
                 return "an unreadable record"
     return saved_output_is_unreliable(records, threshold)
+
+
+def suite_dir_under(master_dir: Path, suite_id: str, known: Any) -> Optional[Path]:
+    """``master_dir/suite_id`` when ``suite_id`` is a known suite and the resolved path stays inside
+    ``master_dir``; else ``None`` (a name such as ``../x`` or an unknown suite is never touched)."""
+    if suite_id not in known:
+        return None
+    root = Path(master_dir).resolve()
+    target = (root / suite_id).resolve()
+    return target if target.parent == root else None
 
 
 def pick_baseline(suite_id: str, raw_dirs: list) -> tuple:
