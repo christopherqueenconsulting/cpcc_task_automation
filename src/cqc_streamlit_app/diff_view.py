@@ -25,7 +25,7 @@ import difflib
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Optional, Sequence, Union
 
 import streamlit as st
@@ -51,17 +51,27 @@ MAX_CACHED_ROW_SETS = 20
 MIN_INTRALINE_SIMILARITY = 0.3
 
 #: Two lines are paired as "changed" (side by side) when their keys are at least this alike (0 to 1).
+#: 0.6 is difflib's own ``get_close_matches`` default cutoff. On the arcade fixture a reworded menu line
+#: scores 0.88 ("b. purchase more tokens" / "b. purchase tokens") while two different menu lines score
+#: under 0.4, so 0.6 sits in the gap with margin; lower cutoffs start pairing unrelated short labels.
 PAIR_MIN_RATIO = 0.6
 #: How many following unmatched lines of the other side a line is compared with when looking for its pair.
+#: Output that is reworded line by line stays within a few lines of its place; 12 covers a short inserted or
+#: dropped block and caps the work at 12 comparisons per line. Further away it is shown as removed + added.
 PAIR_WINDOW = 12
-#: Keys are compared on at most this many characters when pairing (longer lines pair on their start).
+#: Keys are compared on at most this many characters when pairing (longer lines pair on their start): the
+#: cost of one comparison grows with the product of the lengths, and 120 characters holds a normal
+#: prompt or result line whole while capping one comparison at 14,400 steps.
 PAIR_KEY_CHARS = 120
-#: Total pairing work per pair of texts: the sum of ``len(key_a) * len(key_b)`` over the full comparisons
-#: made. Past it, lines are paired on the cheap upper-bound test only, so alignment stays bounded.
+#: Total pairing work per pair of texts, in steps: each attempt is charged ``len(a) * len(b) + len(a) +
+#: len(b) + 1`` (the comparison, the matcher set-up and the cheap bounds). Once spent, pairing is
+#: approximate: two lines are paired on their first character and length alone (never a crash, and
+#: never slower), so a very large block of changed lines may show as removed + added.
 MAX_PAIR_WORK = 3_000_000
 #: Above this many line pairs the line alignment turns difflib's popular-line heuristic (``autojunk``)
-#: on, which is fast and a little less exact; below it the alignment is exact.
-MAX_EXACT_ALIGN_CELLS = 4_000_000
+#: on, which is fast and a little less exact (a line that makes up over 1% of 200+ lines no longer
+#: anchors); below it the alignment is exact.
+MAX_EXACT_ALIGN_CELLS = 250_000
 
 PANE_HEIGHT_PX = 420
 #: A row is 1.6em of a 0.8rem font = 20.48px at the default size; the pane is sized in rem so it grows
@@ -82,15 +92,20 @@ COMPUTE_SIDE_NOTICE = ("This pair of outputs is large, so the side-by-side view 
                        "The unified diff is below.")
 
 KIND_EQUAL, KIND_CHANGED, KIND_REMOVED, KIND_ADDED = "eq", "chg", "del", "ins"
-CLASS_BLANK = "blank"
+CLASS_BLANK, CLASS_MOVED = "blank", "moved"
 
-#: Visible tag and spoken name of each class of difference. The summary and screen readers use the spoken name.
-CLASS_TAG = {oc.LINE_WHITESPACE: "spacing", oc.LINE_CASE: "case", oc.LINE_PUNCTUATION: "punctuation",
-             oc.LINE_NUMBER_FORMAT: "number format", oc.LINE_VALUE: "value", oc.LINE_WORDING: "wording",
-             CLASS_BLANK: "blank line"}
-CLASS_SPOKEN = {oc.LINE_WHITESPACE: "whitespace only", oc.LINE_CASE: "case only",
-                oc.LINE_PUNCTUATION: "punctuation only", oc.LINE_NUMBER_FORMAT: "number format only",
-                oc.LINE_VALUE: "value only", oc.LINE_WORDING: "wording", CLASS_BLANK: "blank line"}
+#: Visible tag and spoken name of each class of difference. One name per class, here and nowhere else.
+CLASS_TAG = {oc.LINE_SPACING: "spacing", oc.LINE_CASE: "case", oc.LINE_PUNCTUATION: "punctuation",
+             oc.LINE_NUMBER_FORMAT: "number format", oc.LINE_DECIMAL_PLACES: "decimal places",
+             oc.LINE_VALUE: "value", oc.LINE_WORDING: "wording", CLASS_BLANK: "blank line",
+             CLASS_MOVED: "moved line"}
+CLASS_SPOKEN = {oc.LINE_SPACING: "spacing only", oc.LINE_CASE: "case only", oc.LINE_PUNCTUATION: "punctuation only",
+                oc.LINE_NUMBER_FORMAT: "number format only", oc.LINE_DECIMAL_PLACES: "decimal places only",
+                oc.LINE_VALUE: "value only", oc.LINE_WORDING: "wording", CLASS_BLANK: "blank line",
+                CLASS_MOVED: "moved line"}
+#: Changed-row classes whose lines differ in more than layout, most serious first (the summary's order).
+CONTENT_CLASSES = (oc.LINE_VALUE, oc.LINE_WORDING, oc.LINE_DECIMAL_PLACES, oc.LINE_NUMBER_FORMAT,
+                   oc.LINE_PUNCTUATION, oc.LINE_CASE)
 
 #: Text that may be drawn: either one string, or ``[[piece, highlighted(0/1)], ...]`` for a changed line.
 Segments = Union[str, list]
@@ -105,7 +120,9 @@ class AlignedRow:
     expected: Optional[Segments]
     actual_no: Optional[int]
     actual: Optional[Segments]
-    #: Changed rows: one of ``output_compare.LINE_CLASSES``. A removed or added blank line: ``CLASS_BLANK``.
+    #: Changed rows: one of ``output_compare.LINE_CLASSES``. A removed or added line: ``CLASS_BLANK`` for a
+    #: blank one, ``CLASS_MOVED`` for one that is also added/removed elsewhere (same once spacing and case
+    #: are ignored).
     cls: str = ""
 
 
@@ -169,13 +186,14 @@ class _Pairer:
 
     def ratio(self, ka: str, kb: str) -> float:
         a, b = ka[:PAIR_KEY_CHARS], kb[:PAIR_KEY_CHARS]
+        cost = len(a) * len(b) + len(a) + len(b) + 1
+        if cost > self.work:
+            # Budget spent: approximate. Same first character and a similar length is a pair.
+            return 1.0 - abs(len(a) - len(b)) / max(len(a), len(b), 1) if a[:1] == b[:1] and (a or b) else 0.0
+        self.work -= cost
         sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
         if sm.real_quick_ratio() < PAIR_MIN_RATIO or sm.quick_ratio() < PAIR_MIN_RATIO:
             return 0.0
-        cost = len(a) * len(b)
-        if cost > self.work:
-            return sm.quick_ratio()  # budget spent: the cheap upper bound decides
-        self.work -= cost
         return sm.ratio()
 
     def pair(self, ka: Sequence[str], kb: Sequence[str]) -> list:
@@ -215,8 +233,8 @@ def align_rows(expected: str, actual: str) -> list[AlignedRow]:
     ``chg`` with a class (:func:`output_compare.classify_line_pair`, the verdict's own rules). Hidden and
     direction characters are turned into spaces in what is drawn, as ``clean_block`` does everywhere
     else. The stored texts are already what ``comparable_output`` produces."""
-    a_txt = [clean_block(x) for x in expected.splitlines()]
-    b_txt = [clean_block(x) for x in actual.splitlines()]
+    a_raw, b_raw = expected.splitlines(), actual.splitlines()
+    a_txt, b_txt = [clean_block(x) for x in a_raw], [clean_block(x) for x in b_raw]
     exact = ([_key(x, mask=False) for x in a_txt], [_key(x, mask=False) for x in b_txt])
     ka, kb = [_key(x, mask=True) for x in a_txt], [_key(x, mask=True) for x in b_txt]
     passes = (exact, (ka, kb))
@@ -227,7 +245,8 @@ def align_rows(expected: str, actual: str) -> list[AlignedRow]:
 
     def changed(i: int, j: int) -> None:
         nonlocal budget
-        cls = oc.classify_line_pair(a_txt[i], b_txt[j])
+        # Classified on the raw lines, as the verdict sees them: a hidden character is a character, not spacing.
+        cls = oc.classify_line_pair(a_raw[i], b_raw[j])
         if cls == oc.LINE_SAME:
             rows.append(AlignedRow(KIND_EQUAL, i + 1, a_txt[i], j + 1, b_txt[j]))
             return
@@ -271,6 +290,23 @@ def align_rows(expected: str, actual: str) -> list[AlignedRow]:
         region(level + 1, pi, i2, pj, j2)
 
     region(0, 0, len(ka), 0, len(kb))
+    return _mark_moved(rows, exact)
+
+
+def _mark_moved(rows: list, exact: tuple) -> list:
+    """Tag a removed line and an added line as ``moved`` when they are the same line once spacing and case
+    are ignored (a line printed in another place). Each added line takes the earliest unused removed one."""
+    pending: dict = {}
+    for idx, r in enumerate(rows):
+        if r.kind == KIND_REMOVED and not r.cls:
+            pending.setdefault(exact[0][r.expected_no - 1], []).append(idx)
+    for idx, r in enumerate(rows):
+        if r.kind == KIND_ADDED and not r.cls:
+            mates = pending.get(exact[1][r.actual_no - 1])
+            if mates:
+                mate = mates.pop(0)
+                rows[mate] = replace(rows[mate], cls=CLASS_MOVED)
+                rows[idx] = replace(r, cls=CLASS_MOVED)
     return rows
 
 
@@ -285,14 +321,37 @@ def count_classes(rows: Sequence[AlignedRow]) -> dict:
     return {c: n for c, n in counts.items() if n}
 
 
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n:,} {one if n == 1 else many}"
+
+
 def summary_text(rows: Sequence[AlignedRow]) -> str:
-    n = count_rows(rows)
+    """Content differences first, then layout-only, then lines on one side only; blank lines apart."""
     classes = count_classes(rows)
-    detail = f" ({', '.join(f'{v:,} {CLASS_SPOKEN[c]}' for c, v in classes.items())})" if classes else ""
-    blanks = sum(1 for r in rows if r.cls == CLASS_BLANK)
-    tail = f" Blank lines among the unmatched rows: {blanks:,}." if blanks else ""
-    return (f"{n[KIND_CHANGED]:,} changed{detail}, {n[KIND_REMOVED]:,} only in expected output, "
-            f"{n[KIND_ADDED]:,} only in student output. {len(rows):,} rows in all.{tail}")
+    content = {c: classes[c] for c in CONTENT_CLASSES if c in classes}
+    parts = []
+    if content:
+        detail = ", ".join(f"{v:,} {CLASS_TAG[c]}" for c, v in content.items())
+        parts.append(f"{_plural(sum(content.values()), 'line differs', 'lines differ')} in content ({detail})")
+    if classes.get(oc.LINE_SPACING):
+        parts.append(f"{classes[oc.LINE_SPACING]:,} differ only in spacing")
+
+    def side(kind: str, cls: str) -> int:
+        return sum(1 for r in rows if r.kind == kind and r.cls == cls)
+
+    for kind, where in ((KIND_REMOVED, "expected output"), (KIND_ADDED, "student output")):
+        text = side(kind, "")
+        if text:
+            parts.append(f"{_plural(text, 'line', 'lines')} only in {where}")
+    moved = side(KIND_REMOVED, CLASS_MOVED)
+    if moved:
+        parts.append(f"{_plural(moved, 'moved line', 'moved lines')}")
+    for kind, where in ((KIND_REMOVED, "expected output"), (KIND_ADDED, "student output")):
+        blank = side(kind, CLASS_BLANK)
+        if blank:
+            parts.append(f"{_plural(blank, 'blank line', 'blank lines')} only in {where}")
+    body = "; ".join(parts) if parts else "No lines differ"
+    return f"{body}. {len(rows):,} rows in all."
 
 
 def pane_height(rows: Sequence[AlignedRow]) -> int:
@@ -315,8 +374,20 @@ def _json_for_script(value) -> str:
             .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
 
 
+def spoken_prefix(row: AlignedRow, side: str) -> str:
+    """What a screen reader hears before the text of a differing row on ``side`` (``expected`` or
+    ``student``); nothing for an equal row. Built here so it is tested, then drawn by the page."""
+    if row.kind == KIND_EQUAL:
+        return ""
+    if row.kind == KIND_CHANGED:
+        return f"Changed line, {side}, {CLASS_SPOKEN[row.cls]}: "
+    what = "Removed" if row.kind == KIND_REMOVED else "Added"
+    return f"{what} {CLASS_SPOKEN[row.cls]}: " if row.cls in (CLASS_BLANK, CLASS_MOVED) else f"{what} line: "
+
+
 def _row_json(row: AlignedRow) -> list:
-    return [row.kind, row.expected_no, row.expected, row.actual_no, row.actual, row.cls]
+    return [row.kind, row.expected_no, row.expected, row.actual_no, row.actual, row.cls,
+            spoken_prefix(row, "expected"), spoken_prefix(row, "student")]
 
 
 _CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
@@ -334,7 +405,7 @@ html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
 font:0.875rem/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
 body{padding:2px 2px 8px}
 #sum{margin:0 0 2px;font-weight:600}
-#key{margin:0 0 6px;color:var(--muted);font-size:0.8125rem}
+#key{margin:0 0 6px;padding-left:1.2rem;color:var(--muted);font-size:0.8125rem}
 .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
 .col h2{margin:0 0 2px;font-size:0.8125rem;font-weight:600}
 .pane{position:relative;height:var(--ph);min-height:4rem;overflow:auto;border:1px solid var(--line);border-radius:4px;background:var(--bg)}
@@ -344,11 +415,11 @@ body{padding:2px 2px 8px}
 .g{position:sticky;left:0;flex:none;display:flex;background:var(--gutbg);border-right:1px solid var(--line)}
 .n{width:5ch;padding:0 6px 0 4px;text-align:right;color:var(--gut)}
 .m{width:2ch;text-align:center;font-weight:700;user-select:none}
-.c{flex:none;width:13ch;padding:0 4px;overflow:hidden;white-space:nowrap;color:var(--gut);font-size:0.7rem;user-select:none}
+.c{flex:none;width:15ch;padding:0 4px;overflow:hidden;white-space:nowrap;color:var(--gut);font-size:0.75rem;user-select:none}
 .t{flex:1 0 auto;padding-right:12px}
 .sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);
 white-space:nowrap;border:0}
-.rm{background:var(--rm)}.add{background:var(--add)}
+.rm{background:var(--rm)}.add{background:var(--add)}.mu{background:var(--gutbg)}
 .fl{background:repeating-linear-gradient(135deg,var(--fill) 0 6px,var(--hatch) 6px 7px)}
 .rm .w{background:var(--rmw);text-decoration:underline;text-decoration-style:wavy}
 .add .w{background:var(--addw);text-decoration:underline;text-decoration-style:solid}
@@ -357,7 +428,7 @@ white-space:nowrap;border:0}
 _SCRIPT = """
 (function(){
 var D=JSON.parse(document.getElementById('d').textContent);
-function fill(box,idx,nIdx,cls,mark,who,lead){
+function fill(box,idx,nIdx,cls,mark){
   var frag=document.createDocumentFragment();
   D.rows.forEach(function(r){
     var row=document.createElement('div'),n=document.createElement('span'),m=document.createElement('span'),
@@ -368,9 +439,9 @@ function fill(box,idx,nIdx,cls,mark,who,lead){
     else{
       var ls=document.createElement('span');ls.className='sr';ls.textContent='Line ';
       n.appendChild(ls);n.appendChild(document.createTextNode(String(r[nIdx])));
-      if(k!=='eq'){row.className+=' '+cls;m.textContent=mark;
+      if(k!=='eq'){row.className+=' '+((k==='chg'&&q==='spacing')?'mu':cls);m.textContent=mark;
         var ps=document.createElement('span');ps.className='sr';
-        ps.textContent=(k==='chg'?'Changed line, '+who+(q?', '+D.say[q]:'')+': ':(q?lead.replace(' line',' '+D.say[q]):lead));
+        ps.textContent=r[idx===2?6:7];
         t.appendChild(ps);if(q){c.textContent=D.tag[q];}}
       if(typeof v==='string'){t.textContent=v;}
       else{v.forEach(function(p){var s=document.createElement('span');
@@ -381,7 +452,7 @@ function fill(box,idx,nIdx,cls,mark,who,lead){
   box.appendChild(frag);
 }
 var pe=document.getElementById('pe'),pa=document.getElementById('pa');
-fill(pe.firstChild,2,1,'rm','-','expected','Removed line: ');fill(pa.firstChild,4,3,'add','+','student','Added line: ');
+fill(pe.firstChild,2,1,'rm','-');fill(pa.firstChild,4,3,'add','+');
 document.getElementById('sum').textContent=D.summary;
 var driver=null;
 ['wheel','pointerdown','keydown','focus','touchstart'].forEach(function(ev){
@@ -407,7 +478,7 @@ def build_side_by_side_html(rows: Sequence[AlignedRow], labels: Sequence[str] = 
     if len(rows) > MAX_SIDE_ROWS:
         raise SideBySideTooLarge(f"{len(rows):,} rows is over the limit of {MAX_SIDE_ROWS:,}")
     exp_label, act_label = labels
-    data = _json_for_script({"rows": [_row_json(r) for r in rows], "summary": summary_text(rows), "tag": CLASS_TAG, "say": CLASS_SPOKEN})
+    data = _json_for_script({"rows": [_row_json(r) for r in rows], "summary": summary_text(rows), "tag": CLASS_TAG})
     # The labels sit in attributes, so they are escaped as HTML; they are fixed strings, not program text.
     def esc(s) -> str:
         return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -421,10 +492,17 @@ def build_side_by_side_html(rows: Sequence[AlignedRow], labels: Sequence[str] = 
 <style>{_STYLE}:root{{--ph:{pane_height(rows) / 16:.2f}rem}}</style></head>
 <body>
 <p id="sum" role="status"></p>
-<p id="key">Markers: <b>-</b> is in the expected output, <b>+</b> is in the student output. A marker on both sides
-means the two lines were paired because they are alike but differ (the differing words are underlined); the tag
-beside the marker says how: spacing, case, punctuation, number format, value (same words, other numbers) or wording.
-Lines that differ only in spacing or case are not a different answer unless your course counts them. Hatched rows are blank here because the other side has an extra line. Both panes scroll together.</p>
+<ul id="key">
+<li>Markers: <b>-</b> is in the expected output, <b>+</b> is in the student output. A marker on both sides means
+these two lines were matched as the same line of output; the tag says how they differ. Wording rows are the least
+certain match.</li>
+<li>Tags: spacing, case, punctuation, number format, decimal places, value (same words, other numbers), wording,
+moved line, blank line. Differing words inside a matched line are underlined. Rows that differ only in
+spacing are drawn in grey and not underlined.</li>
+<li>Hatched rows are blank here because the other side has an extra line. Both panes scroll together.</li>
+<li>Grading: Spacing, case, punctuation, number-format and decimal-places rows are formatting differences. Score them
+by your course's error definitions; they are not value or wording errors.</li>
+</ul>
 <div class="grid">
 <div class="col"><h2 id="te">{esc(exp_label)}</h2>
 <div id="pe" class="pane" role="region" tabindex="0" aria-label="{esc(exp_label)}"><div class="rows"></div></div></div>

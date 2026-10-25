@@ -365,35 +365,40 @@ def _diff_excerpt(expected: str, actual: str) -> str:
 # How one pair of lines differs, as the ladder above sees that pair on its own. The side-by-side view
 # labels each changed row with this, so the label and the verdict never disagree about the same lines.
 LINE_SAME = "same"
-LINE_WHITESPACE = "whitespace"  # rungs 3-4: indentation, spacing, line breaks
+LINE_SPACING = "spacing"  # rungs 3-4: indentation, inner spacing, line breaks
 LINE_CASE = "case"  # rung 5 (spacing may differ too)
-LINE_PUNCTUATION = "punctuation"  # rung 6
-LINE_NUMBER_FORMAT = "number_format"  # rung 7a/7b: 3.5 vs 3.50, 1,000 vs 1000
-LINE_VALUE = "value"  # same words, other numbers (or only dates, times and numbers differ)
-LINE_WORDING = "wording"
-LINE_CLASSES = (LINE_WHITESPACE, LINE_CASE, LINE_PUNCTUATION, LINE_NUMBER_FORMAT, LINE_VALUE, LINE_WORDING)
+LINE_PUNCTUATION = "punctuation"  # rung 6 (hidden and direction characters land here too, as in the ladder)
+LINE_NUMBER_FORMAT = "number_format"  # rung 7a: 3.5 vs 3.50, 1,000 vs 1000
+LINE_DECIMAL_PLACES = "decimal_places"  # rung 7b: 3.5 vs 3.46
+LINE_VALUE = "value"  # rung 7c / 12: the numbers (or dates, times) differ
+LINE_WORDING = "wording"  # rung 8: the words differ and the numbers do not
+LINE_CLASSES = (LINE_SPACING, LINE_CASE, LINE_PUNCTUATION, LINE_NUMBER_FORMAT, LINE_DECIMAL_PLACES, LINE_VALUE,
+                LINE_WORDING)
 
 
 def classify_line_pair(expected: str, actual: str) -> str:
-    """How two single lines differ: one of ``LINE_*``. Uses the same rungs as :func:`compare_output`
-    (``_format_rungs``), so a pair labelled whitespace, case, punctuation or number format is exactly
-    what the ladder calls FORMAT_ONLY with that detail, and ``value`` is its VALUES_DIFFER on the same
-    words. A pair the ladder cannot explain is ``value`` when only dates, times and numbers differ
-    (:func:`mask_values`), else ``wording``."""
+    """How two single lines differ: one of ``LINE_*``, the verdict :func:`compare_output` would give that
+    pair on its own (no prompt segments, no run, no markers): rungs 3-7 by their detail (``spacing``,
+    ``case``, ``punctuation``, ``number_format``, ``decimal_scale`` -> decimal places), VALUES_DIFFER ->
+    ``value``, TEXT_DIFFERS -> ``wording``. The same numbers in another order is ``value``. A pair that
+    changes both the words and the numbers is VALUES_DIFFER for the ladder, so it is ``value`` here.
+    Compared as given: a hidden or direction character is a character the ladder sees (punctuation), not
+    spacing. Linear in the line length (no similarity ratio)."""
     if expected == actual:
         return LINE_SAME
     e, a = expected.rstrip(), actual.rstrip()
     if e == a:
-        return LINE_WHITESPACE
+        return LINE_SPACING
     rung = _format_rungs(e, a)
     if rung is not None:
         verdict, detail = rung
         if verdict is Verdict.VALUES_DIFFER:
             return LINE_VALUE
-        return {SPACING: LINE_WHITESPACE, CASE: LINE_CASE, PUNCTUATION: LINE_PUNCTUATION}.get(detail, LINE_NUMBER_FORMAT)
-    if mask_values(" ".join(e.split()).casefold()) == mask_values(" ".join(a.split()).casefold()):
-        return LINE_VALUE
-    return LINE_WORDING
+        return {SPACING: LINE_SPACING, CASE: LINE_CASE, PUNCTUATION: LINE_PUNCTUATION,
+                DECIMAL_SCALE: LINE_DECIMAL_PLACES}.get(detail, LINE_NUMBER_FORMAT)
+    if _numbers_equivalent(e, a) and _word_tokens(e) != _word_tokens(a):
+        return LINE_WORDING
+    return LINE_VALUE
 
 
 def comparable_output(text: str, ignore_patterns: Iterable[str | re.Pattern] = ()) -> str:

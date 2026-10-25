@@ -93,16 +93,16 @@ def verdict_of(expected: str, actual: str, **kw):
 # --------------------------------------------------------------------------- #
 ARCADE_GOLDEN = [
     ("del", 1, None, "blank"),
-    ("chg", 2, 1, "whitespace"),  # banner: indentation
+    ("chg", 2, 1, "spacing"),  # banner: indentation
     ("chg", 3, 2, "value"),  # 30,102 vs 11,407 tokens
     ("eq", 4, 3, ""),  # the blank line
-    ("chg", 5, 4, "whitespace"),
-    ("chg", 6, 5, "whitespace"),
-    ("chg", 7, 6, "whitespace"),
+    ("chg", 5, 4, "spacing"),
+    ("chg", 6, 5, "spacing"),
+    ("chg", 7, 6, "spacing"),
     ("chg", 8, 7, "wording"),  # Purchase More Tokens / Purchase tokens
     ("chg", 9, 8, "case"),  # Redeem Tokens for Prizes / Redeem tokens for prizes
-    ("chg", 10, 9, "whitespace"),
-    ("chg", 11, 10, "whitespace"),
+    ("chg", 10, 9, "spacing"),
+    ("chg", 11, 10, "spacing"),
 ]
 
 
@@ -113,14 +113,14 @@ def test_the_arcade_case_lines_up_row_for_row():
     # and here every row after the banner fell out of line. Now at most the one extra blank line is unmatched.
     counts = dv.count_rows(rows)
     assert counts == {"chg": 9, "del": 1, "ins": 0}
-    assert dv.count_classes(rows) == {"whitespace": 6, "case": 1, "value": 1, "wording": 1}
+    assert dv.count_classes(rows) == {"spacing": 6, "case": 1, "value": 1, "wording": 1}
 
 
 def test_the_arcade_summary_names_each_kind_of_difference():
     text = dv.summary_text(rows_of(ARCADE_EXPECTED, ARCADE_ACTUAL))
-    assert text.startswith("9 changed (6 whitespace only, 1 case only, 1 value only, 1 wording), "
-                           "1 only in expected output, 0 only in student output. 11 rows in all.")
-    assert "Blank lines among the unmatched rows: 1." in text
+    assert text == ("3 lines differ in content (1 value, 1 wording, 1 case); 6 differ only in spacing; "
+                    "1 blank line only in expected output. 11 rows in all.")
+    assert "Blank lines among" not in text
 
 
 def test_the_arcade_pairs_are_the_lines_a_person_would_pair():
@@ -140,7 +140,7 @@ def test_the_arcade_verdict_is_stated_and_the_row_classes_explain_it():
     # The same menu with only indentation and a leading blank line is formatting, not a wrong answer.
     assert verdict_of(ARCADE_EXPECTED, ARCADE_FORMAT_ONLY_ACTUAL) == ("format_only", "spacing")
     rows = rows_of(ARCADE_EXPECTED, ARCADE_FORMAT_ONLY_ACTUAL)
-    assert set(dv.count_classes(rows)) <= {"whitespace"}
+    assert set(dv.count_classes(rows)) <= {"spacing"}
     assert not [r for r in rows if r.kind in ("del", "ins") and r.cls != "blank"]
 
 
@@ -150,7 +150,7 @@ def test_the_arcade_verdict_is_stated_and_the_row_classes_explain_it():
 def test_values_that_vary_pair_up_as_value_only():
     rows = rows_of(RECEIPT_EXPECTED, RECEIPT_ACTUAL)
     assert dump(rows) == [("chg", n, n, "value") for n in range(1, 7)] + [("eq", 7, 7, "")]
-    assert dv.summary_text(rows).startswith("6 changed (6 value only), 0 only in expected output, 0 only in student output.")
+    assert dv.summary_text(rows) == "6 lines differ in content (6 value). 7 rows in all."
 
 
 def test_varying_values_verdict_depends_on_the_case_flag_and_rows_agree():
@@ -161,7 +161,7 @@ def test_varying_values_verdict_depends_on_the_case_flag_and_rows_agree():
 
 
 def test_a_wording_change_among_varying_values_is_not_hidden_as_a_value():
-    act = RECEIPT_ACTUAL.replace("Lucky number", "Lucky numbers")
+    act = RECEIPT_ACTUAL.replace("Thank you!", "Thanks!")
     rows = rows_of(RECEIPT_EXPECTED, act)
     assert [r.cls for r in rows if r.kind == "chg"].count("wording") == 1
     assert verdict_of(RECEIPT_EXPECTED, act, values_may_differ=True)[0] == "text_differs"
@@ -195,7 +195,7 @@ def test_numbered_lines_whose_numbers_all_differ_still_anchor_on_their_position(
 # --------------------------------------------------------------------------- #
 def test_indentation_and_inner_spacing_are_whitespace_only():
     exp, act = "Report\nName: Ada\nTotal: 4", "    Report\n  Name:   Ada\n\tTotal: 4"
-    assert dump(rows_of(exp, act)) == [("chg", n, n, "whitespace") for n in (1, 2, 3)]
+    assert dump(rows_of(exp, act)) == [("chg", n, n, "spacing") for n in (1, 2, 3)]
     assert verdict_of(exp, act) == ("format_only", "spacing")
 
 
@@ -229,6 +229,9 @@ def test_punctuation_and_number_format_are_their_own_classes():
     exp, act = "Done!\nTotal: 3.5\nCount: 1,000", "Done\nTotal: 3.50\nCount: 1000"
     assert [r.cls for r in rows_of(exp, act)] == ["punctuation", "number_format", "number_format"]
     assert verdict_of(exp, act)[0] == "format_only"
+    # Fewer decimal places is its own class: 3.5 vs 3.46 is rung 7b, not a number format.
+    assert [r.cls for r in rows_of("Total: 3.5", "Total: 3.46")] == ["decimal_places"]
+    assert verdict_of("Total: 3.5", "Total: 3.46") == ("format_only", "decimal_scale")
 
 
 # --------------------------------------------------------------------------- #
@@ -237,8 +240,9 @@ def test_punctuation_and_number_format_are_their_own_classes():
 def test_one_moved_line_is_one_removed_and_one_added_never_a_cascade_of_changes():
     exp = "alpha line\nbeta line\ngamma line\ndelta line\nepsilon line"
     act = "alpha line\ngamma line\ndelta line\nbeta line\nepsilon line"
-    assert dump(rows_of(exp, act)) == [("eq", 1, 1, ""), ("del", 2, None, ""), ("eq", 3, 2, ""),
-                                       ("eq", 4, 3, ""), ("ins", None, 4, ""), ("eq", 5, 5, "")]
+    assert dump(rows_of(exp, act)) == [("eq", 1, 1, ""), ("del", 2, None, "moved"), ("eq", 3, 2, ""),
+                                       ("eq", 4, 3, ""), ("ins", None, 4, "moved"), ("eq", 5, 5, "")]
+    assert dv.summary_text(rows_of(exp, act)) == "1 moved line. 6 rows in all."
     assert verdict_of(exp, act) == ("order_differs", "")
 
 
@@ -275,11 +279,25 @@ def test_wholly_different_lines_are_not_forced_side_by_side():
 #: verdict for that pair on its own, so the two never disagree about the same lines.
 LINE_PAIRS = [
     ("Total: 10", "Total: 10", "match", "", "same"),
-    ("Total: 10", "  Total:   10", "format_only", "spacing", "whitespace"),
+    ("Total: 10", "  Total:   10", "format_only", "spacing", "spacing"),
     ("Total: 10", "TOTAL: 10", "format_only", "case", "case"),
     ("Total: 10.", "Total: 10", "format_only", "punctuation", "punctuation"),
     ("Total: 3.5", "Total: 3.50", "format_only", "number_format", "number_format"),
-    ("Total: 3.5", "Total: 3.46", "format_only", "decimal_scale", "number_format"),
+    ("Total: 3.5", "Total: 3.46", "format_only", "decimal_scale", "decimal_places"),
+    # Integer division is never formatting: the class is value, as the verdict is.
+    ("Total: 10.47", "Total: 10", "values_differ", "", "value"),
+    ("Total: 10", "Total: 10.47", "values_differ", "", "value"),
+    ("Average: 3.04", "Average: 3.0", "values_differ", "", "value"),
+    ("Average: 3.5", "Average: 3", "values_differ", "", "value"),
+    # Dates and times: a changed month, weekday or AM/PM is words. Both words and numbers changing is
+    # VALUES_DIFFER for the ladder, so it is "value" (the one place a row can hide a wording change).
+    ("Due: May 3, 2026", "Due: June 9, 2027", "values_differ", "", "value"),
+    ("Due: May 3", "Due: June 3", "text_differs", "", "wording"),
+    ("Due: 2026-03-14", "Due: 2026-10-25", "values_differ", "", "value"),
+    ("Start 9:05 AM", "Start 9:05 PM", "text_differs", "", "wording"),
+    ("Start 9:05 AM", "Start 10:45 PM", "values_differ", "", "value"),
+    ("Start 9:05", "Start 10:45", "values_differ", "", "value"),
+    ("Monday", "Tuesday", "text_differs", "", "wording"),
     ("Total: 10", "Total: 12", "values_differ", "", "value"),
     ("Total: 10", "TOTAL: 12", "values_differ", "", "value"),
     ("Name: Ada", "Name: Ben", "text_differs", "", "wording"),
@@ -295,11 +313,11 @@ def test_the_class_of_a_pair_matches_the_verdict_for_the_same_pair(expected, act
 def test_classify_line_pair_basics():
     c = oc.classify_line_pair
     assert c("a", "a") == oc.LINE_SAME
-    assert c("a  ", "a") == oc.LINE_WHITESPACE
-    assert c("May 3, 2026", "June 9, 2027") == oc.LINE_VALUE  # dates are values
-    assert c("at 9:05 AM", "at 10:45 PM") == oc.LINE_VALUE
+    assert c("a  ", "a") == oc.LINE_SPACING
     assert c("one apple", "two apple") == oc.LINE_WORDING  # number words are words here
-    assert set(oc.LINE_CLASSES) == {"whitespace", "case", "punctuation", "number_format", "value", "wording"}
+    assert c("1 2", "2 1") == oc.LINE_VALUE  # the same numbers in another order
+    assert set(oc.LINE_CLASSES) == {"spacing", "case", "punctuation", "number_format", "decimal_places", "value",
+                                    "wording"}
 
 
 def test_mask_values_keeps_number_words_and_mask_varying_is_unchanged():
@@ -341,7 +359,7 @@ def test_a_long_output_aligns_quickly_and_completely():
     rows = dv.align_rows(exp, act)
     assert time.monotonic() - started < 10
     assert len(rows) == n and all(r.kind == "chg" for r in rows)
-    assert {r.cls for r in rows} <= {"value", "case", "whitespace"}
+    assert {r.cls for r in rows} <= {"value", "case", "spacing"}
     _check_invariants(exp, act, rows)
     # And it still fits the page's row cap, so the side-by-side view is built, not refused.
     assert len(dv.build_side_by_side_html(rows)) > 0
@@ -384,9 +402,153 @@ def test_the_class_is_in_the_page_as_text_for_every_row_not_just_colour():
     rows = rows_of(ARCADE_EXPECTED, ARCADE_ACTUAL)
     html = dv.build_side_by_side_html(rows)
     script = html.split("<script>")[1]
-    assert "D.tag[q]" in script and "D.say[q]" in script
-    assert "aria-hidden" in script
-    for spoken in ("whitespace only", "case only", "value only", "wording", "blank line"):
-        assert spoken in html
-    assert "9 changed (6 whitespace only, 1 case only, 1 value only, 1 wording)" in html
-    assert "paired because they are alike but differ" in " ".join(html.split())
+    assert "D.tag[q]" in script and "aria-hidden" in script
+    for tag in ("spacing", "case", "value", "wording", "blank line", "moved line", "decimal places"):
+        assert tag in html
+    assert "3 lines differ in content (1 value, 1 wording, 1 case); 6 differ only in spacing" in html
+    flat_html = " ".join(html.split())
+    assert "these two lines were matched as the same line of output; the tag says how they differ" in flat_html
+    assert "Wording rows are the least certain match" in flat_html
+    assert "paired because they are alike" not in flat_html and "unless your course counts them" not in flat_html
+    assert ("Spacing, case, punctuation, number-format and decimal-places rows are formatting differences. "
+            "Score them by your course's error definitions; they are not value or wording errors.") in flat_html
+    assert html.count("<li>") == 4 and "whitespace" not in html
+
+
+# --------------------------------------------------------------------------- #
+# Round-1 review: summary, moved lines, hidden characters, mask equivalence, thresholds, cost
+# --------------------------------------------------------------------------- #
+def test_summary_leads_with_content_and_counts_blank_rows_apart():
+    exp = "Total: 5\nName: Ada\nMenu\n\nBye"
+    act = "Total: 9\n  Name: Ada\nMenu\n\n\nBye\nExtra line"
+    assert dv.summary_text(rows_of(exp, act)) == (
+        "1 line differs in content (1 value); 1 differ only in spacing; 1 line only in student output; "
+        "1 blank line only in student output. 7 rows in all.")
+    assert dv.summary_text(rows_of("a", "a")) == "No lines differ. 1 rows in all."
+
+
+def test_spoken_text_of_every_kind_of_row():
+    kinds = {
+        ("chg", "case", "expected"): "Changed line, expected, case only: ",
+        ("chg", "case", "student"): "Changed line, student, case only: ",
+        ("chg", "decimal_places", "student"): "Changed line, student, decimal places only: ",
+        ("chg", "spacing", "expected"): "Changed line, expected, spacing only: ",
+        ("del", "", "expected"): "Removed line: ",
+        ("del", "blank", "expected"): "Removed blank line: ",
+        ("del", "moved", "expected"): "Removed moved line: ",
+        ("ins", "", "student"): "Added line: ",
+        ("ins", "blank", "student"): "Added blank line: ",
+        ("ins", "moved", "student"): "Added moved line: ",
+        ("eq", "", "student"): "",
+    }
+    for (kind, cls, side), text in kinds.items():
+        row = dv.AlignedRow(kind, 1, "x", 1, "y", cls)
+        assert dv.spoken_prefix(row, side) == text
+    rows = rows_of("Hello\n\nKeep", "hello\nKeep")
+    html = dv.build_side_by_side_html(rows)
+    assert "Removed blank line: " in html and "Changed line, expected, case only: " in html
+
+
+def test_moved_lines_pair_once_and_only_when_the_text_is_the_same():
+    exp = "one two\nalpha\nsame\nbeta"
+    act = "ONE  TWO\nsame\nalpha\nbeta"
+    assert sorted((r.kind, r.cls) for r in rows_of(exp, act) if r.kind in ("del", "ins")) == [("del", "moved"),
+                                                                                               ("ins", "moved")]
+    # A removed line with no added twin is not moved.
+    rows = rows_of("keep\nold wording here\nend", "keep\nend\nbrand new text")
+    assert {r.cls for r in rows if r.kind in ("del", "ins")} == {""}
+    # Two removed copies and one added copy: only one pair is moved.
+    rows = rows_of("x line\nmid text\nx line\ntail", "mid text\ntail\nx line")
+    moved = [r for r in rows if r.cls == "moved"]
+    assert len([r for r in moved if r.kind == 'del' and r.expected == 'x line']) <= 1 and len([r for r in moved if r.kind == "del"]) == len([r for r in moved if r.kind == "ins"])
+
+
+@pytest.mark.parametrize("hidden", ["​", "‮", "﻿", "⁠"])
+def test_a_hidden_or_direction_character_is_not_called_spacing(hidden):
+    exp, act = "Total: 5", f"Total:{hidden} 5"
+    assert verdict_of(exp, act) == ("format_only", "punctuation")
+    [row] = dv.align_rows(exp, act)
+    assert row.kind == "chg" and row.cls == "punctuation"
+    assert oc.classify_line_pair(exp, act) == "punctuation"
+
+
+def _old_mask_varying(text: str) -> str:
+    """Verbatim copy of master's inline mask_varying (before mask_values was factored out)."""
+    for regex in (oc._DATE_RE, oc._CLOCK_RE, oc._MONTH_DAY_RE, oc._WEEKDAY_RE, oc._ANY_NUMBER_RE, oc._NUMBER_WORD_RE):
+        text = regex.sub("#", text)
+    return oc._MONTH_RE.sub("#", text)
+
+
+MASK_CORPUS = [
+    "", "plain words only", "Total: 12", "Total: -3.50 and +4", "1,234,567.89 items", "v1.2.3 build 7",
+    "2026-03-14", "03/14/2026 at 9:05", "14.3.26", "9:05 AM", "10:45:59.123 pm", "12:00 a.m.",
+    "May 3, 2026", "Sept. 9th", "Dec 25", "March", "may", "May 5", "I may go", "next may 5",
+    "Monday", "Tue, Mar 3", "Thurs 4 March", "mon", "sun 5",
+    "one two three", "Twenty-one and thirty five", "a hundred and one thousand", "eleven",
+    "one apple, 2 pears, three plums", "Score: ten of twenty", "x-3 and a-3", "3-5", "1e5 or 0.5 or .5",
+    "Date: Monday, May 3 at 9:05 AM, 2026-05-03: fifty-five items for $12.50",
+]
+
+
+@pytest.mark.parametrize("text", MASK_CORPUS)
+def test_mask_varying_is_unchanged_by_the_refactor(text):
+    assert oc.mask_varying(text) == _old_mask_varying(text)
+    assert oc.mask_values(text) == oc._mask(text, False)
+
+
+def _ratio(a: str, b: str) -> float:
+    import difflib
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def _boundary_params():
+    base = "abcdefghijk"
+    out = []
+    for keep, junk in ((7, "xyzw"), (6, "xyzwq")):
+        other = base[:keep] + junk
+        out.append(pytest.param(base, other, keep == 7, id=f"ratio={_ratio(base, other):.3f}-pairs={keep == 7}"))
+    return out
+
+
+@pytest.mark.parametrize("a,b,pairs", _boundary_params())
+def test_pairing_threshold_boundary(a, b, pairs):
+    assert (_ratio(a, b) >= dv.PAIR_MIN_RATIO) is pairs
+    assert [row.kind for row in dv.align_rows(a, b)] == (["chg"] if pairs else ["del", "ins"])
+
+
+def test_alternating_lines_stay_fast():
+    exp = "\n".join("x" if i % 2 == 0 else "y" for i in range(2000))
+    act = "\n".join("y" if i % 2 == 0 else "x" for i in range(2000))
+    started = time.monotonic()
+    rows = dv.align_rows(exp, act)
+    assert time.monotonic() - started < 10
+    _check_invariants(exp, act, rows)
+
+
+def test_five_thousand_one_character_lines_stay_fast():
+    rng = random.Random(11)
+
+    def mk() -> str:
+        return "\n".join(rng.choice("abcdefghij") for _ in range(5000))
+
+    exp, act = mk(), mk()
+    started = time.monotonic()
+    rows = dv.align_rows(exp, act)
+    assert time.monotonic() - started < 15
+    _check_invariants(exp, act, rows)
+
+
+def test_pairing_is_approximate_but_total_once_the_budget_is_spent(monkeypatch):
+    monkeypatch.setattr(dv, "MAX_PAIR_WORK", 50)
+    exp = "\n".join(f"line {chr(97 + i % 26)}{'x' * (i % 7)}" for i in range(300))
+    act = "\n".join(f"lyne {chr(97 + i % 26)}{'y' * (i % 5)}" for i in range(300))
+    _check_invariants(exp, act, dv.align_rows(exp, act))
+    pairer = dv._Pairer()
+    pairer.work = 0
+    assert pairer.ratio("", "") == 0.0
+    assert pairer.ratio("abcd", "abxy") == 1.0  # same first character, same length
+    assert pairer.ratio("abcd", "zbcd") == 0.0
+
+
+def test_the_exact_alignment_limit_is_small_enough_to_bound_difflib():
+    assert dv.MAX_EXACT_ALIGN_CELLS <= 250_000 and dv.PAIR_MIN_RATIO == 0.6

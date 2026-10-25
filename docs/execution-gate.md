@@ -643,18 +643,26 @@ sandboxed iframe (`st.iframe`, else `components.html`) built in-process: program
 JSON and drawn with `textContent`, the page has a Content-Security-Policy with no network, and nothing is logged or
 sent anywhere. Rows come from `diff_view.align_rows`, which aligns the two outputs in three passes, each on what the one before
 left over: lines equal once spacing and case are ignored; lines equal once numbers, dates and times are masked too
-(`output_compare.mask_values`); then lines in a still-unmatched block are paired by similarity (character ratio of the
-masked keys at least 0.6, in order, within a work budget `MAX_PAIR_WORK`). Blank lines never anchor a pass. A row is
-`eq` only when the two lines are identical, so indentation, case or number differences no longer push everything out
-of line; the text shown is always the original. Each changed (paired) row is tagged with how it differs, by the
-verdict's own rules (`output_compare.classify_line_pair`): *spacing* (indentation, inner spacing), *case*,
-*punctuation*, *number format* (`3.5` / `3.50`), *value* (same words, other numbers, dates or times) or *wording*. A
-removed or added blank line is tagged *blank line*. The tag is text beside the line number (and spoken by a screen
-reader), never colour alone, and the summary counts them ("9 changed (6 whitespace only, 1 case only, 1 value only,
-1 wording), ..."). The tag describes the pair on its own: a case-only or whitespace-only row is FORMAT_ONLY in the
-verdict, scored by the course's error definitions, and a value-only row is a difference unless the case is flagged
-"values may differ". The unified view is still plain `difflib` on the raw lines and can show more changed lines than
-the side-by-side view pairs. Lines do not wrap (long lines scroll sideways); the Unified view
+(`output_compare.mask_values`); then lines in a still-unmatched block are paired by similarity (difflib character
+ratio of the masked keys at least 0.6, difflib's own `get_close_matches` cutoff; in order; looking at most 12 lines
+ahead; keys cut at 120 characters; total work capped by `MAX_PAIR_WORK`, after which pairing is approximate: first
+character and length only). Blank lines never anchor a pass. Alignment over 250,000 line pairs
+(`MAX_EXACT_ALIGN_CELLS`) uses difflib's `autojunk` heuristic. A row is `eq` only when the two lines are identical,
+so indentation, case or number differences no longer push everything out of line; the text shown is always the
+original. Each paired row that is not identical is tagged with how it differs, by the verdict's own rules
+(`output_compare.classify_line_pair`, the ladder's verdict for that pair on its own, on the raw lines): *spacing*
+(indentation, inner spacing), *case*, *punctuation* (hidden and direction characters land here, as in the ladder),
+*number format* (`3.5` / `3.50`), *decimal places* (`3.5` / `3.46`), *value* (the numbers, dates or times differ;
+integer-for-decimal such as `10` / `10.47` is a value) or *wording*. A pair that changes both words and numbers is
+VALUES_DIFFER for the ladder, so it is tagged *value*: the one place a tag can hide a wording change. A removed or
+added blank line is tagged *blank line*; a removed line and an added line that are the same once spacing and case
+are ignored are both tagged *moved line*. The tag is text beside the line number (and spoken by a screen reader),
+never colour alone; spacing-only rows are drawn grey. The summary leads with content ("3 lines differ in content (1
+value, 1 wording, 1 case); 6 differ only in spacing; 1 blank line only in expected output."). The legend says
+spacing, case, punctuation, number-format and decimal-places rows are formatting differences, scored by the
+course's error definitions (FORMAT_ONLY), not value or wording errors; a value row is a difference unless the case
+is flagged "values may differ". The unified view is still plain `difflib` on the raw lines and can show more
+changed lines than the side-by-side view pairs. Lines do not wrap (long lines scroll sideways); the Unified view
 is always one click away.
 Two big-input guards: a pair of outputs over 5,000 lines, or more than 4,000,000 line pairs
 (`MAX_DIFF_LINES`, `MAX_DIFF_CELLS`; difflib is quadratic), is not diffed automatically. The page says so,
