@@ -285,7 +285,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:b1163bffcb3edf908da257865f28ddf0c5d8ffd79f0256e90c81c9baf77fa213",
+      "fingerprint": "sha256:06ffa6d18fa5b593ccf791a0a8feac0c38ca1a00afe35a682496179510504516",
       "suites": [
         "flowgorithm-grade"
       ]

@@ -127,7 +127,8 @@ async def test_grade_path_sends_the_facts(mocker, file_name, expected):
 def test_facts_block_text_and_wording_in_the_built_prompt():
     prompt = fg.build_flowgorithm_prompt("A", "T", "SUB", "Ada_Example_Lab3.fprg", "50")
     assert "- Lab number in file name: yes (Lab 3)\n" in prompt
-    assert "- Name in file name: yes (a name-like word is present; not verified against a roster)" in prompt
+    assert "- Name in file name: yes\n" in prompt and "roster" not in prompt
+    assert "never deduct for it" in prompt and "beyond the criterion decision" in prompt
     assert "Submission File Name:\n" not in prompt
     assert "decided ONLY by these app-checked facts" in prompt
     assert "unknown -> never deduct" in prompt
@@ -165,4 +166,4 @@ async def test_the_eval_suite_path_sends_facts_not_the_name(mocker):
     sent = _serialized(structured)
     assert "Ada" not in sent and "Example" not in sent
     assert _facts_lines(structured.await_args.kwargs["prompt"]) == (
-        "no", "yes (a name-like word is present; not verified against a roster)")
+        "no", "yes")

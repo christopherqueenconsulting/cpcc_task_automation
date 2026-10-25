@@ -26,7 +26,7 @@ Assignment:
 ---
 App-checked facts about the Submission File Name (the file name itself is withheld for privacy):
 {file_name_facts}
-Any rubric criterion about the student's name or the lab number appearing in the file name is decided ONLY by these app-checked facts: lab number: yes -> not deducted; no -> deducted; unknown -> never deduct. Name in file name: yes -> not deducted; no -> deducted; unknown -> never deduct. The file name itself is withheld for privacy; do not guess it or mention its absence as a defect.
+Any rubric criterion about the student's name or the lab number appearing in the file name is decided ONLY by these app-checked facts: lab number: yes -> not deducted; no -> deducted; unknown -> never deduct. Name in file name: yes -> not deducted; no -> deducted; unknown -> never deduct. The file name itself is withheld for privacy; do not guess it or mention its absence as a defect. Any other file-name criterion (extension, format, capitalization) cannot be judged here; never deduct for it. Do not mention these app-checked facts in your explanation beyond the criterion decision.
 
 ---
 Submission:
