@@ -27,7 +27,7 @@ from typing import Optional
 from cqc_cpcc.utilities.language_utils import get_language_from_file_path
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias, register_student, scrub
-from cqc_cpcc.utilities.utils import read_file, readable_roots, wrap_code_in_markdown_backticks
+from cqc_cpcc.utilities.utils import read_file, wrap_code_in_markdown_backticks
 
 # Token estimation constants
 # GPT-5 family models have 128K context window
@@ -370,45 +370,49 @@ def _copy_member_capped(src, dst, limit: Optional[int] = None,
         dst.write(chunk)
 
 
-def _check_zip_directory_size(zip_path: str) -> None:
-    """Refuse an oversized ZIP, or one claiming too many entries, before ``ZipFile()``.
+def _check_zip_stream(fp) -> None:
+    """Refuse an oversized ZIP, or one claiming too many entries, from its open file.
 
-    ``zipfile.ZipFile`` parses the whole central directory on open, so millions of tiny
-    entries could use gigabytes of memory before ``MAX_ENTRY_COUNT`` is checked. The
-    entry count is read from the end-of-central-directory record (and its zip64 record).
+    Reads only the file size and the end-of-central-directory record (and its zip64
+    record), never the central directory itself. ``zipfile.ZipFile`` parses the whole
+    central directory when it opens, so millions of tiny entries could use gigabytes of
+    memory before ``MAX_ENTRY_COUNT`` is checked.
     """
-    # Resolve the path and confine it to an allowed root before opening it; written inline
-    # (normalize, then startswith, assigning on success) so CodeQL's py/path-injection
-    # analysis sees the check, as in ``utils.read_file``.
-    resolved = os.path.realpath(zip_path)
-    for allowed_root in readable_roots():
-        if resolved == allowed_root or resolved.startswith(allowed_root + os.sep):
-            zip_path = resolved
-            break
-    else:
-        raise ValueError(
-            f"Refusing to read {zip_path!r}: it resolves outside the temp directory and "
-            "the working directory.")
-    size = os.path.getsize(zip_path)
+    size = os.fstat(fp.fileno()).st_size
     if size > MAX_ZIP_BYTES:
         raise _bomb_error(f"This ZIP file is larger than {_mib(MAX_ZIP_BYTES)}")
     tail_len = min(size, 65535 + 22 + 20)
-    with open(zip_path, 'rb') as fh:
-        fh.seek(size - tail_len)
-        tail = fh.read(tail_len)
-        eocd = tail.rfind(b'PK\x05\x06')
-        if eocd < 0 or len(tail) - eocd < 22:
-            return  # not a ZIP: ZipFile will say so
-        total_entries = struct.unpack_from('<H', tail, eocd + 10)[0]
-        if total_entries == 0xFFFF and eocd >= 20 and tail[eocd - 20:eocd - 16] == b'PK\x06\x07':
-            zip64_offset = struct.unpack_from('<Q', tail, eocd - 20 + 8)[0]
-            if 0 <= zip64_offset <= size - 56:
-                fh.seek(zip64_offset)
-                record = fh.read(56)
-                if len(record) == 56 and record[:4] == b'PK\x06\x06':
-                    total_entries = struct.unpack_from('<Q', record, 32)[0]
+    fp.seek(size - tail_len)
+    tail = fp.read(tail_len)
+    eocd = tail.rfind(b'PK\x05\x06')
+    if eocd < 0 or len(tail) - eocd < 22:
+        return  # not a ZIP: ZipFile will say so
+    total_entries = struct.unpack_from('<H', tail, eocd + 10)[0]
+    if total_entries == 0xFFFF and eocd >= 20 and tail[eocd - 20:eocd - 16] == b'PK\x06\x07':
+        zip64_offset = struct.unpack_from('<Q', tail, eocd - 20 + 8)[0]
+        if 0 <= zip64_offset <= size - 56:
+            fp.seek(zip64_offset)
+            record = fp.read(56)
+            if len(record) == 56 and record[:4] == b'PK\x06\x06':
+                total_entries = struct.unpack_from('<Q', record, 32)[0]
     if total_entries > MAX_ENTRY_COUNT:
         raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
+
+
+class _CheckedZipFile(zipfile.ZipFile):
+    """``ZipFile`` that checks the file size and entry count before parsing the directory.
+
+    The check runs on the file object ``ZipFile`` already opened (one open, no second
+    path-based access), just before ``_RealGetContents`` reads the central directory.
+    """
+
+    def _RealGetContents(self):
+        try:
+            _check_zip_stream(self.fp)
+        except BaseException:
+            self.fp.close()
+            raise
+        super()._RealGetContents()
 
 
 def _mib(n: int) -> str:
@@ -438,9 +442,8 @@ def rebuild_zip_from_members(src_zip_path: str, out_zip_path: str, keep_arcs) ->
     copy as the grader's extraction. Raises ValueError on a breach; the caller removes
     ``out_zip_path``.
     """
-    _check_zip_directory_size(src_zip_path)
     used = 0
-    with zipfile.ZipFile(src_zip_path, "r") as src, \
+    with _CheckedZipFile(src_zip_path, "r") as src, \
             zipfile.ZipFile(out_zip_path, "w", zipfile.ZIP_DEFLATED) as dst:
         if len(src.infolist()) > MAX_ENTRY_COUNT:
             raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
@@ -621,8 +624,7 @@ def extract_student_submissions_from_zip(
     if _bytes_used is None:
         _bytes_used = [0]  # uncompressed bytes written so far, shared with a nested call
 
-    _check_zip_directory_size(zip_path)
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    with _CheckedZipFile(zip_path, 'r') as zip_ref:
         if len(zip_ref.infolist()) > MAX_ENTRY_COUNT:
             raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
         names = [_normalize_zip_name(i.filename) for i in zip_ref.infolist() if not i.is_dir()]
@@ -649,7 +651,7 @@ def extract_student_submissions_from_zip(
         logger.info("Reading the submissions ZIP nested in a Download All Feedback ZIP")
         inner_path: Optional[str] = None
         try:
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref, zip_ref.open(nested) as src, \
+            with _CheckedZipFile(zip_path, 'r') as zip_ref, zip_ref.open(nested) as src, \
                     tempfile.NamedTemporaryFile(
                         delete=False, prefix='nested_submissions_', suffix='.zip') as inner:
                 inner_path = inner.name
@@ -687,7 +689,7 @@ def _extract_plain_zip(
     """
     students_data: dict[str, StudentSubmission] = {}
 
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    with _CheckedZipFile(zip_path, 'r') as zip_ref:
         # First pass: analyze ZIP structure and detect wrapper folders
         # Backslashes become "/" once here; absolute-path entries are dropped.
         all_paths = [_normalize_zip_name(f.filename) for f in zip_ref.infolist()
