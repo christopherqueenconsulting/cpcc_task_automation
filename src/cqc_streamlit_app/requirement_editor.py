@@ -33,17 +33,19 @@ TEXT_HELP = (f"One thing the program must do that you can check by running or re
 WEIGHT_HELP = ("Core: central to the assignment. Left out costs a major error; only partly done costs "
                "a minor error. Secondary: a smaller required detail. Left out or partly done costs a "
                "minor error.")
+# No " on " in page text: the end-to-end test finds the cost line by that word pair.
 RULES_CAPTION = (f"Rules for each row. Id: up to {MAX_ID_CHARS} letters, digits, - or _, no spaces, "
-                 f"different on every row, or empty to have one made. Requirement: required, up to "
+                 f"unique across rows, or empty to have one made. Requirement: required, up to "
                  f"{MAX_TEXT_CHARS} characters, one thing the program must do. Weight: core or secondary. "
-                 f"At most {MAX_REQUIREMENTS} rows. Row numbers count from the top, starting at 1.")
+                 f"At most {MAX_REQUIREMENTS} rows. Row numbers match the # column.")
 OFF_MESSAGE = ("No usable requirement is left. Requirements will not be checked in this run. "
                "Fix the rows above or press Re-extract.")
 
 
 @dataclass(frozen=True)
 class RowError:
-    """One problem with one table row. ``row`` counts from 1, as the instructor sees the table.
+    """One problem with one table row. ``row`` is the number in the table's # column (0 for a row
+    that has none yet); ``name`` is how the message calls it ("Row 3", "A new row").
     ``quiet`` marks a row that is simply empty: skipped, shown as a note, not as an error.
     ``rid`` is the row's id when it passed the id check, so the message can name the row."""
     row: int
@@ -51,12 +53,14 @@ class RowError:
     message: str
     quiet: bool = False
     rid: str = ""
+    name: str = ""
 
     def __str__(self) -> str:
-        if not self.row:
+        name = self.name or (f"Row {self.row}" if self.row else "")
+        if not name:
             return self.message
         who = f" ({self.rid})" if self.rid else ""
-        return f"Row {self.row}{who}: {self.message}"
+        return f"{name}{who} {self.message}" if self.quiet else f"{name}{who}: {self.message}"
 
 
 def _clean(value: Any) -> str:
@@ -64,54 +68,57 @@ def _clean(value: Any) -> str:
     return "" if text.lower() in ("nan", "none") else text
 
 
-def validate_rows(rows: list[dict]) -> tuple[list[dict], list[RowError]]:
+def validate_rows(rows: list[dict], labels: Optional[list] = None) -> tuple[list[dict], list[RowError]]:
     """Split table rows into the usable ones and the problems.
 
     A usable row is ``{"row", "id", "text", "weight"}`` (``id`` may be "" = make one). Whitespace
     in the text is collapsed so one row is one prompt line. A row with a problem is left out, never
     graded with. A row with no id, no text and the default weight is the blank line the table adds
     for a new row: skipped with a quiet note. A row with an id or another weight but no text is an
-    error. The first row with an id keeps it; a later row with the same id (any case) is an error.
+    error. ``labels`` are the numbers in the table's # column, one per row (None = a new row that has
+    no number yet); without them rows are numbered by position from 1. The first row with an id keeps it; a later row with the same id (any case) is an error.
     """
     valid: list[dict] = []
     errors: list[RowError] = []
     seen: dict[str, int] = {}
-    for number, raw in enumerate(rows, start=1):
+    for position, raw in enumerate(rows, start=1):
+        number = position if labels is None else (labels[position - 1] or 0)
+        name = f"Row {number}" if number else "A new row"
         rid = _clean(raw.get("id"))
         text = " ".join(_clean(raw.get("text")).split())
         weight = _clean(raw.get("weight")) or "core"
         good_id = safe_requirement_id(rid)
         if not text:
             if not rid and weight == "core":
-                errors.append(RowError(number, "blank", "is empty and is skipped.", quiet=True))
+                errors.append(RowError(number, "blank", "is empty, so it is skipped. Fill it in or delete it.", quiet=True, name=name))
             else:
                 errors.append(RowError(number, "text", "has no requirement text, so it is left out. "
-                                       "Type the requirement, or delete the row.", rid=good_id))
+                                       "Type the requirement, or delete the row.", rid=good_id, name=name))
             continue
         problems = []
         if rid and not good_id:
             problems.append(RowError(number, "id", f"the id is not allowed. Use up to "
-                                     f"{MAX_ID_CHARS} letters, digits, - or _, with no spaces."))
+                                     f"{MAX_ID_CHARS} letters, digits, - or _, with no spaces.", name=name))
         elif rid and rid.upper() in seen:
-            problems.append(RowError(number, "id", f"the id {good_id} is already used by row "
+            problems.append(RowError(number, "id", f"the id {good_id} is already used by "
                                      f"{seen[rid.upper()]}. Give this row a different id, or clear it.",
-                                     rid=good_id))
+                                     rid=good_id, name=name))
         if len(text) > MAX_TEXT_CHARS:
             problems.append(RowError(number, "text", f"the requirement is {len(text)} characters; "
                                      f"the limit is {MAX_TEXT_CHARS}. Shorten it or split it into rows.",
-                                     rid=good_id))
+                                     rid=good_id, name=name))
         if weight not in WEIGHTS:
-            problems.append(RowError(number, "weight", "weight must be core or secondary.", rid=good_id))
+            problems.append(RowError(number, "weight", "weight must be core or secondary.", rid=good_id, name=name))
         if problems:
             errors.extend(problems)
             continue
         if len(valid) >= MAX_REQUIREMENTS:
             errors.append(RowError(number, "table", f"the list holds at most {MAX_REQUIREMENTS} "
                                    "requirements, so this row is left out. Delete a row or merge two.",
-                                   rid=good_id))
+                                   rid=good_id, name=name))
             continue
         if rid:
-            seen[rid.upper()] = number
+            seen[rid.upper()] = name.lower() if number else "the new row"
         valid.append({"row": number, "id": good_id, "text": text, "weight": weight})
     return valid, errors
 
@@ -160,7 +167,7 @@ MARKS = (
 HOW_TO_STEPS = (
     "Add a row: choose the Add row button in the table's toolbar (a plus sign), then type in the new "
     "row. Use Tab to move between cells and Enter to finish a cell. Leave Id empty to have one made.",
-    "Delete a row: select the row with its checkbox (Space on the focused checkbox), then choose "
+    "Delete a row: select the row with its checkbox (press Space when the checkbox has focus), then choose "
     "Delete row in the table's toolbar or press the Delete key.",
     "Start over: choose the Re-extract button. It reads the instructions again and drops your edits.",
     "Stop grading one without deleting it: remove it from the Requirements to grade list under the "
@@ -171,7 +178,8 @@ HOW_TO_STEPS = (
 def row_label(row: dict) -> str:
     """A safe label for a row: its number and valid id only, never the requirement text."""
     rid = safe_requirement_id(row.get("id"))
-    return f"Row {row['row']} ({rid})" if rid else f"Row {row['row']} (id made when saved)"
+    name = f"Row {row['row']}" if row["row"] else "New row"
+    return f"{name} ({rid})" if rid else f"{name} (id made when saved)"
 
 
 def _dialog_body(rows: list[dict]) -> None:
@@ -236,7 +244,7 @@ def render_errors(errors: list[RowError], used: int = 0, total: int = 0) -> None
     if len(bad) > MAX_SHOWN_ERRORS:
         shown += f"\n- ... and {len(bad) - MAX_SHOWN_ERRORS} more"
     st.error(f"Grading with {used} of {total} rows. These rows are left out and will NOT be graded "
-             f"(rows counted from the top, starting at 1):\n{shown}", icon=":material/error:")
+             f"(row numbers match the # column):\n{shown}", icon=":material/error:")
 
 
 def render_reminder(errors: Optional[list[RowError]] = None) -> None:

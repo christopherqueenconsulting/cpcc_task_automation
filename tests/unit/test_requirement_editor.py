@@ -38,9 +38,31 @@ def test_empty_text_is_skipped_with_a_message():
 def test_a_completely_blank_row_is_a_quiet_note_not_an_error():
     valid, errors = re_.validate_rows([_row(), _row("", "", "core")])
     assert len(valid) == 1 and errors[0].quiet and re_.loud(errors) == []
-    assert str(errors[0]) == "Row 2: is empty and is skipped."
+    assert str(errors[0]) == "Row 2 is empty, so it is skipped. Fill it in or delete it."
     # an id or a different weight with no text is still an error
     assert not re_.validate_rows([_row("", "", "secondary")])[1][0].quiet
+
+
+def test_errors_use_the_numbers_the_table_shows():
+    # row 1 was deleted: the table now shows 2 and 3, and a new row has no number yet
+    rows = [_row("R2", "Reads a price"), _row("R2", "Duplicate"), _row("", "", "core"),
+            _row("R9", "x" * (re_.MAX_TEXT_CHARS + 1))]
+    valid, errors = re_.validate_rows(rows, [2, 3, None, None])
+    msgs = [str(e) for e in errors]
+    assert [v["row"] for v in valid] == [2]
+    assert msgs[0] == "Row 3 (R2): the id R2 is already used by row 2. Give this row a different id, or clear it."
+    assert msgs[1] == "A new row is empty, so it is skipped. Fill it in or delete it."
+    assert msgs[2].startswith("A new row (R9): the requirement is")
+    dup_new = re_.validate_rows([_row("R1"), _row("R1", "Other")], [None, 1])[1][0]
+    assert "already used by the new row" in str(dup_new)
+    assert re_.row_label({"row": 0, "id": "", "text": "x"}) == "New row (id made when saved)"
+
+
+def test_row_labels_come_from_the_edited_frames_index():
+    from cqc_streamlit_app.grade_assignment import _row_labels
+    frame = pd.DataFrame([_row(), _row()], index=[2, float("nan")])
+    assert _row_labels(frame) == [2, None]
+    assert _row_labels(pd.DataFrame([_row()], index=["x"])) == [None]
 
 
 def test_whitespace_in_text_is_collapsed_to_one_line():
@@ -79,14 +101,14 @@ def test_render_errors_caps_the_list_and_says_how_many_more():
     def page():
         from cqc_streamlit_app import requirement_editor as r
         bad = [r.RowError(i, "text", "has no requirement text.") for i in range(1, 31)]
-        r.render_errors(bad + [r.RowError(31, "blank", "is empty and is skipped.", quiet=True)], 5, 30)
+        r.render_errors(bad + [r.RowError(31, "blank", "is empty, so it is skipped. Fill it in or delete it.", quiet=True)], 5, 30)
 
     at = AppTest.from_function(page, default_timeout=30).run()
     assert not at.exception, at.exception
     text = at.error[0].value
     assert text.startswith("Grading with 5 of 30 rows. These rows are left out and will NOT be graded")
     assert text.count("\n- Row ") == 20 and text.endswith("... and 10 more")
-    assert at.caption[0].value == "Row 31: is empty and is skipped."
+    assert at.caption[0].value == "Row 31 is empty, so it is skipped. Fill it in or delete it."
 
 
 def test_reminder_only_when_there_are_real_errors():
@@ -95,7 +117,7 @@ def test_reminder_only_when_there_are_real_errors():
 
         from cqc_streamlit_app import requirement_editor as r
         r.render_reminder()
-        r.render_reminder([r.RowError(1, "blank", "is empty and is skipped.", quiet=True)])
+        r.render_reminder([r.RowError(1, "blank", "is empty, so it is skipped. Fill it in or delete it.", quiet=True)])
         st.session_state["done"] = True
 
     at = AppTest.from_function(page, default_timeout=30)
@@ -117,6 +139,11 @@ def test_prompt_line_matches_the_real_prompt():
     item = rc.RequirementItem(id="R7", text="Prints the total", weight="secondary")
     line = re_.prompt_line(item.id, item.weight, item.text)
     assert line in requirements_prompt_section(rc.RequirementChecklist(requirements=[item]))
+
+
+def test_page_text_cannot_be_mistaken_for_the_cost_line():
+    # tests/e2e/test_grade_flow.py finds the cost line with a pattern that needs " on "
+    assert " on " not in re_.RULES_CAPTION and " on " not in re_.OFF_MESSAGE
 
 
 def test_effect_sentences():
@@ -184,9 +211,9 @@ def test_row_errors_listed_under_the_table_and_bad_row_not_graded():
     at = _run(edits)
     text = " ".join(e.value for e in at.error)
     assert text.startswith("Grading with 1 of 2 rows. These rows are left out and will NOT be graded "
-                           "(rows counted from the top, starting at 1):")
+                           "(row numbers match the # column):")
     assert "Row 2 (R1): the id R1 is already used by row 1" in text
-    assert any(c.value == "Row 3: is empty and is skipped." for c in at.caption)  # quiet, not an error
+    assert any(c.value == "Row 3 is empty, so it is skipped. Fill it in or delete it." for c in at.caption)  # quiet, not an error
     assert [r.id for r in at.session_state["out"].requirements] == ["R1"]
     assert any("left out and will not be graded" in w.value for w in at.warning)  # the reminder
     assert any(c.value == re_.RULES_CAPTION for c in at.caption)

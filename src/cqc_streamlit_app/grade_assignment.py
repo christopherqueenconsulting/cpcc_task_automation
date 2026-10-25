@@ -2506,11 +2506,24 @@ def _inert_model_text(text: Optional[str]) -> str:
 def _checklist_frame(checklist: RequirementChecklist) -> pd.DataFrame:
     """The editor's table: what the instructor can edit plus the read-only solution column.
     What is graded is set with the list under the table, which a screen reader can use."""
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         [{"id": r.id, "text": r.text, "weight": r.weight, "solution": solution_label(r)}
          for r in checklist.requirements],
         columns=["id", "text", "weight", "solution"],
         index=range(1, len(checklist.requirements) + 1))  # visible row numbers, from 1
+    frame.index.name = "#"
+    return frame
+
+
+def _row_labels(edited: pd.DataFrame) -> list:
+    """The number the table shows for each row (its # column); None for a row with no number yet."""
+    labels = []
+    for ix in edited.index:
+        try:
+            labels.append(int(ix) if ix == ix else None)
+        except (TypeError, ValueError):
+            labels.append(None)
+    return labels
 
 
 def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist,
@@ -2519,7 +2532,7 @@ def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist,
     verdict only while its text is the text that was checked. A row with a problem is left out and
     described in ``errors`` (when given); it is never graded with."""
     old = {r.id.strip().upper(): r for r in base.requirements}
-    rows, problems = requirement_editor.validate_rows(edited.to_dict("records"))
+    rows, problems = requirement_editor.validate_rows(edited.to_dict("records"), _row_labels(edited))
     if errors is not None:
         errors.extend(problems)
     ids = assign_ids([row["id"] for row in rows], reserved=old)

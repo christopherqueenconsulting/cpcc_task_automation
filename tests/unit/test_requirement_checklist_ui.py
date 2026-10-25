@@ -381,7 +381,7 @@ def test_a_duplicate_id_inherits_nothing_from_the_first_owner():
         rc.RequirementItem(id="R2", text="Applies a discount", weight="core", graded=False, hand_ungraded=True)])
     frame = pd.DataFrame([
         {"id": "R2", "text": "Applies a discount", "weight": "core"},
-        {"id": "r2", "text": "A second row typed with the same id", "weight": "core"}])
+        {"id": "r2", "text": "A second row typed with the same id", "weight": "core"}], index=[1, 2])
     errors = []
     out = _checklist_from_editor(frame, base, errors).requirements
     assert [r.id for r in out] == ["R2"]  # the second row is left out and reported
