@@ -82,8 +82,13 @@ def _drop_long_quotes(text: str) -> str:
 
 
 def _secret_env_values():
-    for name, value in os.environ.items():
-        if value and len(value) >= 12 and _SECRET_ENV_NAME.search(name):
+    # Snapshot the names and read each with .get(): os.environ.items() looks every key up again, so a variable
+    # removed by another thread (or the harness unsetting CQC_MODEL_REGISTRY_PATH) mid-iteration raised KeyError.
+    for name in list(os.environ):
+        if not _SECRET_ENV_NAME.search(name):
+            continue
+        value = os.environ.get(name)
+        if value and len(value) >= 12:
             yield value
 
 
