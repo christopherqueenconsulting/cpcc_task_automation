@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+import pandas as pd
+
 from cqc_cpcc.requirement_coverage import (
     MAX_ID_CHARS,
     MAX_REQUIREMENTS,
@@ -63,9 +65,28 @@ class RowError:
         return f"{name}{who} {self.message}" if self.quiet else f"{name}{who}: {self.message}"
 
 
-def _clean(value: Any) -> str:
-    text = "" if value is None else str(value).strip()
-    return "" if text.lower() in ("nan", "none") else text
+def _is_missing(value: Any) -> bool:
+    """True for a cell that holds nothing: None, float nan, pd.NA, pd.NaT. Checked on the raw cell,
+    before any str(), because a missing cell is nan or <NA> depending on the pandas version and the
+    column type, and str() of one is a word, not blank."""
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):  # a list or array cell is not a missing value
+        return False
+
+
+def _clean(value: Any, *, is_id: bool = False) -> str:
+    """An editor cell as stripped text; a missing cell is "". Real text is kept as typed, so a
+    requirement that says "None" stays. An id is the one field where the words nan, none, <NA>
+    and NaT are never wanted, so they are blank there too (a generated id is made instead)."""
+    if _is_missing(value):
+        return ""
+    text = str(value).strip()
+    if is_id and text.lower() in ("nan", "none", "<na>", "nat"):
+        return ""
+    return text
 
 
 def validate_rows(rows: list[dict], labels: Optional[list] = None) -> tuple[list[dict], list[RowError]]:
@@ -84,7 +105,7 @@ def validate_rows(rows: list[dict], labels: Optional[list] = None) -> tuple[list
     for position, raw in enumerate(rows, start=1):
         number = position if labels is None else (labels[position - 1] or 0)
         name = f"Row {number}" if number else "A new row"
-        rid = _clean(raw.get("id"))
+        rid = _clean(raw.get("id"), is_id=True)
         text = " ".join(_clean(raw.get("text")).split())
         weight = _clean(raw.get("weight")) or "core"
         good_id = safe_requirement_id(rid)
