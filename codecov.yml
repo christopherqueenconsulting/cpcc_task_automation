@@ -114,9 +114,12 @@ ignore:
 # We upload coverage separately for unit, integration, and e2e tests
 flags:
   unit:
-    # Coverage from unit tests
+    # Coverage from unit tests. Streamlit UI modules are unit-tested in-process
+    # with st.testing.v1.AppTest, and the unit job already measures them
+    # (--cov=src), so their coverage counts here too.
     paths:
       - "src/cqc_cpcc/"
+      - "src/cqc_streamlit_app/"
     # Join with other flags if they exist
     carryforward: true
   
@@ -247,14 +250,15 @@ component_management:
           target: 80%  # New utility code should be well-tested
     
     # Streamlit UI - user interface components
-    # Currently at 25.78% - tested primarily via E2E
+    # Tested by unit tests (AppTest) and E2E. The 25% baseline predates unit
+    # coverage being counted for this directory.
     - component_id: streamlit_ui
       name: Streamlit UI
       paths:
         - "src/cqc_streamlit_app/**"
       statuses:
         - type: project
-          target: 25%  # Current baseline - UI tested via E2E
+          target: 25%  # Baseline from when only E2E coverage counted
           threshold: 5%
           informational: true  # Don't block PRs
 
