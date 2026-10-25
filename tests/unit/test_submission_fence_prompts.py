@@ -179,3 +179,20 @@ async def test_the_giver_and_grader_send_the_fenced_prompt(mocker):
     await fg.grade_flowgorithm("A", "T", FPRG_A, "Sum.fprg", "10")
     sent = grade.call_args.kwargs["prompt"]
     assert "<<<UNTRUSTED SUBMISSION FILE NAME " in sent and "<<<UNTRUSTED SUBMISSION " in sent
+
+
+@pytest.mark.parametrize("name", BUILDERS)
+def test_a_default_call_puts_the_submission_after_an_opening_marker(name):
+    """No nonce passed (the production path): the submission must follow a real opening marker.
+    The old unfenced prompts fail this by assertion (no marker at all)."""
+    import re
+
+    _, code, _ = BUILDERS[name]
+    if name == "project-feedback":
+        prompt = _giver().build_prompt(code)
+    else:
+        prompt = fg.build_flowgorithm_prompt("Add two numbers.", "| Criterion | Points |", code, "Sum.fprg", "10")
+    match = re.search(r"<<<UNTRUSTED SUBMISSION ([0-9a-f]{16}) BEGIN>>>", prompt)
+    assert match, "the submission is not inside a nonce fence"
+    assert prompt.index(code) > match.end()
+    assert prompt.count(match.group(1)) >= 3  # nonce line (twice), opening and closing marker
