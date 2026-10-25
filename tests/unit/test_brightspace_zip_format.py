@@ -206,7 +206,7 @@ class TestBrightSpaceZIPFormat:
         
         with zipfile.ZipFile(zip_path, 'w') as zf:
             zf.writestr("Exam/index.htm", "<html>Index</html>")
-            zf.writestr("Exam/12345 - Student/page.htm", "<html>Page</html>")
+            zf.writestr("Exam/12345-12345 - Student/page.htm", "<html>Page</html>")
         
         accepted_types = ["htm", "html"]
         
@@ -228,7 +228,7 @@ class TestBrightSpaceZIPFormat:
         with zipfile.ZipFile(zip_path, 'w') as zf:
             zf.writestr("Exam/INDEX.HTML", "<html>Index</html>")
             zf.writestr("Exam/Index.Html", "<html>Index</html>")
-            zf.writestr("Exam/12345 - Student/Page.HTML", "<html>Page</html>")
+            zf.writestr("Exam/12345-12345 - Student/Page.HTML", "<html>Page</html>")
         
         accepted_types = ["html"]
         

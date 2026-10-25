@@ -14,6 +14,9 @@ layout matches what the rubric grader already expects::
 That layout is parsed downstream by
 :func:`cqc_cpcc.utilities.zip_grading_utils.extract_student_submissions_from_zip`
 (student name = the ``" - "``-delimited segment at index 1, else the top folder).
+The grader also accepts name-only folders (``<Student Name>/``), an outer wrapper
+folder such as ``brightspace_submissions/``, and the whole Results & review
+"Download All Feedback" ZIP, so these exports can be re-uploaded as is.
 
 Design notes:
 - The pure-Python core (route detection, last-attempt pruning, ZIP building) has
