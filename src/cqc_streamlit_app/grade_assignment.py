@@ -2809,6 +2809,9 @@ ZIP_LAYOUT_HELP = """\
   **Results & review** can be uploaded as is. For the whole "Download All Feedback" ZIP,
   only the ZIP in its `Student_Submissions/` folder is read.
   Mac `__MACOSX` and `.DS_Store` files are ignored.
+- Student folders must not be named like project folders (`src`, `lib`, `test`, `main`,
+  `docs`), or like parts of one assignment (`Problem 1`, `Lab 2`): those are read as
+  inside one student's work.
 - Files at the top of the ZIP or directly in an outer folder, outside any student folder,
   are skipped. Only accepted file types are graded; others are flagged in the preview below.
 """

@@ -400,3 +400,86 @@ class TestSkippedRootFiles:
             extract_student_submissions_from_zip(zip_path, ['.java'])
         assert ("Files at the ZIP root or directly in an outer folder are skipped; "
                 "put each student's files in their own folder.") in str(exc.value)
+
+
+@pytest.mark.unit
+class TestWrapperLevelFiles:
+    def test_accepted_file_directly_in_wrapper_is_skipped_with_warning(self, tmp_path, caplog):
+        zip_path = _write_zip(tmp_path / "wl.zip", {
+            "brightspace_submissions/Stray.java": JAVA,
+            "brightspace_submissions/notes.txt": "n",
+            "brightspace_submissions/Student A/Main.java": JAVA,
+            "brightspace_submissions/Student B/Main.java": JAVA,
+        })
+        with caplog.at_level("WARNING"):
+            result = extract_student_submissions_from_zip(zip_path, ['.java'])
+        assert set(result) == {"Student A", "Student B"}
+        assert "Skipped 1 file(s) at the ZIP root or directly in an outer folder" in caplog.text
+
+    def test_empty_path_is_noise(self):
+        from cqc_cpcc.utilities.zip_grading_utils import _is_noise_path
+        assert _is_noise_path("//") is True
+
+    def test_loose_file_in_section_wrapper_does_not_merge_students(self, tmp_path, caplog):
+        zip_path = _write_zip(tmp_path / "sec.zip", {
+            "CSC151 Lab 3/Rubric.docx": b"docx",
+            "CSC151 Lab 3/Student A/Main.java": JAVA,
+            "CSC151 Lab 3/Student B/Main.java": JAVA,
+        })
+        with caplog.at_level("WARNING"):
+            result = extract_student_submissions_from_zip(zip_path, ['.java', '.docx'])
+        assert set(result) == {"Student A", "Student B"}
+        assert "Skipped 1 file(s)" in caplog.text
+
+    def test_term_code_wrapper_is_not_a_student_folder(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "term.zip", {
+            "202610 - CSC151 Lab 3/Student A/Main.java": JAVA,
+            "202610 - CSC151 Lab 3/Student B/Main.java": JAVA,
+        })
+        assert set(extract_student_submissions_from_zip(zip_path, ['.java'])) == {"Student A", "Student B"}
+
+    def test_project_name_outermost_folder_is_still_a_wrapper(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "java.zip", {
+            "Java/Student A/Main.java": JAVA,
+            "Java/Student B/Main.java": JAVA,
+        })
+        assert set(extract_student_submissions_from_zip(zip_path, ['.java'])) == {"Student A", "Student B"}
+
+    def test_student_with_loose_file_and_project_dirs_stays_one_student(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "one.zip", {
+            "Student A/Main.java": JAVA,
+            "Student A/src/A.java": JAVA,
+            "Student A/lib/B.java": JAVA,
+        })
+        result = extract_student_submissions_from_zip(zip_path, ['.java'])
+        assert list(result) == ["Student A"]
+        assert len(result["Student A"].files) == 3
+
+    def test_generic_part_folders_are_one_student_with_warning(self, tmp_path, caplog):
+        zip_path = _write_zip(tmp_path / "parts.zip", {
+            "Student A/Problem 1/X.java": JAVA,
+            "Student A/Problem 2/Y.java": JAVA,
+        })
+        with caplog.at_level("WARNING"):
+            result = extract_student_submissions_from_zip(zip_path, ['.java'])
+        assert list(result) == ["Student A"]
+        assert len(result["Student A"].files) == 2
+        assert "kept together, not split into separate submissions" in caplog.text
+
+
+@pytest.mark.unit
+class TestHostileFolderNames:
+    def test_dotdot_folder_never_becomes_a_student(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "dots.zip", {
+            "../Main.java": JAVA,
+            "./Other.java": JAVA,
+            "Student A/Main.java": JAVA,
+        })
+        result = extract_student_submissions_from_zip(zip_path, ['.java'])
+        assert set(result) == {"Student A"}
+
+    def test_control_characters_are_stripped_from_student_names(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "ctl.zip", {
+            "Stu\u2028dent\x85 A/Main.java": JAVA,
+        })
+        assert list(extract_student_submissions_from_zip(zip_path, ['.java'])) == ["Student A"]

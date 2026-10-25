@@ -269,7 +269,7 @@ MAX_NESTED_ZIP_BYTES = 512 * 1024 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
 
 # BrightSpace "Download All" student folder: "{orgId}-{submissionId} - {Name} - {date}".
-_BRIGHTSPACE_ID_FOLDER_RE = re.compile(r'^\d+(?:-\d+)? - ')
+_BRIGHTSPACE_ID_FOLDER_RE = re.compile(r'^\d+-\d+ - ')
 
 # Folder names that belong inside one student's project, never a student's own folder.
 _PROJECT_DIR_NAMES = {
@@ -277,7 +277,11 @@ _PROJECT_DIR_NAMES = {
     'tests', 'resources', 'res', 'java', 'pkg', 'app', 'docs', 'data', 'assets',
 }
 
-_CONTROL_CHARS_RE = re.compile(r'[\x00-\x1f\x7f]')
+_CONTROL_CHARS_RE = re.compile('[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]')
+
+# Generic names for the parts of ONE student's work ("Problem 1", "Lab 2", "Part A"...).
+_GENERIC_PART_RE = re.compile(
+    r'^(part|problem|lab|question|exercise|task|step|q|p|ex)[\s_-]*(\d+|[a-z])$', re.IGNORECASE)
 
 
 def _normalize_zip_name(name: str) -> str:
@@ -367,23 +371,27 @@ def _detect_wrapper_folder(paths: list[str]) -> Optional[str]:
     if common_parts[0].lower() in KNOWN_EXPORT_WRAPPERS and any(len(sp) > 2 for sp in split_paths):
         return common_parts[0]
     depth = len(common_parts)
-    # A file directly in the common folder: it is a student folder, not a wrapper.
-    # (BrightSpace's own index.html does not count.)
-    if any(len(sp) == depth + 1 and not should_ignore_file('/'.join(sp)) for sp in split_paths):
-        return None
-    # A single-student folder: the common folders are a BrightSpace student folder or hold
-    # project directories (src, lib...).
-    if any(_BRIGHTSPACE_ID_FOLDER_RE.match(part) or part.lower() in _PROJECT_DIR_NAMES
-           for part in common_parts):
+    # One student's own folder: a BrightSpace id folder anywhere in the common path, or a
+    # project folder (src, lib...) below the outermost folder.
+    if any(_BRIGHTSPACE_ID_FOLDER_RE.match(part) for part in common_parts) or any(
+            part.lower() in _PROJECT_DIR_NAMES for part in common_parts[1:]):
         return None
     second_level_folders = {
         sp[depth] for sp in split_paths
         if len(sp) > depth + 1 and not should_ignore_file('/'.join(sp))
     }
-    if len(second_level_folders) > 1 and not any(
+    if len(second_level_folders) < 2 or any(
             name.lower() in _PROJECT_DIR_NAMES for name in second_level_folders):
-        return '/'.join(common_parts)
-    return None
+        return None
+    # Loose files directly in the folder (a rubric, a README) do not stop it being a
+    # wrapper; the extractor skips them and reports them.
+    if all(_GENERIC_PART_RE.match(name) for name in second_level_folders):
+        logger.warning(
+            f"Folder {'/'.join(common_parts)!r} holds only {sorted(second_level_folders)!r}; "
+            "kept together, not split into separate submissions. If these are separate "
+            "submissions, rename their folders.")
+        return None
+    return '/'.join(common_parts)
 
 
 def _nested_submissions_zips(names: list[str]) -> list[str]:
@@ -465,7 +473,7 @@ def extract_student_submissions_from_zip(
             if len(nested_candidates) > 1:
                 logger.warning(
                     f"{len(nested_candidates)} ZIPs found in {_NESTED_SUBMISSIONS_DIR}; "
-                    f"reading only '{nested_candidates[0]}'")
+                    f"reading only {nested_candidates[0]!r}")
             if any('/' in n and not n.startswith(_NESTED_SUBMISSIONS_DIR) and not _is_noise_path(n)
                    for n in names):
                 logger.warning(
@@ -520,7 +528,7 @@ def extract_student_submissions_from_zip(
 
             entry_name = _normalize_zip_name(file_info.filename)
             if entry_name.startswith('/'):
-                logger.debug(f"Skipping absolute-path entry: {entry_name}")
+                logger.debug(f"Skipping absolute-path entry: {entry_name!r}")
                 continue
             file_name = os.path.basename(entry_name)
             directory_name = os.path.dirname(entry_name)
@@ -559,6 +567,10 @@ def extract_student_submissions_from_zip(
             # "{id} - {Student Name} - {Timestamp}" and "{Assignment} - {Name}",
             # preserving multi-word and dashed names (see parse_student_folder_name).
             student_folder, subfolder = _student_folder_segment(directory_name, bool(wrapper_folder))
+            student_folder = _CONTROL_CHARS_RE.sub('', student_folder).strip()
+            if student_folder in ('', '.', '..'):
+                logger.warning(f"Skipping {entry_name!r}: no usable student folder name")
+                continue
             student_id = parse_student_folder_name(student_folder)
 
             if binary_reject:
