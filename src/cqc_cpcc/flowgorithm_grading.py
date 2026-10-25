@@ -13,7 +13,11 @@ from typing import Annotated, Optional
 
 from pydantic import BaseModel, Field
 
-from cqc_cpcc.prompts.flowgorithm import FLOWGORITHM_GRADE_PROMPT
+from cqc_cpcc.prompts.flowgorithm import (
+    FLOWGORITHM_CLOSING_LINE,
+    FLOWGORITHM_GRADE_PROMPT,
+)
+from cqc_cpcc.utilities.AI import untrusted_fence
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias, scrub
 
@@ -48,17 +52,32 @@ def file_name_alias(file_name: str) -> str:
 
 
 def build_flowgorithm_prompt(assignment: str, rubric_criteria_markdown_table: str, submission: str,
-                             submission_file_name: str, total_possible_points: str) -> str:
-    """The prompt text. ``grade_flowgorithm`` passes the alias from :func:`file_name_alias`;
-    the name is also run through ``scrub`` here as a second layer for any other caller."""
+                             submission_file_name: str, total_possible_points: str,
+                             nonce: Optional[str] = None) -> str:
+    """The single user message for grading one submission.
+
+    What is the same for every student of an assignment (rules, assignment, rubric, total points,
+    output instructions) comes first. The per-call nonce line, the file name and the submission
+    inside nonce fences (``utilities/AI/untrusted_fence`` strips marker-shaped text from both) and
+    a closing line come last. ``grade_flowgorithm`` passes the alias from :func:`file_name_alias`;
+    the name is also run through ``scrub`` here as a second layer for any other caller. ``nonce``
+    fixes the fence nonce (prompt fingerprints); real calls leave it unset.
+    """
+    nonce = nonce or untrusted_fence.new_nonce()
     submission_file_name = scrub(submission_file_name)
-    return FLOWGORITHM_GRADE_PROMPT.strip().format(
+    static = FLOWGORITHM_GRADE_PROMPT.strip().format(
         assignment=assignment,
-        submission_file_name=submission_file_name,
-        submission=submission,
         rubric_criteria_markdown_table=rubric_criteria_markdown_table,
         total_possible_points=total_possible_points,
     )
+    return "\n".join([
+        static,
+        untrusted_fence.instruction_line(nonce),
+        untrusted_fence.fence("File Name", submission_file_name, nonce),
+        untrusted_fence.fence("Submission", submission, nonce),
+        "",
+        FLOWGORITHM_CLOSING_LINE,
+    ])
 
 
 def _points(value) -> Optional[float]:

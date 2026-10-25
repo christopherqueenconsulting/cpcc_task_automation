@@ -21,7 +21,7 @@ def _grade(deductions=(("Comments", 5),), final=45):
 
 def test_prompt_contains_every_input():
     prompt = fg.build_flowgorithm_prompt("ASSIGN", "| Criterion | Points |", "SUBMISSION", "Sum.fprg", "50")
-    for text in ("ASSIGN", "| Criterion | Points |", "SUBMISSION", "Sum.fprg", "(50)"):
+    for text in ("ASSIGN", "| Criterion | Points |", "SUBMISSION", "Sum.fprg", "Total Possible Points:\n50"):
         assert text in prompt
     assert "{" not in prompt.replace("{}", "")  # every placeholder filled
 
@@ -54,6 +54,10 @@ async def test_grade_calls_gateway_on_flowgorithm_role(mocker):
     assert kwargs["override"] == "openai/x"
     assert kwargs["use_auto_route"] is False
     assert kwargs["prompt_id"] == "flowgorithm-grade"
+    # One user message (no system message); the fenced submission comes last.
+    assert "system" not in kwargs
+    assert kwargs["prompt"].startswith("You are a community college professor")
+    assert "\nS\n<<<UNTRUSTED SUBMISSION" in kwargs["prompt"]
 
 
 async def test_auto_route_model_turns_on_auto_routing(mocker):
@@ -80,8 +84,11 @@ import re  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 from cqc_cpcc.utilities import pii_redaction  # noqa: E402
+from cqc_cpcc.utilities.AI import untrusted_fence  # noqa: E402
 
-_ALIAS_RE = re.compile(r"Submission File Name:\nstudent_[0-9a-f]{8}\.fprg\n")
+# The alias sits alone inside the nonce-fenced File Name block of the user message.
+_ALIAS_RE = re.compile(r"<<<UNTRUSTED FILE NAME ([0-9a-f]{16}) BEGIN>>>\nstudent_[0-9a-f]{8}\.fprg\n"
+                       r"<<<UNTRUSTED FILE NAME \1 END>>>")
 
 
 def _sent(mocker):
@@ -147,3 +154,15 @@ async def test_the_eval_suite_path_sends_the_alias(mocker):
     await SUITE.invoke(case)
     sent = _serialized(structured)
     assert "Ada" not in sent and _ALIAS_RE.search(structured.await_args.kwargs["prompt"])
+
+
+async def test_the_fenced_file_name_block_holds_the_alias_and_not_the_real_name(mocker):
+    structured = _sent(mocker)
+    await fg.grade_flowgorithm("A", "T", "SUB", "Grace_Hopper_Sum.fprg", "50")
+    prompt = structured.await_args.kwargs["prompt"]
+    nonce = _ALIAS_RE.search(prompt).group(1)
+    opening, closing = untrusted_fence.markers("File Name", nonce)
+    block = prompt[prompt.index(opening) + len(opening):prompt.index(closing)].strip()
+    assert block == fg.file_name_alias("Grace_Hopper_Sum.fprg")
+    assert re.fullmatch(r"student_[0-9a-f]{8}\.fprg", block)
+    assert "Grace" not in prompt and "Hopper" not in prompt

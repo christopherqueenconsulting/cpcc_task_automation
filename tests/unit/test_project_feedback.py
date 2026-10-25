@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from cqc_cpcc.rubric_grading import MESSAGE_SEPARATOR
+
 from cqc_cpcc.project_feedback import (
     FeedbackGiver,
     FeedbackItem,
@@ -451,20 +453,24 @@ class TestExtraGuidance:
     def test_build_prompt_includes_guidance(self):
         prompt = self._giver(extra_guidance="  Give hints, not fixes.  ").build_prompt("class A {}")
         assert "## Instructor Guidance\nGive hints, not fixes.\n" in prompt
-        assert "class A {}" in prompt
+        assert "class A {}" in prompt  # inside the submission fence, last of the user message
 
     def test_blank_guidance_renders_none(self):
         prompt = self._giver().build_prompt("class A {}")
         assert "## Instructor Guidance\nNone\n" in prompt
 
     @pytest.mark.asyncio
-    async def test_generate_feedback_sends_build_prompt(self, mocker):
+    async def test_generate_feedback_sends_the_built_messages(self, mocker):
+        mocker.patch('cqc_cpcc.utilities.AI.untrusted_fence.new_nonce', return_value="0123456789abcdef")
         structured = mocker.patch('cqc_cpcc.project_feedback.llm_gateway.structured',
                                   new_callable=AsyncMock, return_value=_report())
         mocker.patch('cqc_cpcc.project_feedback.JavaCode')
         giver = self._giver(extra_guidance="Top 3 issues only.")
         await giver.generate_feedback("class A {}")
-        assert structured.call_args.kwargs["prompt"] == giver.build_prompt("class A {}")
+        system, user = giver.build_messages("class A {}")
+        assert structured.call_args.kwargs["system"] == system
+        assert structured.call_args.kwargs["prompt"] == user
+        assert system + MESSAGE_SEPARATOR + user == giver.build_prompt("class A {}")
 
 
 @pytest.mark.unit
