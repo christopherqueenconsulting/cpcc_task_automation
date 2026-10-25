@@ -130,3 +130,114 @@ class TestMemberLimits:
         text = str(exc.value)
         assert "evil\nname" not in text and "\x85" not in text
         assert "evil\\nname\\x85.java" in text
+
+
+def _eocd(entries, comment=b""):
+    import struct
+    return b"PK\x05\x06" + struct.pack("<HHHHLLH", 0, 0, entries, entries, 0, 0, len(comment)) + comment
+
+
+@pytest.mark.unit
+class TestPreOpenChecks:
+    def _no_zipfile(self, monkeypatch):
+        def boom(*a, **k):
+            raise AssertionError("ZipFile must not be built")
+        monkeypatch.setattr(z.zipfile, "ZipFile", boom)
+
+    def test_eocd_claiming_too_many_entries_is_rejected_without_zipfile(self, tmp_path, monkeypatch):
+        path = tmp_path / "claims.zip"
+        path.write_bytes(b"junk" * 10 + _eocd(11000))
+        self._no_zipfile(monkeypatch)
+        with pytest.raises(ValueError, match="more than 10,000 entries"):
+            extract_student_submissions_from_zip(str(path), ['.java'])
+
+    def test_zip64_record_claiming_too_many_entries(self, tmp_path, monkeypatch):
+        import struct
+        record = struct.pack("<4sQHHIIQQQQ", b"PK\x06\x06", 44, 45, 45, 0, 0, 11000, 11000, 0, 0)
+        locator = struct.pack("<4sIQI", b"PK\x06\x07", 0, 0, 1)
+        path = tmp_path / "z64.zip"
+        path.write_bytes(record + locator + _eocd(0xFFFF))
+        self._no_zipfile(monkeypatch)
+        with pytest.raises(ValueError, match="more than 10,000 entries"):
+            extract_student_submissions_from_zip(str(path), ['.java'])
+
+    def test_oversized_file_is_rejected_without_zipfile(self, tmp_path, monkeypatch):
+        path = _write_zip(tmp_path / "ok.zip", {"Student A/Main.java": JAVA})
+        monkeypatch.setattr(z, "MAX_ZIP_BYTES", 10)
+        self._no_zipfile(monkeypatch)
+        with pytest.raises(ValueError, match="larger than"):
+            extract_student_submissions_from_zip(path, ['.java'])
+
+    def test_not_a_zip_still_reports_bad_zip(self, tmp_path):
+        path = tmp_path / "bad.zip"
+        path.write_bytes(b"not a zip at all")
+        with pytest.raises(zipfile.BadZipFile):
+            extract_student_submissions_from_zip(str(path), ['.java'])
+
+
+@pytest.mark.unit
+class TestLimitConfig:
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("CQC_ZIP_MAX_MEMBER_MB", "7")
+        assert z._limit_from_env("CQC_ZIP_MAX_MEMBER_MB", 100) == 7 * 1024 * 1024
+
+    @pytest.mark.parametrize("bad", ["abc", "0", "-5", "99999999", "1.5"])
+    def test_bad_env_falls_back_to_default(self, monkeypatch, bad):
+        monkeypatch.setenv("CQC_ZIP_MAX_TOTAL_MB", bad)
+        assert z._limit_from_env("CQC_ZIP_MAX_TOTAL_MB", 256) == 256 * 1024 * 1024
+
+    def test_unset_env_uses_default(self, monkeypatch):
+        monkeypatch.delenv("CQC_ZIP_MAX_TOTAL_MB", raising=False)
+        assert z._limit_from_env("CQC_ZIP_MAX_TOTAL_MB", 1024) == 1024 * 1024 * 1024
+
+    def test_cloud_detection_uses_mount_src(self, monkeypatch):
+        from pathlib import Path
+        monkeypatch.setattr(Path, "exists", lambda self: str(self) == "/mount/src")
+        assert z._on_community_cloud() is True
+
+    def test_copy_default_limit_is_read_at_call_time(self, monkeypatch):
+        monkeypatch.setattr(z, "MAX_NESTED_ZIP_BYTES", 10)
+        with pytest.raises(ValueError, match="inside the upload"):
+            z._copy_member_capped(io.BytesIO(b"x" * 100), io.BytesIO())
+
+    def test_member_over_1_mib_with_zero_compress_size_is_rejected(self):
+        info = zipfile.ZipInfo("Student A/Big.java")
+        info.file_size = 2 * 1024 * 1024
+        info.compress_size = 0
+        with pytest.raises(ValueError, match="compressed more than"):
+            z._check_member_before_read(info, 0)
+
+
+@pytest.mark.unit
+class TestRebuildPathIsBounded:
+    def test_rebuild_normal(self, tmp_path):
+        from cqc_streamlit_app.utils import _rebuild_zip_from_kept
+        src = _write_zip(tmp_path / "src.zip", {"Student A/Main.java": JAVA, "Student B/Main.java": JAVA})
+        out = _rebuild_zip_from_kept(src, {"Student A/Main.java"})
+        with zipfile.ZipFile(out) as zf:
+            assert zf.namelist() == ["Student A/Main.java"]
+            assert zf.read("Student A/Main.java").decode() == JAVA
+        os.unlink(out)
+
+    def test_rebuild_over_cap_raises_and_removes_output(self, tmp_path, monkeypatch):
+        from cqc_streamlit_app import utils
+        src = _write_zip(tmp_path / "src.zip", {"Student A/Big.java": "a" * 5000})
+        monkeypatch.setattr(z, "MAX_MEMBER_BYTES", 1000)
+        created = []
+        real = tempfile.NamedTemporaryFile
+
+        def tracking(*a, **k):
+            f = real(*a, **k)
+            created.append(f.name)
+            return f
+        monkeypatch.setattr(utils.tempfile, "NamedTemporaryFile", tracking)
+        with pytest.raises(ValueError, match="zip bomb"):
+            utils._rebuild_zip_from_kept(src, {"Student A/Big.java"})
+        assert created and not any(os.path.exists(p) for p in created)
+
+    def test_rebuild_rejects_too_many_entries_before_opening(self, tmp_path):
+        from cqc_streamlit_app import utils
+        path = tmp_path / "claims.zip"
+        path.write_bytes(_eocd(11000))
+        with pytest.raises(ValueError, match="more than 10,000 entries"):
+            utils._rebuild_zip_from_kept(str(path), {"x"})

@@ -16,6 +16,7 @@ Used by both legacy and rubric-based exam grading tabs.
 
 import os
 import re
+import struct
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -272,9 +273,39 @@ MAX_NESTED_ZIP_BYTES = 512 * 1024 * 1024
 # file (accepted upload types include mp4, mov, mp3) can reach tens of MiB. Streamlit's
 # own default per-upload limit is 200 MB, so 100 MiB per member leaves headroom for the
 # biggest realistic file while stopping a small ZIP that expands to gigabytes.
-MAX_MEMBER_BYTES = 100 * 1024 * 1024
+def _on_community_cloud() -> bool:
+    """True on Streamlit Community Cloud (it mounts the app under ``/mount/src``; the same
+    check ``results_store.persistence_enabled`` uses). Its disk and memory are small."""
+    return Path("/mount/src").exists()
+
+
+def _limit_from_env(name: str, default_mib: int) -> int:
+    """A size limit in bytes from env var ``name`` (whole MiB, 1 to 65536).
+
+    An unset, non-numeric or out-of-range value falls back to ``default_mib`` with a
+    warning, so a typo can neither disable the limit nor make every ZIP fail.
+    """
+    raw = os.environ.get(name, "").strip()
+    if raw:
+        try:
+            mib = int(raw)
+        except ValueError:
+            mib = 0
+        if 1 <= mib <= 65536:
+            return mib * 1024 * 1024
+        logger.warning(f"Ignoring {name}={raw!r}: expected a whole number of MiB from 1 to "
+                       f"65536; using {default_mib}")
+    return default_mib * 1024 * 1024
+
+
+_ON_CLOUD = _on_community_cloud()
+# Local defaults 100 MiB / 1 GiB; Community Cloud 25 MiB / 256 MiB.
+# Override with CQC_ZIP_MAX_MEMBER_MB and CQC_ZIP_MAX_TOTAL_MB.
+MAX_MEMBER_BYTES = _limit_from_env("CQC_ZIP_MAX_MEMBER_MB", 25 if _ON_CLOUD else 100)
 # All members of one extraction together, including a nested ZIP's copy and its members.
-MAX_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+MAX_TOTAL_UNCOMPRESSED_BYTES = _limit_from_env("CQC_ZIP_MAX_TOTAL_MB", 256 if _ON_CLOUD else 1024)
+# The uploaded ZIP itself; above Streamlit's default 200 MB per-upload limit.
+MAX_ZIP_BYTES = 250 * 1024 * 1024
 # Entries in one ZIP (files and folders); a real class export is a few hundred.
 MAX_ENTRY_COUNT = 10_000
 # Members above RATIO_MIN_BYTES that compress better than this are treated as a bomb.
@@ -316,7 +347,7 @@ def _clean_label(label: str) -> str:
     return cleaned or 'file'
 
 
-def _copy_member_capped(src, dst, limit: int = MAX_NESTED_ZIP_BYTES,
+def _copy_member_capped(src, dst, limit: Optional[int] = None,
                         too_big: Optional[str] = None) -> int:
     """Copy ``src`` to ``dst`` in 1 MiB chunks, counting the bytes actually read.
 
@@ -324,6 +355,8 @@ def _copy_member_capped(src, dst, limit: int = MAX_NESTED_ZIP_BYTES,
     nested-ZIP one). Counting real bytes means a ZIP header that lies about the size
     cannot get past the cap.
     """
+    if limit is None:
+        limit = MAX_NESTED_ZIP_BYTES  # read at call time, not bound at definition
     total = 0
     while True:
         chunk = src.read(_COPY_CHUNK_BYTES)
@@ -337,6 +370,35 @@ def _copy_member_capped(src, dst, limit: int = MAX_NESTED_ZIP_BYTES,
         dst.write(chunk)
 
 
+def _check_zip_directory_size(zip_path: str) -> None:
+    """Refuse an oversized ZIP, or one claiming too many entries, before ``ZipFile()``.
+
+    ``zipfile.ZipFile`` parses the whole central directory on open, so millions of tiny
+    entries could use gigabytes of memory before ``MAX_ENTRY_COUNT`` is checked. The
+    entry count is read from the end-of-central-directory record (and its zip64 record).
+    """
+    size = os.path.getsize(zip_path)
+    if size > MAX_ZIP_BYTES:
+        raise _bomb_error(f"This ZIP file is larger than {_mib(MAX_ZIP_BYTES)}")
+    tail_len = min(size, 65535 + 22 + 20)
+    with open(zip_path, 'rb') as fh:
+        fh.seek(size - tail_len)
+        tail = fh.read(tail_len)
+        eocd = tail.rfind(b'PK\x05\x06')
+        if eocd < 0 or len(tail) - eocd < 22:
+            return  # not a ZIP: ZipFile will say so
+        total_entries = struct.unpack_from('<H', tail, eocd + 10)[0]
+        if total_entries == 0xFFFF and eocd >= 20 and tail[eocd - 20:eocd - 16] == b'PK\x06\x07':
+            zip64_offset = struct.unpack_from('<Q', tail, eocd - 20 + 8)[0]
+            if 0 <= zip64_offset <= size - 56:
+                fh.seek(zip64_offset)
+                record = fh.read(56)
+                if len(record) == 56 and record[:4] == b'PK\x06\x06':
+                    total_entries = struct.unpack_from('<Q', record, 32)[0]
+    if total_entries > MAX_ENTRY_COUNT:
+        raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
+
+
 def _mib(n: int) -> str:
     return f"{n / (1024 * 1024):g} MiB"
 
@@ -344,6 +406,41 @@ def _mib(n: int) -> str:
 def _bomb_error(what: str) -> ValueError:
     return ValueError(f"{what}; it may be damaged or a zip bomb. Re-export it from "
                       "BrightSpace, or upload the student files without the ZIP.")
+
+
+def _member_limit(name: str, used: int) -> tuple[int, str]:
+    """Byte limit for the next member and the instructor message if it is exceeded."""
+    remaining = MAX_TOTAL_UNCOMPRESSED_BYTES - used
+    limit = min(MAX_MEMBER_BYTES, remaining)
+    if limit == MAX_MEMBER_BYTES:
+        what = f"{name!r} expands to more than {_mib(MAX_MEMBER_BYTES)}"
+    else:
+        what = f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} in total"
+    return limit, str(_bomb_error(what))
+
+
+def rebuild_zip_from_members(src_zip_path: str, out_zip_path: str, keep_arcs) -> None:
+    """Write ``keep_arcs`` from ``src_zip_path`` into a new ZIP, under the same limits.
+
+    Same pre-open size and entry-count check, per-member and total budget and streamed
+    copy as the grader's extraction. Raises ValueError on a breach; the caller removes
+    ``out_zip_path``.
+    """
+    _check_zip_directory_size(src_zip_path)
+    used = 0
+    with zipfile.ZipFile(src_zip_path, "r") as src, \
+            zipfile.ZipFile(out_zip_path, "w", zipfile.ZIP_DEFLATED) as dst:
+        if len(src.infolist()) > MAX_ENTRY_COUNT:
+            raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
+        for arc in keep_arcs:
+            info = src.getinfo(arc)
+            _check_member_before_read(info, used)
+            limit, too_big = _member_limit(arc, used)
+            target = zipfile.ZipInfo(arc, date_time=info.date_time)
+            target.compress_type = zipfile.ZIP_DEFLATED
+            with src.open(info) as reader, dst.open(
+                    target, "w", force_zip64=info.file_size >= 2 ** 31) as writer:
+                used += _copy_member_capped(reader, writer, limit, too_big=too_big)
 
 
 def _check_member_before_read(info: zipfile.ZipInfo, used: int) -> None:
@@ -512,6 +609,7 @@ def extract_student_submissions_from_zip(
     if _bytes_used is None:
         _bytes_used = [0]  # uncompressed bytes written so far, shared with a nested call
 
+    _check_zip_directory_size(zip_path)
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         if len(zip_ref.infolist()) > MAX_ENTRY_COUNT:
             raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
@@ -708,12 +806,7 @@ def _extract_plain_zip(
                 # Extract to temp file
                 member = zip_ref.getinfo(zip_file_path)
                 _check_member_before_read(member, bytes_used[0])
-                remaining = MAX_TOTAL_UNCOMPRESSED_BYTES - bytes_used[0]
-                limit = min(MAX_MEMBER_BYTES, remaining)
-                too_big = (
-                    f"{zip_file_path!r} expands to more than {_mib(MAX_MEMBER_BYTES)}"
-                    if limit == MAX_MEMBER_BYTES else
-                    f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} in total")
+                limit, too_big = _member_limit(zip_file_path, bytes_used[0])
                 with zip_ref.open(member) as file:
                     prefix = f'from_zip_{randint(1000, 100000000)}_'
                     suffix = Path(file_name).suffix
