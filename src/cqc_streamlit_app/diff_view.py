@@ -103,9 +103,10 @@ CLASS_SPOKEN = {oc.LINE_SPACING: "spacing only", oc.LINE_CASE: "case only", oc.L
                 oc.LINE_NUMBER_FORMAT: "number format only", oc.LINE_DECIMAL_PLACES: "decimal places only",
                 oc.LINE_VALUE: "value only", oc.LINE_WORDING: "wording", CLASS_BLANK: "blank line",
                 CLASS_MOVED: "moved line"}
-#: Changed-row classes whose lines differ in more than layout, most serious first (the summary's order).
-CONTENT_CLASSES = (oc.LINE_VALUE, oc.LINE_WORDING, oc.LINE_DECIMAL_PLACES, oc.LINE_NUMBER_FORMAT,
-                   oc.LINE_PUNCTUATION, oc.LINE_CASE)
+#: Changed-row classes the verdict treats as value or wording differences (the summary's first group).
+VALUE_WORDING_CLASSES = (oc.LINE_VALUE, oc.LINE_WORDING)
+#: Changed-row classes the verdict treats as formatting (FORMAT_ONLY), apart from spacing (the summary's second group).
+FORMAT_CLASSES = (oc.LINE_DECIMAL_PLACES, oc.LINE_NUMBER_FORMAT, oc.LINE_PUNCTUATION, oc.LINE_CASE)
 
 #: Text that may be drawn: either one string, or ``[[piece, highlighted(0/1)], ...]`` for a changed line.
 Segments = Union[str, list]
@@ -326,13 +327,15 @@ def _plural(n: int, one: str, many: str) -> str:
 
 
 def summary_text(rows: Sequence[AlignedRow]) -> str:
-    """Content differences first, then layout-only, then lines on one side only; blank lines apart."""
+    """Value or wording differences first, then formatting, then spacing, then lines on one side only; blank lines
+    apart. The groups follow the verdict, so the summary and the legend's grading note use the same words."""
     classes = count_classes(rows)
-    content = {c: classes[c] for c in CONTENT_CLASSES if c in classes}
     parts = []
-    if content:
-        detail = ", ".join(f"{v:,} {CLASS_TAG[c]}" for c, v in content.items())
-        parts.append(f"{_plural(sum(content.values()), 'line differs', 'lines differ')} in content ({detail})")
+    for group, what in ((VALUE_WORDING_CLASSES, "in value or wording"), (FORMAT_CLASSES, "only in formatting")):
+        found = {c: classes[c] for c in group if c in classes}
+        if found:
+            detail = ", ".join(f"{v:,} {CLASS_TAG[c]}" for c, v in found.items())
+            parts.append(f"{_plural(sum(found.values()), 'line differs', 'lines differ')} {what} ({detail})")
     if classes.get(oc.LINE_SPACING):
         n = classes[oc.LINE_SPACING]
         parts.append(f"{_plural(n, 'line differs', 'lines differ')} only in spacing")
@@ -499,12 +502,15 @@ def build_side_by_side_html(rows: Sequence[AlignedRow], labels: Sequence[str] = 
 <li>Markers: <b>-</b> is in the expected output, <b>+</b> is in the student output. A marker on both sides means
 these two lines were matched as the same line of output; the tag says how they differ. Wording rows are the least
 certain match.</li>
-<li>Tags: spacing, case, punctuation, number format, decimal places, value (the numbers, dates or times differ; the words may differ too), wording,
+<li>Tags: spacing, case, punctuation, number format, decimal places, value (the numbers, dates or times differ; the words may differ too, so check them even when values may
+differ), wording,
 moved line, blank line. Differing words inside a matched line are underlined. Rows that differ only in
 spacing are drawn in grey and not underlined.</li>
 <li>Hatched rows are blank here because the other side has an extra line. Both panes scroll together.</li>
-<li>Grading: The verdict treats spacing, case, punctuation, number-format and decimal-places rows as formatting
-differences, not value or wording errors. Score them by your course's error definitions.</li>
+<li>Grading: The verdict treats spacing, case, punctuation and number-format rows as formatting differences. A
+decimal-places row (3.5 vs 3.46) shows a number rounded or cut to other places: the verdict also counts it as
+formatting, so check it against your course's rounding rule. Score every row by your course's error
+definitions.</li>
 </ul>
 <div class="grid">
 <div class="col"><h2 id="te">{esc(exp_label)}</h2>

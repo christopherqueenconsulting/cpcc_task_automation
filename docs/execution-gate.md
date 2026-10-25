@@ -657,11 +657,13 @@ integer-for-decimal such as `10` / `10.47` is a value) or *wording*. A pair that
 VALUES_DIFFER for the ladder, so it is tagged *value*: the one place a tag can hide a wording change. A removed or
 added blank line is tagged *blank line*; a removed line and an added line that are the same once spacing and case
 are ignored are both tagged *moved line*. The tag is text beside the line number (and spoken by a screen reader),
-never colour alone; spacing-only rows are drawn grey. The summary leads with content ("3 lines differ in content (1
-value, 1 wording, 1 case); 6 lines differ only in spacing; 1 blank line only in expected output."). The legend says
-spacing, case, punctuation, number-format and decimal-places rows are formatting differences, scored by the
-course's error definitions (FORMAT_ONLY), not value or wording errors; a value row is a difference unless the case
-is flagged "values may differ". The unified view is still plain `difflib` on the raw lines and can show more
+never colour alone; spacing-only rows are drawn grey. The summary groups rows as the verdict does: value or wording first, then
+formatting, then spacing ("2 lines differ in value or wording (1 value, 1 wording); 1 line differs only in formatting
+(1 case); 6 lines differ only in spacing; 1 blank line only in expected output."). The legend says spacing, case,
+punctuation and number-format rows are formatting differences (FORMAT_ONLY). A decimal-places row (3.5 vs 3.46) is a
+number rounded or cut to other places; the verdict also counts it as formatting, and the legend asks the instructor
+to check it against the course's rounding rule. Every row is scored by the course's error definitions. A value row
+is a difference unless the case is flagged "values may differ", and even then its words should be checked. The unified view is still plain `difflib` on the raw lines and can show more
 changed lines than the side-by-side view pairs. Lines do not wrap (long lines scroll sideways); the Unified view
 is always one click away.
 Two big-input guards: a pair of outputs over 5,000 lines, or more than 4,000,000 line pairs

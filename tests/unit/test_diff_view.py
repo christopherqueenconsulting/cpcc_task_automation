@@ -129,7 +129,7 @@ def test_hidden_and_direction_characters_are_neutralised_as_clean_block_does():
 def test_counts_and_summary_and_heights():
     rows = dv.align_rows("a\nb\nc", "a\nB\nc\nd")
     assert dv.count_rows(rows) == {"chg": 1, "del": 0, "ins": 1}
-    assert "1 line differs in content (1 case)" in dv.summary_text(rows) and "4 rows" in dv.summary_text(rows)
+    assert "1 line differs only in formatting (1 case)" in dv.summary_text(rows) and "4 rows" in dv.summary_text(rows)
     assert dv.pane_height(rows) == 4 * dv.ROW_HEIGHT_PX + 24
     assert dv.pane_height(dv.align_rows("\n".join(map(str, range(500))), "x")) == dv.PANE_HEIGHT_PX
     assert dv.iframe_height(rows) == dv.pane_height(rows) + dv.CHROME_HEIGHT_PX
