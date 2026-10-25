@@ -19,6 +19,33 @@ def _row(id_="R1", text="Reads a price", weight="core"):
     return {"id": id_, "text": text, "weight": weight}
 
 
+@pytest.mark.parametrize("missing", [float("nan"), None, pd.NA, pd.NaT, "nan", "NaN", "<NA>", "None"])
+def test_a_missing_id_cell_gets_a_generated_id_not_the_word(missing):
+    """A blank cell is nan, None or <NA> depending on the pandas version and column type. None of
+    them may become the id "NAN"; the row gets the next free R number."""
+    base = rc.RequirementChecklist(requirements=[
+        rc.RequirementItem(id="R1", text="Reads a price", weight="core"),
+        rc.RequirementItem(id="R2", text="Prints the total", weight="core")])
+    edited = pd.DataFrame(
+        {"id": ["R1", "R2", missing], "text": ["Reads a price", "Prints the total", "Prints a banner"],
+         "weight": ["core", "core", "core"]}, dtype=object)
+    out = _checklist_from_editor(edited, base)
+    assert [r.id for r in out.requirements] == ["R1", "R2", "R3"]
+
+
+@pytest.mark.parametrize("missing", [float("nan"), None, pd.NA])
+def test_missing_text_and_weight_cells_are_blank(missing):
+    valid, errors = re_.validate_rows([{"id": missing, "text": missing, "weight": missing}])
+    assert valid == [] and [e.quiet for e in errors] == [True]
+    valid, _ = re_.validate_rows([{"id": "R1", "text": "Reads a price", "weight": missing}])
+    assert valid[0]["weight"] == "core"
+
+
+def test_real_text_that_reads_none_is_kept():
+    valid, _ = re_.validate_rows([_row("R1", "None")])
+    assert valid[0]["text"] == "None"
+
+
 def test_valid_rows_pass_and_blank_id_is_allowed():
     valid, errors = re_.validate_rows([_row(), _row("", "Prints the total", "secondary")])
     assert errors == [] and [v["id"] for v in valid] == ["R1", ""]

@@ -12,6 +12,10 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
   process limit would not allow it. The first window is not ramped: up to 512 requests per side (about 1024 with the
   base) leave at once; a 429 burst is absorbed by halving plus jittered retries. Rollback: set
   `CQC_AB_MAX_CONCURRENCY=64` and `CQC_AB_JUDGE_CONCURRENCY=16`. Cost is unchanged; the spend rate rises.
+- Eval batch mode is now scheduled-only: with `CQC_EVAL_BATCH=1` batching runs only when `GITHUB_EVENT_NAME=schedule`
+  (the weekly Model Evaluation) or `CQC_EVAL_BATCH_FORCE=1`; pull-request, push, dispatch, merge-queue and local runs
+  are sync so active sessions are not blocked for up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 2700 s), plus the time of any sync fallback. The decision is logged once per process.
+  No workflow file changed.
 - Dependencies: removed unused packages: langchain-community, langchain-openai, onnxruntime, os-env, datetime,
   chromium, tabulate, pandas-stubs, jupyter, setuptools, grandalf, and the test/e2e plugins pytest-watcher,
   pytest-profiling, pytest-timeout, pytest-playwright; also dropped the direct pins on protobuf, six and
