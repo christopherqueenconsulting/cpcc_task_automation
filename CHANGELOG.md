@@ -11,7 +11,7 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
   typing-extensions (still installed as dependencies of streamlit and others). `poetry.lock` drops 103 packages
   (104 entries), adds none, bumps none. Declares pydantic `>=2.12,<3`, requests, urllib3 and (tests) python-dotenv.
   `watchdog` moves to a new optional `dev` group: on macOS Streamlit does not require it, so use
-  `poetry install --with dev,test` there for fast reload. Run `poetry install --with test` after pulling.
+  `poetry install --with dev,test` there for fast reload. After pulling, run `poetry install --with test --sync` (list every group or extra you use, since `--sync` removes the rest).
 - Pydantic v2: removed the v1 `.dict()` fallback in `openai_debug.py`; added an AST guard against v1 APIs
   (`tests/unit/test_pydantic_v2_only.py`) and an import smoke test for `pydantic.v1` (xfail until PR-2).
 

@@ -97,9 +97,11 @@ poetry run python --version  # Should show Python 3.12+
 - Existing virtualenv: a plain `poetry install` never uninstalls packages. After pulling a change that removes
   dependencies (this one removed 103 packages), or after reverting it, run `poetry install --with test --sync`
   (on macOS `poetry install --with dev,test --sync`). Otherwise removed packages stay importable locally.
+  `--sync` removes every group and extra not named on the command line, so list every one you use (for example
+  `--with test,lint,e2e`, `-E telemetry`, and `dev` on macOS).
 - Declare what first-party code imports. To find unused or undeclared dependencies, run `deptry` from the repo
   root, in the project environment (it reads module names from the installed packages). This adds deptry to the
-  venv; `poetry install --sync` removes it again:
+  venv; the next `poetry install --sync` (with your usual groups) removes it again:
 
   ```bash
   poetry run pip install deptry==0.25.1

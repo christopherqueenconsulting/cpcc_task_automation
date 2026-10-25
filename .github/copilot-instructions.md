@@ -27,8 +27,8 @@
 
 ### Key Libraries
 - **Data Processing**: pandas, BeautifulSoup4, python-docx, mammoth
-- **Date/Time**: dateparser (stdlib `datetime`)
-- **Environment**: `os.environ` via `env_constants.py`
+- **Date/Time**: dateparser, datetime
+- **Environment**: os-env for configuration
 - **Display**: pyvirtualdisplay (for headless browser automation)
 
 ### Development Tools
@@ -186,7 +186,7 @@ cpcc_task_automation/
 ```bash
 # Setup
 poetry install                       # Install dependencies
-poetry install --with test,lint,dev  # Optional groups (dev = watchdog, for fast Streamlit reload on macOS)
+poetry install --with test,lint,dev  # Install with optional groups
 
 # Running the App
 ./run.sh                             # Interactive launcher (Streamlit or Poetry)
