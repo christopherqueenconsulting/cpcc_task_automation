@@ -168,6 +168,15 @@ class CaseResult(BaseModel):
     detail: str = ""
     similarity: float = 0.0
     diff_excerpt: str = ""
+    #: The compared texts (ignored lines dropped, trailing blanks trimmed), kept so the app can show the
+    #: whole diff. Local only: never in a prompt, telemetry, export, feedback document or write-back.
+    #: Empty for a match, for a case that did not run, and in runs saved before these fields existed.
+    expected_output: str = Field("", repr=False)
+    actual_output: str = Field("", repr=False)
+    #: The runner cut the program's output at its own cap, so ``actual_output`` is not everything it printed.
+    output_cut_by_runner: bool = False
+    #: The outputs were not kept because the report or a case was over the storage cap.
+    outputs_omitted: bool = False
 
 
 class ExecutionReport(BaseModel):
