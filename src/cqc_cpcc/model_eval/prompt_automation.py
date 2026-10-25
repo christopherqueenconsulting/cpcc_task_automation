@@ -261,6 +261,22 @@ def _base_has_suite(worktree: Path, suite_id: str) -> bool:
     return init.exists() and f'"{suite_id}"' in init.read_text(encoding="utf-8")
 
 
+def _biggest_group(suite_ids, repeats: Optional[int], n_models: int) -> Optional[int]:
+    """The largest call count of one suite side, for the summary lines (None when it cannot be worked out: each
+    suite computes its own ceiling later, so this figure is only for the header)."""
+    try:
+        return max([len(get_suite(s).cases()) * (repeats or prompt_eval.suite_policy(s).repeats) * n_models
+                    for s in suite_ids] or [0]) or None
+    except Exception:  # noqa: BLE001 - only the summary figure
+        return None
+
+
+def _judge_pool_cap(cap: int, judge_calls: int, batch_judge: bool) -> int:
+    """The judge pool's size: ``cap``, widened to every judge call when batch mode is on (each may wait on the batch
+    at once), but never above the hard cap or the file-descriptor limit."""
+    return adaptive.clamp_pool(batch.widen(cap, judge_calls)) if batch_judge else cap
+
+
 def _base_hard_max(worktree: Path) -> int:
     """The largest ``CQC_AB_MAX_CONCURRENCY`` the base checkout accepts: its own ``HARD_MAX_CONCURRENCY`` (read from
     its ``adaptive.py``), at most this checkout's. A base that rejects a larger value fails its whole run (an error, not
@@ -980,12 +996,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
     start_override = adaptive.ab_start_concurrency(concurrency)
     # The ceiling per side defaults to all the calls of a suite side (set per suite below); this is the largest
     # of them, for the summary lines. An explicit --max-concurrency / CQC_AB_MAX_CONCURRENCY caps every suite.
-    try:
-        n_models = max(1, len(models))
-        biggest = max([len(get_suite(s).cases()) * (repeats or prompt_eval.suite_policy(s).repeats) * n_models
-                       for s in suite_ids] or [0]) or None
-    except Exception:  # noqa: BLE001 - only the summary figure; each suite computes its own below
-        biggest = None
+    biggest = _biggest_group(suite_ids, repeats, max(1, len(models)))
     workers = adaptive.ab_max_concurrency(max_concurrency, calls=biggest)
     judge_cap = adaptive.judge_max_concurrency(calls=biggest)
     batch.reset_events()
@@ -1112,8 +1123,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                 if jmodel:
                     # the judge's own, lower, pool: it throttles on its own and never starves the calls
                     batch_judge = batch.is_on()  # batch mode: every judge call may wait on the batch at once
-                    pool_cap = (adaptive.clamp_pool(batch.widen(suite_judge_cap, len(suite.cases()))) if batch_judge
-                                else suite_judge_cap)
+                    pool_cap = _judge_pool_cap(suite_judge_cap, len(suite.cases()), batch_judge)
                     judge_limiter = adaptive.AdaptiveLimiter("judge", start=pool_cap, ceiling=pool_cap)
                     judge_profile = prompt_eval.profiles_for([suite_models[0][0]])[suite_models[0][0]]
                     judge_estimate = (prompt_eval._dearest_call(suite, judge_profile, suite.cases())

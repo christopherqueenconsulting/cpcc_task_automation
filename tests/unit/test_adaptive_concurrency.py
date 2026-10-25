@@ -837,6 +837,29 @@ class TestBurstOf429s:
         assert all(w >= 5 for w in sleeps.waits)  # Retry-After is the floor of every wait
 
 
+class TestHeaderHelpers:
+    def test_biggest_group_is_the_largest_suite_side(self, monkeypatch):
+        sizes = {"a": 10, "b": 40}
+        monkeypatch.setattr(pa, "get_suite", lambda s: SimpleNamespace(cases=lambda: [0] * sizes[s]))
+        monkeypatch.setattr(pa.prompt_eval, "suite_policy", lambda s: SimpleNamespace(repeats=2))
+        assert pa._biggest_group(["a", "b"], None, 3) == 40 * 2 * 3
+        assert pa._biggest_group(["a", "b"], 5, 1) == 200
+        assert pa._biggest_group([], None, 1) is None
+
+    def test_biggest_group_is_none_when_it_cannot_be_worked_out(self, monkeypatch):
+        def boom(s):
+            raise KeyError(s)
+
+        monkeypatch.setattr(pa, "get_suite", boom)
+        assert pa._biggest_group(["nope"], 1, 1) is None
+
+    def test_judge_pool_cap_is_widened_and_clamped_only_in_batch_mode(self, monkeypatch):
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 300)
+        assert pa._judge_pool_cap(16, 700, False) == 16
+        assert pa._judge_pool_cap(16, 700, True) == 300
+        assert pa._judge_pool_cap(16, 40, True) == 40
+
+
 class TestRunSuiteAdaptive:
     async def test_a_request_for_64_really_gets_64_permits(self, test_mode):
         box, stats = {"peak": 0}, []
