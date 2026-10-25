@@ -40,6 +40,7 @@ It is a personal tool, built and used against my own courses. I have not measure
    ```bash
    poetry install
    ```
+   macOS: `poetry install --with dev,test` (adds watchdog for Streamlit hot reload).
 
 3. **Configure credentials:**
    Create `.streamlit/secrets.toml` with your credentials (see Configuration section below)
