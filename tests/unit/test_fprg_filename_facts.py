@@ -51,7 +51,7 @@ CASES = Path(__file__).resolve().parents[2] / "evals" / "datasets" / "flowgorith
     # a name made only of stopwords or initials is unknown, never no
     ("Final_Lab3", YES, "Lab 3", UNKNOWN),
     ("Lab3_J", YES, "Lab 3", UNKNOWN),
-    ("New Part Test", NO, None, UNKNOWN),
+    ("New Part Test", UNKNOWN, None, UNKNOWN),   # "Part" is a keyword: no deduction
     ("Chapter_Lab2_Fix", YES, "Lab 2", UNKNOWN),
     # realistic names
     ("Smith_Lab3", YES, "Lab 3", YES),
@@ -62,10 +62,38 @@ CASES = Path(__file__).resolve().parents[2] / "evals" / "datasets" / "flowgorith
     ("flowgorithm_lab2_final", YES, "Lab 2", UNKNOWN),
     ("JohnSmith-Flowgorithm-5", YES, "Flowgorithm 5", YES),
     ("LastName_FirstName_L3", YES, "Lab 3", YES),
-    ("Lab_Three", NO, None, YES),                    # known limit: spelled-out numbers
-    ("LabII", NO, None, YES),                        # known limit: roman numerals
     ("C:\\\\work\\\\Ada Example Lab 4.FPRG", YES, "Lab 4", YES),
-    ("Lab1234567.fprg", NO, None, UNKNOWN),          # 7-digit run: an id
+    ("Lab1234567.fprg", UNKNOWN, None, UNKNOWN),     # keyword but the 7-digit run is an id: no deduction
+    # spelled-out numbers and roman numerals after a keyword (fixed keyword + integer label)
+    ("Lab_Three", YES, "Lab 3", NO),
+    ("Lab_One", YES, "Lab 1", NO),
+    ("Lab_Twenty", YES, "Lab 20", NO),
+    ("Lab-Four", YES, "Lab 4", NO),
+    ("LabTwentyOne", YES, "Lab 21", NO),
+    ("Ada_Example_Lab_Ten", YES, "Lab 10", YES),
+    ("LabII", YES, "Lab 2", NO),
+    ("LabIV", YES, "Lab 4", NO),
+    ("Lab_II", YES, "Lab 2", NO),
+    ("lab-ix", YES, "Lab 9", NO),
+    ("LabXX", YES, "Lab 20", NO),
+    ("LabIII_Ada", YES, "Lab 3", YES),
+    ("Lab-03", YES, "Lab 3", NO),
+    ("lab3", YES, "Lab 3", NO),
+    ("L3", YES, "Lab 3", NO),
+    ("Program 3", YES, "Program 3", NO),
+    ("Sum.fprg", NO, None, YES),
+    # keyword but no readable number: unknown, so no deduction
+    ("Lab_Foo", UNKNOWN, None, YES),
+    ("Lab", UNKNOWN, None, UNKNOWN),
+    ("Smith_Lab", UNKNOWN, None, YES),
+    ("LabThirty", UNKNOWN, None, YES),
+    # a spelled number with no keyword is number-like, so not "no"
+    ("Mix_ed_Three", UNKNOWN, None, YES),
+    # a bare roman letter without a keyword is just a word
+    ("Ada_I_Smith", NO, None, YES),
+    ("Ada_V", NO, None, YES),
+    ("I", NO, None, UNKNOWN),
+    ("Labi_Ada", YES, "Lab 1", YES),                 # documented limit: errs toward yes
 ])
 def test_facts(name, lab, label, word):
     facts = file_name_facts(name)
@@ -152,3 +180,27 @@ def test_every_eval_dataset_case_renders_without_error():
         text = render_facts(facts)
         assert text.startswith("- Lab number in file name: ")
         assert facts.lab_number in (YES, NO, UNKNOWN) and facts.name_like_word in (YES, NO, UNKNOWN)
+
+
+@pytest.mark.parametrize("name", ["Lab_Three", "LabII", "lab-ix", "LabTwentyOne", "Ada_Example_Lab_Seven"])
+def test_matched_text_is_never_in_the_rendered_facts(name):
+    text = render_facts(file_name_facts(name))
+    lowered = text.lower()
+    for token in ("three", "ii", "ix", "twenty", "seven", "ada", "example", "lab_", "labii"):
+        assert token not in lowered.replace("lab number in file name", "").replace("name in file name", "")
+    assert text.count("(") <= 1 and text.startswith("- Lab number in file name: yes (Lab ")
+
+
+@pytest.mark.parametrize("name", ["Lab\u0131\u0131", "Lab_Th\u0159ee", "L\u0430b_Three", "Lab\u2169", "Lab_\u0661"])
+def test_unicode_lookalikes_never_read_as_numbers(name):
+    assert file_name_facts(name).lab_number in (UNKNOWN, NO)
+
+
+def test_a_million_character_name_with_words_is_fast():
+    import time
+
+    start = time.perf_counter()
+    file_name_facts("Lab_" + "Three_" * 200_000)
+    file_name_facts("LabI" * 300_000)
+    file_name_facts("Lab" + " " * 1_000_000 + "Three")
+    assert time.perf_counter() - start < 2

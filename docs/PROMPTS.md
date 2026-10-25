@@ -176,6 +176,14 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   sections are unchanged. The existing `flowgorithm-grade` v1 dataset uses ordinary names
   (`Rectangle`, `Average`, `Pay`), so the A/B exercises only the yes-name and no-lab paths; the
   other paths are covered by unit tests. **Rollback:** `git revert`.
+  Follow-up (lab words, prompt text unchanged): the lab fact now also reads `yes` for a keyword
+  of three or more letters followed by a spelled-out number one to twenty-nine or a roman
+  numeral I to XX (`Lab_Three`, `LabII`, `Lab-IV`; the label is a fixed keyword plus the integer,
+  never the matched text), and `unknown` (never deducted) when a lab-style keyword is present
+  without a readable number (`Lab_Foo`, `Smith_Lab`) or a spelled-out number stands alone.
+  `no` is left for names with no keyword and no number-like token at all (`Sum`). A bare `I`
+  or `V` word is not a number. The dataset moved to `flowgorithm-grade/v2` with 4 added
+  file-name cases (v1 frozen, first 24 rows identical; see `evals/README.md`).
 - **v2**: structured output. (#479 added an alias for the file name in code only: no prompt text or registry change. v3 replaces it with the facts block.)
 - **v1**: free-text markdown, real file name.
 

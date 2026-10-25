@@ -143,7 +143,7 @@ class TestFlowgorithm:
     cases = {c.case_id: c for c in suite.cases()}
 
     def test_perfect_answer_scores_one(self):
-        points = dict(sd.FLOWGORITHM_RUBRIC)
+        points = dict(sd.FLOWGORITHM_RUBRIC + sd.FLOWGORITHM_FILE_NAME_CRITERIA)
         for case in self.cases.values():
             deductions = [{"criterion": c, "points": points[c]} for c in case.labels["expected_deductions"]]
             final = case.labels["total"] - sum(d["points"] for d in deductions)
@@ -157,6 +157,81 @@ class TestFlowgorithm:
                    "final_grade": 45, "overall_feedback": ""}
         score = _composite(self.suite, case, payload)
         assert score.graders["arithmetic"] == 0.0 and score.graders["criteria_valid"] == 0.5
+
+
+    def test_file_name_cases_are_additive_and_the_v1_cases_are_untouched(self):
+        import json
+
+        root = sd.ROOT / "flowgorithm-grade"
+        v1 = (root / "v1" / "cases.jsonl").read_text(encoding="utf-8")
+        v2 = (root / "v2" / "cases.jsonl").read_text(encoding="utf-8")
+        assert len(v1.splitlines()) == 24 and len(v2.splitlines()) == 28
+        assert v2.startswith(v1)  # byte-identical first 24 cases
+        assert self.suite.dataset == "flowgorithm-grade/v2"
+        new = [json.loads(line) for line in v2.splitlines()[24:]]
+        assert {r["case_id"]: r["labels"]["expected_deductions"] for r in new} == {
+            "rectangle__fn_lab_yes": [], "average__fn_lab_no": [sd.FLOWGORITHM_LAB_CRITERION],
+            "pay__fn_lab_unknown": [], "rectangle__fn_name_and_digit": []}
+
+    def test_expected_deductions_follow_the_local_facts(self):
+        from cqc_cpcc.utilities.fprg_filename_facts import NO, file_name_facts
+
+        for case in self.cases.values():
+            if "file-name" not in case.tags:
+                continue
+            facts = file_name_facts(case.inputs["submission_file_name"])
+            expected = set(case.labels["expected_deductions"])
+            assert (sd.FLOWGORITHM_LAB_CRITERION in expected) == (facts.lab_number == NO), case.case_id
+            assert (sd.FLOWGORITHM_NAME_CRITERION in expected) == (facts.name_like_word == NO), case.case_id
+
+    def test_file_name_grader_is_report_only_and_checks_the_two_criteria(self):
+        assert "file_name_deductions" not in self.suite.weights
+        no_case = self.cases["average__fn_lab_no"]
+        right = {"deductions": [{"criterion": sd.FLOWGORITHM_LAB_CRITERION, "points": 5}],
+                 "final_grade": 55, "overall_feedback": ""}
+        over = {"deductions": [{"criterion": sd.FLOWGORITHM_NAME_CRITERION, "points": 5}],
+                "final_grade": 55, "overall_feedback": ""}
+        assert _composite(self.suite, no_case, right).graders["file_name_deductions"] == 1.0
+        assert _composite(self.suite, no_case, over).graders["file_name_deductions"] == 0.0
+        yes_case = self.cases["rectangle__fn_lab_yes"]
+        wrongly = {"deductions": [{"criterion": sd.FLOWGORITHM_LAB_CRITERION, "points": 5}],
+                   "final_grade": 55, "overall_feedback": ""}
+        assert _composite(self.suite, yes_case, wrongly).graders["file_name_deductions"] == 0.0
+        assert _composite(self.suite, self.cases["rectangle__clean"], right).graders["file_name_deductions"] is None
+
+
+    def test_dataset_rows_load_and_the_suite_invokes_and_serialises(self, monkeypatch):
+        import asyncio
+        from types import SimpleNamespace
+
+        from cqc_cpcc.model_eval.suites import flowgorithm as fg
+
+        assert len(sd.load_rows("flowgorithm-grade")) == 28 and sd.version_of("flowgorithm-grade") == "v2"
+        assert sd.version_of("digest") == sd.VERSION
+        seen = {}
+
+        async def fake(**kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(deductions=[SimpleNamespace(criterion="c", points=5)],
+                                   final_grade=55.0, overall_feedback="ok")
+
+        monkeypatch.setattr("cqc_cpcc.flowgorithm_grading.grade_flowgorithm", fake)
+        out = asyncio.run(fg.invoke(self.cases["average__fn_lab_no"]))
+        assert seen["submission_file_name"] == "Ben_Sample"
+        assert fg.to_payload(out) == {"deductions": [{"criterion": "c", "points": 5}],
+                                      "final_grade": 55.0, "overall_feedback": "ok"}
+
+
+    def test_render_rejects_duplicate_ids_and_write_all_uses_the_dataset_version(self, monkeypatch, tmp_path):
+        monkeypatch.setitem(sd.BUILDERS, "dup", lambda: [{"case_id": "a"}, {"case_id": "a"}])
+        with pytest.raises(ValueError):
+            sd.render("dup")
+        monkeypatch.delitem(sd.BUILDERS, "dup")
+        counts = sd.write_all(tmp_path)
+        assert counts["flowgorithm-grade"] == 28
+        assert (tmp_path / "flowgorithm-grade" / "v2" / "VERSION").read_text() == "v2\n"
+        assert (tmp_path / "digest" / "v1" / "VERSION").read_text() == "v1\n"
+        assert (tmp_path / "flowgorithm-grade" / "v2" / "cases.jsonl").read_text() == sd.render("flowgorithm-grade")
 
 
 class TestDigest:
