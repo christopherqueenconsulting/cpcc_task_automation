@@ -199,6 +199,11 @@ def run_async_in_streamlit(coro):
         ) from e
 
 
+FLOWGORITHM_FILE_NAME_CAPTION = (
+    "File-name criteria are checked by a lenient local test: any word counts as a name, any number "
+    "as the lab number; unknown is never deducted. The file name itself is not sent to the model.")
+
+
 def define_grading_rubric():
     st.markdown("**Grading rubric** (criteria and points lost)")
 
@@ -226,6 +231,7 @@ def define_grading_rubric():
                                    GR_PPL: st.column_config.NumberColumn('Possible points lost (required)', required=True)
                                }
                                )  # 👈 An editable dataframe
+    st.caption(FLOWGORITHM_FILE_NAME_CAPTION)
 
     return edited_df
 
