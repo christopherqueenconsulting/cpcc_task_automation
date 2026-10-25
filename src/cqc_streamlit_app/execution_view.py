@@ -55,6 +55,7 @@ from cqc_cpcc.utilities.AI.model_registry import resolve as resolve_model
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.output_compare import Verdict, full_unified_diff
 from cqc_cpcc.utilities.utils import read_file
+from cqc_streamlit_app import diff_view
 
 #: Shown where programs cannot run: Streamlit Community Cloud, or ``CQC_EXECUTION=off``.
 NOTICE = ("Output check runs programs in a local Docker sandbox and is not available here. "
@@ -659,6 +660,11 @@ def _diff_lines(expected: str, actual: str, scope: str, r: dict) -> Optional[lis
     return cached
 
 
+def _render_unified(diff: list, scope: str) -> None:
+    st.caption(f"Differences (- expected, + this program), complete: {len(diff):,} lines")
+    show_text("\n".join(diff), scope=scope + "|diff", language="diff", line_numbers=True, wrap=False)
+
+
 def render_case_diff(r: dict, *, scope: str) -> None:
     """The differences of one non-matching case: the complete diff built here from the stored outputs,
     or (runs saved before they were kept) the short excerpt with a notice."""
@@ -671,8 +677,8 @@ def render_case_diff(r: dict, *, scope: str) -> None:
             return
         diff = _diff_lines(expected, actual, scope, r)
         if diff is not None:
-            st.caption(f"Differences (- expected, + this program), complete: {len(diff):,} lines")
-            show_text("\n".join(diff), scope=scope + "|diff", language="diff", line_numbers=True, wrap=False)
+            diff_view.render_diff(expected, actual, scope=scope, max_lines=MAX_DIFF_LINES, max_cells=MAX_DIFF_CELLS,
+                                  render_unified=lambda: _render_unified(diff, scope))
             return
         if not r.get("diff_excerpt"):
             return

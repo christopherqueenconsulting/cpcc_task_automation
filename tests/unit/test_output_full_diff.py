@@ -141,6 +141,7 @@ def _page():
 def _app(report):
     at = AppTest.from_function(_page, default_timeout=30)
     at.session_state["report"] = report
+    at.session_state["diff_view_mode"] = "Unified"  # these tests are about the unified view; test_diff_view.py has the rest
     return at.run()
 
 

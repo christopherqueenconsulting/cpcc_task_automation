@@ -605,10 +605,24 @@ The prompt still gets the capped `diff_excerpt` (20 lines or 1,500 characters), 
 The Output tab and the Solution tab show the whole diff instead. Each non-matching case also stores the
 two compared texts (`CaseResult.expected_output` and `actual_output`: ignored lines dropped, trailing
 blanks trimmed), and the page builds the whole unified diff from them (`output_compare.full_unified_diff`,
-no line or character cap). It is drawn with `st.code` in a fixed-height scrolling box with line numbers.
+no line or character cap). It is shown in one of two views, chosen with a **Side by side | Unified** control above
+each diff (side by side first; the choice is kept for the browser session and applies to every diff on the page).
+**Unified** is the `st.code` view: a fixed-height scrolling box with line numbers.
+**Side by side** (`cqc_streamlit_app/diff_view.py`) puts the expected output and the student's output in two panes,
+row for row, with line numbers, a `-` or `+` marker on every differing row, blank hatched filler rows where one side
+has no line, and the differing words underlined inside a changed line. The panes scroll together, up and down and
+left and right, and both are keyboard-focusable regions named "Expected output" and "Student output". It is one
+sandboxed iframe (`st.iframe`, else `components.html`) built in-process: program text is embedded only as escaped
+JSON and drawn with `textContent`, the page has a Content-Security-Policy with no network, and nothing is logged or
+sent anywhere. Rows come from `difflib.SequenceMatcher` on lines (`diff_view.align_rows`), so a row is "changed" there
+exactly when the unified view shows it as changed. Lines do not wrap (long lines scroll sideways); the Unified view
+is always one click away.
 Two big-input guards: a pair of outputs over 5,000 lines, or more than 4,000,000 line pairs
 (`MAX_DIFF_LINES`, `MAX_DIFF_CELLS`; difflib is quadratic), is not diffed automatically. The page says so,
-shows the short excerpt and offers **Compute full diff anyway**; the result is cached in the session.
+shows the short excerpt and offers **Compute full diff anyway**; the result is cached in the session. The side-by-side
+rows follow the same guard: inside it they are built on the spot; over it they wait for a second button, **Compute
+side-by-side view** (cached the same way); and a pair of more than 10,000 rows in all (`MAX_SIDE_ROWS`) always
+falls back to Unified with a notice. Word-level highlighting is skipped for lines over 400 characters.
 Identical stored texts show "No differences in the stored text after normalization." A diff over 2,000 lines is collapsed behind **Show all N lines** with a 50-line preview and the count
 said out loud; nothing is cut silently. Input and expected output are shown the same way (no more
 `... (cut)`).
