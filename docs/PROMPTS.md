@@ -161,7 +161,8 @@ the fenced submission and a closing line last. Model, effort, schema and parsing
   the rubric table, the total possible points, the output instructions, then the per-call nonce line, the file name
   and the submission each inside an `untrusted_fence` nonce fence, a blank line, and the closing line "Grade the
   fenced submission per the rules above." v2 had no fence; marker-shaped text and the nonce are stripped from the
-  file name and the submission, so a forged closing fence or heading stays inside the data.
+  file name and the submission, so a forged closing fence or heading stays inside the data. The fenced
+  File Name block holds the neutral alias `student_<hash>.fprg` (`file_name_alias`, from #479), never the real name.
   - Why not a system message: in the PR #477 A/B the split version crossed the provider's 1,024-token cache
     minimum on small cases (v2 prompts were 782 to 885 tokens, the split v3 1,038 to 1,167, artifact run
     40182551103), so automatic caching wrote the whole prompt on every call and nothing could be read (the per-call

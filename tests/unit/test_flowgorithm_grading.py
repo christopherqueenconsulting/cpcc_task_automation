@@ -75,3 +75,94 @@ async def test_test_mode_returns_a_valid_grade(monkeypatch):
     grade = await fg.grade_flowgorithm("A", "T", "S", "f.fprg", "50")
     assert isinstance(grade, fg.FlowgorithmGrade)
     assert "Final grade: 45 / 50" in fg.render_markdown(grade, 50)
+
+
+# --- the file name never reaches the request; a neutral alias does ------------------------------
+
+import json  # noqa: E402
+import re  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from cqc_cpcc.utilities import pii_redaction  # noqa: E402
+from cqc_cpcc.utilities.AI import untrusted_fence  # noqa: E402
+
+# The alias sits alone inside the nonce-fenced File Name block of the user message.
+_ALIAS_RE = re.compile(r"<<<UNTRUSTED FILE NAME ([0-9a-f]{16}) BEGIN>>>\nstudent_[0-9a-f]{8}\.fprg\n"
+                       r"<<<UNTRUSTED FILE NAME \1 END>>>")
+
+
+def _sent(mocker):
+    return mocker.patch("cqc_cpcc.utilities.AI.llm_gateway.structured",
+                        new_callable=AsyncMock, return_value=_grade())
+
+
+def _serialized(structured):
+    return json.dumps(structured.await_args.kwargs, default=str)
+
+
+async def test_a_bare_name_never_reaches_the_request(mocker):
+    pii_redaction.clear_registry()
+    structured = _sent(mocker)
+    await fg.grade_flowgorithm("A", "T", "SUB", "Ada Example.fprg", "50")
+    sent = _serialized(structured)
+    assert "Ada" not in sent and "Example" not in sent
+    assert _ALIAS_RE.search(structured.await_args.kwargs["prompt"])
+
+
+async def test_a_registered_name_and_a_student_prefixed_name_are_aliased(mocker):
+    pii_redaction.clear_registry()
+    pii_redaction.register_student("Ada Example")
+    try:
+        structured = _sent(mocker)
+        for name in ("Ada_Example_Sum.fprg", "student_Ada_Example.fprg", "/tmp/x/Ada Example.fprg"):
+            await fg.grade_flowgorithm("A", "T", "SUB", name, "50")
+            sent = _serialized(structured)
+            assert "Ada" not in sent and "Example" not in sent
+            assert _ALIAS_RE.search(structured.await_args.kwargs["prompt"])
+    finally:
+        pii_redaction.clear_registry()
+
+
+async def test_ordinary_names_are_aliased_too(mocker):
+    structured = _sent(mocker)
+    await fg.grade_flowgorithm("A", "T", "SUB", "OrderTotal.fprg", "50")
+    prompt = structured.await_args.kwargs["prompt"]
+    assert "OrderTotal" not in prompt and _ALIAS_RE.search(prompt)
+
+
+def test_alias_is_stable_per_file_and_distinct_across_files():
+    a1, a2 = fg.file_name_alias("Student A.fprg"), fg.file_name_alias("Student A.fprg")
+    b = fg.file_name_alias("Student B.fprg")
+    assert a1 == a2 and a1 != b
+    assert a1.endswith(".fprg") and fg.file_name_alias("Student A") == a1  # extension never matters
+    assert "Student" not in a1
+
+
+def test_build_prompt_still_scrubs_a_name_it_is_handed_directly():
+    pii_redaction.clear_registry()
+    prompt = fg.build_flowgorithm_prompt("A", "T", "SUB", "ada.example@cpcc.edu", "50")
+    assert "ada.example" not in prompt and "<email>" in prompt
+
+
+async def test_the_eval_suite_path_sends_the_alias(mocker):
+    from cqc_cpcc.model_eval.suites.flowgorithm import SUITE
+
+    structured = _sent(mocker)
+    case = SimpleNamespace(inputs={"assignment": "A", "rubric_criteria_markdown_table": "T",
+                                   "submission": "SUB", "submission_file_name": "Ada Example",
+                                   "total_possible_points": "50"})
+    await SUITE.invoke(case)
+    sent = _serialized(structured)
+    assert "Ada" not in sent and _ALIAS_RE.search(structured.await_args.kwargs["prompt"])
+
+
+async def test_the_fenced_file_name_block_holds_the_alias_and_not_the_real_name(mocker):
+    structured = _sent(mocker)
+    await fg.grade_flowgorithm("A", "T", "SUB", "Grace_Hopper_Sum.fprg", "50")
+    prompt = structured.await_args.kwargs["prompt"]
+    nonce = _ALIAS_RE.search(prompt).group(1)
+    opening, closing = untrusted_fence.markers("File Name", nonce)
+    block = prompt[prompt.index(opening) + len(opening):prompt.index(closing)].strip()
+    assert block == fg.file_name_alias("Grace_Hopper_Sum.fprg")
+    assert re.fullmatch(r"student_[0-9a-f]{8}\.fprg", block)
+    assert "Grace" not in prompt and "Hopper" not in prompt
