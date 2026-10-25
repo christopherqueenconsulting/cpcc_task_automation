@@ -23,13 +23,15 @@ Upgrade notes:
    (lenient). Any other file-name criterion (extension, format, capitalization) cannot be judged and is never
    deducted. The rubric page shows this caption: "File-name criteria are checked by a lenient local test: any word
    counts as a name, any number as the lab number; unknown is never deducted. The file name itself is not sent to
-   the model." For instructors: a bare word such as "lab" counts as a name, so name-criterion deductions will be
+   the model." For instructors: any word that is not a stopword counts as a name (yes); a name made only of
+   stopwords such as "lab", or only of initials, reads unknown; neither is deducted, so name-criterion deductions will be
    rare. Spelled-out and roman lab numbers (Lab_Three, LabII) now read as a lab number. rc8 is not fully name-free:
    see #480 under "Not included".
 2. Re-grading. The Flowgorithm results key (`_flowgorithm_key` in `grade_assignment.py`) is built from the
    instructions, rubric, points, model and file names and sizes; it does not contain the prompt version, and
    Flowgorithm results are kept only in the Streamlit session. So no saved result is invalidated; a new session or
-   a restart grades with prompt v3. Grades already returned are not touched.
+   a restart grades with prompt v3. Restart the app after pulling so a long-lived session does not keep serving a v2 result.
+   Grades already returned are not touched.
 3. Digest prompt. `preprocessing-digest` goes from version 1 to 2: the student code goes last in the user message
    inside a per-call fence, so text in a submission cannot pose as an instruction (injection hardening). It is used
    only for oversized exam submissions. Output format and schema are unchanged. Checked in `grading_run_key.py` and
