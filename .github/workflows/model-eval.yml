@@ -156,6 +156,8 @@ jobs:
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          CQC_EVAL_BATCH: "1"  # OpenRouter Batch API (synthetic eval data only); the code default is off
+          CQC_EVAL_BATCH_ALLOW_RETENTION: "1"  # 30-day provider retention accepted for eval runs (owner, 2026-10)
           DISCOVERED: ${{ steps.discover.outputs.candidates }}
           MANUAL: ${{ inputs.candidates }}
           REPEATS: ${{ inputs.repeats }}
@@ -336,6 +338,8 @@ jobs:
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          CQC_EVAL_BATCH: "1"  # OpenRouter Batch API (synthetic eval data only); the code default is off
+          CQC_EVAL_BATCH_ALLOW_RETENTION: "1"  # 30-day provider retention accepted for eval runs (owner, 2026-10)
           WINNER: ${{ needs.evaluate.outputs.winner }}
         run: |
           set -euo pipefail

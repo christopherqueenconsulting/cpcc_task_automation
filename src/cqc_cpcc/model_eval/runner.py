@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import cache_session, error_detail
+from cqc_cpcc.model_eval import batch, cache_session, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.dataset import AUTHORS_IN_DATASET, EvalCase, checklist_model, error_definitions, rubric
 from cqc_cpcc.utilities.AI import model_registry
@@ -54,10 +54,15 @@ class CallRecord:
     validity: Optional[str] = None  # validity-gate status ("ok" when graded by the model)
     requirements: dict = field(default_factory=dict)  # checklist id -> met|partial|missing
     prompt: Optional[str] = None  # "prompt_id@version" sent (config/prompt_registry.json)
+    #: Batch API mode (``batch.py``; additive, absent unless batch mode was on): True when the last model call
+    #: was answered by a batch, False when it ran sync. ``cost_allocated``: ``cost_usd`` is this call's share of
+    #: the batch total (by tokens), not a cost the response reported for the call.
+    batch: Optional[bool] = None
+    cost_allocated: Optional[bool] = None
 
     def to_json(self) -> str:
         data = asdict(self)
-        for name in ("cached_tokens", "cache_write_tokens"):
+        for name in ("cached_tokens", "cache_write_tokens", "batch", "cost_allocated"):
             if data[name] is None:
                 del data[name]  # additive keys: rows that reported nothing are unchanged
         return json.dumps(data, sort_keys=True)
@@ -191,6 +196,7 @@ async def run_model(
         on_record: Optional[Callable[[CallRecord], None]] = None,
         session_id: Optional[str] = None,
         warm_first: Optional[bool] = None,
+        dataset_dir: Optional[Path] = None,
 ) -> list[CallRecord]:
     """Grade every case ``repeats`` times on ``model``; stop new calls when the budget runs out.
 
@@ -202,7 +208,10 @@ async def run_model(
     from cqc_cpcc.utilities.AI import llm_gateway
 
     grade_fn = grade_fn or grade_with_rubric
-    semaphore = asyncio.Semaphore(concurrency)
+    # Batch mode (batch.py; off unless CQC_EVAL_BATCH=1 and the retention opt-in): decided before any call. The cases
+    # must come from ``dataset_dir``, which has to be under evals/datasets, or the run is refused.
+    bplan = batch.plan(dataset_dir, len(cases) * repeats, label="model-eval")
+    semaphore = asyncio.Semaphore(batch.widen(concurrency, len(cases) * repeats) if bplan is not None else concurrency)
     records: list[CallRecord] = []
 
     sid = session_id if session_id is not None else cache_session.session_for_run(
@@ -210,10 +219,12 @@ async def run_model(
     production = grade_fn is grade_with_rubric
     if (cache_session.warm_first_enabled() if warm_first is None else warm_first) and sid is not None:
         cache_session.warm_wait_s()  # a bad CQC_EVAL_WARM_WAIT_S stops the run before any call
-    use_warm = (cache_session.warm_first_enabled() if warm_first is None else warm_first) and sid is not None and production
+    use_warm = ((cache_session.warm_first_enabled() if warm_first is None else warm_first) and sid is not None
+                and production and bplan is None)  # a batch sends everything at once
+    bgroup = None  # the batch.BatchGroup of this run, set below when batch mode is on
 
     async def one(case: EvalCase, repeat: int, resolved) -> CallRecord:
-        with cache_session.record_scope(sid) as tap:
+        with cache_session.record_scope(sid) as tap, batch.task(bgroup):
             return await one_scoped(case, repeat, resolved, tap)
 
     async def one_scoped(case: EvalCase, repeat: int, resolved, tap) -> CallRecord:
@@ -225,6 +236,9 @@ async def run_model(
             # A task inherits the context it was created in, so last_call() can still hold a
             # call made before this case. Only a new one is ours.
             before = llm_gateway.last_call()
+            if bgroup is not None:
+                batch.set_item_estimate(model_registry.estimate_cost(
+                    resolved, estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0)
             try:
                 result, gate = await _grade_once(case, perturb(case, seed), grade_fn)
                 record.ok = True
@@ -267,6 +281,7 @@ async def run_model(
                 record.reasoning_tokens = completion.reasoning_tokens
                 record.cached_tokens = completion.cached_tokens
             used = tap.last()
+            batch.annotate(record, used, bgroup)
             if used is not None:
                 record.cache_write_tokens = used.cache_write_tokens
                 if record.cached_tokens is None:
@@ -278,7 +293,8 @@ async def run_model(
                 on_record(record)
             return record
 
-    with pinned_registry(model, effort, profile) as resolved, cache_session.transport():
+    with pinned_registry(model, effort, profile) as resolved, cache_session.transport(), \
+            batch.group(bplan, "model-eval", "generation", budget=budget, tasks=len(cases) * repeats) as bgroup:
         order = [(case, r) for r in range(repeats) for case in cases]
         plan: dict = {}
         if use_warm and len(order) > 1:

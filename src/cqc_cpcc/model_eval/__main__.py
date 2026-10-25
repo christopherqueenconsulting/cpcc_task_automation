@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from cqc_cpcc.model_eval import dataset as ds
-from cqc_cpcc.model_eval import gates, metrics, scorecard
+from cqc_cpcc.model_eval import batch, gates, metrics, scorecard
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.runner import CallRecord, estimate_prompt_tokens, run_model
 from cqc_cpcc.utilities.AI import model_registry
@@ -121,6 +121,8 @@ async def _run(args) -> int:
     policy = model_registry.load_policy()
     ev = policy.eval
     repeats = args.repeats or ev.repeats
+    batch.reset_events()
+    batch.settings()  # CQC_EVAL_BATCH misconfigured or missing its opt-in: stop here, before any paid call
     cases = ds.load_cases(Path(args.dataset))
     if args.tags:
         wanted = set(args.tags.split(","))
@@ -177,7 +179,7 @@ async def _run(args) -> int:
         for model, effort in runs:
             label = label_of((model, effort))
             probe = await run_model(model, effort, probe_cases(cases), 1, budget, seed=args.seed,
-                                    profile=profiles[model], on_record=save_probe)
+                                    profile=profiles[model], on_record=save_probe, dataset_dir=Path(args.dataset))
             per_call = sum(r.cost_usd for r in probe) / max(1, len(probe))
             projected = per_call * len(cases) * repeats
             if projected > budget.remaining:
@@ -188,7 +190,7 @@ async def _run(args) -> int:
                 continue
             records = await run_model(model, effort, cases, repeats, budget, seed=args.seed,
                                       profile=profiles[model],
-                                      on_record=save)
+                                      on_record=save, dataset_dir=Path(args.dataset))
             all_records[label] = records
             if any(r.error_kind == "budget" for r in records):
                 status = "aborted_budget"
@@ -232,6 +234,8 @@ async def _run(args) -> int:
             # Prompts on the roles a promotion moves: a promotion evaluated on older prompt
             # versions is stale and automerge-check refuses it.
             "prompt_versions": _prompt_versions_for_promotion(),
+            # Additive, report-only; present only when batch mode was on (see batch.py).
+            **_batch_meta(all_records),
         },
         aggregates, decisions, winner,
     )
@@ -240,6 +244,15 @@ async def _run(args) -> int:
     print(f"Scorecard: {json_path}")
     _github_outputs(winner=winner or "", status=status, incumbent_failed=str(bool(incumbent_failures)).lower())
     return 0
+
+
+def _batch_meta(all_records: dict) -> dict:
+    """``{"batch": ...}`` for the scorecard when batch mode was on: batch vs sync cost, share, fall-backs, reason."""
+    events = batch.summary()
+    if events is None:
+        return {}
+    records = [r for recs in all_records.values() for r in recs]
+    return {"batch": {**events, "records": batch.record_stats(records)}}
 
 
 def _prompt_versions_for_promotion() -> dict:

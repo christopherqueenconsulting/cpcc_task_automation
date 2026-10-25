@@ -667,6 +667,75 @@ never changes an output, so no gate, grader, score or threshold reads any of thi
   a run already in flight (cancel it and dispatch again). A revert of the merge commit needs no change to
   the `model-eval-state` branch.
 
+##### OpenRouter Batch API mode for evals (`CQC_EVAL_BATCH`)
+
+Batch mode sends the eval's model calls as OpenRouter batches, which are priced at about half the synchronous
+price ("typically 50%", not guaranteed) and answer within hours at most (the OpenRouter announcement reports a
+median of 7 minutes and a 90th percentile of 1 hour; the window is 24 h). It changes how a request travels and
+nothing about what is asked or scored: the production code builds the same request, `cache_session.py` adds the same
+`session_id`, and `batch.py` answers the call from the batch result. Retries, the truncation guard, parsing and every
+scorer are the production code's own. `batch.py` is for the eval runner only: nothing under the app imports it
+(`tests/unit/test_eval_batch.py` checks), it only sends cases loaded from `evals/datasets/**` (a runtime check that
+also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code default is off.
+
+- **Data handling (decided by the owner).** Batch does not support zero data retention and OpenRouter keeps batch
+  requests and responses for 30 days. The owner accepted this for prompt-eval and model-eval runs on the synthetic
+  datasets only, never for production grading and never for student data. Because the policy provider block asks for
+  `zdr`, a batch whose provider rejects that block fails at submit and the run falls back to sync (see "First batch").
+- **Switches** (read when a run starts; an invalid value aborts before any paid call):
+
+  | Variable | Default | Meaning |
+  |---|---|---|
+  | `CQC_EVAL_BATCH` | `0` (off) | `1`/`true`/`on`/`yes` turn batch mode on; `0` turns it off. |
+  | `CQC_EVAL_BATCH_ALLOW_RETENTION` | unset | Must be `1` as well. The second opt-in: 30-day retention, synthetic data only. `CQC_EVAL_BATCH=1` without it **aborts the run before any paid call**. |
+  | `CQC_EVAL_BATCH_MIN` | `8` | A group with fewer requests runs sync. |
+  | `CQC_EVAL_BATCH_DEADLINE_S` | `2700` | Longest wait for one batch; 1 to 3000 (the gateway client caps one call at 3600 s). |
+  | `CQC_EVAL_BATCH_FIRST_CAP_S` | `2700` | The first batch of a run must finish within this (see "First batch"); 1 to 3000. |
+  | `CQC_EVAL_BATCH_MAX_ITEMS` | `1000` | Most requests per batch (more are split into several batches). |
+  | `CQC_EVAL_BATCH_SETTLE_S` | `120` | Longest to wait for more requests before submitting what has been collected. |
+
+  The two paid steps of `prompt-eval.yml` and the paid steps of `model-eval.yml` set the first two to `1`; local
+  runs and everything else stay sync.
+- **What is batched.** Per (suite, side, model, effort) group, one batch of the suite's generation calls (the run
+  waits until every call of the group has been built, then submits them together). The pairwise judge calls are
+  separate batches, after the generation results exist (the judge asks twice per case with A and B swapped, so it
+  makes two rounds). `runner.run_model` (the model comparison) batches its grading calls the same way. Everything
+  stays sync when batch mode is off, for a group below `CQC_EVAL_BATCH_MIN`, for a request that cannot be batched
+  (`stream`, `provider.order`/`sort`, `:online`, web plugins, inline images), for a retry after a batch (a small
+  group), and for the interactive paths.
+- **First batch (automatic probe).** Several API facts are not documented (below), so the run checks them itself. The
+  first batch of a run is validated, and if it fails, the run stops batching for everything not yet completed and
+  for every later group, and says why: `batch_fallback_reason` in `run_stats` (ab.json, the scorecard) and a visible
+  line in the Run stats. The batch is bad when it ends `failed`/`expired`/`cancelled`, does not finish within
+  `CQC_EVAL_BATCH_FIRST_CAP_S`, the submit or the polls error, its results are malformed (not a list, custom ids
+  missing, unknown or repeated, a body that is not a chat completion), every item errored, or it ignored the
+  reasoning effort. The effort check is conservative: it fires only when at least 4 delivered items asked for `high`
+  or `medium` and every one reports `reasoning_tokens` of 0 or none. Items a valid batch delivered are kept and
+  never charged twice; a finished batch that fails the result checks is discarded, its items re-run sync and its
+  price is counted in the double-charge bound. `scripts/openrouter_batch_probe.py` is an optional manual probe
+  (dry run by default; `--yes-spend` to send); the run no longer needs it.
+- **Deadline and double charge.** At `CQC_EVAL_BATCH_DEADLINE_S` the run stops waiting, keeps the items the last
+  poll returned, runs only the unfinished items sync (adaptive concurrency, budget reserved as for any sync call)
+  and ignores anything the batch returns later. OpenRouter has **no cancel endpoint**, so a batch that finishes
+  after the deadline may still bill: the Run stats give an upper bound (the batch price, half the sync estimate, of
+  the items re-sent sync).
+- **Budget.** A batched call reserves half of its sync worst case at submit and settles with what the response
+  reports for the call; when the response reports none, the batch-level `usage.cost` is allocated over the items by
+  tokens (`cost_allocated: true` on the row); when that is unknown too, the conservative sync estimate is kept
+  (`cost_estimated`). A call that falls back to sync tops its reservation up to the full estimate first.
+- **Records and report (additive, report only).** Each row gains `batch: true|false` (and `cost_allocated`) only when
+  batch mode was on, so old rows and runs with batch off are byte-identical. `run_stats` gains the batch share of
+  calls, batch vs sync cost, wall clock per mode, fall-backs and deadline fall-backs, the double-charge bound, the
+  number of per-item errors and `batch_fallback_reason`; the model-eval scorecard gains a `batch` block with the same.
+- **Not verified (the first batch checks what it can).** Whether `reasoning.effort`, `response_format` json_schema and
+  `session_id` are honoured in a batch; per-item `usage.cost`, `cached_tokens` and `reasoning_tokens`; whether the
+  plain model id or the `:batch` variant is wanted (`batch.MODEL_ID_SUFFIX`); whether `max_completion_tokens` is
+  accepted (`batch.TOKEN_LIMIT_PARAM`); the per-batch request-count cap (a 413 splits the batch); that cache hits
+  carry over to batches (the cheaper batch cache prices are list prices; hit behaviour is unverified). The sync
+  layout and caching above are unchanged.
+- **Rollback.** Unset the two variables (or set `CQC_EVAL_BATCH=0`); nothing else changed in the run. Reverting the
+  merge removes the two env lines from each workflow step.
+
 ##### Optional output-token cap: `CQC_EVAL_MAX_TOKENS` (diagnostic, off by default)
 
 - **Default unset: no change at all.** The eval pins `max_output_tokens` 32768 for every call as before,

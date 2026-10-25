@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import adaptive, cache_session, error_detail
+from cqc_cpcc.model_eval import adaptive, batch, cache_session, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, classify_error, pinned_registry
 from cqc_cpcc.utilities.AI import model_registry
@@ -158,10 +158,16 @@ class SuiteRecord:
     cached_tokens: Optional[int] = None
     cache_write_tokens: Optional[int] = None
     reasoning_tokens: Optional[int] = None
+    #: Batch API mode (``batch.py``, report-only, additive): True when the record's last model call was answered
+    #: by a batch, False when batch mode was on but the call ran sync; None (key absent) when batch mode was off.
+    #: ``cost_allocated`` is True when ``cost_usd`` is the share of the batch's total cost allocated to this call
+    #: by token count, rather than a cost the response reported for the call itself.
+    batch: Optional[bool] = None
+    cost_allocated: Optional[bool] = None
 
     def to_json(self) -> str:
         data = asdict(self)
-        for name in ("cached_tokens", "cache_write_tokens", "reasoning_tokens"):
+        for name in ("cached_tokens", "cache_write_tokens", "reasoning_tokens", "batch", "cost_allocated"):
             if data[name] is None:
                 del data[name]  # additive keys: rows that reported nothing are unchanged
         if not data["error_detail"]:
@@ -249,6 +255,9 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     from cqc_cpcc.utilities.AI import llm_gateway
 
     use_adaptive = adaptive.adaptive_enabled(adaptive_mode)
+    # Batch mode (batch.py; off unless CQC_EVAL_BATCH=1 and the retention opt-in). Decided before any call: a missing
+    # opt-in or a dataset outside evals/datasets raises here. All calls must be able to wait on the batch at once.
+    bplan = batch.plan(suite.dataset_dir, len(cases) * repeats, reserving=use_adaptive, label=suite.id)
     attempts_allowed = adaptive.transport_attempts(transport_attempts)  # a bad setting stops the run before any call
     cap = adaptive.eval_max_tokens()  # None (the default) leaves every request as it was
     limiter = None
@@ -256,22 +265,28 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     if use_adaptive:
         ceiling = adaptive.ab_max_concurrency(max_concurrency)
         total = max(1, len(cases) * repeats)
+        if bplan is not None:
+            ceiling = batch.widen(ceiling, total)
         wanted = adaptive.ab_start_concurrency(concurrency)
         start = min(total, ceiling) if wanted is None else min(wanted, ceiling)
         limiter = adaptive.AdaptiveLimiter("calls", start=start, ceiling=ceiling)
         logger.info(f"[prompt-eval:{suite.id}] adaptive concurrency: start {start}, ceiling {ceiling}")
     else:
-        semaphore = asyncio.Semaphore(eval_concurrency(value=concurrency))
+        semaphore = asyncio.Semaphore(
+            batch.widen(eval_concurrency(value=concurrency), len(cases) * repeats) if bplan is not None
+            else eval_concurrency(value=concurrency))
 
     sid = session_id if session_id is not None else cache_session.session_for_run(suite.id, model, effort)
     # Off unless the caller asks (prompt_eval.run passes the CQC_EVAL_WARM_FIRST setting): the dry render calls
     # ``suite.invoke`` once per case, which a test double with side effects must not see unasked.
-    use_warm = bool(warm_first) and sid is not None
+    use_warm = bool(warm_first) and sid is not None and bplan is None  # a batch sends everything at once
     if use_warm:
         cache_session.warm_wait_s()  # a bad CQC_EVAL_WARM_WAIT_S stops the run before any call
 
+    bgroup = None  # the batch.BatchGroup of this run, set below when batch mode is on
+
     async def one(case: SuiteCase, repeat: int, resolved) -> SuiteRecord:
-        with cache_session.record_scope(sid) as tap:
+        with cache_session.record_scope(sid) as tap, batch.task(bgroup):
             return await one_scoped(case, repeat, resolved, tap)
 
     async def one_scoped(case: SuiteCase, repeat: int, resolved, tap) -> SuiteRecord:
@@ -301,6 +316,10 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 # no price -> 0.0 -> the budget refuses the call (fail closed), it never runs unbounded
                 estimate = model_registry.estimate_cost(
                     resolved, suite.estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0
+                if bgroup is not None:  # a batched call reserves its batch price; a sync re-send tops it up
+                    batch.set_item_estimate(estimate)
+                    if limiter is not None:  # fixed mode reserves nothing, so keeps the full figure
+                        estimate = batch.estimate_for_reservation(estimate)
                 if limiter is None:
                     output = await adaptive.retry_transport(
                         lambda: suite.invoke(case), held=held, estimate=estimate, sleep=sleep, rng=rng,
@@ -350,6 +369,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
             used = tap.last()  # the usage of the call the record keeps (report-only)
+            batch.annotate(record, used, bgroup)
             if completion is not None and getattr(completion, "cached_tokens", None) is not None:
                 record.cached_tokens = completion.cached_tokens
             elif used is not None:
@@ -392,7 +412,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
 
     records: list[SuiteRecord] = []
     with pinned_registry(model, effort, profile, roles=(suite.role,),
-                         max_output_tokens=cap or DEFAULT_MAX_OUTPUT_TOKENS) as resolved, cache_session.transport():
+                         max_output_tokens=cap or DEFAULT_MAX_OUTPUT_TOKENS) as resolved, cache_session.transport(), \
+            batch.group(bplan, suite.id, "generation", budget=budget, tasks=len(cases) * repeats) as bgroup:
         order = [(case, r) for r in range(repeats) for case in cases]
         plan: dict = {}
         if use_warm and len(order) > 1:
