@@ -87,7 +87,7 @@ poetry run python --version  # Should show Python 3.12+
 - Supported Python: `>=3.12,<4.0` in `pyproject.toml`. Python 3.14 is allowed by the constraint, but
   `langchain-core` still imports `pydantic.v1`, which warns on 3.14. PR-2 (planned, number to follow) replaces
   those usages; PR-3 (planned, number to follow) adds a 3.14 CI step. CI runs 3.12 only today.
-- Pydantic is v2 only (`pydantic = ">=2.12"`). `tests/unit/test_pydantic_v2_only.py` fails on v1-style APIs in
+- Pydantic is v2 only (`pydantic = ">=2.12,<3"`). `tests/unit/test_pydantic_v2_only.py` fails on v1-style APIs in
   first-party code; `tests/unit/test_py314_pydantic_smoke.py` is an expected failure (xfail, not strict) until PR-2.
 - Optional `dev` group: `watchdog`, Streamlit's file watcher. Streamlit requires it only off macOS, so on a Mac use
   `poetry install --with dev,test` for fast hot reload (without it Streamlit polls and reloads slower).
