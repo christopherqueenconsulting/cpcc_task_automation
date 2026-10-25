@@ -9,14 +9,39 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 Prerelease, on top of 0.2.0-rc6. Changes how rubric grading prompts are built (system and user messages, the
 submission inside a fence, rubric-grading prompt v4.1), moves the Output-check sandbox to JDK 25, and puts the
-pymupdf dependency back on 1.x. Exam grading gets the system/user split and fenced submission of #446 (`exam-grading` v3) but not the v4.1 rewrite. The rubric prompt
-version is part of the grading run key, so rc7 re-grades new runs; grades already returned are unchanged.
+pymupdf dependency back on 1.x. Exam grading gets the system/user split and fenced submission of #446
+(`exam-grading` v3) but not the v4.1 rewrite.
 
-REBUILD REQUIRED for the Output check: `docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner`
-(see the sandbox entry below). The pymupdf pin means `poetry install` works again on an Intel Mac. Rolling back
-to rc6 brings pymupdf 2.0 back.
+Upgrading from rc6 (two steps):
 
-Not in this release: the OpenRouter Batch API mode for evals (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/469, open, not merged).
+1. Run `poetry install` after pulling. It moves pymupdf from 2.0 (rc5 and rc6) to 1.28.2 on every machine, not
+   only Intel Macs (where 2.0 had no wheel and the install failed). PDF extraction is unchanged.
+2. Rebuild the Output-check sandbox image once, from the rc7 checkout:
+   `docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner`. Until then Output check shows
+   "exec-runner image is not built" with a **Build image** button. Grading with the output check off needs
+   no image.
+
+Re-grading: the grading run key contains the `rubric-grading` prompt tag (`id@version`), and rc7 changes that
+version (2 to 4 in the prompt registry). A run saved under rc6 is therefore not reused: the same inputs
+under rc7 call the model again, at normal cost. Grades already returned and saved runs are not touched. The
+`exam-grading` version is not part of the run key (the key carries only the `rubric-grading` tag). The v4.1 label
+is the revision of the prompt text; the registry's integer for it is 4, because v4 was never released. After a
+rollback to rc6 the rc6 prompt tag gives a different key, so a run saved under rc7 is not reused there either.
+
+Rollback to rc6 (maintainer only; see "Roll back" in [docs/RELEASING.md](docs/RELEASING.md)): rc6 expects the
+sandbox image `cpcc_task_automation/exec-runner:1`. Rebuild it from an rc6 checkout (`git checkout v0.2.0-rc6`,
+not from rc7, whose Dockerfile builds JDK 25): `docker build -t cpcc_task_automation/exec-runner:1 docker/exec-runner`.
+Run `poetry install` after the rollback; it brings pymupdf 2.0 back (and the Intel Mac install failure).
+
+Cache switches. These are separate and have opposite defaults.
+- Grading, OFF by default, on only for the values `1`, `true`, `on`, `yes` (any case): `CQC_PROMPT_CACHE_KEY`
+  (rubric calls send OpenRouter `session_id`) and `CQC_GRADING_WARM_FIRST` (the first student is graded alone,
+  then the rest).
+- Evaluation tooling only, ON by default: `CQC_EVAL_SESSION_ID` and `CQC_EVAL_WARM_FIRST`; set either to `0`
+  (or `off`, `false`, `no`) to turn it off. They do not affect the app's grading calls.
+
+Not in this release: the OpenRouter Batch API mode for evals (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/469, open, not merged). No action needed: Batch
+API mode is absent in rc7 (it is not on `master`), and the eval flow is unchanged.
 
 - Rubric grading: the prompt is split into a system message and a user message, and the student submission is
   sent inside a per-call fence (PR 19b); also applied to exam grading; prompts `rubric-grading` and `exam-grading` 2 to 3. Merge `b7df7bb`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/446
@@ -27,7 +52,7 @@ Not in this release: the OpenRouter Batch API mode for evals (https://github.com
   `docs/PROMPT_GUIDELINES.md`. Merge `912bfac`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/464
 - Sandbox: the exec-runner image moves from eclipse-temurin 21 to 25 (image tag `:2`, supersedes #438). CI host
   Java (`actions/setup-java` in `model-eval.yml` and `prompt-eval.yml`) moves to 25 too. REBUILD REQUIRED:
-  `docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner`. Until you rebuild, Output check shows "exec-runner image is not built" with a **Build image** button (the `:2` tag does not exist yet; "exec-runner image out of date, rebuild" appears only when a `:2` image carries the wrong version label). Optional cleanup after upgrade: `docker rmi cpcc_task_automation/exec-runner:1` (unused now; frees disk). Merge `6c37acc`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/459
+  `docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner`. Until you rebuild, Output check shows "exec-runner image is not built" with a **Build image** button (the `:2` tag does not exist yet; "exec-runner image out of date, rebuild" appears only when a `:2` image carries the wrong version label). Java compile checks run in this image, so they now use JDK 25; the host `javac` fallback (used only when the sandbox is unavailable or `CQC_EXECUTION=off`) is not changed by this entry, and the CI change affects only the eval workflows. Cleanup tip, only if you will not roll back to rc6: `docker rmi cpcc_task_automation/exec-runner:1` (unused by rc7; frees disk). Merge `6c37acc`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/459
 - Dependency: pymupdf pinned back below 2 (`pymupdf = "^1"`, locked at 1.28.2), reverting #441. pymupdf 2.0 has no macOS x86_64 wheel, so `poetry install` failed on an Intel Mac. The rc5 and rc6 warnings about pymupdf 2.0 stay as history; the Dependabot ignore for semver-major pymupdf bumps (#445) is unchanged. Merge `218996f`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/468
 - Evaluation: eval runs send OpenRouter `session_id` and grade one case per shared prompt first (warm-first), and
   records and the A/B report gain cached, cache-write and reasoning token stats. `CQC_EVAL_SESSION_ID=0` and
@@ -38,7 +63,7 @@ Not in this release: the OpenRouter Batch API mode for evals (https://github.com
   such a suite shows `stale (failed calls)` in the status. Eval tooling only. Merge `31adb58`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/470
 - Evaluation: `_secret_env_values` no longer crashes when an environment variable is removed during iteration. Eval tooling only. Merge `c67e411`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/472
 - CI: the prompt-eval and model-eval reports show when a run was aborted on the account limit. Workflow files only. Merge `0b318b5`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/467
-- Docs: maintainer review guide refreshed. Merges `7fca1e7` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/465) and `a843792` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/473).
+- Docs: maintainer review guide refreshed (rc6 status, v4.1 A/B record, harness fixes). Merges `7fca1e7` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/465) and `a843792` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/473).
 
 ## 0.2.0-rc6 - 2026-10-24
 
