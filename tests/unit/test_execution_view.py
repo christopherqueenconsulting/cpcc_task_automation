@@ -964,7 +964,7 @@ def test_the_drawer_labels_for_every_status_and_a_missing_report():
     for status in ("skipped", "language_mismatch", "student_compile_failed", "runner_unavailable"):
         assert ev._STATUS_TEXT[status]
     assert ev.students_without_output_check([("A", SimpleNamespace(execution_report=None))]) == []
-    assert ev._code("") == "(nothing)" and ev._code("x" * 5000).endswith("(cut)")
+    assert ev._code("") == "(nothing)" and ev._code("x" * 5000) == "x" * 5000  # never cut
 
 
 # --------------------------------------------------------------------------- #

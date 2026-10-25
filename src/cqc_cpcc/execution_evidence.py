@@ -43,7 +43,8 @@ MAX_CELL_CHARS = 48
 #: direction marks and bidi embeddings and isolates. A translate table, not a character-range regex.
 _HIDDEN_CODE_POINTS = (
     set(range(0x00, 0x20)) | {0x7F} | set(range(0x80, 0xA0)) | {0x2028, 0x2029}
-    | set(range(0x200B, 0x2010)) | set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A)))
+    | set(range(0x200B, 0x2010)) | set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
+    | set(range(0x2060, 0x2065)) | {0xFEFF, 0x180E})
 _HIDDEN_TABLE = {cp: " " for cp in _HIDDEN_CODE_POINTS}
 
 

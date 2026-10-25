@@ -97,16 +97,16 @@ def _show_outcome(outcome) -> None:
         return
     if outcome.compile is not None and not outcome.compile.ok:
         st.error("The solution did not compile.", icon=":material/error:")
-        st.code(execution_view._code(outcome.compile.stderr), language="text", wrap_lines=True)
+        execution_view.show_text(outcome.compile.stderr, scope="compile_stderr")
         return
     for case in outcome.cases:
         st.caption(f"Status: {_STATUS_WORDS.get(case.status, 'Did not run')}"
                    + (f" ({safe_line(case.reason)})" if case.reason else ""))
         st.caption("Output")
-        st.code(execution_view._code(case.stdout, "(no output)"), language="text", wrap_lines=True)
+        execution_view.show_text(case.stdout, scope="run_stdout|" + str(getattr(case, "id", "")), empty="(no output)")
         if case.stderr:
             st.caption("Error output")
-            st.code(execution_view._code(case.stderr), language="text", wrap_lines=True)
+            execution_view.show_text(case.stderr, scope="run_stderr|" + str(getattr(case, "id", "")))
 
 
 def _case_label(case: dict) -> str:
@@ -130,7 +130,7 @@ def _render_run_locally(workspace: dict, k: str) -> None:
     else:
         stdin = cases[choice]["stdin"]
         st.caption("Input")
-        st.code(execution_view._code(stdin, "(no input)"), language="text", wrap_lines=True)
+        execution_view.show_text(stdin, scope="run_stdin", empty="(no input)")
     if st.button("Run locally", key=f"sol_run_{k}", icon=":material/play_arrow:",
                  help="Runs the solution in the local Docker sandbox: no network, nothing leaves this computer."):
         with st.spinner("Running the solution in the sandbox..."):
@@ -179,12 +179,10 @@ def _render_compare(workspace: dict, results: list, k: str) -> None:
                     f"{verdicts.get(r.get('verdict'), 'Unknown')}")
         if case is not None:
             st.caption("Input")
-            st.code(execution_view._code(case["stdin"], "(no input)"), language="text", wrap_lines=True)
+            execution_view.show_text(case["stdin"], scope=f"{k}|{sid}|{r.get('case_id')}|in", empty="(no input)")
             st.caption("Expected output (your solution)")
-            st.code(execution_view._code(case["expected_output"]), language="text", wrap_lines=True)
-        if r.get("diff_excerpt"):
-            st.caption("Differences (- expected, + this program)")
-            st.code(execution_view._code(r.get("diff_excerpt")), language="diff", wrap_lines=True)
+            execution_view.show_text(case["expected_output"], scope=f"{k}|{sid}|{r.get('case_id')}|exp")
+        execution_view.render_case_diff(r, scope=f"{k}|{sid}|{r.get('case_id')}")
 
 
 # --------------------------------------------------------------------------- #
@@ -230,4 +228,4 @@ def render_solution_tab(run_key: str, all_results: list) -> None:
         st.info(NO_SOLUTION, icon=":material/info:")
         return
     st.caption(NO_PLAN_CAPTION)
-    st.code(execution_view._code(reference), language="text", wrap_lines=True)
+    execution_view.show_text(reference, scope="reference")

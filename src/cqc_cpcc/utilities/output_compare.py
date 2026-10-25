@@ -274,6 +274,19 @@ def _diff_excerpt(expected: str, actual: str) -> str:
     return text
 
 
+def comparable_output(text: str, ignore_patterns: Iterable[str | re.Pattern] = ()) -> str:
+    """``text`` as ``compare_output`` sees it: ignored lines dropped, trailing blanks trimmed."""
+    patterns = [p if isinstance(p, re.Pattern) else re.compile(p) for p in ignore_patterns]
+    return _trim(_drop_ignored(text, (), patterns)[0])
+
+
+def full_unified_diff(expected: str, actual: str, context: int = 3) -> list[str]:
+    """The whole unified diff of two outputs, as lines. No line or character cap: a person reads it
+    on screen. (The model's prompt keeps the capped ``diff_excerpt``.) Empty when they are equal."""
+    return list(difflib.unified_diff(expected.splitlines(), actual.splitlines(), "expected", "actual",
+                                     n=context, lineterm=""))
+
+
 def compare_output(
     expected: str,
     actual: str,
