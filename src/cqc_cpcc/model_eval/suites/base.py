@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import account_limit, adaptive, cache_session, error_detail
+from cqc_cpcc.model_eval import account_limit, adaptive, batch, cache_session, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, classify_error, pinned_registry
 from cqc_cpcc.utilities.AI import model_registry
@@ -158,10 +158,16 @@ class SuiteRecord:
     cached_tokens: Optional[int] = None
     cache_write_tokens: Optional[int] = None
     reasoning_tokens: Optional[int] = None
+    #: Batch API mode (``batch.py``, report-only, additive): True when the record's last model call was answered
+    #: by a batch, False when batch mode was on but the call ran sync; None (key absent) when batch mode was off.
+    #: ``cost_allocated`` is True when ``cost_usd`` is the share of the batch's total cost allocated to this call
+    #: by token count, rather than a cost the response reported for the call itself.
+    batch: Optional[bool] = None
+    cost_allocated: Optional[bool] = None
 
     def to_json(self) -> str:
         data = asdict(self)
-        for name in ("cached_tokens", "cache_write_tokens", "reasoning_tokens"):
+        for name in ("cached_tokens", "cache_write_tokens", "reasoning_tokens", "batch", "cost_allocated"):
             if data[name] is None:
                 del data[name]  # additive keys: rows that reported nothing are unchanged
         if not data["error_detail"]:
@@ -208,7 +214,8 @@ class Suite:
         return DATASETS_ROOT / self.dataset
 
     def cases(self) -> list:
-        return self.load_cases(self.dataset_dir)
+        # batch mode: the directory read must be a guarded eval dataset; the cases are stamped (batch.py)
+        return batch.stamp_cases(self.load_cases(self.dataset_dir), self.dataset_dir)
 
 
 # --- Running ---------------------------------------------------------------------------
@@ -251,6 +258,9 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     if account_limit.tripped():  # an earlier suite or model of this run hit the account's spending limit
         return []
     use_adaptive = adaptive.adaptive_enabled(adaptive_mode)
+    # Batch mode (batch.py; off unless CQC_EVAL_BATCH=1 and the retention opt-in). Decided before any call: a missing
+    # opt-in or a dataset outside evals/datasets raises here. All calls must be able to wait on the batch at once.
+    bplan = batch.plan(suite.dataset_dir, len(cases) * repeats, reserving=use_adaptive, label=suite.id, cases=cases)
     attempts_allowed = adaptive.transport_attempts(transport_attempts)  # a bad setting stops the run before any call
     cap = adaptive.eval_max_tokens()  # None (the default) leaves every request as it was
     limiter = None
@@ -258,22 +268,28 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     if use_adaptive:
         ceiling = adaptive.ab_max_concurrency(max_concurrency)
         total = max(1, len(cases) * repeats)
+        if bplan is not None:
+            ceiling = batch.widen(ceiling, total)
         wanted = adaptive.ab_start_concurrency(concurrency)
         start = min(total, ceiling) if wanted is None else min(wanted, ceiling)
         limiter = adaptive.AdaptiveLimiter("calls", start=start, ceiling=ceiling)
         logger.info(f"[prompt-eval:{suite.id}] adaptive concurrency: start {start}, ceiling {ceiling}")
     else:
-        semaphore = asyncio.Semaphore(eval_concurrency(value=concurrency))
+        semaphore = asyncio.Semaphore(
+            batch.widen(eval_concurrency(value=concurrency), len(cases) * repeats) if bplan is not None
+            else eval_concurrency(value=concurrency))
 
     sid = session_id if session_id is not None else cache_session.session_for_run(suite.id, model, effort)
     # Off unless the caller asks (prompt_eval.run passes the CQC_EVAL_WARM_FIRST setting): the dry render calls
     # ``suite.invoke`` once per case, which a test double with side effects must not see unasked.
-    use_warm = bool(warm_first) and sid is not None
+    use_warm = bool(warm_first) and sid is not None and bplan is None  # a batch sends everything at once
     if use_warm:
         cache_session.warm_wait_s()  # a bad CQC_EVAL_WARM_WAIT_S stops the run before any call
 
+    bgroup = None  # the batch.BatchGroup of this run, set below when batch mode is on
+
     async def one(case: SuiteCase, repeat: int, resolved) -> SuiteRecord:
-        with cache_session.record_scope(sid) as tap:
+        with cache_session.record_scope(sid) as tap, batch.task(bgroup):
             return await one_scoped(case, repeat, resolved, tap)
 
     async def one_scoped(case: SuiteCase, repeat: int, resolved, tap) -> SuiteRecord:
@@ -305,6 +321,11 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 # no price -> 0.0 -> the budget refuses the call (fail closed), it never runs unbounded
                 estimate = model_registry.estimate_cost(
                     resolved, suite.estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0
+                if bgroup is not None:  # a batched call reserves its batch price; a sync re-send tops it up
+                    batch.bind_case(case)
+                    batch.set_item_estimate(estimate)
+                    if limiter is not None:  # fixed mode reserves nothing, so keeps the full figure
+                        estimate = batch.estimate_for_reservation(estimate)
                 if limiter is None:
                     output = await adaptive.retry_transport(
                         lambda: suite.invoke(case), held=held, estimate=estimate, sleep=sleep, rng=rng,
@@ -358,6 +379,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 record.prompt_tokens = completion.prompt_tokens
                 record.completion_tokens = completion.completion_tokens
             used = tap.last()  # the usage of the call the record keeps (report-only)
+            batch.annotate(record, used, bgroup)
             if completion is not None and getattr(completion, "cached_tokens", None) is not None:
                 record.cached_tokens = completion.cached_tokens
             elif used is not None:
@@ -401,56 +423,61 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     records: list[SuiteRecord] = []
     with pinned_registry(model, effort, profile, roles=(suite.role,),
                          max_output_tokens=cap or DEFAULT_MAX_OUTPUT_TOKENS) as resolved, cache_session.transport(), \
-            account_limit.run_scope():
-        order = [(case, r) for r in range(repeats) for case in cases]
-        plan: dict = {}
-        if use_warm and len(order) > 1:
-            try:
-                if prefix_keys is not None:
-                    by_case = await prefix_keys(cases)
-                else:
-                    by_case = await cache_session.render_keys({c.case_id: (lambda c=c: suite.invoke(c)) for c in cases})
-                plan = cache_session.warm_plan([(c.case_id, r) for c, r in order], lambda job: by_case.get(job[0]))
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001 - no grouping: every call runs at once, as before
-                logger.warning(f"[prompt-eval:{suite.id}] warm-first grouping skipped: {type(e).__name__}: "
-                               f"{error_detail.redact_message(str(e), 120)}")
-                plan = {}
-            if plan:
-                logger.info(f"[prompt-eval:{suite.id}] warm-first: {sum(1 for w, _l in plan.values() if w is None)} "
-                            f"group(s), {sum(1 for w, _l in plan.values() if w is not None)} follower call(s)")
+            account_limit.run_scope(), \
+            batch.group(bplan, suite.id, "generation", budget=budget, tasks=len(cases) * repeats) as bgroup:
+        try:
+            order = [(case, r) for r in range(repeats) for case in cases]
+            plan: dict = {}
+            if use_warm and len(order) > 1:
+                try:
+                    if prefix_keys is not None:
+                        by_case = await prefix_keys(cases)
+                    else:
+                        by_case = await cache_session.render_keys({c.case_id: (lambda c=c: suite.invoke(c)) for c in cases})
+                    plan = cache_session.warm_plan([(c.case_id, r) for c, r in order], lambda job: by_case.get(job[0]))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - no grouping: every call runs at once, as before
+                    logger.warning(f"[prompt-eval:{suite.id}] warm-first grouping skipped: {type(e).__name__}: "
+                                   f"{error_detail.redact_message(str(e), 120)}")
+                    plan = {}
+                if plan:
+                    logger.info(f"[prompt-eval:{suite.id}] warm-first: {sum(1 for w, _l in plan.values() if w is None)} "
+                                f"group(s), {sum(1 for w, _l in plan.values() if w is not None)} follower call(s)")
 
-        async def gated(case: SuiteCase, repeat: int) -> SuiteRecord:
-            wait_for, lead = plan.get((case.case_id, repeat), (None, None))
-            if wait_for is not None:
-                await cache_session.wait_for_leader(wait_for)  # holds no slot while it waits
-            try:
-                return await one(case, repeat, resolved)
-            except account_limit.RunAborted:
-                return None  # the run was aborted before this call was sent: no record
-            finally:
-                if lead is not None:
-                    lead.set()  # also on a failure, a budget refusal or a cancellation
+            async def gated(case: SuiteCase, repeat: int) -> SuiteRecord:
+                wait_for, lead = plan.get((case.case_id, repeat), (None, None))
+                if wait_for is not None:
+                    await cache_session.wait_for_leader(wait_for)  # holds no slot while it waits
+                try:
+                    return await one(case, repeat, resolved)
+                except account_limit.RunAborted:
+                    return None  # the run was aborted before this call was sent: no record
+                finally:
+                    if lead is not None:
+                        lead.set()  # also on a failure, a budget refusal or a cancellation
 
-        abort = account_limit.current()
-        tasks = [asyncio.ensure_future(gated(case, r)) for case, r in order]
-        if abort is not None:
-            for task in tasks:
-                abort.track(task)  # the first account-limit error cancels every call still queued or in flight
-        position = {id(t): i for i, t in enumerate(tasks)}
-        pending = set(tasks)
-        while pending:  # ends when every task is done: the abort cancels the rest, so none is left running
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            for task in sorted(done, key=lambda t: position[id(t)]):
-                if task.cancelled():
-                    continue  # cancelled by the abort: it never finished, so it has no record
-                record = task.result()
-                if record is not None:
-                    records.append(record)
-        if abort is not None and abort.tripped:
-            logger.warning(f"[prompt-eval:{suite.id}] {model}: stopped by the account limit after "
-                           f"{len(records)} record(s) (HTTP {abort.status} {account_limit.REASON})")
+            abort = account_limit.current()
+            tasks = [asyncio.ensure_future(gated(case, r)) for case, r in order]
+            if abort is not None:
+                for task in tasks:
+                    abort.track(task)  # the first account-limit error cancels every call still queued or in flight
+            position = {id(t): i for i, t in enumerate(tasks)}
+            pending = set(tasks)
+            while pending:  # ends when every task is done: the abort cancels the rest, so none is left running
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in sorted(done, key=lambda t: position[id(t)]):
+                    if task.cancelled():
+                        continue  # cancelled by the abort: it never finished, so it has no record
+                    record = task.result()
+                    if record is not None:
+                        records.append(record)
+            if abort is not None and abort.tripped:
+                logger.warning(f"[prompt-eval:{suite.id}] {model}: stopped by the account limit after "
+                               f"{len(records)} record(s) (HTTP {abort.status} {account_limit.REASON})")
+        finally:
+            if bgroup is not None:
+                await bgroup.drain()  # batch tasks are awaited even when an exception propagates
     if limiter is not None:
         snap = limiter.snapshot()
         logger.info(f"[prompt-eval:{suite.id}] concurrency: {adaptive.describe(snap)}")
