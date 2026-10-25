@@ -213,7 +213,7 @@
       ]
     },
     "preprocessing-digest": {
-      "version": 1,
+      "version": 2,
       "status": "live",
       "role": "digest",
       "description": "Compresses a very large submission into a per-file grading digest before exam grading.",
@@ -232,7 +232,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:41852226b43ed8821f72fbb3ec0471164937a3c17818f607980684abd28bc5be",
+      "fingerprint": "sha256:d777d945f65c53f139aada07d44fe24cb6d093c0c0af60849f27ebcc2b0b1cdc",
       "suites": [
         "digest"
       ]
@@ -284,7 +284,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:ad7041ea0665c00ffb0b79dddd04866706ce10c3d8b6a346b0dfbed55c4750bb",
+      "fingerprint": "sha256:4c00e616000a7ca3455c2557f7c967d2542931312959d6c054732e6cec1e4b46",
       "suites": [
         "flowgorithm-grade"
       ]

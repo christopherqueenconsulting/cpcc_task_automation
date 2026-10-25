@@ -282,8 +282,8 @@ def _render_preprocessing_digest() -> list[str]:
 
     return [
         _build_preprocessing_prompt(FIXTURE_SUBMISSION, FIXTURE_INSTRUCTIONS,
-                                    rubric_config=FIXTURE_RUBRIC_TABLE),
-        _build_preprocessing_prompt(FIXTURE_SUBMISSION, FIXTURE_INSTRUCTIONS),
+                                    rubric_config=FIXTURE_RUBRIC_TABLE, nonce=FIXTURE_NONCE),
+        _build_preprocessing_prompt(FIXTURE_SUBMISSION, FIXTURE_INSTRUCTIONS, nonce=FIXTURE_NONCE),
     ]
 
 

@@ -15,9 +15,7 @@ from pydantic import BaseModel, Field
 from cqc_cpcc.prompts.flowgorithm import (
     FLOWGORITHM_CLOSING_LINE,
     FLOWGORITHM_GRADE_PROMPT,
-    FLOWGORITHM_USER_STATIC_TEMPLATE,
 )
-from cqc_cpcc.rubric_grading import MESSAGE_SEPARATOR
 from cqc_cpcc.utilities.AI import untrusted_fence
 from cqc_cpcc.utilities.logger import logger
 
@@ -39,24 +37,24 @@ class FlowgorithmGrade(BaseModel):
     overall_feedback: Annotated[str, Field(description="2-4 sentences of constructive feedback")]
 
 
-def build_flowgorithm_messages(assignment: str, rubric_criteria_markdown_table: str, submission: str,
-                               submission_file_name: str, total_possible_points: str,
-                               nonce: Optional[str] = None) -> tuple[str, str]:
-    """The ``(system, user)`` messages for grading one submission.
+def build_flowgorithm_prompt(assignment: str, rubric_criteria_markdown_table: str, submission: str,
+                             submission_file_name: str, total_possible_points: str,
+                             nonce: Optional[str] = None) -> str:
+    """The single user message for grading one submission.
 
-    The system message is instruction text only and identical on every call. The user message
-    opens with what is the same for every student of an assignment (assignment, rubric, total
-    points), then the per-call nonce line and the file name and submission inside nonce fences
-    (``utilities/AI/untrusted_fence`` strips marker-shaped text from both), then a closing line.
-    ``nonce`` fixes the fence nonce (prompt fingerprints); real calls leave it unset.
+    What is the same for every student of an assignment (rules, assignment, rubric, total points,
+    output instructions) comes first. The per-call nonce line, the file name and the submission
+    inside nonce fences (``utilities/AI/untrusted_fence`` strips marker-shaped text from both) and
+    a closing line come last. ``nonce`` fixes the fence nonce (prompt fingerprints); real calls
+    leave it unset.
     """
     nonce = nonce or untrusted_fence.new_nonce()
-    static = FLOWGORITHM_USER_STATIC_TEMPLATE.strip().format(
+    static = FLOWGORITHM_GRADE_PROMPT.strip().format(
         assignment=assignment,
         rubric_criteria_markdown_table=rubric_criteria_markdown_table,
         total_possible_points=total_possible_points,
     )
-    user = "\n".join([
+    return "\n".join([
         static,
         untrusted_fence.instruction_line(nonce),
         untrusted_fence.fence("File Name", submission_file_name, nonce),
@@ -64,20 +62,6 @@ def build_flowgorithm_messages(assignment: str, rubric_criteria_markdown_table: 
         "",
         FLOWGORITHM_CLOSING_LINE,
     ])
-    return FLOWGORITHM_GRADE_PROMPT.strip(), user
-
-
-def build_flowgorithm_prompt(assignment: str, rubric_criteria_markdown_table: str, submission: str,
-                             submission_file_name: str, total_possible_points: str,
-                             nonce: Optional[str] = None) -> str:
-    """The whole request as one string: system message, separator, user message.
-
-    For the prompt registry's fingerprint render and prompt tests. ``grade_flowgorithm`` sends
-    the two messages separately (see :func:`build_flowgorithm_messages`).
-    """
-    system, user = build_flowgorithm_messages(assignment, rubric_criteria_markdown_table, submission,
-                                              submission_file_name, total_possible_points, nonce=nonce)
-    return system + MESSAGE_SEPARATOR + user
 
 
 def _points(value) -> Optional[float]:
@@ -123,13 +107,12 @@ async def grade_flowgorithm(assignment: str, rubric_criteria_markdown_table: str
     """Grade one submission on the registry's ``flowgorithm`` role (``model_name`` overrides)."""
     from cqc_cpcc.utilities.AI import llm_gateway
 
-    system, prompt = build_flowgorithm_messages(assignment, rubric_criteria_markdown_table, submission,
-                                                submission_file_name, total_possible_points)
+    prompt = build_flowgorithm_prompt(assignment, rubric_criteria_markdown_table, submission,
+                                      submission_file_name, total_possible_points)
     use_auto_route = model_name == "openrouter/auto"
     return await llm_gateway.structured(
         role="flowgorithm",
         prompt=prompt,
-        system=system,
         schema_model=FlowgorithmGrade,
         override=None if use_auto_route else (model_name or None),
         use_auto_route=use_auto_route,

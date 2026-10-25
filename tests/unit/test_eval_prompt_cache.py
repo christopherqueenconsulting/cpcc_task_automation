@@ -383,12 +383,12 @@ class TestLayoutOfTheRealSuites:
     """Eval requests are built by the app's own builders: static prefix first, fenced submission last."""
 
     SYSTEM_SUITES = ("grading", "grading-levelband", "exam-grading", "grading-solution",
-                     "project-feedback", "flowgorithm-grade")
+                     "project-feedback")
     SINGLE_SUITES = ("requirement-extraction", "effort-recommendation", "requirement-solution-check",
-                     "test-case-generation", "digest")
+                     "test-case-generation", "digest", "flowgorithm-grade")
     #: System/user suites whose cases are different assignments, so the shared prefix across the
-    #: suite is the system message alone (it can be under the 4,096-character line).
-    PER_ASSIGNMENT_SUITES = ("flowgorithm-grade",)
+    #: suite is the system message alone (it can be under the 4,096-character line). None now.
+    PER_ASSIGNMENT_SUITES = ()
     CASES_PER_SUITE = 12
 
     @pytest.fixture(scope="class")
