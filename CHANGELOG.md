@@ -5,6 +5,7 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Dependency: pymupdf pinned back below 2 (`pymupdf = "^1"`, locked at 1.28.2), reverting #441. pymupdf 2.0 has no macOS x86_64 wheel, so `poetry install` failed on an Intel Mac. Owner ruling 2026-10-25 "revert it", relayed by the maintainer (open decision 8 in `docs/REVIEW-2026-10-26.md`, option A). The rc5 and rc6 warnings about pymupdf 2.0 stay as history; the Dependabot ignore for semver-major pymupdf bumps (#445) is unchanged. Rolling back or running rc5/rc6 still carries pymupdf 2.0.
 - Sandbox: the exec-runner image moves from eclipse-temurin 21 to 25 (image tag `:2`, supersedes #438). CI host Java (`actions/setup-java` in `model-eval.yml` and `prompt-eval.yml`) moves to 25 too. REBUILD REQUIRED: `docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner`. Until you rebuild, Output check shows "exec-runner image is not built" with a **Build image** button (the `:2` tag does not exist yet; "exec-runner image out of date, rebuild" appears only when a `:2` image carries the wrong version label). Optional cleanup after upgrade: `docker rmi cpcc_task_automation/exec-runner:1` (unused now; frees disk).
 
 ## 0.2.0-rc6 - 2026-10-24
