@@ -1418,11 +1418,11 @@ class TestNothingAfterTheAbort:
 
     def test_submit_itself_refuses_when_aborted(self, batch_on):
         client = Fake()
-        g = batch.BatchGroup(batch.BatchPlan(batch.settings()), "t", "generation", client_factory=lambda t: client,
-                             tasks=1)
 
         async def attempt():
             with account_limit.run_scope() as state:
+                g = batch.BatchGroup(batch.BatchPlan(batch.settings()), "t", "generation",
+                                     client_factory=lambda t: client, tasks=1)
                 self.trip(state)
                 item = SimpleNamespace(kwargs={"model": MODEL, "messages": []}, body={}, custom_id="r1")
                 await g._submit(MODEL, [item])
@@ -1439,14 +1439,70 @@ class TestNothingAfterTheAbort:
         assert all(isinstance(r, account_limit.RunAborted) for r in results)
         assert client.sync_requests == []
 
-    def test_a_413_reason_never_carries_provider_text(self, fake, batch_on):
-        fake.too_large_over, fake.too_large_message = 0, "SENTINEL-413-PROVIDER-TEXT for org ACME"
+    def test_a_413_reason_never_carries_provider_text(self, fake, batch_on, caplog):
+        import logging
+
+        caplog.set_level(logging.DEBUG)
+        sentinel = "SENTINEL-413-PROVIDER-TEXT"
+        fake.too_large_over, fake.too_large_message = 0, f"{sentinel} for org ACME"
         records, _ = go(model_suite(), n=10)
         assert all(r.ok for r in records)  # everything ran sync
-        text = batch.fallback_reason() + json.dumps(batch._EVENTS, default=str)
-        assert batch.fallback_reason() == "too large (HTTP 413)" and "SENTINEL" not in text
+        assert batch.fallback_reason() == "too large (HTTP 413)"
+        assert sentinel not in caplog.text and sentinel not in json.dumps(batch._EVENTS, default=str)
+        assert sentinel not in batch.fallback_reason()
+        assert "rejected as too large (HTTP 413); splitting" in caplog.text  # the fixed text is what is logged
 
-    def test_drain_waits_for_the_batch_tasks_and_nothing_starts_after_close(self, batch_on):
+    def test_submit_refuses_from_a_fresh_context_too(self, batch_on):
+        """`_flush` runs its tasks in an empty contextvars.Context: the check must read the group's own state."""
+        import contextvars
+
+        client = Fake()
+
+        async def attempt():
+            with account_limit.run_scope() as state:
+                g = batch.BatchGroup(batch.BatchPlan(batch.settings()), "t", "generation",
+                                     client_factory=lambda t: client, tasks=1)
+                self.trip(state)
+                item = SimpleNamespace(kwargs={"model": MODEL, "messages": []}, body={}, custom_id="r1")
+                task = asyncio.get_running_loop().create_task(g._submit(MODEL, [item]),
+                                                              context=contextvars.Context())
+                return await asyncio.gather(task, return_exceptions=True)
+
+        (outcome,) = vrun(attempt())
+        assert isinstance(outcome, account_limit.RunAborted) and client.posts == []
+
+    def test_close_is_idempotent_and_the_event_is_written_once(self, batch_on):
+        g = batch.BatchGroup(batch.BatchPlan(batch.settings()), "once", "generation", tasks=1)
+        g.close()
+        g.close()
+        vrun(g.drain())
+        assert sum(1 for e in batch._EVENTS if e["type"] == "group" and e["label"] == "once") == 1
+
+    def test_the_round_drains_its_batch_tasks_when_an_exception_propagates(self, fake, batch_on, monkeypatch):
+        drained = []
+        original = batch.BatchGroup.drain
+
+        async def spy(self):
+            drained.append(self.label)
+            return await original(self)
+
+        monkeypatch.setattr(batch.BatchGroup, "drain", spy)
+        judged = stamped(_cases(10))
+        ids = [c.case_id for c in judged]
+
+        class Judge:
+            @staticmethod
+            async def pairwise(suite, case, head_payload, base_payload, model, cache):
+                raise RuntimeError("judge failed")
+
+        payloads = {c: SimpleNamespace(payload=c) for c in ids}
+        with pytest.raises(RuntimeError, match="judge failed"):
+            vrun(pa._pairwise_scores(Judge, model_suite(), {c.case_id: c for c in judged}, ids, payloads, payloads,
+                                     MODEL, None, Budget(1000.0, 900.0), 4))
+        assert drained == ["toy:judge"]
+
+    def test_drain_waits_for_the_batch_tasks_and_nothing_starts_after_close(self, batch_on, monkeypatch):
+        monkeypatch.setenv(batch.ENV_MIN, "1")  # a tiny bucket must not be what resolves the item below
         client = Fake(done_after=99999.0)
         main = _manual_group(client)
         seen = {}
@@ -1455,14 +1511,17 @@ class TestNothingAfterTheAbort:
             results, g, state = await main(lambda state, g: None)
             seen["tasks"] = list(g._tasks)  # drained: every batch task has finished and left the set
             g._closed = True  # a flush after close starts nothing
+            batch._RUN.update(validated=False, fallback_reason=None)  # the deadline above tripped the run-wide fallback
             item = SimpleNamespace(future=asyncio.get_running_loop().create_future(), resolved=False)
             g.buckets = {(MODEL, "null"): [item]}
             g.blocked = 1
+            before = g._tiny_items
             g._flush()
             seen["item_done"] = item.future.done()
             seen["tasks_after_flush"] = list(g._tasks)
+            seen["tiny_added"] = g._tiny_items - before
             return results
 
         results = vrun(run())
-        assert seen == {"tasks": [], "item_done": True, "tasks_after_flush": []}
+        assert seen == {"tasks": [], "item_done": True, "tasks_after_flush": [], "tiny_added": 0}
         assert len(client.posts) == 1 and len(results) == 10  # the flush after close sent no batch

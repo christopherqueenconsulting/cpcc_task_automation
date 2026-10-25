@@ -630,6 +630,7 @@ class BatchGroup:
             "batch-fallback", start=min(max(1, int(tasks)), adaptive.ab_max_concurrency()),
             ceiling=adaptive.ab_max_concurrency())
         self._closed = False
+        self._closed_once = False
 
     # -- tasks of the run
     @contextlib.contextmanager
@@ -797,7 +798,7 @@ class BatchGroup:
                 if depth < 3 and len(items) > 1:
                     half = len(items) // 2
                     logger.warning(f"[eval-batch:{self.label}] {len(items)} requests rejected as too large "
-                                   f"({error_detail.log_text(e)}); splitting")
+                                   f"(HTTP 413); splitting")
                     row["split"] = True
                     await asyncio.gather(self._run_chunk(model, items[:half], depth + 1),
                                          self._run_chunk(model, items[half:], depth + 1))
@@ -862,7 +863,8 @@ class BatchGroup:
     async def _submit(self, model_id: str, items: list) -> str:
         import openai
 
-        account_limit.check()  # defence in depth: an aborted run creates no batch
+        if self._aborted():  # defence in depth (reads the group's own state: this runs in a fresh context)
+            raise account_limit.RunAborted(account_limit.STATUS)
         providers = {json.dumps(batch_provider(i.kwargs), sort_keys=True) for i in items}
         if len(providers) != 1:  # the batch-wide provider block comes from one item, so all must agree
             raise _SubmitFailed("items of one batch disagree on the provider block")
@@ -872,7 +874,7 @@ class BatchGroup:
                 "/batches", body=batch_payload(model_id, items, batch_provider(items[0].kwargs)), cast_to=object)
         except openai.APIStatusError as e:
             if e.status_code == 413:
-                raise _TooLarge(e.message) from e
+                raise _TooLarge("HTTP 413") from e
             raise _SubmitFailed(f"submit rejected: {error_detail.log_text(e)}") from e
         except Exception as e:  # noqa: BLE001
             raise _SubmitFailed(f"submit failed: {type(e).__name__}") from e
@@ -1025,6 +1027,9 @@ class BatchGroup:
             self._sync_wall += time.monotonic() - started
 
     def close(self) -> None:
+        if self._closed_once:  # idempotent: one "group" event however often it is called
+            return
+        self._closed_once = True
         self._closed = True
         if self._timer is not None:
             self._timer.cancel()
@@ -1039,8 +1044,7 @@ class BatchGroup:
         """Close the group and wait for its (cancelled) batch tasks to finish. Call it where the run awaits its calls
         (the runners do, at the end of the group's block): ``close`` itself cannot await."""
         tasks = list(self._tasks)
-        if not self._closed:
-            self.close()
+        self.close()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 

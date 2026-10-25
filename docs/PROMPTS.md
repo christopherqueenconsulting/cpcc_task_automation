@@ -950,9 +950,43 @@ Commands (all under `poetry run python -m cqc_cpcc.model_eval`):
 - `prompt-requests --suites a,b --out <file>` and `prompt-requests-identical --suites a,b --base-ref <ref> --out <dir>` (capture and compare the exact requests; $0)
 - `prompt-ab-decide --dir <A/B artifact> --head-root <PR tree> --base-sha <sha> --head-sha <sha>` (run from a base-branch checkout; the CI's base-branch check)
 - `prompt-calibrate [--apply]` (run every suite on its current model and propose thresholds)
-- `prompt-record`, `prompt-rescore`, `suite-gate` (used by the workflows)
+- `prompt-record`, `prompt-rescore`, `prompt-baseline-check`, `suite-gate` (used by the workflows)
 
 `CQC_TEST_MODE=true` runs any of them with canned answers for free.
+
+#### Stale baselines: `stale (failed calls)`
+
+A master run that hit an account limit (HTTP 403 "Budget limit exceeded" or 402) once saved its failed
+calls as master's outputs: scored 0, priced at the worst-case estimate (run 40134186156, state commit
+`263295d0`: `grading` 0.526, `grading-levelband` / `grading-solution` / `project-feedback` 0.000, against
+0.882 / 0.949 / 0.960 / 0.956 before). Every later $0 re-score then read those rows as "master's saved
+outputs". `src/cqc_cpcc/model_eval/baseline_guard.py` (`saved_output_is_unreliable`) is the one check that
+keeps that from happening. It reads only fields old rows already carry.
+
+- **Unreliable** means more than 20% of the suite's attempted calls failed (exactly 20% is still fine; calls
+  skipped for the local budget do not count), or any call hit the account limit (`error_kind`
+  `account_limit`, or what `account_limit.is_account_limit_detail` accepts in the stored `error_detail`: HTTP 402, or a
+  403 whose redacted message names an exceeded budget, key or credit limit; `baseline_guard` reuses that function and
+  the `KIND` and `STATUS` constants, so the two cannot drift). An old
+  history row without those fields is judged by the `ok_rate` its gate text recorded, or by every grader
+  being 0. The share is `MAX_FAILED_SHARE`; `CQC_BASELINE_MAX_FAILED_SHARE` (a number from 0 up to, not
+  including, 1) overrides it and a bad value is an error.
+- **Baseline selection.** `prompt-rescore` (the grader-only re-score and the request-identical fast path
+  both use it) skips a suite whose saved outputs are unreliable and prints `no baseline, needs a model run`.
+  `--raw-dir` may be repeated, newest first: the first directory with reliable outputs of that suite wins, so
+  a workflow that downloads several earlier master artifacts falls back to the newest good one.
+  `prompt-baseline-check --suites a,b --raw-dir <dir>` prints `ok`, `missing` or the reason, per suite.
+  The A/B itself never reads saved outputs (it runs both sides), so its identical-request skip is unaffected.
+- **`PROMPT_STATUS.md`.** A suite whose latest saved result is unreliable shows `stale (failed calls)`
+  instead of `needs work`, with the last good score and run link (`n/a` when there was none) and the failed
+  attempt's link. No "Prompt needs work" issue opens for it.
+- **The state writer does not advance on it.** `prompt-record` still appends the attempt, marked
+  `"unreliable": <reason>` (plus `ok_rate` and `errors`), but the status page keeps the previous good row. With
+  `--master-dir <saved master outputs>` it also deletes that suite's `raw_outputs.jsonl` so the failed run
+  cannot become the next baseline. The suite name must be a known suite and its resolved path must stay inside
+  `--master-dir`; anything else is skipped with a note.
+- **How a poisoned baseline is superseded.** The next master run of that suite that passes the check writes a
+  reliable row and reliable outputs, and both replace the stale ones. Until then the suite has no baseline.
 
 **Thresholds start uncalibrated.** Until a live calibration, a suite reports its numbers
 and only blocks a PR on a *regression* against the base; it never raises "needs work".

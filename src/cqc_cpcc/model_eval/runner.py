@@ -305,49 +305,51 @@ async def run_model(
 
     with pinned_registry(model, effort, profile) as resolved, cache_session.transport(), account_limit.run_scope(), \
             batch.group(bplan, "model-eval", "generation", budget=budget, tasks=len(cases) * repeats) as bgroup:
-        order = [(case, r) for r in range(repeats) for case in cases]
-        plan: dict = {}
-        if use_warm and len(order) > 1:
-            try:
-                by_case = await cache_session.render_keys(
-                    {c.case_id: (lambda c=c: _grade_once(c, perturb(c, seed), grade_fn)) for c in cases})
-                plan = cache_session.warm_plan([(c.case_id, r) for c, r in order], lambda job: by_case.get(job[0]))
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # noqa: BLE001 - no grouping: every call runs at once, as before
-                logger.warning(f"[eval] warm-first grouping skipped: {type(e).__name__}: "
-                               f"{error_detail.redact_message(str(e), 120)}")
-                plan = {}
+        try:
+            order = [(case, r) for r in range(repeats) for case in cases]
+            plan: dict = {}
+            if use_warm and len(order) > 1:
+                try:
+                    by_case = await cache_session.render_keys(
+                        {c.case_id: (lambda c=c: _grade_once(c, perturb(c, seed), grade_fn)) for c in cases})
+                    plan = cache_session.warm_plan([(c.case_id, r) for c, r in order], lambda job: by_case.get(job[0]))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - no grouping: every call runs at once, as before
+                    logger.warning(f"[eval] warm-first grouping skipped: {type(e).__name__}: "
+                                   f"{error_detail.redact_message(str(e), 120)}")
+                    plan = {}
 
-        async def gated(case: EvalCase, repeat: int) -> CallRecord:
-            wait_for, lead = plan.get((case.case_id, repeat), (None, None))
-            if wait_for is not None:
-                await cache_session.wait_for_leader(wait_for)
-            try:
-                return await one(case, repeat, resolved)
-            except account_limit.RunAborted:
-                return None  # the run was aborted before this call was sent: no record
-            finally:
-                if lead is not None:
-                    lead.set()
+            async def gated(case: EvalCase, repeat: int) -> CallRecord:
+                wait_for, lead = plan.get((case.case_id, repeat), (None, None))
+                if wait_for is not None:
+                    await cache_session.wait_for_leader(wait_for)
+                try:
+                    return await one(case, repeat, resolved)
+                except account_limit.RunAborted:
+                    return None  # the run was aborted before this call was sent: no record
+                finally:
+                    if lead is not None:
+                        lead.set()
 
-        abort = account_limit.current()
-        tasks = [asyncio.ensure_future(gated(case, r)) for case, r in order]
-        if abort is not None:
-            for task in tasks:
-                abort.track(task)  # the first account-limit error cancels every call still queued or in flight
-        position = {id(t): i for i, t in enumerate(tasks)}
-        pending = set(tasks)
-        while pending:  # ends when every task is done: the abort cancels the rest, so none is left running
-            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-            for task in sorted(done, key=lambda t: position[id(t)]):
-                if task.cancelled():
-                    continue
-                record = task.result()
-                if record is not None:
-                    records.append(record)
-        if bgroup is not None:
-            await bgroup.drain()  # the group's batch tasks are finished before the run leaves its block
+            abort = account_limit.current()
+            tasks = [asyncio.ensure_future(gated(case, r)) for case, r in order]
+            if abort is not None:
+                for task in tasks:
+                    abort.track(task)  # the first account-limit error cancels every call still queued or in flight
+            position = {id(t): i for i, t in enumerate(tasks)}
+            pending = set(tasks)
+            while pending:  # ends when every task is done: the abort cancels the rest, so none is left running
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in sorted(done, key=lambda t: position[id(t)]):
+                    if task.cancelled():
+                        continue
+                    record = task.result()
+                    if record is not None:
+                        records.append(record)
+        finally:
+            if bgroup is not None:
+                await bgroup.drain()  # batch tasks are awaited even when an exception propagates
     return records
 
 
