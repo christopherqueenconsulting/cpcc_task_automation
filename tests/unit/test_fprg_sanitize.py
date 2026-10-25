@@ -3,6 +3,7 @@
 
 import base64
 import re
+import time
 from unittest.mock import AsyncMock
 
 import pytest
@@ -45,25 +46,26 @@ def _fprg(extra_comment: str = "") -> str:
 
 
 def _blank(text: str) -> str:
-    return re.sub(r'(<attribute name="(?:name|authors|about|created|edited)" value=")[^"]*"', r'\1"', text)
+    return re.sub(r'(<attribute name="(?:name|authors|about|created|edited)" value=")[^"]+"',
+                  r'\1[name removed]"', text)
 
 
 def test_identity_attributes_blanked_and_rest_identical():
     src = _fprg()
     out = sanitize_fprg(src)
     assert NAME not in out and STAMP not in out and "LAB01" not in out
-    assert 'name="authors" value=""' in out
+    assert 'name="authors" value="[name removed]"' in out
     assert 'name="saved" value="2026-01-01 10:05:00 AM"' in out  # timestamp is not a name
     assert out == _blank(src)  # equals the input except for the stripped values
 
 
 def test_email_removed_from_comment_and_attribute():
-    src = _fprg(" email ada.example@cpcc.edu")
-    src = src.replace('<attribute name="saved"', '<attribute name="note" value="ada.example@cpcc.edu"/>\n'
+    src = _fprg(" email ada.example@example.edu")
+    src = src.replace('<attribute name="saved"', '<attribute name="note" value="ada.example@example.edu"/>\n'
                                                    '        <attribute name="saved"')
     out = sanitize_fprg(src)
-    assert "@cpcc.edu" not in out
-    assert 'name="note" value=""' in out
+    assert "@example.edu" not in out
+    assert 'name="note" value="[email removed]"' in out
     assert "Read the inputs email [email removed]" in out
 
 
@@ -78,13 +80,13 @@ def test_program_structure_unchanged():
 
 
 @pytest.mark.parametrize("src", [
-    f'<flowgorithm><attributes><attribute name="authors" value="{NAME}"/>\n<body><comment text="x ada.example@cpcc.edu"',
+    f'<flowgorithm><attributes><attribute name="authors" value="{NAME}"/>\n<body><comment text="x ada.example@example.edu"',
     f"<flowgorithm><attributes><attribute value='{NAME}' name='Authors'/><<>>",
     f'<attribute name="authors"\n value="{NAME}" />  garbage & < unclosed',
 ])
 def test_malformed_xml_still_stripped_without_crash(src):
     out = sanitize_fprg(src)
-    assert NAME not in out and "@cpcc.edu" not in out
+    assert NAME not in out and "@example.edu" not in out
 
 
 def test_hostile_doctype_and_entities_not_expanded():
@@ -98,7 +100,7 @@ def test_hostile_doctype_and_entities_not_expanded():
     assert "DOCTYPE" not in out and "ENTITY" not in out
     assert NAME not in out and "/etc/passwd" not in out
     assert len(out) <= len(bomb)  # never grows: nothing is expanded
-    assert 'name="authors" value=""' in out
+    assert 'name="authors" value="[name removed]"' in out
 
 
 def test_empty_and_plain_text_pass_through():
@@ -110,16 +112,67 @@ async def test_gateway_call_never_contains_author(mocker):
     grade = fg.FlowgorithmGrade(requirements_summary="s", deductions=[], final_grade=50, overall_feedback="ok")
     structured = mocker.patch("cqc_cpcc.utilities.AI.llm_gateway.structured",
                               new_callable=AsyncMock, return_value=grade)
-    await fg.grade_flowgorithm("Area", "| Criterion | Points |", _fprg(" ada.example@cpcc.edu"),
+    await fg.grade_flowgorithm("Area", "| Criterion | Points |", _fprg(" ada.example@example.edu"),
                                "Student A_1", "50")
     sent = repr(structured.call_args)
-    assert NAME not in sent and STAMP not in sent and "@cpcc.edu" not in sent
+    assert NAME not in sent and STAMP not in sent and "@example.edu" not in sent
     assert '<declare name=\\"length\\"' in sent or '<declare name="length"' in sent
 
 
 def test_attribute_without_value_or_name_is_handled():
-    src = ('<attribute name="authors"/><attribute value="ada.example@cpcc.edu"/>'
+    src = ('<attribute name="authors"/><attribute value="ada.example@example.edu"/>'
            '<attribute name="note" value="keep me"/>')
     out = sanitize_fprg(src)
-    assert out == ('<attribute name="authors"/><attribute value=""/>'
+    assert out == ('<attribute name="authors"/><attribute value="[email removed]"/>'
                    '<attribute name="note" value="keep me"/>')
+
+
+def test_non_empty_author_gets_placeholder_and_empty_stays_empty():
+    out = sanitize_fprg(f'<attribute name="authors" value="{NAME}"/><attribute name="about" value=""/>'
+                        '<attribute name="name" value="  "/>')
+    assert '<attribute name="authors" value="[name removed]"/>' in out
+    assert '<attribute name="about" value=""/>' in out
+    assert '<attribute name="name" value="  "/>' in out
+    assert NAME not in out
+
+
+def test_several_attribute_blocks_and_wider_identity_names():
+    src = "".join(f'<attributes><attribute name="{n}" value="{NAME}"/></attributes>'
+                  for n in ("owner", "user", "computer", "company", "Author_Name", "authors"))
+    out = sanitize_fprg(src)
+    assert NAME not in out
+    assert out.count("[name removed]") == 6
+
+
+def test_value_containing_name_text_cannot_confuse_parsing():
+    src = f'<attribute value="{NAME}" note=\'name="saved"\' name="authors"/>'
+    assert NAME not in sanitize_fprg(src)
+    keep = '<attribute name="saved" value="name=&quot;authors&quot; 2026"/>'
+    assert sanitize_fprg(keep) == keep
+    odd = f'<attribute name="note" value=\'name="authors" {NAME}\'/>'
+    assert sanitize_fprg(odd) == odd  # not an identity attribute: the quoted text is only a value
+
+
+def test_namespaced_attribute_tag_handled():
+    out = sanitize_fprg(f'<fg:attribute name="authors" value="{NAME}"/>')
+    assert out == '<fg:attribute name="authors" value="[name removed]"/>'
+
+
+@pytest.mark.parametrize("at", ["&#64;", "&#x40;", "&#X0040;", "@"])
+def test_entity_encoded_email_removed(at):
+    out = sanitize_fprg(f'<comment text="mail ada.example{at}example.edu please"/>')
+    assert "ada.example" not in out and "[email removed]" in out
+
+
+def test_cdata_content_stripped():
+    out = sanitize_fprg(f'<![CDATA[ ada.example@example.edu <attribute name="authors" value="{NAME}"/> ]]>')
+    assert NAME not in out and "@example.edu" not in out
+
+
+@pytest.mark.parametrize("unit", ["<attribute ", "<!ENTITY ", "<!DOCTYPE ", "<!DOCTYPE [", '<attribute name="', "a."])
+def test_hostile_repeats_run_in_linear_time(unit):
+    src = unit * 200000
+    start = time.perf_counter()
+    out = sanitize_fprg(src)
+    assert time.perf_counter() - start < 2.0
+    assert "DOCTYPE" not in out
