@@ -115,3 +115,11 @@ async def test_gateway_call_never_contains_author(mocker):
     sent = repr(structured.call_args)
     assert NAME not in sent and STAMP not in sent and "@cpcc.edu" not in sent
     assert '<declare name=\\"length\\"' in sent or '<declare name="length"' in sent
+
+
+def test_attribute_without_value_or_name_is_handled():
+    src = ('<attribute name="authors"/><attribute value="ada.example@cpcc.edu"/>'
+           '<attribute name="note" value="keep me"/>')
+    out = sanitize_fprg(src)
+    assert out == ('<attribute name="authors"/><attribute value=""/>'
+                   '<attribute name="note" value="keep me"/>')
