@@ -31,7 +31,27 @@ def test_missing_weight_defaults_to_core_and_nan_is_blank():
 
 def test_empty_text_is_skipped_with_a_message():
     valid, errors = re_.validate_rows([_row(), _row("R2", "   ")])
-    assert len(valid) == 1 and errors[0].row == 2 and "no requirement text" in str(errors[0])
+    assert len(valid) == 1 and errors[0].row == 2 and not errors[0].quiet
+    assert str(errors[0]).startswith("Row 2 (R2): has no requirement text")
+
+
+def test_a_completely_blank_row_is_a_quiet_note_not_an_error():
+    valid, errors = re_.validate_rows([_row(), _row("", "", "core")])
+    assert len(valid) == 1 and errors[0].quiet and re_.loud(errors) == []
+    assert str(errors[0]) == "Row 2: is empty and is skipped."
+    # an id or a different weight with no text is still an error
+    assert not re_.validate_rows([_row("", "", "secondary")])[1][0].quiet
+
+
+def test_whitespace_in_text_is_collapsed_to_one_line():
+    valid, _ = re_.validate_rows([_row(text="Reads  a\n price\t now ")])
+    assert valid[0]["text"] == "Reads a price now"
+
+
+def test_row_label_never_holds_text():
+    assert re_.row_label({"row": 3, "id": "R3", "text": "![x](http://evil.example/p)"}) == "Row 3 (R3)"
+    assert re_.row_label({"row": 4, "id": "", "text": "x"}) == "Row 4 (id made when saved)"
+    assert re_.row_label({"row": 5, "id": "![x](y)", "text": "x"}) == "Row 5 (id made when saved)"
 
 
 def test_invalid_and_duplicate_ids():
@@ -39,7 +59,8 @@ def test_invalid_and_duplicate_ids():
                                        _row("X" * 13, "Fourth")])
     assert [v["row"] for v in valid] == [1]
     msgs = [str(e) for e in errors]
-    assert "already used by row 1" in msgs[0] and "not allowed" in msgs[1] and "not allowed" in msgs[2]
+    assert msgs[0] == "Row 2 (R1): the id R1 is already used by row 1. Give this row a different id, or clear it."
+    assert msgs[1].startswith("Row 3: the id is not allowed") and "not allowed" in msgs[2]
 
 
 def test_too_long_and_bad_weight_report_every_problem_on_the_row():
@@ -52,6 +73,40 @@ def test_count_over_the_cap_skips_the_extra_rows():
     valid, errors = re_.validate_rows(rows)
     assert len(valid) == rc.MAX_REQUIREMENTS and len(errors) == 2
     assert all(e.field == "table" and "at most" in str(e) for e in errors)
+
+
+def test_render_errors_caps_the_list_and_says_how_many_more():
+    def page():
+        from cqc_streamlit_app import requirement_editor as r
+        bad = [r.RowError(i, "text", "has no requirement text.") for i in range(1, 31)]
+        r.render_errors(bad + [r.RowError(31, "blank", "is empty and is skipped.", quiet=True)], 5, 30)
+
+    at = AppTest.from_function(page, default_timeout=30).run()
+    assert not at.exception, at.exception
+    text = at.error[0].value
+    assert text.startswith("Grading with 5 of 30 rows. These rows are left out and will NOT be graded")
+    assert text.count("\n- Row ") == 20 and text.endswith("... and 10 more")
+    assert at.caption[0].value == "Row 31: is empty and is skipped."
+
+
+def test_reminder_only_when_there_are_real_errors():
+    def page():
+        import streamlit as st
+
+        from cqc_streamlit_app import requirement_editor as r
+        r.render_reminder()
+        r.render_reminder([r.RowError(1, "blank", "is empty and is skipped.", quiet=True)])
+        st.session_state["done"] = True
+
+    at = AppTest.from_function(page, default_timeout=30)
+    at.session_state["requirement_row_errors"] = [re_.RowError(2, "id", "bad")]
+    at.run()
+    assert [w.value for w in at.warning] == [
+        "Some requirement rows are left out and will not be graded. See the list under the Requirement "
+        "checklist table."]
+    at.session_state["requirement_row_errors"] = []
+    at.run()
+    assert not at.warning
 
 
 def test_row_error_without_a_row_number_prints_plain():
@@ -69,7 +124,7 @@ def test_effect_sentences():
 
 
 def test_content_has_three_examples_and_no_empty_text():
-    assert len(re_.EXAMPLES) == 3 and len(re_.BAD_REQUIREMENTS) == 3
+    assert len(re_.EXAMPLES) == 3 and len(re_.BAD_REQUIREMENTS) >= 3
     assert all(all(part.strip() for part in e) for e in re_.EXAMPLES + re_.BAD_REQUIREMENTS)
 
 
@@ -128,15 +183,21 @@ def test_row_errors_listed_under_the_table_and_bad_row_not_graded():
              "deleted_rows": []}
     at = _run(edits)
     text = " ".join(e.value for e in at.error)
-    assert "Row 2" in text and "already used by row 1" in text and "Row 3" in text
+    assert text.startswith("Grading with 1 of 2 rows. These rows are left out and will NOT be graded "
+                           "(rows counted from the top, starting at 1):")
+    assert "Row 2 (R1): the id R1 is already used by row 1" in text
+    assert any(c.value == "Row 3: is empty and is skipped." for c in at.caption)  # quiet, not an error
     assert [r.id for r in at.session_state["out"].requirements] == ["R1"]
+    assert any("left out and will not be graded" in w.value for w in at.warning)  # the reminder
+    assert any(c.value == re_.RULES_CAPTION for c in at.caption)
 
 
 def test_no_usable_rows_turns_coverage_off_and_says_why():
     edits = {"edited_rows": {0: {"text": ""}, 1: {"text": ""}}, "added_rows": [], "deleted_rows": []}
     at = _run(edits)
     assert at.session_state["out"] is None
-    assert any("coverage is off for this run" in w.value for w in at.warning)
+    assert any(w.value == re_.OFF_MESSAGE for w in at.warning)
+    assert "Requirements will not be checked in this run" in re_.OFF_MESSAGE
 
 
 def test_how_to_dialog_opens_with_preview():
@@ -144,7 +205,13 @@ def test_how_to_dialog_opens_with_preview():
     next(b for b in at.button if b.label == "How to add your own requirement").click()
     at = _run(at=at)
     body = " ".join(m.value for m in at.markdown)
-    assert "Good requirements" in body and "Requirements to avoid" in body and "Re-extract" in body
+    for heading in ("#### Good requirements", "#### Requirements to avoid", "#### How it affects the grade",
+                    "#### What the marks mean"):
+        assert heading in body
+    assert "Re-extract" in body and "Requirements to grade" in body and "what it costs" not in body.lower()
+    assert "**met**: fully done and working as required." in body
+    assert "**partial**: attempted, but incomplete or not working as required" in body
+    assert "**missing**: not done at all. A missing core requirement is a major error" in body
     assert any(c.value == "- **R1** (core): Reads a price" for c in at.code)
 
 
@@ -165,6 +232,26 @@ def test_preview_follows_the_chosen_row():
     at.selectbox(key="requirement_howto_preview").select(1).run()
     assert at.code[0].value == "- **R?** (secondary): Prints the total"
     assert "minor" in at.caption[0].value
+
+
+def test_hostile_requirement_text_never_reaches_a_label_or_markdown():
+    evil = "![x](http://evil.example/p) [a](http://evil.example)"
+    rows = [{"row": 1, "id": "R1", "text": evil, "weight": "core"}]
+
+    def page():
+        import streamlit as st
+
+        from cqc_streamlit_app import requirement_editor
+        requirement_editor._dialog_body(st.session_state["rows"])
+
+    at = AppTest.from_function(page, default_timeout=30)
+    at.session_state["rows"] = rows
+    at.run()
+    assert not at.exception, at.exception
+    shown = [str(o) for o in at.selectbox[0].options] + [m.value for m in at.markdown]
+    shown += [c.value for c in at.caption]
+    assert all("![" not in t and "](" not in t for t in shown)
+    assert at.code[0].value == f"- **R1** (core): {evil}"  # the text appears only inside the code block
 
 
 def test_dialog_with_no_rows_says_so():

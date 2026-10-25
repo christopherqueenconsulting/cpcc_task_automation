@@ -1,9 +1,12 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
-"""Requirement checklist editor: row checks, the exact text sent to the model, how-to content.
+"""Requirement checklist editor: row checks, the exact text sent to the grader, how-to content.
 
 Pure logic first (no Streamlit state), then the dialog. The page keeps its table in
 ``grade_assignment.render_requirement_checklist``; this module decides which rows are usable and
 tells the instructor why a row is not. Examples use invented assignments only.
+
+Requirement text can come from a model, and Streamlit renders labels and captions as Markdown, so
+requirement text is shown only inside ``st.code`` and never in a label, option or message.
 """
 
 from __future__ import annotations
@@ -18,26 +21,42 @@ from cqc_cpcc.requirement_coverage import (
 )
 
 # The prompt puts the text on one line next to the id; the extraction prompt asks for "a short
-# sentence". Nothing enforced a cap before, so this one is generous: no extracted checklist hits it.
+# sentence". Nothing enforced a cap before. The longest requirement text in evals/datasets is 105
+# characters (command in the PR body), so 500 leaves wide headroom for saved checklists.
 MAX_TEXT_CHARS = 500
+MAX_SHOWN_ERRORS = 20
 WEIGHTS = ("core", "secondary")
 ID_HELP = (f"A short name for the requirement, unique in this list, for example R1. "
            f"Up to {MAX_ID_CHARS} letters, digits, - or _. Leave it empty and one is made for you.")
 TEXT_HELP = (f"One thing the program must do that you can check by running or reading it. "
              f"Up to {MAX_TEXT_CHARS} characters.")
-WEIGHT_HELP = ("Core: central to the assignment. A core requirement a student left out costs a major "
-               "error. Secondary: a smaller required detail; leaving it out costs a minor error.")
+WEIGHT_HELP = ("Core: central to the assignment. Left out costs a major error; only partly done costs "
+               "a minor error. Secondary: a smaller required detail. Left out or partly done costs a "
+               "minor error.")
+RULES_CAPTION = (f"Rules for each row. Id: up to {MAX_ID_CHARS} letters, digits, - or _, no spaces, "
+                 f"different on every row, or empty to have one made. Requirement: required, up to "
+                 f"{MAX_TEXT_CHARS} characters, one thing the program must do. Weight: core or secondary. "
+                 f"At most {MAX_REQUIREMENTS} rows. Row numbers count from the top, starting at 1.")
+OFF_MESSAGE = ("No usable requirement is left. Requirements will not be checked in this run. "
+               "Fix the rows above or press Re-extract.")
 
 
 @dataclass(frozen=True)
 class RowError:
-    """One problem with one table row. ``row`` counts from 1, as the instructor sees the table."""
+    """One problem with one table row. ``row`` counts from 1, as the instructor sees the table.
+    ``quiet`` marks a row that is simply empty: skipped, shown as a note, not as an error.
+    ``rid`` is the row's id when it passed the id check, so the message can name the row."""
     row: int
-    field: str  # "id", "text", "weight" or "table"
+    field: str  # "id", "text", "weight", "table" or "blank"
     message: str
+    quiet: bool = False
+    rid: str = ""
 
     def __str__(self) -> str:
-        return f"Row {self.row}: {self.message}" if self.row else self.message
+        if not self.row:
+            return self.message
+        who = f" ({self.rid})" if self.rid else ""
+        return f"Row {self.row}{who}: {self.message}"
 
 
 def _clean(value: Any) -> str:
@@ -48,44 +67,58 @@ def _clean(value: Any) -> str:
 def validate_rows(rows: list[dict]) -> tuple[list[dict], list[RowError]]:
     """Split table rows into the usable ones and the problems.
 
-    A usable row is ``{"row", "id", "text", "weight"}`` (``id`` may be "" = make one). A row
-    with a problem is left out, never graded with. A row that is completely empty is the blank
-    line the table adds for a new row: it is left out with a reminder, not an error.
-    The first row with an id keeps it; a later row with the same id (any letter case) is an error.
+    A usable row is ``{"row", "id", "text", "weight"}`` (``id`` may be "" = make one). Whitespace
+    in the text is collapsed so one row is one prompt line. A row with a problem is left out, never
+    graded with. A row with no id, no text and the default weight is the blank line the table adds
+    for a new row: skipped with a quiet note. A row with an id or another weight but no text is an
+    error. The first row with an id keeps it; a later row with the same id (any case) is an error.
     """
     valid: list[dict] = []
     errors: list[RowError] = []
     seen: dict[str, int] = {}
     for number, raw in enumerate(rows, start=1):
-        rid, text = _clean(raw.get("id")), _clean(raw.get("text"))
+        rid = _clean(raw.get("id"))
+        text = " ".join(_clean(raw.get("text")).split())
         weight = _clean(raw.get("weight")) or "core"
+        good_id = safe_requirement_id(rid)
         if not text:
-            errors.append(RowError(number, "text", "has no requirement text, so it is skipped. "
-                                   "Type the requirement, or delete the row."))
+            if not rid and weight == "core":
+                errors.append(RowError(number, "blank", "is empty and is skipped.", quiet=True))
+            else:
+                errors.append(RowError(number, "text", "has no requirement text, so it is left out. "
+                                       "Type the requirement, or delete the row.", rid=good_id))
             continue
         problems = []
-        if rid and not safe_requirement_id(rid):
+        if rid and not good_id:
             problems.append(RowError(number, "id", f"the id is not allowed. Use up to "
                                      f"{MAX_ID_CHARS} letters, digits, - or _, with no spaces."))
         elif rid and rid.upper() in seen:
-            problems.append(RowError(number, "id", f"the id {rid.upper()} is already used by row "
-                                     f"{seen[rid.upper()]}. Give this row a different id, or clear it."))
+            problems.append(RowError(number, "id", f"the id {good_id} is already used by row "
+                                     f"{seen[rid.upper()]}. Give this row a different id, or clear it.",
+                                     rid=good_id))
         if len(text) > MAX_TEXT_CHARS:
             problems.append(RowError(number, "text", f"the requirement is {len(text)} characters; "
-                                     f"the limit is {MAX_TEXT_CHARS}. Shorten it or split it into rows."))
+                                     f"the limit is {MAX_TEXT_CHARS}. Shorten it or split it into rows.",
+                                     rid=good_id))
         if weight not in WEIGHTS:
-            problems.append(RowError(number, "weight", "weight must be core or secondary."))
+            problems.append(RowError(number, "weight", "weight must be core or secondary.", rid=good_id))
         if problems:
             errors.extend(problems)
             continue
         if len(valid) >= MAX_REQUIREMENTS:
             errors.append(RowError(number, "table", f"the list holds at most {MAX_REQUIREMENTS} "
-                                   "requirements, so this row is skipped. Delete a row or merge two."))
+                                   "requirements, so this row is left out. Delete a row or merge two.",
+                                   rid=good_id))
             continue
         if rid:
             seen[rid.upper()] = number
-        valid.append({"row": number, "id": rid, "text": text, "weight": weight})
+        valid.append({"row": number, "id": good_id, "text": text, "weight": weight})
     return valid, errors
+
+
+def loud(errors: list[RowError]) -> list[RowError]:
+    """The errors that need the instructor's attention (not the quiet empty-row notes)."""
+    return [e for e in errors if not e.quiet]
 
 
 def prompt_line(req_id: str, weight: str, text: str) -> str:
@@ -95,66 +128,86 @@ def prompt_line(req_id: str, weight: str, text: str) -> str:
 
 
 def effect_sentence(weight: str) -> str:
-    """What the grade loses when the requirement is missing or partial, in plain words."""
+    """What a miss takes off the grade, in plain words."""
     if weight == "core":
-        return ("If a student leaves it out, they lose a major error. "
-                "If it is only partly done, they lose a minor error.")
-    return "If a student leaves it out or only partly does it, they lose a minor error."
+        return "Core: left out costs a major error; only partly done costs a minor error."
+    return "Secondary: left out or partly done costs a minor error."
 
 
 EXAMPLES = (
-    ("Reads two numbers", "core",
-     "Good. The program asks for two whole numbers and reads both. One thing, and you can check it by "
-     "running it."),
-    ("Prints the average with two decimals", "secondary",
-     "Good. You can see it in the output. Format details are a smaller part of the task, so secondary."),
-    ("Loops until the user types 0", "core",
-     "Good. A loop with a clear stop. You can test it with a short run."),
+    ("Reads two whole numbers from the user", "core",
+     "One thing, and you can check it by running the program."),
+    ("Asks again when the user types a negative number", "secondary",
+     "One behavior with a clear test: type -5 and see what happens."),
+    ("Repeats until the user types 0", "core",
+     "A loop with a clear stop. A short test run shows it."),
 )
 BAD_REQUIREMENTS = (
-    ("Code is neat and well named", "This is style. Style is graded by the error list, so listing it "
-                                    "here would take points twice."),
+    ("Code is neat and well named", "This is style. The error list already grades style, so listing it "
+                                    "here would take points off twice."),
+    ("Prints the average with two decimals", "Output formatting, spacing and decimals are graded by the "
+                                             "error list, not here. Ask for the average to be printed."),
     ("Reads two numbers, adds them, prints the sum and loops", "Four things in one row. A student who "
                                                               "does three of them cannot be marked fairly. Use one row each."),
     ("Works well", "Nobody can check this. Say what the program must do."),
 )
-HOW_TO_STEPS = (
-    "Add a row: click the empty line at the bottom of the table, or the plus that appears when you "
-    "point at it. Type the requirement and choose core or secondary. Leave Id empty and one is made.",
-    "Delete a row: tick the box at the left end of the row, then use the trash can above the table "
-    "(or press Delete).",
-    "Start over: press Re-extract. It reads the instructions again and drops your edits.",
-    "Stop grading one without deleting it: remove it from the Requirements to grade list under the table.",
+MARKS = (
+    ("met", "fully done and working as required."),
+    ("partial", "attempted, but incomplete or not working as required. This is a minor error."),
+    ("missing", "not done at all. A missing core requirement is a major error; a missing secondary "
+                "requirement is a minor error."),
 )
+HOW_TO_STEPS = (
+    "Add a row: choose the Add row button in the table's toolbar (a plus sign), then type in the new "
+    "row. Use Tab to move between cells and Enter to finish a cell. Leave Id empty to have one made.",
+    "Delete a row: select the row with its checkbox (Space on the focused checkbox), then choose "
+    "Delete row in the table's toolbar or press the Delete key.",
+    "Start over: choose the Re-extract button. It reads the instructions again and drops your edits.",
+    "Stop grading one without deleting it: remove it from the Requirements to grade list under the "
+    "table (choose its x, or focus the list and press Backspace). Add it back from the same list.",
+)
+
+
+def row_label(row: dict) -> str:
+    """A safe label for a row: its number and valid id only, never the requirement text."""
+    rid = safe_requirement_id(row.get("id"))
+    return f"Row {row['row']} ({rid})" if rid else f"Row {row['row']} (id made when saved)"
 
 
 def _dialog_body(rows: list[dict]) -> None:
     import streamlit as st
 
-    st.markdown("**What a requirement is.** One thing the student's program must do, written so you "
-                "could check it by running or reading the program. For every student, the grader marks "
-                "each requirement met, partial or missing.")
-    st.markdown("**What it costs.** Core requirement: left out is a major error, only partly done is a "
-                "minor error. Secondary requirement: left out or partly done is a minor error.")
-    st.markdown("**Good requirements.** Each is one thing you can check.")
+    st.markdown("#### What a requirement is")
+    st.markdown("One thing the student's program must do, written so you could check it by running or "
+                "reading the program. For every student, the grader marks each requirement met, "
+                "partial or missing.")
+    st.markdown("#### What the marks mean")
+    for name, meaning in MARKS:
+        st.markdown(f"- **{name}**: {meaning}")
+    st.markdown("#### How it affects the grade")
+    st.markdown("Core requirement: left out costs a major error; only partly done costs a minor error. "
+                "Secondary requirement: left out or partly done costs a minor error.")
+    st.markdown("#### Good requirements")
     for text, weight, why in EXAMPLES:
         st.markdown(f"- \"{text}\" ({weight}). {why}")
-    st.markdown("**Requirements to avoid.**")
+    st.markdown("#### Requirements to avoid")
     for text, why in BAD_REQUIREMENTS:
         st.markdown(f"- \"{text}\". {why}")
-    st.markdown("**Adding, deleting and starting over.**")
+    st.markdown("#### Adding, deleting and starting over")
     for step in HOW_TO_STEPS:
         st.markdown(f"- {step}")
-    st.markdown("**Preview.** Choose a row to see the line the grading step receives and what it costs.")
+    st.markdown("#### Preview")
+    st.markdown("Choose a row to see the line the grader receives for it.")
     if not rows:
         st.caption("There are no usable rows yet. Add one in the table and open this again.")
         return
-    labels = {i: f"Row {r['row']}: {r['text'][:60]}" for i, r in enumerate(rows)}
+    labels = {i: row_label(r) for i, r in enumerate(rows)}
     pick = st.selectbox("Row to preview", options=list(labels), format_func=labels.get,
                         key="requirement_howto_preview")
     r = rows[pick]
     st.code(prompt_line(r["id"] or "R?", r["weight"], r["text"]), language=None, wrap_lines=True)
-    st.caption(effect_sentence(r["weight"]))
+    note = "" if r["id"] else "R? stands for the id that is made when the row is saved. "
+    st.caption(note + effect_sentence(r["weight"]))
 
 
 def show_how_to_dialog(rows: list[dict]) -> None:
@@ -168,18 +221,38 @@ def show_how_to_dialog(rows: list[dict]) -> None:
     _open()
 
 
-def render_errors(errors: list[RowError]) -> None:
-    """The problems, one per line under the table. Text, so no colour is needed to read them."""
+def render_errors(errors: list[RowError], used: int = 0, total: int = 0) -> None:
+    """The problems, one per line under the table, as text (no colour needed to read them).
+    ``used`` of ``total`` rows are graded with."""
     import streamlit as st
 
-    if not errors:
+    for e in errors:
+        if e.quiet:
+            st.caption(str(e))
+    bad = loud(errors)
+    if not bad:
         return
-    lines = "\n".join(f"- {e}" for e in errors)
-    st.error(f"Some rows cannot be used and are not graded with:\n{lines}", icon=":material/error:")
+    shown = "\n".join(f"- {e}" for e in bad[:MAX_SHOWN_ERRORS])
+    if len(bad) > MAX_SHOWN_ERRORS:
+        shown += f"\n- ... and {len(bad) - MAX_SHOWN_ERRORS} more"
+    st.error(f"Grading with {used} of {total} rows. These rows are left out and will NOT be graded "
+             f"(rows counted from the top, starting at 1):\n{shown}", icon=":material/error:")
+
+
+def render_reminder(errors: Optional[list[RowError]] = None) -> None:
+    """One line above a button that starts work, while some rows are left out. Without ``errors``
+    it reads the ones the checklist stored in the session."""
+    import streamlit as st
+
+    if errors is None:
+        errors = st.session_state.get("requirement_row_errors") or []
+    if loud(errors):
+        st.warning("Some requirement rows are left out and will not be graded. See the list under "
+                   "the Requirement checklist table.", icon=":material/warning:")
 
 
 def render_full_text(items: list[Any], tag: str) -> Optional[str]:
-    """Under the table: the complete text of one requirement, as the model receives it.
+    """Under the table: the complete text of one requirement, as the grader receives it.
     ``items`` need ``.id``, ``.weight`` and ``.text``. Returns the line shown."""
     import streamlit as st
 

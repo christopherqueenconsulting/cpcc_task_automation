@@ -2509,7 +2509,8 @@ def _checklist_frame(checklist: RequirementChecklist) -> pd.DataFrame:
     return pd.DataFrame(
         [{"id": r.id, "text": r.text, "weight": r.weight, "solution": solution_label(r)}
          for r in checklist.requirements],
-        columns=["id", "text", "weight", "solution"])
+        columns=["id", "text", "weight", "solution"],
+        index=range(1, len(checklist.requirements) + 1))  # visible row numbers, from 1
 
 
 def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist,
@@ -2528,7 +2529,7 @@ def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist,
         weight = row["weight"]
         # A row whose id was unsafe or already taken never inherits a real requirement's state.
         prior = old.get(rid) if own else None
-        same = prior is not None and (prior.text or "").strip() == text
+        same = prior is not None and " ".join((prior.text or "").split()) == text
         items.append(RequirementItem(
             id=rid, text=text, weight=weight, graded=prior.graded if prior is not None else True,
             hand_ungraded=prior.hand_ungraded if prior is not None else False,
@@ -2568,6 +2569,7 @@ def render_requirement_checklist(instructions: str, source_id: str,
     Returns the checklist to grade with, or None when coverage is off or extraction failed.
     """
     st.subheader("Requirement checklist", anchor=False)
+    st.session_state["requirement_row_errors"] = []  # set again below when the table is drawn
     st.caption("Each requirement is marked met, partial or missing for every student. A missing "
                "core requirement costs a major error and a partial one a minor error, so "
                "unfinished work cannot outscore complete work that has mistakes.")
@@ -2606,11 +2608,12 @@ def render_requirement_checklist(instructions: str, source_id: str,
                  icon=":material/help:"):
         requirement_editor.show_how_to_dialog(howto_rows)
     st.caption("Table of requirements. Edit the text and weight here.")
+    st.caption(requirement_editor.RULES_CAPTION)
     edited = st.data_editor(
         _checklist_frame(base),
         key=f"requirements_editor_{tag}_{generations.get(key, 0)}",
         num_rows="dynamic",
-        hide_index=True,
+        hide_index=False,
         column_config={
             "id": st.column_config.TextColumn(
                 "Id", width="small", max_chars=requirement_editor.MAX_ID_CHARS,
@@ -2629,12 +2632,15 @@ def render_requirement_checklist(instructions: str, source_id: str,
     )
     row_errors: list = []
     pre = _checklist_from_editor(edited, base, row_errors)
-    requirement_editor.render_errors(row_errors)
+    st.session_state["requirement_row_errors"] = row_errors
+    requirement_editor.render_errors(
+        row_errors, len(pre.requirements) if pre else 0,
+        len(edited) - sum(e.quiet for e in row_errors))
     if pre is None:
-        st.warning("No usable requirement is left, so requirement coverage is off for this run. "
-                   "Fix the rows above or press Re-extract.")
+        st.warning(requirement_editor.OFF_MESSAGE)
         return None
     requirement_editor.render_full_text(pre.requirements, tag)
+    requirement_editor.render_reminder(row_errors)  # next to the solution-check button below
     # The choices made in the list below are kept per id, so editing a requirement or adding a row
     # never brings a removed requirement back, and a new id starts graded.
     kept = st.session_state.setdefault("requirement_graded_choices", {}).setdefault(key, {})
@@ -3338,6 +3344,7 @@ async def get_rubric_based_exam_grading():
                                      selected_effort)
         st.subheader(f"Batch: {_plural(len(rows), 'student')}", anchor=False)
         # The action bar sits above the table so it stays in view for a large batch.
+        requirement_editor.render_reminder()
         with st.container(horizontal=True, vertical_alignment="center"):
             st.button(
                 f"Grade {len(rows)} submission{'s' if len(rows) != 1 else ''}",
