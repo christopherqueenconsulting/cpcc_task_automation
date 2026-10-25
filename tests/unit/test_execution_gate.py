@@ -607,8 +607,8 @@ def test_a_driver_problem_with_the_students_job_is_skipped_not_runner_unavailabl
 # --------------------------------------------------------------------------- #
 # sha256 of the two fingerprint renders (system + user message, fixed nonce) since PR 19b. They pin the
 # prompt without evidence: a change to the text is deliberate and updates these.
-GOLDEN_RENDERS = ["82c7b08907eea43f0d463e6575b93f6d82dd9e0c8f0d799a180e478fc4edec4d",
-                  "6e8da8c0a2b845303d196721829325ed913add4ae5776cb140776b89d5796c95"]
+GOLDEN_RENDERS = ["968e51dc2ee755b773274cbe77d67830c3817dcfafa85dfcd90d70a8f4be00a0",
+                  "a39ea21a4aaa01cc3b8da37bbfb7c80bf9a7222991ca77f754959e49d3140d94"]
 NONCE = "0123456789abcdef"
 
 

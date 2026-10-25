@@ -190,7 +190,7 @@ def build_rubric_grading_system(rubric: Rubric, *, has_error_definitions: bool =
 
     # One-sentence role, then the task (docs/PROMPT_GUIDELINES.md G4); the submission rule follows.
     p.append("# Rubric-Based Grading Task")
-    p.append("You are a programming instructor grading one student submission against a rubric. "
+    p.append("You are an instructor grading one student submission against a rubric. "
              "Return the structured JSON assessment.")
     p.append("The user message holds the assignment instructions, the grading rubric and the submission.")
     p.append(SUBMISSION_DATA_LINE)
@@ -206,9 +206,11 @@ def build_rubric_grading_system(rubric: Rubric, *, has_error_definitions: bool =
     p.append("## Grading Instructions")
     if has_reference_solution:
         p.append("Grade exactly and only what the assignment instructions and the rubric criteria specify. "
+                 "Do not add interpretation beyond what is requested. "
                  "The reference solution defines what is required and the required output.")
     else:
-        p.append("Grade exactly and only what the assignment instructions and the rubric criteria specify.")
+        p.append("Grade exactly and only what the assignment instructions and the rubric criteria specify. "
+                 "Do not add interpretation beyond what is requested.")
     p.append("")
 
     if has_error_definitions:
@@ -218,8 +220,7 @@ def build_rubric_grading_system(rubric: Rubric, *, has_error_definitions: bool =
                  "'occurrences' to the count.")
         p.append("- Fill error_counts_by_severity with the aggregated counts (e.g., {'major': 2, 'minor': 5}); "
                  "error_counts_by_id is optional.")
-        p.append("The criterion results must agree with the errors you report: the errors are the evidence "
-                 "for the error_count criteria and for the levels of the others.")
+        p.append("Use the errors you report as the evidence for the criterion levels; do not recount them.")
         p.append("")
 
     p.append("### Criterion Scoring")
@@ -242,8 +243,9 @@ def build_rubric_grading_system(rubric: Rubric, *, has_error_definitions: bool =
     p.append("- Set total_points_earned to 0: the backend recalculates it from the criteria.")
     p.append("- For scoring_mode manual, points_earned must be a number (0 to max_points), never null. "
              "For level_band and error_count criteria it stays null.")
-    p.append("- Per-criterion feedback is 2-3 sentences (100-150 characters); overall_feedback is 3-5 "
-             "sentences (400-500 characters) summarizing the assessment. Use simple punctuation.")
+    p.append("- Keep feedback concise. Per-criterion feedback is at most 2-3 sentences (100-150 characters); "
+             "overall_feedback is at most 3-5 sentences (400-500 characters). Name the level or errors and one "
+             "piece of evidence; do not restate the rubric. Use simple punctuation.")
     p.append("- Be objective, fair and constructive.")
     p.append("")
     p.append("### Scope Discipline")

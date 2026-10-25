@@ -684,7 +684,7 @@ class TestGradingFlowOrder:
             error_definitions=error_definitions[:5],
         )
 
-        assert "must agree with the errors you report" in prompt
+        assert "Use the errors you report as the evidence for the criterion levels; do not recount them." in prompt
         assert "Do This First" not in prompt
 
     def test_prompt_error_count_criterion_links_errors_to_rubric(self, base_rubric, error_definitions):

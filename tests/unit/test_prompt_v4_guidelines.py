@@ -249,3 +249,18 @@ def test_the_quality_line_is_in_the_rubric_system_message_only():
 def test_the_exam_prompt_says_wording_that_must_match_is_output_text_not_code_style():
     system, _ = build_exam_grading_messages("x", "class S {}", "y", ["A"], ["b"])
     assert "The wording that must match is the output text the user sees (prompts and output), not code style or names." in system
+
+
+def test_the_rubric_system_message_caps_feedback_and_asks_for_concision():
+    # v4.1: the output-size contract of v3 is back (a soft target had grown feedback and reasoning).
+    for solution in (None, "class S {}"):
+        system, user = build_rubric_grading_messages(RUBRIC, "x", "y", reference_solution=solution)
+        assert "Keep feedback concise." in system
+        assert "at most 2-3 sentences (100-150 characters)" in system
+        assert "at most 3-5 sentences (400-500 characters)" in system
+        assert "Name the level or errors and one piece of evidence; do not restate the rubric." in system
+        assert "Do not add interpretation beyond what is requested." in system
+        assert "You are an instructor grading" in system and "programming" not in system.split("\n")[1]
+        assert "concise" not in user and "at most" not in user
+    exam_system, _ = build_exam_grading_messages("x", "class S {}", "y", ["A"], ["b"])
+    assert "Keep feedback concise." not in exam_system  # the exam prompt is unchanged by v4.1
