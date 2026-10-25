@@ -324,6 +324,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 if bgroup is not None:  # a batched call reserves its batch price; a sync re-send tops it up
                     batch.bind_case(case)
                     batch.set_item_estimate(estimate)
+                    batch.set_sync_timeout(batch.normal_timeout(resolved.role, resolved.reasoning_effort))
                     if limiter is not None:  # fixed mode reserves nothing, so keeps the full figure
                         estimate = batch.estimate_for_reservation(estimate)
                 if limiter is None:
