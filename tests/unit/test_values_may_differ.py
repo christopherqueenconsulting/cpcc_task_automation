@@ -714,3 +714,37 @@ def test_masking_covers_weekdays_months_number_words_and_signs():
     assert oc.compare_output("Temp: -3\n", "Temp: 5\n", **flag).verdict is Verdict.VALUES_MAY_DIFFER
     assert oc.compare_output("Temp: 5\n", "Temp: +7.5\n", **flag).verdict is Verdict.VALUES_MAY_DIFFER
     assert oc.mask_varying("a-3 can be") == "a-# can be"  # a hyphen glued to a word is not a sign
+
+
+def _confined_with(second):
+    """_variance_confined with the two extra runs answered by ``second`` (an outcome or an exception)."""
+    case = TestCase(id="T1", stdin="1\n", source="llm", values_may_differ=True)
+    first = _outcome_for("T1", "Roll: 4\n", True)
+
+    def run(language, files, cases=(), **kw):
+        if isinstance(second, Exception):
+            raise second
+        return second
+    return tcg._variance_confined(run, _solution(), [], case, first, None)
+
+
+def test_a_variance_that_cannot_be_confirmed_is_never_kept():
+    def outcome(status="ok", compile=pr.CompileOutcome(ok=True), cases=None):
+        cases = (_outcome_for("T1", "Roll: 5\n"),) if cases is None else cases
+        return pr.RunOutcome(status=status, compile=compile, cases=cases)
+
+    assert _confined_with(RuntimeError("docker")) == "other"
+    assert _confined_with(outcome(status="runner_error")) == "other"
+    assert _confined_with(outcome(compile=None)) == "other"
+    assert _confined_with(outcome(compile=pr.CompileOutcome(ok=False))) == "other"
+    assert _confined_with(outcome(cases=())) == "other"
+    for bad in ({"status": "TIMEOUT"}, {"exit_code": 1}, {"eof_error": True}, {"stdout_truncated": True},
+                {"stdout": "   "}):
+        base = _outcome_for("T1", "Roll: 5\n")
+        changed = pr.CaseOutcome(**{**base.__dict__, **bad})
+        assert _confined_with(outcome(cases=(changed,))) == "other", bad
+    assert _confined_with(outcome()) == "ok"
+
+
+def test_a_sample_check_that_hits_a_bad_ignore_pattern_does_not_disagree():
+    assert tcg._sample_disagrees("a", "b", ["("]) is False
