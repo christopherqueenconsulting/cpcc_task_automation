@@ -324,6 +324,64 @@ class TestScheduleOnly:
 
 # --- Switches ------------------------------------------------------------------------------------
 
+class TestSyncFallbackKeepsTheNormalTimeout:
+    """CQC_LLM_TIMEOUT is raised for a batch group so a call can wait for its batch; a call sent the ordinary way
+    inside the group (here: the fallback after a rejected submit) must keep the normal timeout."""
+
+    def run_hanging(self, monkeypatch, fake, **env):
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        durations = []
+
+        async def hang(**kwargs):
+            started = asyncio.get_running_loop().time()
+            try:
+                await asyncio.sleep(10 ** 6)
+            finally:
+                durations.append(asyncio.get_running_loop().time() - started)
+
+        fake.create = hang
+        fake.submit_error = 422
+        go(model_suite(), n=10)
+        return durations
+
+    def test_a_hung_fallback_call_times_out_at_the_normal_timeout_not_the_raised_one(self, batch_on, fake,
+                                                                                      monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_limits
+
+        durations = self.run_hanging(monkeypatch, fake)
+        raised = batch.DEFAULT_DEADLINE_S + batch.SYNC_HEADROOM_S  # 3300 s: what the whole group used to get
+        assert durations, "the fallback never reached the client"
+        assert max(durations) < raised / 2
+        assert max(durations) <= 2 * (llm_limits.MAX_TIMEOUT_S) and max(durations) < 700
+
+    def test_the_variable_is_restored_when_the_group_ends(self, batch_on, fake, monkeypatch):
+        import os
+
+        self.run_hanging(monkeypatch, fake)
+        assert os.environ.get(batch.ENV_CLIENT_TIMEOUT) is None
+
+    def test_an_explicit_timeout_is_the_normal_one(self, batch_on, fake, monkeypatch):
+        durations = self.run_hanging(monkeypatch, fake, CQC_LLM_TIMEOUT="90")
+        assert durations and max(durations) <= 90 + batch.SYNC_TIMEOUT_SLACK_S + 1
+
+    def test_normal_timeout_reads_the_saved_value_inside_a_group(self, monkeypatch):
+        monkeypatch.delenv(batch.ENV_CLIENT_TIMEOUT, raising=False)
+        outside = batch.normal_timeout("grading", "low")
+        with batch._client_timeout(2700.0):
+            assert batch.normal_timeout("grading", "low") == outside
+            assert batch.normal_timeout() >= outside  # unknown role: the longest built-in figure
+            import os
+            assert float(os.environ[batch.ENV_CLIENT_TIMEOUT]) == 3300.0  # still raised for the batch wait
+        assert batch.normal_timeout("grading", "low") == outside
+
+    def test_set_sync_timeout_is_what_the_call_gets(self):
+        batch.set_sync_timeout(42.0)
+        assert batch._sync_timeout.get() == 42.0
+        batch.set_sync_timeout(0)
+        assert batch._sync_timeout.get() == 0.0
+
+
 class TestSwitches:
     def test_off_by_default_and_when_zero(self, monkeypatch):
         assert batch.settings() is None and not batch.requested()

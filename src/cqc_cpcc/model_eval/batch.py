@@ -84,6 +84,8 @@ DEFAULT_FIRST_CAP_S = 2700.0
 #: inside that one call, so the deadline plus the head-room for a sync re-send must fit under it.
 HARD_MAX_DEADLINE_S = 3000.0
 SYNC_HEADROOM_S = 600.0
+#: Added to the normal timeout for a synchronous call, like the client's own ``llm_limits.TIMEOUT_SLACK_S``.
+SYNC_TIMEOUT_SLACK_S = 5.0
 ENV_CLIENT_TIMEOUT = "CQC_LLM_TIMEOUT"
 HARD_MAX_ITEMS = 100000
 HARD_MAX_SETTLE_S = 3600.0
@@ -564,6 +566,48 @@ _FALLBACK = object()
 _item_estimate: contextvars.ContextVar[float] = contextvars.ContextVar("cqc_eval_batch_item_estimate", default=0.0)
 
 
+_sync_timeout: contextvars.ContextVar[float] = contextvars.ContextVar("cqc_eval_batch_sync_timeout", default=0.0)
+
+
+def normal_timeout(role: Optional[str] = None, effort: Optional[str] = None) -> float:
+    """The request timeout a synchronous call gets: the gateway's own figure for ``role`` and ``effort`` as it would be
+    without this module's ``CQC_LLM_TIMEOUT`` raise (the saved value while a group has raised it).
+
+    With no role the longest built-in figure (the slowest role at the highest effort) is used, so an unknown call is
+    never cut shorter than a known one.
+    """
+    from cqc_cpcc.utilities.AI import llm_limits
+
+    if _timeout_users > 0:  # a group has raised the variable: read the gateway's figure as if it had not
+        current = os.environ.get(ENV_CLIENT_TIMEOUT)
+        if _timeout_saved is None:
+            os.environ.pop(ENV_CLIENT_TIMEOUT, None)
+        else:
+            os.environ[ENV_CLIENT_TIMEOUT] = _timeout_saved
+        try:
+            return _normal_timeout_unraised(llm_limits, role, effort)
+        finally:  # no await between the swap and the restore, so no other task sees the unraised value
+            if current is None:
+                os.environ.pop(ENV_CLIENT_TIMEOUT, None)
+            else:
+                os.environ[ENV_CLIENT_TIMEOUT] = current
+    return _normal_timeout_unraised(llm_limits, role, effort)
+
+
+def _normal_timeout_unraised(llm_limits, role: Optional[str], effort: Optional[str]) -> float:
+    if role is not None:
+        return llm_limits.request_timeout(role, effort)
+    explicit = llm_limits.request_timeout("none")  # honours CQC_LLM_TIMEOUT, else the fallback figure
+    if os.environ.get(ENV_CLIENT_TIMEOUT):
+        return explicit
+    return max(llm_limits.DEFAULT_REQUEST_TIMEOUT_S.values()) * max(llm_limits.EFFORT_TIMEOUT_FACTOR.values())
+
+
+def set_sync_timeout(seconds: float) -> None:
+    """Record the timeout a synchronous call of the current task must keep (see :func:`normal_timeout`)."""
+    _sync_timeout.set(float(seconds or 0.0))
+
+
 def set_item_estimate(full_sync_estimate: float) -> None:
     """Record the current call's sync worst-case estimate (for the double-charge bound and fall-back top-up)."""
     _item_estimate.set(float(full_sync_estimate or 0.0))
@@ -1035,8 +1079,13 @@ class BatchGroup:
                     raise FallbackBudgetRefused("the budget would not take the synchronous re-send of a batched call")
         started = time.monotonic()
         epoch = await self._limiter.acquire()
+        # CQC_LLM_TIMEOUT is raised for the whole group so a call can wait for its batch; a call sent the ordinary
+        # way (fallback, a group too small to batch, a re-send after the deadline) keeps the normal timeout. The
+        # client's own retry sees the TimeoutError exactly as it sees one from its own limit.
+        limit = _sync_timeout.get() or normal_timeout()
         try:
-            response = await inner.create(**kwargs)
+            async with asyncio.timeout(limit + SYNC_TIMEOUT_SLACK_S):
+                response = await inner.create(**kwargs)
         except openai.RateLimitError:
             self._limiter.release()
             self._limiter.on_throttle(adaptive.RATE_LIMIT, epoch)
