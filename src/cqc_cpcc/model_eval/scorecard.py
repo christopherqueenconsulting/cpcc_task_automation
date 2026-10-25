@@ -90,6 +90,10 @@ def _batch_lines(info) -> list:
                  f"${info['double_charge_bound_usd']:.4f})")
     if info.get("batch_fallback_reason"):
         lines.append(f"- **Batch fell back for the rest of the run:** {_safe(info['batch_fallback_reason'])}")
+    if info.get("effort_not_proven_honoured"):
+        from cqc_cpcc.model_eval import batch  # lazy: only a run that batched has this key
+
+        lines.append(f"- **{batch.effort_flag_text(info.get('effort_items', 0))}**")
     return lines
 
 

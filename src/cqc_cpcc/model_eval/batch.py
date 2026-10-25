@@ -35,7 +35,7 @@ Switches (environment; an invalid value raises ``ValueError`` before any paid ca
 * ``CQC_EVAL_BATCH_SETTLE_S``: longest to wait for more requests to arrive before submitting what is
   collected. Default 120; 1 to 3600.
 
-First batch = automatic probe. The unverified facts (see the constants below) are checked by the run itself: the
+First batch = automatic probe. What the live probe could not show (the reasoning effort, below) is checked by the run itself: the
 first batch it submits is validated, and if it fails, the run stops using batches for everything not yet completed
 and for every later group (the reason goes to the report as ``batch_fallback_reason``). A first batch is bad when it
 ends ``failed``/``expired``/``cancelled``, is not finished within ``CQC_EVAL_BATCH_FIRST_CAP_S``, the submit or the
@@ -46,8 +46,12 @@ conservative: it fires only when at least ``MIN_EFFORT_ITEMS`` (4) delivered ite
 is discarded (its items re-run sync) and its price counts toward the double-charge bound. Items delivered by a
 batch that passed are kept and never charged twice.
 
-Unverified facts are isolated in the constants below so the maintainer's probe result (``scripts/
-openrouter_batch_probe.py``) flips a constant, not the logic.
+Verified by a live probe (2026-10-25, eval workspace with Zero Data Retention off): the batch is accepted (HTTP 202),
+the plain model id, ``max_completion_tokens`` and ``session_id`` are accepted, a ``json_schema`` response format is
+honoured, per-item usage carries ``cached_tokens`` and ``reasoning_tokens`` but **no cost**, and the batch-level
+``usage.cost`` is reported. That probe could not show whether the reasoning effort is honoured, so reports flag it
+(``effort_not_proven_honoured``). Because per-item cost is absent, each item is priced from its own usage tokens
+(:func:`token_cost`) and cross-checked against the batch-level cost. The constants below hold the verified values.
 """
 
 from __future__ import annotations
@@ -90,18 +94,29 @@ HARD_MAX_SETTLE_S = 3600.0
 #: The API allows 200 MB per request body (verified); stay well under it.
 MAX_BODY_BYTES = 120 * 1024 * 1024
 
-# --- Unverified API facts: flip these after the probe (see docs/MODEL_EVALUATION.md) ----------------
-#: Appended to the model id in the batch body. "" sends the plain id (the documented reading); the probe
-#: tells whether ``":batch"`` is the form the API wants.
+# --- API facts, verified by a live probe on 2026-10-25 (see docs/PROMPTS.md) ----------------------------
+#: Appended to the model id in the batch body. "" sends the plain id: verified by a live probe 2026-10-25 (accepted).
 MODEL_ID_SUFFIX = ""
 #: Name of the output-token limit in a batch body. None keeps whatever the sync request used
-#: (``max_completion_tokens``); set "max_tokens" if the probe shows ``max_completion_tokens`` is rejected.
+#: (``max_completion_tokens``): verified by a live probe 2026-10-25 (accepted).
 TOKEN_LIMIT_PARAM: Optional[str] = None
-#: Whether ``session_id`` (the prompt-cache routing key) is sent inside batch request bodies. The probe
-#: tells whether it is accepted; set False to drop it.
+#: Whether ``session_id`` (the prompt-cache routing key) is sent inside batch request bodies: verified by a live
+#: probe 2026-10-25 (accepted).
 SEND_SESSION_ID = True
-#: Body fields removed from every batch request (add a name if the probe shows it is rejected).
+#: Body fields removed from every batch request (none rejected in the 2026-10-25 live probe).
 STRIP_BODY_FIELDS: tuple = ()
+#: Batch prices per million tokens by model id, ``{model: (prompt, completion)}``, when OpenRouter publishes a batch
+#: price for it. Empty: the models listing used by discovery (``openrouter_models``) carries no batch price, so items
+#: are priced at the sync price times ``BATCH_PRICE_FACTOR`` and labelled estimated.
+BATCH_PRICES: dict = {}
+#: Whether a live probe has shown that a batch applies the reasoning effort. False: reports carry the flag
+#: ``effort_not_proven_honoured`` whenever batched requests asked for an effort. A future probe flips this.
+BATCH_EFFORT_VERIFIED = False
+#: Values of a record's ``cost_method``: how a batched row's cost was set.
+COST_METHOD_BATCH_PRICE = "tokens*batch_price"
+COST_METHOD_ESTIMATED = "tokens*sync_price*0.5 (estimated)"
+COST_METHOD_ALLOCATED = "allocated share of batch cost"
+COST_METHOD_BUDGET_ESTIMATE = "request estimate*0.5 (estimated)"
 #: The batch price is typically half the sync price (verified as "typically 50%", not guaranteed).
 BATCH_PRICE_FACTOR = 0.5
 #: What a batched call reserves on the budget, as a share of its sync worst-case estimate.
@@ -367,6 +382,11 @@ def summary(label: Optional[str] = None) -> Optional[dict]:
         "batch_wall_s": round(sum(e["wall_s"] for e in batches), 1),
         "sync_wall_s": round(sum(e.get("sync_wall_s", 0.0) for e in groups), 1),
         "batch_cost_usd": round(sum(e.get("batch_cost_usd") or 0.0 for e in batches), 6),
+        "cost_gap_usd": round(sum(e.get("cost_gap_usd") or 0.0 for e in batches), 6),
+        # the live probe could not show that the reasoning effort is honoured in a batch (see the module docstring)
+        "effort_items": sum(e.get("effort_items", 0) for e in batches),
+        "effort_not_proven_honoured": (not BATCH_EFFORT_VERIFIED) and any(e.get("effort_items", 0) for e in batches),
+        "extra_charge_usd": round(sum(e.get("extra_charge_usd", 0.0) for e in batches), 6),
         "reasons": reasons,
         "batch_fallback_reason": _RUN["fallback_reason"],
         "discarded_items": sum(e.get("discarded", 0) for e in batches),
@@ -387,6 +407,8 @@ def record_stats(records: list) -> Optional[dict]:
             "batch_cost_usd": sum(r.cost_usd for r in batched),
             "sync_cost_usd": sum(r.cost_usd for r in synced),
             "allocated_rows": sum(1 for r in batched if getattr(r, "cost_allocated", None)),
+            "token_priced_rows": sum(1 for r in batched
+                                     if str(getattr(r, "cost_method", "") or "").startswith("tokens*")),
             "estimated_rows": sum(1 for r in batched if r.cost_estimated)}
 
 
@@ -514,7 +536,73 @@ def _wrap(value):
     return value
 
 
-def synthesize(body: dict, cost: Optional[float] = None, allocated: bool = False) -> _Obj:
+def _rates(model: str):
+    """``(prompt, completion, cache_read, method, cache_write)`` per million tokens for ``model``, or None when unpriced.
+
+    A published batch price (``BATCH_PRICES``) wins; otherwise the registry's sync price times
+    ``BATCH_PRICE_FACTOR``, labelled estimated.
+    """
+    if model in BATCH_PRICES:
+        prompt, completion = BATCH_PRICES[model]
+        return float(prompt), float(completion), None, COST_METHOD_BATCH_PRICE, None
+    from cqc_cpcc.utilities.AI import model_registry
+
+    try:
+        profile = model_registry.load_registry().models.get(model_registry.normalize_model_id(model))
+    except Exception:  # noqa: BLE001 - an unreadable registry just means "no price"
+        return None
+    if profile is None:
+        return None
+    pricing = profile.pricing
+    cache = pricing.cache_read_per_mtok
+    write = getattr(pricing, "cache_write_per_mtok", None)
+    return (pricing.prompt_per_mtok * BATCH_PRICE_FACTOR, pricing.completion_per_mtok * BATCH_PRICE_FACTOR,
+            cache * BATCH_PRICE_FACTOR if cache is not None else None, COST_METHOD_ESTIMATED,
+            write * BATCH_PRICE_FACTOR if write is not None else None)
+
+
+def token_cost(model: str, usage: dict, rates=None):
+    """``(cost_usd, method)`` for one batched item from its own usage tokens, or ``(None, None)``.
+
+    The batch API reports no per-item cost (live probe 2026-10-25), so: uncached prompt tokens at the prompt rate,
+    cached prompt tokens (``prompt_tokens_details.cached_tokens``) at the cache-read rate when the registry has one
+    (else the prompt rate), cache-write tokens (``prompt_tokens_details.cache_write_tokens``) at the registry's
+    cache-write rate when it has one (else the prompt rate), and completion tokens (reasoning tokens are part of them)
+    at the completion rate. ``rates`` is a pre-fetched :func:`_rates` result (the caller reads the registry once).
+    """
+    if not isinstance(usage, dict):
+        return None, None
+    prompt, completion = usage.get("prompt_tokens"), usage.get("completion_tokens")
+    if not all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in (prompt, completion)):
+        return None, None
+    rates = rates if rates is not None else _rates(model)
+    if rates is None:
+        return None, None
+    prompt_rate, completion_rate, cache_rate, method, write_rate = rates
+    details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+
+    def count(name):
+        n = details.get(name)
+        return n if isinstance(n, int) and not isinstance(n, bool) and n >= 0 else 0
+
+    cached, written = count("cached_tokens"), count("cache_write_tokens")
+    if cached + written > prompt:  # inconsistent usage: price every prompt token at the plain rate
+        cached = written = 0
+    cost = ((prompt - cached - written) * prompt_rate
+            + cached * (cache_rate if cache_rate is not None else prompt_rate)
+            + written * (write_rate if write_rate is not None else prompt_rate)
+            + completion * completion_rate) / 1_000_000
+    return cost, method
+
+
+def effort_flag_text(n: int) -> str:
+    """The sentence reports carry while ``BATCH_EFFORT_VERIFIED`` is False and ``n`` batched requests asked for an effort."""
+    return (f"effort not proven honoured in batch: {n} batched request(s) asked for a reasoning effort, and the "
+            f"2026-10-25 live probe could not show that a batch applies it")
+
+
+def synthesize(body: dict, cost: Optional[float] = None, allocated: bool = False,
+               method: Optional[str] = None) -> _Obj:
     """A sync-shaped response from one batch result body. ``cost`` sets ``usage.cost`` when the item had none."""
     data = dict(body)
     usage = dict(data.get("usage") or {})
@@ -523,6 +611,8 @@ def synthesize(body: dict, cost: Optional[float] = None, allocated: bool = False
     data["usage"] = usage
     data["cqc_batch"] = True
     data["cqc_cost_allocated"] = bool(allocated)
+    if method:
+        data["cqc_cost_method"] = method
     return _Obj(data)
 
 
@@ -871,7 +961,7 @@ class BatchGroup:
         row = {"type": "batch", "label": self.label, "kind": self.kind, "items": len(items), "delivered": 0,
                "item_errors": 0, "fallback": 0, "deadline": False, "reason": None, "status": None,
                "wall_s": 0.0, "double_charge_bound_usd": 0.0, "batch_cost_usd": None, "discarded": 0,
-               "first": first}
+               "first": first, "effort_items": 0, "delivered_cost_usd": 0.0, "extra_charge_usd": 0.0}
         try:
             try:
                 batch_id = await self._submit(model_id, items)
@@ -1035,17 +1125,39 @@ class BatchGroup:
         if final and batch_cost is not None:
             row["batch_cost_usd"] = float(batch_cost)
         shares = allocate(batch_cost if final else None, entries, len(by_id) == len(entries))
+        priced_total, priced_n, delivered_n = 0.0, 0, 0
+        rates_by_model: dict = {}  # the registry is read once per model, not once per item
         for item, entry in entries:
             response = entry.get("response")
             if isinstance(response, dict) and isinstance(response.get("body"), dict) \
                     and _ok_status(response.get("status_code")) and not entry.get("error") \
                     and _body_size_ok(response["body"]):
-                cost, allocated = shares.get(item.custom_id, (None, False))
-                if cost is None and self.kind == "judge" and item.estimate > 0:
-                    # the judge adds the call's reported cost to the budget as is, so an unknown cost must not be 0
-                    cost = item.estimate * BATCH_PRICE_FACTOR
-                self._resolve_one(item, synthesize(response["body"], cost, allocated))
+                body = response["body"]
+                own = (body.get("usage") or {}).get("cost") if isinstance(body.get("usage"), dict) else None
+                has_own = isinstance(own, (int, float)) and not isinstance(own, bool)
+                cost, allocated, method = None, False, None
+                if not has_own:
+                    # the batch API reports no per-item cost: price the item from its own usage tokens
+                    model_id = item.kwargs.get("model", "")
+                    if model_id not in rates_by_model:
+                        rates_by_model[model_id] = _rates(model_id)
+                    cost, method = token_cost(model_id, body.get("usage"), rates=rates_by_model[model_id])
+                    if cost is not None:
+                        priced_total, priced_n = priced_total + cost, priced_n + 1
+                    else:
+                        cost, allocated = shares.get(item.custom_id, (None, False))
+                        method = COST_METHOD_ALLOCATED if allocated else None
+                        if cost is None and self.kind == "judge" and item.estimate > 0:
+                            # the judge adds the call's reported cost to the budget as is, so an unknown cost must
+                            # not be 0
+                            cost, method = item.estimate * BATCH_PRICE_FACTOR, COST_METHOD_BUDGET_ESTIMATE
+                reasoning = item.body.get("reasoning") if isinstance(item.body, dict) else None
+                if isinstance(reasoning, dict) and reasoning.get("effort"):
+                    row["effort_items"] += 1
+                self._resolve_one(item, synthesize(body, cost, allocated, method))
                 row["delivered"] += 1
+                delivered_n += 1
+                row["delivered_cost_usd"] += float(own) if has_own else (cost or 0.0)
                 continue
             err = entry.get("error")
             status = response.get("status_code") if isinstance(response, dict) else None
@@ -1056,6 +1168,21 @@ class BatchGroup:
             code = status or (err.get("code") if isinstance(err, dict) else None)
             self._resolve_one(item, error=item_error(code, message, body if isinstance(body, dict) else err))
             row["item_errors"] += 1
+        if final and batch_cost is not None:
+            # Whatever the rows add up to, the budget is charged at least the batch's own cost: a positive gap
+            # (batch-level cost above the delivered rows) is settled once as an extra charge.
+            extra = float(batch_cost) - row["delivered_cost_usd"]
+            if extra > 0 and self.budget is not None and not row["extra_charge_usd"]:
+                self.budget.add(extra)
+                row["extra_charge_usd"] = round(extra, 8)
+                logger.info(f"[eval-batch:{self.label}] batch cost ${float(batch_cost):.6f} exceeds the rows' "
+                            f"${row['delivered_cost_usd']:.6f}; charged the budget the ${extra:.6f} difference")
+            if priced_n and priced_n == delivered_n and len(by_id) == len(entries):
+                # every delivered row was token-priced: cross-check them against the batch-level cost
+                gap = float(batch_cost) - priced_total
+                row["cost_gap_usd"] = round(gap, 8)
+                logger.info(f"[eval-batch:{self.label}] token-priced {priced_n} item(s) at ${priced_total:.6f}; "
+                            f"batch-level cost ${float(batch_cost):.6f}; gap ${gap:+.6f}")
         self._kick()
 
     async def _finish(self, client, batch_id: str, status: str, data: dict, row: dict) -> None:
@@ -1308,3 +1435,5 @@ def annotate(record, used, g: Optional[BatchGroup]) -> None:
     record.batch = bool(getattr(used, "batch", None))
     if getattr(used, "cost_allocated", None):
         record.cost_allocated = True
+    if getattr(used, "cost_method", None):
+        record.cost_method = used.cost_method

@@ -945,26 +945,46 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   reports for the call; when the response reports none, the batch-level `usage.cost` is allocated over the items by
   tokens (`cost_allocated: true` on the row); when that is unknown too, the conservative sync estimate is kept
   (`cost_estimated`). A call that falls back to sync tops its reservation up to the full estimate first.
-- **Records and report (additive, report only).** Each row gains `batch: true|false` (and `cost_allocated`) only when
+- **Records and report (additive, report only).** Each row gains `batch: true|false` (and `cost_allocated`, `cost_method`) only when
   batch mode was on, so old rows and runs with batch off are byte-identical. `run_stats` gains the batch share of
   calls, batch vs sync cost, wall clock per mode, fall-backs and deadline fall-backs, the double-charge bound, the
   number of per-item errors and `batch_fallback_reason`; the model-eval scorecard gains a `batch` block with the same.
-- **Constants that carry the unverified facts** (all in `batch.py`; the first batch's validation, or a run of the
-  optional `scripts/openrouter_batch_probe.py`, shows which to change, and a follow-up PR flips it):
+- **Verified by a live probe, 2026-10-25** (the owner's run on the eval workspace with Zero Data Retention off: HTTP 202
+  accepted, 1310 s, 5 of 5 items ok, batch-level usage cost $0.0000977). The constants in `batch.py` hold the verified
+  values:
 
-  | Constant | Default | Unverified question |
+  | Constant | Value | Probe result |
   |---|---|---|
-  | `MODEL_ID_SUFFIX` | `""` | whether the API wants the plain model id or the `:batch` variant |
-  | `TOKEN_LIMIT_PARAM` | `None` (keep `max_completion_tokens`) | whether `max_completion_tokens` is accepted in a batch (the `:batch` listing omits it); `"max_tokens"` is the alternative |
-  | `SEND_SESSION_ID` | `True` | whether `session_id` is accepted in a batch body |
-  | `STRIP_BODY_FIELDS` | `()` | any other body field the API rejects |
-  | `BATCH_PROVIDER_KEYS` | `("only", "allow_fallbacks")` | documented for the batch, not confirmed for a live account |
-- **Not verified (the first batch checks what it can).** Whether `reasoning.effort`, `response_format` json_schema and
-  `session_id` are honoured in a batch; per-item `usage.cost`, `cached_tokens` and `reasoning_tokens`; whether the
-  plain model id or the `:batch` variant is wanted (`batch.MODEL_ID_SUFFIX`); whether `max_completion_tokens` is
-  accepted (`batch.TOKEN_LIMIT_PARAM`); the per-batch request-count cap (a 413 splits the batch); that cache hits
-  carry over to batches (the cheaper batch cache prices are list prices; hit behaviour is unverified). The sync
-  layout and caching above are unchanged.
+  | `MODEL_ID_SUFFIX` | `""` | the plain model id was accepted |
+  | `TOKEN_LIMIT_PARAM` | `None` (keep `max_completion_tokens`) | `max_completion_tokens` was accepted |
+  | `SEND_SESSION_ID` | `True` | `session_id` was accepted |
+  | `STRIP_BODY_FIELDS` | `()` | no body field was rejected |
+
+  Also from the probe: a `json_schema` response format was honoured; per-item usage carries `cached_tokens` and
+  `reasoning_tokens` but **no cost**. Not proven by the probe: that the reasoning effort is applied in a batch (see
+  "Effort" below).
+- **Per-item cost.** Because items report no cost, each delivered item is priced from its own usage tokens (uncached
+  prompt tokens at the prompt rate, cached tokens at the cache-read rate when the registry has one, cache-write tokens at
+  the cache-write rate when it has one, else the prompt rate for both, completion tokens, which include reasoning
+  tokens, at the completion rate). The price is `batch.BATCH_PRICES[model]` when one is published (empty:
+  discovery's `/models` data has no batch price), else the registry's sync price times 0.5, **labelled estimated**.
+  Each row records which in `cost_method` (`tokens*batch_price`, `tokens*sync_price*0.5 (estimated)`,
+  `allocated share of batch cost` for an unpriced model, or `request estimate*0.5 (estimated)` for an unpriced judge
+  call). The sum of the token-priced rows is cross-checked against the batch-level `usage.cost`: the gap is logged and
+  reported (`cost_gap_usd`, only when every delivered row was token-priced). The budget is charged at least the
+  batch-level cost: a positive difference between it and the rows is settled once as an extra charge (`extra_charge_usd`).
+  The old allocation of the batch total by tokens remains the fallback for an unpriced model.
+- **Effort.** `reasoning.effort` is still sent in batch bodies, but the probe could not show that a batch applies it.
+  Every run report that had batched requests with an effort setting says "effort not proven honoured in batch" (summary
+  key `effort_not_proven_honoured`, with `effort_items`; a future probe clears it by setting
+  `batch.BATCH_EFFORT_VERIFIED = True`), so a score difference between batch and sync rows is read with
+  that in mind.
+- **Deadline.** The probe batch took about 22 minutes. `CQC_EVAL_BATCH_DEADLINE_S` and `CQC_EVAL_BATCH_FIRST_CAP_S`
+  default to 2700 s (45 minutes), about twice that, so they stay as they are; a call that still falls back to sync keeps
+  its normal timeout (see "Timeouts").
+- **Not verified.** The per-batch request-count cap (a 413 splits the batch) and that cache hits carry over to batches
+  (the cheaper batch cache prices are list prices; hit behaviour is unverified). The sync layout and caching above are
+  unchanged.
 - **Rollback.** The switch is the two env lines in the five workflow steps above: set `CQC_EVAL_BATCH` to `"0"` or
   delete both lines, or revert the merge. Both are `.github` edits that need the owner; they are not repository
   variables. Locally, unset the two variables.

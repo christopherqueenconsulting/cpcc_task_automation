@@ -164,10 +164,12 @@ class SuiteRecord:
     #: by token count, rather than a cost the response reported for the call itself.
     batch: Optional[bool] = None
     cost_allocated: Optional[bool] = None
+    #: ``cost_method``: how a batched row's cost was set (``batch.COST_METHOD_*``); absent unless batch mode was on.
+    cost_method: Optional[str] = None
 
     def to_json(self) -> str:
         data = asdict(self)
-        for name in ("cached_tokens", "cache_write_tokens", "reasoning_tokens", "batch", "cost_allocated"):
+        for name in ("cached_tokens", "cache_write_tokens", "reasoning_tokens", "batch", "cost_allocated", "cost_method"):
             if data[name] is None:
                 del data[name]  # additive keys: rows that reported nothing are unchanged
         if not data["error_detail"]:
