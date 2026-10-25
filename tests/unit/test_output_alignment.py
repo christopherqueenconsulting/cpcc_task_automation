@@ -118,7 +118,7 @@ def test_the_arcade_case_lines_up_row_for_row():
 
 def test_the_arcade_summary_names_each_kind_of_difference():
     text = dv.summary_text(rows_of(ARCADE_EXPECTED, ARCADE_ACTUAL))
-    assert text == ("3 lines differ in content (1 value, 1 wording, 1 case); 6 differ only in spacing; "
+    assert text == ("3 lines differ in content (1 value, 1 wording, 1 case); 6 lines differ only in spacing; "
                     "1 blank line only in expected output. 11 rows in all.")
     assert "Blank lines among" not in text
 
@@ -405,13 +405,15 @@ def test_the_class_is_in_the_page_as_text_for_every_row_not_just_colour():
     assert "D.tag[q]" in script and "aria-hidden" in script
     for tag in ("spacing", "case", "value", "wording", "blank line", "moved line", "decimal places"):
         assert tag in html
-    assert "3 lines differ in content (1 value, 1 wording, 1 case); 6 differ only in spacing" in html
+    assert "3 lines differ in content (1 value, 1 wording, 1 case); 6 lines differ only in spacing" in html
     flat_html = " ".join(html.split())
     assert "these two lines were matched as the same line of output; the tag says how they differ" in flat_html
     assert "Wording rows are the least certain match" in flat_html
     assert "paired because they are alike" not in flat_html and "unless your course counts them" not in flat_html
-    assert ("Spacing, case, punctuation, number-format and decimal-places rows are formatting differences. "
-            "Score them by your course's error definitions; they are not value or wording errors.") in flat_html
+    assert ("The verdict treats spacing, case, punctuation, number-format and decimal-places rows as formatting "
+            "differences, not value or wording errors. Score them by your course's error definitions.") in flat_html
+    assert "value (the numbers, dates or times differ; the words may differ too)" in flat_html
+    assert "same words, other numbers" not in flat_html
     assert html.count("<li>") == 4 and "whitespace" not in html
 
 
@@ -422,7 +424,7 @@ def test_summary_leads_with_content_and_counts_blank_rows_apart():
     exp = "Total: 5\nName: Ada\nMenu\n\nBye"
     act = "Total: 9\n  Name: Ada\nMenu\n\n\nBye\nExtra line"
     assert dv.summary_text(rows_of(exp, act)) == (
-        "1 line differs in content (1 value); 1 differ only in spacing; 1 line only in student output; "
+        "1 line differs in content (1 value); 1 line differs only in spacing; 1 line only in student output; "
         "1 blank line only in student output. 7 rows in all.")
     assert dv.summary_text(rows_of("a", "a")) == "No lines differ. 1 rows in all."
 
@@ -435,10 +437,10 @@ def test_spoken_text_of_every_kind_of_row():
         ("chg", "spacing", "expected"): "Changed line, expected, spacing only: ",
         ("del", "", "expected"): "Removed line: ",
         ("del", "blank", "expected"): "Removed blank line: ",
-        ("del", "moved", "expected"): "Removed moved line: ",
+        ("del", "moved", "expected"): "Removed line, moved: ",
         ("ins", "", "student"): "Added line: ",
         ("ins", "blank", "student"): "Added blank line: ",
-        ("ins", "moved", "student"): "Added moved line: ",
+        ("ins", "moved", "student"): "Added line, moved: ",
         ("eq", "", "student"): "",
     }
     for (kind, cls, side), text in kinds.items():

@@ -658,7 +658,7 @@ VALUES_DIFFER for the ladder, so it is tagged *value*: the one place a tag can h
 added blank line is tagged *blank line*; a removed line and an added line that are the same once spacing and case
 are ignored are both tagged *moved line*. The tag is text beside the line number (and spoken by a screen reader),
 never colour alone; spacing-only rows are drawn grey. The summary leads with content ("3 lines differ in content (1
-value, 1 wording, 1 case); 6 differ only in spacing; 1 blank line only in expected output."). The legend says
+value, 1 wording, 1 case); 6 lines differ only in spacing; 1 blank line only in expected output."). The legend says
 spacing, case, punctuation, number-format and decimal-places rows are formatting differences, scored by the
 course's error definitions (FORMAT_ONLY), not value or wording errors; a value row is a difference unless the case
 is flagged "values may differ". The unified view is still plain `difflib` on the raw lines and can show more

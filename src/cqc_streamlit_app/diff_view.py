@@ -334,7 +334,8 @@ def summary_text(rows: Sequence[AlignedRow]) -> str:
         detail = ", ".join(f"{v:,} {CLASS_TAG[c]}" for c, v in content.items())
         parts.append(f"{_plural(sum(content.values()), 'line differs', 'lines differ')} in content ({detail})")
     if classes.get(oc.LINE_SPACING):
-        parts.append(f"{classes[oc.LINE_SPACING]:,} differ only in spacing")
+        n = classes[oc.LINE_SPACING]
+        parts.append(f"{_plural(n, 'line differs', 'lines differ')} only in spacing")
 
     def side(kind: str, cls: str) -> int:
         return sum(1 for r in rows if r.kind == kind and r.cls == cls)
@@ -382,7 +383,9 @@ def spoken_prefix(row: AlignedRow, side: str) -> str:
     if row.kind == KIND_CHANGED:
         return f"Changed line, {side}, {CLASS_SPOKEN[row.cls]}: "
     what = "Removed" if row.kind == KIND_REMOVED else "Added"
-    return f"{what} {CLASS_SPOKEN[row.cls]}: " if row.cls in (CLASS_BLANK, CLASS_MOVED) else f"{what} line: "
+    if row.cls == CLASS_BLANK:
+        return f"{what} blank line: "
+    return f"{what} line, moved: " if row.cls == CLASS_MOVED else f"{what} line: "
 
 
 def _row_json(row: AlignedRow) -> list:
@@ -496,12 +499,12 @@ def build_side_by_side_html(rows: Sequence[AlignedRow], labels: Sequence[str] = 
 <li>Markers: <b>-</b> is in the expected output, <b>+</b> is in the student output. A marker on both sides means
 these two lines were matched as the same line of output; the tag says how they differ. Wording rows are the least
 certain match.</li>
-<li>Tags: spacing, case, punctuation, number format, decimal places, value (same words, other numbers), wording,
+<li>Tags: spacing, case, punctuation, number format, decimal places, value (the numbers, dates or times differ; the words may differ too), wording,
 moved line, blank line. Differing words inside a matched line are underlined. Rows that differ only in
 spacing are drawn in grey and not underlined.</li>
 <li>Hatched rows are blank here because the other side has an extra line. Both panes scroll together.</li>
-<li>Grading: Spacing, case, punctuation, number-format and decimal-places rows are formatting differences. Score them
-by your course's error definitions; they are not value or wording errors.</li>
+<li>Grading: The verdict treats spacing, case, punctuation, number-format and decimal-places rows as formatting
+differences, not value or wording errors. Score them by your course's error definitions.</li>
 </ul>
 <div class="grid">
 <div class="col"><h2 id="te">{esc(exp_label)}</h2>
