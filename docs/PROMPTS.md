@@ -865,7 +865,7 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   The three paid steps of `prompt-eval.yml` (A/B base vs head prompts, Run the changed suites on master, Run) and the
   two of `model-eval.yml` (Run evaluation, Run the winner on the other prompt suites of its roles) set the first two to
   `1`; local runs and everything else stay sync. A test pins exactly those five steps.
-- **Scheduled runs only** (owner ruling, 2026-10-25: a batch can take up to ~45-90 minutes, which is too long for runs an
+- **Scheduled runs only** (owner ruling, 2026-10-25: a batch can take up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 2700 s), plus the time of any sync fallback, which is too long for runs an
   active agent or session waits on to move code forward). Even with `CQC_EVAL_BATCH=1`, `batch.settings()` returns sync
   unless `GITHUB_EVENT_NAME` is `schedule` (the weekly Model Evaluation) or `CQC_EVAL_BATCH_FORCE=1`. Pull-request, push,
   `workflow_dispatch`, merge-queue and local runs are therefore sync, with the workflow env lines unchanged. The decision

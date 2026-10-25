@@ -294,6 +294,28 @@ class TestScheduleOnly:
             batch.settings()
         assert [m for m in messages if m.startswith("[eval-batch:")] == [line]
 
+    def test_stamp_cases_is_inert_off_schedule(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(batch.ENV_EVENT, "pull_request")
+        cases = [object()]
+        assert batch.stamp_cases(cases, tmp_path) is cases  # outside evals/datasets: no raise, no PII scan
+        assert not batch.is_stamped(cases[0])
+
+    def test_plan_is_none_off_schedule_for_an_outside_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(batch.ENV_EVENT, "pull_request")
+        assert batch.plan(tmp_path, 100) is None
+
+    def test_stamp_cases_still_refuses_an_outside_dir_on_schedule(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(batch.ENV_EVENT, "schedule")
+        with pytest.raises(batch.DatasetNotAllowed):
+            batch.stamp_cases([object()], tmp_path)
+
+    def test_model_eval_workflow_keeps_its_schedule_trigger(self):
+        import yaml
+
+        data = yaml.safe_load((REPO / ".github" / "workflows" / "model-eval.yml").read_text(encoding="utf-8"))
+        triggers = data.get("on", data.get(True))  # YAML 1.1 reads a bare `on` key as True
+        assert "schedule" in triggers
+
     def test_no_run_stats_event_when_gated_off(self, monkeypatch):
         monkeypatch.setenv(batch.ENV_EVENT, "push")
         batch.settings()
@@ -1127,11 +1149,13 @@ class TestProvenance:
         off = suite.cases()
         assert not any(batch.is_stamped(c) for c in off)
         monkeypatch.setenv(batch.ENV_BATCH, "1")
+        monkeypatch.setenv(batch.ENV_ALLOW, "1")
         on = suite.cases()
         assert on and all(batch.is_stamped(c) for c in on)
 
     def test_a_suite_whose_loader_reads_elsewhere_is_refused_at_load(self, monkeypatch, tmp_path):
         monkeypatch.setenv(batch.ENV_BATCH, "1")
+        monkeypatch.setenv(batch.ENV_ALLOW, "1")
         suite = base.Suite(**{**model_suite().__dict__, "dataset": "../../tests"})
         with pytest.raises(batch.DatasetNotAllowed):
             suite.cases()

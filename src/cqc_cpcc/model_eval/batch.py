@@ -18,7 +18,7 @@ scoring and records are the production code's own. Anything that cannot or shoul
 Switches (environment; an invalid value raises ``ValueError`` before any paid call):
 
 * ``CQC_EVAL_BATCH``: default ``0`` (off). ``1``/``true``/``on``/``yes`` turn it on.
-* Scheduled runs only (owner ruling 2026-10-25: a batch can take up to ~45-90 minutes, too long for runs an active
+* Scheduled runs only (owner ruling 2026-10-25: a batch can take up to 45 minutes per batch (CQC_EVAL_BATCH_DEADLINE_S default 2700 s), plus the time of any sync fallback, too long for runs an active
   session waits on). With ``CQC_EVAL_BATCH=1`` batching still stays off (sync) unless ``GITHUB_EVENT_NAME`` is
   ``schedule`` (the weekly Model Evaluation) or ``CQC_EVAL_BATCH_FORCE=1`` is set (a manual one-off). Pull-request,
   push, dispatch, merge-queue and local runs are therefore sync. The decision is logged once per process.
@@ -182,6 +182,7 @@ def _log_decision_once(text: str) -> None:
     if not _DECISION_LOGGED["done"]:
         _DECISION_LOGGED["done"] = True
         logger.info(f"[eval-batch: {text}]")
+        print(f"[eval-batch: {text}]", flush=True)  # the eval CLI may not log at INFO; CI logs must show the decision
 
 
 def settings() -> Optional[Settings]:
@@ -279,11 +280,12 @@ _case_ok: contextvars.ContextVar[bool] = contextvars.ContextVar("cqc_eval_batch_
 def stamp_cases(cases, directory):
     """Called by the loaders (``Suite.cases``, ``dataset.load_cases``) on the directory they read from.
 
-    With batch mode off this does nothing. With it on, the directory must pass :func:`ensure_eval_dataset`
+    With batch mode off this does nothing, and "off" includes a run that is not scheduled and not forced (no PII
+    scan, no path restriction, nothing stamped, nothing can raise). With it on, the directory must pass :func:`ensure_eval_dataset`
     (under ``evals/datasets``, student-data check clean) or :class:`DatasetNotAllowed` is raised, and each case
     is stamped. A group refuses any case that was not stamped, and any request not tied to a stamped case.
     """
-    if not requested():
+    if not is_on():
         return cases
     ensure_eval_dataset(directory)
     for case in cases:
