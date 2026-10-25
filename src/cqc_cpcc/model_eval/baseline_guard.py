@@ -20,15 +20,16 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Optional
 
+from cqc_cpcc.model_eval import account_limit
+
 #: A saved suite result whose failed share of attempted calls is ABOVE this is unreliable
 #: (exactly this share is still reliable). Calls skipped for the local budget do not count as attempted.
 MAX_FAILED_SHARE = Fraction(1, 5)  # 20%
 ENV_MAX_FAILED_SHARE = "CQC_BASELINE_MAX_FAILED_SHARE"
 
-#: ``error_kind`` of a call that ended on an account/key spending limit (PR #466); older code stored
-#: such a call as ``transport`` with the HTTP status in ``error_detail``.
-ACCOUNT_LIMIT_KIND = "account_limit"
-_LIMIT_WORDS = ("budget", "limit", "credit", "quota", "spend", "insufficient", "payment required")
+#: ``error_kind`` of a call that ended on an account/key spending limit; older code stored such a call as
+#: ``transport`` with the HTTP status in ``error_detail`` (``account_limit.is_account_limit_detail`` reads both).
+ACCOUNT_LIMIT_KIND = account_limit.KIND
 
 
 class BaselineGuardError(ValueError):
@@ -63,17 +64,7 @@ def _get(obj: Any, name: str, default: Any = None) -> Any:
 def _is_account_limit(record: Any) -> bool:
     if _get(record, "error_kind") == ACCOUNT_LIMIT_KIND:
         return True
-    for d in _get(record, "error_detail") or []:
-        if not isinstance(d, dict):
-            continue
-        text = " ".join(str(d.get(k) or "") for k in ("message", "code", "type")).lower()
-        if ACCOUNT_LIMIT_KIND in text:
-            return True
-        if d.get("status") == 402:
-            return True
-        if d.get("status") == 403 and any(w in text for w in _LIMIT_WORDS):
-            return True
-    return False
+    return any(account_limit.is_account_limit_detail(d) for d in _get(record, "error_detail") or [])
 
 
 def _share_text(failed: int, attempted: int) -> str:
@@ -102,7 +93,7 @@ def _from_summary(row: dict, threshold: Fraction) -> Optional[str]:
     if row.get("unreliable"):
         return str(row["unreliable"])
     status = str(row.get("status") or "")
-    if status.startswith("aborted"):
+    if status == account_limit.STATUS or status.startswith("aborted"):
         return f"the run ended {status}"
     errors = row.get("errors") or {}
     if isinstance(errors, dict) and errors.get(ACCOUNT_LIMIT_KIND):
@@ -149,7 +140,7 @@ def saved_output_is_unreliable(saved: Any, threshold: Optional[Fraction] = None)
             return next((f"{label}: {why}" for label, recs in saved.items()
                          if (why := _from_records(list(recs), threshold))), None)
         if isinstance(saved.get("models"), dict):
-            if str(saved.get("status") or "").startswith("aborted"):
+            if str(saved.get("status") or "") == account_limit.STATUS or str(saved.get("status") or "").startswith("aborted"):
                 return f"the run ended {saved['status']}"
             return next((f"{label}: {why}" for label, m in saved["models"].items()
                          if (why := _from_summary(m, threshold))), None)

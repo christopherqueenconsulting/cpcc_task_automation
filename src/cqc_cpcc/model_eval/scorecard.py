@@ -72,6 +72,14 @@ def _safe(text: str) -> str:
 
 
 def to_markdown(sc: dict) -> str:
+    if sc.get("status") == "aborted_account_limit":
+        from cqc_cpcc.model_eval import account_limit
+
+        notes = [n for n in sc.get("notes", []) if str(n).startswith("RUN ABORTED")]
+        return ((notes[-1] if notes else account_limit.banner(sc.get("abort"))) + "\n\n"
+                f"## Model evaluation {_safe(sc.get('run_label', ''))}\n\n"
+                f"Status: **{sc.get('status')}**. No scores, no decision and no winner: nothing of an aborted run "
+                f"is scored.\n")
     lines = [
         f"## Model evaluation {_safe(sc.get('run_label', ''))}",
         "",

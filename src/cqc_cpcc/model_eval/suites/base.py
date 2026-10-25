@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import adaptive, cache_session, error_detail
+from cqc_cpcc.model_eval import account_limit, adaptive, cache_session, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, classify_error, pinned_registry
 from cqc_cpcc.utilities.AI import model_registry
@@ -134,7 +134,7 @@ class SuiteRecord:
     effort: Optional[str]
     repeat: int
     ok: bool = False
-    error_kind: Optional[str] = None  # schema | truncated | refusal | transport | budget
+    error_kind: Optional[str] = None  # schema | truncated | refusal | transport | budget | account_limit
     payload: dict = field(default_factory=dict)  # suite.to_payload(output): what graders read
     output_sha256: Optional[str] = None
     cost_usd: float = 0.0
@@ -248,6 +248,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     """
     from cqc_cpcc.utilities.AI import llm_gateway
 
+    if account_limit.tripped():  # an earlier suite or model of this run hit the account's spending limit
+        return []
     use_adaptive = adaptive.adaptive_enabled(adaptive_mode)
     attempts_allowed = adaptive.transport_attempts(transport_attempts)  # a bad setting stops the run before any call
     cap = adaptive.eval_max_tokens()  # None (the default) leaves every request as it was
@@ -288,9 +290,11 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 slot["held"] = False
                 semaphore.release()
 
+        account_limit.check()
         if semaphore is not None:
             await take_slot()
         try:
+            account_limit.check()  # the run was aborted while this call waited for a slot: send nothing
             if semaphore is not None and budget.exhausted:
                 record.error_kind = "budget"
                 return record
@@ -319,10 +323,12 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                     json.dumps(record.payload, sort_keys=True).encode()).hexdigest()
             except Exception as e:  # noqa: BLE001 - every failure is a data point
                 record.error_kind = classify_error(e)
+                if record.error_kind == account_limit.KIND:
+                    account_limit.note_if_account_limit(e)  # stops the whole run (idempotent: the retry layer did too)
                 if held.last_error is not e:  # failed outside the model call (e.g. building the payload)
                     held.detail.append(error_detail.describe_failure(e, len(held.detail) + 1))
                 logger.warning(f"[prompt-eval:{suite.id}] {model} {case.case_id}#{repeat}: "
-                               f"{record.error_kind}: {error_detail.redact_message(error_detail.failure_message(e))}")
+                               f"{record.error_kind}: {error_detail.log_text(e)}")
             call = llm_gateway.last_call()
             if call is before:
                 call = None
@@ -333,7 +339,9 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
             # a usable usage cost is a finite number >= 0; anything else is treated as "no cost reported"
             real_usage = (isinstance(reported, (int, float)) and not isinstance(reported, bool)
                           and math.isfinite(reported) and reported >= 0)
-            if real_usage:
+            if record.error_kind == account_limit.KIND:
+                record.cost_usd = 0.0  # the call was refused by the account's limit: it did not run, nothing to charge
+            elif real_usage:
                 record.cost_usd = float(reported)
             elif record.ok and llm_gateway._is_test_mode():
                 record.cost_usd = 0.0  # canned CQC_TEST_MODE response: no model call
@@ -392,7 +400,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
 
     records: list[SuiteRecord] = []
     with pinned_registry(model, effort, profile, roles=(suite.role,),
-                         max_output_tokens=cap or DEFAULT_MAX_OUTPUT_TOKENS) as resolved, cache_session.transport():
+                         max_output_tokens=cap or DEFAULT_MAX_OUTPUT_TOKENS) as resolved, cache_session.transport(), \
+            account_limit.run_scope():
         order = [(case, r) for r in range(repeats) for case in cases]
         plan: dict = {}
         if use_warm and len(order) > 1:
@@ -418,13 +427,30 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 await cache_session.wait_for_leader(wait_for)  # holds no slot while it waits
             try:
                 return await one(case, repeat, resolved)
+            except account_limit.RunAborted:
+                return None  # the run was aborted before this call was sent: no record
             finally:
                 if lead is not None:
                     lead.set()  # also on a failure, a budget refusal or a cancellation
 
-        jobs = [gated(case, r) for case, r in order]
-        for coro in asyncio.as_completed(jobs):
-            records.append(await coro)
+        abort = account_limit.current()
+        tasks = [asyncio.ensure_future(gated(case, r)) for case, r in order]
+        if abort is not None:
+            for task in tasks:
+                abort.track(task)  # the first account-limit error cancels every call still queued or in flight
+        position = {id(t): i for i, t in enumerate(tasks)}
+        pending = set(tasks)
+        while pending:  # ends when every task is done: the abort cancels the rest, so none is left running
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in sorted(done, key=lambda t: position[id(t)]):
+                if task.cancelled():
+                    continue  # cancelled by the abort: it never finished, so it has no record
+                record = task.result()
+                if record is not None:
+                    records.append(record)
+        if abort is not None and abort.tripped:
+            logger.warning(f"[prompt-eval:{suite.id}] {model}: stopped by the account limit after "
+                           f"{len(records)} record(s) (HTTP {abort.status} {account_limit.REASON})")
     if limiter is not None:
         snap = limiter.snapshot()
         logger.info(f"[prompt-eval:{suite.id}] concurrency: {adaptive.describe(snap)}")
@@ -480,7 +506,7 @@ def score_case(suite: Suite, case: SuiteCase, records: list[SuiteRecord]) -> Cas
             try:
                 per_grader[g.name].append(g.fn(case, r.payload))
             except Exception as e:  # noqa: BLE001 - a grader bug must not hide the run
-                reasons.append(f"{g.name}: {type(e).__name__}: {e}")
+                reasons.append(f"{g.name}: {type(e).__name__}: {error_detail.redact_message(str(e), 160)}")
                 per_grader[g.name].append(0.0)
     scores = {}
     for name, values in per_grader.items():

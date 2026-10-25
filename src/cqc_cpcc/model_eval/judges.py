@@ -28,6 +28,7 @@ from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from cqc_cpcc.model_eval import error_detail
 from cqc_cpcc.utilities.logger import logger
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -241,7 +242,7 @@ async def judge_one(judge_id: str, suite_id: str, case, payload: dict, judge_mod
     try:
         verdict, cost = await _ask(judge_id, prompt, JudgeVerdict, judge_model)
     except Exception as e:  # noqa: BLE001 - a judge failure is report-only data
-        logger.warning(f"[judge {judge_id}] {case.case_id}: {type(e).__name__}: {str(e)[:200]}")
+        logger.warning(f"[judge {judge_id}] {case.case_id}: {type(e).__name__}: {error_detail.log_text(e)}")
         return None, 0.0
     score = overall(verdict, judge_id)
     cache.put(key, {"score": score, "scores": [s.model_dump() for s in verdict.scores]})
@@ -264,7 +265,7 @@ async def pairwise(suite, case, payload_a: dict, payload_b: dict, judge_model: s
             try:
                 verdict, cost = await _ask("pairwise", prompt, PairwiseVerdict, judge_model)
             except Exception as e:  # noqa: BLE001
-                logger.warning(f"[judge pairwise] {case.case_id}: {type(e).__name__}: {str(e)[:200]}")
+                logger.warning(f"[judge pairwise] {case.case_id}: {type(e).__name__}: {error_detail.log_text(e)}")
                 continue
             spent += cost
             hit = {"winner": verdict.winner}
