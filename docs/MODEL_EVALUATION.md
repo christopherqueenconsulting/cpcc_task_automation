@@ -146,7 +146,7 @@ not blocked for up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 
 fallback (owner ruling, 2026-10-25: 60 minutes is too long for runs that move code forward). To force a manual one-off,
 set `CQC_EVAL_BATCH=1`, `CQC_EVAL_BATCH_ALLOW_RETENTION=1` and `CQC_EVAL_BATCH_FORCE=1`.
 
-The first batch of every run is validated; if it fails (failed or expired, too slow, malformed results, effort ignored on the conservative check below)
+The first batch of every run is validated; if it fails (failed or expired, too slow, malformed results, a first-batch check that fires only when at least 4 delivered items asked for `high` or `medium` effort and every one reports `reasoning_tokens` of 0 or none)
 the run finishes on the synchronous path and the scorecard and Run stats say why (`batch_fallback_reason`). Separately, the 2026-10-25 live probe could not show that a batch applies the reasoning effort, so reports flag "effort not proven honoured in batch" whenever batched requests asked for one (`batch.BATCH_EFFORT_VERIFIED`). There is no
 cancel endpoint, so a batch abandoned at its deadline may still bill; the report bounds that. The switches, the budget
 rules and the facts verified by the 2026-10-25 live probe are in [`PROMPTS.md`](PROMPTS.md) under "OpenRouter Batch API mode for evals".

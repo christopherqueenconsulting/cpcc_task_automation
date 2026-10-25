@@ -979,6 +979,31 @@ class TestJudgeRound:
         want, _method = batch.token_cost(MODEL, {"prompt_tokens": 2000, "completion_tokens": 50})
         assert scores == [1.0] * 10 and spend.spent == pytest.approx(10 * want)  # no budget estimate, no zero
 
+    def test_the_judge_rounds_extra_charge_is_counted_exactly_once(self, fake, batch_on):
+        class Judge:
+            @staticmethod
+            async def pairwise(suite, case, head_payload, base_payload, model, cache):
+                await llm_gateway.structured(role="feedback", prompt=f"judge {case.case_id} 1",
+                                             schema_model=Out, override=MODEL, system="J" * 5000)
+                call = llm_gateway.last_call()
+                return 1.0, call.completion.cost_usd or 0.0
+
+        suite = model_suite()
+        records, _ = go(suite, n=10)
+        judged = stamped(_cases(10))
+        ids = [c.case_id for c in judged]
+        payloads = {r.case_id: r for r in records}
+        spend = Budget(1000.0, 900.0)
+        batch.reset_events()
+        fake.batch_cost = 0.5  # far above the token price of the ten judge calls
+        scores = vrun(pa._pairwise_scores(Judge, suite, {c.case_id: c for c in judged}, ids, payloads, payloads,
+                                          MODEL, None, spend, 4, item_estimate=0.01))
+        want, _method = batch.token_cost(MODEL, {"prompt_tokens": 2000, "completion_tokens": 50})
+        judge_rows = [e for e in batch._EVENTS if e["type"] == "batch" and e["kind"] == "judge"]
+        assert scores == [1.0] * 10 and len(judge_rows) == 1  # the group was given the judge's budget
+        assert judge_rows[0]["extra_charge_usd"] == pytest.approx(0.5 - 10 * want, abs=1e-6)
+        assert spend.spent == pytest.approx(0.5)  # the judge's own adds (10 x token price) plus the extra, once
+
     def test_the_judge_round_stays_sync_when_batch_is_off(self, fake, monkeypatch):
         class Judge:
             @staticmethod
