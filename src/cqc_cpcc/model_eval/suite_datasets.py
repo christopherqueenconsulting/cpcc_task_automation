@@ -20,6 +20,8 @@ from cqc_cpcc.model_eval import dataset_builder as db
 
 ROOT = Path(__file__).resolve().parents[3] / "evals" / "datasets"
 VERSION = "v1"
+#: Datasets that moved past ``VERSION`` (the older directory stays frozen beside the new one).
+DATASET_VERSIONS = {"flowgorithm-grade": "v2"}
 
 
 def _submission_text(filename: str, source: str, language: str) -> str:
@@ -397,6 +399,51 @@ def _fprg(variant: str, inputs: list, result: tuple, label: str) -> str:
             + "\n".join(body) + "\n        </body>\n    </function>\n</flowgorithm>\n")
 
 
+FLOWGORITHM_NAME_CRITERION = "Failure to include student name as part of Flowgorithm file"
+FLOWGORITHM_LAB_CRITERION = "Failure to include Flowgorithm lab number as part of Flowgorithm file name"
+FLOWGORITHM_FILE_NAME_CRITERIA = ((FLOWGORITHM_NAME_CRITERION, 5), (FLOWGORITHM_LAB_CRITERION, 5))
+
+#: (program index, case suffix, synthetic file name, criteria the app-checked facts say to deduct, why).
+#: Facts come from ``utilities/fprg_filename_facts``: yes and unknown never deduct, only "no" does.
+FLOWGORITHM_FILE_NAME_CASES = (
+    (0, "fn_lab_yes", "Ada_Example_Lab3", (), "lab yes (Lab 3), name-like word yes"),
+    (1, "fn_lab_no", "Ben_Sample", (FLOWGORITHM_LAB_CRITERION,), "lab no (no keyword, no number), name yes"),
+    (2, "fn_lab_unknown", "Cal_Fixture_Lab_Foo", (), "lab unknown (keyword, no number), name yes"),
+    (0, "fn_name_and_digit", "Eve_Specimen_7", (), "lab yes (bare digit run), name-like word yes"),
+)
+
+
+def _build_flowgorithm_file_name_cases() -> list[dict]:
+    rubric = FLOWGORITHM_RUBRIC + FLOWGORITHM_FILE_NAME_CRITERIA
+    total = sum(p for _, p in rubric)
+    table = "| Criterion | Points |\n|---|---|\n" + "\n".join(f"| {c} | {p} |" for c, p in rubric)
+    points = dict(rubric)
+    rows = []
+    for index, suffix, file_name, deducted, _why in FLOWGORITHM_FILE_NAME_CASES:
+        key, instructions, inputs, result, label = FLOWGORITHM_PROGRAMS[index]
+        lost = sum(points[c] for c in deducted)
+        rows.append({
+            "case_id": f"{key}__{suffix}",
+            "stratum": "file-name",
+            "tags": ["file-name", "single" if deducted else "clean"],
+            "twin_of": None,
+            "inputs": {
+                "assignment": instructions,
+                "rubric_criteria_markdown_table": table,
+                "submission": _fprg("clean", inputs, result, label),
+                "submission_file_name": file_name,
+                "total_possible_points": str(total),
+            },
+            "labels": {
+                "criteria": [c for c, _ in rubric],
+                "expected_deductions": list(deducted),
+                "grade_range": [total - lost, total - (0.2 * lost)],
+                "total": total,
+            },
+        })
+    return rows
+
+
 def build_flowgorithm() -> list[dict]:
     table = "| Criterion | Points |\n|---|---|\n" + "\n".join(f"| {c} | {p} |" for c, p in FLOWGORITHM_RUBRIC)
     points = dict(FLOWGORITHM_RUBRIC)
@@ -424,7 +471,7 @@ def build_flowgorithm() -> list[dict]:
                     "total": FLOWGORITHM_TOTAL,
                 },
             })
-    return rows
+    return rows + _build_flowgorithm_file_name_cases()
 
 
 # --------------------------------------------------------------------------------------
@@ -1639,8 +1686,12 @@ BUILDERS = {
 }
 
 
+def version_of(name: str) -> str:
+    return DATASET_VERSIONS.get(name, VERSION)
+
+
 def dataset_dir(name: str) -> Path:
-    return ROOT / name / VERSION
+    return ROOT / name / version_of(name)
 
 
 def render(name: str, reviewed_by: Optional[str] = None) -> str:
@@ -1655,11 +1706,11 @@ def render(name: str, reviewed_by: Optional[str] = None) -> str:
 def write_all(root: Path = ROOT, reviewed_by: Optional[str] = None) -> dict:
     counts = {}
     for name in BUILDERS:
-        d = root / name / VERSION
+        d = root / name / version_of(name)
         d.mkdir(parents=True, exist_ok=True)
         text = render(name, reviewed_by)
         (d / "cases.jsonl").write_text(text, encoding="utf-8")
-        (d / "VERSION").write_text(VERSION + "\n", encoding="utf-8")
+        (d / "VERSION").write_text(version_of(name) + "\n", encoding="utf-8")
         counts[name] = text.count("\n")
         if name == "effort-recommendation":
             from cqc_cpcc.model_eval import effort_dataset
@@ -1669,5 +1720,5 @@ def write_all(root: Path = ROOT, reviewed_by: Optional[str] = None) -> dict:
 
 
 def load_rows(name: str, root: Path = ROOT) -> list[dict]:
-    path = root / name / VERSION / "cases.jsonl"
+    path = root / name / version_of(name) / "cases.jsonl"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]

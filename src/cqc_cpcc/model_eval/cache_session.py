@@ -126,6 +126,18 @@ def session_for_run(suite: str, model: str, effort: Optional[str], side: Optiona
 
 _session: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("cqc_eval_session", default=None)
 _tap: contextvars.ContextVar[Optional["UsageTap"]] = contextvars.ContextVar("cqc_eval_tap", default=None)
+#: ``async (inner_completions, kwargs) -> response`` set by ``batch.group()`` for the length of a batched run.
+_batcher: contextvars.ContextVar[Optional[Callable]] = contextvars.ContextVar("cqc_eval_batcher", default=None)
+
+
+@contextlib.contextmanager
+def use_batcher(batcher: Callable):
+    """Route this context's (and its tasks') requests through ``batcher`` (``batch.py`` only)."""
+    token = _batcher.set(batcher)
+    try:
+        yield
+    finally:
+        _batcher.reset(token)
 
 
 @dataclass
@@ -137,8 +149,13 @@ class CallUsage:
     cached_tokens: Optional[int] = None
     cache_write_tokens: Optional[int] = None
     reasoning_tokens: Optional[int] = None
+    #: Set by ``batch.py`` on a response that came from the Batch API (None for a sync response).
+    batch: Optional[bool] = None
+    cost_allocated: Optional[bool] = None
 
     def add(self, response: Any) -> None:
+        self.batch = True if getattr(response, "cqc_batch", None) else None
+        self.cost_allocated = True if getattr(response, "cqc_cost_allocated", None) else None
         usage = getattr(response, "usage", None)
         if usage is None:
             return
@@ -187,7 +204,11 @@ class _Completions:
             else:
                 extra["session_id"] = cleaned
             kwargs["extra_body"] = extra
-        response = await self._inner.create(**kwargs)
+        batcher = _batcher.get()
+        if batcher is not None:  # batch mode (batch.py): it may answer from a batch, or send the request itself
+            response = await batcher(self._inner, kwargs)
+        else:
+            response = await self._inner.create(**kwargs)
         if self._tap is not None:
             self._tap.add(response)
         return response

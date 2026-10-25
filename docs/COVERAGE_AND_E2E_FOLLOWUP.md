@@ -1,5 +1,8 @@
 # Coverage Improvement and E2E Testing - Follow-up PR
 
+> **Historical note (2026-10):** `pytest-playwright` and other packages named below were removed from `pyproject.toml` (unused; see the Dependencies section of `docs/CONTRIBUTING.md`). This document records an earlier state.
+
+
 ## Context
 
 This document provides a complete prompt for completing the remaining work from PR "Fix 7 failing unit tests, add pytest-cov, deprecate LangChain code". That PR successfully:

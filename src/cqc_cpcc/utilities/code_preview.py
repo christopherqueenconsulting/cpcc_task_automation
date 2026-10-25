@@ -218,3 +218,63 @@ frame.addEventListener("load", () => {{
 def onlinegdb_url(lang: str) -> str:
     """OnlineGDB's compiler page for the language (code must be pasted there)."""
     return f"https://www.onlinegdb.com/{_ONLINEGDB_PAGES.get(lang, 'online_java_compiler')}"
+
+
+# --------------------------------------------------------------------------- #
+# The solution text the grading prompt carries, back into files
+# --------------------------------------------------------------------------- #
+_FILE_HEADER = "// File: "
+_FENCE_OPEN = re.compile(r"(`{3,})([^\n`]*)\n")
+_UNFENCED_END = re.compile(r"\n\n(?:// File: |`{3,}[^\n`]*\n)")
+
+
+def split_solution_bundle(text: Optional[str]) -> dict:
+    """``{file name: source}`` rebuilt from the solution text the Setup step built.
+
+    Setup writes each file as ``// File: <name>`` + source, wrapped in a code fence when the
+    language is known (``wrap_code_in_markdown_backticks``), and joins files with a blank line.
+    The fence is made longer than any run of backticks inside the source, so the first line
+    that holds exactly the opening fence closes it: a ``` line inside a file is read as source.
+    Text with no header (a lone pasted solution) comes back as ``Solution.txt``. Files without a
+    fence (text read from a document) end at the next blank line plus header."""
+    out: dict = {}
+    if not text or not text.strip():
+        return out
+    pos, n = 0, len(text)
+
+    def add(name: str, content: str, fallback_ext: str = ".txt") -> None:
+        base = os.path.basename(name.strip().replace("\\", "/")) or f"Solution{fallback_ext}"
+        unique, i = base, 2
+        while unique in out:
+            stem, ext = os.path.splitext(base)
+            unique, i = f"{stem}_{i}{ext}", i + 1
+        out[unique] = content
+
+    while pos < n:
+        while pos < n and text[pos] in "\r\n":
+            pos += 1
+        if pos >= n:
+            break
+        fence = _FENCE_OPEN.match(text, pos)
+        if fence:
+            marks, lang = fence.group(1), fence.group(2).strip()
+            start = fence.end()
+            close = text.find("\n" + marks, start)
+            body = text[start:] if close == -1 else text[start:close]
+            pos = n if close == -1 else close + 1 + len(marks)
+            name = f"Solution.{lang}" if re.fullmatch(r"[A-Za-z0-9+#_-]{1,12}", lang) else "Solution.txt"
+            if body.startswith(_FILE_HEADER):
+                head, _, body = body.partition("\n")
+                name = head[len(_FILE_HEADER):] or name
+            add(name, body)
+            continue
+        if text.startswith(_FILE_HEADER, pos):
+            head, _, rest = text[pos:].partition("\n")
+            stop = _UNFENCED_END.search(rest)
+            content = rest if stop is None else rest[:stop.start()]
+            pos = pos + len(head) + 1 + len(content)
+            add(head[len(_FILE_HEADER):], content)
+            continue
+        add("Solution.txt", text[pos:])
+        break
+    return out

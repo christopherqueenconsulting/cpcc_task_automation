@@ -8,15 +8,14 @@ model's, and :func:`render_markdown` produces the feedback shown on the page.
 
 from __future__ import annotations
 
-import os
 from typing import Annotated, Optional
 
 from pydantic import BaseModel, Field
 
 from cqc_cpcc.prompts.flowgorithm import FLOWGORITHM_GRADE_PROMPT
 from cqc_cpcc.utilities.AI import untrusted_fence
+from cqc_cpcc.utilities.fprg_filename_facts import file_name_facts, render_facts
 from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.utilities.pii_redaction import alias, scrub
 
 
 class Deduction(BaseModel):
@@ -36,37 +35,25 @@ class FlowgorithmGrade(BaseModel):
     overall_feedback: Annotated[str, Field(description="2-4 sentences of constructive feedback")]
 
 
-def file_name_alias(file_name: str) -> str:
-    """Neutral stand-in for a submission's file name: ``student_<hash>.fprg``.
-
-    ``pii_redaction.alias`` is an HMAC under a machine-local secret key, so it is stable per
-    file name on this machine and cannot be reversed by hashing a class roster. The real name
-    never reaches the model; the extension is always ``.fprg``. The ``file:`` prefix keeps a
-    name that itself starts with ``student_`` from being passed through unchanged.
-    """
-    stem = os.path.splitext(os.path.basename(str(file_name or "")))[0]
-    return f"{alias('file:' + stem)}.fprg"
-
-
 def build_flowgorithm_prompt(assignment: str, rubric_criteria_markdown_table: str, submission: str,
                              submission_file_name: str, total_possible_points: str,
                              nonce: Optional[str] = None) -> str:
-    """The prompt text. ``grade_flowgorithm`` passes the alias from :func:`file_name_alias`;
-    the name is also run through ``scrub`` here as a second layer for any other caller.
+    """The prompt text. The file name is never put in it: two facts about it, computed here
+    (``fprg_filename_facts``), take its place, so the file-name rubric criteria can still be
+    decided without the name leaving the machine.
 
-    The file name and the submission are untrusted, so each sits where it always did but
-    inside a nonce fence (``utilities/AI/untrusted_fence``). The line that carries the per-call
-    nonce is directly above the first fence, after all the static text before it. ``nonce`` is
-    fixed only for prompt fingerprints; real calls leave it unset.
+    The submission is untrusted, so it sits where it always did but inside a nonce fence
+    (``utilities/AI/untrusted_fence``). The line that carries the per-call nonce is directly
+    above the fence, after all the static text before it. ``nonce`` is fixed only for prompt
+    fingerprints; real calls leave it unset.
     """
     nonce = nonce or untrusted_fence.new_nonce()
-    submission_file_name = scrub(submission_file_name)
     return FLOWGORITHM_GRADE_PROMPT.strip().format(
         assignment=assignment,
-        submission_file_name_fence="\n".join([
+        file_name_facts=render_facts(file_name_facts(submission_file_name)),
+        submission_fence="\n".join([
             untrusted_fence.instruction_line(nonce),
-            untrusted_fence.fence("Submission File Name", submission_file_name, nonce)]),
-        submission_fence=untrusted_fence.fence("Submission", submission, nonce),
+            untrusted_fence.fence("Submission", submission, nonce)]),
         rubric_criteria_markdown_table=rubric_criteria_markdown_table,
         total_possible_points=total_possible_points,
     )
@@ -116,7 +103,7 @@ async def grade_flowgorithm(assignment: str, rubric_criteria_markdown_table: str
     from cqc_cpcc.utilities.AI import llm_gateway
 
     prompt = build_flowgorithm_prompt(assignment, rubric_criteria_markdown_table, submission,
-                                      file_name_alias(submission_file_name), total_possible_points)
+                                      submission_file_name, total_possible_points)
     use_auto_route = model_name == "openrouter/auto"
     return await llm_gateway.structured(
         role="flowgorithm",
