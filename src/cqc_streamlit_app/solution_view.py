@@ -233,5 +233,5 @@ def render_solution_tab(run_key: str, all_results: list) -> None:
     st.caption(NO_PLAN_CAPTION)
     # The same Code view and run buttons as the Student result card, fed the files rebuilt from
     # the prompt text (fences and file headers removed). Never cut: this is the whole solution.
-    render_submission_code(split_solution_bundle(reference), widget_key=f"solution_{run_key[:16]}",
+    render_submission_code(split_solution_bundle(reference), widget_key=f"solution_fb_{run_key[:16]}",
                            notice=SOLUTION_NOTICE)

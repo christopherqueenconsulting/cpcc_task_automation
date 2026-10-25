@@ -403,7 +403,7 @@ def test_the_tab_without_a_plan_shows_real_code_blocks_per_file_and_no_fences(ru
     at = _tab_app([("Student Alpha", _result())], reference=ref).run()
     assert not at.exception, at.exception
     assert not at.text_area
-    assert "```" not in _rendered(at) and "// File:" not in " ".join(c.value for c in at.code)
+    assert "```" not in _rendered(at) and "// File:" not in _rendered(at)
     assert [c.language for c in at.code] == ["cpp"] and at.code[0].value == CPP.strip()
     assert "main.cpp" in [o for sc in at.get("segmented_control") for o in sc.options]
 
@@ -623,3 +623,46 @@ def test_the_missing_link_is_explained(runner_off):
     plan = _plan()
     at = _tab_app([("Student Alpha", _result(_report(plan, ["match", "match"])))], plan, SOURCES).run()
     assert solution_view.NO_LINK_NOT_READY in _texts(at, "caption")
+
+
+HOSTILE = "x](javascript:evil) ![i](evil.png)"
+
+
+def _live_markup(at):
+    """Markdown/caption texts that still hold an unescaped link or image."""
+    import re
+    return [str(e.value) for e in [*at.markdown, *at.caption]
+            if re.search(r"(?<!\\)\]\(", str(e.value)) or "<script" in str(e.value)]
+
+
+def test_a_hostile_file_name_makes_no_link_or_image_in_any_view(runner_on):
+    ref = _bundle((HOSTILE + ".cpp", "cpp", CPP), ("b.cpp", "cpp", CPP))
+    at = _tab_app([("S", _result())], reference=ref).run()
+    assert not at.exception, at.exception
+    assert not _live_markup(at)
+    at.get("segmented_control")[0].set_value("All files").run()
+    assert not at.exception, at.exception
+    assert not _live_markup(at) and not at.get("imgs")
+    assert any("\\]" in str(e.value) for e in at.caption)  # shown, with the brackets escaped
+
+
+def test_hostile_names_html_dotdot_and_long_survive_the_full_tab(runner_on):
+    name = "a<script>alert(1)</script>" + "n" * 400 + ".cpp"
+    ref = _bundle((name, "cpp", CPP), ("../../etc/passwd.cpp", "cpp", CPP))
+    assert all("/" not in n and "\n" not in n for n in split_solution_bundle(ref))
+    at = _tab_app([("S", _result())], reference=ref).run()
+    assert not at.exception, at.exception
+    at.get("segmented_control")[0].set_value("All files").run()
+    assert not at.exception, at.exception
+    assert not _live_markup(at)
+    assert split_solution_bundle("```cpp\n// File: a\nb.cpp\nint x;\n```") == {"a": "b.cpp\nint x;"}
+
+
+def test_the_fallback_runner_does_not_reopen_from_the_plan_path_key(runner_on):
+    ref = _bundle(("main.cpp", "cpp", CPP))
+    at = _tab_app([("S", _result())], reference=ref)
+    at.session_state[f"code_runner_open_solution_{KEY[:16]}"] = True  # opened under the plan path
+    at.run()
+    assert [b.label for b in at.button] == ["Run in OneCompiler"]
+    at.button[0].click().run()
+    assert at.session_state[f"code_runner_open_solution_fb_{KEY[:16]}"] is True
