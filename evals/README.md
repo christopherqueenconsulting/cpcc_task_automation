@@ -86,6 +86,7 @@ labels come from construction and are drafts until reviewed.
 | `exam-grading` | exam-grading | 81 | v2 programs mapped to exam error types | type F1, offered types only, major/minor severity, injection, no solution leak |
 | `project-feedback` | project-feedback | 81 | v2 programs mapped to FeedbackType | type F1, explanation present, no solution leak, injection |
 | `flowgorithm-grade` | flowgorithm-grade | 28 (v2) | 3 flowcharts x 8 broken-criteria variants, plus 4 file-name cases (lab yes, lab no, lab unknown, name word with a bare number) that use the two default file-name criteria | grade in range, deduction F1, valid criteria, arithmetic, no leak; report-only: file-name deductions |
+| `test-case-generation` | test-case-generation | 16 (v2) | 6 programs x numbered/prose (Java, Python, C++), each with named conditions and boundary values, plus a dice roll and a timestamp program whose printed values vary | condition recall, boundary hit, map complete, case limit; report-only: values-may-differ flag |
 | `digest` | preprocessing-digest | 16 | 2 multi-file Java projects, seeded defects, a removed method | defect coverage, fact retention, files, completeness, compression |
 
 `flowgorithm-grade` moved from v1 to v2 (dataset bump, 24 -> 28 cases). v1 stays frozen beside it (the 2026-10-08
@@ -95,6 +96,11 @@ file-name facts are the only variable: `rectangle__fn_lab_yes` (`Ada_Example_Lab
 `average__fn_lab_no` (`Ben_Sample`, lab criterion deducted), `pay__fn_lab_unknown` (`Cal_Fixture_Lab_Foo`, no deduction)
 and `rectangle__fn_name_and_digit` (`Eve_Specimen_7`, no deduction). The report-only grader `file_name_deductions`
 scores them; it has no weight and no gate in `model_policy.json` (human-edited, untouched).
+
+`test-case-generation` moved from v1 to v2 (12 -> 16 cases; v1 frozen, the first 12 v2 rows are identical). The 4 added rows
+(`dice__numbered`, `dice__prose`, `greeting__numbered`, `greeting__prose`) print a random roll or the current date and
+time. The report-only grader `values_may_differ` expects at least one case marked values-may-differ on those rows and
+none on the other 12; it has no weight and no gate in `model_policy.json` (human-edited, untouched).
 
 Run one: `poetry run python -m cqc_cpcc.model_eval suite run --suite exam-grading --dry-run`
 (drop `--dry-run` to spend; `CQC_TEST_MODE=true` runs it with canned answers for free).

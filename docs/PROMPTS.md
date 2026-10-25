@@ -19,7 +19,7 @@ edits it. The evaluation workflow that grades these prompts is planned in
 | `requirement-extraction` | Instructions → 1–12 functional requirements | grading | `requirement_coverage.py:build_requirement_extraction_prompt` | `RequirementChecklist` | suite `requirement-extraction` (36) |
 | `effort-recommendation` | Assignment → the lowest reasoning effort expected to grade it reliably (advice on the Setup tab; takes no student submission) | grading | `effort_recommendation.py:build_effort_recommendation_prompt` | `EffortJudgement` | suite `effort-recommendation` (15) |
 | `requirement-solution-check` | Does the instructor's solution do each checklist requirement (yes, no, unclear)? One cached call per assignment; only a `no` can make a requirement not graded, and until `model_policy.json` calibrates the suite a `no` is only a suggestion the instructor applies; instructions and solution are nonce-fenced untrusted text, no submission is ever sent | grading | `requirement_solution_check.py:build_solution_check_prompt` | `SolutionCheck` | suite `requirement-solution-check` (16, synthetic; key grader: false-`no` rate) |
-| `test-case-generation` | Output check: stdin test cases for the solution (at most 6, a boundary case for every selection or loop condition the instructions name, condition-to-case map); instructions and solution are nonce-fenced untrusted text | grading | `test_case_generation.py:build_test_case_prompt` | `TestCaseSuggestion` | suite `test-case-generation` (12, synthetic) |
+| `test-case-generation` | Output check: stdin test cases for the solution (at most 6, a boundary case for every selection or loop condition the instructions name, condition-to-case map); instructions and solution are nonce-fenced untrusted text | grading | `test_case_generation.py:build_test_case_prompt` | `TestCaseSuggestion` | suite `test-case-generation` (16 in v2, synthetic) |
 | `exam-grading` | Grade Assignment, exam mode (`CodeGrader`): major/minor errors | grading | `utilities/AI/exam_grading_prompts.py:build_exam_grading_messages` | `ErrorDefinitions` | suite `exam-grading` (81) |
 | `preprocessing-digest` | Compress a very large submission before exam grading; the student code is nonce-fenced untrusted text, last in the message (v2) | digest | `utilities/AI/openai_client.py:_build_preprocessing_prompt` | `PreprocessingDigest` | suite `digest` (16) |
 | `project-feedback` | Give Feedback page (v5: student-facing report; categories from the course error definitions) | feedback | `prompts/project_feedback.py` | `FeedbackReport` | suite `project-feedback` (81) |
@@ -188,6 +188,17 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   file-name cases (v1 frozen, first 24 rows identical; see `evals/README.md`).
 - **v2**: structured output. (#479 added an alias for the file name in code only: no prompt text or registry change. v3 replaces it with the facts block.)
 - **v1**: free-text markdown, real file name.
+
+## Version history: test-case-generation
+
+- **v2**: each case may carry `values_may_differ` (bool, default false) and `varying_markers` (at most 5 short
+  literal fragments, default empty); one rule asks the model to set them only when the instructions or the
+  solution show a printed value that differs on every run (a random number, the current date or time) and never
+  because a value depends on the input. Both fields are optional in the schema, so an answer without them still
+  validates. The app also detects this without the model (`detect_variable_values`); code and model flags are ORed,
+  and the instructor can toggle the flag in the setup table. The dataset moved to `test-case-generation/v2` with 4
+  added cases (v1 frozen; see `evals/README.md`).
+- **v1**: conditions, at most six cases, boundary cases, the condition-to-case map.
 
 ## Guidelines and v4
 

@@ -2803,6 +2803,23 @@ def _after_check_notes(instructions: str, current: RequirementChecklist) -> None
 
 
 GRADE_STAGES = ("Setup", "Submissions & run", "Results & review")
+ZIP_LAYOUT_HELP = """\
+- **One folder per student.** Every file in a student's folder is graded together as that
+  student's submission. Files in that folder's own subfolders (such as `src/`) belong to
+  the same student.
+- Folder names can be just the student's name, or BrightSpace "Download All" style
+  `id - Student Name - date`.
+- An outer folder around the student folders is fine. The submissions ZIP from
+  **Results & review** can be uploaded as is. For the whole "Download All Feedback" ZIP,
+  only the ZIP in its `Student_Submissions/` folder is read.
+  Mac `__MACOSX` and `.DS_Store` files are ignored.
+- Student folders must not be named like project folders (`src`, `lib`, `test`, `main`,
+  `docs`), or like parts of one assignment (`Problem 1`, `Lab 2`): those are read as
+  inside one student's work.
+- Files at the top of the ZIP or directly in an outer folder, outside any student folder,
+  are skipped. Only accepted file types are graded; others are flagged in the preview below.
+"""
+
 SUBMISSION_FILE_TYPES = [
     "txt", "docx", "pdf", "java", "cpp", "sas", "zip",
     "html", "htm",
@@ -2984,6 +3001,8 @@ def _render_submissions_source() -> list:
         if confirmed and confirmed.get("path"):
             return [(confirmed["name"], confirmed["path"])]
         return []
+    with st.expander("What should the ZIP look like?", icon=":material/folder_zip:"):
+        st.markdown(ZIP_LAYOUT_HELP)
     return add_flexible_upload_element(
         "Student submissions (files or a ZIP)",
         SUBMISSION_FILE_TYPES,
