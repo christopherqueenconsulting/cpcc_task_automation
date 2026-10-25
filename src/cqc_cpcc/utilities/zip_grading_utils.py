@@ -308,6 +308,12 @@ MAX_TOTAL_UNCOMPRESSED_BYTES = _limit_from_env("CQC_ZIP_MAX_TOTAL_MB", 256 if _O
 MAX_ZIP_BYTES = 250 * 1024 * 1024
 # Entries in one ZIP (files and folders); a real class export is a few hundred.
 MAX_ENTRY_COUNT = 10_000
+# ``ZipFile`` parses the central directory until its declared byte size runs out, not
+# until the entry count is reached, so the declared size is capped too. Each entry takes
+# 46 bytes plus its name, extra field and comment; 512 bytes per allowed entry leaves
+# room for 10,000 entries with long names (about 4.9 MiB) while a directory of 100,000
+# minimal entries (over 5 MiB) is refused before it is parsed.
+MAX_CENTRAL_DIRECTORY_BYTES = MAX_ENTRY_COUNT * 512
 # Members above RATIO_MIN_BYTES that compress better than this are treated as a bomb.
 # Source code and text compress about 5:1 to 20:1; 100:1 is far outside that.
 MAX_COMPRESSION_RATIO = 100
@@ -371,32 +377,50 @@ def _copy_member_capped(src, dst, limit: Optional[int] = None,
 
 
 def _check_zip_stream(fp) -> None:
-    """Refuse an oversized ZIP, or one claiming too many entries, from its open file.
+    """Refuse an oversized ZIP, or one with too many entries, from its open file.
 
-    Reads only the file size and the end-of-central-directory record (and its zip64
-    record), never the central directory itself. ``zipfile.ZipFile`` parses the whole
-    central directory when it opens, so millions of tiny entries could use gigabytes of
-    memory before ``MAX_ENTRY_COUNT`` is checked.
+    Reads only the file size and the end-of-central-directory (EOCD) records, never the
+    central directory itself, mirroring where ``zipfile`` looks (CPython 3.12 and 3.13
+    ``_EndRecData`` / ``_EndRecData64``): the last 64 KiB for the EOCD signature, then a
+    zip64 locator in the 20 bytes before it and a 56-byte zip64 record in the 56 bytes
+    before that. 3.13 also reads the record at the locator's own offset when it carries
+    the signature, so that record is read too. The largest entry count and directory size
+    any of them declares is the one checked, because ``ZipFile`` parses the directory
+    until its declared size runs out, whatever the count field says.
     """
-    size = os.fstat(fp.fileno()).st_size
+    position = fp.tell()
+    fp.seek(0, 2)
+    size = fp.tell()
     if size > MAX_ZIP_BYTES:
+        fp.seek(position)
         raise _bomb_error(f"This ZIP file is larger than {_mib(MAX_ZIP_BYTES)}")
-    tail_len = min(size, 65535 + 22 + 20)
+    tail_len = min(size, 65536 + 22 + 20 + 56)
     fp.seek(size - tail_len)
     tail = fp.read(tail_len)
     eocd = tail.rfind(b'PK\x05\x06')
     if eocd < 0 or len(tail) - eocd < 22:
+        fp.seek(position)
         return  # not a ZIP: ZipFile will say so
-    total_entries = struct.unpack_from('<H', tail, eocd + 10)[0]
-    if total_entries == 0xFFFF and eocd >= 20 and tail[eocd - 20:eocd - 16] == b'PK\x06\x07':
-        zip64_offset = struct.unpack_from('<Q', tail, eocd - 20 + 8)[0]
-        if 0 <= zip64_offset <= size - 56:
-            fp.seek(zip64_offset)
-            record = fp.read(56)
-            if len(record) == 56 and record[:4] == b'PK\x06\x06':
-                total_entries = struct.unpack_from('<Q', record, 32)[0]
-    if total_entries > MAX_ENTRY_COUNT:
+    entries = struct.unpack_from('<H', tail, eocd + 10)[0]
+    cd_size = struct.unpack_from('<I', tail, eocd + 12)[0]
+    records = []
+    if eocd >= 20 and tail[eocd - 20:eocd - 16] == b'PK\x06\x07':
+        if eocd >= 76:
+            records.append(tail[eocd - 76:eocd - 20])  # the record just before the locator
+        locator_offset = struct.unpack_from('<Q', tail, eocd - 20 + 8)[0]
+        if 0 <= locator_offset <= size - 56:  # 3.13 also tries the locator's own offset
+            fp.seek(locator_offset)
+            records.append(fp.read(56))
+    for record in records:
+        if len(record) == 56 and record[:4] == b'PK\x06\x06':
+            entries = max(entries, *struct.unpack_from('<QQ', record, 24))
+            cd_size = max(cd_size, struct.unpack_from('<Q', record, 40)[0])
+    fp.seek(position)
+    if entries > MAX_ENTRY_COUNT:
         raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
+    if cd_size > MAX_CENTRAL_DIRECTORY_BYTES:
+        raise _bomb_error(
+            f"This ZIP's file list is larger than {_mib(MAX_CENTRAL_DIRECTORY_BYTES)}")
 
 
 class _CheckedZipFile(zipfile.ZipFile):
@@ -404,7 +428,16 @@ class _CheckedZipFile(zipfile.ZipFile):
 
     The check runs on the file object ``ZipFile`` already opened (one open, no second
     path-based access), just before ``_RealGetContents`` reads the central directory.
+    It fails closed: if a ``ZipFile`` change ever stops calling the override, opening
+    for reading raises ``RuntimeError`` rather than skipping the check.
     """
+
+    def __init__(self, *args, **kwargs):
+        self._stream_checked = False
+        super().__init__(*args, **kwargs)
+        if self.mode in ('r', 'a') and not self._stream_checked:
+            self.fp.close()
+            raise RuntimeError("ZIP size and entry-count check did not run")
 
     def _RealGetContents(self):
         try:
@@ -412,6 +445,7 @@ class _CheckedZipFile(zipfile.ZipFile):
         except BaseException:
             self.fp.close()
             raise
+        self._stream_checked = True
         super()._RealGetContents()
 
 

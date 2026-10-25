@@ -242,3 +242,78 @@ class TestRebuildPathIsBounded:
         with pytest.raises(ValueError, match="more than 10,000 entries"):
             utils._rebuild_zip_from_kept(str(path), {"x"})
 
+
+
+def _zip64_record(entries, cd_size=0):
+    import struct
+    return struct.pack("<4sQHHIIQQQQ", b"PK\x06\x06", 44, 45, 45, 0, 0, entries, entries, cd_size, 0)
+
+
+def _locator(offset):
+    import struct
+    return struct.pack("<4sIQI", b"PK\x06\x07", 0, offset, 1)
+
+
+def _eocd_with_size(entries, cd_size):
+    import struct
+    return b"PK\x05\x06" + struct.pack("<HHHHLLH", 0, 0, entries, entries, cd_size, 0, 0)
+
+
+@pytest.mark.unit
+class TestDirectoryDeclaredSizeAndZip64:
+    def _no_parse(self, monkeypatch):
+        def boom(*a, **k):
+            raise AssertionError("the central directory must not be parsed")
+        monkeypatch.setattr(zipfile.ZipFile, "_RealGetContents", boom)
+
+    def test_small_count_but_huge_directory_is_rejected(self, tmp_path, monkeypatch):
+        import struct
+        entry = struct.pack("<4s6H3L5H2L", b"PK\x01\x02", 20, 20, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0) + b"a/b/c000.java"
+        directory = entry * 100_000
+        path = tmp_path / "bigdir.zip"
+        path.write_bytes(directory + _eocd_with_size(1, len(directory)))
+        self._no_parse(monkeypatch)
+        with pytest.raises(ValueError, match="file list is larger than"):
+            extract_student_submissions_from_zip(str(path), ['.java'])
+
+    def test_zip64_locator_with_small_eocd_count_but_huge_record(self, tmp_path, monkeypatch):
+        path = tmp_path / "z64a.zip"
+        path.write_bytes(_zip64_record(11000) + _locator(0) + _eocd_with_size(1, 0))
+        self._no_parse(monkeypatch)
+        with pytest.raises(ValueError, match="more than 10,000 entries"):
+            extract_student_submissions_from_zip(str(path), ['.java'])
+
+    def test_decoy_record_at_locator_offset_does_not_hide_the_adjacent_one(self, tmp_path, monkeypatch):
+        decoy = _zip64_record(1)
+        real = _zip64_record(11000)
+        path = tmp_path / "decoy.zip"
+        path.write_bytes(decoy + real + _locator(0) + _eocd_with_size(1, 0))
+        self._no_parse(monkeypatch)
+        with pytest.raises(ValueError, match="more than 10,000 entries"):
+            extract_student_submissions_from_zip(str(path), ['.java'])
+
+    def test_large_record_at_locator_offset_with_small_adjacent_one(self, tmp_path, monkeypatch):
+        # CPython 3.13 prefers the record at the locator's offset.
+        big = _zip64_record(11000)
+        small = _zip64_record(1)
+        path = tmp_path / "decoy2.zip"
+        path.write_bytes(big + small + _locator(0) + _eocd_with_size(1, 0))
+        self._no_parse(monkeypatch)
+        with pytest.raises(ValueError, match="more than 10,000 entries"):
+            extract_student_submissions_from_zip(str(path), ['.java'])
+
+    def test_override_bypass_fails_closed(self, tmp_path, monkeypatch):
+        path = _write_zip(tmp_path / "ok.zip", {"Student A/Main.java": JAVA})
+        monkeypatch.setattr(z._CheckedZipFile, "_RealGetContents", zipfile.ZipFile._RealGetContents)
+        with pytest.raises(RuntimeError, match="did not run"):
+            z._CheckedZipFile(path, "r")
+
+    def test_check_works_on_a_stream_and_restores_the_position(self, tmp_path):
+        path = _write_zip(tmp_path / "ok.zip", {"Student A/Main.java": JAVA})
+        with open(path, "rb") as fh:
+            stream = io.BytesIO(fh.read())
+        stream.seek(5)
+        z._check_zip_stream(stream)
+        assert stream.tell() == 5
+        with pytest.raises(ValueError, match="more than 10,000 entries"):
+            z._check_zip_stream(io.BytesIO(_eocd(11000)))
