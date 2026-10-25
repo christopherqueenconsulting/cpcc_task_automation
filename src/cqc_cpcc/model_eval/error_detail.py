@@ -82,8 +82,14 @@ def _drop_long_quotes(text: str) -> str:
 
 
 def _secret_env_values():
-    for name, value in os.environ.items():
-        if value and len(value) >= 12 and _SECRET_ENV_NAME.search(name):
+    # Snapshot the names and read each with .get(): os.environ.items() re-reads EVERY key, so any variable removed
+    # by another thread or a test mid-iteration (A/B run 40159103912: CQC_MODEL_REGISTRY_PATH) raised KeyError, even
+    # though only KEY/TOKEN/SECRET-named values matter here.
+    for name in list(os.environ):
+        if not _SECRET_ENV_NAME.search(name):
+            continue
+        value = os.environ.get(name)
+        if value and len(value) >= 12:
             yield value
 
 
@@ -132,6 +138,7 @@ def scrub_log(text, limit: Optional[int] = None) -> str:
     the cut body). Names cannot be recognised in free text, so callers keep this for logs of our own code.
     """
     lines = []
+    secrets = list(_secret_env_values())
     for line in str(text or "").splitlines():
         m = _BODY.search(line)
         if m:
@@ -139,7 +146,7 @@ def scrub_log(text, limit: Optional[int] = None) -> str:
         for pattern, marker in ((_URL, "[url]"), (_EMAIL, "[email]"), (_DOMAIN, "[domain]"),
                                 (_MENTION, "[mention]"), (_REF, "[ref]")):
             line = pattern.sub(marker, line)
-        for value in _secret_env_values():
+        for value in secrets:
             line = line.replace(value, "[redacted]")
         for pattern in _SECRETS:
             line = pattern.sub("[redacted]", line)
