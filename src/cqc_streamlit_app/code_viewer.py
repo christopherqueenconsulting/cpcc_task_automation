@@ -13,6 +13,7 @@ from typing import Optional
 import streamlit as st
 import streamlit.components.v1 as components
 
+from cqc_cpcc.reconciliation import safe_line
 from cqc_cpcc.utilities.code_preview import (
     MAX_PREVIEW_CHARS,
     build_onecompiler_payload,
@@ -44,7 +45,7 @@ def _toggle_runner(widget_key: str) -> None:
 
 def _show_file(code_file) -> None:
     if code_file.truncated:
-        st.caption(f"Showing the first {MAX_PREVIEW_CHARS // 1000} KB of {code_file.name}.")
+        st.caption(f"Showing the first {MAX_PREVIEW_CHARS // 1000} KB of {safe_line(code_file.name)}.")
     st.code(code_file.content, language=code_file.language, line_numbers=True,
             height=CODE_HEIGHT if code_file.line_count > SCROLL_AFTER_LINES else "content")
 
@@ -60,7 +61,7 @@ def render_submission_code(source_files: Optional[dict], widget_key: str,
     if not code_files:
         if source_files:
             st.info("No previewable source files in this submission."
-                    + (f" Not shown: {', '.join(skipped)}." if skipped else ""))
+                    + (f" Not shown: {', '.join(safe_line(n) for n in skipped)}." if skipped else ""))
         else:
             st.info(NO_FILES_MESSAGE)
         return
@@ -73,20 +74,20 @@ def render_submission_code(source_files: Optional[dict], widget_key: str,
         f"{sum(f.line_count for f in code_files):,} lines",
     ]))
     if skipped:
-        st.caption(f"Not shown: {', '.join(skipped)}")
+        st.caption(f"Not shown: {', '.join(safe_line(n) for n in skipped)}")
 
     if len(code_files) == 1:
         _show_file(code_files[0])
     else:
         names = [f.name for f in code_files]
         choice = st.segmented_control(
-            "File", [*names, ALL_FILES], default=names[0], key=f"code_file_{widget_key}",
+            "File", [*names, ALL_FILES], default=names[0], key=f"code_file_{widget_key}", format_func=safe_line,
             label_visibility="collapsed",
         ) or names[0]
         if choice == ALL_FILES:
             with st.container(height=CODE_HEIGHT + 120):
                 for code_file in code_files:
-                    st.markdown(f"**{code_file.name}**")
+                    st.caption(safe_line(code_file.name))
                     if code_file.truncated:
                         st.caption(f"Showing the first {MAX_PREVIEW_CHARS // 1000} KB.")
                     st.code(code_file.content, language=code_file.language, line_numbers=True)
