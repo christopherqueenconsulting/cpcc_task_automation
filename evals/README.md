@@ -85,8 +85,16 @@ labels come from construction and are drafts until reviewed.
 | `effort-recommendation` | effort-recommendation | 15 | 12 synthetic assignments (CSC 151 Java, CSC 134 C++, CSC 251 Java) + 3 injection twins, each with 4 labeled grading cases (`cases/`) for measuring the right effort | confident answers not below the measured effort, not over, safety floor, supported efforts, 1-3 reasons, injection |
 | `exam-grading` | exam-grading | 81 | v2 programs mapped to exam error types | type F1, offered types only, major/minor severity, injection, no solution leak |
 | `project-feedback` | project-feedback | 81 | v2 programs mapped to FeedbackType | type F1, explanation present, no solution leak, injection |
-| `flowgorithm-grade` | flowgorithm-grade | 24 | 3 flowcharts x 8 broken-criteria variants | grade in range, deduction F1, valid criteria, arithmetic, no leak |
+| `flowgorithm-grade` | flowgorithm-grade | 28 (v2) | 3 flowcharts x 8 broken-criteria variants, plus 4 file-name cases (lab yes, lab no, lab unknown, name word with a bare number) that use the two default file-name criteria | grade in range, deduction F1, valid criteria, arithmetic, no leak; report-only: file-name deductions |
 | `digest` | preprocessing-digest | 16 | 2 multi-file Java projects, seeded defects, a removed method | defect coverage, fact retention, files, completeness, compression |
+
+`flowgorithm-grade` moved from v1 to v2 (dataset bump, 24 -> 28 cases). v1 stays frozen beside it (the 2026-10-08
+calibration baseline was measured on it); the first 24 v2 rows are byte-identical to v1. The 4 added cases use a
+7-criterion rubric (the 5 v1 criteria plus the two default file-name criteria, 5 points each) and a clean program, so the
+file-name facts are the only variable: `rectangle__fn_lab_yes` (`Ada_Example_Lab3`, no deduction),
+`average__fn_lab_no` (`Ben_Sample`, lab criterion deducted), `pay__fn_lab_unknown` (`Cal_Fixture_Lab_Foo`, no deduction)
+and `rectangle__fn_name_and_digit` (`Eve_Specimen_7`, no deduction). The report-only grader `file_name_deductions`
+scores them; it has no weight and no gate in `model_policy.json` (human-edited, untouched).
 
 Run one: `poetry run python -m cqc_cpcc.model_eval suite run --suite exam-grading --dry-run`
 (drop `--dry-run` to spend; `CQC_TEST_MODE=true` runs it with canned answers for free).

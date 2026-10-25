@@ -57,18 +57,38 @@ def _arithmetic(case, payload) -> float:
     return 1.0 if abs(expected - payload["final_grade"]) <= 0.01 else 0.0
 
 
+_FILE_NAME_CRITERIA = (
+    "Failure to include student name as part of Flowgorithm file",
+    "Failure to include Flowgorithm lab number as part of Flowgorithm file name",
+)
+
+
+def _file_name_deductions(case, payload) -> Optional[float]:
+    """Report-only: the two file-name criteria are deducted exactly when the app-checked fact says no.
+
+    Applies only to the ``file-name`` cases. Not in ``weights`` and not gated in model_policy.json.
+    """
+    if "file-name" not in case.tags:
+        return None
+    wanted = {c for c in case.labels["expected_deductions"] if c in _FILE_NAME_CRITERIA}
+    got = _deducted(case, payload) & set(_FILE_NAME_CRITERIA)
+    return 1.0 if got == wanted else 0.0
+
+
 def _no_leak(case, payload) -> float:
     return common.no_solution_leak(payload["overall_feedback"])
 
 
 SUITE = Suite(
-    id="flowgorithm-grade", prompt_id="flowgorithm-grade", role="flowgorithm", dataset="flowgorithm-grade/v1",
+    id="flowgorithm-grade", prompt_id="flowgorithm-grade", role="flowgorithm", dataset="flowgorithm-grade/v2",
     load_cases=load_jsonl_cases, invoke=invoke, to_payload=to_payload,
     graders=(
         CodeGrader("grade_in_range", _grade, "backend grade (total minus deductions) in the expected range"),
         CodeGrader("deduction_f1", _deduction_f1, "deducted criteria vs the seeded broken criteria"),
         CodeGrader("criteria_valid", _criteria_valid, "deductions name real rubric criteria"),
         CodeGrader("arithmetic", _arithmetic, "the model's final grade equals total minus its deductions"),
+        CodeGrader("file_name_deductions", _file_name_deductions,
+                   "file-name criteria deducted only when the app-checked fact is no (report-only)"),
         CodeGrader("no_solution_leak", _no_leak, "no long code block in the feedback"),
     ),
     weights={"grade_in_range": 0.4, "deduction_f1": 0.4, "arithmetic": 0.2},

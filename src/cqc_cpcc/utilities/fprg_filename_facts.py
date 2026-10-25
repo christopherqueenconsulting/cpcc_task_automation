@@ -6,12 +6,20 @@ from the file name. The file name itself is a student identifier and is never se
 model, so the app checks those two things here and sends only the answers.
 
 * **lab number**: ``yes`` when the stem has a lab/assignment-style token with one to three
-  digits (``Lab3``, ``lab_03``, ``Lab 3.1``, ``L3``, ``Ch4``, ``HW2``, ``project_2``) or any
-  standalone run of one to three ASCII digits; ``no`` otherwise (a run of four or more digits
-  is an id or a year, not a lab number; dates and ``v2``/``(2)`` markers are ignored). The
+  digits (``Lab3``, ``lab_03``, ``Lab 3.1``, ``L3``, ``Ch4``, ``HW2``, ``project_2``), a
+  keyword of three or more letters followed by a spelled-out number one to twenty-nine
+  (``Lab_Three``, ``LabTwentyOne``) or a roman numeral I to XX (``LabII``, ``Lab-IV``,
+  ``lab-ix``), or any standalone run of one to three ASCII digits. A roman numeral counts only
+  right after such a keyword: a bare ``I`` or ``V`` word does nothing. ``unknown`` when no
+  number is recognised but a keyword is present (``Lab_Foo``, ``Smith_Lab``, ``Lab1234567``) or
+  a spelled-out number stands alone (``Mix_ed_Three``): the file may carry a lab number the rule
+  cannot read, so nothing is deducted. ``no`` only when there is no keyword and no number-like
+  token at all (``Sum``, ``Ada Example``); a run of four or more digits is an id or a year, not
+  a lab number (``12345678`` reads ``no``). Dates and ``v2``/``(2)`` markers are ignored. The
   keyword search runs on the original stem first, so a date after the token cannot swallow
   its digits (``Smith_Lab3_10-05-2024`` is Lab 3). The label is a ``Lab 3``-style token built
-  from a fixed keyword and the digits; the bare-digit fallback sends no digits at all.
+  from a fixed keyword and an integer value (also for spelled-out and roman matches, never the
+  matched text); the bare-digit fallback sends no digits at all.
 * **name-like word**: ``yes`` when, after dropping lab/assignment tokens, digits, separators,
   dates and a stopword list, at least one alphabetic token of two or more letters is left
   (camelCase, underscores, hyphens, spaces and dots all split tokens). ``unknown`` when only
@@ -24,8 +32,10 @@ model, so the app checks those two things here and sends only the answers.
   extension is anything but ``.fprg`` (or none, or numeric such as ``Lab 3.1``), or anything
   unexpected goes wrong. The prompt tells the model never to deduct on ``unknown``.
 
-Known limits, deliberately not handled: spelled-out or roman numbers (``Lab_Three``,
-``LabII``) read as lab ``no``. An id-only name (``12345678``) reads lab ``no`` and name
+Known limits, deliberately not handled: spelled-out numbers above twenty-nine, roman numerals
+above XX, other languages and a number written before its keyword (``Three_Lab``) read
+``unknown`` or ``no`` as above, never a false ``yes``. A keyword glued to a word that starts
+with a roman letter (``Labi``) can read ``yes``, which only lowers a deduction. An id-only name (``12345678``) reads lab ``no`` and name
 ``no``, so both criteria are deducted; that assumes the app sees the student's original
 file name, which is unverified (BrightSpace may rename files on download).
 """
@@ -53,6 +63,22 @@ _KEYWORD_RE = re.compile(
     r"(?:(?<![A-Za-z])|(?-i:(?<=[a-z])(?=[A-Z])))(" + "|".join(sorted(_KEYWORDS, key=len, reverse=True))
     + r")[\s_\-.#]*([0-9]{1,3})(?![0-9])",
     re.IGNORECASE | re.ASCII)
+_NUM_WORDS = {w: i for i, w in enumerate(
+    "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen twenty".split(), 1)}
+_UNITS = {w: i for i, w in enumerate("one two three four five six seven eight nine".split(), 1)}
+_ROMAN = {r: i for i, r in enumerate(
+    "i ii iii iv v vi vii viii ix x xi xii xiii xiv xv xvi xvii xviii xix xx".split(), 1)}
+# Keywords that may take a spelled-out or roman number. One- and two-letter keywords and "mod"
+# are left out: "Ai", "Exi" or "Modi" must not read as a number.
+_WORD_KEYWORDS = sorted((k for k in _KEYWORDS if len(k) >= 3 and k != "mod"), key=len, reverse=True)
+_WORD_NUMBER_RE = re.compile(
+    r"(?:(?<![A-Za-z])|(?-i:(?<=[a-z])(?=[A-Z])))(" + "|".join(_WORD_KEYWORDS) + r")[\s_\-.#]*"
+    r"(?:(twenty[\s_\-.]*(" + "|".join(_UNITS) + r"))|(" + "|".join(sorted(_NUM_WORDS, key=len, reverse=True))
+    + r")|(" + "|".join(sorted(_ROMAN, key=len, reverse=True)) + r"))(?![A-Za-z])",
+    re.IGNORECASE | re.ASCII)
+_KEYWORD_WORD_RE = re.compile(r"(?<![A-Za-z])(?:" + "|".join(_WORD_KEYWORDS) + r")(?![A-Za-z])",
+                              re.IGNORECASE | re.ASCII)
 _DIGIT_RUN_RE = re.compile(r"(?<![0-9])[0-9]{1,3}(?![0-9])", re.ASCII)
 _DATE_RES = (
     re.compile(r"(?<![0-9])[0-9]{4}[-_./][0-9]{1,2}[-_./][0-9]{1,2}(?![0-9])", re.ASCII),
@@ -103,6 +129,16 @@ def _strip_dates(stem: str) -> str:
     return stem
 
 
+def _split_camel(text: str) -> str:
+    for rx in _CAMEL_RES:
+        text = rx.sub(" ", text)
+    return text
+
+
+def _has_number_word(stem: str) -> bool:
+    return any(w in _NUM_WORDS or w in _UNITS for w in re.findall(r"[a-z]+", _split_camel(stem).lower()))
+
+
 def _lab(stem: str) -> tuple[str, Optional[str]]:
     m = _KEYWORD_RE.search(stem)  # original stem first: a date must not swallow the digits
     if m:
@@ -110,15 +146,28 @@ def _lab(stem: str) -> tuple[str, Optional[str]]:
         if word:
             return YES, f"{word} {int(m.group(2))}"
         return YES, None
+    m = _WORD_NUMBER_RE.search(stem)
+    if m:
+        word = _KEYWORDS[m.group(1).lower()]
+        if m.group(2):
+            value = 20 + _UNITS[m.group(3).lower()]
+        elif m.group(4):
+            value = _NUM_WORDS[m.group(4).lower()]
+        else:
+            value = _ROMAN[m.group(5).lower()]
+        return YES, f"{word} {value}"  # fixed keyword + integer: the matched text is never echoed
     if _DIGIT_RUN_RE.search(_strip_dates(stem)):
         return YES, None  # no digits are echoed: they may be cut from an id
+    # A keyword with no readable number, or a stray number word: the file may carry a lab number
+    # this rule cannot read, so nothing is deducted.
+    if _KEYWORD_WORD_RE.search(_split_camel(stem)) or _has_number_word(stem):
+        return UNKNOWN, None
     return NO, None
 
 
 def _name_like(stem: str) -> str:
-    clean = _strip_dates(_KEYWORD_RE.sub(" ", stem))
-    for rx in _CAMEL_RES:
-        clean = rx.sub(" ", clean)
+    clean = _strip_dates(_WORD_NUMBER_RE.sub(" ", _KEYWORD_RE.sub(" ", stem)))
+    clean = _split_camel(clean)
     leftover = False
     for word in _LETTERS_RE.findall(clean):
         if len(word) >= 2 and word.lower() not in _STOPWORDS:
