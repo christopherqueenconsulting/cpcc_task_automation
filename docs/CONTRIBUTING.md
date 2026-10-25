@@ -75,12 +75,41 @@ git remote add upstream https://github.com/christopherqueenconsulting/cpcc_task_
 ### 2. Install Dependencies
 
 ```bash
-# Install all dependencies including dev, test, and lint groups
-poetry install --with dev,test,lint
+# Install all dependencies including the test and lint groups
+poetry install --with test,lint
 
 # Verify installation
 poetry run python --version  # Should show Python 3.12+
 ```
+
+### Dependencies
+
+- Supported Python: `>=3.12,<4.0` in `pyproject.toml`. Python 3.14 is allowed by the constraint, but
+  `langchain-core` still imports `pydantic.v1`, which warns on 3.14. PR-2 (planned, number to follow) replaces
+  those usages; PR-3 (planned, number to follow) adds a 3.14 CI step. CI runs 3.12 only today.
+- Pydantic is v2 only (`pydantic = ">=2.12"`). `tests/unit/test_pydantic_v2_only.py` fails on v1-style APIs in
+  first-party code; `tests/unit/test_py314_pydantic_smoke.py` is an expected failure (xfail, not strict) until PR-2.
+- Optional `dev` group: `watchdog`, Streamlit's file watcher. Streamlit requires it only off macOS, so on a Mac use
+  `poetry install --with dev,test` for fast hot reload (without it Streamlit polls and reloads slower).
+- Poetry versions: `poetry.lock` is written by Poetry 2.5.1 (see its first line). Every workflow that uses
+  Poetry pins `POETRY_VERSION: "1.7.1"` and installs from that lock. That mismatch predates this change. Re-lock with the
+  version named in the lock header so the format does not change: `pipx install poetry==2.5.1` then `poetry lock`.
+- Existing virtualenv: a plain `poetry install` never uninstalls packages. After pulling a change that removes
+  dependencies (this one removed 103 packages), or after reverting it, run `poetry install --with test --sync`
+  (on macOS `poetry install --with dev,test --sync`). Otherwise removed packages stay importable locally.
+  `--sync` removes every group and extra not named on the command line, so list every one you use (for example
+  `--with test,lint,e2e`, `-E telemetry`, and `dev` on macOS).
+- Declare what first-party code imports. To find unused or undeclared dependencies, run `deptry` from the repo
+  root, in the project environment (it reads module names from the installed packages). This adds deptry to the
+  venv; the next `poetry install --sync` (with your usual groups) removes it again:
+
+  ```bash
+  poetry run pip install deptry==0.25.1
+  poetry run deptry . --known-first-party cqc_cpcc --known-first-party cqc_streamlit_app
+  ```
+
+  The `[tool.deptry]` section in `pyproject.toml` ignores the optional `nest_asyncio` import. Check any other
+  finding by hand before removing a package (tools and pytest plugins can be used without an import).
 
 ### 3. Configure Environment
 
