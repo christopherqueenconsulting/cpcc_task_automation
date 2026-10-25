@@ -536,47 +536,67 @@ artifact rows held no status or gateway body, so the cause could not be read.
 
 #### The account's spending limit stops the whole run (eval runner only)
 
-Why: in the A/B run 40142161841 for PR #464 OpenRouter answered every call with
-`HTTP 403 "Budget limit exceeded (monthly limit). Contact your org admin. $50.01 of $50.00 used; resets
-2026-11-01T00:00:00.000Z."`. The runner logged `Attempt 1/3: PermissionDeniedError 403 ... (not retrying)` per call
-and went on through the whole dataset: every call failed and scored 0, the local `Budget` was charged a worst-case
-estimate per failed call, and the report showed a scorecard of zeros and a base check of "not-run" with no word
-about the cause.
+Why: the Prompt A/B run 40142161841 (a `workflow_dispatch` on master at `cbe62b7` with `pr_number=464` as its
+input, not a run at the head of PR #464) got HTTP 403 `Budget limit exceeded (monthly limit). Contact your org
+admin. $50.01 of $50.00 used; resets 2026-11-01T00:00:00.000Z.` from OpenRouter on every call. The runner logged
+`Attempt 1/3: PermissionDeniedError 403 ... (not retrying)` per call and went on through the whole dataset: every
+call failed and scored 0, the local `Budget` was charged a worst-case estimate for each failed call, and the report
+showed a scorecard of zeros and a base check of "not-run" with no word about the cause.
 
 - **What counts (`account_limit.py`, error kind `account_limit`):** HTTP 402 (payment required, insufficient
   credits), or HTTP 403 whose **gateway `error.message`** (the body's `error.message`, never the exception text,
-  which can echo the request) says `Budget limit exceeded`, or `limit exceeded` with a budget, monthly, daily, key,
-  credit or spend word, or insufficient credits. A plain 403 (permission, moderation, zero-data-retention routing),
-  a 401, a 429 and the in-flight-budget throttle (`openrouter_in_flight_budget`, which clears by itself) are not
-  account limits and behave as before. Only the message text decides the 403 case, so a new wording from the
-  gateway may need adding to `account_limit.py` (until then the old per-call behaviour applies).
+  which can echo the request) says `Budget limit exceeded`; or `limit exceeded` together with one of the words
+  budget, monthly, daily, weekly, annual, total, key, credit(s), spend(ing), usage, quota or account; or
+  insufficient credits / funds / balance, out of credits, credit limit, payment required. A plain 403 (permission,
+  moderation, zero-data-retention routing), a 401, a 429 and the in-flight-budget throttle
+  (`openrouter_in_flight_budget`, which clears by itself) are not account limits and behave as before. Only the
+  message wording decides the 403 case, so a new gateway wording may need adding to `account_limit.py` (until then
+  the old per-call behaviour applies).
 - **What happens:** the first call that ends with this error, in any suite, on either side, judges included, sets a
   run-wide flag (one per run, a context variable like the cache session). Calls still queued or in flight are
-  cancelled, warm-first followers are released, no new call starts, and the A/B stops the base run and starts no
-  later suite. The error is never retried (neither the transport retry nor the truncated retry sees it). The failed
-  call did not run, so the local `Budget` is charged nothing for it (an earlier retried attempt that may have been
-  billed stays charged). Records of calls that finished are kept in `raw_outputs.jsonl`.
+  cancelled and awaited (none outlives the run; the flag is reset when the run's scope ends), warm-first followers
+  are released, no new call starts, and the A/B stops the base run and starts no later suite. The error is never
+  retried (neither the transport retry nor the truncated retry sees it). The failed call did not run, so the local
+  `Budget` is charged nothing for it (an earlier retried attempt that may have been billed stays charged). Records
+  of calls that finished are kept in `raw_outputs.jsonl`.
 - **Nothing is scored:** a suite hit by it gets status `aborted_account_limit` (an `abort` block with the HTTP
-  status, the redacted gateway message, the calls completed and the dollars spent), no aggregate, no health,
-  no A/B decision. The A/B decision for it reads "no A/B (run aborted: account limit)". A suite that finished before the
-  abort keeps its real result. A base run on older code does not know the kind; its saved rows
-  (`error_detail` with status 402/403 and the limit message) are recognised all the same.
-- **What you see:** `ab.md`, `base-rule.md` and the suite `scorecard.md` start with
-  `RUN ABORTED: the account/key spending limit was reached (HTTP 403/402). No verdict. <gateway message>. Raise or
-  reset the limit and dispatch again.` plus how many calls completed and what was spent. `ab.json` has
-  `status: aborted_account_limit` and a top-level `abort` block. `prompt-ab` and `suite run` exit with status 3
-  and print that line last, so the workflow step fails with the cause in the log tail. The base-branch check
-  reports `aborted_account_limit` and never a pass; the commit status is `failure`.
-- **Who fixes it:** the OpenRouter account owner. Raise or reset the limit (the organisation's workspace
-  guardrail / monthly budget, or the cap on the API key `OPENROUTER_PROMPT_EVAL_API_KEY`: the gateway message says
-  which), then dispatch the A/B again. Nothing in the repository needs to change.
+  status, the fixed reason code `account_limit`, the calls completed and the dollars spent), no aggregate, no
+  health, no A/B decision. The A/B decision for it reads "no A/B (run aborted: account limit)". A suite that
+  finished before the abort keeps its real result. A base run on older code does not know the kind; its saved
+  rows (`error_detail` with status 402/403 and the limit message) are recognised all the same.
+- **What you see:** `ab.md`, `base-rule.md` and the suite `scorecard.md` start with a FIXED line, chosen from the
+  status alone: `RUN ABORTED: the account/key spending limit was reached (HTTP 402 or 403). No verdict. Raise or
+  reset the limit and dispatch again.` plus how many calls completed and what was spent. The gateway's own message
+  (it can carry dollar amounts, organisation or account names, URLs and key labels) is **never** put in a report,
+  a scorecard or a comment; its redacted text is only in the local log (`eval.log`, `ab.log`, `run.log`) on a
+  line marked `[eval log only]`. `ab.json` has `status: aborted_account_limit` and a top-level `abort` block.
+  `prompt-ab`, `suite run` and `run` exit with status 3 and print the fixed line last, so the workflow step fails
+  with the cause in the log tail. The base-branch check reports `aborted_account_limit`, never a pass, and the
+  commit status is `failure`.
+- **Who fixes it:** the maintainer (the OpenRouter workspace and key owner). Raise or reset the limit (the
+  organisation's workspace guardrail / monthly budget, or the cap on the API key `OPENROUTER_PROMPT_EVAL_API_KEY`
+  or `OPENROUTER_EVAL_API_KEY`), then dispatch the A/B again. Nothing in the repository needs to change.
+- **A per-request 402 is also caught:** A per-request 402 (needs more credits or fewer max_tokens) also stops the
+  run; the banner (fixed text) does not quote the gateway message; read eval.log's redacted line to tell the two
+  apart; if it names max_tokens, lower the limit or set CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0 for that dispatch.
+- **Where the alert lands today:** the failed job (the step exits 3). The model-eval issue labelled
+  `blocked-on-chris` says only "evaluation job ended with failure". In the PR-triggered workflow a non-zero `ab`
+  job shows in the `report` comment as "A/B job failure" without the banner (the banner is in the job log tail and
+  in the `ab.md` artifact); a maintainer dispatch posts the artifact's `ab.md`, banner first. On a push to master
+  whose suites hit the limit, the `suite run` step fails, so "Record history and status" and the artifact upload
+  are skipped and `PROMPT_STATUS.md` stays stale until the next push. Workflow changes that would improve this
+  are listed as follow-ups in the pull request (`.github` is not changed here).
 - **Model evaluation:** the same code runs under `python -m cqc_cpcc.model_eval run` (status
-  `aborted_account_limit`, exit 3, no decisions, no winner). `cmd_promote`, `recompute` and `verify-promotion`
-  refuse any scorecard whose status is not `complete`, and the cross-suite gate fails for an aborted suite and
-  starts no later one, so no promotion can come from an aborted run.
-- **Rollback:** revert the PR. `CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0` turns the abort off (the error is still
-  classified `account_limit` and not charged; calls then fail one by one as before). A value other than
-  0/1/on/off/true/false/yes/no is an error.
+  `aborted_account_limit`, exit 3, no decisions, no winner; the scorecard keeps one empty entry per model so the
+  history row the workflow writes says `aborted_account_limit`). `discover.load_history` ignores those rows and the
+  `attempted` rows of the same run id (all `attempted` rows without a run id if an aborted row has none), so the
+  candidates are tried again once the limit is raised. `cmd_promote`, `recompute` and `verify-promotion` refuse
+  any scorecard whose status is not `complete`, and the cross-suite gate fails for an aborted suite and starts no
+  later one, so no promotion can come from an aborted run.
+- **Switch and rollback:** revert the PR. `CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0` turns the abort off (the error is
+  still classified `account_limit` and not charged; calls then fail one by one as before). It is read from the
+  local `.env` or shell only; no workflow sets it and it is not a `workflow_dispatch` input. A value other than
+  0/1/on/off/true/false/yes/no is an error before any call.
 
 #### A truncated call is retried once (eval runner only)
 

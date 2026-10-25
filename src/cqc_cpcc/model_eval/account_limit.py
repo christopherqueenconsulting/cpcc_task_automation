@@ -32,11 +32,14 @@ import re
 from typing import Optional
 
 from cqc_cpcc.model_eval import error_detail
+from cqc_cpcc.utilities.logger import logger
 
 #: ``error_kind`` of a record whose call ended on an account-level limit.
 KIND = "account_limit"
 #: Status of a suite / run / A/B that was stopped by it. Never a verdict, never promotable.
 STATUS = "aborted_account_limit"
+#: The only cause stored in a scorecard or report: a fixed code, never the gateway's free text.
+REASON = "account_limit"
 ENV_ABORT = "CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT"
 #: ``cmd_*`` exit code of a command whose run was aborted.
 EXIT_CODE = 3
@@ -121,8 +124,8 @@ class AbortState:
     def __init__(self) -> None:
         self.tripped = False
         self.status: Optional[int] = None
+        #: The redacted gateway message. LOCAL LOG ONLY: it is never put in a report, a scorecard or a comment.
         self.message: Optional[str] = None
-        self.code: Optional[str] = None
         self._tasks: set = set()
 
     def track(self, task: "asyncio.Future") -> None:
@@ -143,11 +146,8 @@ class AbortState:
             self.tripped = True
             self.status = error_detail.http_status(error)
             self.message = error_detail.redact_message(error_detail.failure_message(error))
-            for e in error_detail._chain(error):
-                body = getattr(e, "body", None)
-                body = body.get("error", body) if isinstance(body, dict) else None
-                if isinstance(body, dict) and self.code is None:
-                    self.code = error_detail._short(body.get("code"))
+            logger.warning(f"[eval log only] account limit reached (HTTP {self.status}); the gateway's own message, "
+                           f"redacted, kept out of every report: {self.message}")
         try:
             me = asyncio.current_task()
         except RuntimeError:
@@ -161,12 +161,12 @@ class AbortState:
         """Record an abort seen elsewhere (a base-branch subprocess's saved rows): later suites then do not start."""
         if not self.tripped:
             self.tripped = True
-            self.status, self.message, self.code = info.get("status"), info.get("message"), info.get("code")
+            self.status = info.get("status")
 
     def info(self) -> Optional[dict]:
         if not self.tripped:
             return None
-        return {"status": self.status, "message": self.message, "code": self.code}
+        return {"status": self.status, "reason": REASON}
 
 
 _state: contextvars.ContextVar[Optional[AbortState]] = contextvars.ContextVar("eval_abort_state", default=None)
@@ -220,7 +220,7 @@ def tripped() -> bool:
 # --- Reading an aborted run back from saved rows -------------------------------------------------
 
 def from_records(records) -> Optional[dict]:
-    """``{"status", "message", "code"}`` of the first account-limit failure in ``records``, else None.
+    """``{"status", "reason"}`` of the first account-limit failure in ``records``, else None.
 
     Reads ``error_kind`` and, for rows written before the kind existed (or by a base branch that does not
     have it), the saved ``error_detail`` entries.
@@ -230,7 +230,7 @@ def from_records(records) -> Optional[dict]:
         hit = next((d for d in details if is_account_limit_detail(d)), None)
         if hit is not None or getattr(r, "error_kind", None) == KIND:
             hit = hit or (details[-1] if details else {})
-            return {"status": hit.get("status"), "message": hit.get("message"), "code": hit.get("code")}
+            return {"status": hit.get("status"), "reason": REASON}
     return None
 
 
@@ -260,16 +260,17 @@ def from_raw(path) -> Optional[dict]:
     return from_records(rows)
 
 
-def banner(info: Optional[dict], completed: Optional[int] = None, spent_usd: Optional[float] = None) -> str:
-    """The line that starts a report of an aborted run (markdown-safe)."""
-    from cqc_cpcc.model_eval.scorecard import _safe
+#: The line that starts every report of an aborted run. Fixed text: the gateway's own message can carry dollar
+#: amounts, account or organisation names, URLs and key labels, so it is never quoted in a public report.
+BANNER = ("RUN ABORTED: the account/key spending limit was reached (HTTP 402 or 403). No verdict. "
+          "Raise or reset the limit and dispatch again.")
 
-    message = _safe(((info or {}).get("message") or "no message from the gateway").strip().rstrip("."))
-    text = ("RUN ABORTED: the account/key spending limit was reached (HTTP 403/402). No verdict. "
-            f"{message}. Raise or reset the limit and dispatch again.")
+
+def banner(info: Optional[dict] = None, completed: Optional[int] = None, spent_usd: Optional[float] = None) -> str:
+    """:data:`BANNER` plus the counts (calls completed, dollars spent). ``info`` is accepted for callers but unused."""
     extra = []
     if completed is not None:
-        extra.append(f"{completed} call(s) had completed before the abort")
+        extra.append(f"{int(completed)} call(s) had completed before the abort")
     if spent_usd is not None:
-        extra.append(f"${spent_usd:.4f} was spent")
-    return text + (f" ({'; '.join(extra)}.)" if extra else "")
+        extra.append(f"${float(spent_usd):.4f} was spent")
+    return BANNER + (f" ({'; '.join(extra)}.)" if extra else "")

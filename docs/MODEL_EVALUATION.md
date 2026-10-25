@@ -139,7 +139,7 @@ caching in evals".
 | Current model fails a hard gate (drift) | same issue; nothing is promoted |
 | Current model expiring or silently changed by OpenRouter | same issue; a replacement needs your merge |
 | Weekly discovery did not happen (GitHub disabled the schedule) | the heartbeat opens an issue after 10 days |
-| The account's or key's spending limit is reached (HTTP 403 "Budget limit exceeded" or HTTP 402) | the run stops at the first such call: status `aborted_account_limit`, no scores, no decisions, no winner, exit status 3, and a `RUN ABORTED: ...` line first in the scorecard; nothing is promoted. The account owner raises or resets the limit (workspace guardrail or key cap), then the run is dispatched again |
+| The account's or key's spending limit is reached (HTTP 403 "Budget limit exceeded" or HTTP 402) | the run stops at the first such call: status `aborted_account_limit`, no scores, no decisions, no winner, exit status 3, and a fixed `RUN ABORTED: ...` line first in the scorecard (the gateway message is not quoted); nothing is promoted and discovery retries the candidates later. The failed job is the alert; the issue says only that the evaluation job failed. The maintainer (the OpenRouter workspace and key owner) raises or resets the limit, then the run is dispatched again |
 | The winner gets worse on another prompt of its roles | cross-suite gate fails; nothing is promoted; issue opened |
 | Model changed on master | issue "Model change on master: git pull + restart" (+ ClickUp task if configured) |
 | Auto-merge refused | comment on the PR explaining why, label switched to `blocked-on-chris` |
@@ -151,9 +151,12 @@ If the OpenRouter account or key has no budget left, every call fails the same w
 limit (a plain 403 is not one). The first such call stops the run: calls in flight are cancelled, nothing new is
 sent, the failed call is not charged to the local budget, and the scorecard has status `aborted_account_limit`
 with no scores. Only a `complete` scorecard can promote (`promote`, `verify-promotion` and `recompute` check it),
-so an aborted run can never change the registry. Details, the report wording and the rollback switch
-(`CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0`) are in [`PROMPTS.md`](PROMPTS.md) under "The account's spending limit stops
-the whole run".
+so an aborted run can never change the registry, and `discover.load_history` does not count the candidates of an
+aborted run as evaluated. A per-request 402 (needs more credits or fewer max_tokens) also stops the run; the banner
+(fixed text) does not quote the gateway message; read eval.log's redacted line to tell the two apart; if it names
+max_tokens, lower the limit or set CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0 for that dispatch (set in the local `.env` or
+shell only; no workflow sets it). Details, the report wording and the rollback are in [`PROMPTS.md`](PROMPTS.md)
+under "The account's spending limit stops the whole run".
 
 ## Effort recommendation: measuring the right effort
 

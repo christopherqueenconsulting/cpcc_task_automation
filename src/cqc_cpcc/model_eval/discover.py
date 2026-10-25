@@ -188,16 +188,29 @@ def load_history(path: Path, today: Optional[dt.date] = None) -> set:
 
     A row with ``status: attempted`` (the run received the model but did not score it)
     counts for ``ATTEMPT_BACKOFF_DAYS`` only, so a failed candidate is retried later.
+
+    A run stopped by the account's spending limit (``aborted_account_limit``, see ``account_limit.py``) evaluated
+    nothing: its own rows never count, and neither do the ``attempted`` rows written beside them (the workflow
+    writes one per candidate after a failed evaluation). Those are matched by ``run_id``; an aborted row with
+    no run id cannot be matched, so then every ``attempted`` row without a run id is ignored as well. A genuine
+    row from another run still counts as before, so once the limit is raised the next discovery retries.
     """
     if not path.exists():
         return set()
     today = today or dt.date.today()
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    aborted = [r for r in rows if r.get("status") == "aborted_account_limit"]
+    aborted_runs = {str(r.get("run_id")) for r in aborted if r.get("run_id") is not None}
+    unmatched_abort = any(r.get("run_id") is None for r in aborted)
     slugs = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
+    for row in rows:
+        status = row.get("status")
+        if status == "aborted_account_limit":
             continue
-        row = json.loads(line)
-        if row.get("status") == "attempted":
+        if status == "attempted":
+            run_id = row.get("run_id")
+            if (str(run_id) in aborted_runs) if run_id is not None else unmatched_abort:
+                continue
             try:
                 when = dt.date.fromisoformat(str(row.get("date")))
             except ValueError:

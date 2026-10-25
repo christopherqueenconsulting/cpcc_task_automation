@@ -450,7 +450,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                     records.append(record)
         if abort is not None and abort.tripped:
             logger.warning(f"[prompt-eval:{suite.id}] {model}: stopped by the account limit after "
-                           f"{len(records)} record(s): {abort.message}")
+                           f"{len(records)} record(s) (gateway message, local log only: {abort.message})")
     if limiter is not None:
         snap = limiter.snapshot()
         logger.info(f"[prompt-eval:{suite.id}] concurrency: {adaptive.describe(snap)}")

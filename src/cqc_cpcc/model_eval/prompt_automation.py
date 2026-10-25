@@ -835,7 +835,7 @@ def _abort_summary(results: dict) -> Optional[dict]:
     aborted = [r for r in results.values() if r.get("status") == account_limit.STATUS]
     if not aborted:
         return None
-    first = next((r["abort"] for r in aborted if (r.get("abort") or {}).get("message")), aborted[0].get("abort") or {})
+    first = next((r["abort"] for r in aborted if (r.get("abort") or {}).get("status")), aborted[0].get("abort") or {})
     return {**first, "completed_calls": sum((r.get("abort") or {}).get("completed_calls", 0) for r in aborted),
             "spent_usd": round(sum((r.get("abort") or {}).get("spent_usd", 0.0) for r in aborted), 6)}
 

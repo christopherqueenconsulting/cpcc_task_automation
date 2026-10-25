@@ -171,7 +171,7 @@ class TestClassification:
         state.trip(error)
         assert state.message and secret not in state.message and "echoed prompt" not in state.message
         assert state.message.startswith("Budget limit exceeded (monthly limit)")
-        assert state.status == 403 and state.code == "403"
+        assert state.status == 403 and state.info() == {"status": 403, "reason": "account_limit"}
 
     def test_the_switch_turns_the_abort_off_but_not_the_classification(self, monkeypatch):
         monkeypatch.setenv(account_limit.ENV_ABORT, "0")
@@ -377,10 +377,10 @@ class TestSuiteRun:
         sc, _ = virtual(lambda: prompt_eval.run("toy", [], repeats=1, out=str(tmp_path), concurrency=1))
         assert sc["status"] == account_limit.STATUS == "aborted_account_limit"
         assert sc["models"] == {}  # nothing of an aborted run is scored
-        assert sc["abort"]["status"] == 403 and sc["abort"]["message"].startswith("Budget limit exceeded")
+        assert sc["abort"]["status"] == 403 and sc["abort"]["reason"] == "account_limit" and "message" not in sc["abort"]
         assert sc["abort"]["completed_calls"] == 2 and sc["abort"]["recorded_calls"] == 3
         md = (tmp_path / "toy" / "scorecard.md").read_text()
-        assert md.startswith("RUN ABORTED: the account/key spending limit was reached (HTTP 403/402). No verdict. ")
+        assert md.startswith("RUN ABORTED: the account/key spending limit was reached (HTTP 402 or 403). No verdict. ")
         assert "Raise or reset the limit and dispatch again." in md and "2 call(s) had completed" in md
         assert capsys.readouterr().out.count("RUN ABORTED") >= 1
         rows = [base.SuiteRecord.from_json(line) for line in (tmp_path / "toy" / "raw_outputs.jsonl").read_text().splitlines()]
@@ -409,7 +409,7 @@ class TestSuiteRun:
         record = base.SuiteRecord.from_json(json.dumps(row))
         assert record.error_kind == "transport"
         info = account_limit.from_records([record])
-        assert info and info["status"] == 403 and info["message"] == MESSAGE  # recognised from the saved detail
+        assert info and info == {"status": 403, "reason": "account_limit"}  # recognised from the saved detail
         raw = tmp_path / "raw.jsonl"
         raw.write_text(json.dumps(row) + "\nnot json\n")
         assert account_limit.from_raw(raw)["status"] == 403
@@ -449,8 +449,8 @@ class TestAbReport:
                              "toy": aborted}}
         md = pa.ab_markdown(report)
         first = md.splitlines()[0]
-        assert first.startswith("RUN ABORTED: the account/key spending limit was reached (HTTP 403/402). No verdict. ")
-        assert "Budget limit exceeded (monthly limit). Contact your org admin. $50.01 of $50.00 used; " in first
+        assert first.startswith("RUN ABORTED: the account/key spending limit was reached (HTTP 402 or 403). No verdict. ")
+        assert "Budget limit" not in md and "$50.01" not in md  # the gateway message is never quoted
         assert "Raise or reset the limit and dispatch again." in first
         assert "1 call(s) had completed" in first and "$0.2500 was spent" in first
         assert "no A/B (run aborted: account limit)" in md

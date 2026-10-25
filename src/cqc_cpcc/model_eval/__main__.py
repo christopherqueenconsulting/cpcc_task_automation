@@ -256,6 +256,10 @@ async def _run_scoped(args) -> int:
         },
         aggregates, decisions, winner,
     )
+    if aborted:
+        # No scores. One empty entry per model the run received, so the history row the workflow writes for it
+        # carries status 'aborted_account_limit' (discover.load_history then does not count the model as evaluated).
+        sc["models"] = {label_of(run): {"composite": None, "cost_per_submission": None} for run in runs}
     json_path, md_path = scorecard.write(out_dir, sc)
     print(md_path.read_text(encoding="utf-8"))
     print(f"Scorecard: {json_path}")
