@@ -878,6 +878,7 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   | Variable | Default | Meaning |
   |---|---|---|
   | `CQC_EVAL_BATCH` | `0` (off) | `1`/`true`/`on`/`yes` turn batch mode on; `0` turns it off. |
+  | `CQC_EVAL_BATCH_FORCE` | `0` | `1`/`true`/`on`/`yes` allow batching on a run that is not scheduled (a manual one-off). Without it batching needs `GITHUB_EVENT_NAME=schedule`. The retention opt-in below still applies. |
   | `CQC_EVAL_BATCH_ALLOW_RETENTION` | unset | Must be `1` as well. The second opt-in: 30-day retention, synthetic data only. `CQC_EVAL_BATCH=1` without it **aborts the run before any paid call**. |
   | `CQC_EVAL_BATCH_MIN` | `8` | A group with fewer requests runs sync. |
   | `CQC_EVAL_BATCH_DEADLINE_S` | `2700` | Longest wait for one batch; 1 to 3000 (the gateway client caps one call at 3600 s). |
@@ -888,6 +889,13 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   The three paid steps of `prompt-eval.yml` (A/B base vs head prompts, Run the changed suites on master, Run) and the
   two of `model-eval.yml` (Run evaluation, Run the winner on the other prompt suites of its roles) set the first two to
   `1`; local runs and everything else stay sync. A test pins exactly those five steps.
+- **Scheduled runs only** (owner ruling, 2026-10-25: a batch can take up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 2700 s), plus the time of any sync fallback, which is too long for runs an
+  active agent or session waits on to move code forward). Even with `CQC_EVAL_BATCH=1`, `batch.settings()` returns sync
+  unless `GITHUB_EVENT_NAME` is `schedule` (the weekly Model Evaluation) or `CQC_EVAL_BATCH_FORCE=1`. Pull-request, push,
+  `workflow_dispatch`, merge-queue and local runs are therefore sync, with the workflow env lines unchanged. The decision
+  is logged once per process as `[eval-batch: off: event=<name or unset>]`, `[eval-batch: on: event=schedule]` or
+  `[eval-batch: on: forced]` (log only; it is not a Run stats event, so report shapes are unchanged). For a manual
+  one-off batched run set `CQC_EVAL_BATCH=1 CQC_EVAL_BATCH_ALLOW_RETENTION=1 CQC_EVAL_BATCH_FORCE=1` in the environment.
 - **Datasets.** Cases are stamped by the loaders (`Suite.cases()` and `dataset.load_cases`) on the exact directory they
   read, which must be under `evals/datasets` and pass the `scripts/pii_guard.py` checks (re-run when a file changes). A
   group refuses cases that were not stamped and any request not tied to a stamped case. A request capture (the $0
