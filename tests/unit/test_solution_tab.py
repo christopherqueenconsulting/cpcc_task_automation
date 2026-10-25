@@ -351,11 +351,103 @@ def test_the_tab_without_a_plan_or_solution_says_there_is_nothing(runner_off):
     assert solution_view.NO_SOLUTION in _texts(at, "info")
 
 
-def test_the_tab_without_a_plan_shows_the_reference_solution_as_code_only(runner_on):
+def test_the_tab_without_a_plan_shows_a_lone_pasted_solution_as_code_with_the_shared_run_controls(runner_on):
     at = _tab_app([("Student Alpha", _result())], reference="print('hi')").run()
     assert not at.exception, at.exception
     assert solution_view.NO_PLAN_CAPTION in _texts(at, "caption")
-    assert [c.value for c in at.code] == ["print('hi')"] and not at.button
+    assert [c.value for c in at.code] == ["print('hi')"] and not at.text_area
+
+
+# --------------------------------------------------------------------------- #
+# Solution tab without a plan: the prompt bundle is shown as files, not as fenced text
+# --------------------------------------------------------------------------- #
+from cqc_cpcc.utilities.code_preview import build_runner_html, split_solution_bundle  # noqa: E402
+from cqc_cpcc.utilities.utils import wrap_code_in_markdown_backticks  # noqa: E402
+
+CPP = "#include <iostream>\nint main() {\n  std::cout << 1;\n}\n"
+
+
+def _bundle(*files):
+    """What ``_read_solution`` builds at Setup: header, then fence, files joined by a blank line."""
+    parts = []
+    for name, lang, code in files:
+        text = f"// File: {name}\n{code}"
+        parts.append(wrap_code_in_markdown_backticks(text, lang) if lang else text)
+    return "\n\n".join(parts)
+
+
+def _rendered(at) -> str:
+    return " ".join([str(c.value) for c in at.code] + [str(e.value) for e in at.markdown]
+                    + [str(e.value) for e in at.caption] + [str(e.value) for e in at.text_area])
+
+
+def test_split_bundle_round_trips_fenced_files_and_literal_fences_inside_a_file():
+    tricky = 'std::string s = R"(\n```\nnot a fence\n```\n)";\nint main() {}'
+    files = split_solution_bundle(_bundle(("main.cpp", "cpp", tricky), ("util.h", "cpp", "int f();"),
+                                          ("notes.txt", None, "plain\ntext")))
+    assert files == {"main.cpp": tricky, "util.h": "int f();", "notes.txt": "plain\ntext"}
+
+
+def test_split_bundle_edge_cases():
+    assert split_solution_bundle(None) == {} and split_solution_bundle("  \n") == {}
+    assert split_solution_bundle("```cpp\nint x;\n```") == {"Solution.cpp": "int x;"}
+    assert split_solution_bundle("print(1)") == {"Solution.txt": "print(1)"}
+    assert split_solution_bundle("```java\n// File: A.java\nclass A {}") == {"A.java": "class A {}"}  # no closing fence
+    dup = split_solution_bundle(_bundle(("a.cpp", "cpp", "1"), ("a.cpp", "cpp", "2")))
+    assert list(dup.values()) == ["1", "2"] and len(dup) == 2
+    assert list(split_solution_bundle(_bundle(("../../etc/x.py", "python", "pass")))) == ["x.py"]
+
+
+def test_the_tab_without_a_plan_shows_real_code_blocks_per_file_and_no_fences(runner_on):
+    ref = _bundle(("main.cpp", "cpp", CPP), ("util.h", "cpp", "int f();"))
+    at = _tab_app([("Student Alpha", _result())], reference=ref).run()
+    assert not at.exception, at.exception
+    assert not at.text_area
+    assert "```" not in _rendered(at) and "// File:" not in " ".join(c.value for c in at.code)
+    assert [c.language for c in at.code] == ["cpp"] and at.code[0].value == CPP.strip()
+    assert "main.cpp" in [o for sc in at.get("segmented_control") for o in sc.options]
+
+
+def test_the_tab_without_a_plan_picks_java_and_python_highlighting_by_extension(runner_on):
+    java = _tab_app([("S", _result())], reference=_bundle(("A.java", "java", SOLUTION))).run()
+    py = _tab_app([("S", _result())], reference=_bundle(("a.py", "python", "print(1)"))).run()
+    assert [c.language for c in java.code] == ["java"] and [c.language for c in py.code] == ["python"]
+
+
+def test_the_fallback_uses_the_shared_run_component_and_the_solution_notice(runner_on):
+    ref = _bundle(("main.cpp", "cpp", CPP))
+    at = _tab_app([("S", _result())], reference=ref).run()
+    assert [b.label for b in at.button] == ["Run in OneCompiler"]
+    assert "Open in OnlineGDB" in [e.proto.label for e in at.get("link_button")]
+    assert solution_view.SOLUTION_NOTICE in _texts(at, "caption")
+    assert not at.get("iframe")  # nothing is loaded or sent until Run is clicked
+    at.button[0].click().run()
+    assert not at.exception, at.exception
+    assert "Close runner" in [b.label for b in at.button]
+
+
+def test_the_runner_html_for_a_solution_is_not_clipped():
+    from cqc_cpcc.utilities.code_preview import build_onecompiler_payload, collect_code_files
+    big = "int main() {\n" + "".join(f"  puts(\"line {i}\");\n" for i in range(800)) + "}\n"
+    files, _ = collect_code_files({"main.cpp": big})
+    html = build_runner_html(build_onecompiler_payload(files, "cpp"), height=540)
+    assert "line 799" in html and "onecompiler.com/embed/cpp" in html and 'height="540"' in html
+
+
+def test_a_large_solution_is_shown_whole_and_never_cut(runner_on):
+    """Regression: the plan-less tab used execution_view._code (MAX_SHOWN_CHARS=4000, 'cut' marker)."""
+    big = "int main() {\n" + "".join(f"  puts(\"row {i} \");\n" for i in range(3000)) + "  return 7777;\n}\n"
+    assert len(big) > 60_000
+    at = _tab_app([("S", _result())], reference=_bundle(("main.cpp", "cpp", big))).run()
+    assert not at.exception, at.exception
+    shown = "".join(c.value for c in at.code)
+    assert "return 7777;" in shown and "(cut)" not in shown and len(shown) >= len(big.strip())
+
+
+def test_an_empty_solution_file_is_not_a_crash(runner_on):
+    at = _tab_app([("S", _result())], reference=_bundle(("main.cpp", "cpp", "   "))).run()
+    assert not at.exception, at.exception
+    assert not at.text_area
 
 
 def test_the_tab_with_a_plan_shows_the_solution_the_notice_and_the_options(runner_on):

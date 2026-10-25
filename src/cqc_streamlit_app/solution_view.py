@@ -20,6 +20,7 @@ from cqc_cpcc.execution_workspace import (
     cohort_warnings,
 )
 from cqc_cpcc.reconciliation import safe_line
+from cqc_cpcc.utilities.code_preview import split_solution_bundle
 from cqc_cpcc.utilities import program_runner as pr
 from cqc_streamlit_app import execution_view, results_store
 from cqc_streamlit_app.code_viewer import render_submission_code
@@ -230,4 +231,7 @@ def render_solution_tab(run_key: str, all_results: list) -> None:
         st.info(NO_SOLUTION, icon=":material/info:")
         return
     st.caption(NO_PLAN_CAPTION)
-    st.code(execution_view._code(reference), language="text", wrap_lines=True)
+    # The same Code view and run buttons as the Student result card, fed the files rebuilt from
+    # the prompt text (fences and file headers removed). Never cut: this is the whole solution.
+    render_submission_code(split_solution_bundle(reference), widget_key=f"solution_{run_key[:16]}",
+                           notice=SOLUTION_NOTICE)
