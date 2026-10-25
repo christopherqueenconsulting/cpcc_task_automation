@@ -71,6 +71,28 @@ def _safe(text: str) -> str:
     return text.replace("](", "]" + zwsp + "(")
 
 
+def _batch_lines(info) -> list:
+    """Batch API mode (additive, report only): the cost split and any fall-back. Empty unless batch mode was on."""
+    if not info:
+        return []
+    recs = info.get("records") or {}
+    lines = ["", "### Batch API mode (report only)", ""]
+    if not info.get("batches"):
+        why = "; ".join(info.get("reasons") or []) or "no request was eligible"
+        return lines + [f"- **Batch requested but every call ran sync** ({_safe(why)})"]
+    if recs:
+        lines.append(f"- {recs['batch_calls']} of {recs['calls']} calls batched ({recs['batch_share']:.0%}); batch cost "
+                     f"${recs['batch_cost_usd']:.4f} vs sync cost ${recs['sync_cost_usd']:.4f}; "
+                     f"{recs['allocated_rows']} batch row(s) carry an allocated share of the batch total")
+    lines.append(f"- {info['batches']} batch(es), {info['batch_items_delivered']}/{info['batch_items']} delivered, "
+                 f"{info['item_errors']} per-item error(s), {info['fallback_items']} sent sync instead "
+                 f"({info['deadline_fallbacks']} at the deadline; possible double charge at most "
+                 f"${info['double_charge_bound_usd']:.4f})")
+    if info.get("batch_fallback_reason"):
+        lines.append(f"- **Batch fell back for the rest of the run:** {_safe(info['batch_fallback_reason'])}")
+    return lines
+
+
 def to_markdown(sc: dict) -> str:
     if sc.get("status") == "aborted_account_limit":
         from cqc_cpcc.model_eval import account_limit
@@ -106,6 +128,7 @@ def to_markdown(sc: dict) -> str:
                 f"| `{_safe(model)}` | {_fmt(m.get('validity_accuracy'))} | "
                 f"{_fmt(m.get('ordering_violations'))} of {_fmt(m.get('ordering_pairs'))} pairs | "
                 f"{_fmt(m.get('requirement_agreement'))} |")
+    lines += _batch_lines(sc.get("batch"))
     lines += ["", "### Decisions", ""]
     for model, d in sc["decisions"].items():
         verdict = f"eligible via **{d['path']}** path" if d["eligible"] else "not eligible"

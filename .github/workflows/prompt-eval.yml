@@ -369,6 +369,8 @@ jobs:
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_PROMPT_EVAL_API_KEY }}
+          CQC_EVAL_BATCH: "1"  # OpenRouter Batch API (synthetic eval data only); the code default is off
+          CQC_EVAL_BATCH_ALLOW_RETENTION: "1"  # 30-day provider retention accepted for eval runs (owner, 2026-10)
           SUITES: ${{ needs.detect.outputs.run }}
           BASE_BRANCH: ${{ github.base_ref }}
         run: |
@@ -779,6 +781,8 @@ jobs:
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          CQC_EVAL_BATCH: "1"  # OpenRouter Batch API (synthetic eval data only); the code default is off
+          CQC_EVAL_BATCH_ALLOW_RETENTION: "1"  # 30-day provider retention accepted for eval runs (owner, 2026-10)
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_SUITES: ${{ needs.detect.outputs.run }}
@@ -1016,6 +1020,8 @@ jobs:
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ inputs.mode == 'ab' && secrets.OPENROUTER_PROMPT_EVAL_API_KEY || secrets.OPENROUTER_EVAL_API_KEY }}
+          CQC_EVAL_BATCH: "1"  # OpenRouter Batch API (synthetic eval data only); the code default is off
+          CQC_EVAL_BATCH_ALLOW_RETENTION: "1"  # 30-day provider retention accepted for eval runs (owner, 2026-10)
           MODE: ${{ inputs.mode }}
           SUITES: ${{ inputs.suites }}
           MODELS: ${{ inputs.models }}
