@@ -100,6 +100,10 @@ CASES = Path(__file__).resolve().parents[2] / "evals" / "datasets" / "flowgorith
     ("Smith_Lab_IV", YES, "Lab 4", YES),
     ("Ada_Example", NO, None, YES),
     ("Ada_X", NO, None, YES),
+    ("Smith_Three", UNKNOWN, None, YES),
+    ("Smith_V", NO, None, YES),
+    ("Lab_III", YES, "Lab 3", NO),
+    ("lab-iii", YES, "Lab 3", NO),
     ("Ada_I_Smith", NO, None, YES),
     ("Ada_V", NO, None, YES),
     ("I", NO, None, UNKNOWN),
@@ -168,6 +172,7 @@ def test_the_rubric_caption_constant_and_page_render():
 
     assert "unknown is never deducted" in FLOWGORITHM_FILE_NAME_CAPTION
     assert "lab word with no number" in FLOWGORITHM_FILE_NAME_CAPTION and "roman numeral" in FLOWGORITHM_FILE_NAME_CAPTION
+    assert "bare" not in FLOWGORITHM_FILE_NAME_CAPTION and "Smith_Three" in FLOWGORITHM_FILE_NAME_CAPTION
     assert "not sent to the model" in FLOWGORITHM_FILE_NAME_CAPTION
 
     def page():
