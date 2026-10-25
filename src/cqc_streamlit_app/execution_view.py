@@ -276,8 +276,9 @@ def _status_of(case: TestCase, dropped: dict) -> str:
 
 
 CASE_COLUMNS = ["Use", "Label", "Kind", "Source", "Input", "May differ", "Varies on", "Status", "Expected", "id"]
-MAY_DIFFER_WHOLE = ("May differ: only numbers, dates and times may vary; wording, labels and layout are still "
-                    "compared.")
+MAY_DIFFER_WHOLE = ("May differ: numbers, dates, times, weekdays and number words are ignored in this case; "
+                    "wording, labels and layout are still compared. If the case prints varying words (a greeting, a "
+                    "card name, rock, paper or scissors), enter the label of that line in Varies on.")
 
 
 def cases_frame(cases: Sequence[TestCase], dropped: Optional[dict] = None):

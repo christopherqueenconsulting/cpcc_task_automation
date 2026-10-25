@@ -130,6 +130,8 @@ class CaseComparison:
     #: out of the larger count of non-blank lines. Zero unless markers were used.
     excluded_lines: int = 0
     total_lines: int = 0
+    #: The case's markers were too broad to trust (they would remove most of the output): ignored.
+    markers_rejected: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -161,18 +163,31 @@ def clean_markers(markers) -> list:
 
 _DATE_RE = re.compile(r"\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\b")
 _CLOCK_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,6})?(?:\s?[ap]\.?m\b\.?)?", re.IGNORECASE)
-_MONTH_DAY_RE = re.compile(
-    r"\b(?:january|february|march|april|june|july|august|september|october|november|december|"
-    r"jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\.?\s{1,3}\d{1,2}\b(?:st|nd|rd|th)?(?:,?\s{1,3}\d{4})?",
+_MONTHS = ("january|february|march|april|may|june|july|august|september|october|november|december|"
+           "jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec")
+_MONTH_DAY_RE = re.compile(rf"\b(?:{_MONTHS})\.?\s{{1,3}}\d{{1,2}}\b(?:st|nd|rd|th)?(?:,?\s{{1,3}}\d{{4}})?",
+                           re.IGNORECASE)
+_WEEKDAY_RE = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|"
+    r"\b(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b\.?(?=,?\s{1,3}(?:#|\d|" + _MONTHS + r"))",
     re.IGNORECASE)
-_ANY_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# A month name on its own ("May" only next to a number or a weekday, which are already masked to #).
+_MONTH_RE = re.compile(r"\b(?:january|february|march|april|june|july|august|september|october|november|december)\b|"
+                       r"(?<=#)\W{1,3}may\b|\bmay\b(?=\W{1,3}#)", re.IGNORECASE)
+_NUMBER_WORD_RE = re.compile(
+    r"\b(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](?:one|two|three|four|five|six|seven|"
+    r"eight|nine))?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+    r"sixteen|seventeen|eighteen|nineteen|hundred|thousand)\b", re.IGNORECASE)
+# The sign goes with the number unless it is glued to a word ("a-3").
+_ANY_NUMBER_RE = re.compile(r"(?:(?<!\w)[-+])?\d[\d,]*(?:\.\d+)?")
 
 
 def mask_varying(text: str) -> str:
-    """Dates, times and numbers replaced by ``#``: what is left is the wording, labels and layout."""
-    for regex in (_DATE_RE, _CLOCK_RE, _MONTH_DAY_RE, _ANY_NUMBER_RE):
+    """Dates, times, weekdays, month names, numbers and number words replaced by ``#``: what is left is
+    the wording, labels and layout."""
+    for regex in (_DATE_RE, _CLOCK_RE, _MONTH_DAY_RE, _WEEKDAY_RE, _ANY_NUMBER_RE, _NUMBER_WORD_RE):
         text = regex.sub("#", text)
-    return text
+    return _MONTH_RE.sub("#", text)
 
 
 def _nonblank(text: str) -> int:
@@ -388,7 +403,7 @@ def compare_output(
         excerpt = "" if verdict in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER) else _diff_excerpt(e_trim, a_trim)
         if verdict is Verdict.MATCH and varied and not detail:
             detail = VARYING
-        return CaseComparison(verdict, detail, similarity, excerpt, excluded, total)
+        return CaseComparison(verdict, detail, similarity, excerpt, excluded, total, broad)
 
     # Rung 2.
     if run is not None and run.timed_out:
@@ -405,7 +420,8 @@ def compare_output(
                 return result(Verdict.MATCH)
             return result(Verdict.VALUES_MAY_DIFFER, TOO_BROAD if broad else "")
         return CaseComparison(inner.verdict, inner.detail, inner.similarity,
-                              _diff_excerpt(e_trim, a_trim) if inner.verdict is not Verdict.MATCH else "")
+                              _diff_excerpt(e_trim, a_trim) if inner.verdict is not Verdict.MATCH else "",
+                              markers_rejected=broad)
 
     # Rungs 3-7.
     rung = _format_rungs(e_trim, a_trim)

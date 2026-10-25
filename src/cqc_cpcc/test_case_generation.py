@@ -631,8 +631,13 @@ def validate_cases_on_solution(
         if reason == "nondeterministic" and (case.values_may_differ or variance_suggested):
             # The solution really prints something different each run. Keep the case only when the
             # difference is confined to what the flag allows (the marker lines, or numbers and dates).
-            if _variance_confined(run, solution, sandbox_files, case, got, owner):
+            confined = _variance_confined(run, solution, sandbox_files, case, got, owner)
+            if confined == "ok":
                 reason, proven = None, True
+            elif confined == "words":
+                result.warnings.append(
+                    f'{case.label or case.id}: the solution prints different words on its runs. Enter the label '
+                    "of the varying line in Varies on (for example Greeting:) to keep this case.")
         if reason:
             result.dropped.append(DroppedCase(case.id, reason, case.label))
             continue
@@ -668,23 +673,37 @@ def validate_cases_on_solution(
     return result
 
 
-def _variance_confined(run, solution, sandbox_files, case, first, owner) -> bool:
-    """Run the solution once more on this case: the two outputs may differ only where the flag allows."""
-    from cqc_cpcc.utilities import program_runner as pr
-    from cqc_cpcc.utilities.output_compare import Verdict, compare_output
+def _variance_confined(run, solution, sandbox_files, case, first, owner) -> str:
+    """Run the solution twice more on this case and compare every pair of the three outputs.
 
-    try:
-        again = run(solution.language, sandbox_files, [pr.SandboxCase(case.id, case.stdin)], mode="run",
-                    main=solution.main, repeat=1, owner=owner)
-    except Exception:  # noqa: BLE001 - cannot confirm, so the case is dropped
-        return False
-    if again.status != "ok" or again.compile is None or not again.compile.ok or not again.cases:
-        return False
-    second = again.cases[0]
-    if second.status != "OK" or second.exit_code not in (0, None) or second.eof_error or second.stdout_truncated:
-        return False
-    cmp = compare_output(first.stdout, second.stdout, values_may_differ=True, varying_markers=case.varying_markers)
-    return cmp.verdict in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER)
+    Returns ``"ok"`` when the outputs differ only where the flag allows (the marker lines, or numbers,
+    dates and times), ``"words"`` when they differ in other words, ``"other"`` when it cannot be confirmed
+    (empty or cut output, a failed run).
+    """
+    from cqc_cpcc.utilities import program_runner as pr
+    from cqc_cpcc.utilities.output_compare import Verdict, compare_output, mask_varying
+
+    if first.stdout_truncated or not first.stdout.strip():
+        return "other"
+    outputs = [first.stdout]
+    for _ in range(2):
+        try:
+            again = run(solution.language, sandbox_files, [pr.SandboxCase(case.id, case.stdin)], mode="run",
+                        main=solution.main, repeat=1, owner=owner)
+        except Exception:  # noqa: BLE001 - cannot confirm, so the case is dropped
+            return "other"
+        if again.status != "ok" or again.compile is None or not again.compile.ok or not again.cases:
+            return "other"
+        got = again.cases[0]
+        if (got.status != "OK" or got.exit_code not in (0, None) or got.eof_error or got.stdout_truncated
+                or not got.stdout.strip()):
+            return "other"
+        outputs.append(got.stdout)
+    for i, j in ((0, 1), (0, 2), (1, 2)):
+        cmp = compare_output(outputs[i], outputs[j], values_may_differ=True, varying_markers=case.varying_markers)
+        if cmp.verdict not in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER):
+            return "words" if mask_varying(outputs[i]) != mask_varying(outputs[j]) else "other"
+    return "ok"
 
 
 _DROP_TEXT = {
@@ -744,22 +763,22 @@ class SolutionRisk:
 
 _RISK_PATTERNS = {
     "randomness": (
-        r"\bnew\s+Random\b|\bMath\.random\b|\bThreadLocalRandom\b|\bSecureRandom\b|\bsrand\s*\(|\brand\s*\(|"
-        r"#\s*include\s*<random>|\bmt19937\b|\brandom_device\b|\bimport\s+random\b|\bfrom\s+random\s+import\b|"
+        r"\bnew\s{1,20}Random\b|\bMath\.random\b|\bThreadLocalRandom\b|\bSecureRandom\b|\bsrand\s{0,20}\(|\brand\s{0,20}\(|"
+        r"#\s{0,20}include\s{0,20}<random>|\bmt19937\b|\brandom_device\b|\bimport\s{1,20}random\b|\bfrom\s{1,20}random\s{1,20}import\b|"
         r"\bsecrets\.|\buuid\.uuid4\b|\bUUID\.randomUUID\b",
         "The solution uses random numbers, so its output may change between runs; the output "
         "check cannot compare it reliably."),
     "time": (
-        r"\bSystem\.(?:currentTimeMillis|nanoTime)\b|\bLocalDate(?:Time)?\.now\b|\bInstant\.now\b|\bnew\s+Date\s*\(|"
-        r"\bCalendar\.getInstance\b|\btime\s*\(\s*(?:NULL|nullptr|0)?\s*\)|#\s*include\s*<(?:ctime|chrono|time\.h)>|"
-        r"\bimport\s+(?:time|datetime)\b|\bfrom\s+(?:time|datetime)\s+import\b|\bclock\s*\(\s*\)",
+        r"\bSystem\.(?:currentTimeMillis|nanoTime)\b|\bLocalDate(?:Time)?\.now\b|\bInstant\.now\b|\bnew\s{1,20}Date\s{0,20}\(|"
+        r"\bCalendar\.getInstance\b|\btime\s{0,20}\(\s{0,20}(?:NULL|nullptr|0)?\)|#\s{0,20}include\s{0,20}<(?:ctime|chrono|time\.h)>|"
+        r"\bimport\s{1,20}(?:time|datetime)\b|\bfrom\s{1,20}(?:time|datetime)\s{1,20}import\b|\bclock\s{0,20}\(\s{0,20}\)",
         "The solution reads the clock or the date, so its output may change between runs."),
     "files": (
-        r"\bnew\s+File\w*\s*\(|\bFiles\.\w+|\bFileReader\b|\bFileWriter\b|\bPrintWriter\s*\(\s*(?:\"|new\s+File)|"
-        r"\bifstream\b|\bofstream\b|\bfstream\b|\bfopen\s*\(|\bopen\s*\(\s*['\"]|\bPath\s*\(|\bpathlib\b",
+        r"\bnew\s{1,20}File\w*\s{0,20}\(|\bFiles\.\w+|\bFileReader\b|\bFileWriter\b|\bPrintWriter\s{0,20}\(\s{0,20}(?:\"|new\s{1,20}File)|"
+        r"\bifstream\b|\bofstream\b|\bfstream\b|\bfopen\s{0,20}\(|\bopen\s{0,20}\(\s{0,20}['\"]|\bPath\s{0,20}\(|\bpathlib\b",
         "The solution reads or writes files, which the sandbox does not provide."),
     "arguments": (
-        r"\bargs\s*\[|\bargs\.length\b|\bargc\b|\bargv\b|\bsys\.argv\b|\bgetopt\b|\bargparse\b",
+        r"\bargs\s{0,20}\[|\bargs\.length\b|\bargc\b|\bargv\b|\bsys\.argv\b|\bgetopt\b|\bargparse\b",
         "The solution uses command-line arguments; the output check only supplies standard input."),
 }
 _RISK_RES = {code: (re.compile(pattern), message) for code, (pattern, message) in _RISK_PATTERNS.items()}

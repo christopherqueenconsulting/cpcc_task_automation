@@ -1101,4 +1101,6 @@ def test_two_different_solution_runs_prove_it_and_mark_the_case(ready, tmp_path,
     _press(at, "Run solution on these inputs", _edit(rows))
     [case] = at.session_state["plan"].cases
     assert case.values_may_differ and case.variance_reason == tcg.REASON_RUNS
-    assert any("only numbers, dates and times may vary" in c.value for c in at.caption)
+    assert any("numbers, dates, times, weekdays and number words are ignored" in c.value for c in at.caption)
+    assert not any("whole case is not compared" in c.value for c in at.caption)
+    assert any("enter the label of that line in Varies on" in c.value for c in at.caption)

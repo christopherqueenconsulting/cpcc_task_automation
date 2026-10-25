@@ -74,6 +74,9 @@ HELD_OUT = [
 ]
 
 
+# Known false negatives of the instruction suggestion (also listed in the PR body). Not flagged means:
+# the case is dropped as nondeterministic when the solution's runs differ (unless a May differ box is ticked
+# or Varies on is filled in), and compared normally when they do not.
 def _actual(text):
     found = tcg.detect_variable_values(text)
     return "flag" if any(f.flags for f in found) else "hint" if found else "none"
@@ -618,3 +621,96 @@ def test_scan_solution_risks_is_linear_on_unterminated_block_comments():
     risks = tcg.scan_solution_risks("/*" * 200000 + "\nx = random.random()")
     assert time.perf_counter() - start < 1.0 and isinstance(risks, list)
     assert [r.code for r in tcg.scan_solution_risks("import random\nx = random.random() # note\n")] == ["randomness"]
+
+
+# --------------------------------------------------------------------------- #
+# Round 2: linear risk scan, three-run confinement, wider masking, words
+# --------------------------------------------------------------------------- #
+def test_the_risk_scan_has_no_unbounded_whitespace_and_is_linear():
+    import re
+    import time
+
+    for code, (pattern, _) in tcg._RISK_PATTERNS.items():
+        assert not re.search(r"\\s[*+]", pattern), code
+    start = time.perf_counter()
+    tcg.scan_solution_risks("time(" + " " * 200000)
+    tcg.scan_solution_risks("PrintWriter(" + " " * 200000)
+    tcg.scan_solution_risks("new File" + "x" * 100000 + " " * 100000)
+    assert time.perf_counter() - start < 1.0
+
+
+def _solution():
+    return SolutionSources("java", (SourceFile("Dice.java", JAVA_DICE),))
+
+
+def _outcome_for(cid, stdout, nondeterministic=False, truncated=False):
+    return pr.CaseOutcome(id=cid, status="OK", reason="", exit_code=0, stdout=stdout, stderr="", stdout_bytes=1,
+                          stderr_bytes=0, stdout_truncated=truncated, stderr_truncated=False, wall_ms=1,
+                          segmented=False, stdin_reads=(), eof_error=False, nondeterministic=nondeterministic)
+
+
+def _scripted(first, later, truncated=False):
+    """repeat=2 call answers ``first`` (nondeterministic); each later call pops one answer from ``later``."""
+    queue = list(later)
+
+    def run(language, files, cases=(), *, mode="run", main=None, repeat=1, owner=None, **kw):
+        if repeat == 2:
+            outs = [_outcome_for(c.id, first, True, truncated) for c in cases]
+        else:
+            outs = [_outcome_for(c.id, queue.pop(0)) for c in cases]
+        return pr.RunOutcome(status="ok", compile=pr.CompileOutcome(ok=True), cases=tuple(outs))
+    return run
+
+
+def test_a_nondeterministic_case_is_dropped_when_run_one_is_cut_or_empty():
+    case = TestCase(id="T1", stdin="1\n", source="llm", values_may_differ=True)
+    for first, truncated in (("Roll: 4\n", True), ("  \n", False)):
+        res = tcg.validate_cases_on_solution(_solution(), [case], runner=_scripted(first, ["Roll: 5\n", "Roll: 6\n"],
+                                                                                 truncated))
+        assert res.cases == [] and [d.reason for d in res.dropped] == ["nondeterministic"]
+
+
+def test_every_pair_of_runs_must_be_confined_not_just_the_first_two():
+    case = TestCase(id="T1", stdin="1\n", source="llm", values_may_differ=True, varying_markers=["Roll:"])
+    good = _scripted("Roll: 4\nTotal: 9\n", ["Roll: 5\nTotal: 9\n", "Roll: 6\nTotal: 9\n"])
+    assert tcg.validate_cases_on_solution(_solution(), [case], runner=good).cases
+    third_differs = _scripted("Roll: 4\nTotal: 9\n", ["Roll: 5\nTotal: 9\n", "Roll: 6\nTotal: 8\n"])
+    res = tcg.validate_cases_on_solution(_solution(), [case], runner=third_differs)
+    assert res.cases == [] and [d.reason for d in res.dropped] == ["nondeterministic"]
+
+
+def test_different_greetings_say_how_to_keep_the_case_and_the_listed_label_then_works():
+    case = TestCase(id="T1", stdin="1\n", source="llm", values_may_differ=True)
+    runner = _scripted("Greeting: Good morning\nTotal: 5\n",
+                       ["Greeting: Good evening\nTotal: 5\n", "Greeting: Good night\nTotal: 5\n"])
+    res = tcg.validate_cases_on_solution(_solution(), [case], runner=runner)
+    assert res.cases == [] and any("Enter the label of the varying line in Varies on" in w for w in res.warnings)
+    listed = case.model_copy(update={"varying_markers": ["Greeting:"]})
+    runner = _scripted("Greeting: Good morning\nTotal: 5\n",
+                       ["Greeting: Good evening\nTotal: 5\n", "Greeting: Good night\nTotal: 5\n"])
+    [kept] = tcg.validate_cases_on_solution(_solution(), [listed], runner=runner).cases
+    assert oc.compare_output(kept.expected_output, "Greeting: Good afternoon\nTotal: 5\n", values_may_differ=True,
+                             varying_markers=["Greeting:"]).verdict is Verdict.MATCH  # a third greeting: no deduction
+
+
+def test_rejected_markers_show_in_the_gate_note_and_dict(sandbox):
+    plan = _plan(flag_ids={"T1", "T2", "T3"}, markers=["Roll:", "Total:"])
+    exe = _run(plan, {f"T{i}": f"Roll: 6\nTotal: {i}\n" for i in (1, 2, 3)})
+    assert all(r.markers_rejected for r in exe.report.cases)
+    out, _ = eg.apply_execution_gate(_result(), exe, [])
+    assert out.execution_report["gate"]["markers_rejected"] == ["T1", "T2", "T3"]
+    assert any("markers were too broad" in n.reason for n in out.reconciliation)
+
+
+def test_masking_covers_weekdays_months_number_words_and_signs():
+    flag = dict(values_may_differ=True)
+    assert oc.compare_output("Today is Monday, October 25, 2026\n", "Today is Tuesday, November 3, 2026\n",
+                             **flag).verdict is Verdict.VALUES_MAY_DIFFER
+    assert oc.compare_output("Today is Sat, May 3\n", "Today is Mon, June 9\n",
+                             **flag).verdict is Verdict.VALUES_MAY_DIFFER
+    assert oc.compare_output("You rolled four\n", "You rolled six\n", **flag).verdict is Verdict.VALUES_MAY_DIFFER
+    assert oc.compare_output("You got twenty-one\n", "You got ninety\n", **flag).verdict is Verdict.VALUES_MAY_DIFFER
+    assert oc.compare_output("You rolled four\n", "You scored six\n", **flag).verdict is Verdict.TEXT_DIFFERS
+    assert oc.compare_output("Temp: -3\n", "Temp: 5\n", **flag).verdict is Verdict.VALUES_MAY_DIFFER
+    assert oc.compare_output("Temp: 5\n", "Temp: +7.5\n", **flag).verdict is Verdict.VALUES_MAY_DIFFER
+    assert oc.mask_varying("a-3 can be") == "a-# can be"  # a hyphen glued to a word is not a sign

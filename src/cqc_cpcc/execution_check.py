@@ -196,6 +196,7 @@ class CaseResult(BaseModel):
     #: Output lines left out by the case's varying markers, out of all non-blank lines (0 when none).
     excluded_lines: int = 0
     total_lines: int = 0
+    markers_rejected: bool = False
 
 
 class ExecutionReport(BaseModel):

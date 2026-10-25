@@ -423,7 +423,8 @@ def run_student_execution(plan: Optional[ExecutionPlan], source_files: Optional[
         cmp = _judge(case.expected_output or "", case.expected_reads, got, plan.ignore_patterns, case)
         results.append(CaseResult(case_id=case.id, verdict=cmp.verdict.value, detail=cmp.detail,
                                   similarity=round(cmp.similarity, 4), diff_excerpt=clean_block(cmp.diff_excerpt),
-                                  excluded_lines=cmp.excluded_lines, total_lines=cmp.total_lines))
+                                  excluded_lines=cmp.excluded_lines, total_lines=cmp.total_lines,
+                                  markers_rejected=cmp.markers_rejected))
         if cmp.verdict in (Verdict.RUNTIME_ERROR, Verdict.TIMEOUT) and got.stderr:
             exe.stderr_by_case[case.id] = clean_block(got.stderr)[:MAX_STDERR_CHARS]
     exe.report = ExecutionReport(plan_hash=plan.plan_hash, status="ok", cases=results)
@@ -644,6 +645,12 @@ def apply_execution_gate(
     excluded = sum(r.excluded_lines for r in report.cases)
     seen = sum(r.total_lines for r in report.cases)
     gate["excluded_lines"], gate["total_lines"] = excluded, seen
+    rejected = [r.case_id for r in report.cases if r.markers_rejected]
+    gate["markers_rejected"] = rejected
+    if rejected:
+        notes.append(note(STAGE, f"The varying-line markers were too broad for {len(rejected)} test case(s) "
+                                 f"({', '.join(rejected)}): ignored, and the case was compared with numbers, dates "
+                                 "and times masked. Edit Varies on to narrow them."))
     if excluded:
         notes.append(note(STAGE, f"{excluded} of {seen} output lines excluded by markers: values may differ "
                                  "on those lines, the rest was compared."))
