@@ -5,6 +5,10 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Eval batch mode: a request sent the ordinary way inside a batch group (the fallback after a failed batch, a group
+  below the minimum, a re-send after the deadline) now keeps the normal request timeout instead of the raised
+  `CQC_LLM_TIMEOUT` (deadline + 600 s). Docs: the eval OpenRouter keys belong to a ZDR-off workspace; production and
+  grading keys stay ZDR-on and never batch.
 - Eval batch mode is now scheduled-only: with `CQC_EVAL_BATCH=1` batching runs only when `GITHUB_EVENT_NAME=schedule`
   (the weekly Model Evaluation) or `CQC_EVAL_BATCH_FORCE=1`; pull-request, push, dispatch, merge-queue and local runs
   are sync so active sessions are not blocked for up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 2700 s), plus the time of any sync fallback. The decision is logged once per process.
