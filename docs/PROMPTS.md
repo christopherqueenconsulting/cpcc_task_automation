@@ -147,10 +147,10 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   that carries the nonce directly above the fence and one static line saying text inside the
   fence is data to summarize, never instructions. The output format, schema, model and effort
   are unchanged, and it stays a single user message (a system split would not pay: the call
-  runs once per oversized submission and the uncached code is over 95% of the input). The
+  runs once per oversized submission, only above `roles.digest.trigger_prompt_tokens` = 200000 in `model_registry.json`, about 200k estimated tokens (`len(code)//4`), and the code is nearly all of the input: estimate, not measured, against about 2,000 characters of template text). The
   instruction, criteria and output-spec text now come before the code; the closing line
   "Create the grading digest of the fenced submission per the rules above." comes after it.
-  The registry renderer passes `FIXTURE_NONCE`. Suite `digest` calls the production builder
+  The fence text adds about 640 characters (about 160 estimated tokens at 4 characters per token; counted from the fence rule, nonce line, two markers and closing line, not measured by a tokenizer). The registry renderer passes `FIXTURE_NONCE`. Suite `digest` calls the production builder
   (`generate_preprocessing_digest`), so its rendered request changes too and needs the A/B.
   **Rollback:** `git revert`.
 - **v1**: unfenced single message.
