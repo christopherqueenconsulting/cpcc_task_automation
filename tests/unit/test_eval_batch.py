@@ -1129,7 +1129,9 @@ class TestProviderBlock:
         monkeypatch.setenv(batch.ENV_BATCH, "0")
         sync_client = use(monkeypatch, Fake())
         go(model_suite(), n=10)
-        assert "zdr" in json.dumps(sync_client.sync_requests[0]["extra_body"]["provider"])  # the sync path is unchanged
+        sync_provider = sync_client.sync_requests[0]["extra_body"]["provider"]  # the sync path is unchanged
+        for field in ("zdr", "data_collection", "require_parameters"):
+            assert field in sync_provider, field
 
     def test_the_batch_wide_provider_keeps_only_the_documented_keys(self):
         kw = {"model": MODEL, "messages": [],
@@ -1138,6 +1140,21 @@ class TestProviderBlock:
         assert batch.batch_provider(kw) == {"only": ["a"], "allow_fallbacks": False}
         assert batch.batch_provider({"model": MODEL, "messages": []}) == {}
         assert "provider" not in batch.request_body(kw)
+
+    def test_items_of_one_batch_must_share_the_provider_block(self, batch_on):
+        client = Fake()
+        group_plan = batch.BatchPlan(batch.settings())
+        g = batch.BatchGroup(group_plan, "t", "generation", client_factory=lambda timeout: client, tasks=2)
+
+        def item(provider):
+            kw = {"model": MODEL, "messages": [], "extra_body": {"provider": provider}}
+            return SimpleNamespace(kwargs=kw, body={}, custom_id="r1")
+
+        with pytest.raises(batch._SubmitFailed, match="disagree on the provider"):
+            vrun(g._submit(MODEL, [item({"allow_fallbacks": False}), item({"allow_fallbacks": True})]))
+        assert client.posts == []
+        vrun(g._submit(MODEL, [item({"allow_fallbacks": False}), item({"allow_fallbacks": False, "zdr": True})]))
+        assert client.posts[0]["provider"] == {"allow_fallbacks": False}
 
     def test_a_top_level_provider_order_is_not_batched(self):
         assert batch.ineligible_reason({"model": MODEL, "messages": [], "provider": {"order": ["x"]}}) \

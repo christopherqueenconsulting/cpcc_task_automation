@@ -742,6 +742,11 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   at OpenRouter (no cancel endpoint) and may bill up to the 50% reservation of its items. Check the OpenRouter
   activity page for batches created around the job's start time; the batch ids are not logged on purpose (no body or
   id reaches the log). The partial run is not trusted: dispatch it again.
+- **Timeouts and merge order.** The deadline plus 600 s (the `CQC_LLM_TIMEOUT` bump, at most 3600 s) is below the
+  `timeout-minutes` of every one of the five paid steps' jobs (prompt-eval.yml `ab` 240, `record` 150, `dispatch` 240;
+  model-eval.yml `evaluate` 150, `cross-suite` 120, all minutes). PR #466 (stop the run on the first account-limit
+  error) merges first; then the account-limit abort is wired into the batch submit and poll loops (an account_limit error
+  aborts the run, no sync fallback for that error, completed items kept).
 - **Single-threaded eval only.** While a batched group runs, the process sets `CQC_LLM_TIMEOUT` (deadline + 600 s,
   at most 3600) so a gateway call can wait for its batch, and restores it when the last group ends (reference
   counted). That is a process-wide mutation: it assumes one eval run per process and no other thread reading the

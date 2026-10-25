@@ -809,6 +809,9 @@ class BatchGroup:
     async def _submit(self, model_id: str, items: list) -> str:
         import openai
 
+        providers = {json.dumps(batch_provider(i.kwargs), sort_keys=True) for i in items}
+        if len(providers) != 1:  # the batch-wide provider block comes from one item, so all must agree
+            raise _SubmitFailed("items of one batch disagree on the provider block")
         client = self._client(SUBMIT_TIMEOUT_S)
         try:
             data = await client.post(
