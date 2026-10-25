@@ -67,7 +67,9 @@ def load_cases(root: Path = DEFAULT_DATASET) -> list[EvalCase]:
         }
         cases.append(_build(meta, files, case_json.parent))
     validate(cases)
-    return cases
+    from cqc_cpcc.model_eval import batch
+
+    return batch.stamp_cases(cases, root)  # batch mode: the directory must be a guarded eval dataset
 
 
 def _solution_inside(case_dir: Path, solution_file: str, case_id: str) -> Path:
