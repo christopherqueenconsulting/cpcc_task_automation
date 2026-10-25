@@ -2,6 +2,7 @@
 
 """Test for wrapper folder handling in ZIP extraction."""
 
+import os
 import zipfile
 
 import pytest
@@ -267,3 +268,135 @@ class TestResultsAndReviewZipAsIs:
 
         assert list(result) == ["Dee Placeholder"]
         assert list(result["Dee Placeholder"].files) == ["Main.java"]
+
+
+BS_FOLDER = "12345-12345 - Dee Placeholder - Jun 24, 2026 11:21 PM"
+
+
+def _nested_temp_files():
+    import glob
+    import tempfile
+    return glob.glob(os.path.join(tempfile.gettempdir(), "nested_submissions_*"))
+
+
+@pytest.mark.unit
+class TestNestedZipHardening:
+    def _feedback_zip(self, tmp_path, inner_entries, name="feedback.zip"):
+        inner = _write_zip(tmp_path / "inner.zip", inner_entries)
+        with open(inner, 'rb') as f:
+            data = f.read()
+        return _write_zip(tmp_path / name, {"Student_Submissions/a.zip": data})
+
+    def test_only_one_nested_level_is_read(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities import zip_grading_utils as z
+        deepest = _write_zip(tmp_path / "b.zip", {"Student A/Main.java": JAVA})
+        with open(deepest, 'rb') as f:
+            b_bytes = f.read()
+        outer = self._feedback_zip(tmp_path, {"Student_Submissions/b.zip": b_bytes})
+        calls = []
+        real = z._copy_member_capped
+        monkeypatch.setattr(z, "_copy_member_capped", lambda *a, **k: calls.append(1) or real(*a, **k))
+        before = set(_nested_temp_files())
+
+        result = extract_student_submissions_from_zip(outer, ['.java'])
+
+        assert len(calls) == 1
+        assert "Student A" not in result
+        assert set(_nested_temp_files()) == before
+
+    def test_over_cap_member_raises_before_any_temp_file(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities import zip_grading_utils as z
+        outer = self._feedback_zip(tmp_path, {"Student A/Main.java": JAVA})
+        before = set(_nested_temp_files())
+        monkeypatch.setattr(z, "MAX_NESTED_ZIP_BYTES", 10)
+        with pytest.raises(ValueError, match="larger than"):
+            extract_student_submissions_from_zip(outer, ['.java'])
+        assert set(_nested_temp_files()) == before
+
+    def test_chunked_copy_cap_raises_and_temp_file_removed(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities import zip_grading_utils as z
+        outer = self._feedback_zip(tmp_path, {"Student A/Main.java": JAVA})
+        before = set(_nested_temp_files())
+        real_copy = z._copy_member_capped
+        monkeypatch.setattr(z, "_copy_member_capped", lambda s, d, limit=10: real_copy(s, d, 10))
+        with pytest.raises(ValueError, match="larger than"):
+            extract_student_submissions_from_zip(outer, ['.java'])
+        assert set(_nested_temp_files()) == before
+
+    def test_copy_failure_leaves_no_temp_file(self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities import zip_grading_utils as z
+        outer = self._feedback_zip(tmp_path, {"Student A/Main.java": JAVA})
+        before = set(_nested_temp_files())
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+        monkeypatch.setattr(z, "_copy_member_capped", boom)
+        with pytest.raises(OSError):
+            extract_student_submissions_from_zip(outer, ['.java'])
+        assert set(_nested_temp_files()) == before
+
+    def test_label_cleaning_drops_dotdot_and_control_chars(self):
+        from cqc_cpcc.utilities.zip_grading_utils import _clean_label
+        assert _clean_label("../../etc/pa\x00ss\nwd.java") == "etc/passwd.java"
+        assert _clean_label("..") == "file"
+
+    def test_absolute_path_and_backslash_entries(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "odd.zip", {
+            "/abs/Main.java": JAVA,
+            "Student A\\Main.java": JAVA,
+            "Student B\\Main.java": JAVA,
+        })
+        result = extract_student_submissions_from_zip(zip_path, ['.java'])
+        assert set(result) == {"Student A", "Student B"}
+
+    def test_warns_on_two_nested_zips_and_student_folders_beside(self, tmp_path, caplog):
+        inner = _write_zip(tmp_path / "inner.zip", {"Student A/Main.java": JAVA})
+        with open(inner, 'rb') as f:
+            data = f.read()
+        outer = _write_zip(tmp_path / "two.zip", {
+            "Student_Submissions/a.zip": data,
+            "Student_Submissions/b.zip": data,
+            "Student B/Main.java": JAVA,
+        })
+        with caplog.at_level("WARNING"):
+            result = extract_student_submissions_from_zip(outer, ['.java'])
+        assert set(result) == {"Student A"}
+        text = caplog.text
+        assert "2 ZIPs found" in text
+        assert "student folders as well as a nested submissions ZIP" in text
+
+
+@pytest.mark.unit
+class TestSingleStudentIsNotAWrapper:
+    @pytest.mark.parametrize("files, student", [
+        (["Student A/src/Main.java", "Student A/lib/Util.java"], "Student A"),
+        (["Student A/src/Main.java", "Student A/lib/Util.java", "Student A/Main.java"], "Student A"),
+        ([f"{BS_FOLDER}/src/A.java", f"{BS_FOLDER}/lib/B.java"], "Dee Placeholder"),
+        (["Student A/src/a/X.java", "Student A/src/b/Y.java"], "Student A"),
+    ])
+    def test_one_student_keeps_all_files(self, tmp_path, files, student):
+        zip_path = _write_zip(tmp_path / "one.zip", {f: JAVA for f in files})
+        result = extract_student_submissions_from_zip(zip_path, ['.java'])
+        assert list(result) == [student]
+        assert len(result[student].files) == len(files)
+
+    def test_deeper_segment_with_dash_is_not_a_student(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "lab.zip", {
+            "Student A/Lab - 1/Main.java": JAVA,
+            "Student B/Main.java": JAVA,
+        })
+        assert set(extract_student_submissions_from_zip(zip_path, ['.java'])) == {"Student A", "Student B"}
+
+    def test_brightspace_folder_under_unstripped_outer_still_wins(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "bs.zip", {f"Exam 1/{BS_FOLDER}/src/Main.java": JAVA})
+        assert list(extract_student_submissions_from_zip(zip_path, ['.java'])) == ["Dee Placeholder"]
+
+
+@pytest.mark.unit
+class TestSkippedRootFiles:
+    def test_root_level_file_explained_in_error(self, tmp_path):
+        zip_path = _write_zip(tmp_path / "root.zip", {"Main.java": JAVA})
+        with pytest.raises(ValueError) as exc:
+            extract_student_submissions_from_zip(zip_path, ['.java'])
+        assert ("Files at the ZIP root or directly in an outer folder are skipped; "
+                "put each student's files in their own folder.") in str(exc.value)

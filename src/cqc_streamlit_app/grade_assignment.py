@@ -2800,15 +2800,17 @@ def _after_check_notes(instructions: str, current: RequirementChecklist) -> None
 
 GRADE_STAGES = ("Setup", "Submissions & run", "Results & review")
 ZIP_LAYOUT_HELP = """\
-- **One folder per student.** Every file in a student's folder (any number, subfolders
-  included) is graded together as that student's submission.
+- **One folder per student.** Every file in a student's folder is graded together as that
+  student's submission. Files in that folder's own subfolders (such as `src/`) belong to
+  the same student.
 - Folder names can be just the student's name, or BrightSpace "Download All" style
   `id - Student Name - date`.
 - An outer folder around the student folders is fine. The submissions ZIP from
-  **Results & review**, or the whole "Download All Feedback" ZIP, can be uploaded as is.
+  **Results & review** can be uploaded as is. For the whole "Download All Feedback" ZIP,
+  only the ZIP in its `Student_Submissions/` folder is read.
   Mac `__MACOSX` and `.DS_Store` files are ignored.
-- Files at the top of the ZIP, outside any student folder, are skipped. Only accepted file
-  types are graded; others are flagged in the preview below.
+- Files at the top of the ZIP or directly in an outer folder, outside any student folder,
+  are skipped. Only accepted file types are graded; others are flagged in the preview below.
 """
 
 SUBMISSION_FILE_TYPES = [

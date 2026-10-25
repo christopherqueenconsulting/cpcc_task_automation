@@ -264,6 +264,59 @@ def should_ignore_file(filepath: str) -> bool:
     return False
 
 
+# Largest nested submissions ZIP that is copied out of a Download All Feedback ZIP.
+MAX_NESTED_ZIP_BYTES = 512 * 1024 * 1024
+_COPY_CHUNK_BYTES = 1024 * 1024
+
+# BrightSpace "Download All" student folder: "{orgId}-{submissionId} - {Name} - {date}".
+_BRIGHTSPACE_ID_FOLDER_RE = re.compile(r'^\d+(?:-\d+)? - ')
+
+# Folder names that belong inside one student's project, never a student's own folder.
+_PROJECT_DIR_NAMES = {
+    'src', 'lib', 'libs', 'bin', 'out', 'build', 'target', 'include', 'main', 'test',
+    'tests', 'resources', 'res', 'java', 'pkg', 'app', 'docs', 'data', 'assets',
+}
+
+_CONTROL_CHARS_RE = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _normalize_zip_name(name: str) -> str:
+    """ZIP entry name with ``\\`` turned into ``/``, once, for all path logic."""
+    return name.replace('\\', '/')
+
+
+def _clean_label(label: str) -> str:
+    """Make a file label safe to show or put in a prompt header.
+
+    Labels are display keys only (``StudentSubmission.files`` maps label -> temp path);
+    they are never joined into a filesystem path. ``..``/``.``/empty segments are
+    dropped and control characters removed.
+    """
+    parts = [_CONTROL_CHARS_RE.sub('', seg).strip() for seg in label.split('/')]
+    cleaned = '/'.join(seg for seg in parts if seg and seg not in ('.', '..'))
+    return cleaned or 'file'
+
+
+def _copy_member_capped(src, dst, limit: int = MAX_NESTED_ZIP_BYTES) -> int:
+    """Copy ``src`` to ``dst`` in 1 MiB chunks; raise ValueError past ``limit`` bytes."""
+    total = 0
+    while True:
+        chunk = src.read(_COPY_CHUNK_BYTES)
+        if not chunk:
+            return total
+        total += len(chunk)
+        if total > limit:
+            raise ValueError(
+                f"The ZIP inside the upload is larger than {limit // (1024 * 1024)} MiB; "
+                "upload the inner submissions ZIP directly.")
+        dst.write(chunk)
+
+
+def _has_accepted_ext(file_name: str, accepted_file_types: list[str]) -> bool:
+    ext = Path(file_name).suffix.lower().lstrip('.')
+    return ext in [e.lower().lstrip('.') for e in accepted_file_types]
+
+
 def _is_noise_path(filepath: str) -> bool:
     """True for OS/archiver noise: ``__MACOSX`` and other ignored dirs, ``._*``, ``.DS_Store``..."""
     parts = [p for p in filepath.replace('\\', '/').split('/') if p]
@@ -275,15 +328,19 @@ def _is_noise_path(filepath: str) -> bool:
     return name.startswith('._') or name in IGNORE_NOISE_NAMES
 
 
-def _student_folder_segment(directory_name: str) -> tuple[str, str]:
+def _student_folder_segment(directory_name: str, wrapper_stripped: bool = False) -> tuple[str, str]:
     """Split a directory (wrapper already removed) into the student folder and the rest.
 
-    The student folder is the first segment, or the first one in BrightSpace
-    ``"{id} - {Name} - {date}"`` form when an un-stripped wrapper sits above it. Deeper
-    subfolders (``Name/src/pkg``) belong to that student.
+    The student folder is the first segment. The one exception: no wrapper was stripped
+    and a deeper segment is a BrightSpace ``"{id}-{id} - {Name} - {date}"`` folder, so an
+    un-stripped outer folder sits above it. Deeper subfolders (``Name/src/pkg``,
+    ``Name/Lab - 1``) belong to that student.
     """
-    segments = directory_name.replace('\\', '/').split('/')
-    index = next((i for i, seg in enumerate(segments) if _FOLDER_NAME_DELIMITER in seg), 0)
+    segments = _normalize_zip_name(directory_name).split('/')
+    index = 0
+    if not wrapper_stripped:
+        index = next((i for i, seg in enumerate(segments)
+                      if i > 0 and _BRIGHTSPACE_ID_FOLDER_RE.match(seg)), 0)
     return segments[index], '/'.join(segments[index + 1:])
 
 
@@ -291,7 +348,10 @@ def _detect_wrapper_folder(paths: list[str]) -> Optional[str]:
     """Return the folder wrapping every student folder, or None.
 
     ``paths`` must already exclude noise: a single ``__MACOSX/...`` entry would
-    otherwise leave no common prefix.
+    otherwise leave no common prefix. A wrapper is chosen only when no file sits
+    directly in the common folder and its second-level folders look like student
+    folders. One student's own folder (``Student A/src`` + ``Student A/lib``) is never
+    taken for a wrapper.
     """
     if not paths:
         return None
@@ -306,24 +366,32 @@ def _detect_wrapper_folder(paths: list[str]) -> Optional[str]:
         return None
     if common_parts[0].lower() in KNOWN_EXPORT_WRAPPERS and any(len(sp) > 2 for sp in split_paths):
         return common_parts[0]
-    # Heuristic: if there are multiple second-level folders, the common prefix is a wrapper
+    depth = len(common_parts)
+    # A file directly in the common folder: it is a student folder, not a wrapper.
+    # (BrightSpace's own index.html does not count.)
+    if any(len(sp) == depth + 1 and not should_ignore_file('/'.join(sp)) for sp in split_paths):
+        return None
+    # A single-student folder: the common folders are a BrightSpace student folder or hold
+    # project directories (src, lib...).
+    if any(_BRIGHTSPACE_ID_FOLDER_RE.match(part) or part.lower() in _PROJECT_DIR_NAMES
+           for part in common_parts):
+        return None
     second_level_folders = {
-        sp[len(common_parts)] for sp in split_paths
-        if len(sp) > len(common_parts) + 1 and not should_ignore_file('/'.join(sp))
+        sp[depth] for sp in split_paths
+        if len(sp) > depth + 1 and not should_ignore_file('/'.join(sp))
     }
-    if len(second_level_folders) > 1:
+    if len(second_level_folders) > 1 and not any(
+            name.lower() in _PROJECT_DIR_NAMES for name in second_level_folders):
         return '/'.join(common_parts)
     return None
 
 
-def _nested_submissions_zip(zip_ref: zipfile.ZipFile) -> Optional[str]:
-    """Name of ``Student_Submissions/<x>.zip`` inside a Download All Feedback ZIP, if any."""
-    for name in zip_ref.namelist():
-        if (name.startswith(_NESTED_SUBMISSIONS_DIR) and name.lower().endswith('.zip')
-                and '/' not in name[len(_NESTED_SUBMISSIONS_DIR):]
-                and not _is_noise_path(name)):
-            return name
-    return None
+def _nested_submissions_zips(names: list[str]) -> list[str]:
+    """Names of ``Student_Submissions/<x>.zip`` entries in a Download All Feedback ZIP."""
+    return [name for name in names
+            if name.startswith(_NESTED_SUBMISSIONS_DIR) and name.lower().endswith('.zip')
+            and '/' not in name[len(_NESTED_SUBMISSIONS_DIR):]
+            and not _is_noise_path(name)]
 
 
 def get_file_priority(filepath: str) -> int:
@@ -345,6 +413,7 @@ def extract_student_submissions_from_zip(
         zip_path: str,
         accepted_file_types: list[str],
         max_tokens_per_student: int = DEFAULT_MAX_INPUT_TOKENS,
+        _nested_depth: int = 0,
 ) -> dict[str, StudentSubmission]:
     """Extract student submissions from a ZIP file with token estimation.
     
@@ -365,8 +434,10 @@ def extract_student_submissions_from_zip(
     ``{id} - {Student Name} - {date}`` or ``Assignment - Student Name``. An outer
     wrapper folder is stripped (``brightspace_submissions/Student/...``), macOS/Windows
     noise (``__MACOSX``, ``._*``, ``.DS_Store``, ``Icon\\r``) is ignored, and files at the
-    ZIP root are skipped. The Results & review "Download All Feedback" ZIP is accepted
-    as is: its nested ``Student_Submissions/*.zip`` is read instead.
+    ZIP root or directly in an outer folder are skipped with a warning. The Results &
+    review "Download All Feedback" ZIP is accepted as is: its top-level
+    ``Student_Submissions/*.zip`` (the first one, one level deep, at most
+    ``MAX_NESTED_ZIP_BYTES``) is read instead of any student folders beside it.
     
     Args:
         zip_path: Path to ZIP file
@@ -387,24 +458,50 @@ def extract_student_submissions_from_zip(
         raise ValueError(f"Not a ZIP file: {zip_path}")
 
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        nested = _nested_submissions_zip(zip_ref)
-        if nested:
-            inner = tempfile.NamedTemporaryFile(delete=False, prefix='nested_submissions_', suffix='.zip')
-            with inner, zip_ref.open(nested) as src:
-                inner.write(src.read())
-    if nested:
+        names = [_normalize_zip_name(i.filename) for i in zip_ref.infolist() if not i.is_dir()]
+        nested_candidates = _nested_submissions_zips(names) if _nested_depth < 1 else []
+        nested = None
+        if nested_candidates:
+            if len(nested_candidates) > 1:
+                logger.warning(
+                    f"{len(nested_candidates)} ZIPs found in {_NESTED_SUBMISSIONS_DIR}; "
+                    f"reading only '{nested_candidates[0]}'")
+            if any('/' in n and not n.startswith(_NESTED_SUBMISSIONS_DIR) and not _is_noise_path(n)
+                   for n in names):
+                logger.warning(
+                    "The upload has student folders as well as a nested submissions ZIP; "
+                    "only the nested ZIP is read")
+            nested = next(i for i in zip_ref.infolist()
+                          if _normalize_zip_name(i.filename) == nested_candidates[0])
+            if nested.file_size > MAX_NESTED_ZIP_BYTES:
+                raise ValueError(
+                    f"The ZIP inside the upload is larger than "
+                    f"{MAX_NESTED_ZIP_BYTES // (1024 * 1024)} MiB; upload the inner "
+                    "submissions ZIP directly.")
+    if nested is not None:
         logger.info("Reading the submissions ZIP nested in a Download All Feedback ZIP")
+        inner_path: Optional[str] = None
         try:
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref, zip_ref.open(nested) as src, \
+                    tempfile.NamedTemporaryFile(
+                        delete=False, prefix='nested_submissions_', suffix='.zip') as inner:
+                inner_path = inner.name
+                _copy_member_capped(src, inner)
             return extract_student_submissions_from_zip(
-                inner.name, accepted_file_types, max_tokens_per_student)
+                inner_path, accepted_file_types, max_tokens_per_student,
+                _nested_depth=_nested_depth + 1)
         finally:
-            os.unlink(inner.name)
+            if inner_path and os.path.exists(inner_path):
+                os.unlink(inner_path)
 
     students_data: dict[str, StudentSubmission] = {}
 
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         # First pass: analyze ZIP structure and detect wrapper folders
-        all_paths = [f.filename for f in zip_ref.infolist() if not f.is_dir()]
+        # Backslashes become "/" once here; absolute-path entries are dropped.
+        all_paths = [_normalize_zip_name(f.filename) for f in zip_ref.infolist()
+                     if not f.is_dir() and not _normalize_zip_name(f.filename).startswith('/')]
+        skipped_unfoldered: list[str] = []
 
         # Check if there's a common wrapper folder, ignoring OS noise paths
         # e.g., "Programming Exam 1/Student1/file.java" -> wrapper is "Programming Exam 1"
@@ -421,24 +518,30 @@ def extract_student_submissions_from_zip(
             if file_info.is_dir():
                 continue
 
-            file_name = os.path.basename(file_info.filename)
-            directory_name = os.path.dirname(file_info.filename)
+            entry_name = _normalize_zip_name(file_info.filename)
+            if entry_name.startswith('/'):
+                logger.debug(f"Skipping absolute-path entry: {entry_name}")
+                continue
+            file_name = os.path.basename(entry_name)
+            directory_name = os.path.dirname(entry_name)
 
             # Skip files in root (no student folder)
             if not directory_name:
                 logger.debug(f"Skipping file in root: {file_name}")
+                if not should_ignore_file(entry_name) and _has_accepted_ext(file_name, accepted_file_types):
+                    skipped_unfoldered.append(entry_name)
                 continue
 
             # Check if should ignore. A binary file (screenshot, .class, .exe...) in a
             # student folder is still ignored for grading, but recorded as rejected so a
             # student who turned in only binaries is not silently dropped.
             binary_reject = False
-            if should_ignore_file(file_info.filename):
+            if should_ignore_file(entry_name):
                 if (Path(file_name).suffix.lower() in BINARY_EXTENSIONS
-                        and not should_ignore_file(str(Path(file_info.filename).with_suffix('.txt')))):
+                        and not should_ignore_file(str(Path(entry_name).with_suffix('.txt')))):
                     binary_reject = True
                 else:
-                    logger.debug(f"Ignoring file: {file_info.filename}")
+                    logger.debug(f"Ignoring file: {entry_name}")
                     continue
 
             # Remove wrapper folder from directory path if present
@@ -448,12 +551,14 @@ def extract_student_submissions_from_zip(
                 # If directory is now empty (file was directly in wrapper), skip
                 if not directory_name:
                     logger.debug(f"Skipping file directly in wrapper folder: {file_name}")
+                    if _has_accepted_ext(file_name, accepted_file_types):
+                        skipped_unfoldered.append(entry_name)
                     continue
 
             # Parse student name from the folder. Handles both BrightSpace
             # "{id} - {Student Name} - {Timestamp}" and "{Assignment} - {Name}",
             # preserving multi-word and dashed names (see parse_student_folder_name).
-            student_folder, subfolder = _student_folder_segment(directory_name)
+            student_folder, subfolder = _student_folder_segment(directory_name, bool(wrapper_folder))
             student_id = parse_student_folder_name(student_folder)
 
             if binary_reject:
@@ -485,8 +590,9 @@ def extract_student_submissions_from_zip(
             # subfolders are both kept: the later one is keyed by its relative path.
             files_for_student = student_files.setdefault(student_id, [])
             taken = {name for name, _ in files_for_student}
+            file_name = _clean_label(file_name)
             if file_name in taken:
-                key = f"{subfolder}/{file_name}" if subfolder else file_name
+                key = _clean_label(f"{subfolder}/{file_name}") if subfolder else file_name
                 copy = 2
                 while key in taken:
                     key = f"{Path(file_name).stem} ({copy}){Path(file_name).suffix}"
@@ -494,6 +600,10 @@ def extract_student_submissions_from_zip(
                 file_name = key
             files_for_student.append((file_name, file_info.filename))
 
+        if skipped_unfoldered:
+            logger.warning(
+                f"Skipped {len(skipped_unfoldered)} file(s) at the ZIP root or directly in an "
+                f"outer folder (not in a student folder), e.g. {skipped_unfoldered[0]!r}")
         logger.info(f"Found {len(student_files)} potential student folders after parsing")
 
         # Second pass: extract and budget tokens per student
@@ -587,6 +697,8 @@ def extract_student_submissions_from_zip(
             error_msg += f"Found {len(all_paths)} file(s) in ZIP but none matched expected structure.\n"
             error_msg += ("Expected structure: one folder per student, e.g. Student Name/file.ext, "
                           "id - Student Name - date/file.ext, or a wrapper folder around those\n")
+            error_msg += ("Files at the ZIP root or directly in an outer folder are skipped; "
+                          "put each student's files in their own folder.\n")
             error_msg += f"Accepted file types: {', '.join(accepted_file_types)}\n"
             error_msg += f"First few files found:\n"
             for f in all_paths[:5]:
