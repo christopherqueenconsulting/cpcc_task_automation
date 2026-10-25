@@ -324,6 +324,149 @@ class TestScheduleOnly:
 
 # --- Switches ------------------------------------------------------------------------------------
 
+class TestSyncFallbackKeepsTheNormalTimeout:
+    """CQC_LLM_TIMEOUT is raised for a batch group so a call can wait for its batch; a call sent the ordinary way
+    inside the group (here: the fallback after a rejected submit) must keep the normal timeout of its role and effort."""
+
+    @staticmethod
+    def hanging(fake):
+        durations = []
+
+        async def hang(**kwargs):
+            started = asyncio.get_running_loop().time()
+            try:
+                await asyncio.sleep(10 ** 6)
+            finally:
+                durations.append(asyncio.get_running_loop().time() - started)
+
+        fake.create = hang
+        fake.submit_error = 422
+        return durations
+
+    @staticmethod
+    def expected(role, effort):
+        from cqc_cpcc.utilities.AI import llm_limits
+
+        return llm_limits.request_timeout(role, effort) + llm_limits.TIMEOUT_SLACK_S
+
+    def test_the_suite_path_times_out_at_the_roles_normal_timeout(self, batch_on, fake, monkeypatch):
+        durations = self.hanging(fake)
+        suite = model_suite()
+        with pinned_registry(MODEL, None, roles=(suite.role,)) as resolved:
+            want = self.expected(resolved.role, resolved.reasoning_effort)
+        records, _ = go(suite, n=10)
+        raised = batch.DEFAULT_DEADLINE_S + batch.SYNC_HEADROOM_S  # 3300 s: what the whole group used to get
+        assert want < 400 and want != raised + 5  # the figure under test is neither the raised one nor 450
+        assert durations and all(abs(d - want) < 1 for d in durations), (want, sorted(set(durations)))
+        assert records and all(not r.ok for r in records)
+
+    def test_a_timed_out_sync_call_comes_back_through_the_client_as_a_retried_transport_error(self, batch_on, fake):
+        durations = self.hanging(fake)
+        records, _ = go(model_suite(), n=10)
+        assert len(durations) >= 2 * 10  # each call is tried again after its first timeout
+        assert {r.error_kind for r in records} == {"transport"}
+
+    def test_the_model_eval_path_keeps_the_normal_timeout(self, batch_on, fake, monkeypatch):
+        from cqc_cpcc.model_eval import dataset as ds
+        from cqc_cpcc.model_eval import runner
+
+        durations = self.hanging(fake)
+
+        async def grade(**kwargs):
+            await llm_gateway.structured("grading", "case c0", Out, system="S" * 6000)
+            return SimpleNamespace(detected_errors=[], total_points_earned=1.0, requirement_results=[],
+                                   model_dump_json=lambda **k: "{}", llm_request=None)
+
+        cases = ds.load_cases(ds.DEFAULT_DATASET)[:10]
+        monkeypatch.setattr(runner, "_grade_once", lambda case, files, fn: _graded(fn))
+        with pinned_registry(MODEL, None) as resolved:
+            want = self.expected(resolved.role, resolved.reasoning_effort)
+        vrun(runner.run_model(MODEL, None, cases, 1, Budget(1000.0, 900.0), grade_fn=grade,
+                              dataset_dir=ds.DEFAULT_DATASET))
+        assert want < 400
+        assert durations and all(abs(d - want) < 1 for d in durations), (want, sorted(set(durations)))
+
+    def test_the_judge_round_keeps_the_judges_normal_timeout(self, batch_on, fake):
+        from cqc_cpcc.utilities.AI import model_registry
+
+        durations = self.hanging(fake)
+
+        class Judge:
+            @staticmethod
+            async def pairwise(suite, case, head_payload, base_payload, model, cache):
+                await llm_gateway.structured(role="feedback", prompt=f"judge {case.case_id} 1",
+                                             schema_model=Out, override=MODEL, system="J" * 5000)
+                return 1.0, 0.0
+
+        suite = model_suite()
+        judged = stamped(_cases(10))
+        ids = [c.case_id for c in judged]
+        payloads = {c: SimpleNamespace(payload=c) for c in ids}
+        resolved = model_registry.resolve("feedback", override=MODEL)
+        want = self.expected("feedback", resolved.reasoning_effort)
+        with pytest.raises(Exception):
+            vrun(pa._pairwise_scores(Judge, suite, {c.case_id: c for c in judged}, ids, payloads, payloads, MODEL,
+                                     None, Budget(1000.0, 900.0), 4, item_estimate=0.01))
+        assert want < 400
+        assert durations and all(abs(d - want) < 1 for d in durations), (want, sorted(set(durations)))
+
+    def test_the_variable_is_restored_when_the_group_ends(self, batch_on, fake):
+        import os
+
+        self.hanging(fake)
+        go(model_suite(), n=10)
+        assert os.environ.get(batch.ENV_CLIENT_TIMEOUT) is None
+
+    def test_an_explicit_timeout_is_the_normal_one(self, batch_on, fake, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_limits
+
+        monkeypatch.setenv("CQC_LLM_TIMEOUT", "90")
+        durations = self.hanging(fake)
+        go(model_suite(), n=10)
+        assert durations and all(abs(d - (90 + llm_limits.TIMEOUT_SLACK_S)) < 1 for d in durations)
+
+    def test_normal_timeout_reads_the_saved_value_inside_a_group(self, monkeypatch):
+        import os
+
+        monkeypatch.delenv(batch.ENV_CLIENT_TIMEOUT, raising=False)
+        outside = batch.normal_timeout("grading", "low")
+        with batch._client_timeout(2700.0):
+            assert batch.normal_timeout("grading", "low") == outside
+            assert float(os.environ[batch.ENV_CLIENT_TIMEOUT]) == 3300.0  # still raised for the batch wait
+        assert batch.normal_timeout("grading", "low") == outside
+
+    def test_a_role_less_normal_timeout_is_at_least_every_configured_figure(self, monkeypatch):
+        from cqc_cpcc.utilities.AI import llm_limits
+
+        for name in ("CQC_LLM_TIMEOUT", "CQC_LLM_TIMEOUT_DIGEST", "CQC_LLM_TIMEOUT_GRADING"):
+            monkeypatch.delenv(name, raising=False)
+        floor = max(llm_limits.DEFAULT_REQUEST_TIMEOUT_S.values()) * max(llm_limits.EFFORT_TIMEOUT_FACTOR.values())
+        assert batch.normal_timeout() == floor
+        monkeypatch.setenv("CQC_LLM_TIMEOUT_DIGEST", "900")
+        assert batch.normal_timeout() >= 900
+        monkeypatch.setenv("CQC_LLM_TIMEOUT", "1200")
+        assert batch.normal_timeout() >= 1200
+        monkeypatch.setenv("CQC_LLM_TIMEOUT_GRADING", "nonsense")  # ignored
+        assert batch.normal_timeout() == 1200
+        with batch._client_timeout(2700.0):  # the raise made by a group is not mistaken for a configured figure
+            monkeypatch.setenv("CQC_LLM_TIMEOUT_DIGEST", "700")
+            assert batch.normal_timeout() >= 700
+
+    def test_set_sync_timeout_is_what_the_call_gets(self):
+        batch.set_sync_timeout(42.0)
+        assert batch._sync_timeout.get() == 42.0
+        batch.set_sync_timeout(0)
+        assert batch._sync_timeout.get() == 0.0
+
+    def test_the_real_bound_is_logged_once_per_group(self, batch_on, fake, monkeypatch):
+        messages = []
+        monkeypatch.setattr(batch.logger, "info", messages.append)
+        self.hanging(fake)
+        go(model_suite(), n=10)
+        assert len([m for m in messages if "synchronous calls in this group time out after" in m]) >= 1
+        assert len([m for m in messages if "synchronous calls in this group time out after" in m]) <= 3
+
+
 class TestSwitches:
     def test_off_by_default_and_when_zero(self, monkeypatch):
         assert batch.settings() is None and not batch.requested()

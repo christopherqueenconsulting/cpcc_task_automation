@@ -918,7 +918,14 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   at OpenRouter (no cancel endpoint) and may bill up to the 50% reservation of its items. Check the OpenRouter
   activity page for batches created around the job's start time; the batch ids are not logged on purpose (no body or
   id reaches the log). The partial run is not trusted: dispatch it again.
-- **Timeouts and merge order.** The deadline plus 600 s (the `CQC_LLM_TIMEOUT` bump, at most 3600 s) is below the
+- **ZDR workspace.** The eval keys (`OPENROUTER_PROMPT_EVAL_API_KEY`, `OPENROUTER_EVAL_API_KEY`) belong to an OpenRouter
+  workspace with Zero Data Retention off; production and grading keys stay in a ZDR-on workspace and never batch. A 422
+  "cannot be used with your Zero Data Retention settings" (the text as observed 2026-10-25 in the owner's probe) on a
+  batch submit means a key from the wrong workspace (see
+  `PRIVACY_AND_TELEMETRY.md`, "Vendor settings you control").
+- **Timeouts and merge order.** A request sent the ordinary way inside a batch group (the fallback after a failed
+  batch, a group below `CQC_EVAL_BATCH_MIN`, a re-send after the deadline) keeps the normal request timeout for its role
+  and effort; only a call waiting on a batch has the raised `CQC_LLM_TIMEOUT`. The deadline plus 600 s (the `CQC_LLM_TIMEOUT` bump, at most 3600 s) is below the
   `timeout-minutes` of every one of the five paid steps' jobs (prompt-eval.yml `ab` 240, `record` 150, `dispatch` 240;
   model-eval.yml `evaluate` 150, `cross-suite` 120, all minutes).
 - **Account-limit abort.** The run-wide account-limit abort (described above) reaches the batch loops: an account-limit
