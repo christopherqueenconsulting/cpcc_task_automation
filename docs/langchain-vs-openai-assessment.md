@@ -1,5 +1,8 @@
 # LangChain vs OpenAI SDK Assessment
 
+> **Historical note (2026-10):** `langchain-community`, `langchain-openai` and other packages named below were removed from `pyproject.toml` (unused; see the Dependencies section of `docs/CONTRIBUTING.md`). This document records an earlier state.
+
+
 **Date:** January 8, 2026  
 **Repository:** cpcc_task_automation  
 **Assessment Type:** Technical Decision Analysis  

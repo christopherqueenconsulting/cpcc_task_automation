@@ -22,8 +22,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from cqc_cpcc.model_eval import (account_limit, adaptive, baseline_guard, cache_session, error_detail, prompt_eval,
-                                 prompt_registry)
+from cqc_cpcc.model_eval import (account_limit, adaptive, baseline_guard, batch, cache_session, error_detail,
+                                 prompt_eval, prompt_registry)
 from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 from cqc_cpcc.utilities.AI import model_registry
 
@@ -745,23 +745,38 @@ def base_rule_markdown(decided: dict) -> str:
 
 
 async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0: dict, judge_model: str,
-                           cache, budget, workers: int) -> list:
+                           cache, budget, workers: int, item_estimate: float = 0.0) -> list:
     """The pairwise judge's score for each case id, in the order of ``case_ids`` (None: no score).
 
     The calls run in parallel, but the result list keeps the case order, so the mean taken over it
     is the same one the sequential loop took. Once the budget is spent no further call starts.
     """
-    gate = asyncio.Semaphore(workers)
+    # Batch mode (batch.py): the judge round is its own batch(es), sent after the generation results exist;
+    # every case must be able to wait on it at once. Off: bplan is None and nothing below differs.
+    judge_label = f"{getattr(suite, 'id', '')}:judge"
+    bplan = batch.plan(getattr(suite, "dataset_dir", None), len(case_ids), reserving=True, label=judge_label,
+                       cases=[cases[c] for c in case_ids])
+    gate = asyncio.Semaphore(batch.widen(workers, len(case_ids)) if bplan is not None else workers)
 
-    async def one(cid):
-        async with gate:
-            if budget.exhausted:
-                return None
-            score, cost = await jm.pairwise(suite, cases[cid], h0[cid].payload, b0[cid].payload, judge_model, cache)
-            budget.add(cost)
-            return score
+    with batch.group(bplan, judge_label, "judge", budget=budget, tasks=len(case_ids)) as bgroup:
+        async def one(cid):
+            with batch.task(bgroup):
+                async with gate:
+                    if budget.exhausted:
+                        return None
+                    if bgroup is not None:
+                        batch.bind_case(cases[cid])
+                        batch.set_item_estimate(item_estimate)
+                    score, cost = await jm.pairwise(suite, cases[cid], h0[cid].payload, b0[cid].payload,
+                                                    judge_model, cache)
+                    budget.add(cost)
+                    return score
 
-    outcomes = await asyncio.gather(*[one(cid) for cid in case_ids], return_exceptions=True)
+        try:
+            outcomes = await asyncio.gather(*[one(cid) for cid in case_ids], return_exceptions=True)
+        finally:
+            if bgroup is not None:
+                await bgroup.drain()  # batch tasks are awaited even when an exception propagates
     for outcome in outcomes:  # every started call has finished before the first failure is raised
         if isinstance(outcome, BaseException):
             raise outcome
@@ -770,7 +785,7 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
 
 def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[Path],
                judge_pool: Optional[dict] = None, base_dir: Optional[Path] = None,
-               start_concurrency: Optional[int] = None) -> dict:
+               start_concurrency: Optional[int] = None, suite_id: Optional[str] = None) -> dict:
     """Wall-clock, retry counts and the adaptive pools' counters for one suite, for the log.
 
     ``concurrency`` is the ceiling on calls in flight per side (what it has always meant: the most
@@ -812,10 +827,16 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
         saved = prompt_eval.read_concurrency(directory) if directory is not None else None
         return (saved or {}).get("calls")
 
+    def batch_side(path):
+        if path is None:
+            return None
+        recs = [r for rs in prompt_eval.read_records(path).values() for r in rs]
+        return batch.record_stats(recs)
+
     head_pool = pool(head_raw.parent)
     base_pool = pool(base_raw.parent if base_raw is not None else base_dir)
     pools = [p for p in (head_pool, base_pool, judge_pool) if p]
-    return {"elapsed_s": round(time.monotonic() - started, 1), "concurrency": workers,
+    stats = {"elapsed_s": round(time.monotonic() - started, 1), "concurrency": workers,
             "max_concurrency": workers, "start_concurrency": start_concurrency,
             "head": side(head_raw), "base": side(base_raw),
             "head_transport": transport(head_raw), "base_transport": transport(base_raw),
@@ -826,6 +847,35 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
             "head_pool": head_pool, "base_pool": base_pool, "judge_pool": judge_pool,
             "rate_limited": sum(p.get("rate_limited", 0) for p in pools),
             "in_flight_budget": sum(p.get("in_flight_budget", 0) for p in pools)}
+    # Batch mode (report only, additive: absent unless CQC_EVAL_BATCH was on). The events are this process's, so
+    # they cover the head side and the judge round; ``head_batch`` / ``base_batch`` come from the saved records.
+    events = batch.summary(suite_id)
+    if events is not None:
+        stats["batch"] = events
+        stats["batch_fallback_reason"] = events.get("batch_fallback_reason")
+        stats["head_batch"] = batch_side(head_raw)
+        stats["base_batch"] = batch_side(base_raw)
+    return stats
+
+
+def _batch_line(stats: dict) -> str:
+    """The batch part of the one-line stats: share, cost split, fallbacks, or why it did not batch."""
+    events, head = stats.get("batch"), stats.get("head_batch")
+    if events is None:
+        return ""
+    fell = events.get("batch_fallback_reason")
+    if not events["batches"]:
+        why = "; ".join(events["reasons"]) or "no request was eligible"
+        return f"; BATCH requested but every call ran sync ({fell or why})"
+    share = f"{head['batch_share']:.0%} of head calls" if head else "n/a"
+    line = (f"; batch {events['batches']} batch(es), {share}, {events['batch_items_delivered']}/{events['batch_items']} "
+            f"delivered, {events['item_errors']} per-item error(s), {events['fallback_items']} fell back to sync")
+    if events["deadline_fallbacks"]:
+        line += (f" ({events['deadline_fallbacks']} at the deadline; double-charge bound "
+                 f"${events['double_charge_bound_usd']:.4f})")
+    if fell:
+        line += f"; BATCH FELL BACK to sync for the rest of the run: {fell}"
+    return line
 
 
 def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
@@ -847,6 +897,7 @@ def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
                  f", base [{adaptive.describe(stats.get('base_pool'))}]"
                  f", judge [{adaptive.describe(stats.get('judge_pool'))}]"
                  f"; {stats.get('rate_limited', 0)} x 429 in all")
+    line += _batch_line(stats)
     return line + (f"; FAILED: see base/{suite_id}/run.log" if failed else "")
 
 
@@ -914,6 +965,11 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
     workers = adaptive.ab_max_concurrency(max_concurrency)  # the ceiling per side
     start_override = adaptive.ab_start_concurrency(concurrency)
     judge_cap = adaptive.judge_max_concurrency()
+    batch.reset_events()
+    if batch.is_on():  # raises before any paid call when the retention opt-in is missing or a value is bad
+        print("Batch API mode ON (CQC_EVAL_BATCH): requests go to OpenRouter's Batch API, which keeps data for "
+              "30 days and is not zero-data-retention; synthetic eval data only. Groups below "
+              f"{batch.settings().min_items} requests, streams and judge rounds that cannot batch run sync.")
     clean_environ = dict(os.environ)  # before any run pins the registry in this process (see _run_base)
     parsed = [parse_model(m) for m in models]
     skipped_results: dict = {}
@@ -1003,7 +1059,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                                      "reasons": [], "notes": ["the base ref has no such suite; absolute numbers only"],
                                      "models": {k: {"composite_head": v.get("composite")} for k, v in head.items()},
                                      "run_stats": _run_stats(suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", None,
-                                                         start_concurrency=start_override)}
+                                                         start_concurrency=start_override, suite_id=suite_id)}
                 continue
             base_raw = outcomes[1]
             if base_raw is None:
@@ -1013,7 +1069,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                                      "run_stats": _run_stats(suite_started, workers,
                                                              out / "head" / suite_id / "raw_outputs.jsonl", None,
                                                              base_dir=out / "base" / suite_id,
-                                                             start_concurrency=start_override)}
+                                                             start_concurrency=start_override, suite_id=suite_id)}
                 continue
             # Both sides are scored with the HEAD graders, so only the prompt differs. When the
             # PR changed the dataset, only cases whose inputs are unchanged are compared.
@@ -1028,11 +1084,15 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                 calibrated = bool(jmodel) and jm.is_calibrated("pairwise", jmodel)
                 if jmodel:
                     # the judge's own, lower, pool: it throttles on its own and never starves the calls
-                    judge_limiter = adaptive.AdaptiveLimiter("judge", start=judge_cap, ceiling=judge_cap)
+                    batch_judge = batch.is_on()  # batch mode: every judge call may wait on the batch at once
+                    pool_cap = batch.widen(judge_cap, len(suite.cases())) if batch_judge else judge_cap
+                    judge_limiter = adaptive.AdaptiveLimiter("judge", start=pool_cap, ceiling=pool_cap)
                     judge_profile = prompt_eval.profiles_for([suite_models[0][0]])[suite_models[0][0]]
-                    adaptive.use_judge_pool(judge_limiter, budget,
-                                            prompt_eval._dearest_call(suite, judge_profile, suite.cases())
-                                            * adaptive.JUDGE_ESTIMATE_FACTOR)
+                    judge_estimate = (prompt_eval._dearest_call(suite, judge_profile, suite.cases())
+                                      * adaptive.JUDGE_ESTIMATE_FACTOR)
+                    adaptive.use_judge_pool(
+                        judge_limiter, budget,
+                        batch.estimate_for_reservation(judge_estimate) if batch_judge else judge_estimate)
                     cache = jm.VerdictCache(Path(judge_cache) if judge_cache else out / "judge-cache", read_only=True)
                     head_recs = prompt_eval.read_records(out / "head" / suite_id / "raw_outputs.jsonl")
                     base_recs = prompt_eval.read_records(base_raw)
@@ -1044,7 +1104,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                             scores = await _pairwise_scores(
                                 jm, suite, cases, [c for c in sorted(set(h0) & set(b0))
                                                    if cases.get(c) is not None and cases[c].split == "holdout"],
-                                h0, b0, jmodel, cache, budget, judge_cap)
+                                h0, b0, jmodel, cache, budget, judge_cap, item_estimate=judge_estimate)
                         except account_limit.RunAborted:
                             break
                         except Exception as e:  # noqa: BLE001 - only the account limit is handled here
@@ -1064,7 +1124,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
             # Reporting only: nothing above or below reads it.
             results[suite_id]["run_stats"] = _run_stats(
                 suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", base_raw,
-                judge_pool=judge_pool, start_concurrency=start_override)
+                judge_pool=judge_pool, start_concurrency=start_override, suite_id=suite_id)
             if unchanged:
                 results[suite_id]["notes"].append(
                     "prompts unchanged from the base: the paired test uses all cases when there are at least 30 "
@@ -1268,6 +1328,43 @@ def _cache_markdown(rows: list) -> list:
     return ["", "Prompt cache (report only; caching changes input price and latency, never an output):", "", *lines] if lines else []
 
 
+def _batch_markdown(rows: list) -> list:
+    """Batch API mode per suite (reporting only; nothing in a verdict reads it). Empty unless batch mode was on."""
+    lines = []
+    for sid, st in rows:
+        ev = st.get("batch")
+        if ev is None:
+            continue
+        if not ev["batches"]:
+            why = "; ".join(ev["reasons"]) or "no request was eligible"
+            lines.append(f"- `{sid}`: **batch requested but every call ran sync** "
+                         f"({ev.get('batch_fallback_reason') or why})")
+            continue
+        if ev.get("batch_fallback_reason"):
+            lines.append(f"- `{sid}`: **batch fell back to sync for the rest of the run:** "
+                         f"{ev['batch_fallback_reason']}")
+        for side in ("head", "base"):
+            part = st.get(f"{side}_batch")
+            if part:
+                lines.append(f"- `{sid}` {side}: {part['batch_calls']}/{part['calls']} calls batched "
+                             f"({part['batch_share']:.0%}); batch cost ${part['batch_cost_usd']:.4f} vs sync cost "
+                             f"${part['sync_cost_usd']:.4f}; {part['allocated_rows']} batch row(s) carry an allocated "
+                             f"share of the batch total (`cost_allocated`), {part['estimated_rows']} an estimate")
+        lines.append(f"- `{sid}`: {ev['batches']} batch(es) with {ev['batch_items']} request(s), "
+                     f"{ev['batch_items_delivered']} delivered, {ev['item_errors']} per-item error(s); batch wall "
+                     f"{ev['batch_wall_s']:.0f} s, sync fall-back wall {ev['sync_wall_s']:.0f} s "
+                     f"({ev['sync_calls']} sync call(s)); {ev['fallback_items']} request(s) fell back to sync, "
+                     f"{ev['deadline_fallbacks']} of them at the deadline")
+        if ev["deadline_fallbacks"]:
+            lines.append(f"- `{sid}`: upper bound of a possible double charge ${ev['double_charge_bound_usd']:.4f} "
+                         f"(the batch price of the requests re-sent sync; OpenRouter has no cancel endpoint, so a "
+                         f"batch that finishes after the deadline may still bill)")
+        if ev["reasons"]:
+            lines.append(f"- `{sid}`: fall-back reasons: {'; '.join(ev['reasons'])}")
+    return (["", "Batch API mode (report only; events are for the head side and judge round of this process):", "", *lines]
+            if lines else [])
+
+
 def _run_stats_markdown(report: dict) -> list:
     """Wall clock and what each adaptive pool did (reporting only: no decision reads these lines)."""
     rows = [(sid, r["run_stats"]) for sid, r in report["suites"].items() if r.get("run_stats")]
@@ -1291,6 +1388,7 @@ def _run_stats_markdown(report: dict) -> list:
         lines += _truncation_markdown(rows, max((st.get("max_tokens_cap") or 0) for _s, st in rows) or None)
         lines += _cost_markdown(rows)
         lines += _cache_markdown(rows)
+        lines += _batch_markdown(rows)
     return lines
 
 

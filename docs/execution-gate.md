@@ -202,10 +202,11 @@ work, and the grade itself.
    incident process applies.
 7. Since PR 14 a saved result holds student program output: `execution_report.cases[].diff_excerpt`
    (up to 20 lines or 1,500 characters per case) and the notes of gate-added errors (the case input and
-   one expected and one actual line). Find the runs that have any:
+   one expected and one actual line), and since the full-diff change also `expected_output` and
+   `actual_output` (the whole compared texts of non-matching cases). Find the runs that have any:
    ```bash
    grep -rIl '"execution_report"' ~/.cqc_cpcc/grading_results
-   grep -rIlE '"diff_excerpt": "[^"]' ~/.cqc_cpcc/grading_results     # runs that stored program output
+   grep -rIlE '"(diff_excerpt|actual_output)": "[^"]' ~/.cqc_cpcc/grading_results     # runs that stored program output
    ```
    Purge by deleting those run files (`<run_key>.json`; the results can be re-created by re-grading), or
    delete the whole folder. Results are session-only on Streamlit Community Cloud, so nothing is on disk
@@ -597,3 +598,58 @@ Strings below are copied from the code. Use synthetic programs only.
     offered until the sandbox is ready." (or, where results are not saved, "...kept for this session only
     here."). The `code_runner` URL shows only that notice and reads no results.
 14. **Rollback.** `CQC_EXECUTION=off` and reload: step 1 again, and grading is as before the output check.
+
+## Output tab: the complete diff
+
+The prompt still gets the capped `diff_excerpt` (20 lines or 1,500 characters), byte for byte as before.
+The Output tab and the Solution tab show the whole diff instead. Each non-matching case also stores the
+two compared texts (`CaseResult.expected_output` and `actual_output`: ignored lines dropped, trailing
+blanks trimmed), and the page builds the whole unified diff from them (`output_compare.full_unified_diff`,
+no line or character cap). It is shown in one of two views, chosen with a **Side by side | Unified** control above
+each diff (side by side first; the choice is kept for the browser session and applies to every diff on the page).
+**Unified** is the `st.code` view: a fixed-height scrolling box with line numbers.
+**Side by side** (`cqc_streamlit_app/diff_view.py`) puts the expected output and the student's output in two panes,
+row for row, with line numbers, a `-` or `+` marker on every differing row, blank hatched filler rows where one side
+has no line, and the differing words underlined inside a changed line. The panes scroll together, up and down and
+left and right, and both are keyboard-focusable regions named "Expected output" and "Student output". It is one
+sandboxed iframe (`st.iframe`, else `components.html`) built in-process: program text is embedded only as escaped
+JSON and drawn with `textContent`, the page has a Content-Security-Policy with no network, and nothing is logged or
+sent anywhere. Rows come from `difflib.SequenceMatcher` on lines (`diff_view.align_rows`), so a row is "changed" there
+exactly when the unified view shows it as changed. Lines do not wrap (long lines scroll sideways); the Unified view
+is always one click away.
+Two big-input guards: a pair of outputs over 5,000 lines, or more than 4,000,000 line pairs
+(`MAX_DIFF_LINES`, `MAX_DIFF_CELLS`; difflib is quadratic), is not diffed automatically. The page says so,
+shows the short excerpt and offers **Compute full diff anyway**; the result is cached in the session. The side-by-side
+rows follow the same guard: inside it they are built on the spot; over it they wait for a second button, **Compute
+side-by-side view** (cached the same way); and a pair of more than 10,000 rows in all (`MAX_SIDE_ROWS`) always
+falls back to Unified with a notice. Word-level highlighting is skipped for lines over 400 characters and is
+bounded by a total work budget per pair of texts (`MAX_INTRALINE_WORK`), so a long run of similar long lines is
+highlighted whole. A screen reader hears "Line N", then "Removed line:", "Added line:" or "Changed line, expected:" /
+"Changed line, student:" before a differing row; filler rows are hidden from it. The page sizes in rem and scrolls
+itself when a narrow width or zoom needs more room.
+Identical stored texts show "No differences in the stored text after normalization." A diff over 2,000 lines is collapsed behind **Show all N lines** with a 50-line preview and the count
+said out loud; nothing is cut silently. Input and expected output are shown the same way (no more
+`... (cut)`).
+
+- Bounds: the runner stops a program's stdout at 64 KB and sets `output_cut_by_runner`, which the page
+  shows as a warning. Each stored text is at most 64 KiB characters (65,536) and one student's report at most 512 KiB
+  characters (524,288); over either, the texts are left out, `outputs_omitted` is set and the page shows the short
+  excerpt with a notice.
+- Runs saved before this change have only the excerpt. The page shows it with "This run was saved before
+  full diffs were kept: re-run the output check for the complete diff." The new fields default to empty,
+  so old results files load unchanged.
+- The stored texts stay local to the results file (`0600`, in a `0700` folder). Sinks and the test that
+  covers each, all in `tests/unit/test_output_full_diff.py`:
+  PostHog events (`tracked_run`, `update_run`, the BrightSpace `result_properties` callers) and logs:
+  `test_sentinel_is_not_logged_or_sent_to_telemetry_by_the_real_callers` (a real `GradingJob`, mocked
+  client, caplog at DEBUG, also `results_store.save_run`/`load_runs` and `render_case_diff`);
+  `repr` of the model: `test_case_result_repr_does_not_print_the_outputs`;
+  model prompt evidence, result-card Markdown and JSON, the feedback `.docx`, write-back items:
+  `test_sentinel_is_not_in_card_exports_docx_writeback_or_prompt`;
+  hand-back `.docx` ZIP builder, summary `.xlsx`/`.csv`, `build_feedback_html`, "Copy feedback as
+  Markdown", "Download prompt (.md)" document:
+  `test_sentinel_is_not_in_feedback_zip_summary_files_html_markdown_or_prompt_document`.
+  The Streamlit wrapper `_generate_feedback_docs_and_zip` that calls those builders: checked by reading
+  the code; not tested.
+- Rollback: revert the PR. Saved results keep the extra keys, which older code ignores. Purge as in
+  step 7 of the incident path.

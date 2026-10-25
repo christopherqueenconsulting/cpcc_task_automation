@@ -155,6 +155,38 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   **Rollback:** `git revert`.
 - **v1**: unfenced single message.
 
+## Version history: flowgorithm-grade
+
+- **v3** (fairness fix after #479): #479 replaced the real file name with an alias, so the model
+  saw no student name and no lab number and would have deducted both default file-name criteria
+  ("Failure to include student name as part of Flowgorithm file", "Failure to include Flowgorithm
+  lab number as part of Flowgorithm file name", 5 points each) from every student. The
+  "Submission File Name" line is now two facts the app computes locally from the real name
+  (`utilities/fprg_filename_facts.py`): lab number in the file name (yes with a `Lab 3`-style
+  token, no, unknown) and name-like word in the file name (yes, no, unknown; never the word, and
+  not verified against a roster, so an ordinary program name such as `OrderTotal` reads yes; only
+  stopwords or initials left reads unknown, so a surname such as Final is never deducted). The
+  prompt does not say "roster" and tells the model not to mention the facts beyond the criterion
+  decision and never to deduct for other file-name criteria (extension, format, capitalization).
+  The keyword search runs before date removal (a date after `Lab3` cannot swallow the 3), the
+  keyword regexes are ASCII-only, and `file_name_facts` never raises (any error reads unknown).
+  One rule says those criteria are decided only by the facts: yes is not deducted, no is
+  deducted, unknown is never deducted, and the model must not guess the name or call its absence
+  a defect. The alias is gone from the prompt. Output schema, rubric text and the other prompt
+  sections are unchanged. The existing `flowgorithm-grade` v1 dataset uses ordinary names
+  (`Rectangle`, `Average`, `Pay`), so the A/B exercises only the yes-name and no-lab paths; the
+  other paths are covered by unit tests. **Rollback:** `git revert`.
+  Follow-up (lab words, prompt text unchanged): the lab fact now also reads `yes` for a keyword
+  of three or more letters followed by a spelled-out number one to twenty-nine or a roman
+  numeral I to XX (`Lab_Three`, `LabII`, `Lab-IV`; the label is a fixed keyword plus the integer,
+  never the matched text), and `unknown` (never deducted) when a lab-style keyword is present
+  without a readable number (`Lab_Foo`, `Smith_Lab`) or a spelled-out number stands alone.
+  `no` is left for names with no keyword and no number-like token at all (`Sum`). A bare `I`
+  or `V` word is not a number. The dataset moved to `flowgorithm-grade/v2` with 4 added
+  file-name cases (v1 frozen, first 24 rows identical; see `evals/README.md`).
+- **v2**: structured output. (#479 added an alias for the file name in code only: no prompt text or registry change. v3 replaces it with the facts block.)
+- **v1**: free-text markdown, real file name.
+
 ## Guidelines and v4
 
 The system and user messages follow `docs/PROMPT_GUIDELINES.md` (a sourced digest; items it
@@ -790,6 +822,124 @@ never changes an output, so no gate, grader, score or threshold reads any of thi
   of this PR except the added report fields. The switches are read at process start, so they do not change
   a run already in flight (cancel it and dispatch again). A revert of the merge commit needs no change to
   the `model-eval-state` branch.
+
+##### OpenRouter Batch API mode for evals (`CQC_EVAL_BATCH`)
+
+Batch mode sends the eval's model calls as OpenRouter batches, which are priced at about half the synchronous
+price ("typically 50%", not guaranteed) and answer within hours at most (the OpenRouter announcement reports a
+median of 7 minutes and a 90th percentile of 1 hour; the window is 24 h). It changes how a request travels and
+nothing about what is asked or scored: the production code builds the same request, `cache_session.py` adds the same
+`session_id`, and `batch.py` answers the call from the batch result. Retries, the truncation guard, parsing and every
+scorer are the production code's own. `batch.py` is for the eval runner only: nothing under the app imports it
+(`tests/unit/test_eval_batch.py` checks), it only sends cases loaded from `evals/datasets/**` (a runtime check that
+also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code default is off.
+
+- **Data handling (decided by the owner).** Batch does not support zero data retention and OpenRouter keeps batch
+  requests and responses for 30 days. The owner accepted this for prompt-eval and model-eval runs on the synthetic
+  datasets only, never for production grading and never for student data (ruling relayed by the maintainer from the
+  owner's chat, 2026-10-25; no repo artifact).
+- **The provider block.** `model_policy.json` asks for `zdr`, `data_collection: deny`, `require_parameters` and
+  `allow_fallbacks: false` on every request, and a batch cannot honour ZDR. Batch items are sent without zdr/data_collection
+  because the owner accepted 30-day retention for synthetic eval data: the per-request provider block is removed from
+  every batch item (`batch.request_body`), and the batch-wide `provider` carries only the keys the batch API documents
+  (`only`, `allow_fallbacks`; `batch.batch_provider`), so the no-fallback routing choice survives. `require_parameters` is
+  dropped too, so a provider that ignores an unsupported parameter is not refused; the first-batch effort check is the
+  guard for the one parameter that matters. The synchronous path and `model_policy.json` are unchanged. If the API
+  rejects the batch-wide `provider` block at submit, the first batch fails, the run continues on the synchronous path,
+  and `batch_fallback_reason` reads `submit rejected: HTTP <status>` (the gateway's own text is never written to a log or
+  artifact, per the account-limit rule; a local run with `CQC_EVAL_LOG_GATEWAY_MESSAGE=1` shows its redacted form). Reproduce
+  it locally that way, then remove the rejected key from `BATCH_PROVIDER_KEYS` in a follow-up PR (or switch batch off).
+- **Switches** (read when a run starts; an invalid value aborts before any paid call):
+
+  | Variable | Default | Meaning |
+  |---|---|---|
+  | `CQC_EVAL_BATCH` | `0` (off) | `1`/`true`/`on`/`yes` turn batch mode on; `0` turns it off. |
+  | `CQC_EVAL_BATCH_ALLOW_RETENTION` | unset | Must be `1` as well. The second opt-in: 30-day retention, synthetic data only. `CQC_EVAL_BATCH=1` without it **aborts the run before any paid call**. |
+  | `CQC_EVAL_BATCH_MIN` | `8` | A group with fewer requests runs sync. |
+  | `CQC_EVAL_BATCH_DEADLINE_S` | `2700` | Longest wait for one batch; 1 to 3000 (the gateway client caps one call at 3600 s). |
+  | `CQC_EVAL_BATCH_FIRST_CAP_S` | `2700` | The first batch of a run must finish within this (see "First batch"); 1 to 3000. |
+  | `CQC_EVAL_BATCH_MAX_ITEMS` | `1000` | Most requests per batch (more are split into several batches). |
+  | `CQC_EVAL_BATCH_SETTLE_S` | `120` | Longest to wait for more requests before submitting what has been collected. |
+
+  The three paid steps of `prompt-eval.yml` (A/B base vs head prompts, Run the changed suites on master, Run) and the
+  two of `model-eval.yml` (Run evaluation, Run the winner on the other prompt suites of its roles) set the first two to
+  `1`; local runs and everything else stay sync. A test pins exactly those five steps.
+- **Datasets.** Cases are stamped by the loaders (`Suite.cases()` and `dataset.load_cases`) on the exact directory they
+  read, which must be under `evals/datasets` and pass the `scripts/pii_guard.py` checks (re-run when a file changes). A
+  group refuses cases that were not stamped and any request not tied to a stamped case. A request capture (the $0
+  request comparison) is never batched.
+- **What is batched.** Per (suite, side, model, effort) group, one batch of the suite's generation calls (the run
+  waits until every call of the group has been built, then submits them together). The pairwise judge calls are
+  separate batches, after the generation results exist (the judge asks twice per case with A and B swapped, so it
+  makes two rounds). `runner.run_model` (the model comparison) batches its grading calls the same way. Everything
+  stays sync when batch mode is off, for a group below `CQC_EVAL_BATCH_MIN`, for a request that cannot be batched
+  (`stream`, `provider.order`/`sort`, `:online`, web plugins, inline images), for a retry after a batch (a small
+  group), and for the interactive paths.
+- **First batch (automatic probe).** Several API facts are not documented (below), so the run checks them itself. The
+  first batch of a run is validated, and if it fails, the run stops batching for everything not yet completed and
+  for every later group, and says why: `batch_fallback_reason` in `run_stats` (ab.json, the scorecard) and a visible
+  line in the Run stats. The batch is bad when it ends `failed`/`expired`/`cancelled`, does not finish within
+  `CQC_EVAL_BATCH_FIRST_CAP_S`, the submit or the polls error, its results are malformed (not a list, custom ids
+  missing, unknown or repeated, a body that is not a chat completion), every item errored, or it ignored the
+  reasoning effort. The effort check is conservative: it fires only when at least 4 delivered items asked for `high`
+  or `medium` and every one reports `reasoning_tokens` of 0 or none. Items a valid batch delivered are kept and
+  never charged twice; a finished batch that fails the result checks is discarded, its items re-run sync and its
+  price is counted in the double-charge bound. `scripts/openrouter_batch_probe.py` is an optional manual probe
+  (dry run by default; `--yes-spend` to send); the run no longer needs it.
+- **Deadline and double charge.** At `CQC_EVAL_BATCH_DEADLINE_S` the run stops waiting, keeps the items the last
+  poll returned, runs only the unfinished items sync (adaptive concurrency, budget reserved as for any sync call)
+  and ignores anything the batch returns later. OpenRouter has **no cancel endpoint**, so a batch that finishes
+  after the deadline may still bill: the Run stats give an upper bound, `double_charge_bound_usd` (the batch price,
+  sync estimate x 0.5, of the items re-sent sync). That bound is **report only**: it is not added to the budget gate.
+  Expected consequences with the default 2700 s (45 min) deadline and first-batch cap: OpenRouter reports (its
+  announcement, two-week beta) a median of 7 minutes, a 90th percentile of 1 hour and a 99th of 10.3 hours, so most
+  batches finish well inside the limit, a first batch over 45 minutes puts the whole run on the synchronous path, a
+  later batch over 45 minutes re-sends its unfinished items sync, and a batch that finishes late may still bill.
+- **A job killed mid-batch.** If the runner is cancelled or dies while a batch is in flight, the batch keeps running
+  at OpenRouter (no cancel endpoint) and may bill up to the 50% reservation of its items. Check the OpenRouter
+  activity page for batches created around the job's start time; the batch ids are not logged on purpose (no body or
+  id reaches the log). The partial run is not trusted: dispatch it again.
+- **Timeouts and merge order.** The deadline plus 600 s (the `CQC_LLM_TIMEOUT` bump, at most 3600 s) is below the
+  `timeout-minutes` of every one of the five paid steps' jobs (prompt-eval.yml `ab` 240, `record` 150, `dispatch` 240;
+  model-eval.yml `evaluate` 150, `cross-suite` 120, all minutes).
+- **Account-limit abort.** The run-wide account-limit abort (described above) reaches the batch loops: an account-limit
+  error (HTTP 402, or 403 whose gateway message names an exceeded budget or credit limit) on a batch submit or poll trips
+  it. The run then sends nothing more, sync or batch (no sync fallback for that error), items a batch already delivered
+  are kept, items still waiting are cancelled like any other queued call, the status is `aborted_account_limit`, and
+  the batch events and rows carry only the fixed reason code `account_limit`. It is not treated as "batch is unusable":
+  `batch_fallback_reason` stays unset. A plain 403 (permission, routing) is not an account limit and falls back to sync.
+  Everything the batch module logs about a failed submit or poll goes through `error_detail.log_text`.
+- **Single-threaded eval only.** While a batched group runs, the process sets `CQC_LLM_TIMEOUT` (deadline + 600 s,
+  at most 3600) so a gateway call can wait for its batch, and restores it when the last group ends (reference
+  counted). That is a process-wide mutation: it assumes one eval run per process and no other thread reading the
+  variable. Never use batch mode inside the app.
+- **Budget.** A batched call reserves half of its sync worst case at submit and settles with what the response
+  reports for the call; when the response reports none, the batch-level `usage.cost` is allocated over the items by
+  tokens (`cost_allocated: true` on the row); when that is unknown too, the conservative sync estimate is kept
+  (`cost_estimated`). A call that falls back to sync tops its reservation up to the full estimate first.
+- **Records and report (additive, report only).** Each row gains `batch: true|false` (and `cost_allocated`) only when
+  batch mode was on, so old rows and runs with batch off are byte-identical. `run_stats` gains the batch share of
+  calls, batch vs sync cost, wall clock per mode, fall-backs and deadline fall-backs, the double-charge bound, the
+  number of per-item errors and `batch_fallback_reason`; the model-eval scorecard gains a `batch` block with the same.
+- **Constants that carry the unverified facts** (all in `batch.py`; the first batch's validation, or a run of the
+  optional `scripts/openrouter_batch_probe.py`, shows which to change, and a follow-up PR flips it):
+
+  | Constant | Default | Unverified question |
+  |---|---|---|
+  | `MODEL_ID_SUFFIX` | `""` | whether the API wants the plain model id or the `:batch` variant |
+  | `TOKEN_LIMIT_PARAM` | `None` (keep `max_completion_tokens`) | whether `max_completion_tokens` is accepted in a batch (the `:batch` listing omits it); `"max_tokens"` is the alternative |
+  | `SEND_SESSION_ID` | `True` | whether `session_id` is accepted in a batch body |
+  | `STRIP_BODY_FIELDS` | `()` | any other body field the API rejects |
+  | `BATCH_PROVIDER_KEYS` | `("only", "allow_fallbacks")` | documented for the batch, not confirmed for a live account |
+- **Not verified (the first batch checks what it can).** Whether `reasoning.effort`, `response_format` json_schema and
+  `session_id` are honoured in a batch; per-item `usage.cost`, `cached_tokens` and `reasoning_tokens`; whether the
+  plain model id or the `:batch` variant is wanted (`batch.MODEL_ID_SUFFIX`); whether `max_completion_tokens` is
+  accepted (`batch.TOKEN_LIMIT_PARAM`); the per-batch request-count cap (a 413 splits the batch); that cache hits
+  carry over to batches (the cheaper batch cache prices are list prices; hit behaviour is unverified). The sync
+  layout and caching above are unchanged.
+- **Rollback.** The switch is the two env lines in the five workflow steps above: set `CQC_EVAL_BATCH` to `"0"` or
+  delete both lines, or revert the merge. Both are `.github` edits that need the owner; they are not repository
+  variables. Locally, unset the two variables.
 
 ##### Optional output-token cap: `CQC_EVAL_MAX_TOKENS` (diagnostic, off by default)
 
