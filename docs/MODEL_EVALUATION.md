@@ -134,17 +134,24 @@ caching in evals".
 ## OpenRouter Batch API mode
 
 Eval runs (prompt A/B, the model comparison and its cross-suite gate) can send their calls as OpenRouter batches
-at about half the price. It is off in code (`CQC_EVAL_BATCH=0`) and on in the paid steps of `prompt-eval.yml` and
-`model-eval.yml`, which also set `CQC_EVAL_BATCH_ALLOW_RETENTION=1`: batch data is retained by the provider for 30
-days (zero data retention is not supported), so it is limited to the synthetic datasets under `evals/datasets` and
-is never used for production grading or student data (ruling relayed by the maintainer from the owner's chat,
-2026-10-25; no repo artifact). Without the second variable a run with `CQC_EVAL_BATCH=1`
-stops before any paid call. The first batch of every run is validated; if it fails (failed or expired, too slow,
-malformed results, effort ignored) the run finishes on the synchronous path and the scorecard and Run stats say why
-(`batch_fallback_reason`). There is no cancel endpoint, so a batch abandoned at its deadline may still bill; the
-report bounds that. The switches, the budget rules and the list of unverified facts are in [`PROMPTS.md`](PROMPTS.md)
-under "OpenRouter Batch API mode for evals". The weekly `model-eval` run and a prompt A/B read the setting when they
-start. Local runs stay synchronous unless you set both variables.
+at about half the price. It is off in code (`CQC_EVAL_BATCH=0`). The paid steps of `prompt-eval.yml` and
+`model-eval.yml` set `CQC_EVAL_BATCH=1` and `CQC_EVAL_BATCH_ALLOW_RETENTION=1`: batch data is retained by the provider
+for 30 days (zero data retention is not supported), so it is limited to the synthetic datasets under `evals/datasets`
+and is never used for production grading or student data (ruling relayed by the maintainer from the owner's chat,
+2026-10-25; no repo artifact). Without the second variable a run with `CQC_EVAL_BATCH=1` stops before any paid call.
+
+Even with both set, batching runs only on scheduled runs (`GITHUB_EVENT_NAME=schedule`, i.e. the weekly Model
+Evaluation) or with `CQC_EVAL_BATCH_FORCE=1`. Pull-request, push, dispatch and merge-queue runs are sync, so agents are
+not blocked for up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 2700 s), plus the time of any sync
+fallback (owner ruling, 2026-10-25: 60 minutes is too long for runs that move code forward). To force a manual one-off,
+set `CQC_EVAL_BATCH=1`, `CQC_EVAL_BATCH_ALLOW_RETENTION=1` and `CQC_EVAL_BATCH_FORCE=1`.
+
+The first batch of every run is validated; if it fails (failed or expired, too slow, malformed results, effort ignored)
+the run finishes on the synchronous path and the scorecard and Run stats say why (`batch_fallback_reason`). There is no
+cancel endpoint, so a batch abandoned at its deadline may still bill; the report bounds that. The switches, the budget
+rules and the list of unverified facts are in [`PROMPTS.md`](PROMPTS.md) under "OpenRouter Batch API mode for evals".
+The weekly `model-eval` run and a prompt A/B read the setting when they start. Local runs stay synchronous unless you
+set all three variables.
 
 ## What can go wrong and who hears about it
 

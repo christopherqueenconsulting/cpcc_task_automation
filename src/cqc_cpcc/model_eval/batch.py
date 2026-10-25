@@ -18,6 +18,12 @@ scoring and records are the production code's own. Anything that cannot or shoul
 Switches (environment; an invalid value raises ``ValueError`` before any paid call):
 
 * ``CQC_EVAL_BATCH``: default ``0`` (off). ``1``/``true``/``on``/``yes`` turn it on.
+* Scheduled runs only (owner ruling 2026-10-25: a batch can take up to 45 minutes per batch (CQC_EVAL_BATCH_DEADLINE_S default 2700 s), plus the time of any sync fallback, too long for runs an active
+  session waits on). With ``CQC_EVAL_BATCH=1`` batching still stays off (sync) unless ``GITHUB_EVENT_NAME`` is
+  ``schedule`` (the weekly Model Evaluation) or ``CQC_EVAL_BATCH_FORCE=1`` is set (a manual one-off). Pull-request,
+  push, dispatch, merge-queue and local runs are therefore sync. The decision is logged once per process.
+* ``CQC_EVAL_BATCH_FORCE``: default ``0``. ``1``/``true``/``on``/``yes`` allow batching outside a scheduled run.
+  The retention opt-in below still applies.
 * ``CQC_EVAL_BATCH_ALLOW_RETENTION``: must be ``1`` too. The maintainer's second opt-in: batch data is retained
   30 days and ZDR is unsupported. With ``CQC_EVAL_BATCH=1`` and no opt-in the run **aborts before any paid
   call** (a quiet fall-back to sync would hide that the switch did nothing).
@@ -61,6 +67,8 @@ from cqc_cpcc.utilities.logger import logger
 
 ENV_BATCH = "CQC_EVAL_BATCH"
 ENV_ALLOW = "CQC_EVAL_BATCH_ALLOW_RETENTION"
+ENV_FORCE = "CQC_EVAL_BATCH_FORCE"
+ENV_EVENT = "GITHUB_EVENT_NAME"
 ENV_MIN = "CQC_EVAL_BATCH_MIN"
 ENV_DEADLINE = "CQC_EVAL_BATCH_DEADLINE_S"
 ENV_MAX_ITEMS = "CQC_EVAL_BATCH_MAX_ITEMS"
@@ -165,19 +173,38 @@ class Settings:
     max_bytes: int = MAX_BODY_BYTES
 
 
+_DECISION_LOGGED = {"done": False}
+
+
+def _log_decision_once(text: str) -> None:
+    """Log why batching is on or off, once per process (no secrets: only the event name). Log only: no run_stats event,
+    so report shapes are unchanged."""
+    if not _DECISION_LOGGED["done"]:
+        _DECISION_LOGGED["done"] = True
+        logger.info(f"[eval-batch: {text}]")
+        print(f"[eval-batch: {text}]", flush=True)  # the eval CLI may not log at INFO; CI logs must show the decision
+
+
 def settings() -> Optional[Settings]:
     """The validated settings, or None when batch mode is off.
 
+    Batching is for scheduled runs only: it stays off unless ``GITHUB_EVENT_NAME=schedule`` or ``CQC_EVAL_BATCH_FORCE=1``.
     Raises :class:`BatchRefused` when it is on without ``CQC_EVAL_BATCH_ALLOW_RETENTION=1`` and
     ``ValueError`` for any bad value, so a run stops before its first paid call.
     """
     if not requested():
+        return None
+    forced = cache_session._flag(ENV_FORCE, False)
+    event = os.environ.get(ENV_EVENT)
+    if not forced and event != "schedule":
+        _log_decision_once(f"off: event={event or 'unset'}")
         return None
     if not cache_session._flag(ENV_ALLOW, False):
         raise BatchRefused(
             f"{ENV_BATCH}=1 needs {ENV_ALLOW}=1 as well: the batch API keeps request and response data for 30 days "
             f"and does not support zero data retention, so it is for synthetic eval data only. Set both to opt in, "
             f"or unset {ENV_BATCH}. Nothing was sent.")
+    _log_decision_once("on: forced" if forced else "on: event=schedule")
     return Settings(
         min_items=int(_number(ENV_MIN, DEFAULT_MIN, 1, 100000, whole=True)),
         deadline_s=_number(ENV_DEADLINE, DEFAULT_DEADLINE_S, 1, HARD_MAX_DEADLINE_S),
@@ -253,11 +280,12 @@ _case_ok: contextvars.ContextVar[bool] = contextvars.ContextVar("cqc_eval_batch_
 def stamp_cases(cases, directory):
     """Called by the loaders (``Suite.cases``, ``dataset.load_cases``) on the directory they read from.
 
-    With batch mode off this does nothing. With it on, the directory must pass :func:`ensure_eval_dataset`
+    With batch mode off this does nothing, and "off" includes a run that is not scheduled and not forced (no PII
+    scan, no path restriction, nothing stamped, nothing can raise). With it on, the directory must pass :func:`ensure_eval_dataset`
     (under ``evals/datasets``, student-data check clean) or :class:`DatasetNotAllowed` is raised, and each case
     is stamped. A group refuses any case that was not stamped, and any request not tied to a stamped case.
     """
-    if not requested():
+    if not is_on():
         return cases
     ensure_eval_dataset(directory)
     for case in cases:
