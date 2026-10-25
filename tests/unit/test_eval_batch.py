@@ -494,6 +494,32 @@ class TestUnpricedModel:
         assert all(r.cost_estimated and r.batch for r in records)
         assert budget.spent == pytest.approx(10 * per_item_estimate())
 
+    def test_an_unpriced_judge_call_is_charged_its_halved_request_estimate_not_zero(self, fake, batch_on):
+        class Judge:
+            @staticmethod
+            async def pairwise(suite, case, head_payload, base_payload, model, cache):
+                await llm_gateway.structured(role="feedback", prompt=f"judge {case.case_id} 1",
+                                             schema_model=Out, override=MODEL, system="J" * 5000)
+                call = llm_gateway.last_call()
+                return 1.0, call.completion.cost_usd or 0.0
+
+        suite = model_suite()
+        records, _ = go(suite, n=10)
+        judged = stamped(_cases(10))
+        ids = [c.case_id for c in judged]
+        payloads = {r.case_id: r for r in records}
+        spend = Budget(1000.0, 900.0)
+        scores = vrun(pa._pairwise_scores(Judge, suite, {c.case_id: c for c in judged}, ids, payloads, payloads,
+                                          MODEL, None, spend, 4, item_estimate=0.01))
+        assert scores == [1.0] * 10 and spend.spent == pytest.approx(10 * 0.01 * batch.BATCH_PRICE_FACTOR)
+
+    def test_an_unreadable_registry_means_no_price(self, monkeypatch):
+        from cqc_cpcc.utilities.AI import model_registry
+
+        monkeypatch.undo()  # this class's autouse patch of _rates must not hide the function under test
+        monkeypatch.setattr(model_registry, "load_registry", lambda: (_ for _ in ()).throw(OSError("unreadable")))
+        assert batch._rates(MODEL) is None
+
 
 class TestEffortFlag:
     def test_batched_requests_that_asked_for_an_effort_raise_the_flag(self, fake, batch_on):
