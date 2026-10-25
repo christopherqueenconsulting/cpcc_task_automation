@@ -201,7 +201,8 @@ def run_async_in_streamlit(coro):
 
 FLOWGORITHM_FILE_NAME_CAPTION = (
     "File-name criteria are checked by a lenient local test: any word counts as a name, any number "
-    "as the lab number; unknown is never deducted. The file name itself is not sent to the model.")
+    "as the lab number. A lab word with no number (such as Lab_Foo) or a bare roman numeral (such as "
+    "Smith_II) reads as unknown, and unknown is never deducted. The file name itself is not sent to the model.")
 
 
 def define_grading_rubric():

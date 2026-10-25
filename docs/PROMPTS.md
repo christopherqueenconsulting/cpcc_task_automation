@@ -182,7 +182,9 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   never the matched text), and `unknown` (never deducted) when a lab-style keyword is present
   without a readable number (`Lab_Foo`, `Smith_Lab`) or a spelled-out number stands alone.
   `no` is left for names with no keyword and no number-like token at all (`Sum`). A bare `I`
-  or `V` word is not a number. The dataset moved to `flowgorithm-grade/v2` with 4 added
+  or `V` word is not a number, and a standalone roman numeral of two or more letters with no
+  keyword (`Smith_II`, `Ada_Example_IV`) reads `unknown`, not `no` and not `yes` (code only: prompt
+  text and version unchanged). The dataset moved to `flowgorithm-grade/v2` with 4 added
   file-name cases (v1 frozen, first 24 rows identical; see `evals/README.md`).
 - **v2**: structured output. (#479 added an alias for the file name in code only: no prompt text or registry change. v3 replaces it with the facts block.)
 - **v1**: free-text markdown, real file name.
