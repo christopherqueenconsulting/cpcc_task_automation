@@ -957,22 +957,25 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   | `TOKEN_LIMIT_PARAM` | `None` (keep `max_completion_tokens`) | `max_completion_tokens` was accepted |
   | `SEND_SESSION_ID` | `True` | `session_id` was accepted |
   | `STRIP_BODY_FIELDS` | `()` | no body field was rejected |
-  | `BATCH_PROVIDER_KEYS` | `("only", "allow_fallbacks")` | unchanged (accepted in the probe's batch) |
 
   Also from the probe: a `json_schema` response format was honoured; per-item usage carries `cached_tokens` and
   `reasoning_tokens` but **no cost**. Not proven by the probe: that the reasoning effort is applied in a batch (see
   "Effort" below).
 - **Per-item cost.** Because items report no cost, each delivered item is priced from its own usage tokens (uncached
-  prompt tokens at the prompt rate, cached tokens at the cache-read rate when known, completion tokens, which include
-  reasoning tokens, at the completion rate). The price is `batch.BATCH_PRICES[model]` when one is published (empty:
+  prompt tokens at the prompt rate, cached tokens at the cache-read rate when the registry has one, cache-write tokens at
+  the cache-write rate when it has one, else the prompt rate for both, completion tokens, which include reasoning
+  tokens, at the completion rate). The price is `batch.BATCH_PRICES[model]` when one is published (empty:
   discovery's `/models` data has no batch price), else the registry's sync price times 0.5, **labelled estimated**.
   Each row records which in `cost_method` (`tokens*batch_price`, `tokens*sync_price*0.5 (estimated)`,
   `allocated share of batch cost` for an unpriced model, or `request estimate*0.5 (estimated)` for an unpriced judge
   call). The sum of the token-priced rows is cross-checked against the batch-level `usage.cost`: the gap is logged and
-  reported (`cost_gap_usd`). The old allocation of the batch total by tokens remains the fallback for an unpriced model.
+  reported (`cost_gap_usd`, only when every delivered row was token-priced). The budget is charged at least the
+  batch-level cost: a positive difference between it and the rows is settled once as an extra charge (`extra_charge_usd`).
+  The old allocation of the batch total by tokens remains the fallback for an unpriced model.
 - **Effort.** `reasoning.effort` is still sent in batch bodies, but the probe could not show that a batch applies it.
   Every run report that had batched requests with an effort setting says "effort not proven honoured in batch" (summary
-  key `effort_not_proven_honoured`, with `effort_items`), so a score difference between batch and sync rows is read with
+  key `effort_not_proven_honoured`, with `effort_items`; a future probe clears it by setting
+  `batch.BATCH_EFFORT_VERIFIED = True`), so a score difference between batch and sync rows is read with
   that in mind.
 - **Deadline.** The probe batch took about 22 minutes. `CQC_EVAL_BATCH_DEADLINE_S` and `CQC_EVAL_BATCH_FIRST_CAP_S`
   default to 2700 s (45 minutes), about twice that, so they stay as they are; a call that still falls back to sync keeps

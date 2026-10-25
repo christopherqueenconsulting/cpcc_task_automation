@@ -104,6 +104,7 @@ class Fake:
         self.errors, self.partial, self.submit_error, self.reverse = errors or {}, partial, submit_error, reverse
         self.sync_cost, self.too_large_over = sync_cost, too_large_over
         self.budget = None
+        self.cached, self.own_cost_every = 0, None  # cached prompt tokens per item; give every Nth item its own cost
         self.submit_message, self.poll_error = "bad batch request", None
         self.on_413, self.too_large_message, self.on_get = None, "payload too large", None
         self.reserved_at_post, self.reserved_at_sync = [], []
@@ -153,9 +154,12 @@ class Fake:
                             "error": {"code": status, "message": message}})
                 continue
             answer = case_of(req["body"]["messages"])
+            cost = self.item_cost
+            if self.own_cost_every and index % self.own_cost_every == 0:
+                cost = 0.0004
             out.append({"custom_id": req["custom_id"],
                         "response": {"status_code": 200, "request_id": "r",
-                                     "body": completion_body(answer, cost=self.item_cost)},
+                                     "body": completion_body(answer, cost=cost, cached=self.cached)},
                         "error": None})
         return list(reversed(out)) if self.reverse else out
 
@@ -467,6 +471,30 @@ class TestSyncFallbackKeepsTheNormalTimeout:
         assert len([m for m in messages if "synchronous calls in this group time out after" in m]) <= 3
 
 
+class TestUnpricedModel:
+    """A batched model with no price (``_rates`` finds none) keeps the allocation and estimate paths.
+
+    ``run_suite`` pins every run model into a temporary registry, so a model run through it always has a price; the
+    case is one the registry cannot price, which these tests produce by making the price lookup answer None."""
+
+    @pytest.fixture(autouse=True)
+    def unpriced(self, monkeypatch):
+        monkeypatch.setattr(batch, "_rates", lambda model: None)
+
+    def test_the_batch_total_is_allocated_by_tokens(self, fake, batch_on):
+        fake.batch_cost = 0.01
+        records, budget = go(model_suite(), n=10)
+        assert sum(r.cost_usd for r in records) == pytest.approx(0.01)
+        assert budget.spent == pytest.approx(0.01)
+        assert all(r.cost_allocated and not r.cost_estimated for r in records)
+        assert {r.cost_method for r in records} == {batch.COST_METHOD_ALLOCATED}
+
+    def test_with_no_cost_anywhere_the_conservative_estimate_is_kept(self, fake, batch_on):
+        records, budget = go(model_suite(), n=10)  # no usage.cost on the items, none on the batch
+        assert all(r.cost_estimated and r.batch for r in records)
+        assert budget.spent == pytest.approx(10 * per_item_estimate())
+
+
 class TestEffortFlag:
     def test_batched_requests_that_asked_for_an_effort_raise_the_flag(self, fake, batch_on):
         async def main():
@@ -477,6 +505,17 @@ class TestEffortFlag:
         assert records and any(e["type"] == "batch" and e["effort_items"] for e in batch._EVENTS)
         summary = batch.summary()
         assert summary["effort_not_proven_honoured"] is True and summary["effort_items"] > 0
+
+    def test_a_probe_that_verifies_the_effort_clears_the_flag(self, fake, batch_on, monkeypatch):
+        monkeypatch.setattr(batch, "BATCH_EFFORT_VERIFIED", True)
+
+        async def main():
+            return await base.run_suite(model_suite(), MODEL, "high", stamped(_cases(10)), 1, Budget(1000.0, 900.0),
+                                        adaptive_mode=True, max_concurrency=8)
+
+        vrun(main())
+        summary = batch.summary()
+        assert summary["effort_items"] > 0 and summary["effort_not_proven_honoured"] is False
 
     def test_no_effort_no_flag(self, fake, batch_on):
         go(model_suite(), n=10)
@@ -764,31 +803,59 @@ class TestDeadline:
 # --- Budget --------------------------------------------------------------------------------------
 
 class TestBudget:
-    def test_the_batch_reserves_half_the_sync_estimate_and_settles_with_the_batch_cost(self, fake, batch_on,
-                                                                                       monkeypatch):
+    def test_the_batch_reserves_half_the_sync_estimate_and_settles_with_the_batch_cost(self, fake, batch_on):
         fake.batch_cost = 0.01
         fake.budget = budget = Budget(1000.0, 900.0)
         est = per_item_estimate()
-        monkeypatch.setattr(batch, "_rates", lambda model: None)  # an unpriced model: the allocation path
         records, _ = go(model_suite(), n=10, budget=budget)
         assert fake.reserved_at_post == [pytest.approx(10 * 0.5 * est)]  # 10 calls at half the sync worst case
         assert budget.reserved == pytest.approx(0.0, abs=1e-12)
-        assert sum(r.cost_usd for r in records) == pytest.approx(0.01)  # the allocation sums to the batch cost
-        assert budget.spent == pytest.approx(0.01)
-        assert all(r.cost_allocated and not r.cost_estimated for r in records)
-        assert {r.cost_method for r in records} == {batch.COST_METHOD_ALLOCATED}
+        assert budget.spent == pytest.approx(0.01)  # the budget is charged the batch's own cost
+        want, _method = batch.token_cost(MODEL, {"prompt_tokens": 2000, "completion_tokens": 50})
+        assert sum(r.cost_usd for r in records) == pytest.approx(10 * want)  # the rows keep their token price
+        assert batch.summary()["extra_charge_usd"] == pytest.approx(0.01 - 10 * want, abs=1e-6)
 
     def test_each_item_is_priced_from_its_own_tokens_when_the_model_has_a_price(self, fake, batch_on):
-        fake.batch_cost = 0.01
-        records, budget = go(model_suite(), n=10)
+        records, budget = go(model_suite(), n=10)  # the batch reports no cost at all
         want, method = batch.token_cost(MODEL, {"prompt_tokens": 2000, "completion_tokens": 50})
         assert want is not None and method == batch.COST_METHOD_ESTIMATED
         assert all(r.cost_usd == pytest.approx(want) and not r.cost_estimated and not r.cost_allocated for r in records)
         assert {r.cost_method for r in records} == {batch.COST_METHOD_ESTIMATED}
         assert budget.spent == pytest.approx(10 * want)
-        summary = batch.summary()
-        assert summary["cost_gap_usd"] == pytest.approx(0.01 - 10 * want, abs=1e-6)  # batch-level minus token-priced
         assert batch.record_stats(records)["token_priced_rows"] == 10
+
+    def test_the_budget_is_charged_at_least_the_batch_cost_when_it_is_far_above_the_token_price(self, fake, batch_on):
+        want, _method = batch.token_cost(MODEL, {"prompt_tokens": 2000, "completion_tokens": 50})
+        fake.batch_cost = 100 * 10 * want
+        fake.budget = budget = Budget(1000.0, 900.0)
+        records, _ = go(model_suite(), n=10, budget=budget)
+        assert budget.spent >= fake.batch_cost - 1e-12 and budget.reserved == pytest.approx(0.0, abs=1e-12)
+        assert all(r.cost_method == batch.COST_METHOD_ESTIMATED for r in records)  # per-row method and cost kept
+        assert sum(r.cost_usd for r in records) == pytest.approx(10 * want)
+
+    def test_cost_gap_needs_every_delivered_row_to_be_token_priced(self, fake, batch_on):
+        want, _method = batch.token_cost(MODEL, {"prompt_tokens": 2000, "completion_tokens": 50})
+        fake.batch_cost = 0.01
+        records, budget = go(model_suite(), n=10)
+        assert batch.summary()["cost_gap_usd"] == pytest.approx(0.01 - 10 * want, abs=1e-6)
+        batch.reset_events()
+        fake.own_cost_every = 2  # a mixed batch: every second item reports its own cost
+        records, budget = go(model_suite(), n=10)
+        assert batch.summary()["cost_gap_usd"] == 0.0  # no cross-check over a mix
+        own = sum(1 for r in records if r.cost_method is None)
+        assert own == 5 and budget.spent >= 0.01 - 1e-12  # still charged at least the batch cost
+
+    def test_cached_tokens_are_priced_through_the_real_registry(self, fake, batch_on):
+        from cqc_cpcc.utilities.AI import model_registry
+
+        pricing = model_registry.load_registry().models[model_registry.normalize_model_id(MODEL)].pricing
+        fake.cached = 1000
+        records, _ = go(model_suite(), n=10)
+        cache = pricing.cache_read_per_mtok if pricing.cache_read_per_mtok is not None else pricing.prompt_per_mtok
+        write = getattr(pricing, "cache_write_per_mtok", None)
+        assert write is None  # the registry has no cache-write price today: not asserted further
+        want = (1000 * pricing.prompt_per_mtok + 1000 * cache + 50 * pricing.completion_per_mtok) * 0.5 / 1e6
+        assert all(r.cost_usd == pytest.approx(want) for r in records)
 
     def test_the_sync_path_reserves_the_full_estimate(self, monkeypatch, batch_on):
         monkeypatch.setenv(batch.ENV_BATCH, "0")
@@ -801,22 +868,25 @@ class TestBudget:
         fake.item_cost, fake.batch_cost = 0.0004, 0.5
         records, budget = go(model_suite(), n=10)
         assert all(r.cost_usd == pytest.approx(0.0004) and r.cost_allocated is None for r in records)
-        assert budget.spent == pytest.approx(10 * 0.0004)
-
-    def test_with_no_cost_anywhere_the_conservative_estimate_is_kept(self, fake, batch_on, monkeypatch):
-        monkeypatch.setattr(batch, "_rates", lambda model: None)  # an unpriced model: nothing to price the tokens by
-        records, budget = go(model_suite(), n=10)  # no usage.cost on the items, none on the batch
-        assert all(r.cost_estimated and r.batch for r in records)
-        assert budget.spent == pytest.approx(10 * per_item_estimate())
+        assert budget.spent == pytest.approx(0.5)  # at least the batch's own cost
 
     def test_token_cost_math_and_methods(self, monkeypatch):
         usage = {"prompt_tokens": 1000, "completion_tokens": 200, "prompt_tokens_details": {"cached_tokens": 400}}
         monkeypatch.setattr(batch, "BATCH_PRICES", {})
-        monkeypatch.setattr(batch, "_rates", lambda model: (1.0, 2.0, 0.1, batch.COST_METHOD_ESTIMATED))
+        monkeypatch.setattr(batch, "_rates", lambda model: (1.0, 2.0, 0.1, batch.COST_METHOD_ESTIMATED, None))
         cost, method = batch.token_cost("m", usage)
         assert cost == pytest.approx((600 * 1.0 + 400 * 0.1 + 200 * 2.0) / 1e6) and method == batch.COST_METHOD_ESTIMATED
-        monkeypatch.setattr(batch, "_rates", lambda model: (1.0, 2.0, None, batch.COST_METHOD_ESTIMATED))
+        monkeypatch.setattr(batch, "_rates", lambda model: (1.0, 2.0, None, batch.COST_METHOD_ESTIMATED, None))
         assert batch.token_cost("m", usage)[0] == pytest.approx((1000 * 1.0 + 200 * 2.0) / 1e6)  # no cache price
+        written = {"prompt_tokens": 1000, "completion_tokens": 0,
+                   "prompt_tokens_details": {"cached_tokens": 100, "cache_write_tokens": 300}}
+        monkeypatch.setattr(batch, "_rates", lambda model: (1.0, 2.0, 0.1, batch.COST_METHOD_ESTIMATED, 1.25))
+        assert batch.token_cost("m", written)[0] == pytest.approx((600 * 1.0 + 100 * 0.1 + 300 * 1.25) / 1e6)
+        monkeypatch.setattr(batch, "_rates", lambda model: (1.0, 2.0, 0.1, batch.COST_METHOD_ESTIMATED, None))
+        assert batch.token_cost("m", written)[0] == pytest.approx((600 * 1.0 + 100 * 0.1 + 300 * 1.0) / 1e6)
+        bad = {"prompt_tokens": 100, "completion_tokens": 0,
+               "prompt_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 80}}  # more than the prompt
+        assert batch.token_cost("m", bad)[0] == pytest.approx(100 * 1.0 / 1e6)
         assert batch.token_cost("m", {"prompt_tokens": 5}) == (None, None)  # a missing token count
         assert batch.token_cost("m", {"prompt_tokens": True, "completion_tokens": 1}) == (None, None)
         assert batch.token_cost("m", None) == (None, None)
@@ -825,13 +895,11 @@ class TestBudget:
 
     def test_a_published_batch_price_wins_over_the_halved_sync_price(self, monkeypatch):
         monkeypatch.setattr(batch, "BATCH_PRICES", {MODEL: (1.0, 3.0)})
-        prompt, completion, cache, method = batch._rates(MODEL)
-        assert (prompt, completion, cache, method) == (1.0, 3.0, None, batch.COST_METHOD_BATCH_PRICE)
+        assert batch._rates(MODEL) == (1.0, 3.0, None, batch.COST_METHOD_BATCH_PRICE, None)
         cost, how = batch.token_cost(MODEL, {"prompt_tokens": 1000, "completion_tokens": 100})
         assert cost == pytest.approx((1000 * 1.0 + 100 * 3.0) / 1e6) and how == batch.COST_METHOD_BATCH_PRICE
         monkeypatch.setattr(batch, "BATCH_PRICES", {})
-        sync = batch._rates(MODEL)
-        assert sync[3] == batch.COST_METHOD_ESTIMATED and batch._rates("nope/not-in-the-registry") is None
+        assert batch._rates(MODEL)[3] == batch.COST_METHOD_ESTIMATED and batch._rates("nope/not-in-the-registry") is None
 
     def test_a_reported_item_cost_is_left_alone_and_unpriced(self, fake, batch_on):
         fake.item_cost = 0.0004
@@ -890,6 +958,26 @@ class TestJudgeRound:
         assert fake.sync_requests == []
         assert spend.spent > 0
         assert any(e["type"] == "batch" and e["kind"] == "judge" for e in batch._EVENTS)
+
+    def test_judge_rows_are_priced_from_their_tokens(self, fake, batch_on):
+        class Judge:
+            @staticmethod
+            async def pairwise(suite, case, head_payload, base_payload, model, cache):
+                await llm_gateway.structured(role="feedback", prompt=f"judge {case.case_id} 1",
+                                             schema_model=Out, override=MODEL, system="J" * 5000)
+                call = llm_gateway.last_call()
+                return 1.0, call.completion.cost_usd or 0.0
+
+        suite = model_suite()
+        records, _ = go(suite, n=10)
+        judged = stamped(_cases(10))
+        ids = [c.case_id for c in judged]
+        payloads = {r.case_id: r for r in records}
+        spend = Budget(1000.0, 900.0)
+        scores = vrun(pa._pairwise_scores(Judge, suite, {c.case_id: c for c in judged}, ids, payloads, payloads,
+                                          MODEL, None, spend, 4, item_estimate=0.01))
+        want, _method = batch.token_cost(MODEL, {"prompt_tokens": 2000, "completion_tokens": 50})
+        assert scores == [1.0] * 10 and spend.spent == pytest.approx(10 * want)  # no budget estimate, no zero
 
     def test_the_judge_round_stays_sync_when_batch_is_off(self, fake, monkeypatch):
         class Judge:

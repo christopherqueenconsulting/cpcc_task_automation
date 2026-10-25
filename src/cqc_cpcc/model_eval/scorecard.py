@@ -91,7 +91,9 @@ def _batch_lines(info) -> list:
     if info.get("batch_fallback_reason"):
         lines.append(f"- **Batch fell back for the rest of the run:** {_safe(info['batch_fallback_reason'])}")
     if info.get("effort_not_proven_honoured"):
-        lines.append("- **" + "effort not proven honoured in batch: {n} batched request(s) asked for a reasoning effort, and the 2026-10-25 live probe could not show that a batch applies it".format(n=info.get("effort_items", 0)) + "**")
+        from cqc_cpcc.model_eval import batch  # lazy: only a run that batched has this key
+
+        lines.append(f"- **{batch.effort_flag_text(info.get('effort_items', 0))}**")
     return lines
 
 

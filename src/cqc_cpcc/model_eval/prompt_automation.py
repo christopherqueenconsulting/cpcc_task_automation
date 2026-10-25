@@ -1381,7 +1381,7 @@ def _batch_markdown(rows: list) -> list:
         if ev["reasons"]:
             lines.append(f"- `{sid}`: fall-back reasons: {'; '.join(ev['reasons'])}")
         if ev.get("effort_not_proven_honoured"):
-            lines.append(f"- `{sid}`: **" + "effort not proven honoured in batch: {n} batched request(s) asked for a reasoning effort, and the 2026-10-25 live probe could not show that a batch applies it".format(n=ev["effort_items"]) + "**")
+            lines.append(f"- `{sid}`: **{batch.effort_flag_text(ev['effort_items'])}**")
         if ev.get("cost_gap_usd"):
             lines.append(f"- `{sid}`: token-priced batch rows differ from the batch-level cost by "
                          f"${ev['cost_gap_usd']:+.6f} (batch-level minus token-priced)")
