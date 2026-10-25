@@ -920,7 +920,8 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   id reaches the log). The partial run is not trusted: dispatch it again.
 - **ZDR workspace.** The eval keys (`OPENROUTER_PROMPT_EVAL_API_KEY`, `OPENROUTER_EVAL_API_KEY`) belong to an OpenRouter
   workspace with Zero Data Retention off; production and grading keys stay in a ZDR-on workspace and never batch. A 422
-  "cannot be used with your Zero Data Retention settings" on a batch submit means a key from the wrong workspace (see
+  "cannot be used with your Zero Data Retention settings" (the text as observed 2026-10-25 in the owner's probe) on a
+  batch submit means a key from the wrong workspace (see
   `PRIVACY_AND_TELEMETRY.md`, "Vendor settings you control").
 - **Timeouts and merge order.** A request sent the ordinary way inside a batch group (the fallback after a failed
   batch, a group below `CQC_EVAL_BATCH_MIN`, a re-send after the deadline) keeps the normal request timeout for its role

@@ -108,10 +108,11 @@ These are account settings, not code. Check them against your institution's poli
 - **OpenRouter workspaces: production versus eval** (owner decision, 2026-10-25). Zero Data Retention is **off for the
   eval workspace only**; production keeps it on. The eval API keys (`OPENROUTER_PROMPT_EVAL_API_KEY` and
   `OPENROUTER_EVAL_API_KEY`) belong to an OpenRouter workspace with ZDR off, because the Batch API keeps request and
-  response data for 30 days and does not work under ZDR; only the synthetic eval datasets under `evals/datasets` are ever
+  response data for 30 days and does not work under ZDR (both as observed on 2026-10-25 in the owner's probe, not from
+  OpenRouter's documentation); only the synthetic eval datasets under `evals/datasets` are ever
   sent from it (see "OpenRouter Batch API mode for evals" in `PROMPTS.md`). Production and grading keys must stay in a
   workspace with ZDR on, and batch mode is never used with them. If the batch API answers HTTP 422 with "cannot be used
-  with your Zero Data Retention settings", the key belongs to a workspace with ZDR on (or an eval run was pointed at a
+  with your Zero Data Retention settings" (the text as observed 2026-10-25), the key belongs to a workspace with ZDR on (or an eval run was pointed at a
   production key): use the eval workspace's key, do not turn ZDR off for production.
 - **OpenAI** (Whisper only): review the organisation's data controls, including training
   opt-out and retention.
