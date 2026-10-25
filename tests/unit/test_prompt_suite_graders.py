@@ -200,6 +200,40 @@ class TestFlowgorithm:
         assert _composite(self.suite, self.cases["rectangle__clean"], right).graders["file_name_deductions"] is None
 
 
+    def test_dataset_rows_load_and_the_suite_invokes_and_serialises(self, monkeypatch):
+        import asyncio
+        from types import SimpleNamespace
+
+        from cqc_cpcc.model_eval.suites import flowgorithm as fg
+
+        assert len(sd.load_rows("flowgorithm-grade")) == 28 and sd.version_of("flowgorithm-grade") == "v2"
+        assert sd.version_of("digest") == sd.VERSION
+        seen = {}
+
+        async def fake(**kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(deductions=[SimpleNamespace(criterion="c", points=5)],
+                                   final_grade=55.0, overall_feedback="ok")
+
+        monkeypatch.setattr("cqc_cpcc.flowgorithm_grading.grade_flowgorithm", fake)
+        out = asyncio.run(fg.invoke(self.cases["average__fn_lab_no"]))
+        assert seen["submission_file_name"] == "Ben_Sample"
+        assert fg.to_payload(out) == {"deductions": [{"criterion": "c", "points": 5}],
+                                      "final_grade": 55.0, "overall_feedback": "ok"}
+
+
+    def test_render_rejects_duplicate_ids_and_write_all_uses_the_dataset_version(self, monkeypatch, tmp_path):
+        monkeypatch.setitem(sd.BUILDERS, "dup", lambda: [{"case_id": "a"}, {"case_id": "a"}])
+        with pytest.raises(ValueError):
+            sd.render("dup")
+        monkeypatch.delitem(sd.BUILDERS, "dup")
+        counts = sd.write_all(tmp_path)
+        assert counts["flowgorithm-grade"] == 28
+        assert (tmp_path / "flowgorithm-grade" / "v2" / "VERSION").read_text() == "v2\n"
+        assert (tmp_path / "digest" / "v1" / "VERSION").read_text() == "v1\n"
+        assert (tmp_path / "flowgorithm-grade" / "v2" / "cases.jsonl").read_text() == sd.render("flowgorithm-grade")
+
+
 class TestDigest:
     suite = get_suite("digest")
     cases = {c.case_id: c for c in suite.cases()}

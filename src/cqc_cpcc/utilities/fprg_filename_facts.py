@@ -142,10 +142,7 @@ def _has_number_word(stem: str) -> bool:
 def _lab(stem: str) -> tuple[str, Optional[str]]:
     m = _KEYWORD_RE.search(stem)  # original stem first: a date must not swallow the digits
     if m:
-        word = _KEYWORDS.get(m.group(1).lower())
-        if word:
-            return YES, f"{word} {int(m.group(2))}"
-        return YES, None
+        return YES, f"{_KEYWORDS[m.group(1).lower()]} {int(m.group(2))}"
     m = _WORD_NUMBER_RE.search(stem)
     if m:
         word = _KEYWORDS[m.group(1).lower()]
