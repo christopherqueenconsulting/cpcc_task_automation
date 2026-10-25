@@ -801,7 +801,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     st.add_argument("--adaptive", action="store_true",
                     help="adaptive concurrency (AIMD) instead of a fixed number; also CQC_AB_ADAPTIVE=1")
     st.add_argument("--max-concurrency", type=int, default=None,
-                    help="adaptive ceiling on calls in flight (default 64, or CQC_AB_MAX_CONCURRENCY; 1 to 256, "
+                    help="adaptive ceiling on calls in flight (default all the calls of the suite, or CQC_AB_MAX_CONCURRENCY; 1 to 512, "
                          "else an error)")
     st.add_argument("--out", default="evals/runs/suites")
     st.add_argument("--raw", default=None, help="score: raw_outputs.jsonl to re-score")

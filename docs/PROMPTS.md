@@ -474,12 +474,24 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
 `openai_client.py`, `openrouter_client.py` or `llm_gateway.py`, which every registered prompt shares).
 
 - **Start and ceiling.** Each side (head, and base in its own process) starts at
-  `min(calls in the suite, ceiling)` permits: `grading` is 360 calls per side, so 64. The ceiling
-  is `--max-concurrency N` on `prompt-ab` and `suite run`, else `CQC_AB_MAX_CONCURRENCY`, else **64**.
-  `--concurrency N` (or `CQC_AB_START_CONCURRENCY`) sets a smaller starting size. There is no silent
-  fallback: a value that is not a whole number from 1 to the **hard cap of 256** stops the command
-  with `error: max concurrency=... is outside 1 to 256` before any spend (the old rule quietly
-  replaced anything above 32 with 4 or 12).
+  `min(calls in the suite, ceiling)` permits. The ceiling is `--max-concurrency N` on `prompt-ab` and
+  `suite run`, else `CQC_AB_MAX_CONCURRENCY`, else **every call of the suite side** (at most the hard cap
+  of **512**), so a suite of about 250 to 270 calls runs them all at once instead of in waves of 64.
+  An explicit `--max-concurrency` or `CQC_AB_MAX_CONCURRENCY` still wins and can cap lower, as can a
+  smaller start (`--concurrency N` / `CQC_AB_START_CONCURRENCY`). The base side (its own process) gets
+  the same number through `CQC_AB_MAX_CONCURRENCY` (at most 256 when the base checkout predates the 512
+  cap, which rejects more). There is no silent fallback: a value that is not a whole number from 1 to
+  **512** stops the command with `error: max concurrency=... is outside 1 to 512` before any spend.
+  Cost is unchanged (the same calls are made and each still reserves its worst case on the budget
+  first); only the spend rate rises. The 429/timeout backoff is exactly as before, and an account-limit
+  error still aborts the run on the first one.
+- **Why 512 is safe for the transport.** The OpenAI SDK's default HTTP pool takes 1000 connections
+  (`openai.DEFAULT_CONNECTION_LIMITS`, pinned by a test), so 512 in flight never waits on the pool; the
+  client modules are not edited (a shared-file edit would re-run every suite). Each in-flight call is one
+  socket, so `adaptive.fd_safe_cap()` raises a soft file-descriptor limit below 4096 toward
+  `min(hard limit, 4096)` and lowers the ceiling to `limit - 256` if it cannot (a 1024 soft limit would
+  give 768, still above 512; the runner's actual `ulimit -n` was not measured here, so the check runs at
+  start-up rather than assuming it).
 - **AIMD, per pool.** A **throttle** is a 429, or a 402/403 whose body names
   `openrouter_in_flight_budget` (an out-of-credit 402 or a real permission error is not one, and is
   not retried). A throttle **halves** the permits (never below 1). A burst of throttles from calls
@@ -495,7 +507,7 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
   the output it would have returned the first time and scoring does not depend on order, so a 429
   storm and a calm run give the same results (a test checks this with a fake client).
 - **Judge pool.** The pairwise judge (haiku) runs in a separate pool: ceiling
-  `CQC_AB_JUDGE_CONCURRENCY`, default **16**, same hard cap, its own AIMD. A grader's 429 never
+  `CQC_AB_JUDGE_CONCURRENCY` when set, else the number of judge calls (at most 512), its own AIMD. A grader's 429 never
   shrinks the judge's pool and the judge's never shrinks the graders'.
 - **Budget margin.** `Budget.reserve` sets aside a call's worst-case cost (its estimate with the full
   output allowance) before the call is sent, and `Budget.settle` replaces it with the real cost in one
@@ -529,7 +541,7 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
   a model priced at 0 (a free model) has no usable estimate, so its calls would be recorded as `budget`
   skips by the reserve guard.
 - **Changes in behaviour to know about.** `prompt-ab --concurrency N` is now only the **starting** size
-  (the ceiling stays 64 unless `--max-concurrency`). A bad `CQC_AB_MAX_CONCURRENCY` or
+  (the ceiling stays every call of the suite side unless `--max-concurrency`). A bad `CQC_AB_MAX_CONCURRENCY` or
   `CQC_AB_JUDGE_CONCURRENCY` now raises on a plain `suite run` too, not only in the A/B.
 - **First A/B after this merges:** the base side still runs the old code (fixed 12, 3 client
   attempts, no retry layer), so a 429 storm could fail base calls the head would have retried. Run

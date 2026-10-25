@@ -5,6 +5,11 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Prompt A/B concurrency: each suite side now starts with every call in flight at once (ceiling = the call
+  count, at most 512; was 64, hard cap 256) and judges the same, capped at the judge call count.
+  `CQC_AB_MAX_CONCURRENCY`, `CQC_AB_JUDGE_CONCURRENCY` and the start setting still cap lower; the 429/timeout
+  backoff and the first-account-limit abort are unchanged. A file-descriptor check lowers the ceiling if the
+  process limit would not allow it. Cost is unchanged; the spend rate rises.
 - Dependencies: removed unused packages: langchain-community, langchain-openai, onnxruntime, os-env, datetime,
   chromium, tabulate, pandas-stubs, jupyter, setuptools, grandalf, and the test/e2e plugins pytest-watcher,
   pytest-profiling, pytest-timeout, pytest-playwright; also dropped the direct pins on protobuf, six and
