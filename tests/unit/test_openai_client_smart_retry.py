@@ -238,7 +238,7 @@ class TestPreprocessing:
         
         # Should contain all components
         assert "ASSIGNMENT INSTRUCTIONS" in prompt
-        assert "STUDENT SUBMISSION" in prompt
+        assert "UNTRUSTED SUBMISSION" in prompt  # student code sits in a nonce fence
         assert "GRADING CRITERIA" in prompt
         assert "CREATE GRADING DIGEST" in prompt
         assert "public class Test" in prompt

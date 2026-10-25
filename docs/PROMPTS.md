@@ -21,7 +21,7 @@ edits it. The evaluation workflow that grades these prompts is planned in
 | `requirement-solution-check` | Does the instructor's solution do each checklist requirement (yes, no, unclear)? One cached call per assignment; only a `no` can make a requirement not graded, and until `model_policy.json` calibrates the suite a `no` is only a suggestion the instructor applies; instructions and solution are nonce-fenced untrusted text, no submission is ever sent | grading | `requirement_solution_check.py:build_solution_check_prompt` | `SolutionCheck` | suite `requirement-solution-check` (16, synthetic; key grader: false-`no` rate) |
 | `test-case-generation` | Output check: stdin test cases for the solution (at most 6, a boundary case for every selection or loop condition the instructions name, condition-to-case map); instructions and solution are nonce-fenced untrusted text | grading | `test_case_generation.py:build_test_case_prompt` | `TestCaseSuggestion` | suite `test-case-generation` (12, synthetic) |
 | `exam-grading` | Grade Assignment, exam mode (`CodeGrader`): major/minor errors | grading | `utilities/AI/exam_grading_prompts.py:build_exam_grading_messages` | `ErrorDefinitions` | suite `exam-grading` (81) |
-| `preprocessing-digest` | Compress a very large submission before exam grading | digest | `utilities/AI/openai_client.py:_build_preprocessing_prompt` | `PreprocessingDigest` | suite `digest` (16) |
+| `preprocessing-digest` | Compress a very large submission before exam grading; the student code is nonce-fenced untrusted text, last in the message (v2) | digest | `utilities/AI/openai_client.py:_build_preprocessing_prompt` | `PreprocessingDigest` | suite `digest` (16) |
 | `project-feedback` | Give Feedback page (v5: student-facing report; categories from the course error definitions) | feedback | `prompts/project_feedback.py` | `FeedbackReport` | suite `project-feedback` (81) |
 | `flowgorithm-grade` | Flowgorithm grading: per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py`) | `FlowgorithmGrade` | suite `flowgorithm-grade` (24) |
 | `structured-fallback` | Retry suffix of `get_structured_completion`, which nothing calls (dead path) | – | `utilities/AI/openai_client.py:_build_fallback_prompt` | – | no |
@@ -138,6 +138,22 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   `injection_pass_rate` covers them.
 - **A version bump re-grades**, as above. **Rollback:** `git revert`; the version in the run
   key goes back.
+
+## Version history: preprocessing-digest
+
+- **v2** (security hardening, not caching): the student code was pasted unfenced into the middle
+  of the single user message. It now sits last, inside an `untrusted_fence` nonce fence (fresh
+  nonce per call; marker-shaped text and the nonce are stripped from the data), with the line
+  that carries the nonce directly above the fence and one static line saying text inside the
+  fence is data to summarize, never instructions. The output format, schema, model and effort
+  are unchanged, and it stays a single user message (a system split would not pay: the call
+  runs once per oversized submission, only above `roles.digest.trigger_prompt_tokens` = 200000 in `model_registry.json`, about 200k estimated tokens (`len(code)//4`), and the code is nearly all of the input: estimate, not measured, against about 2,000 characters of template text). The
+  instruction, criteria and output-spec text now come before the code; the closing line
+  "Create the grading digest of the fenced submission per the rules above." comes after it.
+  The fence text adds about 640 characters (about 160 estimated tokens at 4 characters per token; counted from the fence rule, nonce line, two markers and closing line, not measured by a tokenizer). The registry renderer passes `FIXTURE_NONCE`. Suite `digest` calls the production builder
+  (`generate_preprocessing_digest`), so its rendered request changes too and needs the A/B.
+  **Rollback:** `git revert`.
+- **v1**: unfenced single message.
 
 ## Guidelines and v4
 
