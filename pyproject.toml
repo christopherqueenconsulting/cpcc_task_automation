@@ -46,6 +46,15 @@ optional = true
 [tool.poetry.group.lint.dependencies]
 ruff = ">=0,<1"
 
+[tool.poetry.group.dev]
+optional = true
+
+[tool.poetry.group.dev.dependencies]
+# Streamlit's optional file watcher. Streamlit itself requires it only on non-macOS
+# platforms, so install this group on a Mac for fast hot reload: `poetry install --with dev,test`.
+watchdog = "^6"
+
+
 [tool.poetry.group.test]
 optional = true
 
@@ -73,6 +82,11 @@ optional = true
 
 [tool.poetry.group.e2e.dependencies]
 playwright = "^1.58.0"
+
+# deptry reads module names from the installed packages, so run it in the project venv.
+# nest_asyncio is an optional fallback imported inside try/except.
+[tool.deptry.per_rule_ignores]
+DEP001 = ["nest_asyncio"]
 
 [tool.coverage.run]
 omit = [

@@ -5,12 +5,15 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
-- Dependencies: removed unused packages (langchain-community, langchain-openai, onnxruntime, os-env, datetime,
-  chromium, tabulate, pandas-stubs, the dev group with jupyter, setuptools and grandalf, and the test/e2e plugins
-  pytest-watcher, pytest-profiling, pytest-timeout, pytest-playwright) and the direct pins on protobuf, watchdog,
-  six and typing-extensions (still installed, as dependencies of streamlit and others). The lock drops 103 packages
-  and bumps none. Declares pydantic `>=2.12,<3`, requests, urllib3
-  and (tests) python-dotenv. Run `poetry install --with test` after pulling; `--with dev` no longer exists.
+- Dependencies: removed unused packages: langchain-community, langchain-openai, onnxruntime, os-env, datetime,
+  chromium, tabulate, pandas-stubs, jupyter, setuptools, grandalf, and the test/e2e plugins pytest-watcher,
+  pytest-profiling, pytest-timeout, pytest-playwright; also dropped the direct pins on protobuf, six and
+  typing-extensions (still installed as dependencies of streamlit and others). `poetry.lock` drops 103 packages
+  (104 entries), adds none, bumps none. Declares pydantic `>=2.12,<3`, requests, urllib3 and (tests) python-dotenv.
+  `watchdog` moves to a new optional `dev` group: on macOS Streamlit does not require it, so use
+  `poetry install --with dev,test` there for fast reload. Run `poetry install --with test` after pulling.
+- Pydantic v2: removed the v1 `.dict()` fallback in `openai_debug.py`; added an AST guard against v1 APIs
+  (`tests/unit/test_pydantic_v2_only.py`) and an import smoke test for `pydantic.v1` (xfail until PR-2).
 
 ## 0.2.0-rc8 - 2026-10-25
 

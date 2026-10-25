@@ -84,19 +84,27 @@ poetry run python --version  # Should show Python 3.12+
 
 ### Dependencies
 
-- Supported Python: `>=3.12,<4.0` in `pyproject.toml`. Python 3.14 is allowed by the constraint; full 3.14
-  support also needs `langchain-core` to stop importing `pydantic.v1` (tracked as a follow-up).
-- Pydantic is v2 only (`pydantic = ">=2.12,<3"`). `tests/unit/test_pydantic_v2_only.py` fails on v1-style APIs in first-party code.
-- Declare what first-party code imports. To find unused or undeclared dependencies, run `deptry` from a
-  scratch environment (it is not a project dependency):
+- Supported Python: `>=3.12,<4.0` in `pyproject.toml`. Python 3.14 is allowed by the constraint, but
+  `langchain-core` still imports `pydantic.v1`, which warns on 3.14. PR-2 (planned, number to follow) replaces
+  those usages; PR-3 (planned, number to follow) adds a 3.14 CI step. CI runs 3.12 only today.
+- Pydantic is v2 only (`pydantic = ">=2.12,<3"`). `tests/unit/test_pydantic_v2_only.py` fails on v1-style APIs in
+  first-party code; `tests/unit/test_py314_pydantic_smoke.py` is an expected failure (xfail, not strict) until PR-2.
+- Optional `dev` group: `watchdog`, Streamlit's file watcher. Streamlit requires it only off macOS, so on a Mac use
+  `poetry install --with dev,test` for fast hot reload (without it Streamlit polls and reloads slower).
+- Poetry versions: `poetry.lock` is written by Poetry 2.5.1 (see its first line). Every workflow pins
+  `POETRY_VERSION: "1.7.1"` and installs from that lock. That mismatch predates this change. Re-lock with the
+  version named in the lock header so the format does not change: `pipx install poetry==2.5.1` then `poetry lock`.
+- Declare what first-party code imports. To find unused or undeclared dependencies, run `deptry` in the project
+  environment (it reads module names from the installed packages; this adds deptry to the venv until the next
+  `poetry install`):
 
   ```bash
-  python -m venv /tmp/deptry-venv && /tmp/deptry-venv/bin/pip install deptry
-  /tmp/deptry-venv/bin/deptry . --known-first-party cqc_cpcc --known-first-party cqc_streamlit_app
+  poetry run pip install deptry
+  poetry run deptry . --known-first-party cqc_cpcc --known-first-party cqc_streamlit_app
   ```
 
-  Expect `DEP002` noise for pytest plugins and packages used only through another package
-  (for example `protobuf`, `watchdog`); check a package by hand before removing it.
+  The `[tool.deptry]` section in `pyproject.toml` ignores the optional `nest_asyncio` import. Expect `DEP002`
+  noise for packages used only through another package or a tool; check by hand before removing one.
 
 ### 3. Configure Environment
 
