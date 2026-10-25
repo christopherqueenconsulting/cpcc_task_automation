@@ -400,3 +400,45 @@ def test_the_report_only_grader_and_the_v2_dataset():
                                                 "values_may_differ": True, "varying_markers": ["Roll:"]}]))
     payload = stdin_cases.to_payload(suggestion)
     assert payload["cases"][0]["values_may_differ"] is True and payload["cases"][0]["varying_markers"] == ["Roll:"]
+
+
+# --------------------------------------------------------------------------- #
+# Hostile input: every detector regex stays linear
+# --------------------------------------------------------------------------- #
+HOSTILE = [
+    "!" * 100000,
+    "random " * 50000,
+    ". " * 50000,
+    "?" * 100000 + "x",
+    " " * 100000 + "random print",
+    "may " * 30000,
+    "print " + "a[" * 30000,
+    "\n" * 100000,
+]
+
+
+@pytest.mark.parametrize("text", HOSTILE, ids=range(len(HOSTILE)))
+def test_the_detector_is_linear_on_hostile_instructions_and_solutions(text):
+    import time
+
+    start = time.perf_counter()
+    tcg.detect_variable_values(text)
+    tcg.detect_variable_values("", text)
+    tcg.detect_variable_values("", "/*" * 50000)
+    tcg.detect_variable_values("", "x = random.randint(1, 6)\n" + "print (" + " " * 50000 + "x\n" * 2000)
+    assert time.perf_counter() - start < 1.0
+
+
+def test_marker_cleaning_skips_non_strings_and_caps_the_count():
+    assert tcg.clean_markers(None) == []
+    assert tcg.clean_markers([5, None, "a", "ok"]) == ["ok"]
+    assert len(tcg.clean_markers([f"marker {i}" for i in range(20)])) == tcg.MAX_MARKERS
+
+
+def test_block_comments_are_removed_without_regex_and_an_open_one_ends_the_text():
+    text = "a /* hide random.randint( */ b // tail\n# py\n#include <random>\nc /* open"
+    out = tcg._strip_comments(text)
+    assert "hide" not in out and "tail" not in out and "py" not in out and "#include <random>" in out
+    assert out.rstrip().endswith("c")
+    # A commented-out API call is not a finding.
+    assert tcg.detect_variable_values("", "/* x = random.randint(1,2) */\nprint('hi')\n") == []

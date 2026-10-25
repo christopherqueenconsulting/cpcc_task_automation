@@ -749,6 +749,9 @@ REASON_MODEL = "The AI model marked this output as varying between runs."
 MAX_MARKERS = 5
 MAX_MARKER_CHARS = 60
 _MAX_SCAN_CHARS = 60000
+_MAX_INSTRUCTION_CHARS = 20000
+_MAX_SENTENCE_CHARS = 2000
+_MAX_LINE_CHARS = 2000
 
 
 def clean_markers(markers: Iterable) -> list:
@@ -786,7 +789,7 @@ _REASON_TEXT = {
     ("stime", False): "The solution reads the clock; it is unclear whether it is printed: no case marked.",
 }
 
-_SENTENCE = re.compile(r"[.!?]+(?=\s|$)|[;\n]+")
+_SENTENCE = re.compile(r"[.!?](?=\s|$)|[;\n]")  # one character per match: linear on any run
 _OUT_TIE = re.compile(
     r"\b(?:outputs?|prints?|printed|printing|displays?|displayed|displaying|shows?|showing|shown|"
     r"values?|results?)\b")
@@ -808,8 +811,8 @@ _VARY_WORDS = re.compile(
 
 
 def _instruction_findings(instructions: str) -> list:
-    text = (instructions or "")[:_MAX_SCAN_CHARS].casefold().encode("ascii", "ignore").decode("ascii")
-    sentences = [" ".join(part.split()) for part in _SENTENCE.split(text)]
+    text = (instructions or "")[:_MAX_INSTRUCTION_CHARS].casefold().encode("ascii", "ignore").decode("ascii")
+    sentences = [" ".join(part[:_MAX_SENTENCE_CHARS].split()) for part in _SENTENCE.split(text)]
     seeded = any(_SEEDED.search(sent) for sent in sentences)
     flagged: dict = {}
     hints: dict = {}
@@ -834,17 +837,17 @@ def _instruction_findings(instructions: str) -> list:
 
 _COMMENT_OR_IMPORT = re.compile(r"^\s*(?:import\b|from\s+\w+\s+import\b|#\s*include\b|using\b)")
 _RANDOM_USE = re.compile(
-    r"\bnew\s+Random\b|\bMath\.random\s*\(|\bThreadLocalRandom\b|\bSecureRandom\b|\brand\s*\(|"
-    r"\bmt19937\b|\bdefault_random_engine\b|\brandom_device\b|\brandom\.\w+\s*\(|\bshuffle\s*\(|"
-    r"\buuid\.uuid4\b|\bUUID\.randomUUID\b|\bsecrets\.\w+\s*\(")
+    r"\bnew\s{1,20}Random\b|\bMath\.random\s{0,20}\(|\bThreadLocalRandom\b|\bSecureRandom\b|\brand\s{0,20}\(|"
+    r"\bmt19937\b|\bdefault_random_engine\b|\brandom_device\b|\brandom\.\w+\s{0,20}\(|\bshuffle\s{0,20}\(|"
+    r"\buuid\.uuid4\b|\bUUID\.randomUUID\b|\bsecrets\.\w+\s{0,20}\(")
 _TIME_USE = re.compile(
-    r"\bSystem\.(?:currentTimeMillis|nanoTime)\s*\(|\bLocalDate(?:Time)?\.now\s*\(|\bInstant\.now\s*\(|"
-    r"\bnew\s+Date\s*\(|\bCalendar\.getInstance\b|\btime\s*\(\s*(?:NULL|nullptr|0)?\s*\)|"
-    r"\bdatetime\.(?:now|today|utcnow)\s*\(|\btime\.time\s*\(|\bdate\.today\s*\(|\bclock\s*\(\s*\)|"
+    r"\bSystem\.(?:currentTimeMillis|nanoTime)\s{0,20}\(|\bLocalDate(?:Time)?\.now\s{0,20}\(|\bInstant\.now\s{0,20}\(|"
+    r"\bnew\s{1,20}Date\s{0,20}\(|\bCalendar\.getInstance\b|\btime\s{0,20}\(\s{0,20}(?:NULL|nullptr|0)?\s{0,20}\)|"
+    r"\bdatetime\.(?:now|today|utcnow)\s{0,20}\(|\btime\.time\s{0,20}\(|\bdate\.today\s{0,20}\(|\bclock\s{0,20}\(\s{0,20}\)|"
     r"\bchrono::\w+_clock")
-_PRINT = re.compile(r"\bSystem\.out\.|\bprintf\s*\(|\bcout\b|\bprint\s*\(|\bputs\s*\(|\bprintln\b")
-_ASSIGN = re.compile(r"\b([A-Za-z_]\w*)\s*(?:\[[^\]\n]*\]\s*)?[-+*/%]?=(?!=)")
-_DECL = re.compile(r"\b(?:Random|SecureRandom|mt19937(?:_64)?|default_random_engine|random_device)\s+([A-Za-z_]\w*)")
+_PRINT = re.compile(r"\bSystem\.out\.|\bprintf\s{0,20}\(|\bcout\b|\bprint\s{0,20}\(|\bputs\s{0,20}\(|\bprintln\b")
+_ASSIGN = re.compile(r"\b([A-Za-z_]\w*)\s{0,20}(?:\[[^\]\n]{0,80}\]\s*)?[-+*/%]?=(?!=)")
+_DECL = re.compile(r"\b(?:Random|SecureRandom|mt19937(?:_64)?|default_random_engine|random_device)\s{1,20}([A-Za-z_]\w*)")
 _IDENT = re.compile(r"[A-Za-z_]\w*")
 
 
@@ -872,15 +875,40 @@ def _reaches_output(lines: Sequence[str], use: "re.Pattern") -> bool:
     return False
 
 
+def _strip_comments(text: str) -> str:
+    """Block comments (found with ``str.find``, linear) and line comments removed. A ``#include`` stays."""
+    parts, pos = [], 0
+    while True:
+        start = text.find("/*", pos)
+        if start == -1:
+            parts.append(text[pos:])
+            break
+        parts.append(text[pos:start])
+        end = text.find("*/", start + 2)
+        if end == -1:
+            break
+        parts.append(" ")
+        pos = end + 2
+    kept = []
+    for line in "".join(parts).splitlines():
+        cut = line.find("//")
+        if cut != -1:
+            line = line[:cut]
+        if line.lstrip().startswith("#") and not line.lstrip().startswith("#include"):
+            line = ""
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _solution_findings(solution: Union[SolutionSources, str]) -> list:
     text = solution.combined_text() if isinstance(solution, SolutionSources) else (solution or "")
-    text = _COMMENT.sub(" ", text[:_MAX_SCAN_CHARS * 2])
-    lines = text.splitlines()
+    text = _strip_comments(text[:_MAX_SCAN_CHARS])
+    lines = [line[:_MAX_LINE_CHARS] for line in text.splitlines()]
     out = []
     for code, use in (("srandom", _RANDOM_USE), ("stime", _TIME_USE)):
         if any(use.search(line) and not _COMMENT_OR_IMPORT.match(line) for line in lines):
-            out.append(VariationFinding(code, _REASON_TEXT[(code, _reaches_output(lines, use))],
-                                        _reaches_output(lines, use)))
+            reaches = _reaches_output(lines, use)
+            out.append(VariationFinding(code, _REASON_TEXT[(code, reaches)], reaches))
     return out
 
 
