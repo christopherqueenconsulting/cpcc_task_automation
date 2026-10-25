@@ -12,7 +12,7 @@ from cqc_cpcc.model_eval import error_detail
 pytestmark = pytest.mark.unit
 
 # 12-31 chars and no shape the _SECRETS patterns match, so only the env-value replacement can redact it.
-SECRET = "zq-opaque-val-48151"
+SECRET = "not-a-real-credential"
 
 
 class VanishingEnviron:
