@@ -76,3 +76,61 @@ async def test_test_mode_returns_a_valid_grade(monkeypatch):
     grade = await fg.grade_flowgorithm("A", "T", "S", "f.fprg", "50")
     assert isinstance(grade, fg.FlowgorithmGrade)
     assert "Final grade: 45 / 50" in fg.render_markdown(grade, 50)
+
+
+# --- file-name scrub (same pii_redaction.scrub as the rubric ZIP path) -------------------------
+
+from cqc_cpcc.utilities import pii_redaction  # noqa: E402
+from cqc_cpcc.utilities.AI import untrusted_fence  # noqa: E402
+
+_NONCE = "n0nce1234"
+
+
+@pytest.fixture
+def ada_registered():
+    pii_redaction.clear_registry()
+    pii_redaction.register_student("Ada Example")
+    yield pii_redaction.alias("Ada Example")
+    pii_redaction.clear_registry()
+
+
+def _file_name_block(user, nonce=_NONCE):
+    opening, closing = untrusted_fence.markers("File Name", nonce)
+    return user.split(opening, 1)[1].split(closing, 1)[0].strip("\n")
+
+
+def test_registered_student_name_in_file_name_is_scrubbed_in_the_user_message(ada_registered):
+    _, user = fg.build_flowgorithm_messages("A", "T", "SUB", "Ada_Example_Sum", "50", nonce=_NONCE)
+    assert _file_name_block(user) == f"{ada_registered}_Sum"
+    assert "Ada" not in user and "Example" not in user
+
+
+def test_folder_style_and_email_file_names_are_scrubbed():
+    pii_redaction.clear_registry()
+    _, user = fg.build_flowgorithm_messages("A", "T", "SUB", "12345-67890 - Ada Example", "50", nonce=_NONCE)
+    assert _file_name_block(user) == pii_redaction.alias("Ada Example")
+    _, user = fg.build_flowgorithm_messages("A", "T", "SUB", "ada.example@cpcc.edu", "50", nonce=_NONCE)
+    assert _file_name_block(user) == "<email>"
+
+
+@pytest.mark.parametrize("name", ["Sum", "Sum.fprg", "Student_A", "OrderTotal", "Project2_20241031"])
+def test_ordinary_file_names_pass_unchanged(name):
+    pii_redaction.clear_registry()
+    _, user = fg.build_flowgorithm_messages("A", "T", "SUB", name, "50", nonce=_NONCE)
+    assert _file_name_block(user) == name
+
+
+def test_the_prompt_builder_scrubs_too(ada_registered):
+    prompt = fg.build_flowgorithm_prompt("A", "T", "SUB", "Ada_Example_Sum", "50", nonce=_NONCE)
+    assert "Ada" not in prompt and ada_registered in prompt
+
+
+async def test_grade_flowgorithm_scrubs_when_called_directly(monkeypatch, ada_registered):
+    from cqc_cpcc.utilities.AI import llm_gateway
+
+    structured = AsyncMock(return_value=_grade())
+    monkeypatch.setattr(llm_gateway, "structured", structured)
+    await fg.grade_flowgorithm("A", "T", "SUB", "Ada_Example_Sum", "50")
+    prompt = structured.await_args.kwargs["prompt"]
+    assert "Ada" not in prompt and "Example" not in prompt
+    assert f"{ada_registered}_Sum" in prompt

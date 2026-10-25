@@ -20,6 +20,7 @@ from cqc_cpcc.prompts.flowgorithm import (
 from cqc_cpcc.rubric_grading import MESSAGE_SEPARATOR
 from cqc_cpcc.utilities.AI import untrusted_fence
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.utilities.pii_redaction import scrub
 
 
 class Deduction(BaseModel):
@@ -49,7 +50,12 @@ def build_flowgorithm_messages(assignment: str, rubric_criteria_markdown_table: 
     points), then the per-call nonce line and the file name and submission inside nonce fences
     (``utilities/AI/untrusted_fence`` strips marker-shaped text from both), then a closing line.
     ``nonce`` fixes the fence nonce (prompt fingerprints); real calls leave it unset.
+
+    The file name is scrubbed with ``pii_redaction.scrub`` before it is fenced, the same way the
+    rubric ZIP path scrubs ``Submission File Name``, so every caller is covered. Ordinary names
+    pass through unchanged. The submission body is sent as written.
     """
+    submission_file_name = scrub(submission_file_name)
     nonce = nonce or untrusted_fence.new_nonce()
     static = FLOWGORITHM_USER_STATIC_TEMPLATE.strip().format(
         assignment=assignment,
