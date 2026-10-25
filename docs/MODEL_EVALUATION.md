@@ -139,9 +139,43 @@ caching in evals".
 | Current model fails a hard gate (drift) | same issue; nothing is promoted |
 | Current model expiring or silently changed by OpenRouter | same issue; a replacement needs your merge |
 | Weekly discovery did not happen (GitHub disabled the schedule) | the heartbeat opens an issue after 10 days |
+| The account's or key's spending limit is reached (HTTP 403 "Budget limit exceeded" or HTTP 402) | the run stops at the first such call: status `aborted_account_limit`, no scores, no decisions, no winner, exit status 3, and a fixed `RUN ABORTED: ...` line first in the scorecard (the gateway message is not quoted); nothing is promoted and discovery retries the candidates later. The failed job is the alert; the issue says only that the evaluation job failed. The maintainer (the OpenRouter workspace and key owner) raises or resets the limit, then the run is dispatched again |
 | The winner gets worse on another prompt of its roles | cross-suite gate fails; nothing is promoted; issue opened |
 | Model changed on master | issue "Model change on master: git pull + restart" (+ ClickUp task if configured) |
 | Auto-merge refused | comment on the PR explaining why, label switched to `blocked-on-chris` |
+
+### The spending limit and a run that is stopped by it
+
+If the OpenRouter account or key has no budget left, every call fails the same way, so the run does not go on.
+`account_limit.py` recognises HTTP 402 and a 403 whose gateway message names an exceeded budget, key or credit
+limit (a plain 403 is not one). The first such call stops the run: calls in flight are cancelled, nothing new is
+sent, the failed call is not charged to the local budget, and the scorecard has status `aborted_account_limit`
+with no scores. Only a `complete` scorecard can promote (`promote`, `verify-promotion` and `recompute` check it),
+so an aborted run can never change the registry, and `discover.load_history` does not count the candidates of an
+aborted run as evaluated. A per-request 402 (needs more credits or fewer max_tokens) also stops the run; the banner
+(fixed text) does not quote the gateway message; read eval.log's redacted line to tell the two apart; if it names
+max_tokens, lower the limit or set CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0 for that dispatch (set in the local `.env` or
+shell only; no workflow sets it).
+
+The artifacts and logs of this public repository are publicly readable, so free text from the gateway is never
+published: a call that ends on an account limit stores only `account_limit (HTTP 403)` in its `error_detail`, logs
+only its status and the fixed reason, and every other stored error message has links, addresses, amounts,
+mentions, `#NN` references and markup stripped. A local run can add the redacted gateway text to its log with
+`CQC_EVAL_LOG_GATEWAY_MESSAGE=1` (ignored when `GITHUB_ACTIONS` is set).
+Any error the gateway answered (it has an HTTP status) is logged as its status only, in the runner, the judges and the
+A/B alike; the base branch's own log and saved rows are scrubbed on this side before they are uploaded; a unit test
+fails if a logger or print call anywhere in `model_eval` formats exception text without `log_text`, `redact_message`
+or `scrub_log`.
+
+How the workflow sees it: `model_eval run` exits 3 and the `Run evaluation` step maps any non-zero exit to `exit 1`,
+so the `evaluate` job simply fails; the exit code 3 itself is not visible. An abort is told apart only by the
+artifact (`scorecard.json` status `aborted_account_limit`, and the `RUN ABORTED` banner in `scorecard.md`) and,
+since the `Record an account-limit abort` step, by the job output `scorecard_status`. `steps.run.outputs.status` is
+written on the abort path too (`_github_outputs` runs before the exit; the value is `aborted_account_limit`, `winner`
+is empty), and GitHub keeps outputs written by a step that later fails. The `update-state` job reads the aborted
+scorecard and writes one `aborted_account_limit` history row per model and no `attempted` row; `load_history` ignores
+them (a test runs that step's own Python on a real aborted scorecard). Details, the report wording and the rollback are in [`PROMPTS.md`](PROMPTS.md)
+under "The account's spending limit stops the whole run".
 
 ## Effort recommendation: measuring the right effort
 
