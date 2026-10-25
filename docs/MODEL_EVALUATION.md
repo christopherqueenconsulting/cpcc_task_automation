@@ -155,7 +155,16 @@ so an aborted run can never change the registry, and `discover.load_history` doe
 aborted run as evaluated. A per-request 402 (needs more credits or fewer max_tokens) also stops the run; the banner
 (fixed text) does not quote the gateway message; read eval.log's redacted line to tell the two apart; if it names
 max_tokens, lower the limit or set CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0 for that dispatch (set in the local `.env` or
-shell only; no workflow sets it). Details, the report wording and the rollback are in [`PROMPTS.md`](PROMPTS.md)
+shell only; no workflow sets it).
+
+How the workflow sees it: `model_eval run` exits 3 and the `Run evaluation` step maps any non-zero exit to `exit 1`,
+so the `evaluate` job simply fails; the exit code 3 itself is not visible. An abort is told apart only by the
+artifact (`scorecard.json` status `aborted_account_limit`, and the `RUN ABORTED` banner in `scorecard.md`) and,
+since the `Record an account-limit abort` step, by the job output `scorecard_status`. `steps.run.outputs.status` is
+written on the abort path too (`_github_outputs` runs before the exit; the value is `aborted_account_limit`, `winner`
+is empty), and GitHub keeps outputs written by a step that later fails. The `update-state` job reads the aborted
+scorecard and writes one `aborted_account_limit` history row per model and no `attempted` row; `load_history` ignores
+them (a test runs that step's own Python on a real aborted scorecard). Details, the report wording and the rollback are in [`PROMPTS.md`](PROMPTS.md)
 under "The account's spending limit stops the whole run".
 
 ## Effort recommendation: measuring the right effort

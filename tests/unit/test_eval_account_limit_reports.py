@@ -265,6 +265,71 @@ class TestHistory:
         assert load_history(tmp_path / "missing.jsonl") == set()
 
 
+class TestWorkflowStateWriter:
+    """The aborted ``run`` scorecard fed to the real inline Python of model-eval.yml's ``update-state`` step."""
+
+    @staticmethod
+    def _writer_code():
+        """The ``python3 - <<'PY'`` block of the 'Record snapshot and history' step, read from the YAML (not edited)."""
+        import pathlib
+
+        import yaml
+
+        path = pathlib.Path(pa.REPO_ROOT) / ".github" / "workflows" / "model-eval.yml"
+        text = path.read_text(encoding="utf-8")
+        steps = yaml.safe_load(text)["jobs"]["update-state"]["steps"]
+        run = next(s["run"] for s in steps if s.get("name", "").startswith("Record snapshot and history"))
+        head, _, rest = run.partition("python3 - <<'PY'\n")
+        code, _, _tail = rest.partition("\nPY\n")
+        assert code.strip(), "could not extract the python block from model-eval.yml"
+        # the key lines this test depends on: if the workflow changes them, this fails loudly
+        assert 'for label, m in sc.get("models", {}).items():' in code
+        assert '"status": sc.get("status")' in code and '"status": "attempted"' in code
+        assert 'if model not in recorded:' in code
+        return code
+
+    def test_an_aborted_run_leaves_history_rows_that_discovery_ignores(self, tmp_path, monkeypatch):
+        import datetime as dt
+        import os
+
+        from cqc_cpcc.model_eval.discover import load_history
+
+        cli, _ = helpers_model_eval(tmp_path, monkeypatch)
+        art = tmp_path / "artifact"
+        state = tmp_path / "state"
+        art.mkdir()
+        state.mkdir()
+        assert cli.main(["run", "--limit", "3", "--out", str(art), "--run-id", "77", "--candidate", "openai/gpt-5@low"]) == 3
+        sc = json.loads((art / "scorecard.json").read_text())
+        assert sc["status"] == "aborted_account_limit" and all(m["composite"] is None for m in sc["models"].values())
+        (art / "attempted.txt").write_text("openai/gpt-5@low\n")  # what the 'Run evaluation' step writes
+        (art / "candidates.json").write_text(json.dumps({"candidates": [
+            {"model_id": "openai/gpt-5", "canonical_slug": "openai/gpt-5-20260101"}]}))
+        # earlier, genuine history: one scored row, one attempted row
+        today = dt.date.today().isoformat()
+        (state / "history.jsonl").write_text(
+            json.dumps({"run_id": "5", "label": "a/real", "canonical_slug": "a/real", "composite": 0.9,
+                        "status": "complete"}) + "\n"
+            + json.dumps({"run_id": "6", "label": "a/failed", "canonical_slug": "a/failed", "status": "attempted",
+                          "date": today}) + "\n")
+        monkeypatch.chdir(state)
+        monkeypatch.setenv("RUN_ID", "77")
+        exec(compile(self._writer_code(), "model-eval.yml:update-state", "exec"), {"__name__": "__workflow__"})
+        rows = [json.loads(line) for line in (state / "history.jsonl").read_text().splitlines()]
+        new = [r for r in rows if r["run_id"] == "77"]
+        assert {r["label"] for r in new} == set(sc["models"]) and len(new) == len(sc["models"])
+        assert all(r["status"] == "aborted_account_limit" and r["composite"] is None for r in new)
+        assert not [r for r in new if r["status"] == "attempted"]  # no attempted row for these candidates
+        slugs = load_history(state / "history.jsonl", today=dt.date.today())
+        assert slugs == {"a/real", "a/failed"}  # the genuine rows still count; none of the aborted run's models do
+        assert "openai/gpt-5-20260101" not in slugs and "openai/gpt-5" not in slugs
+        os.chdir(tmp_path)
+
+
+def helpers_model_eval(tmp_path, monkeypatch):
+    return TestCliPaths()._model_eval(tmp_path, monkeypatch)
+
+
 class TestRemainingBranches:
     def test_the_switch_accepts_on_values(self, monkeypatch):
         for value in ("1", "on", "TRUE", "yes", ""):
