@@ -282,6 +282,7 @@ async def _run_one_suite(suite_id: str, models: list[tuple[str, Optional[str]]],
             if account_limit.tripped():
                 break  # nothing of an aborted run is scored
             if judges:
+                adaptive._install_judge_route()  # also without a pool: it keeps a limit error's text out of the log
                 try:
                     judge_scores = await jm.judge_records(suite, cases, records, judge_model, cache, budget,
                                                           dataset_version=suite.dataset, evaluated_model=model)
@@ -291,6 +292,8 @@ async def _run_one_suite(suite_id: str, models: list[tuple[str, Optional[str]]],
                     if not account_limit.note_if_account_limit(e):
                         raise
                     break
+                if account_limit.tripped():
+                    break  # a judge call hit the limit (its error is swallowed by the judge): nothing is scored
             aggregates[label_of(model, effort)] = aggregate(suite, cases, records, judge_scores)
             if any(r.error_kind == "budget" for r in records):
                 status = "incomplete_budget"

@@ -37,6 +37,17 @@ _SECRETS = (
 )
 _SECRET_ENV_NAME = re.compile(r"(?i)KEY|TOKEN|SECRET")
 
+# Things a gateway message can carry that a public log or artifact must not: links, addresses, money, mentions,
+# issue references and markup. (Organisation or account names cannot be recognised in free text; a message about
+# an account limit is therefore never stored at all, see ``describe_failure`` and ``account_limit.py``.)
+_URL = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_DOMAIN = re.compile(r"(?i)\b[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|ai|dev|edu|gov|co|app|us|uk)\b")
+_AMOUNT = re.compile(r"[$\u20ac\u00a3]\s?\d[\d,]*(?:\.\d+)?(?:\s?[kKmMbB]\b)?")
+_MENTION = re.compile(r"(?<!\w)@\w+")
+_REF = re.compile(r"(?<!\w)#\d+")
+_MARKUP = str.maketrans("", "", "<>`*|[]~\\")
+
 
 def _drop_long_quotes(text: str) -> str:
     """Drop quoted spans longer than ``QUOTE_LIMIT`` (and any past ``QUOTE_TOTAL`` in all).
@@ -86,6 +97,10 @@ def redact_message(message, limit: int = MESSAGE_LIMIT) -> str:
     """
     text = " ".join(str(message if message is not None else "").split())
     text = text.split("{", 1)[0]
+    text = text.translate(_MARKUP)  # HTML and markdown characters first (the markers added below contain brackets)
+    for pattern, marker in ((_URL, "[url]"), (_EMAIL, "[email]"), (_DOMAIN, "[domain]"), (_AMOUNT, "[amount]"),
+                            (_MENTION, "[mention]"), (_REF, "[ref]")):
+        text = pattern.sub(marker, text)
     text = _drop_long_quotes(text)
     for value in _secret_env_values():
         text = text.replace(value, "[redacted]")
@@ -103,6 +118,23 @@ def failure_message(error: BaseException):
         if isinstance(body, dict) and isinstance(body.get("message"), str):
             return body["message"]
     return str(error)
+
+
+def log_text(error: BaseException) -> str:
+    """What may be written to a log for ``error``: the redacted gateway text, except for an account limit.
+
+    An account-limit failure logs only its HTTP status and the fixed reason code. The (redacted) gateway text is
+    added only when ``CQC_EVAL_LOG_GATEWAY_MESSAGE=1`` and ``GITHUB_ACTIONS`` is unset (a local run): the logs and
+    artifacts of a public repository are publicly readable.
+    """
+    from cqc_cpcc.model_eval import account_limit
+
+    if account_limit.is_account_limit(error):
+        text = f"HTTP {http_status(error)} {account_limit.REASON}"
+        if account_limit.gateway_log_enabled():
+            text += f" (gateway message, local run only: {redact_message(failure_message(error))})"
+        return text
+    return redact_message(failure_message(error))
 
 
 def _chain(error: BaseException):
@@ -163,19 +195,25 @@ def describe_failure(error: BaseException, attempt: int, latency_s: Optional[flo
     ``usage`` (a truncated attempt's ``finish_reason`` / token counts / real cost, when known) is added as
     plain numbers; a value that is not a finite number (or, for ``finish_reason``, a short word) is dropped.
     """
+    from cqc_cpcc.model_eval import account_limit  # lazy: account_limit imports this module
+
+    limit = account_limit.is_account_limit(error)
     detail = {
         "attempt": attempt,
         "exception": type(error).__name__,
         "chain": [type(e).__name__ for e in _chain(error)][1:5],
         "status": http_status(error),
-        "message": redact_message(failure_message(error)),
+        # an account-limit failure keeps only a fixed code: the gateway's text can name the organisation, the
+        # amounts and the key, and this row goes into an artifact of a public repository
+        "message": (f"{account_limit.REASON} (HTTP {http_status(error)})" if limit
+                    else redact_message(failure_message(error))),
         "latency_s": round(latency_s, 3) if latency_s is not None else None,
         "retried": retried,
     }
     for e in _chain(error):
         body = getattr(e, "body", None)
         body = body.get("error", body) if isinstance(body, dict) else None
-        if isinstance(body, dict):
+        if isinstance(body, dict) and not limit:
             detail.setdefault("code", _short(body.get("code")))
             detail.setdefault("type", _short(body.get("type")))
             meta = body.get("metadata")

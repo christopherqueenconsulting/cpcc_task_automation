@@ -157,6 +157,12 @@ aborted run as evaluated. A per-request 402 (needs more credits or fewer max_tok
 max_tokens, lower the limit or set CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0 for that dispatch (set in the local `.env` or
 shell only; no workflow sets it).
 
+The artifacts and logs of this public repository are publicly readable, so free text from the gateway is never
+published: a call that ends on an account limit stores only `account_limit (HTTP 403)` in its `error_detail`, logs
+only its status and the fixed reason, and every other stored error message has links, addresses, amounts,
+mentions, `#NN` references and markup stripped. A local run can add the redacted gateway text to its log with
+`CQC_EVAL_LOG_GATEWAY_MESSAGE=1` (ignored when `GITHUB_ACTIONS` is set).
+
 How the workflow sees it: `model_eval run` exits 3 and the `Run evaluation` step maps any non-zero exit to `exit 1`,
 so the `evaluate` job simply fails; the exit code 3 itself is not visible. An abort is told apart only by the
 artifact (`scorecard.json` status `aborted_account_limit`, and the `RUN ABORTED` banner in `scorecard.md`) and,

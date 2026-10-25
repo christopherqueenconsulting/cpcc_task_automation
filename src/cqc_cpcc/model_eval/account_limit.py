@@ -41,6 +41,7 @@ STATUS = "aborted_account_limit"
 #: The only cause stored in a scorecard or report: a fixed code, never the gateway's free text.
 REASON = "account_limit"
 ENV_ABORT = "CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT"
+ENV_LOG_MESSAGE = "CQC_EVAL_LOG_GATEWAY_MESSAGE"
 #: ``cmd_*`` exit code of a command whose run was aborted.
 EXIT_CODE = 3
 
@@ -66,6 +67,19 @@ def abort_enabled() -> bool:
     if value in _ON:
         return True
     raise ValueError(f"{ENV_ABORT} must be one of 0/1/on/off/true/false/yes/no, got {raw!r}")
+
+
+def gateway_log_enabled() -> bool:
+    """True only for a local run that asked for it: ``CQC_EVAL_LOG_GATEWAY_MESSAGE=1`` and no ``GITHUB_ACTIONS``."""
+    return os.environ.get(ENV_LOG_MESSAGE, "").strip() == "1" and not os.environ.get("GITHUB_ACTIONS")
+
+
+class AccountLimitError(RuntimeError):
+    """What a judge call raises for an account limit: the status and the fixed reason, never the gateway text."""
+
+    def __init__(self, status):
+        super().__init__(f"HTTP {status} {REASON}")
+        self.status_code = status
 
 
 def _gateway_message(error: BaseException) -> Optional[str]:
@@ -108,7 +122,8 @@ def is_account_limit(error: BaseException) -> bool:
 def is_account_limit_detail(detail: dict) -> bool:
     """The same test on a saved ``error_detail`` entry (status and redacted message), for old artifacts."""
     return bool(isinstance(detail, dict) and detail.get("status") in (402, 403)
-                and (detail.get("status") == 402 or _limit_message(detail.get("message"))))
+                and (detail.get("status") == 402 or str(detail.get("message") or "").startswith(REASON)
+                     or _limit_message(detail.get("message"))))
 
 
 class RunAborted(BaseException):
@@ -124,7 +139,8 @@ class AbortState:
     def __init__(self) -> None:
         self.tripped = False
         self.status: Optional[int] = None
-        #: The redacted gateway message. LOCAL LOG ONLY: it is never put in a report, a scorecard or a comment.
+        #: The redacted gateway message, kept only for a local run that set CQC_EVAL_LOG_GATEWAY_MESSAGE=1
+        #: (never in CI). It is never put in a report, a scorecard, an artifact or a comment.
         self.message: Optional[str] = None
         self._tasks: set = set()
 
@@ -145,9 +161,10 @@ class AbortState:
         if first:
             self.tripped = True
             self.status = error_detail.http_status(error)
-            self.message = error_detail.redact_message(error_detail.failure_message(error))
-            logger.warning(f"[eval log only] account limit reached (HTTP {self.status}); the gateway's own message, "
-                           f"redacted, kept out of every report: {self.message}")
+            self.message = (error_detail.redact_message(error_detail.failure_message(error))
+                            if gateway_log_enabled() else None)
+            logger.warning(f"account limit reached (HTTP {self.status} {REASON}); the run is stopping"
+                           + (f"; gateway message (local run only): {self.message}" if self.message else ""))
         try:
             me = asyncio.current_task()
         except RuntimeError:

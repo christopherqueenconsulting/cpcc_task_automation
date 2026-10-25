@@ -751,7 +751,12 @@ def _install_judge_route() -> None:
     original = judges._ask
 
     async def routed(judge_id, prompt, schema, judge_model):
-        return await judge_call(lambda: original(judge_id, prompt, schema, judge_model))
+        try:
+            return await judge_call(lambda: original(judge_id, prompt, schema, judge_model))
+        except Exception as e:  # noqa: BLE001 - only the account limit is rewritten
+            if account_limit.note_if_account_limit(e):  # stops the run; judges.py logs str(e), which must stay clean
+                raise account_limit.AccountLimitError(error_detail.http_status(e)) from None
+            raise
 
     judges._ask = routed
     _judge_route_installed = True

@@ -164,7 +164,9 @@ class TestClassification:
         assert not account_limit.is_account_limit_detail({"status": 403, "message": "Forbidden"})
         assert not account_limit.is_account_limit_detail({"status": 500, "message": MESSAGE})
 
-    def test_the_stored_message_is_redacted(self):
+    def test_the_stored_message_is_redacted_and_only_kept_for_a_local_run_that_asks(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        monkeypatch.setenv(account_limit.ENV_LOG_MESSAGE, "1")
         secret = "sk-or-v1-abcdef0123456789abcdef0123456789"
         error = limit_error(403, f"Budget limit exceeded (monthly limit) for key {secret}: 'a long quoted span of echoed prompt text'")
         state = account_limit.AbortState()
@@ -172,6 +174,15 @@ class TestClassification:
         assert state.message and secret not in state.message and "echoed prompt" not in state.message
         assert state.message.startswith("Budget limit exceeded (monthly limit)")
         assert state.status == 403 and state.info() == {"status": 403, "reason": "account_limit"}
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")  # in CI no message is kept, whatever the switch says
+        quiet = account_limit.AbortState()
+        quiet.trip(error)
+        assert quiet.message is None
+        monkeypatch.delenv("GITHUB_ACTIONS")
+        monkeypatch.delenv(account_limit.ENV_LOG_MESSAGE)  # and by default
+        quiet = account_limit.AbortState()
+        quiet.trip(error)
+        assert quiet.message is None
 
     def test_the_switch_turns_the_abort_off_but_not_the_classification(self, monkeypatch):
         monkeypatch.setenv(account_limit.ENV_ABORT, "0")

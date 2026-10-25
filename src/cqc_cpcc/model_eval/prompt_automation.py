@@ -700,7 +700,7 @@ def base_rule_markdown(decided: dict) -> str:
                      + ", ".join(f"`{s}`" for s in sorted(required)))
         for suite_id, r in decided["suites"].items():
             for reason in r.get("reasons", []):
-                lines.append(f"- `{suite_id}`: {reason}")
+                lines.append(f"- `{suite_id}`: {_safe(reason)}")
     else:
         body = ab_markdown({"base_ref": decided["base_sha"][:7], "status": decided["status"],
                             "suites": decided["suites"]})

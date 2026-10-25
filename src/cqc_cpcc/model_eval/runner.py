@@ -244,7 +244,7 @@ async def run_model(
                 record.error_kind = classify_error(e)
                 if record.error_kind == account_limit.KIND:
                     account_limit.note_if_account_limit(e)  # stops the whole run
-                logger.warning(f"[eval] {model} {case.case_id}#{repeat}: {record.error_kind}: {str(e)[:200]}")
+                logger.warning(f"[eval] {model} {case.case_id}#{repeat}: {record.error_kind}: {error_detail.log_text(e)}")
             call = llm_gateway.last_call()
             if call is before:
                 call = None

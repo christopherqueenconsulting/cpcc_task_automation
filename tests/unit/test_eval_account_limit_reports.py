@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from cqc_cpcc.model_eval import account_limit, prompt_automation as pa, prompt_eval
+from cqc_cpcc.model_eval import account_limit, error_detail, prompt_automation as pa, prompt_eval
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.suites import base
 from tests.unit import test_eval_account_limit as helpers
@@ -65,10 +65,50 @@ class TestPublicWording:
         assert_public((tmp_path / "base-rule.md").read_text())
         assert not [leak for leak in LEAKS if leak in (tmp_path / "ab-base-rule.json").read_text()]
 
-    def test_the_redacted_message_is_kept_only_in_the_local_log(self, caplog):
+    def test_the_gateway_text_is_logged_only_for_a_local_run_that_asks(self, caplog, monkeypatch):
+        error = limit_error(403, HOSTILE)
+        monkeypatch.delenv(account_limit.ENV_LOG_MESSAGE, raising=False)
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
         with caplog.at_level("WARNING"):
-            account_limit.AbortState().trip(limit_error(403, "Budget limit exceeded (monthly limit) for the key"))
-        assert "eval log only" in caplog.text and "Budget limit exceeded (monthly limit)" in caplog.text
+            account_limit.AbortState().trip(error)
+        assert "HTTP 403 account_limit" in caplog.text and "Budget limit" not in caplog.text
+        assert error_detail.log_text(error) == "HTTP 403 account_limit"
+        monkeypatch.setenv(account_limit.ENV_LOG_MESSAGE, "1")
+        assert "Budget limit exceeded" in error_detail.log_text(error) and "http" not in error_detail.log_text(error).split("(")[0]
+        redacted = error_detail.log_text(error)  # redacted even then (names cannot be recognised in free text)
+        assert not [bad for bad in ("<img", "http", "e.com", "$50.00", "$100", "a@b.co", "`code`", "#12", "[x](",
+                                    "*bold*", "| col") if bad in redacted]
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")  # CI: never, whatever the switch says
+        assert error_detail.log_text(error) == "HTTP 403 account_limit"
+
+    def test_a_hostile_run_leaks_nothing_to_artifacts_logs_or_stdout(self, tmp_path, monkeypatch, caplog, capsys):
+        async def script(case, n):
+            raise limit_error(403, HOSTILE)
+
+        toy_in_prompt_eval(monkeypatch, Calls(script))
+        with caplog.at_level("DEBUG"):
+            virtual(lambda: prompt_eval.run("toy", [], repeats=1, out=str(tmp_path), concurrency=1))
+        raw = (tmp_path / "toy" / "raw_outputs.jsonl").read_text()
+        row = json.loads(raw.splitlines()[0])
+        assert row["error_kind"] == "account_limit" and row["error_detail"][-1]["message"] == "account_limit (HTTP 403)"
+        for name, text in (("raw_outputs", raw), ("scorecard.json", (tmp_path / "toy" / "scorecard.json").read_text()),
+                           ("scorecard.md", (tmp_path / "toy" / "scorecard.md").read_text()), ("log", caplog.text),
+                           ("stdout", capsys.readouterr().out)):
+            assert not [leak for leak in LEAKS if leak in text], name
+
+    def test_the_not_run_reasons_of_the_base_check_are_neutralised(self):
+        decided = {"combined_status": "not-run", "status": "not-run", "base_sha": "abc1234", "head_sha": "d", "required": ["digest"],
+                   "pr_status": None, "suites": {"digest": {"reasons": ["ping @someone [x](http://e.com)"]}}}
+        md = pa.base_rule_markdown(decided)
+        assert "](" not in md and "@someone" not in md.replace("@\u200b", "")
+
+    def test_other_errors_are_redacted_more_strictly(self):
+        from cqc_cpcc.model_eval.error_detail import redact_message
+
+        text = redact_message("see https://x.example.com/a?b=1 or mail a@b.co about $1,200.50 for @bob (#42) <b>x</b> `c` *d* [e](f)")
+        assert not [bad for bad in ("http", "a@b.co", "$1,200", "@bob", "#42", "<b>", "`", "*", "[e](") if bad in text]
+        assert "[url]" in text and "[email]" in text and "[amount]" in text and "[mention]" in text and "[ref]" in text
+        assert redact_message("rate limited, retry after 5 s (code 429)") == "rate limited, retry after 5 s (code 429)"
 
 
 class TestCleanup:

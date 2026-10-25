@@ -328,7 +328,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 if held.last_error is not e:  # failed outside the model call (e.g. building the payload)
                     held.detail.append(error_detail.describe_failure(e, len(held.detail) + 1))
                 logger.warning(f"[prompt-eval:{suite.id}] {model} {case.case_id}#{repeat}: "
-                               f"{record.error_kind}: {error_detail.redact_message(error_detail.failure_message(e))}")
+                               f"{record.error_kind}: {error_detail.log_text(e)}")
             call = llm_gateway.last_call()
             if call is before:
                 call = None
@@ -450,7 +450,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                     records.append(record)
         if abort is not None and abort.tripped:
             logger.warning(f"[prompt-eval:{suite.id}] {model}: stopped by the account limit after "
-                           f"{len(records)} record(s) (gateway message, local log only: {abort.message})")
+                           f"{len(records)} record(s) (HTTP {abort.status} {account_limit.REASON})")
     if limiter is not None:
         snap = limiter.snapshot()
         logger.info(f"[prompt-eval:{suite.id}] concurrency: {adaptive.describe(snap)}")
