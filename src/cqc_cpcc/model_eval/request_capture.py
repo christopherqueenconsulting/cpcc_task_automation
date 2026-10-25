@@ -51,6 +51,14 @@ def _hash(value) -> str:
                           .encode("utf-8")).hexdigest()
 
 
+_CAPTURING = 0
+
+
+def capturing() -> bool:
+    """True while a capture (which refuses to send) is installed: batch mode must stay out of it."""
+    return _CAPTURING > 0
+
+
 class _NotSent(Exception):
     """Raised instead of sending: the capture needs the request, never a response."""
 
@@ -95,6 +103,8 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
                      if getattr(m, "_PROCESS_KEY", None) is not None]
     saved_keys = [m._PROCESS_KEY for m in fence_modules]
 
+    global _CAPTURING
+    _CAPTURING += 1
     saved = (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
              llm_gateway.structured)
     saved_analytics = os.environ.get("POSTHOG_LLM_ANALYTICS")
@@ -146,6 +156,7 @@ def _patched(sink: list, test_mode: bool, calls: Optional[list] = None):
     try:
         yield
     finally:
+        _CAPTURING -= 1
         for m, key in zip(fence_modules, saved_keys):
             m._PROCESS_KEY = key
         (openrouter_client._get_openrouter_client, asyncio.sleep, llm_gateway._is_test_mode,
