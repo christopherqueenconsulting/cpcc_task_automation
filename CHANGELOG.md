@@ -5,6 +5,10 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Eval batch mode is now scheduled-only: with `CQC_EVAL_BATCH=1` batching runs only when `GITHUB_EVENT_NAME=schedule`
+  (the weekly Model Evaluation) or `CQC_EVAL_BATCH_FORCE=1`; pull-request, push, dispatch, merge-queue and local runs
+  are sync so active sessions are not blocked for up to ~45-90 minutes. The decision is logged once per process.
+  No workflow file changed.
 - Dependencies: removed unused packages: langchain-community, langchain-openai, onnxruntime, os-env, datetime,
   chromium, tabulate, pandas-stubs, jupyter, setuptools, grandalf, and the test/e2e plugins pytest-watcher,
   pytest-profiling, pytest-timeout, pytest-playwright; also dropped the direct pins on protobuf, six and

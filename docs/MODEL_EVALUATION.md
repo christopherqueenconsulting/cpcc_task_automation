@@ -134,7 +134,10 @@ caching in evals".
 ## OpenRouter Batch API mode
 
 Eval runs (prompt A/B, the model comparison and its cross-suite gate) can send their calls as OpenRouter batches
-at about half the price. It is off in code (`CQC_EVAL_BATCH=0`) and on in the paid steps of `prompt-eval.yml` and
+at about half the price. Batching runs only on scheduled runs (`GITHUB_EVENT_NAME=schedule`, i.e. the weekly Model
+Evaluation) or with `CQC_EVAL_BATCH_FORCE=1`; pull-request, push, dispatch and merge-queue runs are sync so agents are
+not blocked for up to ~45-90 minutes (owner ruling, 2026-10-25). To force a manual one-off, set `CQC_EVAL_BATCH=1`,
+`CQC_EVAL_BATCH_ALLOW_RETENTION=1` and `CQC_EVAL_BATCH_FORCE=1`. It is off in code (`CQC_EVAL_BATCH=0`) and on in the paid steps of `prompt-eval.yml` and
 `model-eval.yml`, which also set `CQC_EVAL_BATCH_ALLOW_RETENTION=1`: batch data is retained by the provider for 30
 days (zero data retention is not supported), so it is limited to the synthetic datasets under `evals/datasets` and
 is never used for production grading or student data (ruling relayed by the maintainer from the owner's chat,
