@@ -26,7 +26,8 @@ edits it. The evaluation workflow that grades these prompts is planned in
 | `flowgorithm-grade` | Flowgorithm grading (v3: system/user split): per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py:build_flowgorithm_messages`; `build_flowgorithm_prompt` joins them) | `FlowgorithmGrade` | suite `flowgorithm-grade` (24) |
 | `structured-fallback` | Retry suffix of `get_structured_completion`, which nothing calls (dead path) | – | `utilities/AI/openai_client.py:_build_fallback_prompt` | – | no |
 
-Each prompt is sent as a single user message (no system prompt) through
+`rubric-grading`, `exam-grading`, `project-feedback` and `flowgorithm-grade` are sent as a system
+message plus a user message; every other prompt is sent as a single user message (no system prompt). All go through
 `llm_gateway.structured()` with a strict JSON schema. (`flowgorithm-grade` moved off
 LangChain and free-text markdown in version 2; the page renders the same markdown from
 the structured result, with the final grade computed by the backend.) Every gateway call records `prompt_id@version` on
@@ -171,14 +172,16 @@ unchanged.
   bytes are identical up to the nonce line (fixture sizes, builder's local run: `project-feedback` 3,911
   system characters plus a 2,336-character user prefix; `flowgorithm-grade` 1,554 plus 149; real
   assignments are larger). The prefix must reach about 1,024 tokens to be cacheable, so a flowgorithm
-  assignment with a short rubric may stay under it. No session id is sent for these two prompts
-  (`prompt_cache.session_id_for` is only wired into rubric grading).
+  assignment with a short rubric may stay under it. In production no session id is sent for these two prompts
+  (`prompt_cache.session_id_for` is only wired into rubric grading). The prompt A/B is different: the eval harness sends a
+  `cqc-eval-*` session id and does a warm-first pass for every suite, these two included (`model_eval/cache_session.py`
+  `session_for_run`), so the A/B requests carry a session id that production requests do not.
 - **A/B plan**: the maintainer dispatches mode `ab` with suites `project-feedback,flowgorithm-grade` and
   their judges. Pass rule: non-inferior at the registry margin, `injection_pass_rate` stays 1.000.
   **Rollback:** `git revert`; the prompt version is in the run key, so only new runs change.
 - Layout test: `tests/unit/test_eval_prompt_cache.py` lists both suites with the system/user suites. The
   suites' cases are different assignments, so for `flowgorithm-grade` the prefix shared by all 12 cases
-  is the system message alone (1,592 characters measured, builder's local run).
+  is the system message alone (1,592 characters, builder's local run).
 
 ## Guidelines and v4
 
@@ -761,10 +764,10 @@ never changes an output, so no gate, grader, score or threshold reads any of thi
   per suite with the send refused. `grading`, `grading-levelband`, `exam-grading`, `grading-solution` and (since the
   v6/v3 split) `project-feedback` and `flowgorithm-grade` send a `system` + `user` pair, the system message is
   identical on every call, the fenced submission is in the user message after its first half, and the prefix
-  every rendered case shares is longer than 4,096 characters (measured 7,134 to 13,500; `flowgorithm-grade`
+  every rendered case shares is longer than 4,096 characters (builder's local run, `pytest tests/unit/test_eval_prompt_cache.py -s`: 7,134 to 13,500; `flowgorithm-grade`
   is the exception at 1,592, see its section). The other five (`requirement-extraction`, `effort-recommendation`,
   `requirement-solution-check`, `test-case-generation`, `digest`)
-  send a single `user` message and share fewer than 4,096 characters (measured 148 to 1,226). Since
+  send a single `user` message and share fewer than 4,096 characters (builder's local run, same command: 148 to 1,226). Since
   `project-feedback` v6 and `flowgorithm-grade` v3 those two send `system` + `user` as well (see their
   section above). Token figures are an estimate (4 characters per token); the providers' cache minimum
   is 1,024 tokens, so the five single-message suites are not expected to hit the cache until their
