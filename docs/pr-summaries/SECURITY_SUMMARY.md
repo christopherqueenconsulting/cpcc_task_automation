@@ -1,5 +1,8 @@
 # Security Fix Summary
 
+> **Historical note (2026-10):** `langchain-community`, `langchain-openai` and other packages named below were removed from `pyproject.toml` (unused; see the Dependencies section of `docs/CONTRIBUTING.md`). This document records an earlier state.
+
+
 ## Critical Security Update Applied ✅
 
 ### Issue

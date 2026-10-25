@@ -152,9 +152,9 @@ curl https://api.openai.com/v1/models \
 ```
 
 ### Tests Timeout
-**Solution**: Increase pytest timeout:
+**Solution**: Check network access and the model's availability, then rerun. `pytest-timeout` is not a project dependency, so there is no `--timeout` flag:
 ```bash
-poetry run pytest tests/integration/test_openai_structured_output_integration.py -v --timeout=60
+poetry run pytest tests/integration/test_openai_structured_output_integration.py -v
 ```
 
 ### Rate Limit Errors

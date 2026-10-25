@@ -5,6 +5,13 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Dependencies: removed unused packages (langchain-community, langchain-openai, onnxruntime, os-env, datetime,
+  chromium, tabulate, pandas-stubs, the dev group with jupyter, setuptools and grandalf, and the test/e2e plugins
+  pytest-watcher, pytest-profiling, pytest-timeout, pytest-playwright) and the direct pins on protobuf, watchdog,
+  six and typing-extensions (still installed, as dependencies of streamlit and others). The lock drops 103 packages
+  and bumps none. Declares pydantic `>=2.12,<3`, requests, urllib3
+  and (tests) python-dotenv. Run `poetry install --with test` after pulling; `--with dev` no longer exists.
+
 ## 0.2.0-rc7 - 2026-10-25
 
 Prerelease, on top of 0.2.0-rc6. Changes how rubric grading prompts are built (system and user messages, the

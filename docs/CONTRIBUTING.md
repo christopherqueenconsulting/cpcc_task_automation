@@ -75,12 +75,28 @@ git remote add upstream https://github.com/christopherqueenconsulting/cpcc_task_
 ### 2. Install Dependencies
 
 ```bash
-# Install all dependencies including dev, test, and lint groups
-poetry install --with dev,test,lint
+# Install all dependencies including the test and lint groups
+poetry install --with test,lint
 
 # Verify installation
 poetry run python --version  # Should show Python 3.12+
 ```
+
+### Dependencies
+
+- Supported Python: `>=3.12,<4.0` in `pyproject.toml`. Python 3.14 is allowed by the constraint; full 3.14
+  support also needs `langchain-core` to stop importing `pydantic.v1` (tracked as a follow-up).
+- Pydantic is v2 only (`pydantic = ">=2.12,<3"`). `tests/unit/test_pydantic_v2_only.py` fails on v1-style APIs in first-party code.
+- Declare what first-party code imports. To find unused or undeclared dependencies, run `deptry` from a
+  scratch environment (it is not a project dependency):
+
+  ```bash
+  python -m venv /tmp/deptry-venv && /tmp/deptry-venv/bin/pip install deptry
+  /tmp/deptry-venv/bin/deptry . --known-first-party cqc_cpcc --known-first-party cqc_streamlit_app
+  ```
+
+  Expect `DEP002` noise for pytest plugins and packages used only through another package
+  (for example `protobuf`, `watchdog`); check a package by hand before removing it.
 
 ### 3. Configure Environment
 

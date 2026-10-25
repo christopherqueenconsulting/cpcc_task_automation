@@ -107,8 +107,8 @@ DOCKER_TYPE = ""                        # LOCAL | REMOTE (unset = prompt)
 
 ### Key Libraries
 - **Data Processing**: pandas, BeautifulSoup4, python-docx, mammoth, pypdf, pymupdf
-- **Date/Time**: dateparser, datetime
-- **Environment**: `os.environ` via `env_constants.py`; `os-env` is declared in `pyproject.toml` but unused
+- **Date/Time**: dateparser (stdlib `datetime`)
+- **Environment**: `os.environ` via `env_constants.py`
 - **Display**: pyvirtualdisplay (for headless browser automation)
 
 ## Project Structure
