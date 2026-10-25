@@ -17,7 +17,6 @@ Key changes from LangChain version:
 
 from typing import TYPE_CHECKING, TypeVar
 
-from cqc_cpcc import prompt_cache
 from cqc_cpcc.utilities.AI import llm_gateway
 from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_messages
 from cqc_cpcc.utilities.AI.openai_exceptions import (
@@ -156,10 +155,6 @@ async def grade_exam_submission(
         f"preprocessing={'YES' if use_preprocessing else 'NO'})"
     )
 
-    # Off by default (CQC_PROMPT_CACHE_KEY): a hash of the static prefix, never student data.
-    cache_id = prompt_cache.session_id_for(
-        system_message, prompt, prompt_cache.EXAM_SUBMISSION_HEADING, model_name, None)
-
     try:
         result = await llm_gateway.structured(
             role="grading",
@@ -169,7 +164,6 @@ async def grade_exam_submission(
             override=None if use_auto_route else model_name,
             use_auto_route=use_auto_route,
             prompt_id="exam-grading",
-            **({"session_id": cache_id} if cache_id else {}),
         )
         # The exact request, for the LLM Prompt tab; never persisted.
         result = result.model_copy(update={

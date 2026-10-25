@@ -621,7 +621,7 @@ class TestAppSideSessionIdMeetsTheEvalSession:
 
     async def test_the_capture_hash_is_the_same_with_the_app_flag_on_or_off(self, monkeypatch):
         monkeypatch.delenv("CQC_PROMPT_CACHE_KEY", raising=False)
-        off = await rc.capture_suite("exam-grading")
+        off = await rc.capture_suite("grading")
         monkeypatch.setenv("CQC_PROMPT_CACHE_KEY", "on")
-        on = await rc.capture_suite("exam-grading")
+        on = await rc.capture_suite("grading")
         assert off == on and any(off["requests"].values())

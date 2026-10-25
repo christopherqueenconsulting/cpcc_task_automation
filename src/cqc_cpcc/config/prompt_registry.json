@@ -185,7 +185,7 @@
       ]
     },
     "exam-grading": {
-      "version": 4,
+      "version": 3,
       "status": "live",
       "role": "grading",
       "description": "Exam grading (Grade Assignment page, exam mode via CodeGrader): major/minor error detection against the course's error enums.",
@@ -207,7 +207,7 @@
         "src/cqc_cpcc/utilities/utils.py",
         "src/cqc_cpcc/utilities/AI/untrusted_fence.py"
       ],
-      "fingerprint": "sha256:c476cfb6791069e73f46ea50b2d760d4f2532355184fd9838d49ae1614ad39cb",
+      "fingerprint": "sha256:74f33e8d90fecab7318385e4a10a4e3a7fd009df84af0e4236dbf752f2fe1499",
       "suites": [
         "exam-grading"
       ]

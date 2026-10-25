@@ -83,7 +83,7 @@ def test_the_exam_prompt_asks_for_the_offered_type_by_its_exact_name():
     prompt = build_exam_grading_prompt(exam_instructions="Do it.", exam_solution=SOLUTION,
                                        student_submission="class Main {}",
                                        major_error_types=["Errors that impact the output"], minor_error_types=["b"])
-    rule = "written exactly as it appears in the list, word for word. Do not invent or reword a type."
+    rule = "write that type exactly as it appears in the list, word for word; never invent or reword a type"
     assert prompt.count(rule) == 1
     assert "specific Major or Minor error type" not in prompt
 

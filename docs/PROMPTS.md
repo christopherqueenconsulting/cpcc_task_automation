@@ -142,7 +142,7 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
 ## Guidelines and v4
 
 The system and user messages follow `docs/PROMPT_GUIDELINES.md` (a sourced digest; items it
-marks unverified are not used). `rubric-grading` v4 and `exam-grading` v4 apply it: no
+marks unverified are not used). `rubric-grading` v4 applies it (`exam-grading` stays at v3: the exam v4 rewrite was reverted, no measurable gain across two A/B runs): no
 step-by-step procedure, no emphatic CRITICAL/MUST wording, each rule stated once, the
 contradictions removed. The system message and the static user prefix stay byte-identical
 for one assignment; the nonce appears only in the submission part at the end.
@@ -155,7 +155,7 @@ fence and the submission come last (`tests/unit/test_prompt_cache.py` asserts th
 prefix is byte-identical). Two optional levers, both off by default (the maintainer decides);
 accepted on values are `1`, `true`, `on`, `yes`:
 
-- `CQC_PROMPT_CACHE_KEY`: the grading calls send OpenRouter's `session_id`, `cqc-` plus a hash
+- `CQC_PROMPT_CACHE_KEY`: the rubric grading calls send OpenRouter's `session_id`, `cqc-` plus a hash
   of the static prefix, model and effort; never student data (`prompt_cache.py`). The flag is
   read on every call. To turn it off, unset it or set any other value; the next call sends no
   id. Do not set `provider.order`: it disables sticky routing. Instructors with identical

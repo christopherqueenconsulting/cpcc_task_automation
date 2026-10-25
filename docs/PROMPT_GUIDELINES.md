@@ -5,7 +5,7 @@ Anthropic) for the grading call (`openai/gpt-6-luna`, reasoning effort high, JSO
 Each page was read through a summarising fetch tool, not as raw text. Items marked
 "unverified" or "inference" stay marked, are not grounds for a prompt change, and make no
 claim beyond the cited source. The prompt changes that used these guidelines are described in
-`docs/PROMPTS.md` (rubric-grading v4, exam-grading v4).
+`docs/PROMPTS.md` (rubric-grading v4; exam-grading stays at v3, the exam v4 rewrite was not shipped).
 
 ---
 
