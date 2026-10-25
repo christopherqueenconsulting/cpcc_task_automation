@@ -327,7 +327,8 @@ _NOT_THE_RUNNER = ("driver_", "compile_timeout", "bad_input", "job_too_large")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,80}$")
 
 
-def _judge(expected: str, expected_reads: Sequence[int], got, ignore_patterns: Sequence[str]):
+def _judge(expected: str, expected_reads: Sequence[int], got, ignore_patterns: Sequence[str],
+           case: Optional[TestCase] = None):
     """Compare one case's student outcome with the expected output. A crash, a timeout or output cut
     at the cap is never trusted as MATCH or FORMAT_ONLY."""
     run = oc.RunOutcome(ran=True, timed_out=got.status == "TIMEOUT", exit_code=got.exit_code,
@@ -335,10 +336,13 @@ def _judge(expected: str, expected_reads: Sequence[int], got, ignore_patterns: S
     reads = [int(r[2]) for r in got.stdin_reads] if got.segmented else []
     segments = (list(expected_reads), reads) if expected_reads else None
     cmp = oc.compare_output(expected, got.stdout, run=run, ignore_patterns=ignore_patterns,
-                            prompt_segments=segments)
-    if cmp.verdict in (Verdict.MATCH, Verdict.FORMAT_ONLY) and (
+                            prompt_segments=segments,
+                            values_may_differ=bool(case and case.values_may_differ),
+                            varying_markers=case.varying_markers if case else ())
+    if cmp.verdict in (Verdict.MATCH, Verdict.FORMAT_ONLY, Verdict.VALUES_MAY_DIFFER) and (
             got.status != "OK" or run.crashed or got.stdout_truncated):
-        return oc.CaseComparison(Verdict.RUNTIME_ERROR, got.reason or oc.CRASH, cmp.similarity, cmp.diff_excerpt)
+        return oc.CaseComparison(Verdict.RUNTIME_ERROR, got.reason or oc.CRASH, cmp.similarity, cmp.diff_excerpt,
+                                 cmp.excluded_lines, cmp.total_lines, cmp.markers_rejected)
     return cmp
 
 
@@ -438,10 +442,12 @@ def run_student_execution(plan: Optional[ExecutionPlan], source_files: Optional[
         if got is None:
             results.append(CaseResult(case_id=case.id, verdict=Verdict.NOT_RUN.value))
             continue
-        cmp = _judge(case.expected_output or "", case.expected_reads, got, plan.ignore_patterns)
+        cmp = _judge(case.expected_output or "", case.expected_reads, got, plan.ignore_patterns, case)
         res = CaseResult(case_id=case.id, verdict=cmp.verdict.value, detail=cmp.detail,
                          similarity=round(cmp.similarity, 4), diff_excerpt=clean_block(cmp.diff_excerpt),
-                         output_cut_by_runner=bool(got.stdout_truncated))
+                         output_cut_by_runner=bool(got.stdout_truncated),
+                         excluded_lines=cmp.excluded_lines, total_lines=cmp.total_lines,
+                         markers_rejected=cmp.markers_rejected)
         stored = _keep_outputs(res, oc.comparable_output(case.expected_output or "", plan.ignore_patterns),
                                oc.comparable_output(got.stdout or "", plan.ignore_patterns), stored)
         results.append(res)
@@ -658,12 +664,34 @@ def apply_execution_gate(
                                  "the score follows the model's judgment."))
         return finish(False, "skipped")
 
-    results = list(report.cases)
+    # Cases whose values may differ were not compared: they are neither a match nor a difference.
+    varying = [r for r in report.cases if r.verdict == Verdict.VALUES_MAY_DIFFER.value]
+    results = [r for r in report.cases if r.verdict != Verdict.VALUES_MAY_DIFFER.value]
+    gate["values_may_differ"] = [r.case_id for r in varying]
+    excluded = sum(r.excluded_lines for r in report.cases)
+    seen = sum(r.total_lines for r in report.cases)
+    gate["excluded_lines"], gate["total_lines"] = excluded, seen
+    rejected = [r.case_id for r in report.cases if r.markers_rejected]
+    gate["markers_rejected"] = rejected
+    if rejected:
+        notes.append(note(STAGE, f"The varying-line markers were too broad for {len(rejected)} test case(s) "
+                                 f"({', '.join(rejected)}): ignored, and the case was compared with numbers, dates "
+                                 "and times masked. Edit Varies on to narrow them."))
+    if excluded:
+        notes.append(note(STAGE, f"{excluded} of {seen} output lines excluded by markers: values may differ "
+                                 "on those lines, the rest was compared."))
+    if varying:
+        notes.append(note(STAGE, f"Values may differ on {len(varying)} of {len(report.cases)} test case(s): "
+                                 "not compared, never counted as an output difference."))
+    if not results:
+        gate["mode"] = "values_may_differ"
+        gate["cannot_verify"] = "every test case is marked values may differ"
+        return finish(False, "evidence")
     worst = oc.aggregate(Verdict(r.verdict) for r in results)
     mode = "match" if worst is Verdict.MATCH else "format_only" if worst is Verdict.FORMAT_ONLY else "differs"
     gate["mode"] = mode
 
-    usable = plan.usable_cases()
+    usable = [c for c in plan.usable_cases() if not c.fully_unverifiable]
     cannot = ""
     if len(usable) < MIN_VALIDATED_CASES:
         cannot = f"fewer than {MIN_VALIDATED_CASES} validated test cases"
@@ -888,11 +916,16 @@ async def derive_execution_plan(
     suggestion = await tcg.suggest_test_cases(instructions, solution, model_name=model_name)
     llm_cases, conditions = tcg.suggestion_to_plan_parts(suggestion)
     cases = tcg.merge_cases(list(manual_cases), tcg.cases_from_samples(samples), llm_cases)
+    findings = tcg.detect_variable_values(instructions, solution)
+    # Only a solution that prints a random or clock value marks the cases at once; the instructions alone
+    # are a suggestion that the solution's own runs must confirm. Code ORs with the model's flag.
+    cases = tcg.flag_cases(cases, tcg.variation_reason(findings))
     shown = {s.id: s.expected_output for s in samples}
     validation = await asyncio.to_thread(
         tcg.validate_cases_on_solution, solution, cases, conditions=conditions, sample_outputs=shown,
-        ignore_patterns=list(ignore_patterns), runner=runner, owner=owner)
+        ignore_patterns=list(ignore_patterns), runner=runner, owner=owner,
+        variance_suggested=bool(tcg.variation_suggestion(findings)))
     risks = tcg.scan_solution_risks(solution)
     plan = tcg.build_plan(solution, validation, conditions, ignore_patterns=list(ignore_patterns), risks=risks,
-                          all_cases=cases)
+                          all_cases=cases, extra_warnings=[f.text for f in findings])
     return plan, plan.disabled_reason

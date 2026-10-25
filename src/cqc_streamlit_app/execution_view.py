@@ -67,7 +67,8 @@ SETUP_CAPTION = ("Output check is optional and off by default. It runs each stud
 VERDICT_HELP = ("Match: same output. Format only: same content, spacing or case differs. Different values: numbers "
                 "differ. Different order: same lines, wrong order. Different words: text differs. No output / "
                 "Crashed / Timed out / Did not run: the program printed nothing, failed, ran too long, or was "
-                "not run.")
+                "not run. Values may differ: the case is marked as printing values that change between runs "
+                "(random numbers, the date), so those lines are not compared and never cost points.")
 DISAGREES_LABEL = "Differs (AI found no output error)"
 DISAGREES_CAPTION = ("The programs print different output, but the AI review reported no output error. "
                      "Check this student by hand.")
@@ -110,6 +111,7 @@ _STATUS_TEXT = {
 }
 _VERDICT_TEXT = {
     Verdict.MATCH.value: "Match",
+    Verdict.VALUES_MAY_DIFFER.value: "Values may differ",
     Verdict.FORMAT_ONLY.value: "Format only",
     Verdict.TEXT_DIFFERS.value: "Different words",
     Verdict.ORDER_DIFFERS.value: "Different order",
@@ -119,7 +121,8 @@ _VERDICT_TEXT = {
     Verdict.TIMEOUT.value: "Timed out",
     Verdict.NOT_RUN.value: "Did not run",
 }
-_MODE_TEXT = {"match": "Match", "format_only": "Format only", "differs": "Differs"}
+_MODE_TEXT = {"match": "Match", "format_only": "Format only", "differs": "Differs",
+              "values_may_differ": "Values may differ (not compared)"}
 _VALIDATION_FAILED = {
     "unavailable": "Docker is not available, so the solution could not be run.",
     "runner_error": "The sandbox could not run the solution (cannot verify). Nothing was changed.",
@@ -286,10 +289,16 @@ def _status_of(case: TestCase, dropped: dict) -> str:
         return f"Dropped: {_DROP_TEXT.get(dropped[case.id], dropped[case.id])}"
     if case.disagrees_with_instructions:
         return "Differs from the instructions (not used)"
+    if case.validated and case.values_may_differ:
+        return "Ready (values may differ)"
     return "Ready" if case.validated else "Not run"
 
 
-CASE_COLUMNS = ["Use", "Label", "Kind", "Source", "Input", "Status", "Expected", "id"]
+CASE_COLUMNS = ["Use", "Label", "Kind", "Source", "Input", "May differ", "Varies on", "Status", "Expected", "id"]
+MAY_DIFFER_WHOLE = ("May differ: numbers, dates, times, weekdays and number words are ignored in this case; "
+                    "wording, labels and layout are still compared. A wrong player or option number or number word "
+                    "(Player one, Option two) is not detected. If the case prints varying words (a greeting, a "
+                    "card name, rock, paper or scissors), enter the label of that line in Varies on.")
 
 
 def cases_frame(cases: Sequence[TestCase], dropped: Optional[dict] = None):
@@ -298,7 +307,8 @@ def cases_frame(cases: Sequence[TestCase], dropped: Optional[dict] = None):
     dropped = dropped or {}
     return pd.DataFrame([{
         "Use": c.enabled, "Label": c.label, "Kind": _kind(c), "Source": c.source,
-        "Input": encode_stdin(c.stdin), "Status": _status_of(c, dropped),
+        "Input": encode_stdin(c.stdin), "May differ": c.values_may_differ,
+        "Varies on": "; ".join(c.varying_markers), "Status": _status_of(c, dropped),
         "Expected": _first_line(c.expected_output), "id": c.id} for c in cases], columns=CASE_COLUMNS)
 
 
@@ -306,7 +316,7 @@ def _text(value) -> str:
     return "" if value is None or (isinstance(value, float) and value != value) else str(value)
 
 
-def fold_editor(base: Sequence[TestCase], edited) -> list:
+def fold_editor(base: Sequence[TestCase], edited, variance_reason: str = "") -> list:
     """The cases the edited table describes. Pure.
 
     A row keeps its validation only while its input is the input that was validated: changing
@@ -331,15 +341,30 @@ def fold_editor(base: Sequence[TestCase], edited) -> list:
                 n += 1
             new = tcg.manual_case(label or "Instructor case", decode_stdin(raw), case_id=f"M{n}")
             used.add(new.id)
-            out.append(new.model_copy(update={"enabled": use}))
+            out.append(tcg.flag_cases([new.model_copy(update={"enabled": use})], variance_reason)[0])
             continue
         stdin = tcg.normalize_stdin(decode_stdin(raw))
         update = {"enabled": use, "label": tcg._clean_label(label, old.label or old.id)}
+        vary = row.get("May differ")
+        if vary is not None and bool(vary) != old.values_may_differ:
+            # The instructor's toggle wins over the detection and the model.
+            update.update(values_may_differ=bool(vary), varying_markers=[] if not vary else old.varying_markers,
+                          variance_reason=MARKED_BY_YOU if vary else "",
+                          # An untick is a decision: no detection or solution run may tick it again.
+                          variance_declined=not vary)
+        flagged = update.get("values_may_differ", old.values_may_differ)
+        if flagged and row.get("Varies on") is not None:
+            text = _text(row.get("Varies on"))
+            if text != "; ".join(old.varying_markers):
+                update["varying_markers"] = tcg.clean_markers([m for m in text.split(";")])
         if stdin != old.stdin:
             update.update(stdin=stdin, source="manual", validated=False, expected_output=None,
                           expected_reads=[], boundary_of=[], disagrees_with_instructions=False)
         out.append(old.model_copy(update=update))
     return tcg.merge_cases(out)
+
+
+MARKED_BY_YOU = "You marked this case."
 
 
 def parse_ignore_lines(text: str) -> list:
@@ -410,8 +435,12 @@ def _state_key(sources: SolutionSources, instructions: str) -> str:
 
 def _new_state(sources: SolutionSources, instructions: str) -> dict:
     samples = tcg.parse_sample_runs(instructions)
-    cases = tcg.merge_cases(tcg.cases_from_samples(samples))
-    return {"base": cases, "conditions": [], "dropped": {}, "warnings": [], "validated": False,
+    findings = tcg.detect_variable_values(instructions, sources)
+    reason = tcg.variation_reason(findings)  # proven by the solution's own code: marks the cases at once
+    cases = tcg.flag_cases(tcg.merge_cases(tcg.cases_from_samples(samples)), reason)
+    return {"variance": reason, "suggestion": tcg.variation_suggestion(findings),
+            "variance_notes": [f.text for f in findings if not (f.flags and f.source == "solution")],
+            "base": cases, "conditions": [], "dropped": {}, "warnings": [], "validated": False,
             "message": "", "gen": 0, "shown": {s.id: s.expected_output for s in samples},
             "risks": [r.message for r in tcg.scan_solution_risks(sources)]}
 
@@ -426,7 +455,7 @@ def _validate(state: dict, sources: SolutionSources, cases: list, ignore: list) 
     with st.spinner("Running your solution in the sandbox..."):
         validation = tcg.validate_cases_on_solution(
             sources, run, conditions=state["conditions"], sample_outputs=state["shown"],
-            ignore_patterns=ignore, owner=pr.new_owner_id())
+            ignore_patterns=ignore, owner=pr.new_owner_id(), variance_suggested=bool(state.get("suggestion")))
     state["gen"] += 1
     if validation.status in ("unavailable", "runner_error", "solution_compile_failed"):
         state.update(base=[c.model_copy(update={"validated": False}) for c in cases], validated=False,
@@ -464,7 +493,7 @@ def _suggest(state: dict, sources: SolutionSources, instructions: str, cases: li
     llm_cases, conditions = tcg.suggestion_to_plan_parts(suggestion)
     state["conditions"] = conditions
     mine = [c.model_copy(update={"boundary_of": []}) for c in cases if c.source != "llm"]
-    _validate(state, sources, tcg.merge_cases(mine, llm_cases), ignore)
+    _validate(state, sources, tcg.merge_cases(mine, tcg.flag_cases(llm_cases, state.get("variance", ""))), ignore)
 
 
 def build_plan_from(state: dict, sources: SolutionSources, cases: Sequence[TestCase],
@@ -525,12 +554,35 @@ def render_output_check_setup(instructions: str, solution_file_paths) -> Optiona
                 help="Where the input came from: sample (a sample run in the instructions), manual (typed by "
                      "you) or llm (suggested by the AI)."),
             "Input": st.column_config.TextColumn("Input", help="What the program reads. \\n starts a new line."),
+            "May differ": st.column_config.CheckboxColumn(
+                "May differ", default=False, width="small",
+                help="Tick when this case prints values that change between runs (random numbers, the date). "
+                     "With no text in Varies on, only numbers, dates and times may vary and wording and layout "
+                     "are still compared; they never cost points."),
+            "Varies on": st.column_config.TextColumn(
+                "Varies on", help="Optional. Text that labels each line whose value varies, such as Random number: "
+                                  "(separate several with ;). Lines containing it are not compared; all other lines "
+                                  "are. Two to 60 characters each, at most 5."),
             "Status": st.column_config.TextColumn("Status", disabled=True),
             "Expected": st.column_config.TextColumn("Expected", disabled=True,
                                                    help="The first line of your solution's output."),
             "id": st.column_config.TextColumn("ID", disabled=True, width="small"),
         })
-    cases = fold_editor(state["base"], edited)
+    cases = fold_editor(state["base"], edited, state.get("variance", ""))
+    for c in cases:
+        if c.values_may_differ:
+            st.caption(f"{safe_line(c.label or c.id)}: values may differ. {safe_line(c.variance_reason)} "
+                       + ("Lines containing " + ", ".join(safe_line(m) for m in c.varying_markers)
+                          + " are not compared; every other line is."
+                          if c.varying_markers else MAY_DIFFER_WHOLE))
+    suggestion = state.get("suggestion")
+    if suggestion and not any(c.values_may_differ for c in cases):
+        st.caption("Consider ticking May differ: " + safe_line(suggestion)
+                   + " It is not ticked for you; if the solution prints different output on its two runs, "
+                     "the case is marked automatically.")
+    for text in state.get("variance_notes", []):
+        if text != suggestion:
+            st.caption("Consider ticking May differ: " + safe_line(text))
     ignore_text = st.text_area("Ignore output lines containing", key=f"output_ignore_{key}", height=68,
                                help="One piece of text per line. A line of output that contains it is left out "
                                     "of both outputs before they are compared (a timestamp, a banner).")

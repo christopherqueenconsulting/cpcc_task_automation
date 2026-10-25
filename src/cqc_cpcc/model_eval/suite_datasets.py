@@ -21,7 +21,7 @@ from cqc_cpcc.model_eval import dataset_builder as db
 ROOT = Path(__file__).resolve().parents[3] / "evals" / "datasets"
 VERSION = "v1"
 #: Datasets that moved past ``VERSION`` (the older directory stays frozen beside the new one).
-DATASET_VERSIONS = {"flowgorithm-grade": "v2"}
+DATASET_VERSIONS = {"flowgorithm-grade": "v2", "test-case-generation": "v2"}
 
 
 def _submission_text(filename: str, source: str, language: str) -> str:
@@ -1037,6 +1037,60 @@ int main() {
 )
 
 
+#: Added in v2 (the first 12 rows are v1 unchanged): programs whose printed values legitimately
+#: differ from run to run. Same tuple shape as ``TESTCASE_SPECS``; synthetic, author Ada Example.
+TESTCASE_VARYING_SPECS = (
+    ("dice", "java", "Dice.java", [
+        "Asks for the number of dice to roll and asks again until it is between 1 and 3 inclusive.",
+        "Rolls that many six-sided dice with a Random object.",
+        "Prints each roll on its own line as Roll: followed by the random value, and the total of the rolls.",
+        "The printed rolls will differ every time the program runs.",
+    ], ["Use named constants.", "Comment your code."], """import java.util.Random;
+import java.util.Scanner;
+
+// Author: Ada Example
+public class Dice {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        Random random = new Random();
+        System.out.print("How many dice (1-3)? ");
+        int count = in.nextInt();
+        while (count < 1 || count > 3) {
+            System.out.print("Invalid. How many dice (1-3)? ");
+            count = in.nextInt();
+        }
+        int total = 0;
+        for (int i = 0; i < count; i++) {
+            int roll = random.nextInt(6) + 1;
+            total += roll;
+            System.out.println("Roll: " + roll);
+        }
+        System.out.println("Total: " + total);
+    }
+}
+""", [
+        ("Asks again until the number of dice is between 1 and 3 inclusive", [["dice"], ["between", "1", "3"]],
+         ["1", "3", "0", "4"]),
+    ]),
+    ("greeting", "python", "greeting.py", [
+        "Reads an age (int).",
+        "Prints Adult when the age is 18 or older, otherwise Minor.",
+        "Prints the current date and time on its own line as Generated: followed by the clock value.",
+    ], ["Use meaningful names."], """import datetime
+
+# Author: Ada Example
+age = int(input("Age: "))
+if age >= 18:
+    print("Adult")
+else:
+    print("Minor")
+print("Generated:", datetime.datetime.now())
+""", [
+        ("Prints Adult when the age is 18 or older", [["18"], ["adult", "older"]], ["18", "17"]),
+    ]),
+)
+
+
 def _testcase_instructions(title: str, steps: list, style: list, variant: str) -> str:
     if variant == "numbered":
         body = "\n".join(f"{i}. {t}" for i, t in enumerate(steps, 1))
@@ -1053,6 +1107,21 @@ def build_test_cases() -> list[dict]:
                 "case_id": f"{key}__{variant}",
                 "stratum": language,
                 "tags": [variant, language],
+                "twin_of": None,
+                "inputs": {"instructions": _testcase_instructions(title, steps, style, variant),
+                           "solution": solution, "language": language},
+                "labels": {
+                    "conditions": [{"id": f"G{i}", "text": text, "keyword_groups": groups,
+                                    "boundary_values": values}
+                                   for i, (text, groups, values) in enumerate(conditions, 1)],
+                },
+            })
+    for key, language, title, steps, style, solution, conditions in TESTCASE_VARYING_SPECS:
+        for variant in ("numbered", "prose"):
+            rows.append({
+                "case_id": f"{key}__{variant}",
+                "stratum": language,
+                "tags": [variant, language, "varies"],
                 "twin_of": None,
                 "inputs": {"instructions": _testcase_instructions(title, steps, style, variant),
                            "solution": solution, "language": language},

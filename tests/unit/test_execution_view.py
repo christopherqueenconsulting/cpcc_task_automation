@@ -345,7 +345,7 @@ def test_typed_cases_run_on_the_solution_make_a_plan_with_no_model_call(ready, t
 def test_the_table_has_the_planned_columns(ready, tmp_path):
     at = _turn_on(_setup_app(tmp_path))
     frame = ev.cases_frame([TestCase(id="M1", label="L", stdin="5\n", source="manual")])
-    assert list(frame.columns) == ["Use", "Label", "Kind", "Source", "Input", "Status", "Expected", "id"]
+    assert list(frame.columns) == ["Use", "Label", "Kind", "Source", "Input", "May differ", "Varies on", "Status", "Expected", "id"]
     assert frame.loc[0, "Input"] == "5\\n" and frame.loc[0, "Status"] == "Not run"
 
 
@@ -1071,3 +1071,50 @@ def test_always_visible_setup_text_never_contains_the_word_on_with_spaces(monkey
                      for e in g) + " " + ev.SETUP_CAPTION
     assert " on " not in shown, shown
     assert " on " not in ev.NOTICE and " on " not in ev.SETUP_CAPTION
+
+
+class VaryingSolutionRunner(FakeSolutionRunner):
+    """A solution whose two runs differ (repeat=2 reports nondeterministic) but only in a number."""
+
+    def __call__(self, language, files, cases=(), *, mode="run", main=None, repeat=1, owner=None):
+        out = super().__call__(language, files, cases, mode=mode, main=main, repeat=repeat, owner=owner)
+        flagged = tuple(c.__class__(**{**c.__dict__, "nondeterministic": repeat == 2}) for c in out.cases)
+        return pr.RunOutcome(status=out.status, compile=out.compile, cases=flagged)
+
+
+def test_instructions_alone_only_suggest_and_the_box_is_not_ticked(ready, tmp_path, monkeypatch):
+    monkeypatch.setattr(pr, "run_program", FakeSolutionRunner())
+    at = _turn_on(_setup_app(tmp_path, "Write Dice.java. It prints a random number from 1 to 6."))
+    rows = [{"Label": "Roll", "Input": "5"}]
+    _add_rows(at, rows)
+    _press(at, "Run solution on these inputs", _edit(rows))
+    plan = at.session_state["plan"]
+    assert plan is not None and not plan.cases[0].values_may_differ  # the two solution runs were identical
+    assert any("Consider ticking May differ" in c.value for c in at.caption)
+
+
+def test_two_different_solution_runs_prove_it_and_mark_the_case(ready, tmp_path, monkeypatch):
+    monkeypatch.setattr(pr, "run_program", VaryingSolutionRunner())
+    at = _turn_on(_setup_app(tmp_path, "Write Dice.java. It prints a random number from 1 to 6."))
+    rows = [{"Label": "Roll", "Input": "5"}]
+    _add_rows(at, rows)
+    _press(at, "Run solution on these inputs", _edit(rows))
+    [case] = at.session_state["plan"].cases
+    assert case.values_may_differ and case.variance_reason == tcg.REASON_RUNS
+    assert any("numbers, dates, times, weekdays and number words are ignored" in c.value for c in at.caption)
+    assert not any("whole case is not compared" in c.value for c in at.caption)
+    assert any("enter the label of that line in Varies on" in c.value for c in at.caption)
+
+
+def test_an_untick_sticks_when_run_solution_is_pressed_again(ready, tmp_path, monkeypatch):
+    monkeypatch.setattr(pr, "run_program", VaryingSolutionRunner())
+    at = _turn_on(_setup_app(tmp_path, "Write Dice.java. It prints a random number from 1 to 6."))
+    rows = [{"Label": "Roll", "Input": "5"}]
+    _add_rows(at, rows)
+    _press(at, "Run solution on these inputs", _edit(rows))
+    assert at.session_state["plan"].cases[0].values_may_differ  # proven by the solution's runs
+    _press(at, "Run solution on these inputs", _edit(edited={0: {"May differ": False}}))
+    [state] = at.session_state["output_check_state"].values()
+    [case] = state["base"]
+    assert case.values_may_differ is False and case.variance_declined is True
+    assert state["dropped"] == {case.id: "nondeterministic"} and at.session_state["plan"] is None

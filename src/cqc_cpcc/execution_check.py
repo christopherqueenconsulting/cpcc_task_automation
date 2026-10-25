@@ -27,7 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from cqc_cpcc.utilities.output_compare import MAX_MARKER_CHARS, MAX_MARKERS, clean_markers  # noqa: F401
 
 CaseSource = Literal["sample", "llm", "manual"]
 
@@ -72,6 +74,28 @@ class TestCase(BaseModel):
     #: The expected output needs a human look. Reserved for signals the driver really gives;
     #: nothing sets it today (C and C++ over-reads are a plan-wide warning, not a case flag).
     needs_review: bool = False
+    #: The case's printed values may legitimately differ between runs (random numbers, the date,
+    #: user-dependent text). Set by the instructions' wording, the solution, the model or the
+    #: instructor; the differing lines are not compared and never cost points.
+    values_may_differ: bool = False
+    #: Literal fragments of the lines whose values may differ. Empty with the flag set means the
+    #: whole case is not compared.
+    varying_markers: list[str] = Field(default_factory=list)
+    #: A fixed sentence saying why the flag was set (never student or instruction text).
+    variance_reason: str = ""
+    #: The instructor unticked May differ: nothing (suggestion, solution runs) may tick it again.
+    variance_declined: bool = False
+
+    @field_validator("varying_markers", mode="before")
+    @classmethod
+    def _clean_markers(cls, value):
+        """A loaded or hand-built plan cannot carry a one-letter or oversized marker."""
+        return clean_markers(value)
+
+    @property
+    def fully_unverifiable(self) -> bool:
+        """Flagged with no markers: no line of this case can be compared."""
+        return self.values_may_differ and not self.varying_markers
 
 
 class Condition(BaseModel):
@@ -115,7 +139,10 @@ class ExecutionPlan(BaseModel):
                 {"id": c.id, "stdin": c.stdin, "source": c.source, "boundary_of": sorted(c.boundary_of),
                  "expected": c.expected_output, "reads": c.expected_reads, "validated": c.validated,
                  "enabled": c.enabled,
-                 "disagrees": c.disagrees_with_instructions, "review": c.needs_review}
+                 "disagrees": c.disagrees_with_instructions, "review": c.needs_review,
+                 # Only when set, so the hash of every plan without the flag is unchanged.
+                 **({"vary": True, "markers": sorted(c.varying_markers)} if c.values_may_differ else {}),
+                 **({"declined": True} if c.variance_declined else {})}
                 for c in self.cases
             ],
             "conditions": [(c.id, c.text, c.kind) for c in self.conditions],
@@ -138,7 +165,8 @@ class ExecutionPlan(BaseModel):
         assignment text, so sample cases must never be the only evidence for removing a
         deduction. The gate needs at least one independent case that covers the condition.
         """
-        return [c for c in self.usable_cases() if c.source in ("llm", "manual")]
+        return [c for c in self.usable_cases()
+                if c.source in ("llm", "manual") and not c.fully_unverifiable]
 
     @property
     def sample_only(self) -> bool:
@@ -168,6 +196,10 @@ class CaseResult(BaseModel):
     detail: str = ""
     similarity: float = 0.0
     diff_excerpt: str = ""
+    #: Output lines left out by the case's varying markers, out of all non-blank lines (0 when none).
+    excluded_lines: int = 0
+    total_lines: int = 0
+    markers_rejected: bool = False
     #: The compared texts (ignored lines dropped, trailing blanks trimmed), kept so the app can show the
     #: whole diff. Local only: never in a prompt, telemetry, export, feedback document or write-back.
     #: Empty for a match, for a case that did not run, and in runs saved before these fields existed.
