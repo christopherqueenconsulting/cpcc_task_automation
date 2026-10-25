@@ -155,6 +155,25 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   **Rollback:** `git revert`.
 - **v1**: unfenced single message.
 
+## Version history: flowgorithm-grade
+
+- **v3** (fairness fix after #479): #479 replaced the real file name with an alias, so the model
+  saw no student name and no lab number and would have deducted both default file-name criteria
+  ("Failure to include student name as part of Flowgorithm file", "Failure to include Flowgorithm
+  lab number as part of Flowgorithm file name", 5 points each) from every student. The
+  "Submission File Name" line is now two facts the app computes locally from the real name
+  (`utilities/fprg_filename_facts.py`): lab number in the file name (yes with a `Lab 3`-style
+  token, no, unknown) and name-like word in the file name (yes, no, unknown; never the word, and
+  not verified against a roster, so an ordinary program name such as `OrderTotal` reads yes).
+  One rule says those criteria are decided only by the facts: yes is not deducted, no is
+  deducted, unknown is never deducted, and the model must not guess the name or call its absence
+  a defect. The alias is gone from the prompt. Output schema, rubric text and the other prompt
+  sections are unchanged. The existing `flowgorithm-grade` v1 dataset uses ordinary names
+  (`Rectangle`, `Average`, `Pay`), so the A/B exercises only the yes-name and no-lab paths; the
+  other paths are covered by unit tests. **Rollback:** `git revert`.
+- **v2**: structured output; alias file name (#479).
+- **v1**: free-text markdown, real file name.
+
 ## Guidelines and v4
 
 The system and user messages follow `docs/PROMPT_GUIDELINES.md` (a sourced digest; items it

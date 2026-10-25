@@ -264,7 +264,7 @@
       ]
     },
     "flowgorithm-grade": {
-      "version": 2,
+      "version": 3,
       "status": "live",
       "role": "flowgorithm",
       "description": "Flowgorithm grading: per-criterion deductions + feedback (structured; backend computes the final grade).",
@@ -275,7 +275,8 @@
       ],
       "source_files": [
         "src/cqc_cpcc/prompts/flowgorithm.py",
-        "src/cqc_cpcc/flowgorithm_grading.py"
+        "src/cqc_cpcc/flowgorithm_grading.py",
+        "src/cqc_cpcc/utilities/fprg_filename_facts.py"
       ],
       "shared_files": [
         "src/cqc_cpcc/utilities/AI/llm_gateway.py",
@@ -284,7 +285,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:4c3b63a218f1527c2e52c14c84edd5e10ea85d1dd30f17c02c4ed07cda773247",
+      "fingerprint": "sha256:b1163bffcb3edf908da257865f28ddf0c5d8ffd79f0256e90c81c9baf77fa213",
       "suites": [
         "flowgorithm-grade"
       ]
