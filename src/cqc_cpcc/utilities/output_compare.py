@@ -31,6 +31,13 @@ The comparison ladder (first rung that applies wins):
     11. The program crashed: RUNTIME_ERROR (detail ``reads_more_input`` on EOF).
     12. Anything else: VALUES_DIFFER.
 
+A case flagged "values may differ" (random numbers, the date, user-dependent text) skips the
+comparison it cannot make: lines containing one of its ``varying_markers`` are dropped from
+both outputs like ignored lines (the rest is compared normally, and a clean match carries the
+detail ``values_may_differ``). With no markers the whole case is not compared: after rung 2
+(a timeout or no output still count) a crash is RUNTIME_ERROR and anything else is
+VALUES_MAY_DIFFER, which is never a difference and never costs points.
+
 Rungs 4-7 are cumulative: each allows the differences of the rungs before it, and
 ``detail`` names the loosest rung that was needed. Rung 9 needs prompt segmentation:
 the driver records where the program read stdin, and the last line printed before each
@@ -59,6 +66,8 @@ class Verdict(StrEnum):
     """Case verdicts, least to most severe (``aggregate`` takes the worst)."""
 
     MATCH = "match"
+    #: The case is flagged "values may differ" (random, date, user-dependent): not compared.
+    VALUES_MAY_DIFFER = "values_may_differ"
     FORMAT_ONLY = "format_only"
     TEXT_DIFFERS = "text_differs"
     ORDER_DIFFERS = "order_differs"
@@ -81,6 +90,8 @@ PROMPT_TEXT = "prompt_text"
 # RUNTIME_ERROR details.
 READS_MORE_INPUT = "reads_more_input"
 CRASH = "crash"
+# MATCH detail: some lines were left out because their values may differ.
+VARYING = "values_may_differ"
 
 DIFF_MAX_LINES = 20
 DIFF_MAX_CHARS = 1500
@@ -115,6 +126,72 @@ class CaseComparison:
     detail: str
     similarity: float
     diff_excerpt: str
+    #: Non-blank lines left out of the comparison by ``varying_markers`` (the larger of the two outputs),
+    #: out of the larger count of non-blank lines. Zero unless markers were used.
+    excluded_lines: int = 0
+    total_lines: int = 0
+    #: The case's markers were too broad to trust (they would remove most of the output): ignored.
+    markers_rejected: bool = False
+
+
+# --------------------------------------------------------------------------- #
+# Markers and masking for "values may differ"
+# --------------------------------------------------------------------------- #
+MAX_MARKERS = 5
+MIN_MARKER_CHARS = 2
+MAX_MARKER_CHARS = 60
+TOO_BROAD = "markers_too_broad"
+_MARKER_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def clean_markers(markers) -> list:
+    """Marker fragments that may be used: strings only, control characters removed, 2 to 60 characters
+    after trimming, case-insensitively unique, at most 5. Applied wherever markers are stored or used."""
+    out: list = []
+    if not isinstance(markers, (list, tuple)):
+        return out
+    for item in markers:
+        if not isinstance(item, str):
+            continue
+        text = " ".join(_MARKER_CONTROL.sub(" ", item).split())[:MAX_MARKER_CHARS]
+        if len(text) >= MIN_MARKER_CHARS and text.casefold() not in {m.casefold() for m in out}:
+            out.append(text)
+        if len(out) >= MAX_MARKERS:
+            break
+    return out
+
+
+_DATE_RE = re.compile(r"\b\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}\b")
+_CLOCK_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:\.\d{1,6})?(?:\s?[ap]\.?m\b\.?)?", re.IGNORECASE)
+_MONTHS = ("january|february|march|april|may|june|july|august|september|october|november|december|"
+           "jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec")
+_MONTH_DAY_RE = re.compile(rf"\b(?:{_MONTHS})\.?\s{{1,3}}\d{{1,2}}\b(?:st|nd|rd|th)?(?:,?\s{{1,3}}\d{{4}})?",
+                           re.IGNORECASE)
+_WEEKDAY_RE = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|"
+    r"\b(?:mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b\.?(?=,?\s{1,3}(?:#|\d|" + _MONTHS + r"))",
+    re.IGNORECASE)
+# A month name on its own ("May" only next to a number or a weekday, which are already masked to #).
+_MONTH_RE = re.compile(r"\b(?:january|february|march|april|june|july|august|september|october|november|december)\b|"
+                       r"(?<=#)\W{1,3}may\b|\bmay\b(?=\W{1,3}#)", re.IGNORECASE)
+_NUMBER_WORD_RE = re.compile(
+    r"\b(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](?:one|two|three|four|five|six|seven|"
+    r"eight|nine))?|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+    r"sixteen|seventeen|eighteen|nineteen|hundred|thousand)\b", re.IGNORECASE)
+# The sign goes with the number unless it is glued to a word ("a-3").
+_ANY_NUMBER_RE = re.compile(r"(?:(?<!\w)[-+])?\d[\d,]*(?:\.\d+)?")
+
+
+def mask_varying(text: str) -> str:
+    """Dates, times, weekdays, month names, numbers and number words replaced by ``#``: what is left is
+    the wording, labels and layout."""
+    for regex in (_DATE_RE, _CLOCK_RE, _MONTH_DAY_RE, _WEEKDAY_RE, _ANY_NUMBER_RE, _NUMBER_WORD_RE):
+        text = regex.sub("#", text)
+    return _MONTH_RE.sub("#", text)
+
+
+def _nonblank(text: str) -> int:
+    return sum(1 for line in text.splitlines() if line.strip())
 
 
 # --------------------------------------------------------------------------- #
@@ -294,11 +371,16 @@ def compare_output(
     run: Optional[RunOutcome] = None,
     ignore_patterns: Iterable[str | re.Pattern] = (),
     prompt_segments: Optional[tuple[Sequence[int], Sequence[int]]] = None,
+    values_may_differ: bool = False,
+    varying_markers: Iterable[str] = (),
 ) -> CaseComparison:
     """Classify how ``actual`` (student stdout) differs from ``expected`` (solution stdout).
 
     ``prompt_segments`` is ``(expected_reads, actual_reads)``: the character offsets in
     each output at which that program read stdin. Without it rung 9 never applies.
+
+    ``values_may_differ`` / ``varying_markers``: see the module docstring. Markers are literal,
+    case-insensitive fragments (never regexes, so a model-written marker cannot be a pattern bomb).
     """
     if run is not None and not run.ran:
         return CaseComparison(Verdict.NOT_RUN, "", 0.0, "")
@@ -308,18 +390,51 @@ def compare_output(
     e_reads, a_reads = prompt_segments if prompt_segments is not None else ((), ())
     expected, e_reads = _drop_ignored(expected, e_reads, patterns)
     actual, a_reads = _drop_ignored(actual, a_reads, patterns)
+    # Only usable markers count (2 to 60 characters, at most 5): a one-letter marker would erase the output.
+    marker_res = [re.compile(re.escape(m), re.IGNORECASE) for m in clean_markers(list(varying_markers))]
+    whole_case = values_may_differ and not marker_res
+    varied = broad = False
+    excluded = total = 0
+    if values_may_differ and marker_res:
+        e_kept, e_reads_k = _drop_ignored(expected, e_reads, marker_res)
+        a_kept, a_reads_k = _drop_ignored(actual, a_reads, marker_res)
+        e_n, a_n = _nonblank(expected), _nonblank(actual)
+        e_drop, a_drop = e_n - _nonblank(e_kept), a_n - _nonblank(a_kept)
+        # Markers that remove more than half of either output (or all of it) are not trusted.
+        broad = bool((e_n and (e_drop * 2 > e_n or not _nonblank(e_kept)))
+                     or (a_n and (a_drop * 2 > a_n or not _nonblank(a_kept))))
+        if broad:
+            whole_case = True
+        else:
+            varied = e_kept != expected or a_kept != actual
+            excluded, total = max(e_drop, a_drop), max(e_n, a_n)
+            expected, actual, e_reads, a_reads = e_kept, a_kept, e_reads_k, a_reads_k
     e_trim, a_trim = _trim(expected), _trim(actual)
 
     def result(verdict: Verdict, detail: str = "") -> CaseComparison:
         similarity = difflib.SequenceMatcher(None, e_trim, a_trim).ratio()
-        excerpt = "" if verdict is Verdict.MATCH else _diff_excerpt(e_trim, a_trim)
-        return CaseComparison(verdict, detail, similarity, excerpt)
+        excerpt = "" if verdict in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER) else _diff_excerpt(e_trim, a_trim)
+        if verdict is Verdict.MATCH and varied and not detail:
+            detail = VARYING
+        return CaseComparison(verdict, detail, similarity, excerpt, excluded, total, broad)
 
     # Rung 2.
     if run is not None and run.timed_out:
         return result(Verdict.TIMEOUT)
     if not a_trim and e_trim:
         return result(Verdict.NO_OUTPUT)
+    if whole_case:
+        if run is not None and run.crashed:
+            return result(Verdict.RUNTIME_ERROR, READS_MORE_INPUT if run.eof_error else CRASH)
+        # Only numbers, dates and times may vary: wording, labels, layout and missing lines still count.
+        inner = compare_output(mask_varying(e_trim), mask_varying(a_trim))
+        if inner.verdict is Verdict.MATCH:
+            if e_trim == a_trim:
+                return result(Verdict.MATCH)
+            return result(Verdict.VALUES_MAY_DIFFER, TOO_BROAD if broad else "")
+        return CaseComparison(inner.verdict, inner.detail, inner.similarity,
+                              _diff_excerpt(e_trim, a_trim) if inner.verdict is not Verdict.MATCH else "",
+                              markers_rejected=broad)
 
     # Rungs 3-7.
     rung = _format_rungs(e_trim, a_trim)
