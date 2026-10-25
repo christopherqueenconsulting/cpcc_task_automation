@@ -820,7 +820,7 @@ class TestRedactionKeepsWhatClassificationReads:
 
 class TestAffected:
     def test_a_judges_py_only_change_needs_no_run_and_no_rescore(self):
-        result = pa.affected("origin/master", changed=["src/cqc_cpcc/model_eval/judges.py"])
+        result = pa.affected("HEAD", changed=["src/cqc_cpcc/model_eval/judges.py"])
         assert result == {"run": [], "rescore": [], "judges_changed": ["judge-faithfulness", "judge-feedback-quality",
                                                                       "judge-pairwise"],
                           "reasons": {}, "changed_files": 1, "dependency_only": False}
