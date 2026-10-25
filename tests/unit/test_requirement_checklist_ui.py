@@ -362,10 +362,11 @@ def test_a_hostile_id_and_text_never_reach_a_label_or_caption():
     edits = {"edited_rows": {0: {"id": evil_id, "text": evil_text}}, "added_rows": [], "deleted_rows": []}
     _edit(page, edits)
     page.run()
-    assert page.out.requirements[0].id == "R4"  # replaced by the next free safe id
+    assert [r.id for r in page.out.requirements] == ["R2", "R3"]  # the unsafe row is left out
+    assert any("Row 1" in e.value and "not allowed" in e.value for e in page.at.error)
     page.click("Check all against the solution", editor_state=_edit(page, edits))
     shown = ([b.label for b in page.at.button] + page.captions + [i.value for i in page.at.info]
-             + [w.value for w in page.at.warning])
+             + [w.value for w in page.at.warning] + [e.value for e in page.at.error])
     for m in page.at.multiselect:
         shown += [str(o) for o in m.options] + [str(v) for v in m.value]
     assert shown and all("![" not in t and "](" not in t for t in shown), [t for t in shown if "![" in t]
@@ -380,11 +381,12 @@ def test_a_duplicate_id_inherits_nothing_from_the_first_owner():
         rc.RequirementItem(id="R2", text="Applies a discount", weight="core", graded=False, hand_ungraded=True)])
     frame = pd.DataFrame([
         {"id": "R2", "text": "Applies a discount", "weight": "core"},
-        {"id": "r2", "text": "A second row typed with the same id", "weight": "core"}])
-    out = _checklist_from_editor(frame, base).requirements
-    assert [r.id for r in out] == ["R2", "R3"]
+        {"id": "r2", "text": "A second row typed with the same id", "weight": "core"}], index=[1, 2])
+    errors = []
+    out = _checklist_from_editor(frame, base, errors).requirements
+    assert [r.id for r in out] == ["R2"]  # the second row is left out and reported
     assert (out[0].graded, out[0].hand_ungraded) == (False, True)
-    assert (out[1].graded, out[1].hand_ungraded) == (True, False)
+    assert len(errors) == 1 and "already used by row 1" in str(errors[0])
 
 
 def test_an_unsafe_id_row_never_inherits_and_the_real_row_keeps_its_id_and_state():
@@ -401,9 +403,9 @@ def test_an_unsafe_id_row_never_inherits_and_the_real_row_keeps_its_id_and_state
             {"id": unsafe, "text": "typed row", "weight": "core"},
             {"id": "R1", "text": "one", "weight": "core"},
             {"id": "R3", "text": "three", "weight": "core"}])
-        out = {r.text: r for r in _checklist_from_editor(frame, base).requirements}
-        assert (out["typed row"].graded, out["typed row"].hand_ungraded) == (True, False), unsafe
-        assert out["typed row"].id not in ("R1", "R2", "R3")  # a free id: R2 is a base id too
+        errors = []
+        out = {r.text: r for r in _checklist_from_editor(frame, base, errors).requirements}
+        assert "typed row" not in out and len(errors) == 1, unsafe  # left out, never graded with
         assert out["one"].id == "R1" and (out["one"].graded, out["one"].hand_ungraded) == (False, True)
         assert out["three"].id == "R3" and (out["three"].graded, out["three"].hand_ungraded) == (False, True)
 
