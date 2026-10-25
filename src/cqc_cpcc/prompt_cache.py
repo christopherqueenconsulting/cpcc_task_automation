@@ -1,13 +1,15 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 """Prompt-cache helpers for the grading calls (docs/PROMPT_GUIDELINES.md G21, G26).
 
-Both grading prompts put everything that is the same for every student of an assignment first
+The rubric grading prompt puts everything that is the same for every student of an assignment first
 (the system message, then the assignment instructions, solution, rubric, error definitions and
 requirements in the user message) and the per-call nonce, the fence and the submission last.
 :func:`static_prefix` returns that shared part; :func:`session_id_for` hashes it into the
 OpenRouter ``session_id`` (sticky routing, so the run's calls reach the provider that holds the
 cache). The id is a hash of instruction text, never of student data, and is only sent when
-``CQC_PROMPT_CACHE_KEY`` is on (off by default: the maintainer decides).
+``CQC_PROMPT_CACHE_KEY`` is on (off by default: the maintainer decides). Only the rubric calls send it;
+the exam prompt (v3) has the same layout but its call site does not use this module, so
+``EXAM_SUBMISSION_HEADING`` is used only by a layout test.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
-"""rubric-grading v4 and exam-grading v4 follow docs/PROMPT_GUIDELINES.md.
+"""rubric-grading v4 follows docs/PROMPT_GUIDELINES.md; exam-grading stays at v3.
 
 Checked here: the cacheable prefix (system message and the static start of the user message) is
 byte-identical across calls that differ only in the submission and the nonce; the per-call
