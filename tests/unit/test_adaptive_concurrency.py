@@ -678,6 +678,14 @@ class TestAllCallsInParallel:
         limits = openai.DEFAULT_CONNECTION_LIMITS
         assert limits.max_connections >= adaptive.HARD_MAX_CONCURRENCY
 
+    def test_the_client_modules_use_the_sdk_default_pool(self):
+        from pathlib import Path
+
+        root = Path(adaptive.__file__).resolve().parents[1] / "utilities" / "AI"
+        for name in ("openai_client.py", "openrouter_client.py"):
+            text = (root / name).read_text(encoding="utf-8")
+            assert "http_client" not in text and "max_connections" not in text, name
+
     def test_a_base_that_predates_512_is_given_at_most_256(self, tmp_path):
         d = tmp_path / "src" / "cqc_cpcc" / "model_eval"
         d.mkdir(parents=True)
@@ -685,6 +693,12 @@ class TestAllCallsInParallel:
         assert pa._base_hard_max(tmp_path) == 256
         (d / "adaptive.py").write_text("HARD_MAX_CONCURRENCY = 512\n", encoding="utf-8")
         assert pa._base_hard_max(tmp_path) == 512
+        (d / "adaptive.py").write_text("HARD_MAX_CONCURRENCY = 1024\n", encoding="utf-8")
+        assert pa._base_hard_max(tmp_path) == 512  # never above this checkout's cap
+        (d / "adaptive.py").write_text("HARD_MAX_CONCURRENCY = 300\n", encoding="utf-8")
+        assert pa._base_hard_max(tmp_path) == 300
+        (d / "adaptive.py").write_text("# no number here\n", encoding="utf-8")
+        assert pa._base_hard_max(tmp_path) == 256
         assert pa._base_hard_max(tmp_path / "missing") == 256
 
     async def test_run_suite_starts_every_call_at_once(self, test_mode):
@@ -719,6 +733,108 @@ class TestAllCallsInParallel:
         pool = AdaptiveLimiter("calls", start=250, ceiling=250)
         pool.on_throttle(adaptive.RATE_LIMIT, pool.epoch)
         assert pool.limit == 125
+
+
+class FakeResource:
+    RLIMIT_NOFILE = 7
+    RLIM_INFINITY = -1
+
+    def __init__(self, soft, hard, set_error=None, get_error=None):
+        self.soft, self.hard, self.set_error, self.get_error = soft, hard, set_error, get_error
+        self.set_calls = []
+
+    def getrlimit(self, which):
+        if self.get_error:
+            raise self.get_error
+        return self.soft, self.hard
+
+    def setrlimit(self, which, pair):
+        if self.set_error:
+            raise self.set_error
+        self.set_calls.append(pair)
+        self.soft = pair[0]
+
+
+class TestFdSafeCap:
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.delitem(adaptive._FD_CAP, "n", raising=False)
+        yield
+        adaptive._FD_CAP.pop("n", None)
+
+    def _use(self, monkeypatch, fake):
+        import sys
+
+        monkeypatch.setitem(sys.modules, "resource", fake)
+        return fake
+
+    def test_a_low_soft_limit_is_raised_to_4096(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(1024, 1048576))
+        assert adaptive.fd_safe_cap() == 4096 - adaptive.FD_HEADROOM == 3840
+        assert fake.set_calls == [(4096, 1048576)]
+
+    def test_a_refused_raise_uses_the_soft_limit_minus_headroom(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(1024, 1048576, set_error=OSError("refused")))
+        assert adaptive.fd_safe_cap() == 1024 - adaptive.FD_HEADROOM == 768
+        assert fake.set_calls == []
+
+    def test_a_low_hard_limit_is_the_target(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(1024, 2048))
+        assert adaptive.fd_safe_cap() == 2048 - adaptive.FD_HEADROOM
+        assert fake.set_calls == [(2048, 2048)]
+
+    def test_an_unlimited_soft_limit_gives_the_hard_cap(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(-1, -1))
+        assert adaptive.fd_safe_cap() == adaptive.HARD_MAX_CONCURRENCY
+        assert fake.set_calls == []
+
+    def test_an_unreadable_limit_gives_the_hard_cap(self, monkeypatch):
+        self._use(monkeypatch, FakeResource(1024, 1024, get_error=ValueError("bad")))
+        assert adaptive.fd_safe_cap() == adaptive.HARD_MAX_CONCURRENCY
+
+    def test_no_resource_module_gives_the_hard_cap(self, monkeypatch):
+        import sys
+
+        monkeypatch.setitem(sys.modules, "resource", None)  # an import of it now raises ImportError
+        assert adaptive.fd_safe_cap() == adaptive.HARD_MAX_CONCURRENCY
+
+    def test_the_result_is_cached(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(1024, 1048576))
+        first = adaptive.fd_safe_cap()
+        fake.soft = 100  # a second read would give a different answer
+        assert adaptive.fd_safe_cap() == first and len(fake.set_calls) == 1
+
+    def test_a_tiny_budget_warns_and_uses_the_floor_not_one(self, monkeypatch):
+        self._use(monkeypatch, FakeResource(200, 200))
+        warnings = []
+        monkeypatch.setattr(adaptive.logger, "warning", warnings.append)
+        assert adaptive.fd_safe_cap() == adaptive.FD_FLOOR == 16
+        assert len(warnings) == 1 and "ulimit -n 4096" in warnings[0] and "200" in warnings[0]
+
+    def test_clamp_pool_applies_both_caps(self, monkeypatch):
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 300)
+        assert adaptive.clamp_pool(700) == 300 and adaptive.clamp_pool(50) == 50
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 100000)
+        assert adaptive.clamp_pool(700) == 512
+
+
+class TestBurstOf429s:
+    async def test_250_calls_that_all_get_a_429_first_halve_the_pool_and_all_complete(self):
+        pool = AdaptiveLimiter("calls", start=250, ceiling=250)
+        tries, sleeps, rng = {}, Sleeps(), Top(False)
+
+        async def call(i):
+            tries[i] = tries.get(i, 0) + 1
+            if tries[i] == 1:
+                await asyncio.sleep(0)  # all 250 are in flight before the first answer
+                raise RateLimitError(retry_after=5)
+            return i
+
+        results = await asyncio.gather(*[adaptive.throttled_call(pool, lambda i=i: call(i), sleep=sleeps, rng=rng)
+                                         for i in range(250)])
+        assert sorted(results) == list(range(250))
+        assert pool.stats.rate_limited == 250 and pool.stats.halvings == 1 and pool.stats.min == 125
+        assert all(w >= 5 for w in sleeps.waits)  # Retry-After is the floor of every wait
 
 
 class TestRunSuiteAdaptive:

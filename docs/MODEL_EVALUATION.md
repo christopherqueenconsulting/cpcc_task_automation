@@ -98,7 +98,7 @@ alone was unsafe. It goes back once the digest prompt suite passes (see
 ## How many calls run at once
 
 The promotion run (`model-eval.yml`) and a plain `suite run` use a fixed number of calls in flight (4,
-`CQC_EVAL_CONCURRENCY`, whole numbers 1 to 256; anything else is an error, not a silent default). The
+`CQC_EVAL_CONCURRENCY`, whole numbers 1 to 512; anything else is an error, not a silent default). The
 **prompt A/B** uses adaptive pools instead: it starts with every call of the suite side in flight at once (at most 512) per side, halves on
 a 429 or an `openrouter_in_flight_budget` 402/403, earns a permit back per success window, retries
 throttled calls with full jitter (honouring `Retry-After`), keeps the judge in a separate pool (default: its call count, at most 512), and makes every call reserve its worst-case cost on the budget first so the key cap holds at any

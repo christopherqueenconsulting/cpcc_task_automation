@@ -476,7 +476,7 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
 - **Start and ceiling.** Each side (head, and base in its own process) starts at
   `min(calls in the suite, ceiling)` permits. The ceiling is `--max-concurrency N` on `prompt-ab` and
   `suite run`, else `CQC_AB_MAX_CONCURRENCY`, else **every call of the suite side** (at most the hard cap
-  of **512**), so a suite of about 250 to 270 calls runs them all at once instead of in waves of 64.
+  of **512**), so `grading` (97 cases x 4 repeats = 388 calls per side and model, from the dataset and `suite_policy`) runs them all at once instead of in waves of 64. The first window is not ramped: up to 512 requests per side (about 1024 with the base) leave at once; a 429 burst is absorbed by halving plus jittered retries.
   An explicit `--max-concurrency` or `CQC_AB_MAX_CONCURRENCY` still wins and can cap lower, as can a
   smaller start (`--concurrency N` / `CQC_AB_START_CONCURRENCY`). The base side (its own process) gets
   the same number through `CQC_AB_MAX_CONCURRENCY` (at most 256 when the base checkout predates the 512
@@ -485,13 +485,19 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
   Cost is unchanged (the same calls are made and each still reserves its worst case on the budget
   first); only the spend rate rises. The 429/timeout backoff is exactly as before, and an account-limit
   error still aborts the run on the first one.
-- **Why 512 is safe for the transport.** The OpenAI SDK's default HTTP pool takes 1000 connections
-  (`openai.DEFAULT_CONNECTION_LIMITS`, pinned by a test), so 512 in flight never waits on the pool; the
-  client modules are not edited (a shared-file edit would re-run every suite). Each in-flight call is one
+- **Why 512 is safe for the transport.** `openai_client.py` and `openrouter_client.py` build `AsyncOpenAI` without an
+  `http_client`, so they use the SDK's default HTTP pool of 1000 connections (`openai.DEFAULT_CONNECTION_LIMITS`,
+  pinned by a test): 512 in flight never waits on the pool. The client modules are not edited (a shared-file edit
+  would re-run every suite). Each in-flight call is one
   socket, so `adaptive.fd_safe_cap()` raises a soft file-descriptor limit below 4096 toward
   `min(hard limit, 4096)` and lowers the ceiling to `limit - 256` if it cannot (a 1024 soft limit would
   give 768, still above 512; the runner's actual `ulimit -n` was not measured here, so the check runs at
-  start-up rather than assuming it).
+  start-up rather than assuming it). The limit is raised in this process only; child processes (the base run)
+  inherit it, and macOS may refuse the raise, in which case the lower limit is used. If less than 16
+  connections would fit, a warning names the limit and `ulimit -n 4096`, and the ceiling is 16, not 1. A pool
+  widened to fit a whole batch group is clamped to the same cap.
+- **Rollback.** Set `CQC_AB_MAX_CONCURRENCY=64` and `CQC_AB_JUDGE_CONCURRENCY=16` in the environment (the old
+  defaults); no code change needed.
 - **AIMD, per pool.** A **throttle** is a 429, or a 402/403 whose body names
   `openrouter_in_flight_budget` (an out-of-credit 402 or a real permission error is not one, and is
   not retried). A throttle **halves** the permits (never below 1). A burst of throttles from calls

@@ -125,14 +125,19 @@ def _setting(value, env: str, default: int, name: str) -> int:
 
 
 _FD_CAP: dict = {}
+#: Smallest ceiling used when the descriptor limit leaves almost nothing (after a failed raise). Not 1: that would
+#: serialise the run silently; 16 keeps it moving and the warning tells the operator how to fix the limit.
+FD_FLOOR = 16
 
 
 def fd_safe_cap() -> int:
     """Most connections this process can hold open: its descriptor limit minus ``FD_HEADROOM``.
 
     Each in-flight call is one socket. A soft ``RLIMIT_NOFILE`` below ``FD_TARGET`` is raised toward
-    ``min(hard limit, FD_TARGET)`` first (Linux runners typically start at 1024 soft). Where the limit cannot be read
-    (Windows) the cap is ``HARD_MAX_CONCURRENCY``. Read once per process.
+    ``min(hard limit, FD_TARGET)`` first, in this process (children inherit the raised limit; macOS may refuse and
+    then the unraised limit is used). Where the limit cannot be read (Windows, no ``resource`` module) the cap is
+    ``HARD_MAX_CONCURRENCY``. If the limit leaves less than ``FD_FLOOR`` after headroom, a warning names the limit and
+    the cap is ``FD_FLOOR``. Read once per process.
     """
     if "n" not in _FD_CAP:
         n = HARD_MAX_CONCURRENCY
@@ -147,11 +152,24 @@ def fd_safe_cap() -> int:
                     soft = want
                 except (ValueError, OSError):
                     pass
-            n = HARD_MAX_CONCURRENCY if soft == resource.RLIM_INFINITY else max(1, soft - FD_HEADROOM)
+            if soft == resource.RLIM_INFINITY:
+                n = HARD_MAX_CONCURRENCY
+            else:
+                n = soft - FD_HEADROOM
+                if n < FD_FLOOR:
+                    logger.warning(f"[adaptive] the file-descriptor limit is {soft} (soft) and could not be raised; "
+                                   f"only {max(n, 0)} connections fit after {FD_HEADROOM} descriptors of headroom. "
+                                   f"Using {FD_FLOOR}. Raise it with `ulimit -n 4096` before the run.")
+                    n = FD_FLOOR
         except (ImportError, ValueError, OSError):
             pass
         _FD_CAP["n"] = n
     return _FD_CAP["n"]
+
+
+def clamp_pool(n: int) -> int:
+    """``n`` limited by the hard cap and the descriptor limit (for a pool widened to fit a whole batch group)."""
+    return max(1, min(int(n), HARD_MAX_CONCURRENCY, fd_safe_cap()))
 
 
 def _explicit(value, env: str) -> bool:

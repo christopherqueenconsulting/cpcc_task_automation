@@ -269,14 +269,15 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
         total = max(1, len(cases) * repeats)
         ceiling = adaptive.ab_max_concurrency(max_concurrency, calls=total)
         if bplan is not None:
-            ceiling = batch.widen(ceiling, total)
+            ceiling = adaptive.clamp_pool(batch.widen(ceiling, total))
         wanted = adaptive.ab_start_concurrency(concurrency)
         start = min(total, ceiling) if wanted is None else min(wanted, ceiling)
         limiter = adaptive.AdaptiveLimiter("calls", start=start, ceiling=ceiling)
         logger.info(f"[prompt-eval:{suite.id}] adaptive concurrency: start {start}, ceiling {ceiling}")
     else:
         semaphore = asyncio.Semaphore(
-            batch.widen(eval_concurrency(value=concurrency), len(cases) * repeats) if bplan is not None
+            adaptive.clamp_pool(batch.widen(eval_concurrency(value=concurrency), len(cases) * repeats))
+            if bplan is not None
             else eval_concurrency(value=concurrency))
 
     sid = session_id if session_id is not None else cache_session.session_for_run(suite.id, model, effort)
