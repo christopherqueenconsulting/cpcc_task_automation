@@ -7,6 +7,7 @@ needed, no wall-clock sleeps); its helpers are reused.
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -681,8 +682,76 @@ class TestBaseSideOutput:
         row = json.loads(lines[0])
         assert row["error_detail"][0] == {"attempt": 1, "status": 403, "message": "account_limit (HTTP 403)"}
         assert "http" not in row["error_detail"][1]["message"] and "a@b.co" not in row["error_detail"][1]["message"]
-        assert len(row["error_detail"]) == 2 and lines[1] == "not json" and json.loads(lines[3]) == {"ok": True}
+        assert len(row["error_detail"]) == 2
+        assert len(lines) == 2 and json.loads(lines[1]) == {"ok": True}  # non-object and unparseable lines are dropped
         pa._scrub_rows(tmp_path / "missing.jsonl")  # nothing to do
+
+    def test_a_failure_while_scrubbing_leaves_the_original_untouched_and_raises(self, tmp_path, monkeypatch):
+        raw = tmp_path / "raw_outputs.jsonl"
+        raw.write_bytes((json.dumps({"error_detail": [{"status": 403, "message": "x"}]}) + "\n").encode())
+        before = raw.read_bytes()
+        real_write = Path.write_text
+
+        def half(self, text, *a, **k):
+            real_write(self, text[:5], *a, **k)  # a partial file, then the failure
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "write_text", half)
+        with pytest.raises(OSError, match="disk full"):
+            pa._scrub_rows(raw)
+        monkeypatch.undo()
+        assert raw.read_bytes() == before and [p.name for p in tmp_path.iterdir()] == ["raw_outputs.jsonl"]
+
+    def test_a_failure_in_the_scrub_itself_also_leaves_the_original(self, tmp_path, monkeypatch):
+        raw = tmp_path / "raw_outputs.jsonl"
+        raw.write_text(json.dumps({"ok": True}) + "\n")
+        before = raw.read_bytes()
+
+        def boom(row):
+            raise RuntimeError("scrub broke")
+
+        monkeypatch.setattr(error_detail, "scrub_row", boom)
+        with pytest.raises(RuntimeError, match="scrub broke"):
+            pa._scrub_rows(raw)
+        assert raw.read_bytes() == before and not (tmp_path / "raw_outputs.jsonl.tmp").exists()
+
+    def test_scrubbing_changes_nothing_but_the_error_detail_messages(self, tmp_path):
+        from dataclasses import asdict
+
+        from tests.unit.test_prompt_suites import _toy_suite
+
+        rows = []
+        for i in range(4):
+            ok = i != 3
+            rows.append(base.SuiteRecord(
+                "toy", f"c{i}", MODEL, None, 0, ok=ok, error_kind=None if ok else "transport",
+                payload={"answer": "ok" if i < 3 else ""}, cost_usd=0.01 * (i + 1), cost_estimated=not ok, attempts=1 + i,
+                latency_s=0.5 + i, model_used=MODEL, prompt="toy@1", prompt_tokens=100 + i, completion_tokens=10 + i,
+                output_sha256=f"sha{i}",
+                error_detail=[] if ok else [{"attempt": 1, "status": 403, "message": "Budget limit exceeded Acme",
+                                             "code": "403"}, {"attempt": 2, "status": 502, "message": "bad http://e.com"}],
+                retry_charge_usd=0.002 if not ok else 0.0, cached_tokens=5, reasoning_tokens=7).to_json())
+        raw = tmp_path / "raw_outputs.jsonl"
+        raw.write_text("\n".join(rows) + "\n")
+        before = prompt_eval.read_records(raw)
+        pa._scrub_rows(raw)
+        after = prompt_eval.read_records(raw)
+        label = next(iter(before))
+
+        def stripped(records):
+            return [{k: v for k, v in asdict(r).items() if k != "error_detail"} for r in records]
+
+        assert stripped(before[label]) == stripped(after[label])  # scores, tokens, cost, ids, payloads all equal
+        assert "Acme" in json.dumps([asdict(r)["error_detail"] for r in before[label]])
+        assert "Acme" not in json.dumps([asdict(r)["error_detail"] for r in after[label]])
+        suite = _toy_suite()
+        cases = _cases(4)
+        agg_before = base.aggregate(suite, cases, before[label])
+        agg_after = base.aggregate(suite, cases, after[label])
+        keep = ("composite", "ok_rate", "cost_usd", "cost_per_call", "graders", "scorable_cases", "errors")
+        assert {k: agg_before.get(k) for k in keep} == {k: agg_after.get(k) for k in keep}
+        assert [(c.case_id, c.composite, c.graders) for c in agg_before["per_case"]] == [
+            (c.case_id, c.composite, c.graders) for c in agg_after["per_case"]]  # the paired test's input
 
     def test_capture_failures_reach_requests_json_only_redacted(self, tmp_path, monkeypatch, capsys):
         def boom(*a, **k):
@@ -724,3 +793,34 @@ class TestBaseSideOutput:
             pa._base_capture_once(tmp_path, ["digest"], tmp_path / "f.json", 5)
         shown = capsys.readouterr().out + str(caught.value)
         assert "Acme" not in shown and "a@b.co" not in shown and "http" not in shown
+
+
+class TestRedactionKeepsWhatClassificationReads:
+    def test_the_words_the_retry_logic_matches_survive_redaction(self):
+        from cqc_cpcc.model_eval.error_detail import redact_message
+
+        for word in ("truncated", "finish_reason=length", "timeout", "429", "5xx", "overloaded", "rate limit",
+                     "TRUNCATED by the output token limit", "limit exceeded", "openrouter_in_flight_budget"):
+            assert word in redact_message(f"upstream said: {word} (try later)"), word
+
+    def test_classification_reads_the_exception_never_the_redacted_message(self):
+        import pathlib
+        import re
+
+        root = pathlib.Path(pa.__file__).parent
+        text = {p.name: p.read_text(encoding="utf-8") for p in root.rglob("*.py")}
+        # the only reader of a stored (redacted) message is the saved-row recogniser for old artifacts
+        readers = [n for n, t in text.items() if re.search(r'\.get\("message"\)|\["message"\]', t)
+                   and n != "error_detail.py"]
+        assert sorted(readers) == ["account_limit.py"]
+        classify = text["runner.py"].split("def classify_error")[1].split("def output_fingerprint")[0]
+        retry = text["adaptive.py"].split("def transport_retryable")[1].split("def attempt_usage")[0]
+        assert "redact_message" not in classify and "redact_message" not in retry
+
+
+class TestAffected:
+    def test_a_judges_py_only_change_needs_no_run_and_no_rescore(self):
+        result = pa.affected("origin/master", changed=["src/cqc_cpcc/model_eval/judges.py"])
+        assert result == {"run": [], "rescore": [], "judges_changed": ["judge-faithfulness", "judge-feedback-quality",
+                                                                      "judge-pairwise"],
+                          "reasons": {}, "changed_files": 1, "dependency_only": False}

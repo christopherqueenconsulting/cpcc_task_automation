@@ -422,20 +422,32 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
 
 
 def _scrub_rows(raw: Path) -> None:
-    """Rewrite a base run's ``raw_outputs.jsonl`` with every ``error_detail`` message made publishable."""
+    """Rewrite a base run's ``raw_outputs.jsonl`` with every ``error_detail`` message made publishable.
+
+    Fails closed. The new file is written beside the old one and moved over it in one step, so a failure leaves the
+    original untouched (and the temporary file removed); the failure is raised, so the A/B step fails and nothing
+    unscrubbed is uploaded as if it were safe. A line that is not a JSON object is dropped, never written back.
+    A missing file is nothing to publish.
+    """
     try:
         lines = raw.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except FileNotFoundError:
         return
-    out = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            out.append(line)
-            continue
-        out.append(json.dumps(error_detail.scrub_row(row), sort_keys=True) if isinstance(row, dict) else line)
-    raw.write_text("".join(f"{line}\n" for line in out), encoding="utf-8")
+    tmp = raw.with_name(raw.name + ".tmp")
+    try:
+        out = []
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                out.append(json.dumps(error_detail.scrub_row(row), sort_keys=True))
+        tmp.write_text("".join(f"{line}\n" for line in out), encoding="utf-8")
+        os.replace(tmp, raw)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def prompts_unchanged(suite_id: str, base_ref: str) -> bool:

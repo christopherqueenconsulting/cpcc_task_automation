@@ -74,12 +74,20 @@ def gateway_log_enabled() -> bool:
     return os.environ.get(ENV_LOG_MESSAGE, "").strip() == "1" and not os.environ.get("GITHUB_ACTIONS")
 
 
+def _int(value) -> Optional[int]:
+    """``value`` as an int status, else None (a status read from a saved row or an error may be a string)."""
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 class AccountLimitError(RuntimeError):
     """What a judge call raises for an account limit: the status and the fixed reason, never the gateway text."""
 
     def __init__(self, status):
         super().__init__(f"HTTP {status} {REASON}")
-        self.status_code = status
+        self.status_code = _int(status)
 
 
 def _gateway_message(error: BaseException) -> Optional[str]:
@@ -160,7 +168,7 @@ class AbortState:
         first = not self.tripped
         if first:
             self.tripped = True
-            self.status = error_detail.http_status(error)
+            self.status = _int(error_detail.http_status(error))
             self.message = (error_detail.redact_message(error_detail.failure_message(error))
                             if gateway_log_enabled() else None)
             logger.warning(f"account limit reached (HTTP {self.status} {REASON}); the run is stopping"
@@ -178,7 +186,7 @@ class AbortState:
         """Record an abort seen elsewhere (a base-branch subprocess's saved rows): later suites then do not start."""
         if not self.tripped:
             self.tripped = True
-            self.status = info.get("status")
+            self.status = _int(info.get("status"))
 
     def info(self) -> Optional[dict]:
         if not self.tripped:
@@ -247,7 +255,7 @@ def from_records(records) -> Optional[dict]:
         hit = next((d for d in details if is_account_limit_detail(d)), None)
         if hit is not None or getattr(r, "error_kind", None) == KIND:
             hit = hit or (details[-1] if details else {})
-            return {"status": hit.get("status"), "reason": REASON}
+            return {"status": _int(hit.get("status")), "reason": REASON}
     return None
 
 
