@@ -263,6 +263,7 @@ def test_aggregate_is_worst_of_in_enum_order():
     order = list(Verdict)
     assert order == [
         Verdict.MATCH,
+        Verdict.VALUES_MAY_DIFFER,
         Verdict.FORMAT_ONLY,
         Verdict.TEXT_DIFFERS,
         Verdict.ORDER_DIFFERS,

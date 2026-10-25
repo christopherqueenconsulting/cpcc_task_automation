@@ -135,7 +135,7 @@
       ]
     },
     "test-case-generation": {
-      "version": 1,
+      "version": 2,
       "status": "live",
       "role": "grading",
       "description": "Output check: stdin test cases for the instructor's solution (at most 6, a boundary case for every selection or loop condition the instructions name, and the condition-to-case map). Cached per assignment.",
@@ -154,7 +154,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:ad70c547125bf42d55e7e79b08f27e2b6d2acdb283c1a58c5dc3bbf9fdca7e1f",
+      "fingerprint": "sha256:fc8ba5a04dce56ecb0847d4ffda065067dfecfe540f2243c578c722e8954c663",
       "suites": [
         "test-case-generation"
       ]
