@@ -680,8 +680,18 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
 
 - **Data handling (decided by the owner).** Batch does not support zero data retention and OpenRouter keeps batch
   requests and responses for 30 days. The owner accepted this for prompt-eval and model-eval runs on the synthetic
-  datasets only, never for production grading and never for student data. Because the policy provider block asks for
-  `zdr`, a batch whose provider rejects that block fails at submit and the run falls back to sync (see "First batch").
+  datasets only, never for production grading and never for student data (ruling relayed by the maintainer from the
+  owner's chat, 2026-10-25; no repo artifact).
+- **The provider block.** `model_policy.json` asks for `zdr`, `data_collection: deny`, `require_parameters` and
+  `allow_fallbacks: false` on every request, and a batch cannot honour ZDR. Batch items are sent without zdr/data_collection
+  because the owner accepted 30-day retention for synthetic eval data: the per-request provider block is removed from
+  every batch item (`batch.request_body`), and the batch-wide `provider` carries only the keys the batch API documents
+  (`only`, `allow_fallbacks`; `batch.batch_provider`), so the no-fallback routing choice survives. `require_parameters` is
+  dropped too, so a provider that ignores an unsupported parameter is not refused; the first-batch effort check is the
+  guard for the one parameter that matters. The synchronous path and `model_policy.json` are unchanged. If the API
+  rejects the batch-wide `provider` block at submit, the first batch fails, the run continues on the synchronous path,
+  and `batch_fallback_reason` reads `submit rejected: HTTP <status> <message>`: look at that message, then remove the
+  rejected key from `BATCH_PROVIDER_KEYS` in a follow-up PR (or switch batch off).
 - **Switches** (read when a run starts; an invalid value aborts before any paid call):
 
   | Variable | Default | Meaning |
@@ -694,8 +704,13 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   | `CQC_EVAL_BATCH_MAX_ITEMS` | `1000` | Most requests per batch (more are split into several batches). |
   | `CQC_EVAL_BATCH_SETTLE_S` | `120` | Longest to wait for more requests before submitting what has been collected. |
 
-  The two paid steps of `prompt-eval.yml` and the paid steps of `model-eval.yml` set the first two to `1`; local
-  runs and everything else stay sync.
+  The three paid steps of `prompt-eval.yml` (A/B base vs head prompts, Run the changed suites on master, Run) and the
+  two of `model-eval.yml` (Run evaluation, Run the winner on the other prompt suites of its roles) set the first two to
+  `1`; local runs and everything else stay sync. A test pins exactly those five steps.
+- **Datasets.** Cases are stamped by the loaders (`Suite.cases()` and `dataset.load_cases`) on the exact directory they
+  read, which must be under `evals/datasets` and pass the `scripts/pii_guard.py` checks (re-run when a file changes). A
+  group refuses cases that were not stamped and any request not tied to a stamped case. A request capture (the $0
+  request comparison) is never batched.
 - **What is batched.** Per (suite, side, model, effort) group, one batch of the suite's generation calls (the run
   waits until every call of the group has been built, then submits them together). The pairwise judge calls are
   separate batches, after the generation results exist (the judge asks twice per case with A and B swapped, so it
@@ -717,8 +732,20 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
 - **Deadline and double charge.** At `CQC_EVAL_BATCH_DEADLINE_S` the run stops waiting, keeps the items the last
   poll returned, runs only the unfinished items sync (adaptive concurrency, budget reserved as for any sync call)
   and ignores anything the batch returns later. OpenRouter has **no cancel endpoint**, so a batch that finishes
-  after the deadline may still bill: the Run stats give an upper bound (the batch price, half the sync estimate, of
-  the items re-sent sync).
+  after the deadline may still bill: the Run stats give an upper bound, `double_charge_bound_usd` (the batch price,
+  sync estimate x 0.5, of the items re-sent sync). That bound is **report only**: it is not added to the budget gate.
+  Expected consequences with the default 2700 s (45 min) deadline and first-batch cap: OpenRouter reports (its
+  announcement, two-week beta) a median of 7 minutes, a 90th percentile of 1 hour and a 99th of 10.3 hours, so most
+  batches finish well inside the limit, a first batch over 45 minutes puts the whole run on the synchronous path, a
+  later batch over 45 minutes re-sends its unfinished items sync, and a batch that finishes late may still bill.
+- **A job killed mid-batch.** If the runner is cancelled or dies while a batch is in flight, the batch keeps running
+  at OpenRouter (no cancel endpoint) and may bill up to the 50% reservation of its items. Check the OpenRouter
+  activity page for batches created around the job's start time; the batch ids are not logged on purpose (no body or
+  id reaches the log). The partial run is not trusted: dispatch it again.
+- **Single-threaded eval only.** While a batched group runs, the process sets `CQC_LLM_TIMEOUT` (deadline + 600 s,
+  at most 3600) so a gateway call can wait for its batch, and restores it when the last group ends (reference
+  counted). That is a process-wide mutation: it assumes one eval run per process and no other thread reading the
+  variable. Never use batch mode inside the app.
 - **Budget.** A batched call reserves half of its sync worst case at submit and settles with what the response
   reports for the call; when the response reports none, the batch-level `usage.cost` is allocated over the items by
   tokens (`cost_allocated: true` on the row); when that is unknown too, the conservative sync estimate is kept
@@ -727,14 +754,25 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   batch mode was on, so old rows and runs with batch off are byte-identical. `run_stats` gains the batch share of
   calls, batch vs sync cost, wall clock per mode, fall-backs and deadline fall-backs, the double-charge bound, the
   number of per-item errors and `batch_fallback_reason`; the model-eval scorecard gains a `batch` block with the same.
+- **Constants that carry the unverified facts** (all in `batch.py`; the first batch's validation, or a run of the
+  optional `scripts/openrouter_batch_probe.py`, shows which to change, and a follow-up PR flips it):
+
+  | Constant | Default | Unverified question |
+  |---|---|---|
+  | `MODEL_ID_SUFFIX` | `""` | whether the API wants the plain model id or the `:batch` variant |
+  | `TOKEN_LIMIT_PARAM` | `None` (keep `max_completion_tokens`) | whether `max_completion_tokens` is accepted in a batch (the `:batch` listing omits it); `"max_tokens"` is the alternative |
+  | `SEND_SESSION_ID` | `True` | whether `session_id` is accepted in a batch body |
+  | `STRIP_BODY_FIELDS` | `()` | any other body field the API rejects |
+  | `BATCH_PROVIDER_KEYS` | `("only", "allow_fallbacks")` | documented for the batch, not confirmed for a live account |
 - **Not verified (the first batch checks what it can).** Whether `reasoning.effort`, `response_format` json_schema and
   `session_id` are honoured in a batch; per-item `usage.cost`, `cached_tokens` and `reasoning_tokens`; whether the
   plain model id or the `:batch` variant is wanted (`batch.MODEL_ID_SUFFIX`); whether `max_completion_tokens` is
   accepted (`batch.TOKEN_LIMIT_PARAM`); the per-batch request-count cap (a 413 splits the batch); that cache hits
   carry over to batches (the cheaper batch cache prices are list prices; hit behaviour is unverified). The sync
   layout and caching above are unchanged.
-- **Rollback.** Unset the two variables (or set `CQC_EVAL_BATCH=0`); nothing else changed in the run. Reverting the
-  merge removes the two env lines from each workflow step.
+- **Rollback.** The switch is the two env lines in the five workflow steps above: set `CQC_EVAL_BATCH` to `"0"` or
+  delete both lines, or revert the merge. Both are `.github` edits that need the owner; they are not repository
+  variables. Locally, unset the two variables.
 
 ##### Optional output-token cap: `CQC_EVAL_MAX_TOKENS` (diagnostic, off by default)
 

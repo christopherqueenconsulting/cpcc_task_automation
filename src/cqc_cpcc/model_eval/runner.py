@@ -210,7 +210,7 @@ async def run_model(
     grade_fn = grade_fn or grade_with_rubric
     # Batch mode (batch.py; off unless CQC_EVAL_BATCH=1 and the retention opt-in): decided before any call. The cases
     # must come from ``dataset_dir``, which has to be under evals/datasets, or the run is refused.
-    bplan = batch.plan(dataset_dir, len(cases) * repeats, label="model-eval")
+    bplan = batch.plan(dataset_dir, len(cases) * repeats, label="model-eval", cases=cases)
     semaphore = asyncio.Semaphore(batch.widen(concurrency, len(cases) * repeats) if bplan is not None else concurrency)
     records: list[CallRecord] = []
 
@@ -237,6 +237,7 @@ async def run_model(
             # call made before this case. Only a new one is ours.
             before = llm_gateway.last_call()
             if bgroup is not None:
+                batch.bind_case(case)
                 batch.set_item_estimate(model_registry.estimate_cost(
                     resolved, estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0)
             try:

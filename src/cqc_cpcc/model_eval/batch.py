@@ -197,16 +197,28 @@ def ensure_eval_dataset(dataset_dir) -> None:
     _require_pii_clean(resolved)
 
 
-_PII_CLEAN: set = set()
+_PII_CLEAN: dict = {}
+
+
+def _fingerprint(directory: Path) -> str:
+    """Cheap fingerprint of a directory tree (relative path, size, mtime of every file): a changed file re-scans."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for p in sorted(q for q in directory.rglob("*") if q.is_file()):
+        st = p.stat()
+        h.update(f"{p.relative_to(directory)}\x1f{st.st_size}\x1f{st.st_mtime_ns}\x1e".encode())
+    return h.hexdigest()
 
 
 def _require_pii_clean(directory: Path) -> None:
     """Run the repo's student-data checks (``scripts/pii_guard.py``) over a dataset before it is batched.
 
-    Once per directory per process. Fails closed: a guard that cannot be loaded, or any finding, refuses the batch
-    (the data would be retained by the provider for 30 days).
+    Once per (directory, content fingerprint) per process. Fails closed: a guard that cannot be loaded, or any
+    finding, refuses the batch (the data would be retained by the provider for 30 days).
     """
-    if directory in _PII_CLEAN:
+    key = (directory, _fingerprint(directory))
+    if key in _PII_CLEAN:
         return
     import importlib.util
     import sys
@@ -219,14 +231,55 @@ def _require_pii_clean(directory: Path) -> None:
         spec.loader.exec_module(module)
         denylist = module.load_denylist(REPO_ROOT / module.DENYLIST_PATH)
         files = sorted(p for p in directory.rglob("*") if p.is_file())
-        findings = module.scan_files(files, REPO_ROOT, denylist)
+        findings = module.scan_files(files, directory, denylist)
     except Exception as e:  # noqa: BLE001 - fail closed
         raise DatasetNotAllowed(f"the student-data check could not run on {directory} ({type(e).__name__}); "
                                 f"not batching") from e
     if findings:
         raise DatasetNotAllowed(f"{len(findings)} student-data finding(s) in {directory} (scripts/pii_guard.py); "
                                 f"not batching")
-    _PII_CLEAN.add(directory)
+    _PII_CLEAN[key] = True
+
+
+# --- Provenance: the cases that are sent must be the cases the guard checked -----------------------
+
+_STAMPED: dict = {}  # id(case) -> (case, directory): the strong ref keeps the id valid
+_case_ok: contextvars.ContextVar[bool] = contextvars.ContextVar("cqc_eval_batch_case_ok", default=False)
+
+
+def stamp_cases(cases, directory):
+    """Called by the loaders (``Suite.cases``, ``dataset.load_cases``) on the directory they read from.
+
+    With batch mode off this does nothing. With it on, the directory must pass :func:`ensure_eval_dataset`
+    (under ``evals/datasets``, student-data check clean) or :class:`DatasetNotAllowed` is raised, and each case
+    is stamped. A group refuses any case that was not stamped, and any request not tied to a stamped case.
+    """
+    if not requested():
+        return cases
+    ensure_eval_dataset(directory)
+    for case in cases:
+        _STAMPED[id(case)] = (case, Path(directory))
+    return cases
+
+
+def is_stamped(case) -> bool:
+    entry = _STAMPED.get(id(case))
+    return entry is not None and entry[0] is case
+
+
+def bind_case(case) -> None:
+    """Tie the requests this task makes to ``case``: they are batched only if the guard stamped it."""
+    _case_ok.set(is_stamped(case))
+
+
+def _require_stamped(cases) -> None:
+    if cases is None:
+        raise DatasetNotAllowed("batch mode needs the cases of the group; none were given")
+    bad = [c for c in cases if not is_stamped(c)]
+    if bad:
+        raise DatasetNotAllowed(
+            f"{len(bad)} case(s) were not loaded through the guarded loader (evals/datasets, student-data check); "
+            f"not batching. Run with {ENV_BATCH}=0.")
 
 
 # --- Run statistics (report only; nothing in a verdict reads them) ------------------------------
@@ -338,9 +391,9 @@ def ineligible_reason(kwargs: dict) -> Optional[str]:
     for name in _NEVER_BATCHED_EXTRA:
         if extra.get(name):
             return f"unsupported field {name}"
-    provider = extra.get("provider")
-    if isinstance(provider, dict) and ("order" in provider or "sort" in provider):
-        return "provider.order/sort"
+    for provider in (extra.get("provider"), kwargs.get("provider")):
+        if isinstance(provider, dict) and ("order" in provider or "sort" in provider):
+            return "provider.order/sort"
     if _has_inline_image(kwargs.get("messages")):
         return "inline image"
     return None
@@ -356,6 +409,7 @@ def request_body(kwargs: dict, model_id: Optional[str] = None) -> dict:
     if isinstance(extra, dict):
         for key, value in extra.items():
             body.setdefault(key, value)
+    body.pop("provider", None)  # see ``batch_provider``: batch cannot honour zdr/data_collection; routing goes batch-wide
     if TOKEN_LIMIT_PARAM:
         for name in ("max_completion_tokens", "max_tokens"):
             if name in body and name != TOKEN_LIMIT_PARAM:
@@ -367,10 +421,33 @@ def request_body(kwargs: dict, model_id: Optional[str] = None) -> dict:
     return body
 
 
-def batch_payload(model_id: str, items: list) -> dict:
+#: The only ``provider`` keys the batch API documents (batch-wide, not per request): ``only`` and ``allow_fallbacks``.
+BATCH_PROVIDER_KEYS = ("only", "allow_fallbacks")
+
+
+def batch_provider(kwargs: dict) -> dict:
+    """The batch-wide ``provider`` block for these kwargs: the documented keys only.
+
+    The per-request provider block of the registry (``zdr``, ``data_collection``, ``require_parameters``, ...) is not
+    sent: batch items are sent without zdr/data_collection because the owner accepted 30-day retention for synthetic
+    eval data (relayed by the maintainer from the owner's chat, 2026-10-25; no repo artifact), and batch cannot honour
+    ZDR anyway. ``model_policy.json`` is not touched, so the synchronous path still sends the full block.
+    """
+    extra = kwargs.get("extra_body") if isinstance(kwargs.get("extra_body"), dict) else {}
+    merged: dict = {}
+    for block in (kwargs.get("provider"), extra.get("provider")):
+        if isinstance(block, dict):
+            merged.update(block)
+    return {k: merged[k] for k in BATCH_PROVIDER_KEYS if k in merged}
+
+
+def batch_payload(model_id: str, items: list, provider: Optional[dict] = None) -> dict:
     """The ``POST /batches`` body. ``requests`` is the LAST field (the API rejects any other order)."""
-    return {"endpoint": ENDPOINT, "model": model_id,
-            "requests": [{"custom_id": i.custom_id, "body": i.body} for i in items]}
+    out: dict = {"endpoint": ENDPOINT, "model": model_id}
+    if provider:
+        out["provider"] = provider
+    out["requests"] = [{"custom_id": i.custom_id, "body": i.body} for i in items]
+    return out
 
 
 def _estimate_tokens(kwargs: dict) -> int:
@@ -475,16 +552,28 @@ class BatchPlan:
     reserving: bool = False
 
 
-def plan(dataset_dir, total_calls: int, reserving: bool = False, label: str = "") -> Optional[BatchPlan]:
+def _capturing() -> bool:
+    from cqc_cpcc.model_eval import request_capture
+
+    return request_capture.capturing()
+
+
+def plan(dataset_dir, total_calls: int, reserving: bool = False, label: str = "", cases=None) -> Optional[BatchPlan]:
     """Decide, before any paid call, whether a group of ``total_calls`` is batched. None means sync.
 
     Raises (:class:`BatchRefused`, :class:`DatasetNotAllowed`, ``ValueError``) when batch mode is on but not
-    allowed or misconfigured: the run stops here, before any spend.
+    allowed or misconfigured, or when ``dataset_dir`` is outside the eval datasets or any of ``cases`` was not
+    stamped by the guarded loader: the run stops here, before any spend. A request capture (the $0 request
+    comparison) is never batched.
     """
     cfg = settings()
     if cfg is None:
         return None
+    if _capturing():
+        _event(type="note", label=label, reason="request capture is active: nothing is batched")
+        return None
     ensure_eval_dataset(dataset_dir)
+    _require_stamped(cases)
     if total_calls < cfg.min_items:
         _event(type="note", label=label, reason=f"group of {total_calls} calls is below {ENV_MIN}={cfg.min_items}")
         return None
@@ -543,6 +632,11 @@ class BatchGroup:
 
     # -- the entry point cache_session calls
     async def dispatch(self, inner, kwargs: dict):
+        if not _case_ok.get():  # a request not tied to a case the guard stamped in this run
+            raise DatasetNotAllowed("a request is not tied to a case loaded through the guarded dataset loader; "
+                                    "refusing to send it as a batch")
+        if _capturing():
+            return await self._sync(inner, kwargs, topup=False)
         reason = ineligible_reason(kwargs)
         if reason is not None:
             _event(type="note", label=self.label, reason=f"not batched: {reason}")
@@ -717,7 +811,8 @@ class BatchGroup:
 
         client = self._client(SUBMIT_TIMEOUT_S)
         try:
-            data = await client.post("/batches", body=batch_payload(model_id, items), cast_to=object)
+            data = await client.post(
+                "/batches", body=batch_payload(model_id, items, batch_provider(items[0].kwargs)), cast_to=object)
         except openai.APIStatusError as e:
             if e.status_code == 413:
                 raise _TooLarge(e.message) from e
@@ -783,7 +878,8 @@ class BatchGroup:
                 return  # nothing is resolved here: the caller sends every unfinished item sync
         if not isinstance(results, list):
             return
-        entries = [(by_id.get(r.get("custom_id")), r) for r in results if isinstance(r, dict)]
+        entries = [(by_id.get(r.get("custom_id")), r) for r in results[:len(by_id) + MAX_EXTRA_RESULTS]
+                   if isinstance(r, dict)]
         entries = [(i, r) for i, r in entries if i is not None and not i.resolved]
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
         batch_cost = usage.get("cost") if isinstance(usage.get("cost"), (int, float)) \
@@ -794,7 +890,8 @@ class BatchGroup:
         for item, entry in entries:
             response = entry.get("response")
             if isinstance(response, dict) and isinstance(response.get("body"), dict) \
-                    and int(response.get("status_code") or 0) in range(200, 300) and not entry.get("error"):
+                    and _ok_status(response.get("status_code")) and not entry.get("error") \
+                    and _body_size_ok(response["body"]):
                 cost, allocated = shares.get(item.custom_id, (None, False))
                 if cost is None and self.kind == "judge" and item.estimate > 0:
                     # the judge adds the call's reported cost to the budget as is, so an unknown cost must not be 0
@@ -885,11 +982,32 @@ def failure_text(error: BaseException) -> str:
     return error_detail.failure_message(error)
 
 
+#: Results beyond the submitted count that are still looked at (anything more is ignored), and the largest message
+#: content one item may return before it is treated as an error.
+MAX_EXTRA_RESULTS = 8
+MAX_ITEM_CONTENT_CHARS = 4_000_000
+
+
+def _ok_status(value) -> bool:
+    """A 2xx integer status; anything else (a string, None, a float, a bool) is not one. Never raises."""
+    return isinstance(value, int) and not isinstance(value, bool) and 200 <= value < 300
+
+
+def _body_size_ok(body: dict) -> bool:
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return True
+    return not isinstance(content, str) or len(content) <= MAX_ITEM_CONTENT_CHARS
+
+
 def check_first_results(results, by_id: dict) -> Optional[str]:
     """Why the results of a finished first batch cannot be trusted, or None. Pure; the checks are listed in the
     module docstring: shape, custom ids, all-errors, body shape, and the conservative reasoning-effort check."""
     if not isinstance(results, list) or not results:
         return "first batch: results missing or not a list"
+    if len(results) > len(by_id) + MAX_EXTRA_RESULTS:
+        return "first batch: more results than requests"
     ids = [r.get("custom_id") for r in results if isinstance(r, dict)]
     if len(ids) != len(results) or any(i not in by_id for i in ids) or len(set(ids)) != len(ids):
         return "first batch: results carry unknown or repeated custom_ids"
@@ -903,8 +1021,8 @@ def check_first_results(results, by_id: dict) -> Optional[str]:
         body = response.get("body")
         try:
             message = body["choices"][0]["message"]
-            ok_status = 200 <= int(response.get("status_code") or 0) < 300
-        except (KeyError, IndexError, TypeError, ValueError):
+            ok_status = _ok_status(response.get("status_code"))
+        except (KeyError, IndexError, TypeError):
             return "first batch: a result body is not a chat completion"
         if not isinstance(message, dict) or not ok_status:
             continue

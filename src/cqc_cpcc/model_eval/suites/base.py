@@ -214,7 +214,8 @@ class Suite:
         return DATASETS_ROOT / self.dataset
 
     def cases(self) -> list:
-        return self.load_cases(self.dataset_dir)
+        # batch mode: the directory read must be a guarded eval dataset; the cases are stamped (batch.py)
+        return batch.stamp_cases(self.load_cases(self.dataset_dir), self.dataset_dir)
 
 
 # --- Running ---------------------------------------------------------------------------
@@ -257,7 +258,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     use_adaptive = adaptive.adaptive_enabled(adaptive_mode)
     # Batch mode (batch.py; off unless CQC_EVAL_BATCH=1 and the retention opt-in). Decided before any call: a missing
     # opt-in or a dataset outside evals/datasets raises here. All calls must be able to wait on the batch at once.
-    bplan = batch.plan(suite.dataset_dir, len(cases) * repeats, reserving=use_adaptive, label=suite.id)
+    bplan = batch.plan(suite.dataset_dir, len(cases) * repeats, reserving=use_adaptive, label=suite.id, cases=cases)
     attempts_allowed = adaptive.transport_attempts(transport_attempts)  # a bad setting stops the run before any call
     cap = adaptive.eval_max_tokens()  # None (the default) leaves every request as it was
     limiter = None
@@ -317,6 +318,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
                 estimate = model_registry.estimate_cost(
                     resolved, suite.estimate_prompt_tokens(case), resolved.max_output_tokens) or 0.0
                 if bgroup is not None:  # a batched call reserves its batch price; a sync re-send tops it up
+                    batch.bind_case(case)
                     batch.set_item_estimate(estimate)
                     if limiter is not None:  # fixed mode reserves nothing, so keeps the full figure
                         estimate = batch.estimate_for_reservation(estimate)

@@ -137,7 +137,8 @@ Eval runs (prompt A/B, the model comparison and its cross-suite gate) can send t
 at about half the price. It is off in code (`CQC_EVAL_BATCH=0`) and on in the paid steps of `prompt-eval.yml` and
 `model-eval.yml`, which also set `CQC_EVAL_BATCH_ALLOW_RETENTION=1`: batch data is retained by the provider for 30
 days (zero data retention is not supported), so it is limited to the synthetic datasets under `evals/datasets` and
-is never used for production grading or student data. Without the second variable a run with `CQC_EVAL_BATCH=1`
+is never used for production grading or student data (ruling relayed by the maintainer from the owner's chat,
+2026-10-25; no repo artifact). Without the second variable a run with `CQC_EVAL_BATCH=1`
 stops before any paid call. The first batch of every run is validated; if it fails (failed or expired, too slow,
 malformed results, effort ignored) the run finishes on the synchronous path and the scorecard and Run stats say why
 (`batch_fallback_reason`). There is no cancel endpoint, so a batch abandoned at its deadline may still bill; the

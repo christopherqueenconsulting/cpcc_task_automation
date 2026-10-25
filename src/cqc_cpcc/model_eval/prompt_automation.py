@@ -708,7 +708,8 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
     # Batch mode (batch.py): the judge round is its own batch(es), sent after the generation results exist;
     # every case must be able to wait on it at once. Off: bplan is None and nothing below differs.
     judge_label = f"{getattr(suite, 'id', '')}:judge"
-    bplan = batch.plan(getattr(suite, "dataset_dir", None), len(case_ids), reserving=True, label=judge_label)
+    bplan = batch.plan(getattr(suite, "dataset_dir", None), len(case_ids), reserving=True, label=judge_label,
+                       cases=[cases[c] for c in case_ids])
     gate = asyncio.Semaphore(batch.widen(workers, len(case_ids)) if bplan is not None else workers)
 
     with batch.group(bplan, judge_label, "judge", budget=budget, tasks=len(case_ids)) as bgroup:
@@ -718,6 +719,7 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
                     if budget.exhausted:
                         return None
                     if bgroup is not None:
+                        batch.bind_case(cases[cid])
                         batch.set_item_estimate(item_estimate)
                     score, cost = await jm.pairwise(suite, cases[cid], h0[cid].payload, b0[cid].payload,
                                                     judge_model, cache)

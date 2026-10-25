@@ -196,11 +196,18 @@ def model_suite(system="S" * 6000):
                          "to_payload": lambda out: {"answer": out.answer}})
 
 
+def stamped(cases):
+    """What `Suite.cases()` does with batch mode on: the loader stamps cases read from a guarded eval dataset."""
+    return batch.stamp_cases(cases, batch.DATASETS_ROOT / "digest")
+
+
 def go(suite, n=10, model=MODEL, adaptive_mode=True, budget=None, repeats=1, **kw):
     budget = budget or Budget(1000.0, 900.0)
 
+    cases = stamped(_cases(n))
+
     async def main():
-        return await base.run_suite(suite, model, None, _cases(n), repeats, budget, adaptive_mode=adaptive_mode,
+        return await base.run_suite(suite, model, None, cases, repeats, budget, adaptive_mode=adaptive_mode,
                                     max_concurrency=8, **kw)
 
     records = vrun(main())
@@ -332,10 +339,7 @@ class TestBody:
 
     def test_an_ineligible_request_is_sent_sync_while_the_rest_batch(self, fake, batch_on, monkeypatch):
         async def invoke(case):
-            order = {"order": ["x"]} if case.case_id == "c3" else None
-            return await llm_gateway.structured("feedback", f"case {case.case_id}", Out, system="S" * 6000,
-                                                request_overrides=order) if False else \
-                await llm_gateway.structured("feedback", f"case {case.case_id}", Out, system="S" * 6000)
+            return await llm_gateway.structured("feedback", f"case {case.case_id}", Out, system="S" * 6000)
 
         suite = base.Suite(**{**model_suite().__dict__, "invoke": invoke})
         original = batch.ineligible_reason
@@ -383,9 +387,9 @@ class TestResults:
         records, _ = go(model_suite(), n=5)  # below the default minimum of 8
         assert fake.posts == [] and len(fake.sync_requests) == 5
         assert all(r.ok and r.batch is None for r in records)
-        line = pa._batch_line({"batch": batch.summary("toy"), "head_batch": None}) if False else None
-        assert line is None
-        assert batch.summary()["reasons"]
+        assert pa._batch_line({"batch": batch.summary("toy"), "head_batch": None}) == (
+            "; BATCH requested but every call ran sync (group of 5 calls is below CQC_EVAL_BATCH_MIN=8)")
+        assert batch.summary()["reasons"] == ["group of 5 calls is below CQC_EVAL_BATCH_MIN=8"]
 
     def test_a_per_item_error_is_mapped_to_the_existing_error_kinds(self, fake, batch_on):
         fake.errors = {0: (400, "bad request " + "x" * 400), 1: (403, "forbidden for this key")}
@@ -536,7 +540,7 @@ class TestJudgeRound:
             async def pairwise(suite, case, head_payload, base_payload, model, cache):
                 total = 0.0
                 for rnd in (1, 2):  # the real judge asks twice, A/B swapped
-                    out = await llm_gateway.structured(role="feedback", prompt=f"judge {case} {rnd}",
+                    out = await llm_gateway.structured(role="feedback", prompt=f"judge {case.case_id} {rnd}",
                                                        schema_model=Out, override=MODEL, system="J" * 5000)
                     call = llm_gateway.last_call()
                     total += call.completion.cost_usd or 0.0
@@ -544,13 +548,14 @@ class TestJudgeRound:
 
         suite = model_suite()
         records, _ = go(suite, n=10)
-        ids = [c.case_id for c in _cases(10)]
+        judged = stamped(_cases(10))
+        ids = [c.case_id for c in judged]
         payloads = {r.case_id: r for r in records}
         spend = Budget(1000.0, 900.0)
 
         async def judge():
-            return await pa._pairwise_scores(Judge, suite, {c: c for c in ids}, ids, payloads, payloads, MODEL,
-                                             None, spend, 4, item_estimate=0.01)
+            return await pa._pairwise_scores(Judge, suite, {c.case_id: c for c in judged}, ids, payloads, payloads,
+                                             MODEL, None, spend, 4, item_estimate=0.01)
 
         fake.batch_cost = 0.02
         scores = vrun(judge())
@@ -631,18 +636,59 @@ class TestDatasetGuard:
         assert findings == [], [f"{f.path}:{f.line} class {f.klass}" for f in findings[:10]]
 
 
+def _imports_batch(tree) -> list:
+    """Every way a module can pull in `cqc_cpcc.model_eval.batch`: from/import statements (absolute, relative,
+    parenthesised, aliased) and importlib / __import__ calls with a literal naming it."""
+    import ast
+
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            names = [n.name for n in node.names]
+            if module.endswith("model_eval.batch") or (node.level and module in ("batch", "model_eval.batch")):
+                hits.append(node.lineno)
+            elif "batch" in names and (module.endswith("model_eval") or (node.level and module in ("", "model_eval"))):
+                hits.append(node.lineno)
+        elif isinstance(node, ast.Import):
+            if any(n.name.endswith("model_eval.batch") for n in node.names):
+                hits.append(node.lineno)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            if name in ("import_module", "__import__", "spec_from_file_location") and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str) and (
+                        first.value.endswith("model_eval.batch") or first.value == "batch"):
+                    hits.append(node.lineno)
+    return hits
+
+
 class TestIsolation:
+    def test_the_import_finder_catches_every_form(self):
+        import ast
+
+        for source in ("from cqc_cpcc.model_eval import batch", "from cqc_cpcc.model_eval.batch import settings",
+                       "import cqc_cpcc.model_eval.batch as b", "from ..model_eval import batch",
+                       "from cqc_cpcc.model_eval import (\n    adaptive,\n    batch,\n)",
+                       "from . import batch\nfrom .model_eval import batch",
+                       "import importlib\nimportlib.import_module('cqc_cpcc.model_eval.batch')",
+                       "__import__('cqc_cpcc.model_eval.batch')"):
+            assert _imports_batch(ast.parse(source)), source
+        assert not _imports_batch(ast.parse("import batch_tools\nfrom x import y"))
+
     def test_nothing_outside_the_eval_runner_imports_the_batch_module(self):
+        import ast
+
         offenders = []
-        pattern = re.compile(r"model_eval\.batch|from cqc_cpcc\.model_eval import[^\n]*\bbatch\b|"
-                             r"from \. import[^\n]*\bbatch\b|from \.batch import|import batch\b")
-        for path in (REPO / "src").rglob("*.py"):
-            rel = path.relative_to(REPO / "src")
-            if rel.parts[:2] == ("cqc_cpcc", "model_eval"):  # the eval runner itself
+        files = list((REPO / "src").rglob("*.py")) + list((REPO / "scripts").rglob("*.py"))
+        for path in files:
+            rel = path.relative_to(REPO)
+            if rel.parts[:3] == ("src", "cqc_cpcc", "model_eval"):  # the eval runner itself
                 continue
-            if pattern.search(path.read_text(encoding="utf-8")):
+            if _imports_batch(ast.parse(path.read_text(encoding="utf-8"))):
                 offenders.append(str(rel))
-        assert offenders == []
+        assert files and offenders == []
 
     def test_the_app_never_imports_the_eval_package(self):
         for root in ("cqc_streamlit_app",):
@@ -905,13 +951,307 @@ async def _graded(grade_fn):
 
 
 class TestWorkflows:
-    def test_only_the_paid_eval_steps_turn_batch_on(self):
-        for name in ("prompt-eval.yml", "model-eval.yml"):
-            text = (REPO / ".github" / "workflows" / name).read_text(encoding="utf-8")
-            lines = text.splitlines()
-            keys = [i for i, line in enumerate(lines) if "OPENROUTER_API_KEY:" in line]
-            for i in keys:
-                assert 'CQC_EVAL_BATCH: "1"' in lines[i + 1] and 'CQC_EVAL_BATCH_ALLOW_RETENTION: "1"' in lines[i + 2]
-            assert text.count("CQC_EVAL_BATCH:") == len(keys)
-        for other in ("unit-tests.yml", "model-automerge.yml", "release.yml"):
-            assert "CQC_EVAL_BATCH" not in (REPO / ".github" / "workflows" / other).read_text(encoding="utf-8")
+    FIVE = {
+        ("prompt-eval.yml", "ab", "A/B base vs head prompts"),
+        ("prompt-eval.yml", "record", "Run the changed suites on master"),
+        ("prompt-eval.yml", "dispatch", "Run"),
+        ("model-eval.yml", "evaluate", "Run evaluation"),
+        ("model-eval.yml", "cross-suite", "Run the winner on the other prompt suites of its roles"),
+    }
+
+    def steps_with_batch(self):
+        import yaml
+
+        found, occurrences = set(), 0
+        for path in sorted((REPO / ".github" / "workflows").glob("*.y*ml")):
+            text = path.read_text(encoding="utf-8")
+            occurrences += text.count("CQC_EVAL_BATCH:")
+            data = yaml.safe_load(text)
+            for job_id, job in (data.get("jobs") or {}).items():
+                for step in job.get("steps") or []:
+                    env = step.get("env") or {}
+                    if "CQC_EVAL_BATCH" in env or "CQC_EVAL_BATCH_ALLOW_RETENTION" in env:
+                        assert env.get("CQC_EVAL_BATCH") == "1" and env.get("CQC_EVAL_BATCH_ALLOW_RETENTION") == "1"
+                        found.add((path.name, job_id, step.get("name")))
+                if "CQC_EVAL_BATCH" in (job.get("env") or {}):
+                    found.add((path.name, job_id, "<job env>"))
+            assert "CQC_EVAL_BATCH" not in (data.get("env") or {}), path.name
+        return found, occurrences
+
+    def test_exactly_the_five_paid_steps_turn_batch_on(self):
+        found, occurrences = self.steps_with_batch()
+        assert found == self.FIVE
+        assert occurrences == 5  # five `CQC_EVAL_BATCH:` keys in all workflow files (plus five retention keys)
+
+    def test_every_one_of_those_steps_also_holds_the_paid_key(self):
+        import yaml
+
+        for name, job_id, step_name in self.FIVE:
+            data = yaml.safe_load((REPO / ".github" / "workflows" / name).read_text(encoding="utf-8"))
+            step = next(s for s in data["jobs"][job_id]["steps"] if s.get("name") == step_name)
+            assert "OPENROUTER_API_KEY" in step["env"]
+
+
+# --- Gauntlet round 1: provenance, capture, provider block, caps -----------------------------------
+
+class TestProvenance:
+    def test_cases_loaded_from_a_directory_outside_the_eval_roots_never_reach_the_batch_api(self, fake, batch_on,
+                                                                                            tmp_path):
+        outside = tmp_path / "mine"
+        outside.mkdir()
+        (outside / "case.txt").write_text("synthetic", encoding="utf-8")
+        cases = _cases(10)
+        with pytest.raises(batch.DatasetNotAllowed):  # the loader's stamp names the directory it read from
+            batch.stamp_cases(cases, outside)
+        # ... and a group handed those unstamped cases, with the guarded directory NAMED, is refused too
+        with pytest.raises(batch.DatasetNotAllowed, match="not loaded through the guarded loader"):
+            vrun(base.run_suite(model_suite(), MODEL, None, cases, 1, Budget(1000.0, 900.0), adaptive_mode=True,
+                                max_concurrency=8))
+        assert fake.posts == [] and fake.sync_requests == []
+
+    def test_a_copy_of_a_stamped_case_is_not_stamped(self, batch_on):
+        import dataclasses
+
+        (case,) = stamped(_cases(1))
+        assert batch.is_stamped(case) and not batch.is_stamped(dataclasses.replace(case))
+
+    def test_run_model_cases_must_come_through_the_loader_too(self, fake, batch_on):
+        from cqc_cpcc.model_eval import dataset as ds
+        from cqc_cpcc.model_eval import runner
+
+        cases = ds.load_cases(ds.DEFAULT_DATASET)[:10]
+        assert all(batch.is_stamped(c) for c in cases)  # load_cases stamps
+        import dataclasses
+        copies = [dataclasses.replace(c) for c in cases]
+        with pytest.raises(batch.DatasetNotAllowed):
+            vrun(runner.run_model(MODEL, None, copies, 1, Budget(1000.0, 900.0), dataset_dir=ds.DEFAULT_DATASET))
+        assert fake.posts == [] and fake.sync_requests == []
+
+    def test_a_request_not_tied_to_a_stamped_case_is_refused(self, batch_on):
+        (case,) = stamped(_cases(1))
+        group_plan = batch.plan(batch.DATASETS_ROOT / "digest", 1, cases=[case])
+        # one call is below the minimum, so build the group by hand with a plan that would batch
+        group_plan = batch.BatchPlan(batch.settings(), reserving=False)
+
+        async def attempt():
+            with batch.group(group_plan, "t", "generation", tasks=1) as g:
+                batch.bind_case(object())  # not a stamped case
+                return await g.dispatch(object(), {"model": MODEL, "messages": []})
+
+        with pytest.raises(batch.DatasetNotAllowed, match="not tied to a case"):
+            vrun(attempt())
+
+    def test_the_suite_loader_stamps_when_batch_is_on_and_not_when_it_is_off(self, monkeypatch):
+        suite = get_suite("digest")
+        off = suite.cases()
+        assert not any(batch.is_stamped(c) for c in off)
+        monkeypatch.setenv(batch.ENV_BATCH, "1")
+        on = suite.cases()
+        assert on and all(batch.is_stamped(c) for c in on)
+
+    def test_a_suite_whose_loader_reads_elsewhere_is_refused_at_load(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(batch.ENV_BATCH, "1")
+        suite = base.Suite(**{**model_suite().__dict__, "dataset": "../../tests"})
+        with pytest.raises(batch.DatasetNotAllowed):
+            suite.cases()
+
+
+class TestDatasetScanCache:
+    def test_a_changed_file_is_scanned_again(self, monkeypatch, tmp_path):
+        import os
+
+        root = tmp_path / "datasets"
+        (root / "ds").mkdir(parents=True)
+        monkeypatch.setattr(batch, "DATASETS_ROOT", root)
+        monkeypatch.setattr(batch, "_PII_CLEAN", {})
+        target = root / "ds" / "notes.txt"
+        target.write_text("print hello world", encoding="utf-8")
+        batch.ensure_eval_dataset(root / "ds")  # clean: cached under (directory, fingerprint)
+        batch.ensure_eval_dataset(root / "ds")
+        target.write_text(f"see https://example.invalid/page?{'ou'}=1234567 for details", encoding="utf-8")
+        os.utime(target, (1, 1))
+        with pytest.raises(batch.DatasetNotAllowed, match="student-data finding"):
+            batch.ensure_eval_dataset(root / "ds")
+
+
+class TestCaptureIsNeverBatched:
+    def test_a_suite_run_inside_a_request_capture_sends_nothing_as_a_batch(self, fake, batch_on):
+        async def main():
+            with rc._patched([], test_mode=False):
+                return await base.run_suite(model_suite(), MODEL, None, stamped(_cases(10)), 1, Budget(1000.0, 900.0),
+                                            adaptive_mode=True, max_concurrency=8)
+
+        records = vrun(main())
+        assert fake.posts == [] and fake.gets == []
+        assert all(r.batch is None for r in records)  # no group was formed
+        s = batch.summary()
+        assert s["batches"] == 0 and s["requested_but_sync"] is True
+        assert any("request capture is active" in r for r in s["reasons"])
+
+    def test_run_model_inside_a_request_capture_sends_nothing_as_a_batch(self, fake, batch_on, monkeypatch):
+        from cqc_cpcc.model_eval import dataset as ds
+        from cqc_cpcc.model_eval import runner
+
+        async def grade(**kwargs):
+            await llm_gateway.structured("grading", "case c0", Out, system="S" * 6000)
+
+        cases = ds.load_cases(ds.DEFAULT_DATASET)[:10]
+        monkeypatch.setattr(runner, "_grade_once", lambda case, files, fn: _graded(fn))
+
+        async def main():
+            with rc._patched([], test_mode=False):
+                return await runner.run_model(MODEL, None, cases, 1, Budget(1000.0, 900.0), grade_fn=grade,
+                                              dataset_dir=ds.DEFAULT_DATASET)
+
+        vrun(main())
+        assert fake.posts == [] and fake.gets == []
+        s = batch.summary()
+        assert s["batches"] == 0 and any("request capture is active" in r for r in s["reasons"])
+
+    def test_capturing_is_true_only_inside_the_patch(self):
+        assert rc.capturing() is False
+        with rc._patched([], test_mode=True):
+            assert rc.capturing() is True
+        assert rc.capturing() is False
+
+
+class TestProviderBlock:
+    def test_batch_items_carry_no_zdr_or_data_collection_and_sync_still_does(self, monkeypatch, batch_on):
+        batch_client = use(monkeypatch, Fake())
+        go(model_suite(), n=10)
+        (post,) = batch_client.posts
+        text = json.dumps(post)
+        for field in ("zdr", "data_collection", "require_parameters"):
+            assert field not in text
+        assert all("provider" not in r["body"] for r in post["requests"])
+        assert set(post.get("provider", {})) <= set(batch.BATCH_PROVIDER_KEYS)
+        assert list(post)[-1] == "requests"
+        monkeypatch.setenv(batch.ENV_BATCH, "0")
+        sync_client = use(monkeypatch, Fake())
+        go(model_suite(), n=10)
+        assert "zdr" in json.dumps(sync_client.sync_requests[0]["extra_body"]["provider"])  # the sync path is unchanged
+
+    def test_the_batch_wide_provider_keeps_only_the_documented_keys(self):
+        kw = {"model": MODEL, "messages": [],
+              "extra_body": {"provider": {"zdr": True, "data_collection": "deny", "require_parameters": True,
+                                          "allow_fallbacks": False, "only": ["a"], "order": ["b"]}}}
+        assert batch.batch_provider(kw) == {"only": ["a"], "allow_fallbacks": False}
+        assert batch.batch_provider({"model": MODEL, "messages": []}) == {}
+        assert "provider" not in batch.request_body(kw)
+
+    def test_a_top_level_provider_order_is_not_batched(self):
+        assert batch.ineligible_reason({"model": MODEL, "messages": [], "provider": {"order": ["x"]}}) \
+            == "provider.order/sort"
+        assert batch.ineligible_reason({"model": MODEL, "messages": [], "provider": {"sort": "price"}}) \
+            == "provider.order/sort"
+
+
+class TestResultValidation:
+    def test_a_status_code_that_is_not_an_int_never_raises(self):
+        for value in ("200", None, 200.0, True, [], {}, "bad"):
+            assert batch._ok_status(value) is False
+        assert batch._ok_status(200) and batch._ok_status(204) and not batch._ok_status(500)
+        items = _items([None, None])
+        results = [{**_result(c), "response": {"status_code": "bad", "body": completion_body("x")}} for c in items]
+        assert "every item errored" in batch.check_first_results(results, items)
+
+    def test_a_bad_status_on_a_later_item_is_an_item_error_not_a_crash(self, fake, batch_on, monkeypatch):
+        go(model_suite(), n=10)  # the first batch passes
+        original = fake._results
+
+        def tampered(b):
+            out = original(b)
+            out[0] = {**out[0], "response": {**out[0]["response"], "status_code": "oops"}}
+            return out
+
+        monkeypatch.setattr(fake, "_results", tampered)
+        records, _ = go(model_suite(), n=10)
+        assert sum(1 for r in records if r.ok) >= 9 and batch.fallback_reason() is None
+
+    def test_extra_results_are_ignored_and_a_first_batch_with_too_many_is_bad(self):
+        items = _items([None, None])
+        many = [_result(c) for c in items] + [_result(f"x{i}") for i in range(batch.MAX_EXTRA_RESULTS + 1)]
+        assert "more results than requests" in batch.check_first_results(many, items)
+
+    def test_an_oversize_answer_is_an_item_error(self, fake, batch_on, monkeypatch):
+        go(model_suite(), n=10)
+        original = fake._results
+
+        def huge(b):
+            out = original(b)
+            body = out[0]["response"]["body"]
+            body["choices"][0]["message"]["content"] = "x" * (batch.MAX_ITEM_CONTENT_CHARS + 1)
+            return out
+
+        monkeypatch.setattr(fake, "_results", huge)
+        records, _ = go(model_suite(), n=10)
+        assert sum(1 for r in records if not r.ok) <= 1 and batch.summary()["item_errors"] >= 1
+
+
+class TestRootAndTimeout:
+    def test_no_cqc_environment_variable_can_move_the_datasets_root(self):
+        import os
+        import subprocess
+        import sys
+
+        names = set()
+        for path in (REPO / "src").rglob("*.py"):
+            names.update(re.findall(r"\b(CQC_[A-Z0-9_]+)\b", path.read_text(encoding="utf-8")))
+        assert len(names) > 20
+        env = {**os.environ, **{n: "/tmp/elsewhere" for n in names}, "CQC_EVAL_BATCH": "0"}
+        code = ("import sys; sys.path.insert(0, 'src'); import cqc_cpcc.model_eval.batch as b; "
+                "print(b.DATASETS_ROOT.resolve())")
+        out = subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env, capture_output=True, text=True,
+                             check=True).stdout.strip()
+        assert Path(out) == (REPO / "evals" / "datasets").resolve()
+
+    def test_nested_groups_share_one_timeout_and_restore_it(self, monkeypatch, batch_on):
+        import os
+
+        monkeypatch.setenv("CQC_LLM_TIMEOUT", "77")
+        cfg = batch.BatchPlan(batch.settings())
+        with batch.group(cfg, "a", "generation", tasks=1):
+            outer = os.environ["CQC_LLM_TIMEOUT"]
+            with batch.group(cfg, "b", "judge", tasks=1):
+                assert os.environ["CQC_LLM_TIMEOUT"] == outer
+            assert os.environ["CQC_LLM_TIMEOUT"] == outer  # the inner exit does not restore early
+        assert os.environ["CQC_LLM_TIMEOUT"] == "77"
+
+
+class TestOldArtifacts:
+    OLD_SCORECARD = {
+        "run_label": "2026-10-01", "dataset": "v2", "cases": 3, "repeats": 2, "incumbent": "m@high",
+        "spent_usd": 1.5, "budget_usd": 5.0, "status": "complete", "efforts": {"m@high": "high"},
+        "models": {"m@high": {
+            "composite": 0.9, "f1": 0.9, "precision": 0.9, "recall": 0.9, "score_accuracy": 0.8, "jaccard": 0.7,
+            "ok_rate": 1.0, "injection_pass_rate": 1.0, "cost_per_submission": 0.01, "latency_p95_s": 30.0,
+            "errors": {}, "per_language": {}, "per_case": []}},
+        "decisions": {"m@high": {"eligible": True, "path": "quality", "reasons": ["ok"]}}, "winner": "m@high"}
+
+    def test_a_scorecard_written_before_batch_renders_unchanged(self):
+        from cqc_cpcc.model_eval import scorecard
+
+        text = scorecard.to_markdown(self.OLD_SCORECARD)
+        assert "Batch API" not in text and "### Decisions" in text
+        assert text == scorecard.to_markdown({**self.OLD_SCORECARD, "batch": None})
+        assert text == scorecard.to_markdown({**self.OLD_SCORECARD, "batch": {}})
+
+    def test_the_state_branch_loaders_read_rows_and_scorecards_from_before_batch(self, tmp_path):
+        old_row = {"suite": "s", "case_id": "a", "model": "m", "effort": None, "repeat": 0, "ok": True,
+                   "payload": {"x": 1}, "cost_usd": 0.1, "cost_estimated": False, "attempts": 1}
+        raw = tmp_path / "raw.jsonl"
+        raw.write_text(json.dumps(old_row) + "\n", encoding="utf-8")
+        from cqc_cpcc.model_eval import prompt_eval
+
+        ((label, (record,)),) = prompt_eval.read_records(raw).items()
+        assert label == "m" and record.batch is None and record.cost_allocated is None
+        assert json.loads(record.to_json()).keys() == {k for k in json.loads(
+            base.SuiteRecord.from_json(json.dumps(old_row)).to_json())}
+        card_dir = tmp_path / "cards" / "s"
+        card_dir.mkdir(parents=True)
+        (card_dir / "scorecard.json").write_text(json.dumps({
+            "suite": "s", "prompt_id": "p", "status": "complete",
+            "models": {"m": {"composite": 0.5, "graders": {}, "health": {"failures": []}, "cost_usd": 1.0}}}))
+        rows = pa.history_rows(tmp_path / "cards", "abc", "https://example.invalid/run", today="2026-10-01")
+        assert len(rows) == 1 and rows[0]["composite"] == 0.5
+        assert "batch" not in json.dumps(rows)
