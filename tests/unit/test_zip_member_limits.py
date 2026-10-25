@@ -241,3 +241,10 @@ class TestRebuildPathIsBounded:
         path.write_bytes(_eocd(11000))
         with pytest.raises(ValueError, match="more than 10,000 entries"):
             utils._rebuild_zip_from_kept(str(path), {"x"})
+
+
+@pytest.mark.unit
+class TestZipPathConfinement:
+    def test_zip_outside_allowed_roots_is_refused(self):
+        with pytest.raises(ValueError, match="Refusing to read"):
+            extract_student_submissions_from_zip("/etc/not-a-real-upload.zip", ['.java'])

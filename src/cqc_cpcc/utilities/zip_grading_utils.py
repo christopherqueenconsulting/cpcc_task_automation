@@ -27,7 +27,7 @@ from typing import Optional
 from cqc_cpcc.utilities.language_utils import get_language_from_file_path
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias, register_student, scrub
-from cqc_cpcc.utilities.utils import read_file, wrap_code_in_markdown_backticks
+from cqc_cpcc.utilities.utils import read_file, readable_roots, wrap_code_in_markdown_backticks
 
 # Token estimation constants
 # GPT-5 family models have 128K context window
@@ -377,6 +377,18 @@ def _check_zip_directory_size(zip_path: str) -> None:
     entries could use gigabytes of memory before ``MAX_ENTRY_COUNT`` is checked. The
     entry count is read from the end-of-central-directory record (and its zip64 record).
     """
+    # Resolve the path and confine it to an allowed root before opening it; written inline
+    # (normalize, then startswith, assigning on success) so CodeQL's py/path-injection
+    # analysis sees the check, as in ``utils.read_file``.
+    resolved = os.path.realpath(zip_path)
+    for allowed_root in readable_roots():
+        if resolved == allowed_root or resolved.startswith(allowed_root + os.sep):
+            zip_path = resolved
+            break
+    else:
+        raise ValueError(
+            f"Refusing to read {zip_path!r}: it resolves outside the temp directory and "
+            "the working directory.")
     size = os.path.getsize(zip_path)
     if size > MAX_ZIP_BYTES:
         raise _bomb_error(f"This ZIP file is larger than {_mib(MAX_ZIP_BYTES)}")
