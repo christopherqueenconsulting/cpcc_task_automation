@@ -118,6 +118,15 @@ def cmd_build_solution_dataset(args) -> int:
 
 
 async def _run(args) -> int:
+    from cqc_cpcc.model_eval import account_limit
+
+    with account_limit.run_scope():
+        return await _run_scoped(args)
+
+
+async def _run_scoped(args) -> int:
+    from cqc_cpcc.model_eval import account_limit
+
     policy = model_registry.load_policy()
     ev = policy.eval
     repeats = args.repeats or ev.repeats
@@ -180,6 +189,8 @@ async def _run(args) -> int:
             label = label_of((model, effort))
             probe = await run_model(model, effort, probe_cases(cases), 1, budget, seed=args.seed,
                                     profile=profiles[model], on_record=save_probe, dataset_dir=Path(args.dataset))
+            if account_limit.tripped():
+                break
             per_call = sum(r.cost_usd for r in probe) / max(1, len(probe))
             projected = per_call * len(cases) * repeats
             if projected > budget.remaining:
@@ -191,6 +202,8 @@ async def _run(args) -> int:
             records = await run_model(model, effort, cases, repeats, budget, seed=args.seed,
                                       profile=profiles[model],
                                       on_record=save, dataset_dir=Path(args.dataset))
+            if account_limit.tripped():
+                break  # nothing of an aborted run is scored: no aggregate, no decision, no winner
             all_records[label] = records
             if any(r.error_kind == "budget" for r in records):
                 status = "aborted_budget"
@@ -199,6 +212,13 @@ async def _run(args) -> int:
     finally:
         raw.close()
 
+    abort_state = account_limit.current()
+    aborted = abort_state is not None and abort_state.tripped
+    if aborted:
+        status, all_records = account_limit.STATUS, {}
+        done = sum(1 for line in (out_dir / "raw_outputs.jsonl").read_text(encoding="utf-8").splitlines()
+                   if '"ok": true' in line)
+        notes.append(account_limit.banner(abort_state.info(), done, budget.spent))
     aggregates = {label: metrics.aggregate(cases, recs) for label, recs in all_records.items()}
     incumbent_label = label_of(runs[0])
     decisions, winner = {}, None
@@ -230,6 +250,7 @@ async def _run(args) -> int:
             "spent_usd": round(budget.spent, 6),
             "status": status,
             "notes": notes,
+            **({"abort": abort_state.info()} if aborted else {}),
             "incumbent_hard_gate_failures": incumbent_failures,
             # Prompts on the roles a promotion moves: a promotion evaluated on older prompt
             # versions is stale and automerge-check refuses it.
@@ -239,10 +260,17 @@ async def _run(args) -> int:
         },
         aggregates, decisions, winner,
     )
+    if aborted:
+        # No scores. One empty entry per model the run received, so the history row the workflow writes for it
+        # carries status 'aborted_account_limit' (discover.load_history then does not count the model as evaluated).
+        sc["models"] = {label_of(run): {"composite": None, "cost_per_submission": None} for run in runs}
     json_path, md_path = scorecard.write(out_dir, sc)
     print(md_path.read_text(encoding="utf-8"))
     print(f"Scorecard: {json_path}")
     _github_outputs(winner=winner or "", status=status, incumbent_failed=str(bool(incumbent_failures)).lower())
+    if aborted:
+        print(notes[-1])
+        return account_limit.EXIT_CODE
     return 0
 
 
@@ -407,6 +435,8 @@ def cmd_verify(args) -> int:
     """Guard check for a bot promotion PR. Exit 1 with reasons when anything is off."""
     sc = json.loads(Path(args.scorecard).read_text(encoding="utf-8"))
     problems = []
+    if sc.get("status") != "complete":  # an aborted run (account limit, budget) or a smoke run never promotes
+        problems.append(f"the evaluation run ended {sc.get('status')!r}, not 'complete': nothing may be promoted from it")
     winner = recompute(Path(args.scorecard), Path(args.raw))
     if winner != sc.get("winner"):
         problems.append(f"recomputed winner {winner!r} != scorecard winner {sc.get('winner')!r}")

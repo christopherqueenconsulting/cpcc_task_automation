@@ -534,6 +534,70 @@ artifact rows held no status or gateway body, so the cause could not be read.
   `_recorded_cost` and budget accounting undercount those rows by the failed-attempt charge (their
   `cost_usd` holds only the real cost).
 
+#### The account's spending limit stops the whole run (eval runner only)
+
+Why: the Prompt A/B run 40142161841 (a `workflow_dispatch` on master at `cbe62b7` with `pr_number=464` as its
+input, not a run at the head of PR #464) got HTTP 403 `Budget limit exceeded (monthly limit). Contact your org
+admin. $50.01 of $50.00 used; resets 2026-11-01T00:00:00.000Z.` from OpenRouter on every call. The runner logged
+`Attempt 1/3: PermissionDeniedError 403 ... (not retrying)` per call and went on through the whole dataset: every
+call failed and scored 0, the local `Budget` was charged a worst-case estimate for each failed call, and the report
+showed a scorecard of zeros and a base check of "not-run" with no word about the cause.
+
+- **What counts (`account_limit.py`, error kind `account_limit`):** HTTP 402 (payment required, insufficient
+  credits), or HTTP 403 whose **gateway `error.message`** (the body's `error.message`, never the exception text,
+  which can echo the request) says `Budget limit exceeded`; or `limit exceeded` together with one of the words
+  budget, monthly, daily, weekly, annual, total, key, credit(s), spend(ing), usage, quota or account; or
+  insufficient credits / funds / balance, out of credits, credit limit, payment required. A plain 403 (permission,
+  moderation, zero-data-retention routing), a 401, a 429 and the in-flight-budget throttle
+  (`openrouter_in_flight_budget`, which clears by itself) are not account limits and behave as before. Only the
+  message wording decides the 403 case, so a new gateway wording may need adding to `account_limit.py` (until then
+  the old per-call behaviour applies).
+- **What happens:** the first call that ends with this error, in any suite, on either side, judges included, sets a
+  run-wide flag (one per run, a context variable like the cache session). Calls still queued or in flight are
+  cancelled and awaited (none outlives the run; the flag is reset when the run's scope ends), warm-first followers
+  are released, no new call starts, and the A/B stops the base run and starts no later suite. The error is never
+  retried (neither the transport retry nor the truncated retry sees it). The failed call did not run, so the local
+  `Budget` is charged nothing for it (an earlier retried attempt that may have been billed stays charged). Records
+  of calls that finished are kept in `raw_outputs.jsonl`.
+- **Nothing is scored:** a suite hit by it gets status `aborted_account_limit` (an `abort` block with the HTTP
+  status, the fixed reason code `account_limit`, the calls completed and the dollars spent), no aggregate, no
+  health, no A/B decision. The A/B decision for it reads "no A/B (run aborted: account limit)". A suite that
+  finished before the abort keeps its real result. A base run on older code does not know the kind; its saved
+  rows (`error_detail` with status 402/403 and the limit message) are recognised all the same.
+- **What you see:** `ab.md`, `base-rule.md` and the suite `scorecard.md` start with a FIXED line, chosen from the
+  status alone: `RUN ABORTED: the account/key spending limit was reached (HTTP 402 or 403). No verdict. Raise or
+  reset the limit and dispatch again.` plus how many calls completed and what was spent. The gateway's own message
+  (it can carry dollar amounts, organisation or account names, URLs and key labels) is **never** put in a report,
+  a scorecard or a comment; its redacted text is only in the local log (`eval.log`, `ab.log`, `run.log`) on a
+  line marked `[eval log only]`. `ab.json` has `status: aborted_account_limit` and a top-level `abort` block.
+  `prompt-ab`, `suite run` and `run` exit with status 3 and print the fixed line last, so the workflow step fails
+  with the cause in the log tail. The base-branch check reports `aborted_account_limit`, never a pass, and the
+  commit status is `failure`.
+- **Who fixes it:** the maintainer (the OpenRouter workspace and key owner). Raise or reset the limit (the
+  organisation's workspace guardrail / monthly budget, or the cap on the API key `OPENROUTER_PROMPT_EVAL_API_KEY`
+  or `OPENROUTER_EVAL_API_KEY`), then dispatch the A/B again. Nothing in the repository needs to change.
+- **A per-request 402 is also caught:** A per-request 402 (needs more credits or fewer max_tokens) also stops the
+  run; the banner (fixed text) does not quote the gateway message; read eval.log's redacted line to tell the two
+  apart; if it names max_tokens, lower the limit or set CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0 for that dispatch.
+- **Where the alert lands today:** the failed job (the step exits 3). The model-eval issue labelled
+  `blocked-on-chris` says only "evaluation job ended with failure". In the PR-triggered workflow a non-zero `ab`
+  job shows in the `report` comment as "A/B job failure" without the banner (the banner is in the job log tail and
+  in the `ab.md` artifact); a maintainer dispatch posts the artifact's `ab.md`, banner first. On a push to master
+  whose suites hit the limit, the `suite run` step fails, so "Record history and status" and the artifact upload
+  are skipped and `PROMPT_STATUS.md` stays stale until the next push. Workflow changes that would improve this
+  are listed as follow-ups in the pull request (`.github` is not changed here).
+- **Model evaluation:** the same code runs under `python -m cqc_cpcc.model_eval run` (status
+  `aborted_account_limit`, exit 3, no decisions, no winner; the scorecard keeps one empty entry per model so the
+  history row the workflow writes says `aborted_account_limit`). `discover.load_history` ignores those rows and the
+  `attempted` rows of the same run id (all `attempted` rows without a run id if an aborted row has none), so the
+  candidates are tried again once the limit is raised. `cmd_promote`, `recompute` and `verify-promotion` refuse
+  any scorecard whose status is not `complete`, and the cross-suite gate fails for an aborted suite and starts no
+  later one, so no promotion can come from an aborted run.
+- **Switch and rollback:** revert the PR. `CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0` turns the abort off (the error is
+  still classified `account_limit` and not charged; calls then fail one by one as before). It is read from the
+  local `.env` or shell only; no workflow sets it and it is not a `workflow_dispatch` input. A value other than
+  0/1/on/off/true/false/yes/no is an error before any call.
+
 #### A truncated call is retried once (eval runner only)
 
 Why: in the final Prompt A/B for PR #446 (run 40101727031) one `project-feedback` call (case
@@ -690,8 +754,9 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   dropped too, so a provider that ignores an unsupported parameter is not refused; the first-batch effort check is the
   guard for the one parameter that matters. The synchronous path and `model_policy.json` are unchanged. If the API
   rejects the batch-wide `provider` block at submit, the first batch fails, the run continues on the synchronous path,
-  and `batch_fallback_reason` reads `submit rejected: HTTP <status> <message>`: look at that message, then remove the
-  rejected key from `BATCH_PROVIDER_KEYS` in a follow-up PR (or switch batch off).
+  and `batch_fallback_reason` reads `submit rejected: HTTP <status>` (the gateway's own text is never written to a log or
+  artifact, per the account-limit rule; a local run with `CQC_EVAL_LOG_GATEWAY_MESSAGE=1` shows its redacted form). Reproduce
+  it locally that way, then remove the rejected key from `BATCH_PROVIDER_KEYS` in a follow-up PR (or switch batch off).
 - **Switches** (read when a run starts; an invalid value aborts before any paid call):
 
   | Variable | Default | Meaning |
@@ -744,9 +809,14 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   id reaches the log). The partial run is not trusted: dispatch it again.
 - **Timeouts and merge order.** The deadline plus 600 s (the `CQC_LLM_TIMEOUT` bump, at most 3600 s) is below the
   `timeout-minutes` of every one of the five paid steps' jobs (prompt-eval.yml `ab` 240, `record` 150, `dispatch` 240;
-  model-eval.yml `evaluate` 150, `cross-suite` 120, all minutes). PR #466 (stop the run on the first account-limit
-  error) merges first; then the account-limit abort is wired into the batch submit and poll loops (an account_limit error
-  aborts the run, no sync fallback for that error, completed items kept).
+  model-eval.yml `evaluate` 150, `cross-suite` 120, all minutes).
+- **Account-limit abort.** The run-wide account-limit abort (described above) reaches the batch loops: an account-limit
+  error (HTTP 402, or 403 whose gateway message names an exceeded budget or credit limit) on a batch submit or poll trips
+  it. The run then sends nothing more, sync or batch (no sync fallback for that error), items a batch already delivered
+  are kept, items still waiting are cancelled like any other queued call, the status is `aborted_account_limit`, and
+  the batch events and rows carry only the fixed reason code `account_limit`. It is not treated as "batch is unusable":
+  `batch_fallback_reason` stays unset. A plain 403 (permission, routing) is not an account limit and falls back to sync.
+  Everything the batch module logs about a failed submit or poll goes through `error_detail.log_text`.
 - **Single-threaded eval only.** While a batched group runs, the process sets `CQC_LLM_TIMEOUT` (deadline + 600 s,
   at most 3600) so a gateway call can wait for its batch, and restores it when the last group ends (reference
   counted). That is a process-wide mutation: it assumes one eval run per process and no other thread reading the

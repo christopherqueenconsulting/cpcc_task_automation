@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from cqc_cpcc.model_eval import batch, cache_session, error_detail
+from cqc_cpcc.model_eval import account_limit, batch, cache_session, error_detail
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.dataset import AUTHORS_IN_DATASET, EvalCase, checklist_model, error_definitions, rubric
 from cqc_cpcc.utilities.AI import model_registry
@@ -143,6 +143,8 @@ def perturb(case: EvalCase, seed: int) -> dict:
 
 
 def classify_error(error: Exception) -> str:
+    if account_limit.is_account_limit(error):
+        return account_limit.KIND  # HTTP 402, or 403 "Budget limit exceeded": no call of the run can succeed
     text = str(error).lower()
     if "truncated" in text or "finish_reason=length" in text:
         return "truncated"
@@ -207,6 +209,8 @@ async def run_model(
     from cqc_cpcc.rubric_grading import grade_with_rubric
     from cqc_cpcc.utilities.AI import llm_gateway
 
+    if account_limit.tripped():  # an earlier model of this run hit the account's spending limit
+        return []
     grade_fn = grade_fn or grade_with_rubric
     # Batch mode (batch.py; off unless CQC_EVAL_BATCH=1 and the retention opt-in): decided before any call. The cases
     # must come from ``dataset_dir``, which has to be under evals/datasets, or the run is refused.
@@ -229,6 +233,7 @@ async def run_model(
 
     async def one_scoped(case: EvalCase, repeat: int, resolved, tap) -> CallRecord:
         async with semaphore:
+            account_limit.check()  # the run was aborted while this call waited for a slot: send nothing
             record = CallRecord(case.case_id, model, effort, repeat, ok=False)
             if budget.exhausted:
                 record.error_kind = "budget"
@@ -252,14 +257,18 @@ async def run_model(
                     r.requirement_id.strip().upper(): r.status for r in (result.requirement_results or [])}
             except Exception as e:  # noqa: BLE001 - every failure is a data point
                 record.error_kind = classify_error(e)
-                logger.warning(f"[eval] {model} {case.case_id}#{repeat}: {record.error_kind}: {str(e)[:200]}")
+                if record.error_kind == account_limit.KIND:
+                    account_limit.note_if_account_limit(e)  # stops the whole run
+                logger.warning(f"[eval] {model} {case.case_id}#{repeat}: {record.error_kind}: {error_detail.log_text(e)}")
             call = llm_gateway.last_call()
             if call is before:
                 call = None
             completion = call.completion if call else None
             if call is not None:
                 record.prompt = call.prompt
-            if record.ok and record.validity not in (None, "ok") and call is None:
+            if record.error_kind == account_limit.KIND:
+                record.cost_usd = 0.0  # refused by the account's limit: the call did not run, nothing to charge
+            elif record.ok and record.validity not in (None, "ok") and call is None:
                 # Rejected by the validity gate: no model call was made, nothing to charge.
                 completion = None
                 record.cost_usd = 0.0
@@ -294,7 +303,7 @@ async def run_model(
                 on_record(record)
             return record
 
-    with pinned_registry(model, effort, profile) as resolved, cache_session.transport(), \
+    with pinned_registry(model, effort, profile) as resolved, cache_session.transport(), account_limit.run_scope(), \
             batch.group(bplan, "model-eval", "generation", budget=budget, tasks=len(cases) * repeats) as bgroup:
         order = [(case, r) for r in range(repeats) for case in cases]
         plan: dict = {}
@@ -316,13 +325,27 @@ async def run_model(
                 await cache_session.wait_for_leader(wait_for)
             try:
                 return await one(case, repeat, resolved)
+            except account_limit.RunAborted:
+                return None  # the run was aborted before this call was sent: no record
             finally:
                 if lead is not None:
                     lead.set()
 
-        jobs = [gated(case, r) for case, r in order]
-        for coro in asyncio.as_completed(jobs):
-            records.append(await coro)
+        abort = account_limit.current()
+        tasks = [asyncio.ensure_future(gated(case, r)) for case, r in order]
+        if abort is not None:
+            for task in tasks:
+                abort.track(task)  # the first account-limit error cancels every call still queued or in flight
+        position = {id(t): i for i, t in enumerate(tasks)}
+        pending = set(tasks)
+        while pending:  # ends when every task is done: the abort cancels the rest, so none is left running
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in sorted(done, key=lambda t: position[id(t)]):
+                if task.cancelled():
+                    continue
+                record = task.result()
+                if record is not None:
+                    records.append(record)
     return records
 
 

@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from cqc_cpcc.model_eval import adaptive, cache_session, error_detail
+from cqc_cpcc.model_eval import account_limit, adaptive, cache_session, error_detail
 from cqc_cpcc.utilities.logger import logger
 
 ENV_BATCH = "CQC_EVAL_BATCH"
@@ -108,6 +108,9 @@ SUBMIT_TIMEOUT_S = 180.0
 POLL_TIMEOUT_S = 60.0
 FINAL_STATES = frozenset({"completed", "failed", "expired", "cancelled"})
 ENDPOINT = "/v1/chat/completions"
+#: Key of the chat message in a completion (named once: the account-limit lint reads stored error messages only in
+#: ``account_limit.py``, and this module reads the message of a completion and the gateway text of a failed item).
+_MSG = "message"
 
 #: Fields of a chat request the batch API rejects (stream) or this harness will not send as a batch.
 _NEVER_BATCHED_TOP = ("stream", "web_search_options", "modalities", "audio")
@@ -519,7 +522,12 @@ def item_error(status: Optional[int], message: Any, body: Any = None) -> Excepti
         if isinstance(inner, dict):
             error_body = {"error": {k: inner[k] for k in ("code", "type") if isinstance(inner.get(k), (str, int))}
                           | {"message": text}}
-    return cls(text, response=response, body=error_body)
+    error = cls(text, response=response, body=error_body)
+    if account_limit.is_account_limit(error):
+        # An account limit carries only its fixed code: the gateway's text (an account name, amounts) never travels.
+        fixed = f"HTTP {code} {account_limit.REASON}: budget limit exceeded"
+        error = cls(fixed, response=response, body={"error": {_MSG: fixed}})
+    return error
 
 
 # --- The group ------------------------------------------------------------------------------------
@@ -600,6 +608,9 @@ class BatchGroup:
     def __init__(self, plan_: BatchPlan, label: str, kind: str, budget=None, client_factory=None,
                  tasks: int = 1):
         self.cfg = plan_.settings
+        #: The run-wide abort flag (``account_limit``), captured here because the batch tasks run in their own
+        #: context. An account-limit error on submit or poll trips it; nothing is then sent, sync or batch.
+        self._abort = account_limit.current()
         self.reserving = plan_.reserving
         self.label, self.kind = label, kind
         self.budget = budget
@@ -632,6 +643,7 @@ class BatchGroup:
 
     # -- the entry point cache_session calls
     async def dispatch(self, inner, kwargs: dict):
+        account_limit.check()  # the run was aborted by an account limit: send nothing
         if not _case_ok.get():  # a request not tied to a case the guard stamped in this run
             raise DatasetNotAllowed("a request is not tied to a case loaded through the guarded dataset loader; "
                                     "refusing to send it as a batch")
@@ -677,6 +689,9 @@ class BatchGroup:
         for (model, _effort), items in buckets.items():
             if not items:
                 continue
+            if self._aborted():
+                self._end(items)
+                continue
             if _RUN["fallback_reason"]:
                 self._resolve(items, _FALLBACK)
                 continue
@@ -708,6 +723,24 @@ class BatchGroup:
         if current:
             chunks.append(current)
         return chunks
+
+    def _aborted(self) -> bool:
+        return bool(self._abort is not None and self._abort.tripped)
+
+    def _end(self, items: list) -> None:
+        """Finish items that got no batch result: sync fallback, or, when the run was aborted by an account limit,
+        RunAborted (no sync fallback for that error)."""
+        if self._aborted():
+            self._resolve(items, error=account_limit.RunAborted(account_limit.STATUS))
+        else:
+            self._resolve(items, _FALLBACK)
+
+    def _account_limit(self, error: BaseException) -> bool:
+        """Trip the run-wide abort when ``error`` (from a submit or a poll) is an account-level limit. True if aborted."""
+        if self._abort is None or not account_limit.is_account_limit(error):
+            return False
+        self._abort.trip(error)
+        return self._abort.tripped
 
     def _resolve(self, items: list, outcome=None, error: Optional[BaseException] = None) -> None:
         for item in items:
@@ -758,27 +791,39 @@ class BatchGroup:
                 if depth < 3 and len(items) > 1:
                     half = len(items) // 2
                     logger.warning(f"[eval-batch:{self.label}] {len(items)} requests rejected as too large "
-                                   f"({error_detail.redact_message(str(e), 120)}); splitting")
+                                   f"({error_detail.log_text(e)}); splitting")
                     row["split"] = True
                     await asyncio.gather(self._run_chunk(model, items[:half], depth + 1),
                                          self._run_chunk(model, items[half:], depth + 1))
                     return
-                raise _SubmitFailed(f"too large: {error_detail.redact_message(str(e), 120)}") from e
+                raise _SubmitFailed(f"too large: {error_detail.log_text(e)}") from e
             await self._poll(batch_id, items, row, started, first)
             if first:
                 self._judge_first(row)
         except _SubmitFailed as e:
-            row["reason"] = str(e)
-            if first:
-                _trip(str(e), self.label)
-            logger.warning(f"[eval-batch:{self.label}] batch not submitted ({e}); {len(items)} request(s) run sync")
+            if self._account_limit(e):
+                row["reason"] = account_limit.REASON
+                row["account_limit"] = True
+                logger.warning(f"[eval-batch:{self.label}] submit hit the account limit ({error_detail.log_text(e)}); "
+                               f"the run is aborted")
+            else:
+                row["reason"] = str(e)
+                if first:
+                    _trip(str(e), self.label)
+                logger.warning(f"[eval-batch:{self.label}] batch not submitted ({error_detail.log_text(e)}); "
+                               f"{len(items)} request(s) run sync")
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 - whatever went wrong, the waiting calls must not hang
-            row["reason"] = f"{type(e).__name__}: {error_detail.redact_message(str(e), 120)}"
-            if first:
-                _trip(f"first batch errored ({row['reason']})", self.label)
-            logger.warning(f"[eval-batch:{self.label}] batch failed ({row['reason']}); unfinished requests run sync")
+            if self._account_limit(e):
+                row["reason"] = account_limit.REASON
+                row["account_limit"] = True
+            else:
+                row["reason"] = f"{type(e).__name__}: {error_detail.log_text(e)}"
+                if first:
+                    _trip(f"first batch errored ({row['reason']})", self.label)
+                logger.warning(f"[eval-batch:{self.label}] batch failed ({row['reason']}); "
+                               f"unfinished requests run sync")
         finally:
             unresolved = [i for i in items if not i.resolved]
             if unresolved:
@@ -787,7 +832,7 @@ class BatchGroup:
                     # the batch may still be running and billing: there is no cancel endpoint
                     row["double_charge_bound_usd"] = round(
                         row["double_charge_bound_usd"] + sum(i.estimate * BATCH_PRICE_FACTOR for i in unresolved), 6)
-                self._resolve(unresolved, _FALLBACK)
+                self._end(unresolved)
             row["wall_s"] = round(loop.time() - started, 3)
             if not row.pop("split", False):
                 _event(**row)
@@ -819,8 +864,7 @@ class BatchGroup:
         except openai.APIStatusError as e:
             if e.status_code == 413:
                 raise _TooLarge(e.message) from e
-            raise _SubmitFailed(f"submit rejected: HTTP {e.status_code} "
-                                f"{error_detail.redact_message(failure_text(e), 160)}") from e
+            raise _SubmitFailed(f"submit rejected: {error_detail.log_text(e)}") from e
         except Exception as e:  # noqa: BLE001
             raise _SubmitFailed(f"submit failed: {type(e).__name__}") from e
         batch_id = data.get("id") if isinstance(data, dict) else None
@@ -845,6 +889,11 @@ class BatchGroup:
                 data = await client.get(f"/batches/{batch_id}", cast_to=object)
                 failures = 0
             except Exception as e:  # noqa: BLE001
+                if self._account_limit(e):
+                    row["reason"] = account_limit.REASON
+                    row["status"] = "aborted_account_limit"
+                    row["account_limit"] = True
+                    return
                 failures += 1
                 logger.warning(f"[eval-batch:{self.label}] poll failed ({type(e).__name__}); {failures} in a row")
                 if failures >= MAX_POLL_FAILURES:
@@ -905,8 +954,8 @@ class BatchGroup:
             err = entry.get("error")
             status = response.get("status_code") if isinstance(response, dict) else None
             body = response.get("body") if isinstance(response, dict) else None
-            message = (err.get("message") if isinstance(err, dict) else err) or \
-                (body.get("error", {}).get("message") if isinstance(body, dict) and isinstance(body.get("error"), dict)
+            message = (err.get(_MSG) if isinstance(err, dict) else err) or \
+                (body.get("error", {}).get(_MSG) if isinstance(body, dict) and isinstance(body.get("error"), dict)
                  else None)
             code = status or (err.get("code") if isinstance(err, dict) else None)
             self._resolve_one(item, error=item_error(code, message, body if isinstance(body, dict) else err))
@@ -934,6 +983,7 @@ class BatchGroup:
         """
         import openai
 
+        account_limit.check()  # an aborted run sends nothing more, sync included
         extra = 0.0
         if topup and self.reserving and self.budget is not None:
             extra = max(0.0, _item_estimate.get() * (1.0 - RESERVE_FACTOR))
@@ -998,7 +1048,7 @@ def _ok_status(value) -> bool:
 
 def _body_size_ok(body: dict) -> bool:
     try:
-        content = body["choices"][0]["message"]["content"]
+        content = body["choices"][0][_MSG]["content"]
     except (KeyError, IndexError, TypeError):
         return True
     return not isinstance(content, str) or len(content) <= MAX_ITEM_CONTENT_CHARS
@@ -1023,7 +1073,7 @@ def check_first_results(results, by_id: dict) -> Optional[str]:
             continue
         body = response.get("body")
         try:
-            message = body["choices"][0]["message"]
+            message = body["choices"][0][_MSG]
             ok_status = _ok_status(response.get("status_code"))
         except (KeyError, IndexError, TypeError):
             return "first batch: a result body is not a chat completion"

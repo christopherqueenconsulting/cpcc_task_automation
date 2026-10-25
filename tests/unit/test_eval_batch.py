@@ -102,6 +102,7 @@ class Fake:
         self.errors, self.partial, self.submit_error, self.reverse = errors or {}, partial, submit_error, reverse
         self.sync_cost, self.too_large_over = sync_cost, too_large_over
         self.budget = None
+        self.submit_message, self.poll_error = "bad batch request", None
         self.reserved_at_post, self.reserved_at_sync = [], []
         self.chat = SimpleNamespace(completions=self)
 
@@ -127,7 +128,7 @@ class Fake:
         if self.too_large_over is not None and len(body["requests"]) > self.too_large_over:
             raise self._status_error(413, "payload too large")
         if self.submit_error is not None:
-            raise self._status_error(self.submit_error, "bad batch request")
+            raise self._status_error(self.submit_error, self.submit_message)
         bid = f"batch_{len(self.posts)}"
         self.batches[bid] = {"t0": loop.time(), "body": body}
         return {"id": bid, "status": "validating"}
@@ -157,6 +158,8 @@ class Fake:
         bid = path.rsplit("/", 1)[1]
         loop = asyncio.get_running_loop()
         self.gets.append((bid, loop.time()))
+        if self.poll_error is not None:
+            raise self._status_error(*self.poll_error)
         b = self.batches[bid]
         elapsed = loop.time() - b["t0"]
         if elapsed < self.done_after:
@@ -1272,3 +1275,98 @@ class TestOldArtifacts:
         rows = pa.history_rows(tmp_path / "cards", "abc", "https://example.invalid/run", today="2026-10-01")
         assert len(rows) == 1 and rows[0]["composite"] == 0.5
         assert "batch" not in json.dumps(rows)
+
+
+# --- #466: the run-wide account-limit abort reaches the batch submit and poll loops ---------------
+
+from cqc_cpcc.model_eval import account_limit  # noqa: E402
+
+HOSTILE = "Budget limit exceeded (monthly limit) for org ACME-SECRET-ORG: $12,345.67 sk-live-abcdefghijklmnop1234"
+
+
+def run_in_scope(suite, n=10, runs=1, budget=None):
+    """Like `go`, inside one account-limit run scope (as the CLI commands have); returns (records, state)."""
+    budget = budget or Budget(1000.0, 900.0)
+    cases = stamped(_cases(n))
+
+    async def main():
+        with account_limit.run_scope() as state:
+            out = []
+            for _ in range(runs):
+                out += await base.run_suite(suite, MODEL, None, cases, 1, budget, adaptive_mode=True,
+                                            max_concurrency=8)
+            return out, state
+
+    return vrun(main())
+
+
+class TestAccountLimitAbort:
+    def test_a_budget_limit_403_on_submit_aborts_the_run_with_no_sync_call(self, fake, batch_on, caplog):
+        import logging
+
+        caplog.set_level(logging.DEBUG)
+        fake.submit_error, fake.submit_message = 403, HOSTILE
+        records, state = run_in_scope(model_suite(), runs=2)
+        assert state.tripped and state.status == 403 and state.info() == {"status": 403, "reason": "account_limit"}
+        assert fake.sync_requests == []  # no sync fallback for this error, and the second run sent nothing at all
+        assert len(fake.posts) == 0 + 1 and records == []
+        assert batch.fallback_reason() is None  # an account limit is not a "batch is unusable" verdict
+        (row,) = [e for e in batch._EVENTS if e["type"] == "batch"]
+        assert row["reason"] == account_limit.REASON and row["account_limit"] is True
+        assert account_limit.STATUS == "aborted_account_limit"
+        assert account_limit.banner(state.info()).startswith("RUN ABORTED: the account/key spending limit")
+
+    def test_a_402_while_polling_aborts_too_and_keeps_nothing_it_never_got(self, fake, batch_on):
+        fake.poll_error = (402, "Payment required: insufficient credits")
+        records, state = run_in_scope(model_suite())
+        assert state.tripped and state.status == 402
+        assert fake.sync_requests == [] and records == [] and len(fake.posts) == 1
+        (row,) = [e for e in batch._EVENTS if e["type"] == "batch"]
+        assert row["status"] == "aborted_account_limit" and row["reason"] == account_limit.REASON
+
+    def test_items_completed_before_the_abort_are_kept(self, fake, batch_on, monkeypatch):
+        fake.partial, fake.done_after = (10.0, 4), 500.0
+        original = fake.get
+        calls = {"n": 0}
+
+        async def flaky(path, *, cast_to=None):
+            calls["n"] += 1
+            if calls["n"] >= 5:  # after the partial results were polled
+                raise fake._status_error(402, "Payment required")
+            return await original(path, cast_to=cast_to)
+
+        monkeypatch.setattr(fake, "get", flaky)
+        records, state = run_in_scope(model_suite())
+        assert state.tripped and fake.sync_requests == []
+        assert len(records) == 4 and all(r.ok and r.batch for r in records)
+
+    def test_a_plain_403_is_not_an_account_limit_and_falls_back_to_sync(self, fake, batch_on):
+        fake.submit_error, fake.submit_message = 403, "Forbidden: zero data retention routing"
+        records, state = run_in_scope(model_suite())
+        assert not state.tripped
+        assert len(records) == 10 and all(r.ok and r.batch is False for r in records)
+        assert len(fake.sync_requests) == 10
+        assert "submit rejected: HTTP 403" in batch.fallback_reason()
+
+    def test_no_gateway_text_reaches_the_log_events_or_rows(self, fake, batch_on, caplog):
+        import logging
+
+        caplog.set_level(logging.DEBUG)
+        secret = "SENTINEL-GATEWAY-TEXT-ACME-SECRET-ORG"
+        # (1) an account limit on submit, hostile text; (2) a plain 400 on a later run; (3) a hostile item error
+        fake.submit_error, fake.submit_message = 403, HOSTILE
+        run_in_scope(model_suite())
+        batch.reset_events()
+        fake.submit_error, fake.submit_message = 400, f"{secret} $99,999.99 https://evil.example/{secret}"
+        records_400, _ = run_in_scope(model_suite())
+        batch.reset_events()
+        fake.submit_error = None
+        fake.errors = {0: (403, HOSTILE), 1: (400, f"{secret} $1.00")}
+        records_item, _ = run_in_scope(model_suite())
+        ours = [r.getMessage() for r in caplog.records if "model_eval" in r.pathname]  # this package's own log lines
+        assert ours
+        artifacts = json.dumps(batch._EVENTS, default=str) + "\n".join(
+            r.to_json() for r in records_400 + records_item) + "\n".join(ours)
+        for text in (secret, "ACME-SECRET-ORG", "12,345", "sk-live", "99,999", "evil.example"):
+            assert text not in artifacts, text
+        assert "HTTP 400" in artifacts  # the status and the fixed code are what is kept

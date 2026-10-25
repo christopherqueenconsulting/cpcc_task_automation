@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from cqc_cpcc.model_eval import adaptive, batch, cache_session, error_detail, prompt_eval, prompt_registry
+from cqc_cpcc.model_eval import account_limit, adaptive, batch, cache_session, error_detail, prompt_eval, prompt_registry
 from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
 from cqc_cpcc.utilities.AI import model_registry
 
@@ -407,14 +407,47 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
             _live_base.discard(proc)
     log_dir = out / suite_id
     log_dir.mkdir(parents=True, exist_ok=True)
-    (log_dir / "run.log").write_text(f"{stdout}\n--- stderr ---\n{stderr}", encoding="utf-8")
+    # The base branch's own (older) code wrote this output: the log and the saved rows go into a public artifact, so
+    # an SDK error body, links, addresses and the like are scrubbed here, on this side.
+    (log_dir / "run.log").write_text(
+        f"{error_detail.scrub_log(stdout)}\n--- stderr ---\n{error_detail.scrub_log(stderr)}", encoding="utf-8")
+    raw = out / suite_id / "raw_outputs.jsonl"
+    _scrub_rows(raw)
     if timed_out or proc.returncode != 0:
         print(f"[{suite_id}] base run {'timed out' if timed_out else f'exited {proc.returncode}'}; "
               f"log in {log_dir / 'run.log'}")
-        print((stdout or "")[-2000:], (stderr or "")[-2000:])
+        print(error_detail.scrub_log(stdout, 2000), error_detail.scrub_log(stderr, 2000))
         return None
-    raw = out / suite_id / "raw_outputs.jsonl"
     return raw if raw.exists() else None
+
+
+def _scrub_rows(raw: Path) -> None:
+    """Rewrite a base run's ``raw_outputs.jsonl`` with every ``error_detail`` message made publishable.
+
+    Fails closed. The new file is written beside the old one and moved over it in one step, so a failure leaves the
+    original untouched (and the temporary file removed); the failure is raised, so the A/B step fails and nothing
+    unscrubbed is uploaded as if it were safe. A line that is not a JSON object is dropped, never written back.
+    A missing file is nothing to publish.
+    """
+    try:
+        lines = raw.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return
+    tmp = raw.with_name(raw.name + ".tmp")
+    try:
+        out = []
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                out.append(json.dumps(error_detail.scrub_row(row), sort_keys=True))
+        tmp.write_text("".join(f"{line}\n" for line in out), encoding="utf-8")
+        os.replace(tmp, raw)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def prompts_unchanged(suite_id: str, base_ref: str) -> bool:
@@ -549,17 +582,22 @@ def decide_with_this_rule(out: Path, head_root: Path, base_sha: str, head_sha: s
                                               head_root, changed, head_reg, base_reg,
                                               {r: role(c) for r, c in head_roles.items()})
         statuses = [r["status"] for r in results.values()]
-        status = ("fail" if "fail" in statuses
+        status = (account_limit.STATUS if account_limit.STATUS in statuses
+                  else "fail" if "fail" in statuses
                   else "pass" if all(s in PASSING for s in statuses) else "pass-provisional")
     pr_status = (report or {}).get("status")
-    if status in ("fail", "not-run", "request-identical"):
+    if status in ("fail", "not-run", "request-identical", account_limit.STATUS):
         combined = status
+    elif pr_status == account_limit.STATUS:  # the PR's A/B was stopped by the limit: never a pass
+        combined = account_limit.STATUS
     elif pr_status == "fail":
         combined = "fail"
     else:
         combined = "pass" if status == "pass" and pr_status in (None, "pass") else "pass-provisional"
     decided = {"base_sha": base_sha, "head_sha": head_sha, "required": required, "status": status,
                "pr_status": pr_status, "combined_status": combined, "suites": results}
+    if combined == account_limit.STATUS and (report or {}).get("abort"):
+        decided["abort"] = report["abort"]
     out.mkdir(parents=True, exist_ok=True)
     (out / "ab-base-rule.json").write_text(json.dumps(decided, indent=2, sort_keys=True, default=str) + "\n",
                                            encoding="utf-8")
@@ -628,6 +666,9 @@ def _decide_suite(suite_id: str, pr_result: Optional[dict], out: Path, head_root
 
     if pr_result is None:
         return failed("the base branch's detection needs this suite, but the A/B did not run it")
+    if pr_result.get("status") == account_limit.STATUS:  # stopped by the account's limit: nothing to re-decide
+        return {"suite": suite_id, "status": account_limit.STATUS, "models": {}, "reasons": [],
+                "notes": ["no A/B (run aborted: account limit)"], "abort": pr_result.get("abort") or {}}
     if suite_id not in SUITE_MODULES:
         if pr_result.get("status") == "no-base":
             return {"suite": suite_id, "status": "no-base", "models": {}, "reasons": [],
@@ -670,7 +711,11 @@ def _decide_suite(suite_id: str, pr_result: Optional[dict], out: Path, head_root
 def base_rule_markdown(decided: dict) -> str:
     from cqc_cpcc.model_eval.scorecard import _safe
 
-    lines = [f"## Base-branch check: {decided['combined_status']}", "",
+    lines = []
+    if decided["combined_status"] == account_limit.STATUS:
+        abort = decided.get("abort") or next((r["abort"] for r in decided["suites"].values() if r.get("abort")), {})
+        lines += [account_limit.banner(abort, abort.get("completed_calls"), abort.get("spent_usd")), ""]
+    lines += [f"## Base-branch check: {decided['combined_status']}", "",
              f"Base `{decided['base_sha'][:7]}` re-decided this PR's A/B with its own detection, graders and "
              f"rule (data only; protects against honest relaxations, not a hostile author).", ""]
     required = decided["required"]
@@ -688,7 +733,7 @@ def base_rule_markdown(decided: dict) -> str:
                      + ", ".join(f"`{s}`" for s in sorted(required)))
         for suite_id, r in decided["suites"].items():
             for reason in r.get("reasons", []):
-                lines.append(f"- `{suite_id}`: {reason}")
+                lines.append(f"- `{suite_id}`: {_safe(error_detail.redact_message(reason))}")
     else:
         body = ab_markdown({"base_ref": decided["base_sha"][:7], "status": decided["status"],
                             "suites": decided["suites"]})
@@ -851,7 +896,42 @@ def _stats_line(suite_id: str, stats: dict, failed: bool = False) -> str:
     return line + (f"; FAILED: see base/{suite_id}/run.log" if failed else "")
 
 
-async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
+def _aborted_suite(suite_id: str, info: Optional[dict], *raw_paths, started: bool = True) -> dict:
+    """The result of a suite the account's spending limit stopped (or kept from starting): no scores, no A/B."""
+    completed, spent = 0, 0.0
+    for path in raw_paths:
+        if path is not None and Path(path).exists():
+            completed += sum(1 for recs in prompt_eval.read_records(Path(path)).values() for r in recs if r.ok)
+            spent += _recorded_cost(Path(path))
+    notes = ["no A/B (run aborted: account limit)"]
+    if not started:
+        notes.append("not started: an earlier call of this run hit the account's spending limit")
+    return {"suite": suite_id, "status": account_limit.STATUS, "models": {}, "reasons": [], "notes": notes,
+            "abort": {**(info or {}), "completed_calls": completed, "spent_usd": round(spent, 6)}}
+
+
+def _abort_summary(results: dict) -> Optional[dict]:
+    """The first aborted suite's abort info with the calls completed and dollars spent summed over all of them."""
+    aborted = [r for r in results.values() if r.get("status") == account_limit.STATUS]
+    if not aborted:
+        return None
+    first = next((r["abort"] for r in aborted if (r.get("abort") or {}).get("status")), aborted[0].get("abort") or {})
+    return {**first, "completed_calls": sum((r.get("abort") or {}).get("completed_calls", 0) for r in aborted),
+            "spent_usd": round(sum((r.get("abort") or {}).get("spent_usd", 0.0) for r in aborted), 6)}
+
+
+async def prompt_ab(*args, **kwargs) -> dict:
+    """Run the prompt A/B (see :func:`_prompt_ab`) under one abort flag for the whole run.
+
+    The first call, of any suite or side, that ends on the account's spending limit stops the run: calls in
+    flight are cancelled, the base run is stopped, later suites do not start, and the report has status
+    ``aborted_account_limit`` ("no A/B") instead of scores.
+    """
+    with account_limit.run_scope():
+        return await _prompt_ab(*args, **kwargs)
+
+
+async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, repeats: Optional[int] = None,
                     judges: bool = False, judge_model: Optional[str] = None, judge_cache: Optional[str] = None,
                     concurrency: Optional[int] = None, skip_identical: Optional[bool] = None,
                     max_concurrency: Optional[int] = None) -> dict:
@@ -911,7 +991,11 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
     results = {}
     _allow_base()
     try:
+        abort_state = account_limit.current()
         for suite_id in suite_ids:
+            if abort_state is not None and abort_state.tripped:  # an earlier suite hit the account's limit
+                results[suite_id] = _aborted_suite(suite_id, abort_state.info(), started=False)
+                continue
             suite = get_suite(suite_id)
             suite_models = parsed or [prompt_eval.incumbent_of(suite.role)]
             labels = [prompt_eval.label_of(m, e) for m, e in suite_models]
@@ -926,9 +1010,12 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
             head_budget, base_share = budget.split() if has_base else (budget, None)
             async def run_head():
                 try:
-                    return await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"),
-                                                 budget=head_budget, concurrency=start_override,
-                                                 adaptive_mode=True, max_concurrency=workers)
+                    head_sc = await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"),
+                                                    budget=head_budget, concurrency=start_override,
+                                                    adaptive_mode=True, max_concurrency=workers)
+                    if head_sc.get("status") == account_limit.STATUS:
+                        _terminate_live_base(stop_new=True)  # the same limit stops the base run too
+                    return head_sc
                 except BaseException:
                     # a failed head makes the base's result worthless: stop paying for it, and keep one
                     # that has not started yet from starting
@@ -947,6 +1034,17 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                 budget.absorb(head_budget)
                 # Whatever the base run recorded was spent, whether it finished, failed or was stopped.
                 budget.add(_recorded_cost(out / "base" / suite_id / "raw_outputs.jsonl"))
+            head_raw_path = out / "head" / suite_id / "raw_outputs.jsonl"
+            base_raw_path = out / "base" / suite_id / "raw_outputs.jsonl" if has_base else None
+            abort_info = ((abort_state.info() if abort_state is not None else None)
+                          or account_limit.from_raw(head_raw_path)
+                          or (account_limit.from_raw(base_raw_path) if base_raw_path is not None else None))
+            if abort_info is not None:
+                # The account's limit stopped this suite: nothing was compared, and later suites do not start.
+                if abort_state is not None:
+                    abort_state.mark(abort_info)
+                results[suite_id] = _aborted_suite(suite_id, abort_info, head_raw_path, base_raw_path)
+                continue
             for outcome in outcomes:
                 if isinstance(outcome, BaseException):
                     raise outcome
@@ -997,14 +1095,25 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
                     for label in labels[:1]:  # the incumbent (first model)
                         h0 = {x.case_id: x for x in head_recs.get(label, []) if x.ok and x.repeat == 0}
                         b0 = {x.case_id: x for x in base_recs.get(label, []) if x.ok and x.repeat == 0}
-                        scores = await _pairwise_scores(
-                            jm, suite, cases, [c for c in sorted(set(h0) & set(b0))
-                                               if cases.get(c) is not None and cases[c].split == "holdout"],
-                            h0, b0, jmodel, cache, budget, judge_cap, item_estimate=judge_estimate)
+                        try:
+                            scores = await _pairwise_scores(
+                                jm, suite, cases, [c for c in sorted(set(h0) & set(b0))
+                                                   if cases.get(c) is not None and cases[c].split == "holdout"],
+                                h0, b0, jmodel, cache, budget, judge_cap, item_estimate=judge_estimate)
+                        except account_limit.RunAborted:
+                            break
+                        except Exception as e:  # noqa: BLE001 - only the account limit is handled here
+                            if not account_limit.note_if_account_limit(e):
+                                raise
+                            break
                         wins = [s for s in scores if s is not None]
                         pairwise_scores[label] = sum(wins) / len(wins) if wins else None
                     judge_pool = judge_limiter.snapshot()
                     adaptive.use_judge_pool(None)
+            if abort_state is not None and abort_state.tripped:  # the limit hit during the pairwise judge calls
+                adaptive.use_judge_pool(None)
+                results[suite_id] = _aborted_suite(suite_id, abort_state.info(), head_raw_path, base_raw_path)
+                continue
             results[suite_id] = ab_decision(suite, head, base_aggs, pairwise_scores=pairwise_scores,
                                             judge_calibrated=calibrated, split=None if unchanged else "holdout")
             # Reporting only: nothing above or below reads it.
@@ -1025,13 +1134,18 @@ async def prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, rep
     for suite_id, r in results.items():  # last lines of the log: the workflow shows only its tail
         if r.get("run_stats"):
             print(_stats_line(suite_id, r["run_stats"], failed=r["status"] == "fail"))
-    overall = ("fail" if any(r["status"] == "fail" for r in results.values())
+    overall = (account_limit.STATUS if any(r["status"] == account_limit.STATUS for r in results.values())
+               else "fail" if any(r["status"] == "fail" for r in results.values())
                else "pass" if results and all(r["status"] in PASSING for r in results.values()) else "pass-provisional")
     rate_limited = sum((r.get("run_stats") or {}).get("rate_limited", 0) for r in results.values())
     report = {"base_ref": base_ref, "status": overall, "suites": results,
               "prompt_versions": {pid: e.version for pid, e in prompt_registry.load().prompts.items()},
               "wall_clock_s": round(time.monotonic() - started, 1), "concurrency": workers,
               "max_concurrency": workers, "judge_max_concurrency": judge_cap, "rate_limited": rate_limited}
+    abort_summary = _abort_summary(results)
+    if abort_summary is not None:
+        report["abort"] = abort_summary
+        print(account_limit.banner(abort_summary, abort_summary["completed_calls"], abort_summary["spent_usd"]))
     if skipped_results:  # the head side of the skip, for ab-base-rule to re-verify against the base's own capture
         report["request_capture"] = request_capture_saved
     print(f"A/B wall-clock {report['wall_clock_s']:.0f}s at up to {workers} calls in flight per side; "
@@ -1075,14 +1189,22 @@ def _identical_for_ab(suite_ids: list, base_ref: str, out: Path) -> tuple:
 def ab_markdown(report: dict) -> str:
     from cqc_cpcc.model_eval.scorecard import _safe
 
-    icon = {"pass": "✅", "pass-provisional": "🟡", "fail": "❌", "no-base": "ℹ️", IDENTICAL_SKIPPED: "✅"}
-    lines = [f"## Prompt A/B {icon.get(report['status'], '')} {report['status']}", "",
+    icon = {"pass": "✅", "pass-provisional": "🟡", "fail": "❌", "no-base": "ℹ️", IDENTICAL_SKIPPED: "✅",
+            account_limit.STATUS: "🛑"}
+    lines = []
+    if report["status"] == account_limit.STATUS:  # the first line of the report and of the PR comment
+        abort = report.get("abort") or _abort_summary(report["suites"]) or {}
+        lines += [account_limit.banner(abort, abort.get("completed_calls"), abort.get("spent_usd")), ""]
+    lines += [f"## Prompt A/B {icon.get(report['status'], '')} {report['status']}", "",
              f"Head vs base `{_safe(report['base_ref'])}`, scored with the head graders.", "",
              "| Suite | Model | Base | Head | Δ | Paired test | Cost × | Status |", "|---|---|---|---|---|---|---|---|"]
     for suite_id, r in report["suites"].items():
         if r["status"] == IDENTICAL_SKIPPED:
             lines.append(f"| `{suite_id}` | all | n/a | n/a | 0 | identical to the base, not re-run | 0 | "
                          f"{icon[IDENTICAL_SKIPPED]} {IDENTICAL_SKIPPED} |")
+        if r["status"] == account_limit.STATUS:
+            lines.append(f"| `{suite_id}` | all | n/a | n/a | n/a | no A/B (run aborted: account limit) | n/a | "
+                         f"{icon[account_limit.STATUS]} {account_limit.STATUS} |")
         for label, m in (r.get("models") or {}).items():
             if "comparative" not in m:
                 test = "n/a"
@@ -1393,7 +1515,13 @@ def record(scorecards_dir: Path, history_path: Path, status_path: Path, sha: str
 
 # --- Model promotion: the candidate must pass every suite on the roles it would take ---------
 
-async def suite_gate(incumbent: str, candidate: str, roles: list, out: Path, skip: tuple = ("grading",)) -> dict:
+async def suite_gate(*args, **kwargs) -> dict:
+    """:func:`_suite_gate` under one abort flag: after the account limit no later suite starts."""
+    with account_limit.run_scope():
+        return await _suite_gate(*args, **kwargs)
+
+
+async def _suite_gate(incumbent: str, candidate: str, roles: list, out: Path, skip: tuple = ("grading",)) -> dict:
     """Run the suites of ``roles`` (except those the model evaluation covers) on both models."""
     policy = model_registry.load_policy()
     ev = policy.eval
@@ -1409,6 +1537,9 @@ async def suite_gate(incumbent: str, candidate: str, roles: list, out: Path, ski
     for suite_id in SUITE_MODULES:
         suite = get_suite(suite_id)
         if suite.role not in roles or suite_id in skip:
+            continue
+        if account_limit.tripped():
+            failures.append(f"{suite_id}: not run (aborted: account limit)")
             continue
         sc = await prompt_eval.run(suite_id, [inc, cand], out=str(out), budget=budget)
         if sc.get("status") != "complete":
@@ -1474,6 +1605,10 @@ def cmd_prompt_ab(args) -> int:
         raise SystemExit(f"error: {e}")
     print((Path(args.out) / "ab.md").read_text(encoding="utf-8"))
     github_output(ab_status=report["status"])
+    if report["status"] == account_limit.STATUS:  # exit non-zero, with the cause as the last lines of the log
+        abort = report.get("abort") or {}
+        print(account_limit.banner(abort, abort.get("completed_calls"), abort.get("spent_usd")))
+        return account_limit.EXIT_CODE
     return 0
 
 
@@ -1529,8 +1664,9 @@ def _base_capture_once(worktree: Path, suite_ids: list, file: Path, timeout: int
     except subprocess.TimeoutExpired as e:
         raise _CaptureTimeout() from e
     if returncode != 0:
-        tail = (stderr or "").strip().splitlines()[-1:] or [""]
-        print(f"base capture of {','.join(suite_ids)} exited {returncode}: {(stderr or '')[-STDERR_CAP:]}")
+        safe = error_detail.scrub_log(stderr)
+        tail = safe.strip().splitlines()[-1:] or [""]
+        print(f"base capture of {','.join(suite_ids)} exited {returncode}: {safe[-STDERR_CAP:]}")
         raise RuntimeError(f"exit {returncode}: {tail[0][:120]}")
     try:
         data = json.loads(file.read_text(encoding="utf-8"))
@@ -1573,7 +1709,7 @@ def capture_base(worktree: Path, suite_ids: list, tmp: Path, timeout: int = BASE
         print("the base capture timed out")
         return captures, {**failures, **{s: "base capture failed: timed out" for s in known}}
     except RuntimeError as e:
-        first_error = str(e)
+        first_error = error_detail.redact_message(str(e), 160)  # reaches requests.json: nothing unredacted
         print(f"base capture of all suites failed ({first_error}); retrying each suite alone")
     if len(known) == 1:  # the retry would repeat the same run
         failures[known[0]] = f"base capture failed: {first_error}"
@@ -1585,7 +1721,7 @@ def capture_base(worktree: Path, suite_ids: list, tmp: Path, timeout: int = BASE
         except _CaptureTimeout:
             return suite_id, None, "base capture failed: timed out"
         except Exception as err:  # noqa: BLE001 - any failure of this suite fails this suite closed
-            return suite_id, None, f"base capture failed: {err}"
+            return suite_id, None, f"base capture failed: {error_detail.redact_message(str(err), 160)}"
 
     with ThreadPoolExecutor(max_workers=max(1, min(pool, len(known)))) as ex:
         for suite_id, data, reason in ex.map(one, known):
