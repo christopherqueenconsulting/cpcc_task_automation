@@ -584,7 +584,7 @@ class TestRegistryAndSuite:
         readme = (root / "README.md").read_text(encoding="utf-8")
         assert "No case derives from a real submission" in readme
         rows = sd.load_rows("test-case-generation")
-        assert len(rows) == 12
+        assert len(rows) == 16  # v2: v1's 12 plus 4 values-may-differ rows
         text = json.dumps(rows)
         assert "Ada Example" in text and not re.search(r"\b\d{5,}\b", text)
 

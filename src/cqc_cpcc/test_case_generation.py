@@ -41,6 +41,7 @@ from typing import Annotated, Callable, Iterable, Literal, Mapping, Optional, Se
 
 from pydantic import BaseModel, Field
 
+from cqc_cpcc.execution_check import clean_markers, MAX_MARKERS, MAX_MARKER_CHARS  # noqa: F401
 from cqc_cpcc.execution_check import (
     MAX_LABEL_CHARS,
     MAX_STDIN_CHARS,
@@ -273,6 +274,15 @@ class SuggestedCase(BaseModel):
         description="The lines the program reads from standard input, in order, one list item per line")]
     boundary_of: Annotated[list[str], Field(
         description="Ids of the conditions this case puts exactly on the boundary; empty if none")]
+    # Optional, so an answer without these fields still validates (old answers, test mode).
+    values_may_differ: Annotated[bool, Field(
+        default=False,
+        description="True only when the instructions or the solution say that some printed values differ "
+                    "from run to run (random numbers, the current date or time)")]
+    varying_markers: Annotated[list[str], Field(
+        default_factory=list,
+        description="Short pieces of text that appear on each output line whose value varies, such as "
+                    "'Random number:'; at most 5; empty when values_may_differ is false")]
 
 
 class TestCaseSuggestion(BaseModel):
@@ -325,6 +335,11 @@ def build_test_case_prompt(instructions: str, solution: str, language: str, nonc
         "input early.",
         "- Plain values only, as a person would type them. No code, no escape sequences.",
         "- Include one ordinary case with typical values, and prefer small values.",
+        "- Set `values_may_differ` to true on a case only when the INSTRUCTIONS or the SOLUTION show that a "
+        "printed value is different on every run, such as a random number or the current date or time, and "
+        "list in `varying_markers` the short fixed text that starts or labels each such output line (for "
+        "example `Random number:`). Otherwise leave both at their defaults (false and an empty list). Never "
+        "set it because a value depends on the input, and never mark a line whose value the input decides.",
         "",
         "## Assignment Instructions",
         fence_untrusted("instructions", instructions, nonce),
@@ -433,8 +448,15 @@ def normalize_suggestion(raw: TestCaseSuggestion) -> TestCaseSuggestion:
             continue
         seen_stdin.add(stdin)
         n = len(cases) + 1
+        flag = bool(getattr(item, "values_may_differ", False))
+        markers = clean_markers(getattr(item, "varying_markers", []) or []) if flag else []
+        if flag and getattr(item, "varying_markers", None) and not markers:
+            logger.info("test-case suggestion: every marker was rejected; values_may_differ left off")
+            flag = False
         cases.append(SuggestedCase(id=f"T{n}", label=_clean_label(item.label, f"Case {n}"),
-                                   inputs=stdin.split("\n")[:-1] if stdin else [], boundary_of=boundary))
+                                   inputs=stdin.split("\n")[:-1] if stdin else [], boundary_of=boundary,
+                                   values_may_differ=flag,
+                                   varying_markers=markers))
     return TestCaseSuggestion(conditions=conditions, cases=cases)
 
 
@@ -484,7 +506,10 @@ async def suggest_test_cases(instructions: str, solution: Union[str, SolutionSou
 def suggestion_to_plan_parts(suggestion: TestCaseSuggestion) -> tuple:
     """``(cases, conditions)`` from a suggestion. Boundary ids stay on the cases."""
     cases = [TestCase(id=c.id, label=c.label, stdin=_inputs_to_stdin(c.inputs), source="llm",
-                      boundary_of=list(c.boundary_of)) for c in suggestion.cases]
+                      boundary_of=list(c.boundary_of), values_may_differ=c.values_may_differ,
+                      varying_markers=list(c.varying_markers) if c.values_may_differ else [],
+                      variance_reason=REASON_MODEL if c.values_may_differ else "")
+             for c in suggestion.cases]
     conditions = [Condition(id=c.id, text=c.text, kind=c.kind) for c in suggestion.conditions]
     return cases, conditions
 
@@ -550,6 +575,7 @@ def validate_cases_on_solution(
         ignore_patterns: Sequence[str] = (),
         runner: Optional[Callable] = None,
         owner: Optional[str] = None,
+        variance_suggested: bool = False,
 ) -> ValidationResult:
     """Run every case twice on the solution in the sandbox and keep the usable ones.
 
@@ -597,22 +623,44 @@ def validate_cases_on_solution(
         return result
 
     by_id = {c.id: c for c in outcome.cases}
+    # Cases the flag (or the instructions' suggestion) lets through when the solution differs between runs.
+    # An instructor who unticked the box has declined: such a case is dropped like any nondeterministic one.
+    candidates = [(c, by_id[c.id]) for c in pool
+                  if c.id in by_id and _drop_reason(by_id[c.id]) == "nondeterministic"
+                  and (c.values_may_differ or (variance_suggested and not c.variance_declined))]
+    confirmed = _variance_confined_batch(run, solution, sandbox_files, candidates, owner) if candidates else {}
     kept = []
     for case in pool:
         got = by_id.get(case.id)
         reason = "crash" if got is None else _drop_reason(got)
+        proven = False
+        if reason == "nondeterministic" and case.id in confirmed:
+            # The solution really prints something different each run. Keep the case only when the
+            # difference is confined to what the flag allows (the marker lines, or numbers and dates).
+            confined = confirmed[case.id]
+            if confined == "ok":
+                reason, proven = None, True
+            elif confined == "words":
+                result.warnings.append(
+                    f'{case.label or case.id}: the solution prints different words on its runs. Enter the label '
+                    "of the varying line in Varies on (for example Greeting:) to keep this case.")
         if reason:
             result.dropped.append(DroppedCase(case.id, reason, case.label))
             continue
         reads = [int(r[2]) for r in got.stdin_reads] if got.segmented else []
         update = {"expected_output": got.stdout, "expected_reads": reads, "validated": True}
+        if proven and not case.values_may_differ:
+            update.update(values_may_differ=True, variance_reason=REASON_RUNS)
         shown = (sample_outputs or {}).get(case.id)
-        if case.source == "sample" and shown and _sample_disagrees(shown, got.stdout, ignore_patterns):
+        if case.source == "sample" and shown and not case.values_may_differ and _sample_disagrees(shown, got.stdout, ignore_patterns):
             update["disagrees_with_instructions"] = True
             result.warnings.append(
                 f'{case.label or case.id} shows "{_brief(shown)}" but the solution prints '
                 f'"{_brief(got.stdout)}". Fix the instructions or the solution, or delete this sample.')
         kept.append(case.model_copy(update=update))
+    if any(c.values_may_differ for c in kept):
+        result.warnings.append("Some cases are marked values may differ: the lines whose values vary (or the "
+                               "whole case) are not compared with the solution.")
     if kept and solution.language in ("cpp", "c"):
         result.warnings.append("The sandbox cannot tell when a C or C++ program reads past the end of its "
                                "input. Check each expected output.")
@@ -629,6 +677,68 @@ def validate_cases_on_solution(
                 result.warnings.append(f"No test covers the exact edge of: {c.text}.")
     logger.info("test-case validation: status=%s kept=%d dropped=%d", result.status, len(kept), len(result.dropped))
     return result
+
+
+def _run_ok(got) -> bool:
+    return not (got.status != "OK" or got.exit_code not in (0, None) or got.eof_error or got.stdout_truncated
+                or not got.stdout.strip())
+
+
+def _variance_confined_batch(run, solution, sandbox_files, items, owner) -> dict:
+    """Run the solution twice more on ALL ``items`` ``[(case, first_outcome)]`` at once (two sandbox jobs
+    however many cases there are) and compare every pair of the three outputs of each.
+
+    ``{case id: status}``: ``"ok"`` when the outputs differ only where the flag allows (the marker lines,
+    or numbers, dates and times), ``"words"`` when they differ in other words, ``"other"`` when it cannot be
+    confirmed (empty or cut output, a failed run).
+    """
+    from cqc_cpcc.utilities import program_runner as pr
+    from cqc_cpcc.utilities.output_compare import Verdict, compare_output, mask_varying
+
+    status: dict = {}
+    live = []
+    for case, first in items:
+        if first.stdout_truncated or not first.stdout.strip():
+            status[case.id] = "other"
+        else:
+            live.append((case, first))
+    outputs = {case.id: [first.stdout] for case, first in live}
+    for _ in range(2):
+        if not live:
+            break
+        try:
+            again = run(solution.language, sandbox_files, [pr.SandboxCase(c.id, c.stdin) for c, _f in live],
+                        mode="run", main=solution.main, repeat=1, owner=owner)
+        except Exception:  # noqa: BLE001 - cannot confirm, so the cases are dropped
+            again = None
+        if again is None or again.status != "ok" or again.compile is None or not again.compile.ok:
+            status.update({c.id: "other" for c, _f in live})
+            live = []
+            break
+        by_id = {c.id: c for c in again.cases}
+        still = []
+        for case, first in live:
+            got = by_id.get(case.id)
+            if got is None or not _run_ok(got):
+                status[case.id] = "other"
+                continue
+            outputs[case.id].append(got.stdout)
+            still.append((case, first))
+        live = still
+    for case, _first in live:
+        a, b, c = outputs[case.id]
+        status[case.id] = "ok"
+        for x, y in ((a, b), (a, c), (b, c)):
+            cmp = compare_output(x, y, values_may_differ=True, varying_markers=case.varying_markers)
+            if cmp.verdict not in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER):
+                status[case.id] = "words" if mask_varying(x) != mask_varying(y) else "other"
+                break
+    return status
+
+
+def _variance_confined(run, solution, sandbox_files, case, first, owner) -> str:
+    """One case through :func:`_variance_confined_batch`."""
+    return _variance_confined_batch(run, solution, sandbox_files, [(case, first)], owner)[case.id]
 
 
 _DROP_TEXT = {
@@ -658,7 +768,7 @@ def _sample_disagrees(shown: str, actual: str, ignore_patterns: Sequence[str]) -
 
 def build_plan(solution: SolutionSources, validation: ValidationResult, conditions: Sequence[Condition] = (),
                *, ignore_patterns: Sequence[str] = (), risks: Sequence = (),
-               all_cases: Sequence[TestCase] = ()) -> ExecutionPlan:
+               all_cases: Sequence[TestCase] = (), extra_warnings: Sequence[str] = ()) -> ExecutionPlan:
     """The plan for the assignment from a validation. Disabled when nothing was verified.
 
     ``all_cases`` (the cases before validation) are kept disabled-and-unvalidated when the
@@ -667,7 +777,7 @@ def build_plan(solution: SolutionSources, validation: ValidationResult, conditio
     enabled = validation.ok
     cases = validation.cases if enabled else [c.model_copy(update={"validated": False, "enabled": False})
                                               for c in all_cases]
-    warnings = list(validation.warnings) + [r.message for r in risks]
+    warnings = list(validation.warnings) + [r.message for r in risks] + list(extra_warnings)
     return ExecutionPlan(
         language=solution.language, solution_sha256=solution.sha256,
         solution_files=solution.solution_files(), main=solution.main, cases=cases,
@@ -688,30 +798,231 @@ class SolutionRisk:
 
 _RISK_PATTERNS = {
     "randomness": (
-        r"\bnew\s+Random\b|\bMath\.random\b|\bThreadLocalRandom\b|\bSecureRandom\b|\bsrand\s*\(|\brand\s*\(|"
-        r"#\s*include\s*<random>|\bmt19937\b|\brandom_device\b|\bimport\s+random\b|\bfrom\s+random\s+import\b|"
+        r"\bnew\s{1,20}Random\b|\bMath\.random\b|\bThreadLocalRandom\b|\bSecureRandom\b|\bsrand\s{0,20}\(|\brand\s{0,20}\(|"
+        r"#\s{0,20}include\s{0,20}<random>|\bmt19937\b|\brandom_device\b|\bimport\s{1,20}random\b|\bfrom\s{1,20}random\s{1,20}import\b|"
         r"\bsecrets\.|\buuid\.uuid4\b|\bUUID\.randomUUID\b",
         "The solution uses random numbers, so its output may change between runs; the output "
         "check cannot compare it reliably."),
     "time": (
-        r"\bSystem\.(?:currentTimeMillis|nanoTime)\b|\bLocalDate(?:Time)?\.now\b|\bInstant\.now\b|\bnew\s+Date\s*\(|"
-        r"\bCalendar\.getInstance\b|\btime\s*\(\s*(?:NULL|nullptr|0)?\s*\)|#\s*include\s*<(?:ctime|chrono|time\.h)>|"
-        r"\bimport\s+(?:time|datetime)\b|\bfrom\s+(?:time|datetime)\s+import\b|\bclock\s*\(\s*\)",
+        r"\bSystem\.(?:currentTimeMillis|nanoTime)\b|\bLocalDate(?:Time)?\.now\b|\bInstant\.now\b|\bnew\s{1,20}Date\s{0,20}\(|"
+        r"\bCalendar\.getInstance\b|\btime\s{0,20}\(\s{0,20}(?:NULL|nullptr|0)?\)|#\s{0,20}include\s{0,20}<(?:ctime|chrono|time\.h)>|"
+        r"\bimport\s{1,20}(?:time|datetime)\b|\bfrom\s{1,20}(?:time|datetime)\s{1,20}import\b|\bclock\s{0,20}\(\s{0,20}\)",
         "The solution reads the clock or the date, so its output may change between runs."),
     "files": (
-        r"\bnew\s+File\w*\s*\(|\bFiles\.\w+|\bFileReader\b|\bFileWriter\b|\bPrintWriter\s*\(\s*(?:\"|new\s+File)|"
-        r"\bifstream\b|\bofstream\b|\bfstream\b|\bfopen\s*\(|\bopen\s*\(\s*['\"]|\bPath\s*\(|\bpathlib\b",
+        r"\bnew\s{1,20}File\w*\s{0,20}\(|\bFiles\.\w+|\bFileReader\b|\bFileWriter\b|\bPrintWriter\s{0,20}\(\s{0,20}(?:\"|new\s{1,20}File)|"
+        r"\bifstream\b|\bofstream\b|\bfstream\b|\bfopen\s{0,20}\(|\bopen\s{0,20}\(\s{0,20}['\"]|\bPath\s{0,20}\(|\bpathlib\b",
         "The solution reads or writes files, which the sandbox does not provide."),
     "arguments": (
-        r"\bargs\s*\[|\bargs\.length\b|\bargc\b|\bargv\b|\bsys\.argv\b|\bgetopt\b|\bargparse\b",
+        r"\bargs\s{0,20}\[|\bargs\.length\b|\bargc\b|\bargv\b|\bsys\.argv\b|\bgetopt\b|\bargparse\b",
         "The solution uses command-line arguments; the output check only supplies standard input."),
 }
 _RISK_RES = {code: (re.compile(pattern), message) for code, (pattern, message) in _RISK_PATTERNS.items()}
+_HASH_COMMENT = re.compile(r"#(?!\s*include)[^\n]*")
+_MAX_SOLUTION_SCAN_CHARS = 600 * 1024
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/|#(?!\s*include)[^\n]*", re.DOTALL)
 
 
 def scan_solution_risks(solution: Union[SolutionSources, str]) -> list:
     """Warn about things a stdin-only check cannot reproduce. Comments are ignored."""
     text = solution.combined_text() if isinstance(solution, SolutionSources) else (solution or "")
-    text = _COMMENT.sub(" ", text)
+    text = _HASH_COMMENT.sub(" ", _strip_comments(text[:_MAX_SOLUTION_SCAN_CHARS]))
     return [SolutionRisk(code, message) for code, (regex, message) in _RISK_RES.items() if regex.search(text)]
+
+
+# --------------------------------------------------------------------------- #
+# 5. Output that legitimately varies ("values may differ")
+# --------------------------------------------------------------------------- #
+REASON_MODEL = "The AI model marked this output as varying between runs."
+REASON_RUNS = "The solution printed different output on two runs."
+_MAX_SCAN_CHARS = 60000
+_MAX_INSTRUCTION_CHARS = 20000
+_MAX_SENTENCE_CHARS = 2000
+_MAX_LINE_CHARS = 2000
+
+
+@dataclass(frozen=True)
+class VariationFinding:
+    """One reason output may vary. ``flags`` False is a hint only: no case is marked."""
+
+    code: str  # random | time | varies
+    text: str  # a fixed sentence, never text from the instructions or the solution
+    flags: bool
+    #: "instructions": a suggestion only. "solution": a random or clock call that reaches a print.
+    source: str = "instructions"
+
+
+_REASON_TEXT = {
+    ("random", True): "The instructions say a random value is part of the output.",
+    ("time", True): "The instructions say the current date or time is part of the output.",
+    ("varies", True): "The instructions say the printed values may differ from run to run.",
+    ("random", False): "The instructions mention random values, but not as part of the output: no case marked.",
+    ("time", False): "The instructions mention the date or time, but not as part of the output: no case marked.",
+    ("srandom", True): "The solution prints a random value.",
+    ("stime", True): "The solution prints the current date or time.",
+    ("srandom", False): "The solution uses random numbers; it is unclear whether they are printed: no case marked.",
+    ("stime", False): "The solution reads the clock; it is unclear whether it is printed: no case marked.",
+}
+
+_SENTENCE = re.compile(r"[.!?](?=\s|$)|[;\n]")  # one character per match: linear on any run
+_CLAUSE = re.compile(r"[,:]| but ")
+_OUT_TIE = re.compile(
+    r"\b(?:outputs?|prints?|printed|printing|displays?|displayed|displaying|shows?|showing|shown|"
+    r"values?|results?)\b")
+# A negation governs the clause it stands in, and only when it negates doing the thing ("no larger
+# than 10" and "does not exceed" do not).
+_NEGATED = re.compile(
+    r"\b(?:do\s+not|don'?t|never|without|avoid|must\s+not|should\s+not|"
+    r"not\s+(?:use|using|print|display|show|generate|include|call|rely))\b")
+_FORMAT_ONLY = re.compile(
+    r"\b(?:spacing|whitespace|wording|format|formatting|capitali[sz]ation|punctuation|slightly|minor|style|"
+    r"rounding|decimal|trailing)\b")
+# Only a literal seed makes a generator reproducible.
+_LITERAL_SEED = re.compile(r"\bseed(?:ed|s)?\b(?:\s+\w+){0,3}\s+\d+|\b(?:fixed|constant)\s+seed\b|\bseed\s*=\s*\d+")
+_RANDOM_WORDS = re.compile(
+    r"\b(?:random(?:ly)?|pseudo-?random|shuffle[sd]?|uuid|die\s+roll|dice\s+roll)\b|\brand\s{0,5}\(|"
+    r"\bmath\.random\b|\broll(?:s|ing)?\s+(?:\w+\s+){0,2}(?:die|dice)\b|"
+    r"\bseed\w*\s+(?:\w+\s+){0,4}(?:clock|time)\b")
+_TIME_WORDS = re.compile(
+    r"\bcurrent\s+(?:date|time)\b|\btoday'?s\s+date\b|\btimestamps?\b|"
+    r"\bsystem\s+(?:time|clock|date)\b|\btime\s+of\s+day\b")
+# The subject must be the output itself ("the number of students will vary" does not count).
+_VARY_SUBJECT = re.compile(
+    r"\b(?:outputs?|values?|results?|prints?|printed)\b(?:\s+\w+){0,4}\s+(?:will|may)\s+(?:vary|differ)\b")
+_VARY_EACH = re.compile(r"\b(?:different|differs?|changes?|varies)\s+(?:each|every)\s+(?:time|run|execution)\b")
+
+
+def _instruction_findings(instructions: str) -> list:
+    text = (instructions or "")[:_MAX_INSTRUCTION_CHARS].casefold().encode("ascii", "ignore").decode("ascii")
+    sentences = [" ".join(part[:_MAX_SENTENCE_CHARS].split()) for part in _SENTENCE.split(text)]
+    flagged: dict = {}
+    hints: dict = {}
+    for sent in sentences:
+        if not sent:
+            continue
+        tied = bool(_OUT_TIE.search(sent))
+        seeded = bool(_LITERAL_SEED.search(sent))
+        for clause in _CLAUSE.split(sent):
+            for code, regex in (("random", _RANDOM_WORDS), ("time", _TIME_WORDS)):
+                if not regex.search(clause) or (code == "random" and seeded) or _NEGATED.search(clause):
+                    continue
+                (flagged if tied else hints)[code] = True
+        if (_VARY_SUBJECT.search(sent) or (tied and _VARY_EACH.search(sent))) \
+                and not _NEGATED.search(sent) and not _FORMAT_ONLY.search(sent):
+            flagged["varies"] = True
+    out = [VariationFinding(code, _REASON_TEXT[(code, True)], True) for code in ("random", "time", "varies")
+           if code in flagged]
+    out += [VariationFinding(code, _REASON_TEXT[(code, False)], False) for code in ("random", "time")
+            if code in hints and code not in flagged]
+    return out
+
+
+_COMMENT_OR_IMPORT = re.compile(r"^\s*(?:import\b|from\s+\w+\s+import\b|#\s*include\b|using\b)")
+_RANDOM_USE = re.compile(
+    r"\bnew\s{1,20}Random\b|\bMath\.random\s{0,20}\(|\bThreadLocalRandom\b|\bSecureRandom\b|\brand\s{0,20}\(|"
+    r"\bmt19937\b|\bdefault_random_engine\b|\brandom_device\b|\brandom\.\w+\s{0,20}\(|\bshuffle\s{0,20}\(|"
+    r"\buuid\.uuid4\b|\bUUID\.randomUUID\b|\bsecrets\.\w+\s{0,20}\(")
+_TIME_USE = re.compile(
+    r"\bSystem\.(?:currentTimeMillis|nanoTime)\s{0,20}\(|\bLocalDate(?:Time)?\.now\s{0,20}\(|\bInstant\.now\s{0,20}\(|"
+    r"\bnew\s{1,20}Date\s{0,20}\(|\bCalendar\.getInstance\b|\btime\s{0,20}\(\s{0,20}(?:NULL|nullptr|0)?\s{0,20}\)|"
+    r"\bdatetime\.(?:now|today|utcnow)\s{0,20}\(|\btime\.time\s{0,20}\(|\bdate\.today\s{0,20}\(|\bclock\s{0,20}\(\s{0,20}\)|"
+    r"\bchrono::\w+_clock")
+_PRINT = re.compile(r"\bSystem\.out\.|\bprintf\s{0,20}\(|\bcout\b|\bprint\s{0,20}\(|\bputs\s{0,20}\(|\bprintln\b")
+_ASSIGN = re.compile(r"\b([A-Za-z_]\w*)\s{0,20}(?:\[[^\]\n]{0,80}\]\s*)?[-+*/%]?=(?!=)")
+_DECL = re.compile(r"\b(?:Random|SecureRandom|mt19937(?:_64)?|default_random_engine|random_device)\s{1,20}([A-Za-z_]\w*)")
+_IDENT = re.compile(r"[A-Za-z_]\w*")
+
+
+def _reaches_output(lines: Sequence[str], use: "re.Pattern") -> bool:
+    """Best effort: a line printing the API call, or a name assigned (transitively) from it."""
+    tainted: set = set()
+    for _ in range(3):
+        grew = False
+        for line in lines:
+            if _COMMENT_OR_IMPORT.match(line):
+                continue
+            if use.search(line) or tainted.intersection(_IDENT.findall(line)):
+                names = {m.group(1) for m in _ASSIGN.finditer(line)} \
+                    | {m.group(1) for m in _DECL.finditer(line)}
+                if not names.issubset(tainted):
+                    tainted |= names
+                    grew = True
+        if not grew:
+            break
+    for line in lines:
+        if _COMMENT_OR_IMPORT.match(line) or not _PRINT.search(line):
+            continue
+        if use.search(line) or tainted.intersection(_IDENT.findall(line)):
+            return True
+    return False
+
+
+def _strip_comments(text: str) -> str:
+    """Block comments (found with ``str.find``, linear) and line comments removed. A ``#include`` stays."""
+    parts, pos = [], 0
+    while True:
+        start = text.find("/*", pos)
+        if start == -1:
+            parts.append(text[pos:])
+            break
+        parts.append(text[pos:start])
+        end = text.find("*/", start + 2)
+        if end == -1:
+            break
+        parts.append(" ")
+        pos = end + 2
+    kept = []
+    for line in "".join(parts).splitlines():
+        cut = line.find("//")
+        if cut != -1:
+            line = line[:cut]
+        if line.lstrip().startswith("#") and not line.lstrip().startswith("#include"):
+            line = ""
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _solution_findings(solution: Union[SolutionSources, str]) -> list:
+    text = solution.combined_text() if isinstance(solution, SolutionSources) else (solution or "")
+    text = _strip_comments(text[:_MAX_SCAN_CHARS])
+    lines = [line[:_MAX_LINE_CHARS] for line in text.splitlines()]
+    out = []
+    for code, use in (("srandom", _RANDOM_USE), ("stime", _TIME_USE)):
+        if any(use.search(line) and not _COMMENT_OR_IMPORT.match(line) for line in lines):
+            reaches = _reaches_output(lines, use)
+            out.append(VariationFinding(code, _REASON_TEXT[(code, reaches)], reaches, "solution"))
+    return out
+
+
+def detect_variable_values(instructions: str, solution: Union[SolutionSources, str, None] = None) -> list:
+    """Why the assignment's output may differ between runs: ``VariationFinding``s, fixed text only.
+
+    Instructions: a sentence counts only when it ties the trigger to the output (random, the
+    current date or time, "may vary" and similar) and is not negated, not about format, and not
+    about a seeded generator. Solution: random or clock API used AND its result reaches a print
+    statement (a name assigned from it, followed three steps). Otherwise the finding is a hint with
+    ``flags`` False. Errors toward not flagging: an unflagged case is still compared normally.
+    """
+    findings = _instruction_findings(instructions)
+    if solution is not None:
+        findings += _solution_findings(solution)
+    return findings
+
+
+def variation_reason(findings: Iterable[VariationFinding]) -> str:
+    """The reason to mark cases at once: only a solution that prints a random or clock value proves it."""
+    return next((f.text for f in findings if f.flags and f.source == "solution"), "")
+
+
+def variation_suggestion(findings: Iterable[VariationFinding]) -> str:
+    """What the instructions suggest. A suggestion marks nothing until the solution's runs prove variance."""
+    return next((f.text for f in findings if f.flags and f.source != "solution"), "")
+
+
+def flag_cases(cases: Iterable[TestCase], reason: str) -> list:
+    """Mark every case ``values_may_differ`` when ``reason`` is set (an existing flag and its markers stay;
+    the deterministic reason replaces the model's). An empty reason returns the cases unchanged."""
+    cases = list(cases)
+    if not reason:
+        return cases
+    return [c if c.variance_declined or (c.values_may_differ and c.variance_reason == reason)
+            else c.model_copy(update={"values_may_differ": True, "variance_reason": reason}) for c in cases]
