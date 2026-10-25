@@ -173,8 +173,7 @@ class TestPromptIncludesCriterionIDs:
         # Prompt should explicitly mention the criterion_id
         assert "criterion_id" in prompt.lower()
         assert "`documentation`" in prompt or "documentation" in prompt
-        assert "IMPORTANT" in prompt or "CRITICAL" in prompt
-        assert "exact" in prompt.lower() or "EXACT" in prompt
+        assert "exact criterion_id values" in prompt
         
     def test_prompt_warns_about_exact_ids(self):
         """Test that prompt explicitly warns about using exact criterion IDs."""
@@ -208,7 +207,7 @@ class TestPromptIncludesCriterionIDs:
             student_submission="code here"
         )
         
-        # Should have warning about NOT making up IDs
-        assert "CRITICAL" in prompt or "IMPORTANT" in prompt
+        # Should say to use the exact ids, with the reason (v4: no emphatic wording)
+        assert "exact criterion_id values" in prompt and "matched to criteria by that id" in prompt
         # Should explicitly show the criterion_id format
         assert "`code_quality`" in prompt or "code_quality" in prompt

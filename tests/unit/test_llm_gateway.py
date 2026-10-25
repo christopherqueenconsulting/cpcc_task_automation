@@ -237,6 +237,7 @@ class TestRequestRecord:
         assert call.messages == openrouter_client.build_messages("2+2?") == kwargs["messages"]
         assert call.params["reasoning"] == {"effort": "high"} and call.params["user"] == "run-abc"
         assert kwargs["extra_body"]["user"] == "run-abc"
+        assert kwargs["extra_body"]["session_id"] == "run-abc"  # OpenRouter's sticky-routing field
         assert call.correlation_id == "ui-123"
         record = llm_gateway.last_request_record("rubric-grading", "grading")
         assert record["effort"] == "high" and record["model"] == "openai/primary"

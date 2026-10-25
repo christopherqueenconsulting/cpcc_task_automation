@@ -619,7 +619,7 @@ class TestManualPromptGuidance:
         )
 
         assert '"points_earned": null' not in prompt
-        assert "scoring_mode='manual' criteria: points_earned MUST be a" in prompt
+        assert "scoring_mode='manual' criteria: points_earned must be a" in prompt
 
     def test_level_band_rubric_example_still_shows_null(self):
         from cqc_cpcc.rubric_grading import build_rubric_grading_prompt
