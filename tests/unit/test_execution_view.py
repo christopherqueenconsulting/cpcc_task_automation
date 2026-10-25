@@ -345,7 +345,7 @@ def test_typed_cases_run_on_the_solution_make_a_plan_with_no_model_call(ready, t
 def test_the_table_has_the_planned_columns(ready, tmp_path):
     at = _turn_on(_setup_app(tmp_path))
     frame = ev.cases_frame([TestCase(id="M1", label="L", stdin="5\n", source="manual")])
-    assert list(frame.columns) == ["Use", "Label", "Kind", "Source", "Input", "Status", "Expected", "id"]
+    assert list(frame.columns) == ["Use", "Label", "Kind", "Source", "Input", "May differ", "Status", "Expected", "id"]
     assert frame.loc[0, "Input"] == "5\\n" and frame.loc[0, "Status"] == "Not run"
 
 
@@ -1071,3 +1071,16 @@ def test_always_visible_setup_text_never_contains_the_word_on_with_spaces(monkey
                      for e in g) + " " + ev.SETUP_CAPTION
     assert " on " not in shown, shown
     assert " on " not in ev.NOTICE and " on " not in ev.SETUP_CAPTION
+
+
+def test_the_setup_page_flags_cases_when_the_instructions_say_values_vary(ready, tmp_path, monkeypatch):
+    monkeypatch.setattr(pr, "run_program", FakeSolutionRunner())
+    at = _turn_on(_setup_app(tmp_path, "Write Dice.java. It prints a random number from 1 to 6."))
+    rows = [{"Label": "Roll", "Input": "5"}]
+    _add_rows(at, rows)
+    _press(at, "Run solution on these inputs", _edit(rows))
+    plan = at.session_state["plan"]
+    assert plan is not None and plan.cases[0].values_may_differ
+    assert any("values may differ" in c.value.lower() for c in at.caption)
+    frame = at.session_state[_editor_key(at)]
+    assert frame is not None

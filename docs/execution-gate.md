@@ -305,6 +305,33 @@ stores the solution's file hashes, never its text. `load_solution_sources` reads
 a folder (symlinks skipped) or a `.zip` in memory (base names only, size and count caps, sizes
 checked before reading, no extraction to disk).
 
+### Output that legitimately varies ("values may differ")
+
+A program that prints a random number, the current date or time, or text the user chooses cannot be compared
+line for line. A `TestCase` therefore carries `values_may_differ` (default false), optional `varying_markers`
+(literal, case-insensitive fragments of the lines that vary) and a fixed-text `variance_reason`. They are set by:
+
+1. `detect_variable_values(instructions, solution)`: a sentence of the instructions counts only when it ties a
+   trigger (random, shuffle, uuid, the current date or time, a timestamp, "will/may vary", "may differ",
+   "different each time", "user-dependent") to the output (output, print, display, show, value, result). A
+   negated sentence, a sentence about spacing, wording or format, a seeded generator and a trigger with no
+   output word all stay silent. The solution counts only when a random or clock call reaches a print (a name
+   assigned from it, followed up to three steps); a call that does not is shown as a hint and flags nothing.
+   Over every instruction text in `evals/datasets` it flags only the four rows built to vary (the PR body has the
+   list); that is pinned by `tests/unit/test_values_may_differ.py`.
+2. The model (`test-case-generation` v2), for the case it names.
+3. The instructor, with the **May differ** box in the setup table (the instructor's choice wins).
+
+Code ORs with the model; neither can be turned off by the other. A flagged case is still run twice on the
+solution, and two different outputs no longer drop it. For a student, lines containing a marker are left out of
+both outputs and the rest is compared normally (a clean match shows the detail `values_may_differ`); a flagged case
+with no markers is not compared at all and gets the verdict `values_may_differ` (a timeout, no output or a crash
+still count). The gate sets such results aside: they are never a difference, never a "disagrees" badge, never a
+deduction; the reconciliation note says "not compared". When every case is flagged the gate mode is
+`values_may_differ` and the check is evidence only. A fully flagged case is not independent evidence for removing
+errors. `plan_hash` adds the flag and markers only for a flagged case, so every earlier plan keeps its hash.
+Rollback: `git revert` the change; saved plans load either way (the new fields default off).
+
 ## The execution gate in grading (PR 14)
 
 `grade_with_rubric(..., execution_plan=None)`. With no plan nothing below runs: the prompt, the

@@ -31,6 +31,13 @@ The comparison ladder (first rung that applies wins):
     11. The program crashed: RUNTIME_ERROR (detail ``reads_more_input`` on EOF).
     12. Anything else: VALUES_DIFFER.
 
+A case flagged "values may differ" (random numbers, the date, user-dependent text) skips the
+comparison it cannot make: lines containing one of its ``varying_markers`` are dropped from
+both outputs like ignored lines (the rest is compared normally, and a clean match carries the
+detail ``values_may_differ``). With no markers the whole case is not compared: after rung 2
+(a timeout or no output still count) a crash is RUNTIME_ERROR and anything else is
+VALUES_MAY_DIFFER, which is never a difference and never costs points.
+
 Rungs 4-7 are cumulative: each allows the differences of the rungs before it, and
 ``detail`` names the loosest rung that was needed. Rung 9 needs prompt segmentation:
 the driver records where the program read stdin, and the last line printed before each
@@ -59,6 +66,8 @@ class Verdict(StrEnum):
     """Case verdicts, least to most severe (``aggregate`` takes the worst)."""
 
     MATCH = "match"
+    #: The case is flagged "values may differ" (random, date, user-dependent): not compared.
+    VALUES_MAY_DIFFER = "values_may_differ"
     FORMAT_ONLY = "format_only"
     TEXT_DIFFERS = "text_differs"
     ORDER_DIFFERS = "order_differs"
@@ -81,6 +90,8 @@ PROMPT_TEXT = "prompt_text"
 # RUNTIME_ERROR details.
 READS_MORE_INPUT = "reads_more_input"
 CRASH = "crash"
+# MATCH detail: some lines were left out because their values may differ.
+VARYING = "values_may_differ"
 
 DIFF_MAX_LINES = 20
 DIFF_MAX_CHARS = 1500
@@ -281,11 +292,16 @@ def compare_output(
     run: Optional[RunOutcome] = None,
     ignore_patterns: Iterable[str | re.Pattern] = (),
     prompt_segments: Optional[tuple[Sequence[int], Sequence[int]]] = None,
+    values_may_differ: bool = False,
+    varying_markers: Iterable[str] = (),
 ) -> CaseComparison:
     """Classify how ``actual`` (student stdout) differs from ``expected`` (solution stdout).
 
     ``prompt_segments`` is ``(expected_reads, actual_reads)``: the character offsets in
     each output at which that program read stdin. Without it rung 9 never applies.
+
+    ``values_may_differ`` / ``varying_markers``: see the module docstring. Markers are literal,
+    case-insensitive fragments (never regexes, so a model-written marker cannot be a pattern bomb).
     """
     if run is not None and not run.ran:
         return CaseComparison(Verdict.NOT_RUN, "", 0.0, "")
@@ -295,11 +311,21 @@ def compare_output(
     e_reads, a_reads = prompt_segments if prompt_segments is not None else ((), ())
     expected, e_reads = _drop_ignored(expected, e_reads, patterns)
     actual, a_reads = _drop_ignored(actual, a_reads, patterns)
+    marker_res = [re.compile(re.escape(m.strip()), re.IGNORECASE) for m in varying_markers if m and m.strip()]
+    whole_case = values_may_differ and not marker_res
+    varied = False
+    if values_may_differ and marker_res:
+        e_kept, e_reads = _drop_ignored(expected, e_reads, marker_res)
+        a_kept, a_reads = _drop_ignored(actual, a_reads, marker_res)
+        varied = e_kept != expected or a_kept != actual
+        expected, actual = e_kept, a_kept
     e_trim, a_trim = _trim(expected), _trim(actual)
 
     def result(verdict: Verdict, detail: str = "") -> CaseComparison:
         similarity = difflib.SequenceMatcher(None, e_trim, a_trim).ratio()
-        excerpt = "" if verdict is Verdict.MATCH else _diff_excerpt(e_trim, a_trim)
+        excerpt = "" if verdict in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER) else _diff_excerpt(e_trim, a_trim)
+        if verdict is Verdict.MATCH and varied and not detail:
+            detail = VARYING
         return CaseComparison(verdict, detail, similarity, excerpt)
 
     # Rung 2.
@@ -307,6 +333,10 @@ def compare_output(
         return result(Verdict.TIMEOUT)
     if not a_trim and e_trim:
         return result(Verdict.NO_OUTPUT)
+    if whole_case:
+        if run is not None and run.crashed:
+            return result(Verdict.RUNTIME_ERROR, READS_MORE_INPUT if run.eof_error else CRASH)
+        return result(Verdict.VALUES_MAY_DIFFER)
 
     # Rungs 3-7.
     rung = _format_rungs(e_trim, a_trim)

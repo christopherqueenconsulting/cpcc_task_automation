@@ -72,6 +72,20 @@ class TestCase(BaseModel):
     #: The expected output needs a human look. Reserved for signals the driver really gives;
     #: nothing sets it today (C and C++ over-reads are a plan-wide warning, not a case flag).
     needs_review: bool = False
+    #: The case's printed values may legitimately differ between runs (random numbers, the date,
+    #: user-dependent text). Set by the instructions' wording, the solution, the model or the
+    #: instructor; the differing lines are not compared and never cost points.
+    values_may_differ: bool = False
+    #: Literal fragments of the lines whose values may differ. Empty with the flag set means the
+    #: whole case is not compared.
+    varying_markers: list[str] = Field(default_factory=list)
+    #: A fixed sentence saying why the flag was set (never student or instruction text).
+    variance_reason: str = ""
+
+    @property
+    def fully_unverifiable(self) -> bool:
+        """Flagged with no markers: no line of this case can be compared."""
+        return self.values_may_differ and not self.varying_markers
 
 
 class Condition(BaseModel):
@@ -115,7 +129,9 @@ class ExecutionPlan(BaseModel):
                 {"id": c.id, "stdin": c.stdin, "source": c.source, "boundary_of": sorted(c.boundary_of),
                  "expected": c.expected_output, "reads": c.expected_reads, "validated": c.validated,
                  "enabled": c.enabled,
-                 "disagrees": c.disagrees_with_instructions, "review": c.needs_review}
+                 "disagrees": c.disagrees_with_instructions, "review": c.needs_review,
+                 # Only when set, so the hash of every plan without the flag is unchanged.
+                 **({"vary": True, "markers": sorted(c.varying_markers)} if c.values_may_differ else {})}
                 for c in self.cases
             ],
             "conditions": [(c.id, c.text, c.kind) for c in self.conditions],
@@ -138,7 +154,8 @@ class ExecutionPlan(BaseModel):
         assignment text, so sample cases must never be the only evidence for removing a
         deduction. The gate needs at least one independent case that covers the condition.
         """
-        return [c for c in self.usable_cases() if c.source in ("llm", "manual")]
+        return [c for c in self.usable_cases()
+                if c.source in ("llm", "manual") and not c.fully_unverifiable]
 
     @property
     def sample_only(self) -> bool:
