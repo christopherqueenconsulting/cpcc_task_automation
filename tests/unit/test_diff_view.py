@@ -42,11 +42,15 @@ def test_equal_changed_removed_and_added_rows_stay_level():
     assert added.expected is None and added.actual == "e"  # blank filler on the expected side
 
 
-def test_a_replace_of_unequal_size_pairs_then_fills():
+def test_a_replace_of_unequal_size_pairs_the_alike_lines_then_fills():
+    # Changed from positional pairing: "old1" and "new" share nothing, so they are no longer forced
+    # side by side (that was the alignment bug). Alike lines still pair.
     rows = dv.align_rows("x\nold1\nold2\ny", "x\nnew\ny")
+    assert _kinds(rows) == ["eq", "del", "del", "ins", "eq"]
+    rows = dv.align_rows("x\nTotal: apples\nfiller line\ny", "x\nTotal: apple\ny")
     assert _kinds(rows) == ["eq", "chg", "del", "eq"]
     assert (rows[1].expected_no, rows[1].actual_no) == (2, 2) and rows[2].expected_no == 3
-    rows = dv.align_rows("x\nold\ny", "x\nnew1\nnew2\ny")
+    rows = dv.align_rows("x\nTotal: apple\ny", "x\nTotal: apples\nfiller line\ny")
     assert _kinds(rows) == ["eq", "chg", "ins", "eq"]
 
 
@@ -69,8 +73,8 @@ def test_changed_words_are_flagged_inside_a_changed_line():
 
 
 def test_a_wholly_different_or_very_long_line_is_highlighted_whole_not_by_word():
-    [row] = dv.align_rows("alpha beta", "zzzzzzzzzz")
-    assert row.expected == "alpha beta" and row.actual == "zzzzzzzzzz"
+    [row] = dv.align_rows("abcdefgh", "abcdefgx")  # alike enough to pair, no word in common
+    assert row.kind == "chg" and row.expected == "abcdefgh" and row.actual == "abcdefgx"
     long_a, long_b = "x " * 300 + "1", "x " * 300 + "2"
     [row] = dv.align_rows(long_a, long_b)
     assert isinstance(row.expected, str) and isinstance(row.actual, str)
@@ -125,7 +129,7 @@ def test_hidden_and_direction_characters_are_neutralised_as_clean_block_does():
 def test_counts_and_summary_and_heights():
     rows = dv.align_rows("a\nb\nc", "a\nB\nc\nd")
     assert dv.count_rows(rows) == {"chg": 1, "del": 0, "ins": 1}
-    assert "1 changed" in dv.summary_text(rows) and "4 rows" in dv.summary_text(rows)
+    assert "1 line differs only in formatting (1 case)" in dv.summary_text(rows) and "4 rows" in dv.summary_text(rows)
     assert dv.pane_height(rows) == 4 * dv.ROW_HEIGHT_PX + 24
     assert dv.pane_height(dv.align_rows("\n".join(map(str, range(500))), "x")) == dv.PANE_HEIGHT_PX
     assert dv.iframe_height(rows) == dv.pane_height(rows) + dv.CHROME_HEIGHT_PX
@@ -263,8 +267,9 @@ def test_every_text_and_ui_colour_pair_meets_wcag_in_both_palettes():
 def test_row_markup_gives_screen_readers_line_numbers_and_the_kind_of_change():
     html = dv.build_side_by_side_html(dv.align_rows("a\nb\nc", "a\nB\nc\nd"))
     script = html.split("<script>")[1]
-    assert "'Line '" in script and "'Removed line: '" in script and "'Added line: '" in script
-    assert "'Changed line, '+who+': '" in script and "'expected'" in script and "'student'" in script
+    assert "'Line '" in script and "r[idx===2?6:7]" in script  # the spoken prefix is built in Python and tested
+    assert "Added line: " in html and "Changed line, expected, case only: " in html
+    assert "Changed line, student, case only: " in html
     assert "m.setAttribute('aria-hidden','true')" in script  # the visual -/+ marker
     assert "n.setAttribute('aria-hidden'" not in script  # line numbers stay readable
     assert script.count("row.setAttribute('aria-hidden','true')") == 1  # filler rows only
@@ -281,7 +286,7 @@ def test_the_page_scrolls_and_sizes_in_relative_units_so_nothing_is_clipped():
 
 def test_the_legend_and_summary_wording():
     html = dv.build_side_by_side_html(dv.align_rows("a", "b"))
-    assert "rows in all" in html and "only spacing or case" in " ".join(html.split())
+    assert "rows in all" in html and "Rows that differ only in spacing are drawn in grey" in " ".join(html.split())
     assert "Hatched rows are blank here because the other side has an extra line" in html
     assert "blank filler" not in html
 
