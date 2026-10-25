@@ -474,6 +474,8 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
         if abort is not None and abort.tripped:
             logger.warning(f"[prompt-eval:{suite.id}] {model}: stopped by the account limit after "
                            f"{len(records)} record(s) (HTTP {abort.status} {account_limit.REASON})")
+        if bgroup is not None:
+            await bgroup.drain()  # the group's batch tasks are finished before the run leaves its block
     if limiter is not None:
         snap = limiter.snapshot()
         logger.info(f"[prompt-eval:{suite.id}] concurrency: {adaptive.describe(snap)}")

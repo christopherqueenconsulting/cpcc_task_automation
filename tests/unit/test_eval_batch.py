@@ -103,6 +103,7 @@ class Fake:
         self.sync_cost, self.too_large_over = sync_cost, too_large_over
         self.budget = None
         self.submit_message, self.poll_error = "bad batch request", None
+        self.on_413, self.too_large_message, self.on_get = None, "payload too large", None
         self.reserved_at_post, self.reserved_at_sync = [], []
         self.chat = SimpleNamespace(completions=self)
 
@@ -126,7 +127,9 @@ class Fake:
         if self.budget is not None:
             self.reserved_at_post.append(self.budget.reserved)
         if self.too_large_over is not None and len(body["requests"]) > self.too_large_over:
-            raise self._status_error(413, "payload too large")
+            if self.on_413 is not None:
+                self.on_413()
+            raise self._status_error(413, self.too_large_message)
         if self.submit_error is not None:
             raise self._status_error(self.submit_error, self.submit_message)
         bid = f"batch_{len(self.posts)}"
@@ -158,6 +161,8 @@ class Fake:
         bid = path.rsplit("/", 1)[1]
         loop = asyncio.get_running_loop()
         self.gets.append((bid, loop.time()))
+        if self.on_get is not None:
+            self.on_get()
         if self.poll_error is not None:
             raise self._status_error(*self.poll_error)
         b = self.batches[bid]
@@ -1370,3 +1375,94 @@ class TestAccountLimitAbort:
         for text in (secret, "ACME-SECRET-ORG", "12,345", "sk-live", "99,999", "evil.example"):
             assert text not in artifacts, text
         assert "HTTP 400" in artifacts  # the status and the fixed code are what is kept
+
+
+# --- Gauntlet round 3: nothing is submitted or awaited after the abort -----------------------------
+
+def _manual_group(fake, n=10, **kw):
+    """A BatchGroup with `n` waiting dispatches, no tracked tasks (so RunAborted reaches every item), in a run scope."""
+    cases = stamped(_cases(n))
+    plan_ = batch.BatchPlan(batch.settings())
+
+    async def main(configure):
+        with account_limit.run_scope() as state:
+            g = batch.BatchGroup(plan_, "t", "generation", client_factory=lambda timeout: fake, tasks=n)
+            configure(state, g)
+
+            async def one(case):
+                batch.bind_case(case)
+                with g.task():
+                    return await g.dispatch(SimpleNamespace(create=fake.create), {
+                        "model": MODEL, "messages": [{"role": "user", "content": f"case {case.case_id}"}]})
+
+            results = await asyncio.gather(*[one(c) for c in cases], return_exceptions=True)
+            await g.drain()
+            return results, g, state
+
+    return main
+
+
+class TestNothingAfterTheAbort:
+    def trip(self, state):
+        state.trip(Fake._status_error(403, "Budget limit exceeded (monthly limit)"))
+
+    def test_a_413_split_never_submits_once_the_abort_is_tripped(self, batch_on):
+        client = Fake(too_large_over=5)
+        main = _manual_group(client)
+
+        results, g, state = vrun(main(lambda state, g: setattr(client, "on_413", lambda: self.trip(state))))
+        assert state.tripped
+        assert len(client.posts) == 1  # only the POST that got the 413: the two halves were never submitted
+        assert len(results) == 10 and all(isinstance(r, account_limit.RunAborted) for r in results)
+        assert client.sync_requests == [] and client.gets == []
+
+    def test_submit_itself_refuses_when_aborted(self, batch_on):
+        client = Fake()
+        g = batch.BatchGroup(batch.BatchPlan(batch.settings()), "t", "generation", client_factory=lambda t: client,
+                             tasks=1)
+
+        async def attempt():
+            with account_limit.run_scope() as state:
+                self.trip(state)
+                item = SimpleNamespace(kwargs={"model": MODEL, "messages": []}, body={}, custom_id="r1")
+                await g._submit(MODEL, [item])
+
+        with pytest.raises(account_limit.RunAborted):
+            vrun(attempt())
+        assert client.posts == []
+
+    def test_polling_stops_when_the_run_is_aborted(self, batch_on):
+        client = Fake(done_after=9999.0)
+        main = _manual_group(client)
+        results, g, state = vrun(main(lambda state, g: setattr(client, "on_get", lambda: self.trip(state))))
+        assert len(client.gets) == 1  # the poll that tripped the abort was the last one
+        assert all(isinstance(r, account_limit.RunAborted) for r in results)
+        assert client.sync_requests == []
+
+    def test_a_413_reason_never_carries_provider_text(self, fake, batch_on):
+        fake.too_large_over, fake.too_large_message = 0, "SENTINEL-413-PROVIDER-TEXT for org ACME"
+        records, _ = go(model_suite(), n=10)
+        assert all(r.ok for r in records)  # everything ran sync
+        text = batch.fallback_reason() + json.dumps(batch._EVENTS, default=str)
+        assert batch.fallback_reason() == "too large (HTTP 413)" and "SENTINEL" not in text
+
+    def test_drain_waits_for_the_batch_tasks_and_nothing_starts_after_close(self, batch_on):
+        client = Fake(done_after=99999.0)
+        main = _manual_group(client)
+        seen = {}
+
+        async def run():
+            results, g, state = await main(lambda state, g: None)
+            seen["tasks"] = list(g._tasks)  # drained: every batch task has finished and left the set
+            g._closed = True  # a flush after close starts nothing
+            item = SimpleNamespace(future=asyncio.get_running_loop().create_future(), resolved=False)
+            g.buckets = {(MODEL, "null"): [item]}
+            g.blocked = 1
+            g._flush()
+            seen["item_done"] = item.future.done()
+            seen["tasks_after_flush"] = list(g._tasks)
+            return results
+
+        results = vrun(run())
+        assert seen == {"tasks": [], "item_done": True, "tasks_after_flush": []}
+        assert len(client.posts) == 1 and len(results) == 10  # the flush after close sent no batch

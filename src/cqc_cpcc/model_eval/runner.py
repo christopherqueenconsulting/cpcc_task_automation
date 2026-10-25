@@ -346,6 +346,8 @@ async def run_model(
                 record = task.result()
                 if record is not None:
                     records.append(record)
+        if bgroup is not None:
+            await bgroup.drain()  # the group's batch tasks are finished before the run leaves its block
     return records
 
 

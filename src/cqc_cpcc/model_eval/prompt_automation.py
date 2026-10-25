@@ -772,6 +772,8 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
                     return score
 
         outcomes = await asyncio.gather(*[one(cid) for cid in case_ids], return_exceptions=True)
+        if bgroup is not None:
+            await bgroup.drain()  # the group's batch tasks are finished before the round ends
     for outcome in outcomes:  # every started call has finished before the first failure is raised
         if isinstance(outcome, BaseException):
             raise outcome

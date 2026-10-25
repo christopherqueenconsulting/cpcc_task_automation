@@ -689,6 +689,9 @@ class BatchGroup:
         for (model, _effort), items in buckets.items():
             if not items:
                 continue
+            if self._closed:  # no task starts after close: the items go the ordinary way
+                self._end(items)
+                continue
             if self._aborted():
                 self._end(items)
                 continue
@@ -776,6 +779,9 @@ class BatchGroup:
         return factory(timeout)
 
     async def _run_chunk(self, model: str, items: list, depth: int = 0) -> None:
+        if self._aborted():  # covers the first call and the recursive halves of a 413 split: nothing is submitted
+            self._end(items)
+            return
         loop = asyncio.get_running_loop()
         started = loop.time()
         model_id = model + MODEL_ID_SUFFIX
@@ -796,7 +802,7 @@ class BatchGroup:
                     await asyncio.gather(self._run_chunk(model, items[:half], depth + 1),
                                          self._run_chunk(model, items[half:], depth + 1))
                     return
-                raise _SubmitFailed(f"too large: {error_detail.log_text(e)}") from e
+                raise _SubmitFailed("too large (HTTP 413)") from e
             await self._poll(batch_id, items, row, started, first)
             if first:
                 self._judge_first(row)
@@ -814,6 +820,8 @@ class BatchGroup:
                                f"{len(items)} request(s) run sync")
         except asyncio.CancelledError:
             raise
+        except account_limit.RunAborted:
+            row["reason"] = account_limit.REASON  # the run was aborted: its items end in `finally` with RunAborted
         except Exception as e:  # noqa: BLE001 - whatever went wrong, the waiting calls must not hang
             if self._account_limit(e):
                 row["reason"] = account_limit.REASON
@@ -854,6 +862,7 @@ class BatchGroup:
     async def _submit(self, model_id: str, items: list) -> str:
         import openai
 
+        account_limit.check()  # defence in depth: an aborted run creates no batch
         providers = {json.dumps(batch_provider(i.kwargs), sort_keys=True) for i in items}
         if len(providers) != 1:  # the batch-wide provider block comes from one item, so all must agree
             raise _SubmitFailed("items of one batch disagree on the provider block")
@@ -881,6 +890,10 @@ class BatchGroup:
         interval, failures = POLL_START_S, 0
         client = self._client(POLL_TIMEOUT_S)
         while True:
+            if self._aborted():  # stop paying for waits after the run-wide abort
+                row["reason"] = account_limit.REASON
+                row["status"] = "aborted_account_limit"
+                return
             remaining = deadline_at - loop.time()
             at_deadline = remaining <= interval
             await asyncio.sleep(max(0.0, min(interval, remaining)))
@@ -1021,6 +1034,15 @@ class BatchGroup:
         _event(type="group", label=self.label, kind=self.kind, sync_calls=self._sync_calls,
                sync_wall_s=self._sync_wall, tiny_items=self._tiny_items,
                fallback_pool=self._limiter.snapshot())
+
+    async def drain(self) -> None:
+        """Close the group and wait for its (cancelled) batch tasks to finish. Call it where the run awaits its calls
+        (the runners do, at the end of the group's block): ``close`` itself cannot await."""
+        tasks = list(self._tasks)
+        if not self._closed:
+            self.close()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 class _SubmitFailed(Exception):
