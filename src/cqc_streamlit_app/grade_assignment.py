@@ -47,7 +47,7 @@ from cqc_cpcc.rubric_grading import (
     rubric_scores_errors,
 )
 from cqc_cpcc.utilities.AI import llm_limits, llm_progress
-from cqc_streamlit_app import execution_view, results_store, solution_view
+from cqc_streamlit_app import execution_view, requirement_editor, results_store, solution_view
 from cqc_streamlit_app.effort_recommendation_ui import preapply_for, render_effort_recommendation
 from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_cpcc.utilities.submission_validity import (
@@ -2512,19 +2512,20 @@ def _checklist_frame(checklist: RequirementChecklist) -> pd.DataFrame:
         columns=["id", "text", "weight", "solution"])
 
 
-def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist) -> Optional[RequirementChecklist]:
+def _checklist_from_editor(edited: pd.DataFrame, base: RequirementChecklist,
+                           errors: Optional[list] = None) -> Optional[RequirementChecklist]:
     """The checklist the table now describes (graded as in ``base``). A row keeps its solution
-    verdict only while its text is the text that was checked."""
+    verdict only while its text is the text that was checked. A row with a problem is left out and
+    described in ``errors`` (when given); it is never graded with."""
     old = {r.id.strip().upper(): r for r in base.requirements}
-    rows = []
-    for row in edited.to_dict("records"):
-        text = str(row.get("text") or "").strip()
-        if text and text != "nan":
-            rows.append((row, text))
-    ids = assign_ids([str(row.get("id") or "") for row, _ in rows], reserved=old)
+    rows, problems = requirement_editor.validate_rows(edited.to_dict("records"))
+    if errors is not None:
+        errors.extend(problems)
+    ids = assign_ids([row["id"] for row in rows], reserved=old)
     items = []
-    for (row, text), (rid, own) in zip(rows, ids):
-        weight = row.get("weight") if row.get("weight") in ("core", "secondary") else "core"
+    for row, (rid, own) in zip(rows, ids):
+        text = row["text"]
+        weight = row["weight"]
         # A row whose id was unsafe or already taken never inherits a real requirement's state.
         prior = old.get(rid) if own else None
         same = prior is not None and (prior.text or "").strip() == text
@@ -2600,6 +2601,10 @@ def render_requirement_checklist(instructions: str, source_id: str,
 
     base = store[key]
     st.caption(TABLE_HELP)
+    howto_rows = requirement_editor.validate_rows(_checklist_frame(base).to_dict("records"))[0]
+    if st.button("How to add your own requirement", key=f"requirement_howto_{tag}",
+                 icon=":material/help:"):
+        requirement_editor.show_how_to_dialog(howto_rows)
     st.caption("Table of requirements. Edit the text and weight here.")
     edited = st.data_editor(
         _checklist_frame(base),
@@ -2607,19 +2612,29 @@ def render_requirement_checklist(instructions: str, source_id: str,
         num_rows="dynamic",
         hide_index=True,
         column_config={
-            "id": st.column_config.TextColumn("Id", width="small", required=True),
-            "text": st.column_config.TextColumn("Requirement", width="large", required=True),
+            "id": st.column_config.TextColumn(
+                "Id", width="small", max_chars=requirement_editor.MAX_ID_CHARS,
+                help=requirement_editor.ID_HELP),
+            "text": st.column_config.TextColumn(
+                "Requirement", width="large", required=True,
+                max_chars=requirement_editor.MAX_TEXT_CHARS, help=requirement_editor.TEXT_HELP),
             "weight": st.column_config.SelectboxColumn(
-                "Weight", options=["core", "secondary"], required=True, default="core"),
+                "Weight", options=list(requirement_editor.WEIGHTS), required=True, default="core",
+                help=requirement_editor.WEIGHT_HELP),
             "solution": st.column_config.TextColumn(
                 "Solution does it", width="small", disabled=True,
                 help="Whether your solution does this requirement: Yes, No or Unclear. "
                      "You cannot edit it here."),
         },
     )
-    pre = _checklist_from_editor(edited, base)
+    row_errors: list = []
+    pre = _checklist_from_editor(edited, base, row_errors)
+    requirement_editor.render_errors(row_errors)
     if pre is None:
+        st.warning("No usable requirement is left, so requirement coverage is off for this run. "
+                   "Fix the rows above or press Re-extract.")
         return None
+    requirement_editor.render_full_text(pre.requirements, tag)
     # The choices made in the list below are kept per id, so editing a requirement or adding a row
     # never brings a removed requirement back, and a new id starts graded.
     kept = st.session_state.setdefault("requirement_graded_choices", {}).setdefault(key, {})
