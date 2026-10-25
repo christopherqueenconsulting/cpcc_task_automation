@@ -5,6 +5,74 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc8 - 2026-10-25
+
+Prerelease, on top of 0.2.0-rc7. Flowgorithm grading no longer sends the file name to the model: the app checks the
+file name locally and sends two facts instead. The preprocessing-digest prompt fences the student code. The eval
+workflows turn on OpenRouter Batch API mode. Five pull requests are listed; #479 was replaced by #481 before release
+and its alias behaviour is not in rc8.
+
+Upgrade notes:
+
+1. Flowgorithm file name (privacy and grading fairness). Before rc8 (rc6 and rc7) the real Flowgorithm file name was
+   sent to the model. rc8 stops that. The `flowgorithm-grade` prompt goes from version 2 to 3. The app reads the real
+   file name locally and sends two facts: whether the name contains a lab number (yes, no or unknown) and whether it
+   contains a name (yes, no or unknown). The two default Flowgorithm file-name rubric criteria ("Failure to include
+   student name as part of Flowgorithm file" and "Failure to include Flowgorithm lab number as part of Flowgorithm
+   file name") are decided only by those facts: yes is not deducted, no is deducted, and unknown never deducts
+   (lenient). Any other file-name criterion (extension, format, capitalization) cannot be judged and is never
+   deducted. The rubric page shows this caption: "File-name criteria are checked by a lenient local test: any word
+   counts as a name, any number as the lab number; unknown is never deducted. The file name itself is not sent to
+   the model." For instructors: any word that is not a stopword counts as a name (yes); a name made only of
+   stopwords such as "lab", or only of initials, reads unknown; neither is deducted, so name-criterion deductions will be
+   rare. Spelled-out and roman lab numbers (Lab_Three, LabII) now read as a lab number. rc8 is not fully name-free:
+   see #480 under "Not included".
+2. Re-grading. The Flowgorithm results key (`_flowgorithm_key` in `grade_assignment.py`) is built from the
+   instructions, rubric, points, model and file names and sizes; it does not contain the prompt version, and
+   Flowgorithm results are kept only in the Streamlit session. So no saved result is invalidated; a new session or
+   a restart grades with prompt v3. Restart the app after pulling so a long-lived session does not keep serving a v2 result.
+   Grades already returned are not touched.
+3. Digest prompt. `preprocessing-digest` goes from version 1 to 2: the student code goes last in the user message
+   inside a per-call fence, so text in a submission cannot pose as an instruction (injection hardening). It is used
+   only for oversized exam submissions. Output format and schema are unchanged. Checked in `grading_run_key.py` and
+   `grade_assignment.py`: the digest version is in no run key (the only prompt tag in a run key is `rubric-grading`),
+   so neither this change nor a rollback invalidates saved runs.
+4. Evaluation dataset. `flowgorithm-grade` moves to dataset v2 (28 cases; the first 24 rows are byte-identical to v1).
+   v1 stays frozen as the October calibration baseline; `model_policy.json` is unchanged.
+5. Eval workflows (maintainer; no app or grading change). #469 adds OpenRouter Batch API mode for prompt and model
+   evals, off by default in code (`CQC_EVAL_BATCH` defaults to `0`; turning it on also needs
+   `CQC_EVAL_BATCH_ALLOW_RETENTION=1`, otherwise the run aborts before any paid call). The same PR sets
+   `CQC_EVAL_BATCH: "1"` and `CQC_EVAL_BATCH_ALLOW_RETENTION: "1"` in the paid steps of `prompt-eval.yml` (A/B,
+   record and dispatch runs) and `model-eval.yml` (evaluation and cross-suite runs), so those workflows now use batch
+   mode on the synthetic datasets, with 30-day provider retention accepted by the owner (per the PR). Nothing outside
+   `src/cqc_cpcc/model_eval` imports the batch module.
+
+The Flowgorithm file-name exposure that existed on `master` between #479 and #481 (an alias in the prompt that left
+the model with no name and no lab number) is not in any release: rc7 (`43ed95b`) was cut before #479 (`d95ca06`),
+which `git merge-base --is-ancestor` confirms. No pyproject, `poetry.lock` or `docker/` change is in any of the five
+PRs (checked against the rc7 commit; the only pyproject change is this version bump), so no `poetry install` or
+sandbox rebuild is needed to move between rc7 and rc8.
+
+Not included (unmerged, each checked with `gh pr view`; next step for each: planned for the next rc):
+- #477 (draft, parked): its cost saving was not proven by the A/B.
+- #480 (open): rc8 may still send author attributes inside the Flowgorithm file body to the model until #480 merges;
+  rc8 is not fully name-free.
+- #482 (open): the `flowgorithm-grade` and `project-feedback` prompts do not have the nonce fence in rc8.
+
+Rollback to rc7 (maintainer only; documented, not run here; see "Roll back" in [docs/RELEASING.md](docs/RELEASING.md)):
+`git push --force origin 'v0.2.0-rc7^{commit}:refs/heads/release'`. Verify the release branch moved:
+`git ls-remote origin refs/heads/release` should print `43ed95ba0395f1f81b29b255909faa4ad6329a42`, and the app shows
+the version string from `pyproject.toml`. After a rollback, `flowgorithm-grade` is back to version 2 and rc7 sends the
+real file name to the model again; `preprocessing-digest` is back to version 1 (unfenced). Rolling back the code does
+not touch the eval workflows on `master`: to turn batch mode off, set `CQC_EVAL_BATCH` to `"0"` (or delete both
+batch lines) in the five workflow steps, or revert #469; that is a `.github` edit the owner makes.
+
+- Digest prompt: the student code in `preprocessing-digest` now sits last in the user message inside the per-call fence (prompt 1 to 2). Merge `e9d30d3`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/476
+- Privacy: Flowgorithm grading sends a neutral alias instead of the file name. Replaced by #481 before release; not in rc8. Merge `d95ca06`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/479
+- Flowgorithm grading fairness fix: the file name is not sent; two app-checked facts (lab number, name) are sent instead and decide the two default file-name criteria (`flowgorithm-grade` 2 to 3); the rubric page shows a caption saying so. Merge `ba33dd0`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/481
+- Flowgorithm: the lab-number fact reads spelled-out and roman numbers (Lab_Three, LabII); `flowgorithm-grade` eval dataset v2 (28 cases, adds file-name cases and a report-only `file_name_deductions` grader). Merge `06149b4`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/483
+- Evaluation: OpenRouter Batch API mode for prompt and model evals, off by default in code, switched on in the paid eval workflow steps. Eval tooling and workflow files only. Merge `99adfe5`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/469
+
 ## 0.2.0-rc7 - 2026-10-25
 
 Prerelease, on top of 0.2.0-rc6. Changes how rubric grading prompts are built (system and user messages, the
