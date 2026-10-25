@@ -744,6 +744,19 @@ def base_rule_markdown(decided: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _judge_sync_timeout(judge_model: Optional[str]) -> float:
+    """The normal request timeout of a judge call: role ``feedback`` (it only supplies defaults; the judge model
+    overrides it) at the effort the registry resolves for that model. 0 (the role-less bound still applies) when it
+    cannot be resolved."""
+    from cqc_cpcc.utilities.AI import model_registry
+
+    try:
+        resolved = model_registry.resolve("feedback", override=judge_model)
+        return batch.normal_timeout("feedback", resolved.reasoning_effort)
+    except Exception:  # noqa: BLE001 - the role-less bound still applies
+        return 0.0
+
+
 async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0: dict, judge_model: str,
                            cache, budget, workers: int, item_estimate: float = 0.0) -> list:
     """The pairwise judge's score for each case id, in the order of ``case_ids`` (None: no score).
@@ -758,6 +771,8 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
                        cases=[cases[c] for c in case_ids])
     gate = asyncio.Semaphore(batch.widen(workers, len(case_ids)) if bplan is not None else workers)
 
+    judge_timeout = _judge_sync_timeout(judge_model) if bplan is not None else 0.0
+
     with batch.group(bplan, judge_label, "judge", budget=budget, tasks=len(case_ids)) as bgroup:
         async def one(cid):
             with batch.task(bgroup):
@@ -767,6 +782,7 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
                     if bgroup is not None:
                         batch.bind_case(cases[cid])
                         batch.set_item_estimate(item_estimate)
+                        batch.set_sync_timeout(judge_timeout)
                     score, cost = await jm.pairwise(suite, cases[cid], h0[cid].payload, b0[cid].payload,
                                                     judge_model, cache)
                     budget.add(cost)
