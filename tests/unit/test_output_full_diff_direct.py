@@ -82,9 +82,9 @@ def test_render_case_diff_branches():
         ev.render_case_diff({"expected_output": "a\nb", "actual_output": "a\nc", "output_cut_by_runner": True}, scope="x")
         ev.render_case_diff({"expected_output": "same", "actual_output": "same", "diff_excerpt": "-x\n+y"}, scope="y")
         ev.render_case_diff({"diff_excerpt": "-x\n+y", "outputs_omitted": True}, scope="z")
-        ev.render_case_diff({"verdict": "values_differ"}, scope="w")
+        ev.render_case_diff({"diff_excerpt": "-x\n+y"}, scope="w")
     assert st.warnings and "+c" in st.codes[0][0] and st.codes[0][1] == "diff"
-    assert ev.OLD_RUN_NOTICE in st.captions and ev.OMITTED_NOTICE in st.captions
+    assert ev.OLD_RUN_NOTICE in st.captions and ev.OMITTED_NOTICE in st.captions and ev.NO_DIFF_NOTICE in st.captions
     assert len(st.codes) == 3
 
 

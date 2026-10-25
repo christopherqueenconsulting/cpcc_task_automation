@@ -598,6 +598,7 @@ Strings below are copied from the code. Use synthetic programs only.
     offered until the sandbox is ready." (or, where results are not saved, "...kept for this session only
     here."). The `code_runner` URL shows only that notice and reads no results.
 14. **Rollback.** `CQC_EXECUTION=off` and reload: step 1 again, and grading is as before the output check.
+
 ## Output tab: the complete diff
 
 The prompt still gets the capped `diff_excerpt` (20 lines or 1,500 characters), byte for byte as before.
@@ -605,19 +606,32 @@ The Output tab and the Solution tab show the whole diff instead. Each non-matchi
 two compared texts (`CaseResult.expected_output` and `actual_output`: ignored lines dropped, trailing
 blanks trimmed), and the page builds the whole unified diff from them (`output_compare.full_unified_diff`,
 no line or character cap). It is drawn with `st.code` in a fixed-height scrolling box with line numbers.
-A diff over 2,000 lines is collapsed behind **Show all N lines** with a 50-line preview and the count
+Two big-input guards: a pair of outputs over 5,000 lines, or more than 4,000,000 line pairs
+(`MAX_DIFF_LINES`, `MAX_DIFF_CELLS`; difflib is quadratic), is not diffed automatically. The page says so,
+shows the short excerpt and offers **Compute full diff anyway**; the result is cached in the session.
+Identical stored texts show "No differences in the stored text after normalization." A diff over 2,000 lines is collapsed behind **Show all N lines** with a 50-line preview and the count
 said out loud; nothing is cut silently. Input and expected output are shown the same way (no more
 `... (cut)`).
 
 - Bounds: the runner stops a program's stdout at 64 KB and sets `output_cut_by_runner`, which the page
-  shows as a warning. Each stored text is at most 64 KB and one student's report at most 512,000
-  characters; over either, the texts are left out, `outputs_omitted` is set and the page shows the short
+  shows as a warning. Each stored text is at most 64 KiB characters (65,536) and one student's report at most 512 KiB
+  characters (524,288); over either, the texts are left out, `outputs_omitted` is set and the page shows the short
   excerpt with a notice.
 - Runs saved before this change have only the excerpt. The page shows it with "This run was saved before
   full diffs were kept: re-run the output check for the complete diff." The new fields default to empty,
   so old results files load unchanged.
-- The stored texts stay local to the results file: not in telemetry, logs, the prompt, the feedback
-  `.docx`, write-back, the result-card exports or the hand-back ZIP (tests in
-  `tests/unit/test_output_full_diff.py`).
+- The stored texts stay local to the results file (`0600`, in a `0700` folder). Sinks and the test that
+  covers each, all in `tests/unit/test_output_full_diff.py`:
+  PostHog events (`tracked_run`, `update_run`, the BrightSpace `result_properties` callers) and logs:
+  `test_sentinel_is_not_logged_or_sent_to_telemetry_by_the_real_callers` (a real `GradingJob`, mocked
+  client, caplog at DEBUG, also `results_store.save_run`/`load_runs` and `render_case_diff`);
+  `repr` of the model: `test_case_result_repr_does_not_print_the_outputs`;
+  model prompt evidence, result-card Markdown and JSON, the feedback `.docx`, write-back items:
+  `test_sentinel_is_not_in_card_exports_docx_writeback_or_prompt`;
+  hand-back `.docx` ZIP builder, summary `.xlsx`/`.csv`, `build_feedback_html`, "Copy feedback as
+  Markdown", "Download prompt (.md)" document:
+  `test_sentinel_is_not_in_feedback_zip_summary_files_html_markdown_or_prompt_document`.
+  The Streamlit wrapper `_generate_feedback_docs_and_zip` that calls those builders: checked by reading
+  the code; not tested.
 - Rollback: revert the PR. Saved results keep the extra keys, which older code ignores. Purge as in
   step 7 of the incident path.

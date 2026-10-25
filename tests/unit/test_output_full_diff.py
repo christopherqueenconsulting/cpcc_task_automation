@@ -113,6 +113,7 @@ def test_results_store_round_trips_outputs_and_loads_old_json():
     results_store.save_run("abc123", "rubric", [("Student Alpha", _result(execution_report=report))])
     path = results_store.results_dir() / "abc123.json"
     assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert oct(results_store.results_dir().stat().st_mode & 0o777) == "0o700"
     [run_] = results_store.load_runs()
     got = run_["results"][0][1].execution_report["cases"][0]
     assert got["actual_output"] == SENTINEL and got["output_cut_by_runner"] is True
@@ -157,7 +158,7 @@ def test_a_long_diff_is_shown_in_full_in_one_scrollable_code_block():
 
 
 def test_a_huge_diff_collapses_behind_show_all_and_never_cuts_silently():
-    n = ev.MAX_AUTO_SHOWN_LINES + 500
+    n = 1900  # under the automatic diff limit; the diff itself is ~3,800 lines
     at = _app(_report_dict(expected_output=_lines(n), actual_output=_lines(n, tag="x") + "END_MARK"))
     assert not at.exception
     buttons = [b for b in at.button if b.label.startswith("Show all")]
@@ -186,7 +187,8 @@ def test_outputs_too_large_to_keep_say_so():
 
 def test_the_runner_cut_is_surfaced():
     at = _app(_report_dict(expected_output="a", actual_output="b", output_cut_by_runner=True))
-    assert any("cut by the runner" in str(w.value) for w in at.warning)
+    assert any(ev.RUNNER_CUT_NOTICE in str(w.value) for w in at.warning)
+    assert "runner" not in ev.RUNNER_CUT_NOTICE and "64 KB" in ev.RUNNER_CUT_NOTICE
 
 
 def test_program_text_stays_out_of_markdown():
@@ -219,6 +221,17 @@ def _sentinel_result():
     return _result(execution_report=_report_dict(expected_output="a", actual_output=SENTINEL))
 
 
+def _bytes_hold_sentinel(path) -> bool:
+    """True when the file, or any member of it when it is a ZIP/xlsx, holds the sentinel."""
+    raw = open(path, "rb").read()
+    if SENTINEL.encode() in raw:
+        return True
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as z:
+            return any(SENTINEL.encode() in z.read(n) for n in z.namelist())
+    return False
+
+
 def test_sentinel_is_not_in_card_exports_docx_writeback_or_prompt():
     from cqc_cpcc.feedback_doc_generator import generate_student_feedback_doc
     from cqc_cpcc.result_card_export import result_card_json, result_card_markdown
@@ -237,14 +250,124 @@ def test_sentinel_is_not_in_card_exports_docx_writeback_or_prompt():
     assert SENTINEL not in "\n".join(execution_evidence_section(plan, report, "n"))
 
 
-def test_sentinel_is_not_logged_or_sent_to_telemetry(caplog):
+def test_sentinel_is_not_in_feedback_zip_summary_files_html_markdown_or_prompt_document(tmp_path):
+    import pandas as pd
+    from cqc_cpcc.feedback_doc_generator import generate_student_feedback_doc
+    from cqc_cpcc.prompt_export import prompt_markdown
+    from cqc_cpcc.student_feedback_builder import build_student_feedback
+    from cqc_cpcc.utilities import brightspace_writeback as bw
+    from cqc_streamlit_app import grade_assignment as ga
+    from cqc_streamlit_app.utils import export_grading_summary_to_excel
+    result = _sentinel_result()
+    doc = tmp_path / "Feedback.docx"
+    doc.write_bytes(generate_student_feedback_doc("Student Alpha", "CSC151", "Project 1", result, {"date": "2026-10-25"}))
+    zip_path = bw.build_feedback_docs_zip({"101 - Ada Example": str(doc)}, str(tmp_path / "docs.zip"))
+    assert zip_path and not _bytes_hold_sentinel(zip_path)
+    rows = ga._summary_rows([("Student Alpha", result)], [])
+    xlsx, csv = export_grading_summary_to_excel(pd.DataFrame(rows), include_csv=True)
+    assert not _bytes_hold_sentinel(xlsx) and not _bytes_hold_sentinel(csv)
+    html = bw.build_feedback_html(result.overall_feedback, result.criteria_results, errors=result.detected_errors)
+    assert SENTINEL not in html
+    # "Copy feedback as Markdown" copies build_student_feedback(result); "Download prompt (.md)" is
+    # prompt_markdown(result.llm_request), whose messages hold the evidence section built from the report.
+    assert SENTINEL not in build_student_feedback(result, "Student Alpha")
+    plan = make_plan()
+    raw = {k: v for k, v in result.execution_report.items() if k != "gate"}
+    evidence = "\n".join(execution_evidence_section(plan, ExecutionReport.model_validate(
+        {**raw, "plan_hash": plan.plan_hash}), "n"))
+    request = {"model": "m", "messages": [{"role": "user", "content": "grade this\n" + evidence}]}
+    assert SENTINEL not in prompt_markdown(request, "Student Alpha")
+
+
+def _submissions(tmp_path):
+    from cqc_cpcc.utilities.zip_grading_utils import StudentSubmission
+    f = tmp_path / "A.java"
+    f.write_text("class A {}")
+    return {"Student Alpha": StudentSubmission(student_id="Student Alpha", student_name="", files={f.name: str(f)})}
+
+
+def test_sentinel_is_not_logged_or_sent_to_telemetry_by_the_real_callers(tmp_path, caplog):
+    """Real GradingJob (telemetry update_run, tracked_run, results_store.save_run), the real
+    BrightSpace result_properties callers, load_runs and render_output_check, with a live mock client."""
+    from cqc_cpcc import grading_job
+    from cqc_cpcc.grading_job import GradingJob
+    from cqc_streamlit_app import grade_assignment as ga
+    from cqc_cpcc.utilities import brightspace_submissions as bs
+    from cqc_cpcc.utilities import brightspace_writeback as bw
     from cqc_cpcc.utilities.AI import posthog_telemetry as tel
+    result = _sentinel_result()
     sent = []
+
+    async def grade(student_submission, **kw):
+        return result
+
     with caplog.at_level(logging.DEBUG), patch.object(tel, "_get_client") as client:
         client.return_value.capture.side_effect = lambda **kw: sent.append(kw)
-        tel._capture("evt", {"n": 1})  # the client is live, so a leak would land in ``sent``
-        exe = run(make_plan(), FakeRunner(student={"T1": SENTINEL + "\n"}))
-        tel.update_run(students=1, succeeded=1)
-        tel.capture_event("cqc_probe", {"students": 1})
-    assert exe.report.cases[0].actual_output == SENTINEL
-    assert sent and SENTINEL not in caplog.text and SENTINEL not in repr(sent)
+        job = GradingJob("abc123", _submissions(tmp_path), {"model_name": "m"}, grade=grade, deadline_s=30,
+                         concurrency=1, save=ga._save_job_progress, load=results_store.load_run)
+        grading_job.start_job(job)
+        assert job.wait(15)
+        fetch = bs.BrightSpaceFetchResult(zip_path="x.zip", route="assignment", students={"Student Alpha": ["A.java"]},
+                                          warnings=[], instructions="Do it")
+        report = bw.GradeWriteReport(route="assignment", dry_run=True, outcomes=[
+            bw.StudentWriteOutcome(student_key="101 - Ada Example", display_name="Ada Example", matched=True)])
+        tel.tracked_run("brightspace_fetch", result_properties=bs._fetch_run_properties)(lambda: fetch)()
+        tel.tracked_run("brightspace_writeback", result_properties=bw._writeback_run_properties)(lambda: report)()
+        saved = results_store.load_runs()
+        assert saved and SENTINEL in repr(saved[0]["results"][0][1].execution_report)  # it IS stored
+        _app(result.execution_report)  # render_output_check (AppTest) logs nothing of it either
+        ev.render_case_diff(result.execution_report["cases"][0], scope="x")
+    assert len(sent) >= 3  # the client was live: a leak would have landed here
+    assert SENTINEL not in repr(sent) and SENTINEL not in caplog.text
+
+
+def test_case_result_repr_does_not_print_the_outputs():
+    case = CaseResult(case_id="T1", verdict="values_differ", expected_output=SENTINEL, actual_output=SENTINEL)
+    assert SENTINEL not in repr(case) and SENTINEL not in str(case)
+    assert case.model_dump()["actual_output"] == SENTINEL  # still stored
+
+
+# --------------------------------------------------------------------------- #
+# Large outputs: the diff is not computed on every rerun
+# --------------------------------------------------------------------------- #
+def _hostile_lines(n, seed):
+    import random
+    rnd = random.Random(seed)
+    return "\n".join(f"line {rnd.randrange(99)}" for _ in range(n))
+
+
+def test_a_large_output_is_not_diffed_until_the_button_is_pressed():
+    import time
+    big = ev.MAX_DIFF_LINES * 6  # ~30k lines drawn from 99 distinct lines
+    report = _report_dict(expected_output=_hostile_lines(big, 1), actual_output=_hostile_lines(big, 2))
+    with patch.object(oc.difflib, "unified_diff", wraps=oc.difflib.unified_diff) as spy:
+        started = time.monotonic()
+        at = _app(report)
+        assert time.monotonic() - started < 5
+        assert not at.exception
+        assert spy.call_count == 0  # the ordinary rerun never reached difflib
+        assert any(ev.LARGE_OUTPUT_NOTICE in str(c.value) for c in at.caption)
+        assert [c.value for c in at.code if c.language == "diff"] == ["-a\n+b"]  # the capped excerpt
+        buttons = [b for b in at.button if b.label == "Compute full diff anyway"]
+        assert len(buttons) == 1
+        # Stand in for the quadratic part so the test stays quick; the point is when it runs.
+        with patch.object(ev, "full_unified_diff", return_value=["--- expected", "+++ actual", "+END_BIG"]) as full:
+            buttons[0].click()
+            at.run()
+            assert full.call_count == 1
+            at.run()  # a later rerun uses the cached result
+            assert full.call_count == 1
+    assert any("+END_BIG" in c.value for c in at.code if c.language == "diff")
+
+
+def test_equal_texts_say_so_and_skip_difflib():
+    with patch.object(oc.difflib, "unified_diff") as spy:
+        at = _app(_report_dict(expected_output="same\nlines", actual_output="same\nlines"))
+    assert spy.call_count == 0
+    assert any(ev.NO_DIFF_NOTICE in str(c.value) for c in at.caption)
+
+
+def test_hidden_characters_incl_word_joiner_and_bom_are_blanked():
+    from cqc_cpcc.execution_evidence import clean_block
+    text = "a⁠b⁤c﻿d᠎e"
+    assert clean_block(text) == "a b c d e"

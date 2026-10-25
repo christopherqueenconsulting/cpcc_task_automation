@@ -78,6 +78,16 @@ PREVIEW_LINES = 50
 #: Blocks taller than this many lines scroll inside a box of that height instead of growing the page.
 SCROLL_AFTER_LINES = 18
 SCROLL_HEIGHT_PX = 380
+#: Automatic diff limits. difflib's worst case is quadratic in the line counts; 4,000,000 line pairs
+#: (e.g. 2,000 x 2,000 lines) diff in well under a second, while ordinary assignments (tens to hundreds
+#: of lines) are far below it. Bigger pairs wait for a button press.
+MAX_DIFF_LINES = 5000
+MAX_DIFF_CELLS = 4_000_000
+LARGE_OUTPUT_NOTICE = ("This output is large; the full diff is not computed automatically. The short excerpt is "
+                       "shown below.")
+RUNNER_CUT_NOTICE = ("This program printed more than 64 KB. Only the first 64 KB was kept, so the "
+                     "differences below stop there.")
+NO_DIFF_NOTICE = "No differences in the stored text after normalization."
 OLD_RUN_NOTICE = ("This run was saved before full diffs were kept: re-run the output check for the complete diff.")
 OMITTED_NOTICE = ("The full outputs were too large to keep with the saved run, so only the short excerpt is "
                   "shown. Run the program yourself for the complete output.")
@@ -630,18 +640,41 @@ def show_text(text: Optional[str], *, scope: str, language: str = "text", empty:
             height=SCROLL_HEIGHT_PX if lines > SCROLL_AFTER_LINES else "content")
 
 
+def _diff_lines(expected: str, actual: str, scope: str, r: dict) -> Optional[list]:
+    """The full diff, or None when the texts are too big to diff on every rerun.
+
+    difflib is quadratic in the worst case and runs in the page's thread, so a big pair is diffed only
+    after **Compute full diff anyway**, and the result is kept in ``st.session_state`` (keyed by scope
+    and a hash of both texts) so later reruns do not repeat it."""
+    n, m = expected.count("\n") + 1, actual.count("\n") + 1
+    if n <= MAX_DIFF_LINES and m <= MAX_DIFF_LINES and n * m <= MAX_DIFF_CELLS:
+        return full_unified_diff(expected, actual)
+    digest = hashlib.sha1(f"{len(expected)}|{expected}|{actual}".encode("utf-8", "replace")).hexdigest()[:16]
+    key = f"fulldiff_{hashlib.sha1(scope.encode()).hexdigest()[:8]}_{digest}"
+    cached = st.session_state.get(key)
+    if cached is None:
+        st.caption(LARGE_OUTPUT_NOTICE)
+        if st.button("Compute full diff anyway", key=key + "_btn", icon=":material/difference:"):
+            cached = st.session_state[key] = full_unified_diff(expected, actual)
+    return cached
+
+
 def render_case_diff(r: dict, *, scope: str) -> None:
     """The differences of one non-matching case: the complete diff built here from the stored outputs,
     or (runs saved before they were kept) the short excerpt with a notice."""
     expected, actual = r.get("expected_output") or "", r.get("actual_output") or ""
     if r.get("output_cut_by_runner"):
-        st.warning("The program's output was cut by the runner at 64 KB, so the diff below stops where "
-                   "the output stopped.", icon=":material/content_cut:")
+        st.warning(RUNNER_CUT_NOTICE, icon=":material/content_cut:")
     if expected or actual:
-        diff = full_unified_diff(expected, actual)
-        if diff:
+        if expected == actual:
+            st.caption(NO_DIFF_NOTICE)
+            return
+        diff = _diff_lines(expected, actual, scope, r)
+        if diff is not None:
             st.caption(f"Differences (- expected, + this program), complete: {len(diff):,} lines")
             show_text("\n".join(diff), scope=scope + "|diff", language="diff", line_numbers=True, wrap=False)
+            return
+        if not r.get("diff_excerpt"):
             return
     if r.get("diff_excerpt"):
         st.caption("Differences (- expected, + this program), short excerpt")
