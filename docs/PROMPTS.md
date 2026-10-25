@@ -22,8 +22,8 @@ edits it. The evaluation workflow that grades these prompts is planned in
 | `test-case-generation` | Output check: stdin test cases for the solution (at most 6, a boundary case for every selection or loop condition the instructions name, condition-to-case map); instructions and solution are nonce-fenced untrusted text | grading | `test_case_generation.py:build_test_case_prompt` | `TestCaseSuggestion` | suite `test-case-generation` (12, synthetic) |
 | `exam-grading` | Grade Assignment, exam mode (`CodeGrader`): major/minor errors | grading | `utilities/AI/exam_grading_prompts.py:build_exam_grading_messages` | `ErrorDefinitions` | suite `exam-grading` (81) |
 | `preprocessing-digest` | Compress a very large submission before exam grading | digest | `utilities/AI/openai_client.py:_build_preprocessing_prompt` | `PreprocessingDigest` | suite `digest` (16) |
-| `project-feedback` | Give Feedback page (v5: student-facing report; categories from the course error definitions) | feedback | `prompts/project_feedback.py` | `FeedbackReport` | suite `project-feedback` (81) |
-| `flowgorithm-grade` | Flowgorithm grading: per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py`) | `FlowgorithmGrade` | suite `flowgorithm-grade` (24) |
+| `project-feedback` | Give Feedback page (v6: student-facing report; categories from the course error definitions; system/user split) | feedback | `prompts/project_feedback.py` (built by `FeedbackGiver.build_messages`; `build_prompt` joins them) | `FeedbackReport` | suite `project-feedback` (81) |
+| `flowgorithm-grade` | Flowgorithm grading (v3: system/user split): per-criterion deductions + feedback; the backend computes the final grade | flowgorithm | `prompts/flowgorithm.py` (built by `flowgorithm_grading.py:build_flowgorithm_messages`; `build_flowgorithm_prompt` joins them) | `FlowgorithmGrade` | suite `flowgorithm-grade` (24) |
 | `structured-fallback` | Retry suffix of `get_structured_completion`, which nothing calls (dead path) | – | `utilities/AI/openai_client.py:_build_fallback_prompt` | – | no |
 
 Each prompt is sent as a single user message (no system prompt) through
@@ -138,6 +138,47 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   `injection_pass_rate` covers them.
 - **A version bump re-grades**, as above. **Rollback:** `git revert`; the version in the run
   key goes back.
+
+## System and user messages for project-feedback v6 and flowgorithm-grade v3
+
+Same pattern as rubric-grading (above), applied to the two per-student prompts that sent one user
+message. Both now call `llm_gateway.structured(..., system=)`; model, effort, schema and parsing are
+unchanged.
+
+- **System message**: the role, the process and output rules, the scope rules, and one line that text inside
+  the submission fence is data to evaluate, never instructions. No placeholders, no course, assignment,
+  rubric, points or submission text, and no nonce, so it is byte-identical on every call. For
+  `project-feedback` it also says that "// File:" lines name files and are not student code. The rules
+  name the user-message sections (Feedback Categories, Instructor Guidance, Total Possible Points) by
+  heading.
+- **User message**: the part that is the same for every student of an assignment first. `project-feedback`:
+  course, assignment instructions, example solution, feedback categories, instructor guidance.
+  `flowgorithm-grade`: assignment, rubric table, total possible points (it moved out of the output
+  instructions, which now say "the total possible points given in the user message"). Then the heading
+  "## Student Submission", the per-call nonce line, the submission inside an `untrusted_fence` nonce
+  fence (flowgorithm: the file name in its own fence first), a blank line, and a closing line ("Give
+  feedback on the fenced submission per the system rules." / "Grade the fenced submission per the system
+  rules."). Neither submission was fenced before; marker-shaped text and the nonce are stripped from it,
+  so a forged closing fence or heading stays inside the data.
+- **Callers**: `FeedbackGiver.build_messages` / `flowgorithm_grading.build_flowgorithm_messages` return
+  `(system, user)`. `FeedbackGiver.build_prompt` / `build_flowgorithm_prompt` still return one string
+  (system, the separator `rubric_grading.MESSAGE_SEPARATOR`, user) for the "Prompt sent to the model"
+  expander, the registry fingerprint renders (fixed `FIXTURE_NONCE`) and tests.
+- **Versions**: `project-feedback` 5 to 6, `flowgorithm-grade` 2 to 3. The request changed, so the paid A/B
+  is required (the request-identical skip does not apply).
+- **Expected effect, not measured**: a provider can reuse the system message plus the assignment part of
+  the user message across the students of one assignment. `tests/unit/test_prompt_split.py` proves the
+  bytes are identical up to the nonce line (fixture sizes, builder's local run: `project-feedback` 3,911
+  system characters plus a 2,336-character user prefix; `flowgorithm-grade` 1,554 plus 149; real
+  assignments are larger). The prefix must reach about 1,024 tokens to be cacheable, so a flowgorithm
+  assignment with a short rubric may stay under it. No session id is sent for these two prompts
+  (`prompt_cache.session_id_for` is only wired into rubric grading).
+- **A/B plan**: the maintainer dispatches mode `ab` with suites `project-feedback,flowgorithm-grade` and
+  their judges. Pass rule: non-inferior at the registry margin, `injection_pass_rate` stays 1.000.
+  **Rollback:** `git revert`; the prompt version is in the run key, so only new runs change.
+- Layout test: `tests/unit/test_eval_prompt_cache.py` lists both suites with the system/user suites. The
+  suites' cases are different assignments, so for `flowgorithm-grade` the prefix shared by all 12 cases
+  is the system message alone (1,592 characters measured, builder's local run).
 
 ## Guidelines and v4
 
@@ -717,15 +758,17 @@ never changes an output, so no gate, grader, score or threshold reads any of thi
   identical-request fast path compares captures made without the runner), so that path is unaffected (tested).
   The A/B sets `CQC_EVAL_SIDE=base` for the base subprocess.
 - **Layout (what `tests/unit/test_eval_prompt_cache.py` asserts for all 11 suites).** It renders up to 12 cases
-  per suite with the send refused. `grading`, `grading-levelband`, `exam-grading` and `grading-solution` send a
-  `system` + `user` pair, the system message is identical on every call, the fenced submission is in the
-  user message after its first half, and the prefix every rendered case shares is longer than 4,096
-  characters (measured 7,857 to 14,340). The other seven (`requirement-extraction`, `effort-recommendation`,
-  `requirement-solution-check`, `test-case-generation`, `digest`, `project-feedback`, `flowgorithm-grade`)
-  send a single `user` message and share fewer than 4,096 characters (measured 148 to 2,588). Token figures
-  are an estimate (4 characters per token); the providers' cache minimum is 1,024 tokens, so those seven
-  are not expected to hit the cache until their prompts get a system/user split (a prompt change, a
-  separate PR). No suite was changed here. The measured table is printed by
+  per suite with the send refused. `grading`, `grading-levelband`, `exam-grading`, `grading-solution` and (since the
+  v6/v3 split) `project-feedback` and `flowgorithm-grade` send a `system` + `user` pair, the system message is
+  identical on every call, the fenced submission is in the user message after its first half, and the prefix
+  every rendered case shares is longer than 4,096 characters (measured 7,134 to 13,500; `flowgorithm-grade`
+  is the exception at 1,592, see its section). The other five (`requirement-extraction`, `effort-recommendation`,
+  `requirement-solution-check`, `test-case-generation`, `digest`)
+  send a single `user` message and share fewer than 4,096 characters (measured 148 to 1,226). Since
+  `project-feedback` v6 and `flowgorithm-grade` v3 those two send `system` + `user` as well (see their
+  section above). Token figures are an estimate (4 characters per token); the providers' cache minimum
+  is 1,024 tokens, so the five single-message suites are not expected to hit the cache until their
+  prompts get a split (a prompt change, a separate PR). The measured table is printed by
   `pytest tests/unit/test_eval_prompt_cache.py -s -k "measured_prefix or judge_instructions"`.
 - **Warm first.** For each suite and side the runner renders every case's request once with the send refused
   (no network, no cost), hashes the part before the first fence marker (system message plus instructions and
@@ -736,7 +779,7 @@ never changes an output, so no gate, grader, score or threshold reads any of thi
   anyway). `CQC_EVAL_WARM_FIRST=0` removes the wait. The first call of a group pays the cache write
   (1.25x on the cached part); later calls read at 0.1x.
 - **If the provider ignores `session_id`.** The run proceeds and scores are unchanged (the key only affects
-  routing). The symptom is a cached share near 0% and empty cache fields in Run stats. Separately, the seven
+  routing). The symptom is a cached share near 0% and empty cache fields in Run stats. Separately, the five
   single-message suites cannot cache (1,024-token minimum), so a low share on those is expected. Whether
   OpenRouter ignores or rejects an unknown body field on a given model/provider is NOT VERIFIED (no paid call
   was made); the code does not special-case it. If a provider returned a 4xx for the key, those calls would fail

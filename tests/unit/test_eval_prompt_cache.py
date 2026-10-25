@@ -382,9 +382,13 @@ class TestModelEvalPath:
 class TestLayoutOfTheRealSuites:
     """Eval requests are built by the app's own builders: static prefix first, fenced submission last."""
 
-    SYSTEM_SUITES = ("grading", "grading-levelband", "exam-grading", "grading-solution")
+    SYSTEM_SUITES = ("grading", "grading-levelband", "exam-grading", "grading-solution",
+                     "project-feedback", "flowgorithm-grade")
     SINGLE_SUITES = ("requirement-extraction", "effort-recommendation", "requirement-solution-check",
-                     "test-case-generation", "digest", "project-feedback", "flowgorithm-grade")
+                     "test-case-generation", "digest")
+    #: System/user suites whose cases are different assignments, so the shared prefix across the
+    #: suite is the system message alone (it can be under the 4,096-character line).
+    PER_ASSIGNMENT_SUITES = ("flowgorithm-grade",)
     CASES_PER_SUITE = 12
 
     @pytest.fixture(scope="class")
@@ -463,7 +467,13 @@ class TestLayoutOfTheRealSuites:
                 assert "order" not in r["extra_body"]["provider"] and "session_id" not in r["extra_body"]
             if sid in self.SYSTEM_SUITES:
                 assert roles == {("system", "user")} and len(system) == 1
-                assert shared > cs.MIN_PREFIX_CHARS, (sid, shared)
+                if sid in self.PER_ASSIGNMENT_SUITES:
+                    # The suite's cases are different assignments: only the system message is common to
+                    # all of them. The cache gain is per assignment (the user prefix is byte-identical
+                    # across the students of one assignment, see tests/unit/test_prompt_split.py).
+                    assert shared >= len(next(iter(system))), (sid, shared)
+                else:
+                    assert shared > cs.MIN_PREFIX_CHARS, (sid, shared)
             else:
                 assert roles == {("user",)}
                 assert shared < cs.MIN_PREFIX_CHARS, (sid, shared)
@@ -478,10 +488,12 @@ class TestLayoutOfTheRealSuites:
             assert "<<<UNTRUSTED" in kwargs["messages"][1]["content"]
         assert len({r["messages"][0]["content"] for r in requests}) == 1  # system message is identical per call
         keys = {cs.prefix_key(r["messages"]) for r in requests}
-        assert None not in keys
+        if sid not in self.PER_ASSIGNMENT_SUITES:  # their fixture prefixes are under the 4,096-character line
+            assert None not in keys
         for kwargs in requests:
             user = kwargs["messages"][1]["content"]
-            assert user.index("<<<UNTRUSTED") > len(user) // 2
+            if sid not in self.PER_ASSIGNMENT_SUITES:
+                assert user.index("<<<UNTRUSTED") > len(user) // 2
 
     def test_the_judge_instructions_are_far_below_a_cache_minimum(self):
         """Estimate (4 bytes per token) of the pairwise judge template without its placeholders: ~135 tokens."""

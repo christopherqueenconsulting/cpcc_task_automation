@@ -121,7 +121,7 @@ async def test_feedback_status_extender_builds_prompt_and_saves_docx(mocker):
     mocker.patch.object(page, "on_download_click")
     giver = FeedbackGiver(course_name="CSC 151", assignment_instructions="Print Hello",
                           assignment_solution="class Hello {}", extra_guidance="Hints only.")
-    build = mocker.spy(giver, "build_prompt")
+    build = mocker.spy(giver, "build_messages")
 
     async def _fake_generate(submission, callback=None):
         from cqc_cpcc.project_feedback import FeedbackReport
@@ -138,7 +138,7 @@ async def test_feedback_status_extender_builds_prompt_and_saves_docx(mocker):
         feedback_giver=giver, course_name="CSC 151", selected_model="m", selected_temperature=0.3)
     assert name == "Student_A.docx"
     assert Path(path).stat().st_size > 0  # a real .docx was written
-    assert "Hints only." in build.spy_return
+    assert "Hints only." in build.spy_return[1]  # (system, user): the guidance is in the user message
 
 
 @pytest.mark.unit

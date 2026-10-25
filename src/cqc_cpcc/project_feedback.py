@@ -6,7 +6,8 @@ from typing import Optional, Annotated, List, Literal, TypeVar
 
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.exam_review import JavaCode
-from cqc_cpcc.utilities.AI import llm_gateway
+from cqc_cpcc.utilities.AI import llm_gateway, untrusted_fence
+from cqc_cpcc.rubric_grading import MESSAGE_SEPARATOR
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import *
 from cqc_cpcc.utilities.logger import logger
@@ -521,20 +522,48 @@ class FeedbackGiver:
     def category_name(self, category_id: str) -> str:
         return next((c.name for c in self.categories if c.id == category_id), category_id)
 
-    def build_prompt(self, student_submission: str) -> str:
-        """The exact prompt ``generate_feedback`` sends for this submission."""
-        from cqc_cpcc.prompts.project_feedback import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
+    def build_messages(self, student_submission: str, nonce: Optional[str] = None) -> tuple[str, str]:
+        """The ``(system, user)`` messages ``generate_feedback`` sends for this submission.
 
+        The system message is instruction text only and identical on every call. The user message
+        opens with what is the same for every student of the assignment (course, instructions,
+        example solution, categories, guidance), then the per-call nonce line and the submission
+        inside a nonce fence (``utilities/AI/untrusted_fence`` strips marker-shaped text from it),
+        then a closing line. ``nonce`` fixes the fence nonce (prompt fingerprints).
+        """
+        from cqc_cpcc.prompts.project_feedback import (
+            CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI,
+            FEEDBACK_CLOSING_LINE,
+            FEEDBACK_USER_STATIC_TEMPLATE,
+        )
+
+        nonce = nonce or untrusted_fence.new_nonce()
         categories = "\n".join(f"- {c.id} | {c.name} | {c.severity} | {c.description}"
                                for c in self.categories) or "N/A"
-        return CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
+        static = FEEDBACK_USER_STATIC_TEMPLATE.strip().format(
             course_name=self.course_name,
             assignment=self.assignment_instructions,
             solution=self.assignment_solution,
-            submission=student_submission,
             feedback_categories=categories,
             extra_guidance=self.extra_guidance or "None",
         )
+        user = "\n".join([
+            static,
+            untrusted_fence.instruction_line(nonce),
+            untrusted_fence.fence("Submission", student_submission, nonce),
+            "",
+            FEEDBACK_CLOSING_LINE,
+        ])
+        return CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.strip(), user
+
+    def build_prompt(self, student_submission: str, nonce: Optional[str] = None) -> str:
+        """The whole request as one string: system message, separator, user message.
+
+        What the page shows in "Prompt sent to the model" and what the prompt registry fingerprints;
+        ``generate_feedback`` sends the two messages separately (see :meth:`build_messages`).
+        """
+        system, user = self.build_messages(student_submission, nonce=nonce)
+        return system + MESSAGE_SEPARATOR + user
 
     async def generate_feedback(self, student_submission: str, callback=None) -> FeedbackReport:
         """Generate feedback using OpenAI structured completion.
@@ -547,9 +576,11 @@ class FeedbackGiver:
             The feedback report for this submission. Nothing is stored on the instance,
             so one giver can serve concurrent students without their feedback crossing.
         """
+        system, prompt = self.build_messages(student_submission)
         report = await llm_gateway.structured(
             role="feedback",
-            prompt=self.build_prompt(student_submission),
+            prompt=prompt,
+            system=system,
             schema_model=FeedbackReport,
             override=self.model_name,
             prompt_id="project-feedback",

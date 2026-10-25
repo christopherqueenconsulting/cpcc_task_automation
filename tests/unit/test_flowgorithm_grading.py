@@ -21,7 +21,7 @@ def _grade(deductions=(("Comments", 5),), final=45):
 
 def test_prompt_contains_every_input():
     prompt = fg.build_flowgorithm_prompt("ASSIGN", "| Criterion | Points |", "SUBMISSION", "Sum.fprg", "50")
-    for text in ("ASSIGN", "| Criterion | Points |", "SUBMISSION", "Sum.fprg", "(50)"):
+    for text in ("ASSIGN", "| Criterion | Points |", "SUBMISSION", "Sum.fprg", "## Total Possible Points\n50"):
         assert text in prompt
     assert "{" not in prompt.replace("{}", "")  # every placeholder filled
 
@@ -54,6 +54,11 @@ async def test_grade_calls_gateway_on_flowgorithm_role(mocker):
     assert kwargs["override"] == "openai/x"
     assert kwargs["use_auto_route"] is False
     assert kwargs["prompt_id"] == "flowgorithm-grade"
+    # The call sends the split messages: system first, the fenced submission in the user message.
+    assert "Step 1: Summarize the requirements" in kwargs["system"]
+    assert "<<<UNTRUSTED" not in kwargs["system"].replace("<<<UNTRUSTED ...", "")
+    assert kwargs["prompt"].startswith("## Assignment\nA\n")
+    assert "\nS\n<<<UNTRUSTED SUBMISSION" in kwargs["prompt"]
 
 
 async def test_auto_route_model_turns_on_auto_routing(mocker):
