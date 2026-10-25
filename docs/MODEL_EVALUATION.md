@@ -162,6 +162,10 @@ published: a call that ends on an account limit stores only `account_limit (HTTP
 only its status and the fixed reason, and every other stored error message has links, addresses, amounts,
 mentions, `#NN` references and markup stripped. A local run can add the redacted gateway text to its log with
 `CQC_EVAL_LOG_GATEWAY_MESSAGE=1` (ignored when `GITHUB_ACTIONS` is set).
+Any error the gateway answered (it has an HTTP status) is logged as its status only, in the runner, the judges and the
+A/B alike; the base branch's own log and saved rows are scrubbed on this side before they are uploaded; a unit test
+fails if a logger or print call anywhere in `model_eval` formats exception text without `log_text`, `redact_message`
+or `scrub_log`.
 
 How the workflow sees it: `model_eval run` exits 3 and the `Run evaluation` step maps any non-zero exit to `exit 1`,
 so the `evaluate` job simply fails; the exit code 3 itself is not visible. An abort is told apart only by the

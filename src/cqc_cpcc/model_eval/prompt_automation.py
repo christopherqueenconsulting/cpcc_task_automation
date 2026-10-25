@@ -407,14 +407,35 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
             _live_base.discard(proc)
     log_dir = out / suite_id
     log_dir.mkdir(parents=True, exist_ok=True)
-    (log_dir / "run.log").write_text(f"{stdout}\n--- stderr ---\n{stderr}", encoding="utf-8")
+    # The base branch's own (older) code wrote this output: the log and the saved rows go into a public artifact, so
+    # an SDK error body, links, addresses and the like are scrubbed here, on this side.
+    (log_dir / "run.log").write_text(
+        f"{error_detail.scrub_log(stdout)}\n--- stderr ---\n{error_detail.scrub_log(stderr)}", encoding="utf-8")
+    raw = out / suite_id / "raw_outputs.jsonl"
+    _scrub_rows(raw)
     if timed_out or proc.returncode != 0:
         print(f"[{suite_id}] base run {'timed out' if timed_out else f'exited {proc.returncode}'}; "
               f"log in {log_dir / 'run.log'}")
-        print((stdout or "")[-2000:], (stderr or "")[-2000:])
+        print(error_detail.scrub_log(stdout, 2000), error_detail.scrub_log(stderr, 2000))
         return None
-    raw = out / suite_id / "raw_outputs.jsonl"
     return raw if raw.exists() else None
+
+
+def _scrub_rows(raw: Path) -> None:
+    """Rewrite a base run's ``raw_outputs.jsonl`` with every ``error_detail`` message made publishable."""
+    try:
+        lines = raw.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    out = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            out.append(line)
+            continue
+        out.append(json.dumps(error_detail.scrub_row(row), sort_keys=True) if isinstance(row, dict) else line)
+    raw.write_text("".join(f"{line}\n" for line in out), encoding="utf-8")
 
 
 def prompts_unchanged(suite_id: str, base_ref: str) -> bool:
@@ -700,7 +721,7 @@ def base_rule_markdown(decided: dict) -> str:
                      + ", ".join(f"`{s}`" for s in sorted(required)))
         for suite_id, r in decided["suites"].items():
             for reason in r.get("reasons", []):
-                lines.append(f"- `{suite_id}`: {_safe(reason)}")
+                lines.append(f"- `{suite_id}`: {_safe(error_detail.redact_message(reason))}")
     else:
         body = ab_markdown({"base_ref": decided["base_sha"][:7], "status": decided["status"],
                             "suites": decided["suites"]})
@@ -1537,8 +1558,9 @@ def _base_capture_once(worktree: Path, suite_ids: list, file: Path, timeout: int
     except subprocess.TimeoutExpired as e:
         raise _CaptureTimeout() from e
     if returncode != 0:
-        tail = (stderr or "").strip().splitlines()[-1:] or [""]
-        print(f"base capture of {','.join(suite_ids)} exited {returncode}: {(stderr or '')[-STDERR_CAP:]}")
+        safe = error_detail.scrub_log(stderr)
+        tail = safe.strip().splitlines()[-1:] or [""]
+        print(f"base capture of {','.join(suite_ids)} exited {returncode}: {safe[-STDERR_CAP:]}")
         raise RuntimeError(f"exit {returncode}: {tail[0][:120]}")
     try:
         data = json.loads(file.read_text(encoding="utf-8"))
@@ -1581,7 +1603,7 @@ def capture_base(worktree: Path, suite_ids: list, tmp: Path, timeout: int = BASE
         print("the base capture timed out")
         return captures, {**failures, **{s: "base capture failed: timed out" for s in known}}
     except RuntimeError as e:
-        first_error = str(e)
+        first_error = error_detail.redact_message(str(e), 160)  # reaches requests.json: nothing unredacted
         print(f"base capture of all suites failed ({first_error}); retrying each suite alone")
     if len(known) == 1:  # the retry would repeat the same run
         failures[known[0]] = f"base capture failed: {first_error}"
@@ -1593,7 +1615,7 @@ def capture_base(worktree: Path, suite_ids: list, tmp: Path, timeout: int = BASE
         except _CaptureTimeout:
             return suite_id, None, "base capture failed: timed out"
         except Exception as err:  # noqa: BLE001 - any failure of this suite fails this suite closed
-            return suite_id, None, f"base capture failed: {err}"
+            return suite_id, None, f"base capture failed: {error_detail.redact_message(str(err), 160)}"
 
     with ThreadPoolExecutor(max_workers=max(1, min(pool, len(known)))) as ex:
         for suite_id, data, reason in ex.map(one, known):

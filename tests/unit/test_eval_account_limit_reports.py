@@ -96,11 +96,23 @@ class TestPublicWording:
                            ("stdout", capsys.readouterr().out)):
             assert not [leak for leak in LEAKS if leak in text], name
 
-    def test_the_not_run_reasons_of_the_base_check_are_neutralised(self):
-        decided = {"combined_status": "not-run", "status": "not-run", "base_sha": "abc1234", "head_sha": "d", "required": ["digest"],
-                   "pr_status": None, "suites": {"digest": {"reasons": ["ping @someone [x](http://e.com)"]}}}
+    def test_the_not_run_reasons_of_the_base_check_carry_none_of_the_fragments(self):
+        fed = ("x <img src=y> http://e.com a@b.co $50.00 #12 `code` [x](http://e.com) *bold* | col")
+        fragments = ("<img", "http", "e.com", "$50.00", "a@b.co", "`code`", "#12", "[x](", "*bold*", "| col")
+        assert all(f in fed for f in fragments) and all(f in LEAKS for f in fragments)
+        decided = {"combined_status": "not-run", "status": "not-run", "base_sha": "abc1234", "head_sha": "d",
+                   "required": ["digest"], "pr_status": None, "suites": {"digest": {"reasons": [fed]}}}
         md = pa.base_rule_markdown(decided)
-        assert "](" not in md and "@someone" not in md.replace("@\u200b", "")
+        assert [line for line in md.splitlines() if line.startswith("- `digest`")]  # the reason line is rendered
+        assert not [f for f in fragments if f in md], md
+
+    def test_run_scope_resets_the_context_variable_even_when_the_body_raises(self):
+        assert account_limit.current() is None
+        with pytest.raises(RuntimeError, match="boom"):
+            with account_limit.run_scope() as state:
+                assert account_limit.current() is state
+                raise RuntimeError("boom")
+        assert account_limit.current() is None and account_limit._state.get() is None
 
     def test_other_errors_are_redacted_more_strictly(self):
         from cqc_cpcc.model_eval.error_detail import redact_message
@@ -533,3 +545,182 @@ class TestRemainingBranches:
 
         with pytest.raises(RuntimeError, match="pairwise broke"):
             self._pairwise_ab(tmp_path, monkeypatch, raiser)
+
+
+class TestJudgeLogs:
+    HOSTILE_500 = ("<img src=x onerror=1> http://e.com $50.00 of $100 org Acme a@b.co `code` #12 "
+                   "[x](http://e.com) *bold* | col")
+
+    def _failing_judge(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from cqc_cpcc.model_eval import judges as jm
+        from tests.unit.test_eval_transport_retry import StatusError
+
+        async def ask(*a, **k):
+            raise StatusError(500, {"error": {"message": self.HOSTILE_500}}, message=f"Error code: 500 - {self.HOSTILE_500}")
+
+        class Cache:
+            def key(self, *a):
+                return "k"
+
+            def get(self, key):
+                return None
+
+            def put(self, key, value):
+                pass
+
+        monkeypatch.setattr(jm, "_ask", ask)
+        monkeypatch.setattr(jm, "view", lambda *a, **k: {"output": "o"})
+        monkeypatch.setattr(jm, "build_judge_prompt", lambda *a, **k: "p")
+        monkeypatch.setattr(jm, "_fingerprint", lambda x: "f")
+        monkeypatch.setattr(jm, "_grading_context", lambda case: "")
+        return jm, Cache(), SimpleNamespace(case_id="c0"), SimpleNamespace(id="toy", description="d")
+
+    def test_a_judge_failure_logs_nothing_the_gateway_said(self, monkeypatch, caplog):
+        jm, cache, case, suite = self._failing_judge(monkeypatch)
+
+        async def go():
+            return (await jm.judge_one("faithfulness", "toy", case, {}, "judge/x", cache),
+                    await jm.pairwise(suite, case, {}, {}, "judge/x", cache))
+
+        with caplog.at_level("DEBUG"):
+            virtual(go)
+        assert "[judge" in caplog.text and "StatusError" in caplog.text  # it is still logged
+        assert not [leak for leak in LEAKS if leak in caplog.text], caplog.text
+
+
+class TestNoUnredactedExceptionText:
+    """Lint: no logger/print call in the package may format an exception's text without redacting it."""
+
+    SAFE_CALLS = {"log_text", "redact_message", "scrub_log", "scrub_row", "type", "describe_failure"}
+    NAMES = {"e", "err", "exc", "error", "ex"}
+    #: (file, text the call must contain) for the few calls that are fine, each with the reason.
+    ALLOWED = {
+        # ValueError raised by this package's own fingerprint writer (repo data only, no gateway text)
+        ("__main__.py", "refused: {exc}"),
+    }
+
+    def _calls(self):
+        import ast
+        import pathlib
+
+        root = pathlib.Path(pa.__file__).parent
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                is_log = (isinstance(fn, ast.Name) and fn.id == "print") or (
+                    isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id == "logger")
+                if is_log:
+                    yield path.name, node
+
+    def _unsafe(self, node):
+        import ast
+
+        found = []
+
+        def visit(n, safe):
+            if isinstance(n, ast.Call):
+                name = n.func.id if isinstance(n.func, ast.Name) else getattr(n.func, "attr", None)
+                safe = safe or name in self.SAFE_CALLS
+            if isinstance(n, ast.Name) and n.id in self.NAMES and not safe:
+                found.append(n.id)
+            for child in ast.iter_child_nodes(n):
+                visit(child, safe)
+
+        for arg in node.args + [k.value for k in node.keywords]:
+            visit(arg, False)
+        return found
+
+    def test_no_logger_or_print_formats_an_exception_unredacted(self):
+        import ast
+
+        offenders = []
+        for name, node in self._calls():
+            if self._unsafe(node):
+                text = ast.unparse(node)
+                if not any(name == f and part in text for f, part in self.ALLOWED):
+                    offenders.append(f"{name}: {text[:120]}")
+        assert not offenders, offenders
+
+    def test_the_lint_itself_catches_a_raw_exception_in_a_log_call(self):
+        import ast
+
+        bad = ast.parse('logger.warning(f"x {type(e).__name__}: {str(e)[:200]}")').body[0].value
+        good = ast.parse('logger.warning(f"x {type(e).__name__}: {error_detail.log_text(e)}")').body[0].value
+        assert self._unsafe(bad) == ["e"] and self._unsafe(good) == []
+
+
+class TestBaseSideOutput:
+    """The base branch's own (older) code wrote its logs and rows: they are scrubbed on this side."""
+
+    BODY = ("Attempt 1/3: PermissionDeniedError 403: Error code: 403 - {'error': {'message': 'Budget limit exceeded "
+            "(monthly limit) for Acme $50.01 of $50.00 a@b.co http://e.com'}}")
+    FRAGMENTS = ("<img", "http", "e.com", "$50.00", "a@b.co", "`code`", "#12")
+
+    def test_scrub_log_cuts_the_error_body_and_keeps_the_rest_of_the_log(self):
+        text = "[digest] 4 calls, 0 retried\n" + self.BODY + "\nspent $0.71 of the budget, see #12 or ping @bob\n"
+        out = error_detail.scrub_log(text)
+        assert "Acme" not in out and "a@b.co" not in out and "http" not in out and "#12" not in out and "@bob" not in out
+        assert "[digest] 4 calls, 0 retried" in out and "spent $0.71" in out and out.count("\n") == 2
+        assert error_detail.scrub_log("x" * 50 + "\nabc", 3) == "abc"
+        assert error_detail.scrub_log(None) == ""
+
+    def test_saved_rows_of_the_base_run_are_rewritten_before_they_are_published(self, tmp_path):
+        old = {"suite": "digest", "case_id": "c0", "ok": False, "error_kind": "transport",
+               "error_detail": [{"attempt": 1, "status": 403, "message": "Budget limit exceeded for Acme", "code": "403",
+                                 "type": "x", "provider": "P"},
+                                {"attempt": 2, "status": 502, "message": "bad gateway http://e.com a@b.co"}, "junk"]}
+        raw = tmp_path / "raw_outputs.jsonl"
+        raw.write_text(json.dumps(old) + "\nnot json\n" + json.dumps(["list"]) + "\n" + json.dumps({"ok": True}) + "\n")
+        pa._scrub_rows(raw)
+        lines = raw.read_text().splitlines()
+        row = json.loads(lines[0])
+        assert row["error_detail"][0] == {"attempt": 1, "status": 403, "message": "account_limit (HTTP 403)"}
+        assert "http" not in row["error_detail"][1]["message"] and "a@b.co" not in row["error_detail"][1]["message"]
+        assert len(row["error_detail"]) == 2 and lines[1] == "not json" and json.loads(lines[3]) == {"ok": True}
+        pa._scrub_rows(tmp_path / "missing.jsonl")  # nothing to do
+
+    def test_capture_failures_reach_requests_json_only_redacted(self, tmp_path, monkeypatch, capsys):
+        def boom(*a, **k):
+            raise RuntimeError("exit 1: see http://e.com a@b.co $50.00 #12 `code` <img>")
+
+        monkeypatch.setattr(pa, "_base_capture_once", boom)
+        captures, failures = pa.capture_base(pa.REPO_ROOT, ["digest"], tmp_path)
+        text = json.dumps(failures) + capsys.readouterr().out
+        assert failures and not [leak for leak in self.FRAGMENTS if leak in text]
+        captures, failures = pa.capture_base(pa.REPO_ROOT, ["digest", "requirement-extraction"], tmp_path)
+        assert len(failures) == 2 and not [leak for leak in self.FRAGMENTS if leak in json.dumps(failures)]
+
+    def test_the_base_runs_log_and_rows_are_scrubbed_in_the_artifact(self, tmp_path, monkeypatch, capsys):
+        from types import SimpleNamespace
+
+        row = {"error_detail": [{"status": 403, "message": "Budget limit exceeded Acme"}]}
+        out = tmp_path / "out"
+        (out / "digest").mkdir(parents=True)
+        (out / "digest" / "raw_outputs.jsonl").write_text(json.dumps(row) + "\n")
+
+        class Proc:
+            pid, returncode = 1, 1
+
+            def communicate(self, timeout=None):
+                return self_body, "stderr http://e.com"
+
+        self_body = self.BODY
+        monkeypatch.setattr(pa.subprocess, "Popen", lambda *a, **k: Proc())
+        assert pa._run_base(tmp_path, "digest", [], 1, out, 1.0) is None
+        log = (out / "digest" / "run.log").read_text()
+        shown = log + capsys.readouterr().out
+        assert "Acme" not in shown and "http" not in shown and "$50.00" not in shown
+        saved = json.loads((out / "digest" / "raw_outputs.jsonl").read_text())
+        assert saved["error_detail"][0]["message"] == "account_limit (HTTP 403)"
+
+    def test_a_failed_base_capture_prints_a_scrubbed_stderr(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(pa, "_run_capture", lambda *a, **k: (1, "boom\n" + self.BODY))
+        with pytest.raises(RuntimeError) as caught:
+            pa._base_capture_once(tmp_path, ["digest"], tmp_path / "f.json", 5)
+        shown = capsys.readouterr().out + str(caught.value)
+        assert "Acme" not in shown and "a@b.co" not in shown and "http" not in shown

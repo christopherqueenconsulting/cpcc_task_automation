@@ -120,21 +120,78 @@ def failure_message(error: BaseException):
     return str(error)
 
 
-def log_text(error: BaseException) -> str:
-    """What may be written to a log for ``error``: the redacted gateway text, except for an account limit.
+_BODY = re.compile(r"Error code: \d+ - |\{\s*['\"]error['\"]")
 
-    An account-limit failure logs only its HTTP status and the fixed reason code. The (redacted) gateway text is
-    added only when ``CQC_EVAL_LOG_GATEWAY_MESSAGE=1`` and ``GITHUB_ACTIONS`` is unset (a local run): the logs and
-    artifacts of a public repository are publicly readable.
+
+def scrub_log(text, limit: Optional[int] = None) -> str:
+    """``text`` (a subprocess log, a stderr tail) with what must not reach a public log or artifact removed.
+
+    Line by line, newlines kept: an SDK error body (``Error code: 403 - {...}``) is cut at its start, then links,
+    domains, email addresses, @mentions, ``#NN`` references and credential-looking tokens are replaced. Dollar
+    amounts are kept (a cost line is legitimate; the budget message that carries the account's figures is inside
+    the cut body). Names cannot be recognised in free text, so callers keep this for logs of our own code.
+    """
+    lines = []
+    for line in str(text or "").splitlines():
+        m = _BODY.search(line)
+        if m:
+            line = line[:m.start()] + "[body removed]"
+        for pattern, marker in ((_URL, "[url]"), (_EMAIL, "[email]"), (_DOMAIN, "[domain]"),
+                                (_MENTION, "[mention]"), (_REF, "[ref]")):
+            line = pattern.sub(marker, line)
+        for value in _secret_env_values():
+            line = line.replace(value, "[redacted]")
+        for pattern in _SECRETS:
+            line = pattern.sub("[redacted]", line)
+        lines.append(line)
+    out = "\n".join(lines)
+    return out[-limit:] if limit else out
+
+
+def scrub_row(row: dict) -> dict:
+    """A saved ``raw_outputs.jsonl`` row with its ``error_detail`` messages made safe to publish.
+
+    Used on the base side's rows, which were written by the base branch's own (older) code: an account-limit entry
+    keeps only its fixed code, every other message goes through :func:`redact_message` again.
     """
     from cqc_cpcc.model_eval import account_limit
 
-    if account_limit.is_account_limit(error):
-        text = f"HTTP {http_status(error)} {account_limit.REASON}"
-        if account_limit.gateway_log_enabled():
-            text += f" (gateway message, local run only: {redact_message(failure_message(error))})"
-        return text
-    return redact_message(failure_message(error))
+    details = row.get("error_detail")
+    if not isinstance(details, list):
+        return row
+    fixed = []
+    for d in details:
+        if not isinstance(d, dict):
+            continue
+        d = dict(d)
+        if account_limit.is_account_limit_detail(d):
+            d["message"] = f"{account_limit.REASON} (HTTP {d.get('status')})"
+            for key in ("code", "type", "provider"):
+                d.pop(key, None)
+        elif "message" in d:
+            d["message"] = redact_message(d["message"])
+        fixed.append(d)
+    return {**row, "error_detail": fixed}
+
+
+def log_text(error: BaseException) -> str:
+    """What may be written to a log for ``error``.
+
+    An error the gateway answered with (it has an HTTP status) logs only that status, plus the fixed reason code for
+    an account limit: the gateway's text can echo the request, name the account or carry amounts, and the logs and
+    artifacts of a public repository are publicly readable. The redacted text is added only for a local run with
+    ``CQC_EVAL_LOG_GATEWAY_MESSAGE=1`` and ``GITHUB_ACTIONS`` unset. An error with no status (a timeout, a schema
+    error of our own) logs its redacted text.
+    """
+    from cqc_cpcc.model_eval import account_limit
+
+    status = http_status(error)
+    if status is None:
+        return redact_message(failure_message(error))
+    text = f"HTTP {status}" + (f" {account_limit.REASON}" if account_limit.is_account_limit(error) else "")
+    if account_limit.gateway_log_enabled():
+        text += f" (gateway message, local run only: {redact_message(failure_message(error))})"
+    return text
 
 
 def _chain(error: BaseException):

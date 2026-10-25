@@ -506,7 +506,7 @@ def score_case(suite: Suite, case: SuiteCase, records: list[SuiteRecord]) -> Cas
             try:
                 per_grader[g.name].append(g.fn(case, r.payload))
             except Exception as e:  # noqa: BLE001 - a grader bug must not hide the run
-                reasons.append(f"{g.name}: {type(e).__name__}: {e}")
+                reasons.append(f"{g.name}: {type(e).__name__}: {error_detail.redact_message(str(e), 160)}")
                 per_grader[g.name].append(0.0)
     scores = {}
     for name, values in per_grader.items():
