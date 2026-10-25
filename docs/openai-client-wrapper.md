@@ -571,7 +571,7 @@ OPENAI_API_KEY=sk-proj-...
 
 ```python
 # Current code (LangChain)
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI  # historical: langchain-openai is no longer a dependency
 from langchain_core.prompts import PromptTemplate
 
 llm = ChatOpenAI(model="gpt-5", temperature=0.2)

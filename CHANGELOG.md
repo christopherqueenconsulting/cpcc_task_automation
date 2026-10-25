@@ -5,6 +5,20 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Eval batch mode is now scheduled-only: with `CQC_EVAL_BATCH=1` batching runs only when `GITHUB_EVENT_NAME=schedule`
+  (the weekly Model Evaluation) or `CQC_EVAL_BATCH_FORCE=1`; pull-request, push, dispatch, merge-queue and local runs
+  are sync so active sessions are not blocked for up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 2700 s), plus the time of any sync fallback. The decision is logged once per process.
+  No workflow file changed.
+- Dependencies: removed unused packages: langchain-community, langchain-openai, onnxruntime, os-env, datetime,
+  chromium, tabulate, pandas-stubs, jupyter, setuptools, grandalf, and the test/e2e plugins pytest-watcher,
+  pytest-profiling, pytest-timeout, pytest-playwright; also dropped the direct pins on protobuf, six and
+  typing-extensions (still installed as dependencies of streamlit and others). `poetry.lock` drops 103 packages
+  (104 entries), adds none, bumps none. Declares pydantic `>=2.12,<3`, requests, urllib3 and (tests) python-dotenv.
+  `watchdog` moves to a new optional `dev` group: on macOS Streamlit does not require it, so use
+  `poetry install --with dev,test` there for fast reload. After pulling, run `poetry install --with test --sync` (list every group or extra you use, since `--sync` removes the rest).
+- Pydantic v2: removed the v1 `.dict()` fallback in `openai_debug.py`; added an AST guard against v1 APIs
+  (`tests/unit/test_pydantic_v2_only.py`) and an import smoke test for `pydantic.v1` (xfail until PR-2).
+
 ## 0.2.0-rc8 - 2026-10-25
 
 Prerelease, on top of 0.2.0-rc7. Flowgorithm grading no longer sends the file name to the model: the app checks the

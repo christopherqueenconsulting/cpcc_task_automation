@@ -1,5 +1,8 @@
 # Unit Test Performance Optimization - Summary
 
+> **Historical note (2026-10):** `pytest-timeout` was removed from `pyproject.toml` (unused; see the Dependencies section of `docs/CONTRIBUTING.md`). This document records an earlier state.
+
+
 ## Initial State (Baseline)
 - **Total runtime**: 58.53 seconds
 - **Slowest tests**: 3 tests taking 15+ seconds each

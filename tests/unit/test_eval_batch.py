@@ -42,7 +42,7 @@ class Out(BaseModel):
 
 
 ENV_NAMES = (batch.ENV_BATCH, batch.ENV_ALLOW, batch.ENV_MIN, batch.ENV_DEADLINE, batch.ENV_MAX_ITEMS,
-             batch.ENV_SETTLE, cs.ENV_SESSION, cs.ENV_WARM, cs.ENV_SIDE, cs.ENV_RUN, "GITHUB_RUN_ID",
+             batch.ENV_SETTLE, batch.ENV_FORCE, batch.ENV_EVENT, cs.ENV_SESSION, cs.ENV_WARM, cs.ENV_SIDE, cs.ENV_RUN, "GITHUB_RUN_ID",
              "CQC_AB_ADAPTIVE", "CQC_AB_MAX_CONCURRENCY", "CQC_AB_START_CONCURRENCY", "CQC_EVAL_CONCURRENCY",
              "CQC_EVAL_MAX_TOKENS", "CQC_EVAL_TRANSPORT_RETRIES", "CQC_LLM_TIMEOUT")
 
@@ -51,8 +51,10 @@ ENV_NAMES = (batch.ENV_BATCH, batch.ENV_ALLOW, batch.ENV_MIN, batch.ENV_DEADLINE
 def clean_env(monkeypatch):
     for var in ENV_NAMES:
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv(batch.ENV_EVENT, "schedule")  # batching is scheduled-only; TestScheduleOnly overrides this
     monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda *a, **k: False)
     batch.reset_events()
+    batch._DECISION_LOGGED["done"] = False
     yield
     batch.reset_events()
 
@@ -225,6 +227,99 @@ def go(suite, n=10, model=MODEL, adaptive_mode=True, budget=None, repeats=1, **k
 def per_item_estimate():
     with pinned_registry(MODEL, None, roles=("feedback",)) as resolved:
         return model_registry.estimate_cost(resolved, 10, resolved.max_output_tokens)
+
+
+# --- Scheduled runs only ---------------------------------------------------------------------------
+
+class TestScheduleOnly:
+    @pytest.fixture(autouse=True)
+    def _on(self, monkeypatch):
+        monkeypatch.setenv(batch.ENV_BATCH, "1")
+        monkeypatch.setenv(batch.ENV_ALLOW, "1")
+
+    def test_schedule_batches(self, monkeypatch):
+        monkeypatch.setenv(batch.ENV_EVENT, "schedule")
+        assert batch.settings() is not None and batch.is_on()
+
+    @pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch", "merge_group", None])
+    def test_other_events_are_sync(self, monkeypatch, event):
+        if event is None:
+            monkeypatch.delenv(batch.ENV_EVENT)
+        else:
+            monkeypatch.setenv(batch.ENV_EVENT, event)
+        assert batch.settings() is None and not batch.is_on()
+
+    def test_other_events_never_refuse_for_missing_retention(self, monkeypatch):
+        monkeypatch.setenv(batch.ENV_EVENT, "push")
+        monkeypatch.delenv(batch.ENV_ALLOW)
+        assert batch.settings() is None
+
+    def test_force_batches_outside_a_schedule(self, monkeypatch):
+        monkeypatch.setenv(batch.ENV_EVENT, "workflow_dispatch")
+        monkeypatch.setenv(batch.ENV_FORCE, "1")
+        assert batch.settings() is not None
+
+    def test_force_still_needs_the_retention_opt_in(self, monkeypatch):
+        monkeypatch.setenv(batch.ENV_EVENT, "workflow_dispatch")
+        monkeypatch.setenv(batch.ENV_FORCE, "1")
+        monkeypatch.delenv(batch.ENV_ALLOW)
+        with pytest.raises(batch.BatchRefused):
+            batch.settings()
+
+    def test_invalid_force_value_raises(self, monkeypatch):
+        monkeypatch.setenv(batch.ENV_FORCE, "maybe")
+        with pytest.raises(ValueError):
+            batch.settings()
+
+    def test_off_does_not_need_batch_flag_for_force(self, monkeypatch):
+        monkeypatch.setenv(batch.ENV_BATCH, "0")
+        monkeypatch.setenv(batch.ENV_FORCE, "1")
+        assert batch.settings() is None
+
+    @pytest.mark.parametrize("event, forced, line", [
+        ("pull_request", False, "[eval-batch: off: event=pull_request]"),
+        (None, False, "[eval-batch: off: event=unset]"),
+        ("schedule", False, "[eval-batch: on: event=schedule]"),
+        ("push", True, "[eval-batch: on: forced]")])
+    def test_decision_logged_once(self, monkeypatch, event, forced, line):
+        messages = []
+        monkeypatch.setattr(batch.logger, "info", messages.append)
+        if event is None:
+            monkeypatch.delenv(batch.ENV_EVENT)
+        else:
+            monkeypatch.setenv(batch.ENV_EVENT, event)
+        if forced:
+            monkeypatch.setenv(batch.ENV_FORCE, "1")
+        for _ in range(3):
+            batch.settings()
+        assert [m for m in messages if m.startswith("[eval-batch:")] == [line]
+
+    def test_stamp_cases_is_inert_off_schedule(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(batch.ENV_EVENT, "pull_request")
+        cases = [object()]
+        assert batch.stamp_cases(cases, tmp_path) is cases  # outside evals/datasets: no raise, no PII scan
+        assert not batch.is_stamped(cases[0])
+
+    def test_plan_is_none_off_schedule_for_an_outside_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(batch.ENV_EVENT, "pull_request")
+        assert batch.plan(tmp_path, 100) is None
+
+    def test_stamp_cases_still_refuses_an_outside_dir_on_schedule(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(batch.ENV_EVENT, "schedule")
+        with pytest.raises(batch.DatasetNotAllowed):
+            batch.stamp_cases([object()], tmp_path)
+
+    def test_model_eval_workflow_keeps_its_schedule_trigger(self):
+        import yaml
+
+        data = yaml.safe_load((REPO / ".github" / "workflows" / "model-eval.yml").read_text(encoding="utf-8"))
+        triggers = data.get("on", data.get(True))  # YAML 1.1 reads a bare `on` key as True
+        assert "schedule" in triggers
+
+    def test_no_run_stats_event_when_gated_off(self, monkeypatch):
+        monkeypatch.setenv(batch.ENV_EVENT, "push")
+        batch.settings()
+        assert batch.summary() is None
 
 
 # --- Switches ------------------------------------------------------------------------------------
@@ -1054,11 +1149,13 @@ class TestProvenance:
         off = suite.cases()
         assert not any(batch.is_stamped(c) for c in off)
         monkeypatch.setenv(batch.ENV_BATCH, "1")
+        monkeypatch.setenv(batch.ENV_ALLOW, "1")
         on = suite.cases()
         assert on and all(batch.is_stamped(c) for c in on)
 
     def test_a_suite_whose_loader_reads_elsewhere_is_refused_at_load(self, monkeypatch, tmp_path):
         monkeypatch.setenv(batch.ENV_BATCH, "1")
+        monkeypatch.setenv(batch.ENV_ALLOW, "1")
         suite = base.Suite(**{**model_suite().__dict__, "dataset": "../../tests"})
         with pytest.raises(batch.DatasetNotAllowed):
             suite.cases()

@@ -347,8 +347,6 @@ def record_response(
                 # Convert Pydantic model to dict, preserving structural fields
                 if hasattr(output_parsed, 'model_dump'):
                     parsed_dict = output_parsed.model_dump(mode='json')
-                elif hasattr(output_parsed, 'dict'):
-                    parsed_dict = output_parsed.dict()
                 else:
                     parsed_dict = {"raw": str(output_parsed)}
 

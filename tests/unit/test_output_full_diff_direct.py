@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cqc_cpcc.execution_check import CaseResult, ExecutionPlan, ExecutionReport, TestCase
+from cqc_streamlit_app import diff_view as dv
 from cqc_streamlit_app import execution_view as ev
 from cqc_streamlit_app import solution_view as sv
 
@@ -22,7 +23,7 @@ class _St:
     """Records what the render code asks Streamlit to draw."""
 
     def __init__(self):
-        self.session_state = {}
+        self.session_state = {"diff_view_mode": "Unified"}
         self.codes, self.captions, self.warnings, self.buttons = [], [], [], []
         self._m = MagicMock()
 
@@ -39,6 +40,9 @@ class _St:
         self.buttons.append(label)
         return False
 
+    def radio(self, *a, **kw):
+        return None
+
     def selectbox(self, label, options, **kw):
         return options[0]
 
@@ -53,7 +57,7 @@ def _report_dict(**case_kw):
 
 def test_show_text_plain_scroll_and_empty():
     st = _St()
-    with patch.object(ev, "st", st):
+    with patch.object(ev, "st", st), patch.object(dv, "st", st):
         ev.show_text("one line", scope="a")
         ev.show_text("\n".join(map(str, range(40))), scope="b", language="diff", line_numbers=True, wrap=False)
         ev.show_text("", scope="c", empty="(none)")
@@ -65,7 +69,7 @@ def test_show_text_plain_scroll_and_empty():
 def test_show_text_collapses_then_shows_all_once_asked():
     big = "\n".join(map(str, range(ev.MAX_AUTO_SHOWN_LINES + 10)))
     st = _St()
-    with patch.object(ev, "st", st):
+    with patch.object(ev, "st", st), patch.object(dv, "st", st):
         ev.show_text(big, scope="g")
         assert len(st.codes[0][0].splitlines()) == ev.PREVIEW_LINES
         assert st.buttons == [f"Show all {ev.MAX_AUTO_SHOWN_LINES + 10:,} lines"]
@@ -78,7 +82,7 @@ def test_show_text_collapses_then_shows_all_once_asked():
 
 def test_render_case_diff_branches():
     st = _St()
-    with patch.object(ev, "st", st):
+    with patch.object(ev, "st", st), patch.object(dv, "st", st):
         ev.render_case_diff({"expected_output": "a\nb", "actual_output": "a\nc", "output_cut_by_runner": True}, scope="x")
         ev.render_case_diff({"expected_output": "same", "actual_output": "same", "diff_excerpt": "-x\n+y"}, scope="y")
         ev.render_case_diff({"diff_excerpt": "-x\n+y", "outputs_omitted": True}, scope="z")
@@ -94,7 +98,7 @@ def test_render_output_check_with_the_plan_shows_input_expected_and_diff():
     report = _report_dict(expected_output="Total: 5", actual_output="Total: 6")
     report["plan_hash"] = plan.plan_hash
     st = _St()
-    with patch.object(ev, "st", st):
+    with patch.object(ev, "st", st), patch.object(dv, "st", st):
         ev.render_output_check(report, plan, scope="s")
     bodies = [c[0] for c in st.codes]
     assert "5\n" in bodies and "Total: 5\n" in bodies and any("+Total: 6" in b for b in bodies)
@@ -109,7 +113,7 @@ def test_solution_view_compare_and_outcome():
     case = SimpleNamespace(id="T1", status="OK", reason="", stdout="out", stderr="err")
     good = SimpleNamespace(status="ok", reason="", compile=None, cases=(case,))
     st = _St()
-    with patch.object(sv, "st", st), patch.object(ev, "st", st):
+    with patch.object(sv, "st", st), patch.object(ev, "st", st), patch.object(dv, "st", st):
         sv._render_compare(workspace, results, "k")
         sv._show_outcome(bad)
         sv._show_outcome(good)
