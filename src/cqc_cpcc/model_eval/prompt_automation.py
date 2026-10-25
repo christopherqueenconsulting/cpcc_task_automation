@@ -891,6 +891,8 @@ def _batch_line(stats: dict) -> str:
                  f"${events['double_charge_bound_usd']:.4f})")
     if fell:
         line += f"; BATCH FELL BACK to sync for the rest of the run: {fell}"
+    if events.get("effort_not_proven_honoured"):
+        line += "; EFFORT NOT PROVEN HONOURED IN BATCH"
     return line
 
 
@@ -1365,7 +1367,8 @@ def _batch_markdown(rows: list) -> list:
                 lines.append(f"- `{sid}` {side}: {part['batch_calls']}/{part['calls']} calls batched "
                              f"({part['batch_share']:.0%}); batch cost ${part['batch_cost_usd']:.4f} vs sync cost "
                              f"${part['sync_cost_usd']:.4f}; {part['allocated_rows']} batch row(s) carry an allocated "
-                             f"share of the batch total (`cost_allocated`), {part['estimated_rows']} an estimate")
+                             f"share of the batch total (`cost_allocated`), {part.get('token_priced_rows', 0)} priced from their own "
+                             f"usage tokens (`cost_method`), {part['estimated_rows']} an estimate")
         lines.append(f"- `{sid}`: {ev['batches']} batch(es) with {ev['batch_items']} request(s), "
                      f"{ev['batch_items_delivered']} delivered, {ev['item_errors']} per-item error(s); batch wall "
                      f"{ev['batch_wall_s']:.0f} s, sync fall-back wall {ev['sync_wall_s']:.0f} s "
@@ -1377,6 +1380,11 @@ def _batch_markdown(rows: list) -> list:
                          f"batch that finishes after the deadline may still bill)")
         if ev["reasons"]:
             lines.append(f"- `{sid}`: fall-back reasons: {'; '.join(ev['reasons'])}")
+        if ev.get("effort_not_proven_honoured"):
+            lines.append(f"- `{sid}`: **" + "effort not proven honoured in batch: {n} batched request(s) asked for a reasoning effort, and the 2026-10-25 live probe could not show that a batch applies it".format(n=ev["effort_items"]) + "**")
+        if ev.get("cost_gap_usd"):
+            lines.append(f"- `{sid}`: token-priced batch rows differ from the batch-level cost by "
+                         f"${ev['cost_gap_usd']:+.6f} (batch-level minus token-priced)")
     return (["", "Batch API mode (report only; events are for the head side and judge round of this process):", "", *lines]
             if lines else [])
 

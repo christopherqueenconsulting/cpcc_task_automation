@@ -35,7 +35,7 @@ Switches (environment; an invalid value raises ``ValueError`` before any paid ca
 * ``CQC_EVAL_BATCH_SETTLE_S``: longest to wait for more requests to arrive before submitting what is
   collected. Default 120; 1 to 3600.
 
-First batch = automatic probe. The unverified facts (see the constants below) are checked by the run itself: the
+First batch = automatic probe. What the live probe could not show (see the module end of this docstring) is checked by the run itself: the
 first batch it submits is validated, and if it fails, the run stops using batches for everything not yet completed
 and for every later group (the reason goes to the report as ``batch_fallback_reason``). A first batch is bad when it
 ends ``failed``/``expired``/``cancelled``, is not finished within ``CQC_EVAL_BATCH_FIRST_CAP_S``, the submit or the

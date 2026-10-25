@@ -5,6 +5,10 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Eval batch mode: the 2026-10-25 live probe verified the plain model id, `max_completion_tokens`, `session_id` and
+  `json_schema`; the batch API reports no per-item cost, so each batched row is now priced from its own usage tokens
+  (batch price when published, else the sync price times 0.5, labelled estimated; `cost_method` per row) and
+  cross-checked against the batch-level cost. Reports flag "effort not proven honoured in batch". Deadlines unchanged.
 - Eval batch mode: a request sent the ordinary way inside a batch group (the fallback after a failed batch, a group
   below the minimum, a re-send after the deadline) now keeps the normal request timeout instead of the raised
   `CQC_LLM_TIMEOUT` (deadline + 600 s). Docs: the eval OpenRouter keys belong to a ZDR-off workspace; production and

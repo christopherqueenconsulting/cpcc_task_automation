@@ -149,7 +149,7 @@ set `CQC_EVAL_BATCH=1`, `CQC_EVAL_BATCH_ALLOW_RETENTION=1` and `CQC_EVAL_BATCH_F
 The first batch of every run is validated; if it fails (failed or expired, too slow, malformed results, effort ignored)
 the run finishes on the synchronous path and the scorecard and Run stats say why (`batch_fallback_reason`). There is no
 cancel endpoint, so a batch abandoned at its deadline may still bill; the report bounds that. The switches, the budget
-rules and the list of unverified facts are in [`PROMPTS.md`](PROMPTS.md) under "OpenRouter Batch API mode for evals".
+rules and the facts verified by the 2026-10-25 live probe are in [`PROMPTS.md`](PROMPTS.md) under "OpenRouter Batch API mode for evals".
 The weekly `model-eval` run and a prompt A/B read the setting when they start. Local runs stay synchronous unless you
 set all three variables.
 
