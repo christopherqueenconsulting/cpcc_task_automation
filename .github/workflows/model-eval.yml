@@ -73,6 +73,7 @@ jobs:
       status: ${{ steps.run.outputs.status }}
       evaluated: ${{ steps.gate.outputs.run }}
       incumbent_failed: ${{ steps.run.outputs.incumbent_failed }}
+      scorecard_status: ${{ steps.abort.outputs.scorecard_status }}
       incumbent_expiring: ${{ steps.discover.outputs.incumbent_expiring }}
       incumbent_changed: ${{ steps.discover.outputs.incumbent_changed }}
       dry_run: ${{ steps.mode.outputs.dry_run }}
@@ -187,6 +188,22 @@ jobs:
           if [ "${DRY_RUN}" = "true" ]; then args+=(--dry-run); fi
           poetry run python -m cqc_cpcc.model_eval "${args[@]}" > eval.log 2>&1 || { tail -n 80 eval.log; exit 1; }
           tail -n 60 eval.log
+
+      - name: Record an account-limit abort
+        id: abort
+        if: always() && steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          # Only the fixed status string is read from the scorecard (data), and only that exact
+          # value is passed on. A missing or unreadable scorecard leaves the output empty.
+          st=""
+          if [ -f evals/runs/ci/scorecard.json ]; then
+            st="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status") or "")' evals/runs/ci/scorecard.json 2>/dev/null || true)"
+          fi
+          if [ "${st}" = "aborted_account_limit" ]; then
+            echo "scorecard_status=aborted_account_limit" >> "$GITHUB_OUTPUT"
+            echo "::error::RUN ABORTED: account limit"
+          fi
 
       - name: Publish scorecard to job summary
         if: always()
@@ -448,6 +465,7 @@ jobs:
           INCUMBENT_FAILED: ${{ needs.evaluate.outputs.incumbent_failed }}
           EXPIRING: ${{ needs.evaluate.outputs.incumbent_expiring }}
           CHANGED: ${{ needs.evaluate.outputs.incumbent_changed }}
+          SCORECARD_STATUS: ${{ needs.evaluate.outputs.scorecard_status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ASSIGNEE: ${{ vars.MODEL_BOT_ASSIGNEE }}
         run: |
@@ -458,6 +476,7 @@ jobs:
             echo "Run: ${RUN_URL}"
             echo
             if [ "${RESULT}" != "success" ]; then echo "- The evaluation job ended with **${RESULT}**."; fi
+            if [ "${SCORECARD_STATUS}" = "aborted_account_limit" ]; then echo "- Account/key spending limit reached: the OpenRouter account owner raises the limit, then re-dispatch Model Evaluation with dry_run off."; fi
             if [ "${STATE_RESULT}" = "failure" ]; then echo "- Recording the snapshot/history on the state branch **failed** (next month may re-evaluate the same models)."; fi
             if [ "${PROMOTE_RESULT}" = "failure" ]; then echo "- Opening the promotion PR **failed** although a winner was found."; fi
             if [ "${CROSS_SUITE}" = "fail" ]; then echo "- The winner **failed the cross-suite gate** (another prompt on its roles got worse); nothing is promoted. See the cross-suite artifact."; fi
