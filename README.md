@@ -40,6 +40,7 @@ It is a personal tool, built and used against my own courses. I have not measure
    ```bash
    poetry install
    ```
+   macOS: `poetry install --with dev,test` (adds watchdog for Streamlit hot reload).
 
 3. **Configure credentials:**
    Create `.streamlit/secrets.toml` with your credentials (see Configuration section below)
@@ -107,8 +108,8 @@ DOCKER_TYPE = ""                        # LOCAL | REMOTE (unset = prompt)
 
 ### Key Libraries
 - **Data Processing**: pandas, BeautifulSoup4, python-docx, mammoth, pypdf, pymupdf
-- **Date/Time**: dateparser, datetime
-- **Environment**: `os.environ` via `env_constants.py`; `os-env` is declared in `pyproject.toml` but unused
+- **Date/Time**: dateparser (stdlib `datetime`)
+- **Environment**: `os.environ` via `env_constants.py`
 - **Display**: pyvirtualdisplay (for headless browser automation)
 
 ## Project Structure
@@ -220,6 +221,7 @@ For detailed technical documentation, see:
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture and design decisions
 - **[PRODUCT.md](docs/PRODUCT.md)** - Product features and user personas
 - **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines
+- **[RELEASING.md](docs/RELEASING.md)** - Versioning, prereleases, release and rollback; see also [CHANGELOG.md](CHANGELOG.md)
 
 ## Important Notes
 
@@ -292,6 +294,7 @@ Workflows in `.github/workflows/`:
 - **codeql.yml**, **gitguardian-scan.yml**, **pii-guard.yml**: Code scanning, secret scanning, and student-PII guard
 - **dependabot-auto-merge.yml**, **dependabot-ci-autofix.yml**: Dependabot housekeeping
 - **Cron_Action.yml**: Manual dispatch only (the schedule is commented out); `cron.py` currently prints a placeholder and does not take attendance
+- **release.yml**: A pushed tag `vX.Y.Z` or `vX.Y.Z-rcN` creates a GitHub release (see `docs/RELEASING.md`)
 - **Selenium_Action.yml**: Stale; it references `main_selenium.py`, which does not exist in the repo
 
 ## Docker Support

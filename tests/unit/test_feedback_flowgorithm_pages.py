@@ -68,6 +68,137 @@ def test_start_button_is_disabled_until_inputs_are_ready(page, button_key, monke
     assert not any(h.value == "Chat GPT Prompt" for h in app.header)
 
 
+def _feedback_page_app(monkeypatch):
+    from cqc_cpcc.utilities.AI import openrouter_client
+
+    async def _no_models(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-used")
+    monkeypatch.setattr(openrouter_client, "fetch_openrouter_models", _no_models)
+    return AppTest.from_file(str(APP_PAGES / "give_feedback.py"), default_timeout=60).run()
+
+
+@pytest.mark.unit
+def test_guidance_template_prefills_the_editable_box(monkeypatch):
+    from cqc_cpcc.project_feedback import load_feedback_guidance_templates
+
+    first = load_feedback_guidance_templates()[0]
+    app = _feedback_page_app(monkeypatch)
+    assert not app.exception, [e.value for e in app.exception]
+    assert app.text_area(key="feedback_extra_guidance").value == ""
+    app.selectbox(key="feedback_guidance_template").select(first["label"]).run()
+    assert app.text_area(key="feedback_extra_guidance").value == first["text"]
+    # The instructor can still edit it, and "(none)" leaves the edit alone.
+    app.text_area(key="feedback_extra_guidance").input("My own guidance").run()
+    app.selectbox(key="feedback_guidance_template").select("(none)").run()
+    assert app.text_area(key="feedback_extra_guidance").value == "My own guidance"
+
+
+@pytest.mark.unit
+def test_feedback_categories_follow_the_course_error_definitions(monkeypatch):
+    app = _feedback_page_app(monkeypatch)
+    assert not app.exception, [e.value for e in app.exception]
+    app.selectbox(key="feedback_course").select("CSC 251").run()
+    source = app.selectbox(key="feedback_category_source_CSC 251")
+    assert source.options[-1] == "General intro set" and source.value == source.options[0]
+    names = list(app.dataframe[0].value["Name"])  # the editable categories table
+    assert "ArrayList Errors" in names and names[-2:] == ["Requirements Not Met", "General Advice"]
+
+    source.select("General intro set").run()
+    general = list(app.dataframe[0].value["Name"])
+    assert "ArrayList Errors" not in general and "Insufficient Documentation" in general
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_feedback_status_extender_builds_prompt_and_saves_docx(mocker):
+    # Regression: the page called the removed FeedbackGiver.feedback_prompt and crashed.
+    from cqc_cpcc.project_feedback import FeedbackGiver
+
+    page = _page()
+    mocker.patch.object(page, "st")  # no script run here; Streamlit calls are no-ops
+    mocker.patch.object(page, "on_download_click")
+    giver = FeedbackGiver(course_name="CSC 151", assignment_instructions="Print Hello",
+                          assignment_solution="class Hello {}", extra_guidance="Hints only.")
+    build = mocker.spy(giver, "build_prompt")
+
+    async def _fake_generate(submission, callback=None):
+        from cqc_cpcc.project_feedback import FeedbackReport
+        return FeedbackReport(summary="Your program compiles.", items=[], next_steps=["Add input."])
+
+    mocker.patch.object(giver, "generate_feedback", side_effect=_fake_generate)
+    import tempfile
+    # read_file only reads the app's temp dir (where uploads land), so stage the file there.
+    with tempfile.NamedTemporaryFile("w", suffix=".java", delete=False) as f:
+        f.write("public class Hello {}")
+    src = Path(f.name)
+    name, path = await page.add_feedback_status_extender(
+        ctx=None, base_student_filename="Student A", filename_file_path_map={"Hello.java": str(src)},
+        feedback_giver=giver, course_name="CSC 151", selected_model="m", selected_temperature=0.3)
+    assert name == "Student_A.docx"
+    assert Path(path).stat().st_size > 0  # a real .docx was written
+    assert "Hints only." in build.spy_return
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_feedback_status_extender_marks_a_failed_student(mocker):
+    from cqc_cpcc.project_feedback import FeedbackGiver
+
+    page = _page()
+    mocker.patch.object(page, "st")
+    giver = FeedbackGiver(course_name="CSC 151", assignment_instructions="Print Hello",
+                          assignment_solution="class Hello {}")
+    mocker.patch.object(giver, "generate_feedback", side_effect=RuntimeError("model down"))
+    save = mocker.spy(giver, "save_feedback_to_docx")
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".java", delete=False) as f:
+        f.write("public class Hello {}")
+    name, path = await page.add_feedback_status_extender(
+        ctx=None, base_student_filename="Student B", filename_file_path_map={"Hello.java": f.name},
+        feedback_giver=giver, course_name="CSC 151", selected_model="m", selected_temperature=0.3)
+    assert name == "Student_B.docx"
+    assert path is None  # the failure marker: no empty .docx is handed back
+    assert save.call_count == 0
+
+
+@pytest.mark.unit
+def test_feedback_run_leaves_failed_students_out_of_the_zip(tmp_path):
+    page = _page()
+    doc = tmp_path / "a.docx"
+    doc.write_bytes(b"feedback for A")
+    run = page._build_feedback_run("CSC 151", [("Student_A.docx", str(doc)), ("Student_B.docx", None)])
+    assert run["files"] == [("Student_A.docx", str(doc))]
+    assert run["failed"] == ["Student_B.docx"]
+    with zipfile.ZipFile(run["zip_path"]) as z:
+        assert z.namelist() == ["Student_A.docx"]
+
+
+@pytest.mark.unit
+def test_feedback_results_name_the_failed_students(mocker, tmp_path):
+    page = _page()
+    st = mocker.patch.object(page, "st")
+    st.dataframe.return_value.selection.rows = []
+    doc = tmp_path / "a.docx"
+    doc.write_bytes(b"feedback for A")
+    page._show_feedback_results({"files": [("Student_A.docx", str(doc))], "failed": ["Student_B.docx"],
+                                 "zip_path": str(doc), "zip_name": "x.zip"})
+    warning = st.warning.call_args.args[0]
+    assert "Student_B.docx" in warning and "Student_A.docx" not in warning
+    assert [row["Student"] for row in st.dataframe.call_args.args[0]] == ["Student_A.docx"]
+
+
+@pytest.mark.unit
+def test_feedback_results_with_every_student_failed_offer_no_zip(mocker):
+    page = _page()
+    st = mocker.patch.object(page, "st")
+    page._show_feedback_results({"files": [], "failed": ["Student_B.docx"], "zip_path": "unused",
+                                 "zip_name": "x.zip"})
+    assert "Student_B.docx" in st.warning.call_args.args[0]
+    st.download_button.assert_not_called()
+
+
 @pytest.mark.unit
 def test_split_batch_results_keeps_finished_work_and_returns_the_interrupt():
     from cqc_streamlit_app.grade_assignment import _split_batch_results

@@ -1,0 +1,115 @@
+#  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+"""How close a submission's structure is to the reference solution (instructor-only).
+
+The flag is information for the instructor, never a score input and never called a
+"leak": a student who follows the solution's shape closely has done nothing wrong by this
+measure. Identifiers and literals are normalised before comparing, so renaming variables or
+changing a constant does not hide the shape, and comments and blank lines are ignored.
+"""
+
+from __future__ import annotations
+
+import difflib
+import re
+from dataclasses import dataclass
+
+#: Ratio at or above which the drawer and the results table show the flag. Measured on the
+#: grading-solution dataset (54 cases, 2026-10-23): the solution by another author and the
+#: rename-only or reorder-only rewrites score 1.0; the structural rewrites (a helper method,
+#: a ternary, ``String.format`` for ``printf``, a ``do``/``while``) 0.88 to 0.96; the bug
+#: twins 0.88 to 1.0. The threshold sits above the structural rewrites (their highest is
+#: 0.959) and the comparison is "at or above". A high ratio means the submission follows
+#: the solution's shape; it is not a copying claim.
+DEFAULT_THRESHOLD = 0.96
+
+#: Bounds on the work: ``difflib`` is quadratic in the token count and the comment and
+#: string patterns are quadratic on pathological input, so a huge or hostile file is cut
+#: short (chars) or reported as not similar (tokens) instead of stalling the grading run.
+MAX_SOURCE_CHARS = 200_000
+MAX_TOKENS = 8_000
+
+_NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
+_TOKEN = re.compile(r"[A-Za-z_]\w*|\d+(?:\.\d+)?|\S")
+
+#: Words kept as themselves: the languages' keywords and the library names students use.
+_KEYWORDS = frozenset("""
+abstract boolean break byte case catch char class const continue default do double else enum
+extends final finally float for goto if implements import instanceof int interface long native
+new package private protected public return short static strictfp super switch synchronized
+this throw throws transient try void volatile while true false null
+auto bool cin cout endl fixed include namespace setprecision signed sizeof std string struct
+typedef union unsigned using virtual
+and as assert async await def del elif except from global in is lambda nonlocal not or pass
+raise with yield print input len range str float int list dict
+System out in println print printf Scanner String Math nextInt nextDouble nextLine close
+format main args
+""".split())
+
+
+def _strip_strings_and_comments(source: str) -> str:
+    """``source`` with every string literal replaced by ``"S"`` and every comment by a space.
+
+    One left-to-right pass (no regular expression), so a hostile file full of unterminated
+    ``/*`` or quotes costs linear time. A ``//`` or ``#`` inside a string does not start a
+    comment and a quote inside a comment does not start a string; a string ends at its
+    closing quote or at the end of its line.
+    """
+    out: list[str] = []
+    i, n = 0, len(source)
+    while i < n:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/" or ch == "#":
+            end = source.find("\n", i)
+            i = n if end < 0 else end
+            out.append(" ")
+        elif ch == "/" and nxt == "*":
+            end = source.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            out.append(" ")
+        elif ch in "\"'":
+            j = i + 1
+            while j < n and source[j] != ch and source[j] != "\n":
+                j += 2 if source[j] == "\\" else 1
+            i = min(j + 1, n)
+            out.append(' "S" ')
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def normalize(source: str) -> list[str]:
+    """The token shape of ``source``: comments gone, strings ``S``, numbers ``N``, identifiers
+    that are not keywords or library names ``V``."""
+    text = _NUMBER.sub(" N ", _strip_strings_and_comments((source or "")[:MAX_SOURCE_CHARS]))
+    out = []
+    for token in _TOKEN.findall(text):
+        if token in _KEYWORDS or token in ("S", "N") or not token[0].isalpha() and token[0] != "_":
+            out.append(token)
+        else:
+            out.append("V")
+    return out
+
+
+@dataclass(frozen=True)
+class Similarity:
+    ratio: float
+    flagged: bool
+    threshold: float
+
+
+def solution_similarity(submission: str, solution: str, threshold: float = DEFAULT_THRESHOLD) -> Similarity:
+    """``difflib`` ratio of the two token shapes, and whether it reaches ``threshold``."""
+    a, b = normalize(submission), normalize(solution)
+    if not a or not b or len(a) > MAX_TOKENS or len(b) > MAX_TOKENS:
+        return Similarity(0.0, False, threshold)
+    ratio = difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+    return Similarity(round(ratio, 4), ratio >= threshold, threshold)
+
+
+def similarity_label(sim: Similarity | None) -> str:
+    """The results-table cell: ``"very similar (0.98)"`` or ``""``."""
+    if sim is None or not sim.flagged:
+        return ""
+    return f"very similar ({sim.ratio:.2f})"

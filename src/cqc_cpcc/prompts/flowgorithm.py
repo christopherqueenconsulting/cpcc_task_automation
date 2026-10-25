@@ -5,6 +5,10 @@
 Version 2 (October 2026): structured output (``FlowgorithmGrade``) instead of free-text
 markdown, so the grade can be checked and the arithmetic is done by the backend. The
 grading steps are unchanged from version 1.
+
+Version 3 (October 2026): the "Submission File Name" line is replaced by two facts the app
+checked locally (lab number in the file name, name-like word in the file name), with one rule
+that file-name criteria are decided only by them. The file name itself is never sent.
 """
 
 FLOWGORITHM_GRADE_PROMPT = """
@@ -20,8 +24,9 @@ Assignment:
 {assignment}
 
 ---
-Submission File Name:
-{submission_file_name}
+App-checked facts about the Submission File Name (the file name itself is withheld for privacy):
+{file_name_facts}
+Any rubric criterion about the student's name or the lab number appearing in the file name is decided ONLY by these app-checked facts: lab number: yes -> not deducted; no -> deducted; unknown -> never deduct. Name in file name: yes -> not deducted; no -> deducted; unknown -> never deduct. The file name itself is withheld for privacy; do not guess it or mention its absence as a defect. Any other file-name criterion (extension, format, capitalization) cannot be judged here; never deduct for it. Do not mention these app-checked facts in your explanation beyond the criterion decision.
 
 ---
 Submission:

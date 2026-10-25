@@ -190,6 +190,10 @@ def _fixture_checklist():
     ]})
 
 
+# A fixed fence nonce: production calls draw a fresh one, which the fingerprint must not depend on.
+FIXTURE_NONCE = "0123456789abcdef"
+
+
 # --- Renders: the real builder on the fixtures ---------------------------------------
 
 def _render_rubric_grading() -> list[str]:
@@ -200,10 +204,10 @@ def _render_rubric_grading() -> list[str]:
         build_rubric_grading_prompt(_fixture_rubric("error_count"), FIXTURE_INSTRUCTIONS,
                                     FIXTURE_SUBMISSION, reference_solution=FIXTURE_SOLUTION,
                                     error_definitions=_fixture_error_definitions(),
-                                    requirements=_fixture_checklist()),
+                                    requirements=_fixture_checklist(), nonce=FIXTURE_NONCE),
         # level-band rubric, no error definitions, no checklist
         build_rubric_grading_prompt(_fixture_rubric("level_band"), FIXTURE_INSTRUCTIONS,
-                                    FIXTURE_SUBMISSION),
+                                    FIXTURE_SUBMISSION, nonce=FIXTURE_NONCE),
     ]
 
 
@@ -213,17 +217,64 @@ def _render_requirements_section() -> list[str]:
     return ["\n".join(requirements_prompt_section(_fixture_checklist()))]
 
 
+def _render_execution_evidence_section() -> list[str]:
+    from cqc_cpcc.execution_check import CaseResult, ExecutionPlan, ExecutionReport, TestCase
+    from cqc_cpcc.execution_evidence import execution_evidence_section
+
+    plan = ExecutionPlan(language="java", solution_sha256="fixture", cases=[
+        TestCase(id="T1", label="Typical order", stdin="3\n10.00\n", source="llm", validated=True),
+        TestCase(id="T2", label="Negative count", stdin="-1\n10.00\n", source="llm", validated=True)])
+    report = ExecutionReport(plan_hash="fixture", status="ok", cases=[
+        CaseResult(case_id="T1", verdict="values_differ",
+                   diff_excerpt="--- expected\n+++ actual\n@@ -1 +1 @@\n-Total: 32.10\n+Total: 30.0"),
+        CaseResult(case_id="T2", verdict="match")])
+    # A fixed nonce: the production call draws a fresh one per call, which the fingerprint must not
+    # depend on.
+    return ["\n".join(execution_evidence_section(plan, report, "0123456789abcdef"))]
+
+
 def _render_requirement_extraction() -> list[str]:
     from cqc_cpcc.requirement_coverage import build_requirement_extraction_prompt
 
     return [build_requirement_extraction_prompt(FIXTURE_INSTRUCTIONS)]
 
 
+def _render_effort_recommendation() -> list[str]:
+    from cqc_cpcc.effort_recommendation import (
+        build_effort_recommendation_prompt,
+        extract_signals,
+    )
+
+    signals = extract_signals(FIXTURE_INSTRUCTIONS, _fixture_checklist(), FIXTURE_SOLUTION)
+    # A fixed nonce keeps the fingerprint stable; real calls draw a fresh one. No submission.
+    return [build_effort_recommendation_prompt(FIXTURE_INSTRUCTIONS, signals, ["low", "medium", "high"],
+                                               solution=FIXTURE_SOLUTION, nonce="0123456789abcdef"),
+            build_effort_recommendation_prompt(FIXTURE_INSTRUCTIONS, signals, ["low", "medium", "high"],
+                                               nonce="0123456789abcdef")]
+
+
+def _render_requirement_solution_check() -> list[str]:
+    from cqc_cpcc.requirement_solution_check import build_solution_check_prompt
+
+    # A fixed nonce: the production call derives one from the text, which the fingerprint must
+    # not depend on.
+    return [build_solution_check_prompt(FIXTURE_INSTRUCTIONS, _fixture_checklist(), FIXTURE_SOLUTION,
+                                        "0123456789abcdef")]
+
+
+def _render_test_case_generation() -> list[str]:
+    from cqc_cpcc.test_case_generation import build_test_case_prompt
+
+    # A fixed nonce: the production call draws a fresh one per call, which the fingerprint
+    # must not depend on.
+    return [build_test_case_prompt(FIXTURE_INSTRUCTIONS, FIXTURE_SOLUTION, "java", "0123456789abcdef")]
+
+
 def _render_exam_grading() -> list[str]:
     from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_prompt
 
     return [build_exam_grading_prompt(FIXTURE_INSTRUCTIONS, FIXTURE_SOLUTION, FIXTURE_SUBMISSION,
-                                      FIXTURE_MAJOR_TYPES, FIXTURE_MINOR_TYPES)]
+                                      FIXTURE_MAJOR_TYPES, FIXTURE_MINOR_TYPES, nonce=FIXTURE_NONCE)]
 
 
 def _render_preprocessing_digest() -> list[str]:
@@ -231,20 +282,18 @@ def _render_preprocessing_digest() -> list[str]:
 
     return [
         _build_preprocessing_prompt(FIXTURE_SUBMISSION, FIXTURE_INSTRUCTIONS,
-                                    rubric_config=FIXTURE_RUBRIC_TABLE),
-        _build_preprocessing_prompt(FIXTURE_SUBMISSION, FIXTURE_INSTRUCTIONS),
+                                    rubric_config=FIXTURE_RUBRIC_TABLE, nonce=FIXTURE_NONCE),
+        _build_preprocessing_prompt(FIXTURE_SUBMISSION, FIXTURE_INSTRUCTIONS, nonce=FIXTURE_NONCE),
     ]
 
 
 def _render_project_feedback() -> list[str]:
-    from cqc_cpcc.project_feedback import DefaultFeedbackType, schema_feedback_types
-    from cqc_cpcc.prompts.project_feedback import CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI
+    from cqc_cpcc.project_feedback import DefaultFeedbackType, FeedbackGiver
 
-    # Mirrors FeedbackGiver.generate_feedback with the page's default feedback types.
-    return [CODE_ASSIGNMENT_FEEDBACK_PROMPT_OPENAI.format(
-        course_name=FIXTURE_COURSE, assignment=FIXTURE_INSTRUCTIONS, solution=FIXTURE_SOLUTION,
-        submission=FIXTURE_SUBMISSION,
-        feedback_types="\n\t".join(schema_feedback_types(DefaultFeedbackType.list())))]
+    # The production builder with the eval dataset's legacy feedback types.
+    giver = FeedbackGiver(course_name=FIXTURE_COURSE, assignment_instructions=FIXTURE_INSTRUCTIONS,
+                          assignment_solution=FIXTURE_SOLUTION, feedback_type_list=DefaultFeedbackType.list())
+    return [giver.build_prompt(FIXTURE_SUBMISSION)]
 
 
 def _render_flowgorithm_grade() -> list[str]:
@@ -275,7 +324,11 @@ def _render_judge(judge_id: str) -> Callable[[], list[str]]:
 RENDERERS: dict[str, Callable[[], list[str]]] = {
     "rubric-grading": _render_rubric_grading,
     "requirements-section": _render_requirements_section,
+    "execution-evidence-section": _render_execution_evidence_section,
     "requirement-extraction": _render_requirement_extraction,
+    "effort-recommendation": _render_effort_recommendation,
+    "requirement-solution-check": _render_requirement_solution_check,
+    "test-case-generation": _render_test_case_generation,
     "exam-grading": _render_exam_grading,
     "preprocessing-digest": _render_preprocessing_digest,
     "project-feedback": _render_project_feedback,

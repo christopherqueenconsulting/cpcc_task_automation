@@ -38,9 +38,34 @@ def _level(result: RubricAssessmentResult) -> str:
     return ", ".join(levels) if levels else "—"
 
 
+def _without_program_output(result: RubricAssessmentResult) -> RubricAssessmentResult:
+    """``result`` without anything a student's program printed, for the instructor sections of a card.
+
+    The output-check report is dropped, and an error the output check added loses its note (the
+    test input and the expected and actual lines) both on the error and on its scoring note. The
+    note keeps its stage, action and code. The student-facing feedback is built from the original
+    result: that note is written for the student (capped, in code spans) and stays there.
+    """
+    def plain(e):
+        return e.model_copy(update={"notes": None}) if getattr(e, "source", None) == "execution" else e
+
+    notes = []
+    for n in result.reconciliation or []:
+        if n.stage == "execution" and n.action == "added":
+            n = n.model_copy(update={
+                "reason": "The output check added this error. The test input and output lines are not in this export.",
+                "error": plain(n.error) if n.error is not None else None})
+        notes.append(n)
+    return result.model_copy(update={
+        "execution_report": None,
+        "detected_errors": [plain(e) for e in (result.detected_errors or [])] or result.detected_errors,
+        "reconciliation": notes})
+
+
 def result_card_markdown(student: str, result: RubricAssessmentResult,
                          greeting_name: Optional[str] = None) -> str:
-    """The card as Markdown: summary, criteria, errors, requirements, feedback, notes."""
+    """The card as Markdown: summary, criteria, errors, requirements, scoring notes, feedback,
+    instructor notes."""
     lines = [
         f"# Result card: {student}",
         "",
@@ -49,6 +74,10 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
         f"({_percent(result):.1f}%)",
         f"- **Level:** {_level(result)}",
     ]
+    if getattr(result, "code_version", None):
+        lines.append(f"- **Graded with:** code v{result.code_version}")
+    feedback_source = result
+    result = _without_program_output(result)
     counts = result.error_counts_by_severity or {}
     if counts:
         lines.append(f"- **Errors:** {counts.get('major', 0)} major, {counts.get('minor', 0)} minor")
@@ -77,8 +106,14 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
         for r in requirements:
             lines.append(f"| {_cell(r.requirement_id)} | {_cell(r.status)} | {_cell(r.evidence or '')} |")
 
+    notes = getattr(result, "reconciliation", None) or []
+    if notes:
+        from cqc_cpcc.reconciliation import describe, safe_line
+        lines += ["", "## Scoring notes", ""]
+        lines += [f"- {safe_line(describe(n))}" for n in notes]
+
     lines += ["", "## Feedback for the student", "",
-              build_student_feedback(result, student_name=greeting_name)]
+              build_student_feedback(feedback_source, student_name=greeting_name)]
     if result.overall_feedback:
         lines += ["", "## Instructor notes", "", result.overall_feedback]
     return "\n".join(lines).rstrip() + "\n"
@@ -92,8 +127,20 @@ def result_card_text(student: str, result: RubricAssessmentResult,
 
 
 def result_card_json(student: str, result: RubricAssessmentResult) -> str:
-    """The full result as JSON, with the student it belongs to."""
-    payload = {"student": student, "result": result.model_dump(mode="json")}
+    """The full result as JSON, with the student it belongs to.
+
+    Raw compiler diagnostics are left out: the card is meant to be pasted into outside
+    tools, and the diagnostics are instructor-only. The reconciliation notes are included,
+    and with them any error a backend stage dropped (``suppressed``), so the JSON shows
+    what was not counted and why.
+    """
+    data = _without_program_output(result).model_dump(mode="json", exclude={
+        "llm_request": True,  # the prompt holds the whole submission
+        "execution_report": True,  # program output (diff excerpts)
+        "detected_errors": {"__all__": {"compiler_diagnostics"}},
+        # A dropped error rides on its note with the same instructor-only field.
+        "reconciliation": {"__all__": {"error": {"compiler_diagnostics"}}}})
+    payload = {"student": student, "result": data}
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 

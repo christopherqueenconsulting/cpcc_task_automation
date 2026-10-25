@@ -13,6 +13,7 @@ from typing import Annotated, Optional
 from pydantic import BaseModel, Field
 
 from cqc_cpcc.prompts.flowgorithm import FLOWGORITHM_GRADE_PROMPT
+from cqc_cpcc.utilities.fprg_filename_facts import file_name_facts, render_facts
 from cqc_cpcc.utilities.logger import logger
 
 
@@ -35,9 +36,12 @@ class FlowgorithmGrade(BaseModel):
 
 def build_flowgorithm_prompt(assignment: str, rubric_criteria_markdown_table: str, submission: str,
                              submission_file_name: str, total_possible_points: str) -> str:
+    """The prompt text. The file name is never put in it: two facts about it, computed here
+    (``fprg_filename_facts``), take its place, so the file-name rubric criteria can still be
+    decided without the name leaving the machine."""
     return FLOWGORITHM_GRADE_PROMPT.strip().format(
         assignment=assignment,
-        submission_file_name=submission_file_name,
+        file_name_facts=render_facts(file_name_facts(submission_file_name)),
         submission=submission,
         rubric_criteria_markdown_table=rubric_criteria_markdown_table,
         total_possible_points=total_possible_points,

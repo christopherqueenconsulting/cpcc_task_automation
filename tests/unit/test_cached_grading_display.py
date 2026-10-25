@@ -392,3 +392,16 @@ class TestCachedErrorOnlyDisplay:
                 assert True
             except Exception as e:
                 pytest.fail(f"display_cached_error_only_results raised unexpected exception: {e}")
+
+
+@pytest.mark.unit
+def test_similarity_label_ignores_a_missing_or_non_numeric_ratio():
+    """The results-table cell: "" without a ratio or on a stand-in result object; the
+    label only when the saved float is at or above the threshold."""
+    grade_assignment = _import_grade_assignment_module()
+    from cqc_cpcc.solution_similarity import DEFAULT_THRESHOLD
+
+    assert grade_assignment._similarity_label(SimpleNamespace(solution_similarity=None)) == ""
+    assert grade_assignment._similarity_label(MagicMock()) == ""
+    assert grade_assignment._similarity_label(SimpleNamespace(solution_similarity=0.5)) == ""
+    assert grade_assignment._similarity_label(SimpleNamespace(solution_similarity=DEFAULT_THRESHOLD)) != ""

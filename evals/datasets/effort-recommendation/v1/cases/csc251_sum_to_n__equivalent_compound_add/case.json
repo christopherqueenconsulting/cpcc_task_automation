@@ -1,0 +1,49 @@
+{
+  "case_id": "csc251_sum_to_n__equivalent_compound_add",
+  "language": "java",
+  "role": "grading",
+  "course_id": "CSC_251",
+  "assignment_id": "Exam1",
+  "rubric_id": "csc151_java_exam_rubric",
+  "instructions": "Write a Java program named SumToN.java that:\n1. Uses a Scanner to read a whole number n.\n2. Prints Invalid and stops when n is less than 1.\n3. Otherwise uses a for loop to add the numbers from 1 to n and prints Sum: X.\nFollow Java naming conventions and comment your code.\n",
+  "files": [
+    "SumToN.java"
+  ],
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "Use a Scanner to read a whole number n.",
+      "weight": "core"
+    },
+    {
+      "id": "R2",
+      "text": "Print Invalid and stop when n is less than 1.",
+      "weight": "core"
+    },
+    {
+      "id": "R3",
+      "text": "Add the numbers from 1 to n with a for loop and print Sum: X.",
+      "weight": "core"
+    }
+  ],
+  "expected": {
+    "validity": [
+      "ok"
+    ],
+    "compiles": true,
+    "error_ids": [],
+    "acceptable_error_ids": [],
+    "max_occurrences": {},
+    "requirements": {},
+    "error_satisfied_by": {},
+    "not_above": null
+  },
+  "mutations": [],
+  "tags": [
+    "clean",
+    "equivalent"
+  ],
+  "twin_of": "csc251_sum_to_n__solution_format",
+  "labels_reviewed_by": null,
+  "reference_solution_file": "solution/SumToN.java"
+}

@@ -362,13 +362,16 @@ class TestScorecard:
 
 @pytest.mark.unit
 class TestReviewFixes:
-    def test_multi_site_errors_widen_the_expected_range(self, cases):
+    def test_multi_site_errors_do_not_widen_the_expected_range(self, cases):
+        """Each distinct error type counts once however often it occurs (2026-10-22), so
+        reporting a multi-site error at its max_occurrences scores the same as reporting it
+        once and the expected range does not widen."""
         c = _case(cases, "csc134_project_cpp__magic_threshold")
         low, high = c.expected_score_range
         assert c.max_occurrences == {"CSC_134_PROJECT_1_CONSTANTS_ERROR": 3}
         assert low == ds.score_for_errors(c, c.error_ids, {"CSC_134_PROJECT_1_CONSTANTS_ERROR": 3})
         assert high == ds.score_for_errors(c, c.error_ids)
-        assert low < high
+        assert low == high
 
     def test_empty_submissions_must_score_zero(self, cases):
         c = _case(cases, "csc151_exam1_java__empty")
@@ -419,6 +422,23 @@ class TestReviewFixes:
         picked = probe_cases(cases)
         assert len(picked) == 3 and {c.language for c in picked} == {"java", "cpp"}
         assert not any(c.is_empty for c in picked)
+
+    @pytest.mark.asyncio
+    async def test_a_call_made_before_the_case_is_not_recorded_as_the_cases(self, cases):
+        from cqc_cpcc.utilities.AI import llm_gateway
+
+        async def no_call(**kwargs):
+            return _Result([], 200.0)
+
+        stale = llm_gateway.GatewayCall("feedback", "judge/model", "judge/model", False, "h", "r",
+                                        completion=None, prompt="judge-pairwise@1")
+        token = llm_gateway._last_call.set(stale)
+        try:
+            records = await run_model("openai/gpt-5-mini", None, cases[:1], 1, Budget(limit=1, stop_at=0.9),
+                                      grade_fn=no_call)
+        finally:
+            llm_gateway._last_call.reset(token)
+        assert records[0].prompt is None and records[0].model_used is None
 
     @pytest.mark.asyncio
     async def test_failed_call_is_charged_an_estimate(self, cases):

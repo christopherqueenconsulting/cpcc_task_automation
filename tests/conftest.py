@@ -8,6 +8,10 @@ import pytest
 # Fixed alias key so tests never create ~/.cqc_cpcc/pii_alias.key and aliases are
 # deterministic (see cqc_cpcc.utilities.pii_redaction).
 os.environ.setdefault("CQC_PII_ALIAS_KEY", "test-alias-key")
+# Tests never start student programs in a developer's real Docker. Set at import time so
+# module-scoped fixtures (which run before any function-scoped one) are covered too.
+# Sandbox tests turn it back on themselves; see _no_docker_sandbox_unless_asked below.
+os.environ["CQC_EXECUTION"] = "off"
 _SYSTEM_TEMPDIR = tempfile.tempdir
 
 @pytest.fixture
@@ -34,6 +38,19 @@ def _isolate_posthog_telemetry(monkeypatch):
     posthog_telemetry.reload()
     yield
     posthog_telemetry.reload()
+
+
+@pytest.fixture(autouse=True)
+def _no_docker_sandbox_unless_asked(monkeypatch):
+    """Keep tests off a developer's real Docker. With CQC_EXECUTION=off the compile gate
+    uses its host fallback, as on Streamlit Cloud. Tests of the sandbox runner and the
+    Docker integration tests set the variable themselves."""
+    from cqc_cpcc.utilities import program_runner
+
+    monkeypatch.setenv("CQC_EXECUTION", "off")
+    program_runner.reset_runner_status_cache()
+    yield
+    program_runner.reset_runner_status_cache()
 
 
 @pytest.fixture(autouse=True)

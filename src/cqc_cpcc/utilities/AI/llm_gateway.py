@@ -14,8 +14,10 @@ calls OpenRouter, and on failure retries once on the role's fallback model.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -23,7 +25,7 @@ from typing import Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
-from cqc_cpcc.utilities.AI import model_registry
+from cqc_cpcc.utilities.AI import llm_limits, llm_progress, model_registry
 from cqc_cpcc.utilities.AI import openrouter_client
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.AI.openai_exceptions import (
@@ -47,6 +49,11 @@ class GatewayCall:
     registry_revision: str
     completion: Optional[openrouter_client.CompletionMetadata]
     prompt: Optional[str] = None  # "prompt_id@version" from config/prompt_registry.json
+    # The exact request as sent: chat messages, the extra body (reasoning effort, seed,
+    # provider, token limit, user) and the correlation id the debug record is filed under.
+    messages: Optional[list] = None
+    params: Optional[dict] = None
+    correlation_id: Optional[str] = None
 
 
 _PROMPT_REGISTRY = Path(__file__).resolve().parents[2] / "config" / "prompt_registry.json"
@@ -91,6 +98,13 @@ async def structured(
         override: Optional[str] = None,
         use_auto_route: bool = False,
         prompt_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
+        effort_override: Optional[str] = None,
+        request_timeout: Optional[float] = None,
+        max_attempts: Optional[int] = None,
+        allow_fallback: bool = True,
 ) -> T:
     """Return a ``schema_model`` instance for ``prompt`` using ``role``'s model.
 
@@ -104,25 +118,50 @@ async def structured(
             (``OPENROUTER_ALLOWED_MODELS`` constrains it). No fallback applies.
         prompt_id: Id of the prompt in ``config/prompt_registry.json``; recorded as
             ``prompt_id@version`` on :func:`last_call` so every output names its prompt.
+        correlation_id: The id the caller shows in its debug panel; the request and
+            response records are filed under it instead of a fresh one.
+        session_id: A stable id for the run (OpenRouter's ``user`` field), so the
+            provider can route the run's calls to the same cache.
+        system: Optional system message; without it the prompt is one user message.
+        effort_override: Reasoning effort that replaces the role's effort for this call
+            when the model supports it (otherwise none is sent and the provider default
+            applies). Ignored under ``use_auto_route``, which takes no effort.
+        request_timeout: Seconds one request may take; replaces the role's timeout
+            (``llm_limits.request_timeout``) when set.
+        max_attempts: Total attempts on one model (the default is the client's three);
+            ``1`` means a single try.
+        allow_fallback: ``False`` never retries on the role's fallback model, so a failure
+            or timeout raises after the primary's attempts.
     """
     _last_call.set(None)
-    resolved = model_registry.resolve(role, override=override)
+    if use_auto_route and effort_override:
+        logger.warning("Auto Router takes no reasoning effort setting; ignoring the effort override.")
+        effort_override = None
+    resolved = model_registry.resolve(role, override=override, effort_override=effort_override)
     tag = prompt_tag(prompt_id)
 
     if _is_test_mode():
         from cqc_cpcc.utilities.AI.openai_client import _get_test_mode_response
+        llm_progress.emit("attempt_started", resolved.model, attempt=1, max_attempts=1)
+        # Lets e2e tests watch a call that is still waiting (default: no delay).
+        await asyncio.sleep(float(os.getenv("CQC_TEST_MODE_LATENCY_S", "0") or 0))
         result = _get_test_mode_response(schema_model)
-        _last_call.set(_call_record(resolved, resolved.model, False, None, prompt=tag))
+        llm_progress.emit("succeeded", resolved.model, attempt=1, max_attempts=1)
+        _last_call.set(_call_record(resolved, resolved.model, False, None, prompt=tag, request={
+            "messages": openrouter_client.build_messages(prompt, system),
+            "params": model_registry.build_request_params(resolved), "correlation_id": correlation_id}))
         return result
 
+    send = dict(correlation_id=correlation_id, session_id=session_id, system=system,
+                request_timeout=request_timeout, max_attempts=max_attempts)
     try:
-        result = await _complete(resolved, prompt, schema_model, use_auto_route)
+        result = await _complete(resolved, prompt, schema_model, use_auto_route, **send)
         _last_call.set(_call_record(resolved, resolved.model, False, prompt=tag))
         return result
     except (OpenAISchemaValidationError, OpenAITransportError) as primary_error:
         # Record what the failed call spent, so callers (the eval budget) can charge it.
         _last_call.set(_call_record(resolved, resolved.model, False, prompt=tag))
-        if use_auto_route or not resolved.fallback:
+        if use_auto_route or not resolved.fallback or not allow_fallback:
             raise
         logger.warning(
             f"[{role}] {resolved.model} failed ({type(primary_error).__name__}: "
@@ -134,8 +173,9 @@ async def structured(
             model=resolved.model,
             details={"role": role, "fallback_model": resolved.fallback},
         )
-        fallback = model_registry.resolve(role, override=resolved.fallback)
-        result = await _complete(fallback, prompt, schema_model, False)
+        llm_progress.emit("fallback", resolved.model)
+        fallback = model_registry.resolve_fallback(resolved, effort_override)
+        result = await _complete(fallback, prompt, schema_model, False, **send)
         _last_call.set(_call_record(resolved, fallback.model, True, prompt=tag))
         return result
 
@@ -145,25 +185,62 @@ def _is_test_mode() -> bool:
     return TEST_MODE
 
 
-async def _complete(resolved, prompt, schema_model, use_auto_route):
+async def _complete(resolved, prompt, schema_model, use_auto_route, *, correlation_id=None,
+                    session_id=None, system=None, request_timeout=None, max_attempts=None):
     if use_auto_route:
         # The router picks the model, so only model-independent params apply.
         resolved = resolved.model_copy(update={"profile": None})
+    attempts = {} if max_attempts is None else {"max_retries": max(1, int(max_attempts))}
     return await openrouter_client.get_openrouter_completion(
         prompt=prompt,
         schema_model=schema_model,
         use_auto_route=use_auto_route,
         model_name=None if use_auto_route else resolved.model,
         extra_params=model_registry.build_request_params(resolved),
+        request_timeout=request_timeout or llm_limits.request_timeout(
+            resolved.role, None if use_auto_route else resolved.reasoning_effort),
+        correlation_id=correlation_id,
+        session_id=session_id,
+        system=system,
+        **attempts,
     )
+
+
+def last_request_record(prompt_id: str, role: str) -> Optional[dict]:
+    """What the most recent gateway call sent, for the result it produced (never persisted).
+
+    ``None`` when no call was made in this context (a mocked gateway, a validity-gate
+    short-circuit). The effort comes from the request itself, so a fallback model's
+    effort is the one that actually ran.
+    """
+    call = last_call()
+    if call is None or not call.messages:
+        return None
+    reasoning = (call.params or {}).get("reasoning")
+    effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
+    completion = call.completion
+    return {
+        "prompt_id": prompt_id,
+        "prompt": call.prompt,
+        "model": call.model_used,
+        "effort": effort,
+        "timeout_s": llm_limits.request_timeout(role, effort),
+        "correlation_id": call.correlation_id,
+        "messages": call.messages,
+        "params": call.params,
+        "cached_tokens": getattr(completion, "cached_tokens", None) if completion else None,
+    }
 
 
 _UNSET = object()
 
 
-def _call_record(resolved, model_used, fallback_used, completion=_UNSET, prompt=None) -> GatewayCall:
+def _call_record(resolved, model_used, fallback_used, completion=_UNSET, prompt=None,
+                 request=_UNSET) -> GatewayCall:
     if completion is _UNSET:
         completion = openrouter_client.last_completion_metadata()
+    if request is _UNSET:
+        request = openrouter_client.last_request() or {}
     return GatewayCall(
         role=resolved.role,
         requested_model=resolved.model,
@@ -173,4 +250,7 @@ def _call_record(resolved, model_used, fallback_used, completion=_UNSET, prompt=
         registry_revision=resolved.registry_revision,
         completion=completion,
         prompt=prompt,
+        messages=(request or {}).get("messages"),
+        params=(request or {}).get("params"),
+        correlation_id=(request or {}).get("correlation_id"),
     )

@@ -1096,9 +1096,9 @@ class TestMicrosoftLoginHelpers:
     """Test helper logic used by microsoft_login account path resolution."""
 
     def test_get_microsoft_account_tile_xpath_contains_both_identifiers(self):
-        xpath = _get_microsoft_account_tile_xpath("CQueen", "email@cpcc.edu")
+        xpath = _get_microsoft_account_tile_xpath("CQueen", "example@cpcc.edu")
         assert "cqueen" in xpath
-        assert "email@cpcc.edu" in xpath
+        assert "example@cpcc.edu" in xpath
         assert "tilesHolder" in xpath
 
     def test_resolve_account_path_returns_true_when_expected_prefilled(self, mocker):
@@ -1115,7 +1115,7 @@ class TestMicrosoftLoginHelpers:
         driver.find_elements.side_effect = find_elements
         click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry")
 
-        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "email@cpcc.edu")
+        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "example@cpcc.edu")
 
         assert result is True
         assert click_retry.call_count == 1
@@ -1140,7 +1140,7 @@ class TestMicrosoftLoginHelpers:
 
         driver.find_elements.side_effect = find_elements
         click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry")
-        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "email@cpcc.edu")
+        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "example@cpcc.edu")
 
         assert result is False
         assert click_retry.call_count == 2
@@ -1170,7 +1170,7 @@ class TestMicrosoftLoginHelpers:
         driver.find_elements.return_value = []
         click_retry = mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry")
 
-        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "email@cpcc.edu")
+        result = _resolve_microsoft_account_path(driver, wait, wait_short, wait_probe, "cqueen", "example@cpcc.edu")
 
         assert result is False
         click_retry.assert_not_called()
@@ -1205,8 +1205,8 @@ class TestMicrosoftLoginBranchBehavior:
         mocker.patch.dict(
             os.environ,
             {
-                "INSTRUCTOR_USERID": "cqueen",
-                "INSTRUCTOR_EMAIL": "email@cpcc.edu",
+                "INSTRUCTOR_USERID": "example",
+                "INSTRUCTOR_EMAIL": "example@cpcc.edu",
                 "INSTRUCTOR_PASS": "secret-pass",
             },
             clear=False,
@@ -1214,7 +1214,7 @@ class TestMicrosoftLoginBranchBehavior:
 
         microsoft_login(driver)
 
-        username_field.send_keys.assert_called_once_with("cqueen@cpcc.edu")
+        username_field.send_keys.assert_called_once_with("example@cpcc.edu")
         password_field.send_keys.assert_called_once_with("secret-pass")
         assert any("Next" in c.args[2] for c in click_retry.call_args_list)
         screenshot.assert_not_called()
@@ -1245,7 +1245,7 @@ class TestMicrosoftLoginBranchBehavior:
             os.environ,
             {
                 "INSTRUCTOR_USERID": "cqueen",
-                "INSTRUCTOR_EMAIL": "email@cpcc.edu",
+                "INSTRUCTOR_EMAIL": "example@cpcc.edu",
                 "INSTRUCTOR_PASS": "secret-pass",
             },
             clear=False,
@@ -1287,7 +1287,7 @@ class TestMicrosoftLoginBranchBehavior:
             os.environ,
             {
                 "INSTRUCTOR_USERID": "cqueen",
-                "INSTRUCTOR_EMAIL": "email@cpcc.edu",
+                "INSTRUCTOR_EMAIL": "example@cpcc.edu",
                 "INSTRUCTOR_PASS": "secret-pass",
             },
             clear=False,
@@ -1331,7 +1331,7 @@ class TestMicrosoftLoginBranchBehavior:
             os.environ,
             {
                 "INSTRUCTOR_USERID": "cqueen",
-                "INSTRUCTOR_EMAIL": "email@cpcc.edu",
+                "INSTRUCTOR_EMAIL": "example@cpcc.edu",
                 "INSTRUCTOR_PASS": "secret-pass",
             },
             clear=False,

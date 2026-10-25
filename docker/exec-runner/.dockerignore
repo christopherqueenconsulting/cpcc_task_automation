@@ -1,0 +1,5 @@
+# Deny everything, then allow only what the image copies. The build context is
+# ./docker/exec-runner; nothing else (no .env, no repo files) may enter the image.
+*
+!Dockerfile
+!driver.py

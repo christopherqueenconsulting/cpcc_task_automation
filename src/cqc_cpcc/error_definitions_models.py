@@ -27,10 +27,39 @@ Usage:
     >>> print(error.name)
 """
 
-from typing import Optional, Annotated
+import re
+from typing import Annotated, Literal, Optional
 
 from cqc_cpcc.course_identifier import course_ids_match, normalize_course_id
 from pydantic import BaseModel, Field, field_validator
+
+
+ExecutionCategory = Literal["output_format", "output_values", "sequence"]
+
+# Ids and names that are never output errors, whatever else they say. A misspelling in an output
+# string is a MISSPELLING; the output check routes it there (execution_gate), never to formatting.
+_NOT_OUTPUT = re.compile(
+    r"MISSPELL|INPUT_VALID|CURLY|BRACE|COMPILE|DOCUMENT|COMMENT|NAMING|STYLE|SYNTAX|CONSTANT|METHOD|"
+    r"FUNCTION|CLASS|ARRAY|FILE|SCANNER|UNUSED|DATA_TYPE|STALE|INEFFICIENT|SECURITY|AGGREGAT", re.IGNORECASE)
+_SEQUENCE = re.compile(r"SEQUENCE", re.IGNORECASE)
+_FORMAT = re.compile(r"FORMATTING|DECIMAL_SCALE|OUTPUT_FORMAT", re.IGNORECASE)
+_VALUES = re.compile(r"OUTPUT_IMPACT|CALCULATION|WRONG_OUTPUT|INCORRECT_OUTPUT|OUTPUT_ERROR", re.IGNORECASE)
+
+
+def infer_execution_category(error_id: str, name: str = "") -> Optional[str]:
+    """The output-check category of a definition that has no ``execution_category`` set.
+
+    Fallback for custom definitions, from the id and name only (never the description, which
+    mentions many things). Returns None for anything not clearly about sequencing, output values
+    or output format, and always for misspelling, input validation, braces and similar ids.
+    """
+    key = re.sub(r"[\s\-]+", "_", f"{error_id} {name}")
+    if _NOT_OUTPUT.search(key):
+        return None
+    for category, pattern in (("sequence", _SEQUENCE), ("output_format", _FORMAT), ("output_values", _VALUES)):
+        if pattern.search(key):
+            return category
+    return None
 
 
 class ErrorDefinition(BaseModel):
@@ -48,6 +77,10 @@ class ErrorDefinition(BaseModel):
         enabled: Whether this error is active for grading
         default_penalty_points: Optional default point deduction (for future use)
         examples: Optional list of example code snippets or descriptions
+        execution_category: Optional output-check role (output_format, output_values or
+            sequence). Set on the registry's output and sequence ids; ``infer_execution_category``
+            is the fallback for custom definitions. Never set on misspelling, input validation,
+            braces or other non-output ids.
     """
     error_id: Annotated[str, Field(description="Stable identifier for this error")]
     name: Annotated[str, Field(description="Short human-readable error name")]
@@ -61,6 +94,11 @@ class ErrorDefinition(BaseModel):
     examples: Annotated[
         Optional[list[str]],
         Field(default=None, description="Optional list of example code snippets or descriptions")
+    ]
+
+    execution_category: Annotated[
+        Optional[ExecutionCategory],
+        Field(default=None, description="Role in the output check: output_format, output_values or sequence")
     ]
 
     @field_validator('error_id')

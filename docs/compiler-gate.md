@@ -22,8 +22,8 @@ and the score and band are computed from that list.
 |---|---|---|
 | Compiles | "Does Not Compile" | **Removes** the error (false positive) |
 | Compiles | nothing | no change |
-| Does not compile | "Does Not Compile" | **Confirms**, attaches the real diagnostics |
-| Does not compile | nothing | **Adds** the rubric's compile error, with diagnostics |
+| Does not compile | "Does Not Compile" | **Confirms** (the error stays as the model wrote it) |
+| Does not compile | nothing | **Adds** the rubric's compile error, with instructor-only diagnostics |
 | Cannot verify | anything | **Nothing** — the model's judgment stands |
 
 When the error list changes, the cached `error_counts_by_*` are reset to `None` so
@@ -46,6 +46,7 @@ Non-definitive outcomes, all of which leave the model's judgment alone:
 - the compile timed out (`COMPILE_TIMEOUT_SECONDS`)
 - an unsupported language (SAS has no local compiler)
 - an empty submission, or no compilable source files at all
+- a C/C++ include that could read a file outside the submission (see below)
 
 In a mixed-language submission, one unverifiable language makes the whole submission
 unverifiable. There is no half-verdict.
@@ -61,10 +62,77 @@ unverifiable. There is no half-verdict.
 Every invocation is time-bounded, passes list arguments (never `shell=True`), and
 works inside a `TemporaryDirectory` that is removed afterwards.
 
-Two residual gaps, neither currently exploited by the tool but worth knowing:
-`javac` runs annotation processors by default (`-proc:none` would close that), and
-`g++ -fsyntax-only` still resolves `#include`, so a crafted include path can echo
-file contents into a diagnostic string.
+`g++ -fsyntax-only` still resolves `#include`, and its diagnostics quote the lines of
+any file it opens. A submission that includes a host file (for example the app's
+`.env`) would read it back in the error text. So before compiling, the gate refuses a
+verdict (`supported=False`) when any C/C++ file has:
+
+- an `#include`, `#import` or `#embed` of an absolute path, or of a path containing `..`;
+- a quoted include (`"name.h"`) that is not one of the submitted files, by basename;
+- `#include_next`, or a macro include (`#include NAME`);
+- `__has_include`, `__has_embed` or `#pragma GCC dependency`, which can test whether a
+  host file exists;
+- a `#line` directive or GNU line marker (`# 1 "file"`) that names a file: GCC prints
+  the source line under a diagnostic by opening that file;
+- a submitted file name starting with `-` or `@`, which the compiler would read as an
+  option or a response file (`@opts.cpp` reads options such as `-include <file>` from
+  `opts.cpp`).
+
+The compile also runs with `-fno-diagnostics-show-caret` (GCC) or
+`-fno-caret-diagnostics` (clang), so it never prints source
+lines under a diagnostic. If a guard rule is ever missed, at most the tokens a message
+quotes can leak, not whole lines of a file. Sources are also passed as `./name`, so no argument can start with `-` or `@`, and the
+compile drops environment variables that widen the include search or add options
+(`CPATH`, `CPLUS_INCLUDE_PATH`, `CCC_OVERRIDE_OPTIONS` and the like; see
+`_COMPILER_ENV_VARS`).
+
+Standard headers (`<iostream>`) and the submission's own headers still compile. The
+scan also catches the `%:` digraph, the `??=` trigraph, comments before the keyword
+and backslash line splices. It matches anywhere in the text, so a directive-like
+string or comment can make a submission unverifiable; that is the safe direction.
+
+### If a host file may have leaked
+
+Before this guard (PR #395), raw diagnostics went into `notes`, which student feedback
+renders. Only the synthetic `fake.env` test has reproduced the echo; no real grading
+run is known to have included a host file.
+
+**Before merging, and again if a leak is ever suspected,** whoever runs the app on the
+Mac (Christopher, or an agent working there) searches the saved runs. Results live in
+`~/.cqc_cpcc/grading_results/` (or `CQC_GRADING_RESULTS_DIR`). The check below prints
+only counts, never note text:
+
+```bash
+python3 -c "import glob,json,os;d=os.environ.get('CQC_GRADING_RESULTS_DIR') or os.path.expanduser('~/.cqc_cpcc/grading_results');n=[f for f in glob.glob(d+'/*.json') if any('Verified by' in (e.get('notes') or '') and '\n' in (e.get('notes') or '').strip() or e.get('compiler_diagnostics') for r in json.load(open(f)).get('results',[]) if isinstance(r,list) and isinstance(r[-1],dict) for e in r[-1].get('detected_errors') or [])];print(len(glob.glob(d+'/*.json')),'runs,',len(n),'to review:',[os.path.basename(f) for f in n])"
+```
+
+1. A run is listed when a gate note holds more than the one line "Verified by ...: the
+   submission does not compile.", or when it carries `compiler_diagnostics`. Open each
+   one and look for text that is not from the student's own files. Delete or re-grade
+   any run that has such text before downloading feedback from it again.
+2. If any note quotes a host file, rotate every key in `.env` (by name:
+   `OPENROUTER_API_KEY`, `OPENAI_API_KEY` and the rest). Christopher does the rotation;
+   creating secrets is his.
+
+Result on 2026-10-22, before merge, on the Mac: 9 saved runs, 0 gate-added compile
+errors, so nothing to review. Hand-backs already sent to students cannot be checked
+this way.
+
+Rollback is `git revert`, but a revert puts the host-file echo back into student
+feedback. Prefer a forward fix unless the gate is breaking grading.
+
+One residual gap, not currently exploited by the tool but worth knowing: `javac` runs
+annotation processors by default (`-proc:none` would close that).
+
+## Compile checks in the sandbox
+
+When the exec-runner container is available (`program_runner.runner_status()`), the C++ and
+Java compile checks run inside it, with no network and no host files; the host toolchain and
+its include guard above are only the fallback. A sandbox that is available but cannot answer
+(timeout, daemon error) gives "cannot verify", never "does not compile", and the host is not
+tried instead. Python is still parse-checked in process. `CQC_EXECUTION=off` forces the host
+fallback. The gate has no C language today, so C compile checks are not part of it. See
+`docs/execution-gate.md`.
 
 ## Multi-file submissions
 
@@ -77,7 +145,10 @@ headers rather than skipped.
 
 Compiler diagnostics have the throwaway temp path replaced with the student's real
 filename before they reach a report, and are truncated at 1500 characters — g++ can
-emit thousands of lines for one mistake.
+emit thousands of lines for one mistake. They are kept in the instructor-only
+`DetectedError.compiler_diagnostics` field, which is outside the model's schema. The
+student-facing `notes` get only a generic "Verified by g++: the submission does not
+compile." line, so student feedback never shows raw diagnostics.
 
 ## Configuration
 
@@ -94,3 +165,10 @@ poetry run pytest tests/unit/test_compiler_gate.py tests/unit/test_backend_scori
 
 The toolchain-missing and timeout paths are tested with the compiler stubbed out, so
 the suite behaves the same on a machine with no JDK as on one with a full toolchain.
+
+## Related: the execution gate
+
+The execution gate (`docs/execution-gate.md`, PR 14) runs after this gate. A student program that
+fails to compile in the sandbox gives the output check no evidence and changes nothing: "Does Not
+Compile" is decided here, by the real compiler, and "cannot verify" never becomes a deduction in
+either gate.

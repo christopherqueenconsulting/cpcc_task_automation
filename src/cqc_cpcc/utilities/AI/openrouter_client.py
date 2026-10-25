@@ -38,6 +38,7 @@ Example usage:
 import asyncio
 import contextvars
 import json
+import math
 import os
 from dataclasses import dataclass
 from typing import Optional, Type, TypeVar
@@ -60,7 +61,9 @@ from cqc_cpcc.utilities.env_constants import (
     OPENROUTER_ALLOWED_MODELS as DEFAULT_OPENROUTER_ALLOWED_MODELS,
     OPENROUTER_API_KEY as DEFAULT_OPENROUTER_API_KEY,
 )
+from cqc_cpcc.utilities.AI import llm_limits, llm_progress
 from cqc_cpcc.utilities.logger import logger
+import openai
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
 
@@ -75,6 +78,11 @@ OPENROUTER_APP_URL = "https://github.com/gitchrisqueen/cpcc_task_automation"
 # Retry configuration for OpenRouter
 DEFAULT_MAX_RETRIES = 3  # Total attempts (1 initial + 2 retries) - matches OpenAI for consistency
 DEFAULT_RETRY_DELAY = 1.0  # Base delay in seconds
+DEFAULT_REQUEST_TIMEOUT = llm_limits.FALLBACK_REQUEST_TIMEOUT_S  # seconds per request
+MAX_RETRY_AFTER_S = 30.0  # longest rate-limit wait honoured from a Retry-After header
+# Client errors a retry cannot fix (bad request, auth, permission, unknown model).
+_NO_RETRY_ERRORS = (openai.BadRequestError, openai.AuthenticationError,
+                    openai.PermissionDeniedError, openai.NotFoundError)
 
 # Backward-compatible module-level constants (tests patch these names directly)
 OPENROUTER_API_KEY = DEFAULT_OPENROUTER_API_KEY
@@ -100,11 +108,23 @@ class CompletionMetadata:
     latency_seconds: float
     attempts: int
     ok: bool = True
+    cached_tokens: Optional[int] = None  # prompt tokens the provider served from its cache
 
 
 _last_completion: contextvars.ContextVar[Optional[CompletionMetadata]] = contextvars.ContextVar(
     "openrouter_last_completion", default=None
 )
+
+
+_last_request: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "openrouter_last_request", default=None
+)
+
+
+def last_request() -> Optional[dict]:
+    """The request body of the most recent completion call in this context (task): the chat
+    messages, the extra parameters sent, the model asked for and the correlation id."""
+    return _last_request.get()
 
 
 def last_completion_metadata() -> Optional[CompletionMetadata]:
@@ -121,6 +141,7 @@ class _Spend:
         self.prompt_tokens = 0
         self.completion_tokens = 0
         self.reasoning_tokens = 0
+        self.cached_tokens = 0
         self.last_response = None
 
     def add(self, response) -> None:
@@ -140,6 +161,10 @@ class _Spend:
         reasoning = getattr(details, "reasoning_tokens", None) if details else None
         if isinstance(reasoning, int):
             self.reasoning_tokens += reasoning
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        cached = getattr(prompt_details, "cached_tokens", None) if prompt_details else None
+        if isinstance(cached, int):
+            self.cached_tokens += cached
 
     def metadata(self, requested_model: str, latency: float, ok: bool) -> CompletionMetadata:
         response = self.last_response
@@ -151,6 +176,7 @@ class _Spend:
             prompt_tokens=self.prompt_tokens or None,
             completion_tokens=self.completion_tokens or None,
             reasoning_tokens=self.reasoning_tokens or None,
+            cached_tokens=self.cached_tokens or None,
             cost_usd=self.cost,
             latency_seconds=latency,
             attempts=self.attempts,
@@ -173,7 +199,7 @@ def _get_openrouter_allowed_models_raw() -> str | None:
     return os.getenv("OPENROUTER_ALLOWED_MODELS") or OPENROUTER_ALLOWED_MODELS
 
 
-def _get_openrouter_client() -> AsyncOpenAI:
+def _get_openrouter_client(timeout: float = DEFAULT_REQUEST_TIMEOUT) -> AsyncOpenAI:
     """Get configured AsyncOpenAI client pointing to OpenRouter API.
 
     OpenRouter provides an OpenAI-compatible API endpoint at https://openrouter.ai/api/v1
@@ -194,9 +220,13 @@ def _get_openrouter_client() -> AsyncOpenAI:
 
     # Use AsyncOpenAI with OpenRouter's base URL
     # OpenRouter provides OpenAI-compatible API at https://openrouter.ai/api/v1
+    # The SDK's own retries are off (its default is 2 more tries of 600 s each): the loop in
+    # _get_openrouter_completion_impl is the only retry counter, so attempts are visible.
     return AsyncOpenAI(
         api_key=api_key,
         base_url=OPENROUTER_BASE_URL,
+        timeout=openai.Timeout(timeout, connect=10.0),
+        max_retries=0,
         default_headers={
             "X-Title": OPENROUTER_APP_NAME,
             "HTTP-Referer": OPENROUTER_APP_URL,
@@ -312,9 +342,10 @@ def get_openrouter_plugins() -> Optional[list]:
     ]
 
 
-def build_messages(prompt: str) -> list[dict]:
-    """The chat messages sent for ``prompt`` (one user message, no system prompt)."""
-    return [{"role": "user", "content": prompt}]
+def build_messages(prompt: str, system: Optional[str] = None) -> list[dict]:
+    """One user message holding ``prompt``; with ``system``, a system message first."""
+    messages = [{"role": "system", "content": system}] if system else []
+    return messages + [{"role": "user", "content": prompt}]
 
 
 def build_response_format(schema_model: Type[BaseModel]) -> dict:
@@ -341,6 +372,10 @@ async def get_openrouter_completion(
         max_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         extra_params: Optional[dict] = None,
+        request_timeout: Optional[float] = None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
 ) -> T:
     """Get a structured completion from OpenRouter, reporting failures to analytics.
 
@@ -354,6 +389,7 @@ async def get_openrouter_completion(
     spend = _Spend()
     _spend.set(spend)
     _last_completion.set(None)
+    _last_request.set(None)
     try:
         return await _get_openrouter_completion_impl(
             prompt=prompt,
@@ -363,6 +399,8 @@ async def get_openrouter_completion(
             max_tokens=max_tokens,
             max_retries=max_retries,
             extra_params=extra_params,
+            request_timeout=request_timeout,
+            correlation_id=correlation_id, session_id=session_id, system=system
         )
     except Exception as call_error:
         _last_completion.set(spend.metadata(effective_model, timer.elapsed(), ok=False))
@@ -388,6 +426,10 @@ async def _get_openrouter_completion_impl(
         max_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         extra_params: Optional[dict] = None,
+        request_timeout: Optional[float] = None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
 ) -> T:
     """Get structured completion from OpenRouter using OpenAI-compatible API.
 
@@ -406,6 +448,9 @@ async def _get_openrouter_completion_impl(
         extra_params: Extra OpenRouter request body fields from the model registry
             (reasoning, provider, seed, usage, token limit). See
             ``model_registry.build_request_params``.
+        request_timeout: Seconds one request may take (default ``DEFAULT_REQUEST_TIMEOUT``).
+            After ``llm_limits.MAX_TIMEOUTS_PER_MODEL`` timeouts the call gives up so the
+            gateway can move to the fallback model.
         
     Returns:
         Validated Pydantic model instance
@@ -433,12 +478,14 @@ async def _get_openrouter_completion_impl(
 
     response_format = build_response_format(schema_model)
 
-    client = _get_openrouter_client()
+    timeout = request_timeout or DEFAULT_REQUEST_TIMEOUT
+    client = _get_openrouter_client(timeout)
 
     # Debug logging setup. The correlation id doubles as the PostHog trace id.
-    correlation_id = (
-        create_correlation_id() if (should_debug() or telemetry.is_enabled()) else None
-    )
+    if not correlation_id:
+        correlation_id = (
+            create_correlation_id() if (should_debug() or telemetry.is_enabled()) else None
+        )
     telemetry.set_trace_id(correlation_id)
     telemetry_span = schema_model.__name__
     telemetry_timer = telemetry.GenerationTimer()
@@ -451,13 +498,14 @@ async def _get_openrouter_completion_impl(
     )
 
     last_error = None
+    timeouts = 0
 
     for attempt in range(max_retries):
         try:
             # Build API call parameters for OpenAI-compatible endpoint
             api_kwargs = {
                 "model": effective_model,
-                "messages": build_messages(prompt),
+                "messages": build_messages(prompt, system),
                 "response_format": response_format,
             }
 
@@ -485,8 +533,22 @@ async def _get_openrouter_completion_impl(
                             "allowed_models": allowed_models,
                         }
                     ]
+            if session_id:
+                # OpenRouter's stable per-run id: lets the provider route the run's calls to
+                # the same prompt cache.
+                extra_body["user"] = session_id
+                # OpenRouter's documented sticky-routing key (max 256 characters).
+                extra_body["session_id"] = session_id[:256]
             if extra_body:
                 api_kwargs["extra_body"] = extra_body
+
+            # What this attempt sends, for the result's record (the gateway reads it).
+            _last_request.set({
+                "model": effective_model, "messages": api_kwargs["messages"],
+                "params": {**({"max_completion_tokens": max_tokens} if "max_completion_tokens" in api_kwargs else {}),
+                           **extra_body},
+                "correlation_id": correlation_id,
+            })
 
             # Debug: Record request
             if correlation_id:
@@ -497,10 +559,20 @@ async def _get_openrouter_completion_impl(
                     response_format=api_kwargs.get("response_format"),
                     max_tokens=max_tokens,
                     schema_name=schema_model.__name__,
+                    extra_body=extra_body or None,
                 )
 
-            # Call OpenRouter API using OpenAI-compatible client
-            response = await client.chat.completions.create(**api_kwargs)
+            # Call OpenRouter API using OpenAI-compatible client. The hard limit backs up the
+            # client's read timeout, which only bounds the gap between bytes.
+            llm_progress.emit("attempt_started", effective_model, attempt=attempt + 1,
+                              max_attempts=max_retries, timeout_s=timeout)
+            try:
+                async with asyncio.timeout(timeout + llm_limits.TIMEOUT_SLACK_S):
+                    response = await client.chat.completions.create(**api_kwargs)
+            except (TimeoutError, openai.APITimeoutError) as timed_out:
+                timeouts += 1
+                raise OpenAITransportError(
+                    f"No response from {effective_model} within {timeout:.0f} s") from timed_out
             spend = _spend.get()
             if spend is not None:
                 spend.add(response)
@@ -641,6 +713,7 @@ async def _get_openrouter_completion_impl(
                 f"OpenRouter completion successful with {effective_model}, "
                 f"used_model={response.model}, attempt={attempt + 1}"
             )
+            llm_progress.emit("succeeded", effective_model, attempt=attempt + 1, max_attempts=max_retries)
             usage = getattr(response, "usage", None)
             spend = _spend.get()
             if spend is not None:
@@ -670,27 +743,57 @@ async def _get_openrouter_completion_impl(
                     f"Attempt {attempt + 1}/{max_retries} failed with JSON error from model {model_used}: {e}. "
                     f"{'Retrying...' if attempt + 1 < max_retries else 'No more retries.'}"
                 )
+                _emit_failed(effective_model, attempt, max_retries, "invalid JSON", attempt + 1 < max_retries)
                 if attempt + 1 < max_retries:
                     await asyncio.sleep(DEFAULT_RETRY_DELAY * (attempt + 1))
                     continue
+            else:
+                _emit_failed(effective_model, attempt, max_retries, "schema mismatch", False)
             # Schema validation errors - don't retry
             logger.error(f"Schema validation error (not retrying): {e}")
             raise
 
         except OpenAITransportError as e:
             last_error = e
+            # Two timeouts on one model: stop waiting so the gateway can try the fallback.
+            will_retry = attempt + 1 < max_retries and timeouts < llm_limits.MAX_TIMEOUTS_PER_MODEL
             logger.warning(
                 f"Attempt {attempt + 1}/{max_retries} failed with transport error: {e}. "
-                f"{'Retrying...' if attempt + 1 < max_retries else 'No more retries.'}"
+                f"{'Retrying...' if will_retry else 'No more retries.'}"
             )
-            if attempt + 1 < max_retries:
+            reason = (f"timed out after {timeout:.0f} s" if isinstance(e.__cause__, (TimeoutError, openai.APITimeoutError))
+                      else type(e.__cause__ or e).__name__)
+            _emit_failed(effective_model, attempt, max_retries, reason, will_retry)
+            if will_retry:
                 await asyncio.sleep(DEFAULT_RETRY_DELAY * (attempt + 1))
                 continue
             raise
 
+        except openai.RateLimitError as e:
+            last_error = e
+            will_retry = attempt + 1 < max_retries
+            wait = _retry_after_seconds(e, default=DEFAULT_RETRY_DELAY * (attempt + 1))
+            logger.warning(
+                f"Attempt {attempt + 1}/{max_retries} rate-limited by {effective_model}. "
+                f"{f'Retrying in {wait:.0f} s...' if will_retry else 'No more retries.'}"
+            )
+            _emit_failed(effective_model, attempt, max_retries, "rate limited", will_retry)
+            if will_retry:
+                await asyncio.sleep(wait)
+                continue
+            raise OpenAITransportError(f"OpenRouter rate limit: {e}") from e
+
+        except _NO_RETRY_ERRORS as e:
+            # The provider's error body can quote the request; keep only its start.
+            detail = f"{type(e).__name__} {getattr(e, 'status_code', '')}: {str(e)[:200]}"
+            logger.error(f"Attempt {attempt + 1}/{max_retries}: {detail} (not retrying)")
+            _emit_failed(effective_model, attempt, max_retries, type(e).__name__, False)
+            raise OpenAITransportError(f"OpenRouter API error: {detail}") from e
+
         except Exception as e:
             last_error = e
             logger.error(f"Attempt {attempt + 1}/{max_retries} failed with unexpected error: {e}")
+            _emit_failed(effective_model, attempt, max_retries, type(e).__name__, attempt + 1 < max_retries)
             if attempt + 1 < max_retries:
                 await asyncio.sleep(DEFAULT_RETRY_DELAY * (attempt + 1))
                 continue
@@ -705,6 +808,22 @@ async def _get_openrouter_completion_impl(
     raise OpenAITransportError("Unknown error in OpenRouter completion")
 
 
+def _emit_failed(model: str, attempt: int, max_retries: int, reason: str, will_retry: bool) -> None:
+    llm_progress.emit("attempt_failed", model, attempt=attempt + 1, max_attempts=max_retries,
+                      error=reason, will_retry=will_retry)
+
+
+def _retry_after_seconds(error: Exception, default: float) -> float:
+    """The server's ``Retry-After`` in seconds (capped at ``MAX_RETRY_AFTER_S``), else ``default``."""
+    response = getattr(error, "response", None)
+    raw = response.headers.get("retry-after") if response is not None else None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(seconds, 0.0), MAX_RETRY_AFTER_S) if math.isfinite(seconds) else default
+
+
 # Convenience function for sync contexts
 def get_openrouter_completion_sync(
         prompt: str,
@@ -714,6 +833,10 @@ def get_openrouter_completion_sync(
         max_tokens: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         extra_params: Optional[dict] = None,
+        request_timeout: Optional[float] = None,
+        correlation_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
 ) -> T:
     """Sync wrapper for get_openrouter_completion.
     
@@ -732,5 +855,7 @@ def get_openrouter_completion_sync(
             max_tokens=max_tokens,
             max_retries=max_retries,
             extra_params=extra_params,
+            correlation_id=correlation_id, session_id=session_id, system=system,
+            request_timeout=request_timeout,
         )
     )

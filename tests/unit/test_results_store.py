@@ -65,3 +65,43 @@ def test_remember_saves_only_changes():
     mtime = app_settings.settings_path().stat().st_mtime_ns
     app_settings.remember(last_course_id="CSC_134")  # unchanged: no write
     assert app_settings.settings_path().stat().st_mtime_ns == mtime
+
+
+@pytest.mark.unit
+def test_code_version_is_stamped_and_old_runs_still_load():
+    stamped = _result().model_copy(update={"code_version": "0.1.2"})
+    results_store.save_run("ver1", "rubric", [("s1", stamped)], meta={"code_version": "0.1.2"})
+    [run] = results_store.load_runs()
+    assert run["results"][0][1].code_version == "0.1.2" and run["meta"]["code_version"] == "0.1.2"
+    # A run saved before the field existed has no code_version and still loads.
+    results_store.save_run("ver2", "rubric", [("s1", _result())])
+    older = next(r for r in results_store.load_runs() if r["run_key"] == "ver2")
+    assert older["results"][0][1].code_version is None
+
+
+@pytest.mark.unit
+def test_code_version_is_not_in_the_model_schema():
+    assert "code_version" not in RubricAssessmentResult.model_json_schema()["properties"]
+
+
+def test_remembered_effort_only_returns_a_known_effort(tmp_path, monkeypatch):
+    monkeypatch.setenv("CQC_GRADING_RESULTS_DIR", str(tmp_path))
+    results_store.save_run("run1", "rubric", [], [], meta={"instructions_hash": "h", "effort": "high"})
+    assert results_store.remembered_effort("h") == "high"
+    results_store.save_run("run1", "rubric", [], [], meta={"instructions_hash": "h", "effort": "x; drop"})
+    assert results_store.remembered_effort("h") is None
+
+
+def test_run_keys_are_ascii_alphanumeric_and_a_file_cannot_rename_itself(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("CQC_GRADING_RESULTS_DIR", str(tmp_path))
+    for bad in ("../x", "a/b", "a.b", "a" * 65, "", "\u00e9"):
+        with pytest.raises(ValueError):
+            results_store._path(bad)
+    results_store.save_run("goodkey", "rubric", [], [])
+    path = tmp_path / "goodkey.json"
+    data = json.loads(path.read_text())
+    data["run_key"] = "../evil"
+    path.write_text(json.dumps(data))
+    assert [r["run_key"] for r in results_store.load_runs()] == ["goodkey"]

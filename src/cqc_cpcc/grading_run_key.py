@@ -40,6 +40,10 @@ def generate_grading_run_key(
         grading_mode: str = "rubric_and_errors",
         model_config_hash: Optional[str] = None,
         requirements_hash: Optional[str] = None,
+        solution_hash: Optional[str] = None,
+        prompt_version: Optional[str] = None,
+        requirement_overlap: Optional[str] = None,
+        plan_hash: Optional[str] = None,
 ) -> str:
     """Generate a deterministic hash key from grading inputs.
     
@@ -61,6 +65,16 @@ def generate_grading_run_key(
             change of model, reasoning effort or output budget invalidates cached results
         requirements_hash: ``requirement_coverage.checklist_hash`` of the requirement
             checklist in use, so editing the checklist re-grades
+        solution_hash: :func:`hash_solution` of the reference solution, when one is given,
+            so a different solution never serves cached results
+        prompt_version: the ``rubric-grading`` prompt's ``id@version`` tag, so a prompt
+            change re-grades instead of reusing cache
+        requirement_overlap: ``requirement_overlap.run_key_overlap()``: ``"drop"`` when the
+            overlap stage removes errors (it changes scores), else ``None`` so keys of
+            ``notes``/``off`` runs stay exactly as before
+        plan_hash: ``ExecutionPlan.plan_hash`` of the output check, when the instructor turned
+            it on, so a different set of test cases, expected outputs or ignore patterns never
+            serves cached results. ``None`` (no plan) leaves the key exactly as it was
         
     Returns:
         SHA256 hash string (64 hex characters)
@@ -87,6 +101,15 @@ def generate_grading_run_key(
         inputs["model_config_hash"] = model_config_hash
     if requirements_hash is not None:
         inputs["requirements_hash"] = requirements_hash
+    # Only when present, so keys of runs without a solution or prompt tag stay valid.
+    if solution_hash is not None:
+        inputs["solution_hash"] = solution_hash
+    if prompt_version is not None:
+        inputs["prompt_version"] = prompt_version
+    if requirement_overlap is not None:
+        inputs["requirement_overlap"] = requirement_overlap
+    if plan_hash is not None:
+        inputs["plan_hash"] = plan_hash
 
     # Serialize to JSON with sorted keys for determinism
     json_str = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
@@ -94,6 +117,13 @@ def generate_grading_run_key(
     # Hash with SHA256
     hash_obj = hashlib.sha256(json_str.encode("utf-8"))
     return hash_obj.hexdigest()
+
+
+def hash_solution(solution_text: Optional[str]) -> Optional[str]:
+    """SHA-256 of the reference solution text, or ``None`` when there is no solution."""
+    if not solution_text:
+        return None
+    return hashlib.sha256(solution_text.encode("utf-8")).hexdigest()
 
 
 def generate_file_metadata(file_paths: list[tuple[str, str]]) -> list[tuple[str, int]]:

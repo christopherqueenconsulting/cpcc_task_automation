@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from cqc_cpcc.model_eval import dataset as ds
-from cqc_cpcc.model_eval import gates, metrics, scorecard
+from cqc_cpcc.model_eval import batch, gates, metrics, scorecard
 from cqc_cpcc.model_eval.budget import Budget
 from cqc_cpcc.model_eval.runner import CallRecord, estimate_prompt_tokens, run_model
 from cqc_cpcc.utilities.AI import model_registry
@@ -108,10 +108,30 @@ def cmd_build_dataset(args) -> int:
     return 0
 
 
+def cmd_build_solution_dataset(args) -> int:
+    from cqc_cpcc.model_eval.dataset_builder import write_solution_dataset
+
+    count = write_solution_dataset(Path(args.out), reviewed_by=args.reviewed_by)
+    ds.load_cases(Path(args.out))  # validate what was written
+    print(f"Wrote {count} cases to {args.out}")
+    return 0
+
+
 async def _run(args) -> int:
+    from cqc_cpcc.model_eval import account_limit
+
+    with account_limit.run_scope():
+        return await _run_scoped(args)
+
+
+async def _run_scoped(args) -> int:
+    from cqc_cpcc.model_eval import account_limit
+
     policy = model_registry.load_policy()
     ev = policy.eval
     repeats = args.repeats or ev.repeats
+    batch.reset_events()
+    batch.settings()  # CQC_EVAL_BATCH misconfigured or missing its opt-in: stop here, before any paid call
     cases = ds.load_cases(Path(args.dataset))
     if args.tags:
         wanted = set(args.tags.split(","))
@@ -168,7 +188,9 @@ async def _run(args) -> int:
         for model, effort in runs:
             label = label_of((model, effort))
             probe = await run_model(model, effort, probe_cases(cases), 1, budget, seed=args.seed,
-                                    profile=profiles[model], on_record=save_probe)
+                                    profile=profiles[model], on_record=save_probe, dataset_dir=Path(args.dataset))
+            if account_limit.tripped():
+                break
             per_call = sum(r.cost_usd for r in probe) / max(1, len(probe))
             projected = per_call * len(cases) * repeats
             if projected > budget.remaining:
@@ -179,7 +201,9 @@ async def _run(args) -> int:
                 continue
             records = await run_model(model, effort, cases, repeats, budget, seed=args.seed,
                                       profile=profiles[model],
-                                      on_record=save)
+                                      on_record=save, dataset_dir=Path(args.dataset))
+            if account_limit.tripped():
+                break  # nothing of an aborted run is scored: no aggregate, no decision, no winner
             all_records[label] = records
             if any(r.error_kind == "budget" for r in records):
                 status = "aborted_budget"
@@ -188,6 +212,13 @@ async def _run(args) -> int:
     finally:
         raw.close()
 
+    abort_state = account_limit.current()
+    aborted = abort_state is not None and abort_state.tripped
+    if aborted:
+        status, all_records = account_limit.STATUS, {}
+        done = sum(1 for line in (out_dir / "raw_outputs.jsonl").read_text(encoding="utf-8").splitlines()
+                   if '"ok": true' in line)
+        notes.append(account_limit.banner(abort_state.info(), done, budget.spent))
     aggregates = {label: metrics.aggregate(cases, recs) for label, recs in all_records.items()}
     incumbent_label = label_of(runs[0])
     decisions, winner = {}, None
@@ -219,18 +250,37 @@ async def _run(args) -> int:
             "spent_usd": round(budget.spent, 6),
             "status": status,
             "notes": notes,
+            **({"abort": abort_state.info()} if aborted else {}),
             "incumbent_hard_gate_failures": incumbent_failures,
             # Prompts on the roles a promotion moves: a promotion evaluated on older prompt
             # versions is stale and automerge-check refuses it.
             "prompt_versions": _prompt_versions_for_promotion(),
+            # Additive, report-only; present only when batch mode was on (see batch.py).
+            **_batch_meta(all_records),
         },
         aggregates, decisions, winner,
     )
+    if aborted:
+        # No scores. One empty entry per model the run received, so the history row the workflow writes for it
+        # carries status 'aborted_account_limit' (discover.load_history then does not count the model as evaluated).
+        sc["models"] = {label_of(run): {"composite": None, "cost_per_submission": None} for run in runs}
     json_path, md_path = scorecard.write(out_dir, sc)
     print(md_path.read_text(encoding="utf-8"))
     print(f"Scorecard: {json_path}")
     _github_outputs(winner=winner or "", status=status, incumbent_failed=str(bool(incumbent_failures)).lower())
+    if aborted:
+        print(notes[-1])
+        return account_limit.EXIT_CODE
     return 0
+
+
+def _batch_meta(all_records: dict) -> dict:
+    """``{"batch": ...}`` for the scorecard when batch mode was on: batch vs sync cost, share, fall-backs, reason."""
+    events = batch.summary()
+    if events is None:
+        return {}
+    records = [r for recs in all_records.values() for r in recs]
+    return {"batch": {**events, "records": batch.record_stats(records)}}
 
 
 def _prompt_versions_for_promotion() -> dict:
@@ -318,7 +368,9 @@ def _records_from_jsonl(path: Path) -> dict[str, list[CallRecord]]:
     out: dict[str, list[CallRecord]] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
-            r = CallRecord(**json.loads(line))
+            data = json.loads(line)
+            known = {f for f in CallRecord.__dataclass_fields__}
+            r = CallRecord(**{k: v for k, v in data.items() if k in known})
             label = f"{r.model}@{r.effort}" if r.effort else r.model
             out.setdefault(label, []).append(r)
     return out
@@ -383,6 +435,8 @@ def cmd_verify(args) -> int:
     """Guard check for a bot promotion PR. Exit 1 with reasons when anything is off."""
     sc = json.loads(Path(args.scorecard).read_text(encoding="utf-8"))
     problems = []
+    if sc.get("status") != "complete":  # an aborted run (account limit, budget) or a smoke run never promotes
+        problems.append(f"the evaluation run ended {sc.get('status')!r}, not 'complete': nothing may be promoted from it")
     winner = recompute(Path(args.scorecard), Path(args.raw))
     if winner != sc.get("winner"):
         problems.append(f"recomputed winner {winner!r} != scorecard winner {sc.get('winner')!r}")
@@ -581,6 +635,13 @@ def cmd_build_suite_datasets(args) -> int:
     return 0
 
 
+def cmd_effort_truth(args) -> int:
+    """Derive the effort-recommendation ground truth from a run over its labeled cases."""
+    from cqc_cpcc.model_eval import effort_truth
+
+    return effort_truth.run(args)
+
+
 def cmd_build_judge_gold(args) -> int:
     from cqc_cpcc.model_eval import judge_calibration
 
@@ -660,6 +721,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     b.add_argument("--out", default=str(ds.DEFAULT_DATASET))
     b.add_argument("--reviewed-by", default=None)
     b.set_defaults(func=cmd_build_dataset)
+    bs = sub.add_parser("build-solution-dataset",
+                        help="regenerate the grading-solution dataset (solution, equivalents, bug twins)")
+    bs.add_argument("--out", default=str(ds.DEFAULT_DATASET.parent / "grading-solution" / "v1"))
+    bs.add_argument("--reviewed-by", default=None)
+    bs.set_defaults(func=cmd_build_solution_dataset)
 
     r = sub.add_parser("run", help="evaluate candidates against the incumbent")
     r.add_argument("--candidate", action="append", default=[], help="model id, optionally @effort")
@@ -729,6 +795,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     st.add_argument("--repeats", type=int, default=None)
     st.add_argument("--limit", type=int, default=None, help="first N cases only (smoke)")
     st.add_argument("--budget", type=float, default=None)
+    st.add_argument("--concurrency", type=int, default=None,
+                    help="model calls in flight (default 4, or CQC_EVAL_CONCURRENCY; 1 to 256, else an error); "
+                         "with --adaptive, the pool's starting size")
+    st.add_argument("--adaptive", action="store_true",
+                    help="adaptive concurrency (AIMD) instead of a fixed number; also CQC_AB_ADAPTIVE=1")
+    st.add_argument("--max-concurrency", type=int, default=None,
+                    help="adaptive ceiling on calls in flight (default 64, or CQC_AB_MAX_CONCURRENCY; 1 to 256, "
+                         "else an error)")
     st.add_argument("--out", default="evals/runs/suites")
     st.add_argument("--raw", default=None, help="score: raw_outputs.jsonl to re-score")
     st.add_argument("--label", default=None)
@@ -760,6 +834,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     bsd = sub.add_parser("build-suite-datasets", help="regenerate the prompt-suite datasets")
     bsd.add_argument("--reviewed-by", default=None, help="record a human label review")
     bsd.set_defaults(func=cmd_build_suite_datasets)
+
+    et = sub.add_parser("effort-truth", help="effort-recommendation ground truth from a run (no model calls)")
+    et.add_argument("--raw", required=True, help="raw_outputs.jsonl of `run --dataset <effort dataset>` "
+                                                 "with the incumbent at high and candidates at low and medium")
+    et.add_argument("--dataset", default="evals/datasets/effort-recommendation/v1")
+    et.add_argument("--write", action="store_true", help="write ground_truth.json into the dataset")
+    et.set_defaults(func=cmd_effort_truth)
 
     pm = sub.add_parser("prompts", help="list / fingerprint / check the prompt registry")
     pm.add_argument("action", choices=["list", "fingerprint", "check"])

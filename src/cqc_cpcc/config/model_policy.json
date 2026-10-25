@@ -126,7 +126,7 @@
           }
         },
         "health_floor": 0.839,
-        "repeats": 2
+        "repeats": 4
       },
       "grading-levelband": {
         "baseline_report": "evals/reports/prompt-calibration/2026-10-08/grading-levelband/scorecard.json",
@@ -181,7 +181,7 @@
           }
         },
         "health_floor": 0.911,
-        "repeats": 2
+        "repeats": 4
       },
       "exam-grading": {
         "baseline_report": "evals/reports/prompt-calibration/2026-10-08/exam-grading/scorecard.json",
@@ -213,7 +213,7 @@
           }
         },
         "health_floor": 0.775,
-        "repeats": 2
+        "repeats": 4
       },
       "digest": {
         "baseline_report": "evals/reports/prompt-calibration/2026-10-08/digest/scorecard.json",
@@ -271,7 +271,7 @@
           }
         },
         "health_floor": 0.821,
-        "repeats": 2
+        "repeats": 4
       },
       "flowgorithm-grade": {
         "baseline_report": "evals/reports/prompt-calibration/2026-10-08/flowgorithm-grade/scorecard.json",
@@ -304,6 +304,9 @@
         },
         "health_floor": 0.946,
         "repeats": 2
+      },
+      "grading-solution": {
+        "repeats": 4
       }
     }
   }

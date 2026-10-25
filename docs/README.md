@@ -23,6 +23,8 @@ This documentation provides in-depth information about the architecture, compone
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, design decisions, and data flows |
 | [PRODUCT.md](PRODUCT.md) | Product features, user personas, and roadmap |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development guidelines and contribution process |
+| [RELEASING.md](RELEASING.md) | Versioning, prereleases, release and rollback |
+| [REVIEW-2026-10-26.md](REVIEW-2026-10-26.md) | Review guide for the grading-fairness work: what shipped, decisions, rollback |
 
 ### Module Documentation
 

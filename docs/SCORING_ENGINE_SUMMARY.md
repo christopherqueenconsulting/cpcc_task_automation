@@ -121,6 +121,82 @@ class ErrorConversionRules(BaseModel):
 
 **Backwards Compatibility**: `apply_error_based_scoring()` wrapper maintained for legacy code.
 
+### Counting errors
+
+Ruled by Christopher on 2026-10-22 (rubric versions: `csc_java_exam_rubric` 3.2, `csc134_cpp_exam_rubric` 3.2,
+`csc134_cpp_final_exam_rubric` 3.3):
+
+- **Each distinct error type counts once.** An error type is its code, compared case-insensitively, across
+  all files of the submission. One type reported with `occurrences: 4` counts as one error, for minors and
+  majors alike. If the model labels one code both minor and major, it counts once, as major. Occurrences
+  still show in the Errors table ("Times") and on the result card; they no longer move the score.
+- **Only listed errors count.** `program_performance` takes its counts from `detected_errors`. Counts the
+  model reports in `error_counts_by_severity` without listing the errors are ignored (they cost nothing;
+  a warning is logged). Rubrics with a plain `error_count` criterion and no `program_performance` (none
+  ship today) still fall back to those counts.
+- **Conversion is unchanged:** every 4 distinct minor types count as 1 major (remainder stays minor), then
+  the level band is chosen from the effective counts.
+- `error_scoring.aggregate_error_counts` (which sums occurrences) is display-only; scoring never calls it.
+
+Before this change one minor slip seen four times (`occurrences: 4`) became 1 major, a B- (160/200) on the
+CSC151 rubric; it is now 1 minor, an A (190/200). Most scores stay the same or rise. A score can drop when
+the model's own counts were lower than the errors it listed (the old code trusted the counts): those runs now
+score from the list.
+
+**Rollback:** revert the commit that made this change. That restores the earlier `rubric_version`s, so the
+run keys change back and session caches re-grade on their own. A revert does not touch grades already
+written to BrightSpace: assignment drafts and quiz grades (published on write) stay as written until they
+are re-graded and written again. Rolling back is Christopher's call.
+
+### One penalty per issue: requirement overlap
+
+A requirement the model marks partial or missing becomes an error (`MISSING_REQUIREMENT_<id>` major,
+`PARTIAL_REQUIREMENT_<id>` minor), and the model also lists its own errors, so one defect (for example
+`Print the total with two decimal places` marked partial next to `OUTPUT_FORMATTING`) can be charged twice.
+`requirement_overlap.reconcile_overlaps` pairs them after requirement coverage and before scoring. It is
+deterministic and uses no model call; the grading prompt and the answer schema are not changed (asking the
+model to link its own errors made it mark requirements partial far more often, PR 8).
+
+- **Kinds.** A requirement's kind (`format`, `print`, `input`, `valid`, `func`, `select`, `loop`, `calc`,
+  `data`) comes from its wording; a model error code maps to the kinds it can overlap (shared code tokens, with
+  per-course overrides, then whole-word description hints for custom definitions; a definition that talks about
+  comments, naming, indentation or style never pairs). Unknown on either side means no pair. A requirement that
+  forbids something ("must not use loops", "without functions", "rather than") has no kind. Formatting codes
+  (`OUTPUT_FORMATTING`, `DECIMAL_SCALE`, `*_FORMATTING`) pair only with a `format` requirement, which needs
+  explicit format wording (decimal places, currency, separators, spacing, sample output); "Show a menu" or
+  "Tell the user ..." is `print` and never pairs with them, and "Calculate the payment as currency" is left alone.
+- **Only unambiguous pairs.** The requirement has exactly one kind-matching model error and that error has
+  exactly one kind-matching requirement (one-to-one). Anything else gets an instructor-only "possible overlap"
+  note and keeps both penalties. For the general codes (`OUTPUT_IMPACT`, `CALCULATION`, `SEQUENCE...SELECTION`) a
+  kind match is not enough: the error's own description or notes must share a content word with the requirement,
+  otherwise it is a note only.
+- **Which one goes.** The lesser of the pair; at equal severity the requirement error is kept and the model
+  error dropped (tie rule A', reversible). A `MISSING_REQUIREMENT_*` error is never dropped. That is a CORE
+  requirement the model marked missing (major). A non-core "missing" requirement becomes
+  `PARTIAL_REQUIREMENT_*` (minor), so it can be dropped in favour of a major model error, like any partial.
+  Errors backed by the compiler or the execution check and "Does Not Compile" are never dropped either, so
+  shallow-submission detection is unchanged. Every drop is a suppressed `ReconciliationNote` (stage `overlap`)
+  the instructor can Reinstate; a code listed twice gets one note per entry, and a multi-occurrence entry says
+  how many times it was listed.
+- **Switch `CQC_REQUIREMENT_OVERLAP`** (also in `.env.example`). `notes` (default): write the notes, drop nothing,
+  scores identical to a run without the stage. `drop`: apply the drops. `off`: skip the stage. Only `drop`
+  enters the grading run key (as `requirement_overlap`), so existing keys and cached results do not change in
+  `notes`/`off`.
+- **First notes-mode session (before turning `drop` on).**
+  1. Grade a real session with the default (`notes`). Scores must equal what master gives.
+  2. Read every "Possible overlap" note in the drawer. Judge whether the two items really are the same defect.
+  3. Check that no note flags a `MISSING_REQUIREMENT_*`, a compiler error or Does Not Compile as the one to drop.
+  4. If the pairs look right, set `CQC_REQUIREMENT_OVERLAP=drop` in `.env`, restart, and re-grade (the key changes,
+     so it re-grades on its own).
+  5. Reinstate any drop that was wrong (Reinstate re-scores with no model call) and tell the builder which wording
+     was mis-paired.
+- **Rollback.** Remove the variable (or set `notes`) and restart, or revert the commit. Saved runs load either
+  way (no schema change); results graded under `drop` simply re-grade because their key differed.
+- **Offline gate.** `python scripts/requirement_overlap_rescore.py --raw-outputs <grading raw_outputs.jsonl>
+  --extraction <requirement-extraction raw_outputs.jsonl>` re-scores saved outputs and reports rows changed, rows
+  that go down (must be 0), the `incomplete` mean, and classifier coverage. Saved outputs carry codes, not the
+  model's error descriptions, so general-code pairs cannot be confirmed there and show as notes.
+
 ## Testing
 
 ### New Tests (37 total)

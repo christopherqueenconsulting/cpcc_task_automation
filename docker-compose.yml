@@ -51,6 +51,47 @@ services:
           timeout: 10s
           retries: 5
           start_period: 20s
+    # Sandbox for running student programs (docs/execution-gate.md). Only built or started
+    # with --profile exec. The app starts its own containers with `docker run` and the flag
+    # set from program_runner.build_run_command(); this service exists to build the image
+    # (`docker compose --profile exec build exec-runner`) and so that an accidental
+    # `docker compose --profile exec up` is still sandboxed. Keep image, tag and version in
+    # step with program_runner.RUNNER_IMAGE (a unit test checks it).
+    exec-runner:
+        profiles: ["exec"]
+        build:
+          context: ./docker/exec-runner
+        image: cpcc_task_automation/exec-runner:2
+        network_mode: none
+        read_only: true
+        user: "10001:10001"
+        init: true
+        stdin_open: true
+        restart: "no"
+        cap_drop:
+          - ALL
+        security_opt:
+          - no-new-privileges:true
+        ipc: none
+        logging:
+          driver: none
+        tmpfs:
+          - /work:rw,exec,nosuid,nodev,size=128m,mode=1777
+          - /tmp:rw,noexec,nosuid,nodev,size=32m,mode=1777
+        mem_limit: 512m
+        memswap_limit: 512m
+        cpus: 1
+        pids_limit: 128
+        ulimits:
+          nofile:
+            soft: 256
+            hard: 256
+          fsize:
+            soft: 16777216
+            hard: 16777216
+          core:
+            soft: 0
+            hard: 0
     #framework:
     #    build: .
     #   networks:

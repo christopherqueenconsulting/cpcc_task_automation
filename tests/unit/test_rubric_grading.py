@@ -504,22 +504,25 @@ class TestPromptQuality:
         
         # Check for key instructions
         assert "Grading Instructions" in prompt
-        assert "Evaluate" in prompt
+        assert "Criterion Scoring" in prompt
         assert "feedback" in prompt.lower()
         assert "evidence" in prompt.lower()
     
     def test_prompt_is_deterministic(self, base_rubric):
         """Test that prompt is deterministic (same inputs = same output)."""
+        # The fence nonce is random per call; a fixed one makes the whole prompt comparable.
         prompt1 = build_rubric_grading_prompt(
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
+            nonce="0123456789abcdef",
         )
-        
+
         prompt2 = build_rubric_grading_prompt(
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
+            nonce="0123456789abcdef",
         )
         
         assert prompt1 == prompt2
@@ -645,36 +648,21 @@ class TestRubricGradingOptionalParameters:
 
 @pytest.mark.unit
 class TestGradingFlowOrder:
-    """Test that the grading prompt enforces Error Detection FIRST, then Rubric Evaluation."""
+    """v4: error detection is a section ahead of criterion scoring, stated as a constraint (no steps)."""
 
-    def test_prompt_without_errors_uses_evaluation_process(self, base_rubric):
-        """Without error definitions, prompt uses standard Evaluation Process header."""
+    def test_prompt_without_errors_has_no_error_detection_section(self, base_rubric):
+        """Without error definitions, the prompt has Criterion Scoring only."""
         prompt = build_rubric_grading_prompt(
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
             student_submission=STUDENT_SUBMISSION,
         )
 
-        assert "Evaluation Process" in prompt
-        assert "Step 1: Error Detection" not in prompt
-        assert "Step 2: Rubric Evaluation" not in prompt
+        assert "Criterion Scoring" in prompt
+        assert "### Error Detection" not in prompt
 
-    def test_prompt_with_errors_has_step1_before_step2(self, base_rubric, error_definitions):
-        """With error definitions, Error Detection (Step 1) comes before Rubric Evaluation (Step 2)."""
-        prompt = build_rubric_grading_prompt(
-            rubric=base_rubric,
-            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
-            student_submission=STUDENT_SUBMISSION,
-            error_definitions=error_definitions[:5],
-        )
-
-        assert "Step 1: Error Detection" in prompt
-        assert "Step 2: Rubric Evaluation" in prompt
-        # Step 1 must appear before Step 2 in the prompt
-        assert prompt.index("Step 1: Error Detection") < prompt.index("Step 2: Rubric Evaluation")
-
-    def test_prompt_with_errors_emphasizes_errors_first(self, base_rubric, error_definitions):
-        """With error definitions, the prompt explicitly says to detect errors before rubric."""
+    def test_prompt_with_errors_has_error_detection_before_criterion_scoring(self, base_rubric, error_definitions):
+        """With error definitions, Error Detection comes before Criterion Scoring."""
         prompt = build_rubric_grading_prompt(
             rubric=base_rubric,
             assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
@@ -682,8 +670,22 @@ class TestGradingFlowOrder:
             error_definitions=error_definitions[:5],
         )
 
-        assert "Do This First" in prompt
-        assert "Complete ALL error detection before proceeding" in prompt
+        assert "### Error Detection" in prompt
+        assert "### Criterion Scoring" in prompt
+        assert prompt.index("### Error Detection") < prompt.index("### Criterion Scoring")
+        assert "Step 1" not in prompt
+
+    def test_prompt_with_errors_ties_criteria_to_the_reported_errors(self, base_rubric, error_definitions):
+        """With error definitions, the criterion results must agree with the reported errors."""
+        prompt = build_rubric_grading_prompt(
+            rubric=base_rubric,
+            assignment_instructions=ASSIGNMENT_INSTRUCTIONS,
+            student_submission=STUDENT_SUBMISSION,
+            error_definitions=error_definitions[:5],
+        )
+
+        assert "Use the errors you report as the evidence for the criterion levels; do not recount them." in prompt
+        assert "Do This First" not in prompt
 
     def test_prompt_error_count_criterion_links_errors_to_rubric(self, base_rubric, error_definitions):
         """error_count criteria tell the model to use detected errors to determine level."""
@@ -694,11 +696,10 @@ class TestGradingFlowOrder:
             error_definitions=error_definitions[:5],
         )
 
-        assert "Use the detected errors" in prompt
-        assert "determine the appropriate performance level" in prompt
+        assert "Use the detected errors to choose the performance level" in prompt
 
-    def test_prompt_with_all_disabled_errors_uses_evaluation_process(self, base_rubric):
-        """If all error definitions are disabled, prompt falls back to Evaluation Process (not Step1/Step2)."""
+    def test_prompt_with_all_disabled_errors_has_no_error_detection_section(self, base_rubric):
+        """If all error definitions are disabled, the prompt has no Error Detection section."""
         from cqc_cpcc.error_definitions_models import ErrorDefinition
 
         disabled_errors = [
@@ -718,9 +719,8 @@ class TestGradingFlowOrder:
             error_definitions=disabled_errors,
         )
 
-        # No enabled errors → should use standard Evaluation Process, not Step 1/Step 2
-        assert "Evaluation Process" in prompt
-        assert "Step 1: Error Detection" not in prompt
-        assert "Step 2: Rubric Evaluation" not in prompt
+        # No enabled errors: Criterion Scoring only
+        assert "Criterion Scoring" in prompt
+        assert "### Error Detection" not in prompt
         # And the Error Definitions section should not appear
         assert "Error Definitions" not in prompt

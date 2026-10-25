@@ -307,6 +307,13 @@ class DetectedError(BaseModel):
     description: Annotated[str, Field(description="Detailed error description")]
     occurrences: Annotated[Optional[int], Field(default=None, description="Number of occurrences")]
     notes: Annotated[Optional[str], Field(default=None, description="Additional notes")]
+    # Set by the compile gate, never by the model, and never shown to the student: raw
+    # diagnostics can quote any file the compiler opened. SkipJsonSchema keeps it out of
+    # the structured-output schema sent to the LLM.
+    # Backend-only: the stage that produced the error (model, compiler, requirement,
+    # execution). The reconciler never drops a compiler- or execution-sourced error.
+    source: SkipJsonSchema[Optional[str]] = None
+    compiler_diagnostics: SkipJsonSchema[Optional[str]] = None
 
 
 class RequirementResult(BaseModel):
@@ -376,6 +383,27 @@ class CriterionResult(BaseModel):
         return points_earned
 
 
+class ReconciliationNote(BaseModel):
+    """One backend decision about the model's errors, written for the instructor.
+
+    Backend-only, never part of the model's schema. ``error`` carries the whole error a
+    stage dropped, so it stays visible and can be reinstated; ``suppressed`` is True while
+    it is out of ``detected_errors`` and ``reinstated`` once the instructor put it back.
+    """
+    stage: str                              # compile, requirement, solution, execution, overlap
+    action: str                             # removed, added, kept, note
+    code: Optional[str] = None
+    kept_code: Optional[str] = None
+    requirement_id: Optional[str] = None
+    reason: str = ""
+    error: Optional[DetectedError] = None
+    suppressed: bool = False
+    reinstated: bool = False
+    #: A gate-ADDED error the instructor took out again (``reconciliation.remove_added``).
+    #: ``suppressed`` is then True so Reinstate can put it back.
+    removed_by_instructor: bool = False
+
+
 class RubricAssessmentResult(BaseModel):
     """Complete assessment result using a rubric.
     
@@ -438,6 +466,21 @@ class RubricAssessmentResult(BaseModel):
     needs_review: SkipJsonSchema[bool] = False
     review_confirmed: SkipJsonSchema[bool] = False
     validity_status: SkipJsonSchema[Optional[str]] = None
+    # Backend reconciliation (compile gate, requirement coverage; later the execution and
+    # overlap stages): notes in instructor language, the model and effort that graded, and
+    # the execution report. SkipJsonSchema keeps them out of the model's schema.
+    reconciliation: SkipJsonSchema[list[ReconciliationNote]] = Field(default_factory=list)
+    graded_with_model: SkipJsonSchema[Optional[str]] = None
+    # Version of the code that graded this (cqc_cpcc.version). Optional: results saved before
+    # it existed load without it.
+    code_version: SkipJsonSchema[Optional[str]] = None
+    execution_report: SkipJsonSchema[Optional[dict]] = None
+    # The exact request the grading call sent (prompt tag, model, effort, timeout,
+    # correlation id, messages, params). Never persisted: it holds the whole submission.
+    llm_request: SkipJsonSchema[Optional[dict]] = None
+    # Instructor-only: how close the submission's token shape is to the reference solution
+    # (solution_similarity.py). Information, never a score input.
+    solution_similarity: SkipJsonSchema[Optional[float]] = None
     validity_reason: SkipJsonSchema[Optional[str]] = None
 
     @field_validator('total_points_earned')

@@ -148,9 +148,10 @@ class TestVersionBumps:
         base = REGISTRY.model_copy(deep=True)
         head = REGISTRY.model_copy(deep=True)
         head.prompts["exam-grading"].fingerprint = "sha256:new"
+        version = base.prompts["exam-grading"].version
         assert pr.version_problems(head, base) == [
-            "exam-grading: fingerprint changed but version stayed 1"]
-        head.prompts["exam-grading"].version = 2
+            f"exam-grading: fingerprint changed but version stayed {version}"]
+        head.prompts["exam-grading"].version = version + 1
         assert pr.version_problems(head, base) == []
         assert pr.version_problems(head, None) == []
 

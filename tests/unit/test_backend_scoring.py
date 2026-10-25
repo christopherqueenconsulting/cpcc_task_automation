@@ -8,8 +8,28 @@ for program_performance, level_band, and error_count criteria.
 
 import pytest
 from cqc_cpcc.rubric_config import get_rubric_by_id
-from cqc_cpcc.rubric_models import RubricAssessmentResult, CriterionResult
+from cqc_cpcc.rubric_models import RubricAssessmentResult, CriterionResult, DetectedError
 from cqc_cpcc.rubric_grading import apply_backend_scoring
+
+
+def _errors(major: int = 0, minor: int = 0) -> list[DetectedError]:
+    """Build `major` distinct major and `minor` distinct minor error types.
+
+    Scoring counts each distinct (severity, code) once and reads counts only from
+    detected_errors, so every entry gets its own code.
+    """
+    errors = []
+    for severity, count in (("major", major), ("minor", minor)):
+        for i in range(1, count + 1):
+            errors.append(
+                DetectedError(
+                    code=f"CSC_151_EXAM_1_TEST_{severity.upper()}_{i}",
+                    name=f"Test {severity} error {i}",
+                    severity=severity,
+                    description=f"Synthetic {severity} error type {i}.",
+                )
+            )
+    return errors
 
 
 @pytest.mark.unit
@@ -68,8 +88,7 @@ def test_csc151_program_performance_2_minor_errors():
         ],
         overall_feedback="Good work with minor issues.",
         overall_band_label=None,
-        detected_errors=[],
-        error_counts_by_severity={"major": 0, "minor": 2}
+        detected_errors=_errors(minor=2),
     )
     
     updated = apply_backend_scoring(rubric, result)
@@ -104,8 +123,7 @@ def test_csc151_program_performance_4_minor_converts_to_1_major():
         ],
         overall_feedback="Work needs improvement.",
         overall_band_label=None,
-        detected_errors=[],
-        error_counts_by_severity={"major": 0, "minor": 4}
+        detected_errors=_errors(minor=4),
     )
     
     updated = apply_backend_scoring(rubric, result)
@@ -143,8 +161,7 @@ def test_csc151_program_performance_1_major_5_minor():
         ],
         overall_feedback="Significant issues found.",
         overall_band_label=None,
-        detected_errors=[],
-        error_counts_by_severity={"major": 1, "minor": 5}
+        detected_errors=_errors(major=1, minor=5),
     )
     
     updated = apply_backend_scoring(rubric, result)
@@ -281,8 +298,7 @@ def test_scoring_consistency_across_display():
         ],
         overall_feedback="Good work.",
         overall_band_label=None,
-        detected_errors=[],
-        error_counts_by_severity={"major": 0, "minor": 3}
+        detected_errors=_errors(minor=3),
     )
     
     updated = apply_backend_scoring(rubric, result)
@@ -369,8 +385,7 @@ def test_csc134_program_performance_3_minor_remains_above_average_after_normaliz
         ],
         overall_feedback="Above average work.",
         overall_band_label=None,
-        detected_errors=[],
-        error_counts_by_severity={"major": 0, "minor": 3},
+        detected_errors=_errors(minor=3),
     )
 
     updated = apply_backend_scoring(rubric, result)
@@ -411,8 +426,7 @@ def test_csc134_program_performance_3_major_returns_needs_improvement():
         ],
         overall_feedback="Below average submission.",
         overall_band_label=None,
-        detected_errors=[],
-        error_counts_by_severity={"major": 3, "minor": 0},
+        detected_errors=_errors(major=3),
     )
 
     updated = apply_backend_scoring(rubric, result)
@@ -449,8 +463,7 @@ def test_csc134_program_performance_5_minor_uses_effective_counts_for_level_sele
         ],
         overall_feedback="Average submission.",
         overall_band_label=None,
-        detected_errors=[],
-        error_counts_by_severity={"major": 0, "minor": 5},
+        detected_errors=_errors(minor=5),
     )
 
     updated = apply_backend_scoring(rubric, result)
@@ -493,8 +506,7 @@ def test_csc134_versus_csc151_both_use_effective_counts_but_keep_rubric_specific
             ],
             overall_feedback="Test.",
             overall_band_label=None,
-            detected_errors=[],
-            error_counts_by_severity={"major": 0, "minor": minor_errors},
+            detected_errors=_errors(minor=minor_errors),
         )
 
     csc134_result = apply_backend_scoring(csc134_rubric, make_result(csc134_rubric, 5))
@@ -607,7 +619,7 @@ class TestManualPromptGuidance:
         )
 
         assert '"points_earned": null' not in prompt
-        assert "scoring_mode='manual' criteria: points_earned MUST be a" in prompt
+        assert "scoring_mode='manual' criteria: points_earned must be a" in prompt
 
     def test_level_band_rubric_example_still_shows_null(self):
         from cqc_cpcc.rubric_grading import build_rubric_grading_prompt
@@ -926,7 +938,11 @@ class TestCompileGateAddsAMissingCompileError:
         assert [e.code for e in gated.detected_errors] == ["CSC151_DOES_NOT_COMPILE"]
 
     def test_the_real_compiler_diagnostics_are_attached(self):
-        """Without them the instructor cannot see why the gate disagreed."""
+        """Without them the instructor cannot see why the gate disagreed.
+
+        They go in the instructor-only field; the student-facing notes get only the
+        generic line, because diagnostics can quote any file the compiler opened.
+        """
         from cqc_cpcc.rubric_grading import apply_compile_gate
 
         gated, _ = apply_compile_gate(
@@ -934,9 +950,10 @@ class TestCompileGateAddsAMissingCompileError:
             [self._compile_definition()],
         )
 
-        notes = gated.detected_errors[0].notes or ""
-        assert "SyntaxError" in notes
-        assert "does not compile" in notes
+        error = gated.detected_errors[0]
+        assert "SyntaxError" in (error.compiler_diagnostics or "")
+        assert "does not compile" in (error.notes or "")
+        assert "SyntaxError" not in (error.notes or "")
 
     def test_a_very_long_diagnostic_is_truncated(self, mocker):
         """g++ can emit thousands of lines; the report has to stay readable.
@@ -963,9 +980,9 @@ class TestCompileGateAddsAMissingCompileError:
         )
 
         assert info["compiles"] is False
-        notes = gated.detected_errors[0].notes or ""
-        assert "truncated" in notes
-        assert len(notes) < 2000
+        diagnostics = gated.detected_errors[0].compiler_diagnostics or ""
+        assert "truncated" in diagnostics
+        assert len(diagnostics) < 2000
 
     def test_a_failure_with_no_compile_definition_leaves_errors_alone(self):
         """Inventing an error id the rubric does not define would corrupt scoring."""

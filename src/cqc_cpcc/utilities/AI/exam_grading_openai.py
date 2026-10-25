@@ -18,7 +18,7 @@ Key changes from LangChain version:
 from typing import TYPE_CHECKING, TypeVar
 
 from cqc_cpcc.utilities.AI import llm_gateway
-from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_prompt
+from cqc_cpcc.utilities.AI.exam_grading_prompts import build_exam_grading_messages
 from cqc_cpcc.utilities.AI.openai_exceptions import (
     OpenAISchemaValidationError,
     OpenAITransportError,
@@ -132,7 +132,7 @@ async def grade_exam_submission(
     # Build the grading prompt
     # If preprocessing was used, pass digest instead of raw code
     if preprocessing_digest_json:
-        prompt = build_exam_grading_prompt(
+        system_message, prompt = build_exam_grading_messages(
             exam_instructions=exam_instructions,
             exam_solution=exam_solution,
             student_submission=f"GRADING DIGEST (preprocessed):\n{preprocessing_digest_json}",
@@ -140,7 +140,7 @@ async def grade_exam_submission(
             minor_error_types=minor_error_type_list,
         )
     else:
-        prompt = build_exam_grading_prompt(
+        system_message, prompt = build_exam_grading_messages(
             exam_instructions=exam_instructions,
             exam_solution=exam_solution,
             student_submission=student_submission,
@@ -159,11 +159,15 @@ async def grade_exam_submission(
         result = await llm_gateway.structured(
             role="grading",
             prompt=prompt,
+            system=system_message,
             schema_model=ErrorDefinitions,
             override=None if use_auto_route else model_name,
             use_auto_route=use_auto_route,
             prompt_id="exam-grading",
         )
+        # The exact request, for the LLM Prompt tab; never persisted.
+        result = result.model_copy(update={
+            "llm_request": llm_gateway.last_request_record("exam-grading", "grading")})
 
         logger.info(
             f"Grading complete: {len(result.all_major_errors or [])} major errors, "

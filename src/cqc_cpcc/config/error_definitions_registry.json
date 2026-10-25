@@ -21,7 +21,8 @@
               "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "sequence"
             },
             {
               "error_id": "CSC_151_EXAM_1_OUTPUT_IMPACT_ERROR",
@@ -29,7 +30,8 @@
               "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_values"
             },
             {
               "error_id": "CSC_151_EXAM_1_SYNTAX_ERROR",
@@ -69,7 +71,8 @@
               "description": "There are issues with the expected code output formatting (spacing, decimal places, etc.)",
               "severity_category": "minor",
               "enabled": true,
-              "default_penalty_points": 10
+              "default_penalty_points": 10,
+              "execution_category": "output_format"
             },
             {
               "error_id": "CSC_151_EXAM_1_PROGRAMMING_STYLE",
@@ -115,7 +118,8 @@
               "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "sequence"
             },
             {
               "error_id": "CSC_151_EXAM_2_OUTPUT_IMPACT_ERROR",
@@ -123,7 +127,8 @@
               "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_values"
             },
             {
               "error_id": "CSC_151_EXAM_2_SYNTAX_ERROR",
@@ -163,7 +168,8 @@
               "description": "There are issues with the expected code output formatting (spacing, decimal places, etc.)",
               "severity_category": "minor",
               "enabled": true,
-              "default_penalty_points": 10
+              "default_penalty_points": 10,
+              "execution_category": "output_format"
             },
             {
               "error_id": "CSC_151_EXAM_2_PROGRAMMING_STYLE",
@@ -206,7 +212,8 @@
               "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "sequence"
             },
             {
               "error_id": "CSC_251_EXAM_1_OUTPUT_IMPACT_ERROR",
@@ -214,7 +221,8 @@
               "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_values"
             },
             {
               "error_id": "CSC_251_EXAM_1_CONSTANTS_ERROR",
@@ -230,7 +238,8 @@
               "description": "There are issues with the expected code output where the decimal scale is not correct and/or missing commas separators",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_format"
             },
             {
               "error_id": "CSC_251_EXAM_1_CURLY_BRACES_OMITTED",
@@ -310,7 +319,8 @@
               "description": "There are formatting issues not matching Sample Input and Output (i.e spacing, missing dollar sign, not using print/println appropriately, etc.)",
               "severity_category": "minor",
               "enabled": true,
-              "default_penalty_points": 10
+              "default_penalty_points": 10,
+              "execution_category": "output_format"
             },
             {
               "error_id": "CSC_251_EXAM_1_STALE_DATA",
@@ -364,7 +374,8 @@
               "description": "Errors in the coding sequence, selection and looping including incorrect use of comparison operators",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "sequence"
             },
             {
               "error_id": "CSC_251_EXAM_2_OUTPUT_IMPACT_ERROR",
@@ -372,7 +383,8 @@
               "description": "Errors that adversely impact the expected output, such as calculation errors or omissions",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_values"
             },
             {
               "error_id": "CSC_251_EXAM_2_CONSTANTS_ERROR",
@@ -388,7 +400,8 @@
               "description": "There are issues with the expected code output where the decimal scale is not correct and/or missing commas separators",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_format"
             },
             {
               "error_id": "CSC_251_EXAM_2_CURLY_BRACES_OMITTED",
@@ -484,7 +497,8 @@
               "description": "There are formatting issues not matching Sample Input and Output (i.e spacing, missing dollar sign, not using print/println appropriately, etc.)",
               "severity_category": "minor",
               "enabled": true,
-              "default_penalty_points": 10
+              "default_penalty_points": 10,
+              "execution_category": "output_format"
             },
             {
               "error_id": "CSC_251_EXAM_2_STALE_DATA",
@@ -548,10 +562,11 @@
             {
               "error_id": "CSC_134_PROJECT_1_MAJOR_FORMATTING",
               "name": "Major Formatting Issues",
-              "description": "Major formatting issues \u2013 instructions are not followed for output (output and formatting must match sample output exactly)",
+              "description": "Major formatting issues – instructions are not followed for output (output and formatting must match sample output exactly)",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_format"
             },
             {
               "error_id": "CSC_134_PROJECT_1_SEQUENCE_SELECTION_ERROR",
@@ -559,7 +574,8 @@
               "description": "All errors when coding sequence, selection and/or looping control structures",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "sequence"
             },
             {
               "error_id": "CSC_134_PROJECT_1_CURLY_BRACES_OMITTED",
@@ -591,7 +607,8 @@
               "description": "Calculation errors that produce incorrect results",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_values"
             },
             {
               "error_id": "CSC_134_PROJECT_1_OUTPUT_IMPACT_ERROR",
@@ -599,7 +616,8 @@
               "description": "Any errors that adversely impact the output",
               "severity_category": "major",
               "enabled": true,
-              "default_penalty_points": 40
+              "default_penalty_points": 40,
+              "execution_category": "output_values"
             },
             {
               "error_id": "CSC_134_PROJECT_1_FILENAME_CLASS_MISMATCH",
@@ -660,15 +678,16 @@
             {
               "error_id": "CSC_134_PROJECT_1_MINOR_FORMATTING",
               "name": "Minor Formatting Issues",
-              "description": "Minor formatting issues \u2013 decimal scale (incorrect decimal places or missing separators)",
+              "description": "Minor formatting issues – decimal scale (incorrect decimal places or missing separators)",
               "severity_category": "minor",
               "enabled": true,
-              "default_penalty_points": 10
+              "default_penalty_points": 10,
+              "execution_category": "output_format"
             },
             {
               "error_id": "CSC_134_PROJECT_1_PROGRAMMING_STYLE",
               "name": "Programming Style Issues",
-              "description": "Programming style issues (inconsistent or no indentation, inadequate white space, etc. \u2013 review sample programs in the book)",
+              "description": "Programming style issues (inconsistent or no indentation, inadequate white space, etc. – review sample programs in the book)",
               "severity_category": "minor",
               "enabled": true,
               "default_penalty_points": 10

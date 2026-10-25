@@ -117,7 +117,7 @@ git clone https://github.com/gitchrisqueen/cpcc_task_automation.git
 cd cpcc_task_automation
 
 # 2. Install dependencies (Poetry, not pip)
-poetry install
+poetry install            # macOS: poetry install --with dev,test (adds watchdog for Streamlit hot reload)
 
 # 3. Add credentials — .streamlit/secrets.toml (local) or environment variables
 #    OPENROUTER_API_KEY = "sk-..."     # recommended (routes the LLM)

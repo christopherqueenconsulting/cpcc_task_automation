@@ -39,6 +39,10 @@ alone was unsafe. It goes back once the digest prompt suite passes (see
 3. **Hard gates** (any failure blocks): call success rate, no refusals or truncations, no
    invented error ids, retry rate, every prompt-injection twin resisted, minimum F1 and
    score accuracy, latency, cost per submission, the model actually served, and policy.
+   Eval calls use the same request timeouts as the app (grading 180 s at low effort, scaled
+   to 270 s at the registry's high effort; see `docs/OPENROUTER_INTEGRATION.md`), so a
+   candidate slower than that fails its calls
+   instead of passing slowly. Set `CQC_LLM_TIMEOUT_GRADING` to evaluate a slower model.
 4. **Promotion paths**:
    - *better*: composite score at least 0.03 higher (95% interval above zero), nothing
      else worse by more than 0.02, cost at most 1.5x;
@@ -91,6 +95,57 @@ alone was unsafe. It goes back once the digest prompt suite passes (see
   `{"start": "2026-12-01", "end": "2026-12-20", "reason": "finals"}`.
 - **Run locally**: `poetry run python -m cqc_cpcc.model_eval run --candidate <id> --dry-run`.
 
+## How many calls run at once
+
+The promotion run (`model-eval.yml`) and a plain `suite run` use a fixed number of calls in flight (4,
+`CQC_EVAL_CONCURRENCY`, whole numbers 1 to 256; anything else is an error, not a silent default). The
+**prompt A/B** uses adaptive pools instead: it starts at min(calls in the suite, 64) per side, halves on
+a 429 or an `openrouter_in_flight_budget` 402/403, earns a permit back per success window, retries
+throttled calls with full jitter (honouring `Retry-After`), keeps the judge in a separate pool (default
+16), and makes every call reserve its worst-case cost on the budget first so the key cap holds at any
+concurrency. Knobs: `--max-concurrency` / `CQC_AB_MAX_CONCURRENCY` (default 64, hard cap 256),
+`CQC_AB_JUDGE_CONCURRENCY` (16), `--concurrency` / `CQC_AB_START_CONCURRENCY`, `--adaptive` /
+`CQC_AB_ADAPTIVE=1` for a `suite run`. The rule, defaults and report fields are in
+[`PROMPTS.md`](PROMPTS.md) under "Adaptive concurrency". None of it changes what is measured or any
+threshold.
+
+## Prompt caching in model evals
+
+The grading runs behind `model-eval.yml` use the same layout as the app (its prompt builders: static system
+message and rubric first, fenced submission last), send OpenRouter's `session_id` (side `model-eval`, one id per
+model, effort and run, no case data) and send one case per shared-prefix group first before the rest of the
+group fans out (`runner.run_model`, via `cache_session.py`; skipped when a test double replaces the grader).
+Caching changes input price and latency only: outputs, scores and every gate are unchanged.
+
+| Variable | Default | Accepted values |
+|---|---|---|
+| `CQC_EVAL_SESSION_ID` | on | `1`/`on`/`true`/`yes`, `0`/`off`/`false`/`no` |
+| `CQC_EVAL_WARM_FIRST` | on exactly when the session id is on | same |
+| `CQC_EVAL_WARM_WAIT_S` | `600` | a number from 1 to 7200 (seconds) |
+
+They are read when a run starts, so they do not change a run in flight (cancel and dispatch again); an invalid
+value aborts the run before any paid call. Setting the first two to `0` reverts every behaviour change; the
+workflow itself is not edited. If a provider were to reject the `session_id` key, an unattended weekly run
+would see failed calls, a low ok-rate and no promotion (NOT VERIFIED that any provider does). Raw records
+gain `cached_tokens` and `cache_write_tokens` when the response reported them. The layout measurements, the Run
+stats definitions and the caveat for a base ref on older code are in [`PROMPTS.md`](PROMPTS.md) under "Prompt
+caching in evals".
+
+## OpenRouter Batch API mode
+
+Eval runs (prompt A/B, the model comparison and its cross-suite gate) can send their calls as OpenRouter batches
+at about half the price. It is off in code (`CQC_EVAL_BATCH=0`) and on in the paid steps of `prompt-eval.yml` and
+`model-eval.yml`, which also set `CQC_EVAL_BATCH_ALLOW_RETENTION=1`: batch data is retained by the provider for 30
+days (zero data retention is not supported), so it is limited to the synthetic datasets under `evals/datasets` and
+is never used for production grading or student data (ruling relayed by the maintainer from the owner's chat,
+2026-10-25; no repo artifact). Without the second variable a run with `CQC_EVAL_BATCH=1`
+stops before any paid call. The first batch of every run is validated; if it fails (failed or expired, too slow,
+malformed results, effort ignored) the run finishes on the synchronous path and the scorecard and Run stats say why
+(`batch_fallback_reason`). There is no cancel endpoint, so a batch abandoned at its deadline may still bill; the
+report bounds that. The switches, the budget rules and the list of unverified facts are in [`PROMPTS.md`](PROMPTS.md)
+under "OpenRouter Batch API mode for evals". The weekly `model-eval` run and a prompt A/B read the setting when they
+start. Local runs stay synchronous unless you set both variables.
+
 ## What can go wrong and who hears about it
 
 | Situation | What happens |
@@ -99,6 +154,94 @@ alone was unsafe. It goes back once the digest prompt suite passes (see
 | Current model fails a hard gate (drift) | same issue; nothing is promoted |
 | Current model expiring or silently changed by OpenRouter | same issue; a replacement needs your merge |
 | Weekly discovery did not happen (GitHub disabled the schedule) | the heartbeat opens an issue after 10 days |
+| The account's or key's spending limit is reached (HTTP 403 "Budget limit exceeded" or HTTP 402) | the run stops at the first such call: status `aborted_account_limit`, no scores, no decisions, no winner, exit status 3, and a fixed `RUN ABORTED: ...` line first in the scorecard (the gateway message is not quoted); nothing is promoted and discovery retries the candidates later. The failed job is the alert; the issue says only that the evaluation job failed. The maintainer (the OpenRouter workspace and key owner) raises or resets the limit, then the run is dispatched again |
 | The winner gets worse on another prompt of its roles | cross-suite gate fails; nothing is promoted; issue opened |
 | Model changed on master | issue "Model change on master: git pull + restart" (+ ClickUp task if configured) |
 | Auto-merge refused | comment on the PR explaining why, label switched to `blocked-on-chris` |
+
+### The spending limit and a run that is stopped by it
+
+If the OpenRouter account or key has no budget left, every call fails the same way, so the run does not go on.
+`account_limit.py` recognises HTTP 402 and a 403 whose gateway message names an exceeded budget, key or credit
+limit (a plain 403 is not one). The first such call stops the run: calls in flight are cancelled, nothing new is
+sent, the failed call is not charged to the local budget, and the scorecard has status `aborted_account_limit`
+with no scores. Only a `complete` scorecard can promote (`promote`, `verify-promotion` and `recompute` check it),
+so an aborted run can never change the registry, and `discover.load_history` does not count the candidates of an
+aborted run as evaluated. A per-request 402 (needs more credits or fewer max_tokens) also stops the run; the banner
+(fixed text) does not quote the gateway message; read eval.log's redacted line to tell the two apart; if it names
+max_tokens, lower the limit or set CQC_EVAL_ABORT_ON_ACCOUNT_LIMIT=0 for that dispatch (set in the local `.env` or
+shell only; no workflow sets it).
+
+The artifacts and logs of this public repository are publicly readable, so free text from the gateway is never
+published: a call that ends on an account limit stores only `account_limit (HTTP 403)` in its `error_detail`, logs
+only its status and the fixed reason, and every other stored error message has links, addresses, amounts,
+mentions, `#NN` references and markup stripped. A local run can add the redacted gateway text to its log with
+`CQC_EVAL_LOG_GATEWAY_MESSAGE=1` (ignored when `GITHUB_ACTIONS` is set).
+Any error the gateway answered (it has an HTTP status) is logged as its status only, in the runner, the judges and the
+A/B alike; the base branch's own log and saved rows are scrubbed on this side before they are uploaded; a unit test
+fails if a logger or print call anywhere in `model_eval` formats exception text without `log_text`, `redact_message`
+or `scrub_log`.
+
+How the workflow sees it: `model_eval run` exits 3 and the `Run evaluation` step maps any non-zero exit to `exit 1`,
+so the `evaluate` job simply fails; the exit code 3 itself is not visible. An abort is told apart only by the
+artifact (`scorecard.json` status `aborted_account_limit`, and the `RUN ABORTED` banner in `scorecard.md`) and,
+since the `Record an account-limit abort` step, by the job output `scorecard_status`. `steps.run.outputs.status` is
+written on the abort path too (`_github_outputs` runs before the exit; the value is `aborted_account_limit`, `winner`
+is empty), and GitHub keeps outputs written by a step that later fails. The `update-state` job reads the aborted
+scorecard and writes one `aborted_account_limit` history row per model and no `attempted` row; `load_history` ignores
+them (a test runs that step's own Python on a real aborted scorecard). Details, the report wording and the rollback are in [`PROMPTS.md`](PROMPTS.md)
+under "The account's spending limit stops the whole run".
+
+## Effort recommendation: measuring the right effort
+
+The `effort-recommendation` prompt suite scores the Setup tab's effort judge against *measured* ground truth,
+not against `high`. Ground truth needs a paid run, so it is a separate, human-started step
+(see `evals/datasets/effort-recommendation/v1/README.md` for the dataset):
+
+```bash
+# <model> is the registry grading model (src/cqc_cpcc/config/model_registry.json): openai/gpt-6-luna.
+# Its registry effort is high, and `run` starts that incumbent (<model>@high) by itself, so only
+# the two lower efforts are named as candidates.
+
+# 1. cost first (no model call)
+poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
+  --candidate openai/gpt-6-luna@low --candidate openai/gpt-6-luna@medium --repeats 3 --dry-run
+# 2. the paid run: worst case. Step 1 prints the current cost (the author's local dry run printed $0.9713 on 2026-10-23;
+#    that is not a recorded artifact). Step 2 spends it.
+poetry run python -m cqc_cpcc.model_eval run --dataset evals/datasets/effort-recommendation/v1 \
+  --candidate openai/gpt-6-luna@low --candidate openai/gpt-6-luna@medium --repeats 3 --out evals/runs/effort-truth
+# 3. derive the ground truth (no model call); --write puts ground_truth.json in the dataset directory
+poetry run python -m cqc_cpcc.model_eval effort-truth --raw evals/runs/effort-truth/raw_outputs.jsonl --write
+```
+
+Then, by hand:
+
+1. Commit `evals/datasets/effort-recommendation/v1/ground_truth.json` (the report says `not informative` and
+   writes no truth when fewer than 3 assignments separate; then stop here).
+2. Add an `effort-recommendation` entry under `prompt_eval.suites` in `src/cqc_cpcc/config/model_policy.json`
+   with `"calibrated": true`, and the prompt version under `prompt_eval.calibrated_versions`. This file is
+   Christopher's: it is edited by hand only, and the bot guard rejects agent edits. Set the floor only
+   when at least 10 non-injection answers were confident (count them in the suite run's
+   `raw_outputs.jsonl`, field `payload.confidence`, source `judge`) and `confident_not_under` is 1.0.
+
+If nobody runs this, the recommendation stays display-only (Apply button, never selected for you) and the
+suite's graders that need ground truth return nothing. The ground truth belongs to one model, this dataset
+version and its content, and the prompt version it was calibrated on: change any of them and measure again
+(a stale report is ignored with a warning).
+
+**Limits.** These are short single-class labs. They cannot show that a real multi-file project needs
+`high`, so a low ground truth here says nothing about such work. A recommendation is advice for one
+assignment; the instructor still chooses one effort for the whole run.
+
+For each assignment the right effort is the lowest one no worse than `high`, beyond noise (high against
+itself across repeats), on level-band agreement, missed bug twins and harshness on equivalent cases.
+When no assignment shows a difference beyond the noise the report says `not informative`, writes no
+ground truth, and the judge stays display-only. The report also lists each counted signal's
+association with the ground truth, the medium-versus-high balance (so the registry default can be
+reviewed) and how many assignments were decided by a single measure. The policy floor that lets the
+recommendation be pre-selected is an entry for `effort-recommendation` in `model_policy.json`
+(`calibrated: true` and `calibrated_versions` at the current prompt version), edited by hand.
+
+Note on A/B dispatches: in `ab` mode the workflow does not read `dry_run`, so an `ab` dispatch with
+`dry_run=true` still spends money (a pre-existing property of the `ab` branch of `prompt-eval.yml`). Use the
+`run` dry-run above for a cost estimate.

@@ -162,10 +162,12 @@ def compute_error_based_score(
 def aggregate_error_counts(
         detected_errors: list[DetectedError]
 ) -> tuple[dict[str, int], dict[str, int]]:
-    """Aggregate error counts by severity and error_id.
-    
-    Groups detected errors into counts by severity category (e.g., "major", "minor")
-    and by individual error_id.
+    """Aggregate error counts by severity and error_id, summing occurrences.
+
+    Display only: scoring counts each distinct error type once
+    (``rubric_grading.normalize_detected_errors_for_scoring``), so occurrences never move
+    a score. Groups detected errors into counts by severity category (e.g., "major",
+    "minor") and by individual error_id.
     
     Args:
         detected_errors: List of detected errors from grading

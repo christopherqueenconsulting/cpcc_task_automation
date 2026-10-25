@@ -17,9 +17,11 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from cqc_cpcc.model_eval import account_limit, adaptive
 from cqc_cpcc.model_eval.budget import Budget
-from cqc_cpcc.model_eval.suites import SUITE_MODULES, get_suite
-from cqc_cpcc.model_eval.suites.base import SuiteRecord, aggregate, gate_failures, run_suite
+from cqc_cpcc.model_eval import cache_session
+from cqc_cpcc.model_eval.suites import SUITE_MODULES, base, get_suite
+from cqc_cpcc.model_eval.suites.base import SuiteRecord, aggregate, gate_failures, retry_stats, run_suite
 from cqc_cpcc.utilities.AI import model_registry
 
 ASSUMED_OUTPUT_TOKENS = 4000  # incl. reasoning; dry-run estimate only
@@ -63,6 +65,31 @@ def shared_budget(budget_usd: Optional[float] = None) -> Budget:
     policy = model_registry.load_policy().prompt_eval
     limit = min(budget_usd or policy.budget_usd, policy.budget_usd)
     return Budget(limit=limit, stop_at=min(policy.stop_at_usd, limit * 0.9))
+
+
+def _dearest_call(suite, profile, cases: list) -> float:
+    """The dearest single call of ``suite`` on ``profile`` by the same estimate as :func:`estimate`."""
+    pricing = profile.pricing
+    return max((suite.estimate_prompt_tokens(c) * pricing.prompt_per_mtok
+                + ASSUMED_OUTPUT_TOKENS * pricing.completion_per_mtok) / 1e6 for c in cases) if cases else 0.0
+
+
+CONCURRENCY_FILE = "concurrency.json"
+
+
+def write_concurrency(out_dir: Path, calls: Optional[dict], judge: Optional[dict]) -> None:
+    """Save the pools' counters beside ``raw_outputs.jsonl`` so the A/B can report the base side too."""
+    (out_dir / CONCURRENCY_FILE).write_text(
+        json.dumps({"calls": calls, "judge": judge}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_concurrency(path: Path) -> Optional[dict]:
+    """``{"calls": ..., "judge": ...}`` saved by a run that used adaptive pools, else None (a base
+    that predates them, or a run that failed before writing)."""
+    try:
+        return json.loads((path / CONCURRENCY_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 def estimate_suites(suite_ids: list, models: list, repeats: Optional[int] = None) -> float:
@@ -127,6 +154,11 @@ def to_markdown(sc: dict) -> str:
 
     suite = get_suite(sc["suite"])
     grader_names = [g.name for g in suite.graders]
+    if sc.get("status") == account_limit.STATUS:
+        abort = sc.get("abort") or {}
+        return (account_limit.banner(abort, abort.get("completed_calls"), sc.get("spent_usd")) + "\n\n"
+                f"### Prompt suite `{sc['suite']}` (prompt `{sc['prompt_id']}`)\n\n"
+                f"Status: **{sc.get('status')}**. No scores: nothing of an aborted run is scored.\n")
     lines = [f"### Prompt suite `{sc['suite']}` (prompt `{sc['prompt_id']}`)", "",
              f"Dataset `{sc['dataset']}`, {sc.get('cases')} cases x {sc.get('repeats')} repeats. "
              f"Status: **{sc.get('status')}**. Spent ${_fmt(sc.get('spent_usd'), 2)}.", "",
@@ -143,6 +175,11 @@ def to_markdown(sc: dict) -> str:
     for label, m in sc["models"].items():
         for failure in m["health"]["failures"]:
             lines.append(f"- `{_safe(label)}`: {_safe(failure)}")
+        if suite.report is not None:
+            try:
+                lines.extend(suite.report(m))
+            except Exception as e:  # noqa: BLE001 - an extra line must not break the scorecard
+                lines.append(f"- (extra report for `{_safe(label)}` failed: {type(e).__name__})")
         for judge, j in (m.get("judges") or {}).items():
             lines.append(f"- `{_safe(label)}` judge `{judge}`: mean {_fmt(j.get('mean'))} "
                          f"({'counts' if j.get('calibrated') else 'report-only'})")
@@ -166,12 +203,23 @@ def read_records(path: Path) -> dict[str, list[SuiteRecord]]:
     return out
 
 
-async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: Optional[int] = None,
+async def run(*args, **kwargs) -> dict:
+    """Evaluate one suite (see :func:`_run_one_suite` for the arguments) under the run's abort flag.
+
+    The first call that ends on the account's spending limit (HTTP 402, or 403 "Budget limit exceeded") stops
+    the run: the scorecard has status ``aborted_account_limit``, an ``abort`` block, and no scores.
+    """
+    with account_limit.run_scope():
+        return await _run_one_suite(*args, **kwargs)
+
+
+async def _run_one_suite(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: Optional[int] = None,
               limit: Optional[int] = None, budget_usd: Optional[float] = None, out: str = "evals/runs/suites",
               dry_run: bool = False, run_label: Optional[str] = None, run_id: Optional[str] = None,
               case_ids: Optional[set] = None, judges: bool = False, judge_model: Optional[str] = None,
               judge_cache: Optional[str] = None, judge_cache_read_only: bool = False,
-              budget: Optional[Budget] = None) -> dict:
+              budget: Optional[Budget] = None, concurrency: Optional[int] = None,
+              adaptive_mode: Optional[bool] = None, max_concurrency: Optional[int] = None) -> dict:
     """Evaluate ``suite_id`` on ``models`` (default: the role's incumbent)."""
     suite = get_suite(suite_id)
     policy = model_registry.load_policy().prompt_eval
@@ -207,25 +255,64 @@ async def run(suite_id: str, models: list[tuple[str, Optional[str]]], repeats: O
             raw.flush()
 
         judge_scores = {}
+        pool_stats: list = []
+        judge_pool = None
         if judges:
             from cqc_cpcc.model_eval import judges as jm
             judge_model = judge_model or jm.pick_judge_model()
             cache = jm.VerdictCache(Path(judge_cache) if judge_cache else out_dir / "judge-cache",
                                     read_only=judge_cache_read_only)
+            if adaptive.adaptive_enabled(adaptive_mode):  # judges get their own, lower, pool
+                cap = adaptive.judge_max_concurrency()
+                judge_pool = adaptive.AdaptiveLimiter("judge", start=cap, ceiling=cap)
+                adaptive.use_judge_pool(judge_pool, budget, _dearest_call(suite, profiles[models[0][0]], cases) * adaptive.JUDGE_ESTIMATE_FACTOR)
+        recorded = {"calls": 0, "ok": 0}
         for model, effort in models:
+            if account_limit.tripped():
+                break
             records = await run_suite(suite, model, effort, cases, repeats, budget,
-                                      profile=profiles[model], on_record=save)
+                                      concurrency=concurrency, profile=profiles[model], on_record=save,
+                                      adaptive_mode=adaptive_mode, max_concurrency=max_concurrency,
+                                      pool_stats=pool_stats, warm_first=cache_session.warm_first_enabled())
+            stats = retry_stats(records)
+            recorded["calls"] += stats["calls"]
+            recorded["ok"] += sum(1 for r in records if r.ok)
+            print(f"[{suite_id}] {label_of(model, effort)}: {stats['calls']} calls, {stats['retried']} retried "
+                  f"({stats['extra_attempts']} extra attempts)")
+            if account_limit.tripped():
+                break  # nothing of an aborted run is scored
             if judges:
-                judge_scores = await jm.judge_records(suite, cases, records, judge_model, cache, budget,
-                                                      dataset_version=suite.dataset, evaluated_model=model)
+                adaptive._install_judge_route()  # also without a pool: it keeps a limit error's text out of the log
+                try:
+                    judge_scores = await jm.judge_records(suite, cases, records, judge_model, cache, budget,
+                                                          dataset_version=suite.dataset, evaluated_model=model)
+                except account_limit.RunAborted:
+                    break
+                except Exception as e:  # noqa: BLE001 - only the account limit is handled here
+                    if not account_limit.note_if_account_limit(e):
+                        raise
+                    break
+                if account_limit.tripped():
+                    break  # a judge call hit the limit (its error is swallowed by the judge): nothing is scored
             aggregates[label_of(model, effort)] = aggregate(suite, cases, records, judge_scores)
             if any(r.error_kind == "budget" for r in records):
                 status = "incomplete_budget"
                 break
+    abort = account_limit.current()
+    aborted = abort is not None and abort.tripped
+    if aborted:
+        status, aggregates = account_limit.STATUS, {}
+        print(account_limit.banner(abort.info(), recorded["ok"], budget.spent - spent_before))
+    if pool_stats or judge_pool is not None:
+        adaptive.use_judge_pool(None)
+        write_concurrency(out_dir, adaptive.combine("calls", pool_stats),
+                          judge_pool.snapshot() if judge_pool is not None else None)
     sc = scorecard(suite, aggregates, {
         "run_label": run_label or dt.date.today().isoformat(), "run_id": run_id,
         "cases": len(cases), "repeats": repeats, "status": status,
         "spent_usd": round(budget.spent - spent_before, 6), "budget_usd": budget.limit,
+        **({"abort": {**abort.info(), "completed_calls": recorded["ok"], "recorded_calls": recorded["calls"]}}
+           if aborted else {}),
     })
     json_path, md_path = write_scorecard(out_dir, sc)
     print(md_path.read_text(encoding="utf-8"))
@@ -267,14 +354,29 @@ def cmd_suite(args) -> int:
     models = [parse_model(m) for m in (args.model or [])]
     suite_ids = list(SUITE_MODULES) if args.suite == "all" else args.suite.split(",")
     budget = shared_budget(args.budget)
+    try:  # a bad setting is an error before any spend, never a silent fallback
+        adaptive.ab_max_concurrency(args.max_concurrency)
+        base.eval_concurrency(value=args.concurrency)
+        adaptive.judge_max_concurrency()
+    except adaptive.ConcurrencyError as e:
+        raise SystemExit(f"error: {e}")
     if not args.dry_run and not args.limit:
         total = estimate_suites(suite_ids, models, args.repeats)
         print(f"estimated total ${total:.2f}; budget stops at ${budget.stop_at:.2f}")
         if total > budget.stop_at:
             raise SystemExit("the estimated total exceeds the budget: run fewer suites or models")
     for suite_id in suite_ids:
-        asyncio.run(run(suite_id, models, args.repeats, args.limit, args.budget, args.out,
-                        args.dry_run, args.label, args.run_id, judges=args.judges,
-                        judge_model=args.judge_model, judge_cache=args.judge_cache,
-                        judge_cache_read_only=args.judge_cache_read_only, budget=budget))
+        sc = asyncio.run(run(suite_id, models, args.repeats, args.limit, args.budget, args.out,
+                             args.dry_run, args.label, args.run_id, judges=args.judges,
+                             judge_model=args.judge_model, judge_cache=args.judge_cache,
+                             judge_cache_read_only=args.judge_cache_read_only, budget=budget,
+                             concurrency=args.concurrency, adaptive_mode=True if args.adaptive else None,
+                             max_concurrency=args.max_concurrency))
+        if sc.get("status") == account_limit.STATUS:  # the same limit stops every later suite: do not start them
+            skipped = suite_ids[suite_ids.index(suite_id) + 1:]
+            abort = sc.get("abort") or {}
+            print(account_limit.banner(abort, abort.get("completed_calls"), sc.get("spent_usd")))
+            if skipped:
+                print("Not started: " + ", ".join(skipped))
+            return account_limit.EXIT_CODE
     return 0

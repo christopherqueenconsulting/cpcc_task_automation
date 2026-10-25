@@ -5,6 +5,7 @@ Project context for Claude Code sessions.
 - Browser control + BrightSpace automation notes: @.claude/brightspace-and-selenium-mcp.md
 - BrightSpace session handoff (status, kickoff prompt): @docs/BRIGHTSPACE_AUTOMATION_HANDOFF.md
 - Selenium MCP setup/usage: @docs/SELENIUM_MCP.md
+- Versioning, `-rc` prereleases, release and rollback: [docs/RELEASING.md](docs/RELEASING.md)
 
 The `selenium` MCP server (`.mcp.json`) drives the project's Docker Selenium grid
 (`SELENIUM_REMOTE_URL=http://localhost:14444/wd/hub`). Start the container first:
@@ -35,10 +36,12 @@ Markers are strict (`--strict-markers`): `unit`, `integration`, `e2e`, `eval_liv
 
 - BrightSpace submission-folder names (`<userid>-<subid> - First Last`);
 - BrightSpace ids (`ou=`, `qi=`, `db=`, `ouId=`, `orgUnitId=` with 4+ digits);
+- e-mail addresses at `cpcc.edu` or `*.cpcc.edu`, except the synthetic local parts allowlisted in the
+  script (`example`, `student.example`, `ada.example`, `ben.sample`, `cal.fixture`);
 - any token whose SHA-256 is in `scripts/pii_denylist.sha256` (plaintext never committed).
 
 Run it before pushing: `python scripts/pii_guard.py` (or pass paths). Use only the
-synthetic names and ids allowlisted at the top of the script in fixtures and docs. A
+synthetic names, ids and e-mail local parts allowlisted at the top of the script in fixtures and docs. A
 `pii-guard:allow` comment exempts a line from the structural checks only, never from the
 denylist. Never commit real student names, ids, submissions or grades, and never put real
 student work in a prompt renderer or eval fixture. Details: `docs/security-workflows.md`,
@@ -52,11 +55,26 @@ student work in a prompt renderer or eval fixture. Details: `docs/security-workf
 - The LLM detects errors or picks a level; **points are computed deterministically** in
   `src/cqc_cpcc/scoring/rubric_scoring_engine.py` (`manual`, `level_band`, `error_count`
   modes). Do not move arithmetic into prompts. See `docs/SCORING_ENGINE_SUMMARY.md`.
-- In `grade_with_rubric` the order is `apply_compile_gate` (when source files are given),
-  then `apply_requirement_coverage` (when requirements are given), then
-  `apply_backend_scoring`. A real compiler (`utilities/compiler_gate.py`), not the model,
+- In `grade_with_rubric` the order is the validity gate, then `run_student_execution` (only
+  when an `execution_plan` is given; before the prompt), the prompt and model call, then
+  `apply_compile_gate` (when source files are given), `apply_execution_gate` (when a plan was
+  given), `apply_requirement_coverage` (when requirements are given), `reconcile_overlaps`
+  (`requirement_overlap.py`: one penalty when a requirement error and a model error describe the
+  same issue; `CQC_REQUIREMENT_OVERLAP` = `notes` (default, drops nothing) | `drop` | `off`; it
+  never drops an execution- or compiler-sourced error) and `apply_backend_scoring`. With no plan,
+  or when the output check is skipped or the runner cannot answer, the prompt is byte-identical to
+  the one without the output check (`docs/execution-gate.md`). The middle stages run inside
+  `_reconcile`, which tags each error's
+  `source` and records every decision as a `ReconciliationNote` (`reconciliation.py`); an
+  error a stage drops lives on its note, suppressed, until the instructor reinstates it. A real compiler (`utilities/compiler_gate.py`), not the model,
   decides "Does Not Compile". "Cannot verify" must never be treated as "does not compile".
   See `docs/compiler-gate.md`.
+- Student programs run only in the Docker sandbox (`utilities/program_runner.py`, image in
+  `docker/exec-runner/`), never on the host; `CQC_EXECUTION=off` turns it off. The compile gate
+  uses it when available. See `docs/execution-gate.md`.
+- The output check (`docs/execution-gate.md`) is opt-in on the Setup tab; its `plan_hash` joins the run key
+  only when a plan exists. It runs programs only in the Docker sandbox, never on the host, and
+  `CQC_EXECUTION=off` (or Streamlit Cloud) leaves grading exactly as it was.
 - BrightSpace write-back defaults to `dry_run=True`. Assignment write-back saves a draft;
   quiz write-back publishes to the student immediately. See "Writing Grades Back to
   BrightSpace" in `docs/ARCHITECTURE.md`.
