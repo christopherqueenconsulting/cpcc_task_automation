@@ -380,7 +380,14 @@ jobs:
           fi
           git fetch -q origin "${BASE_BRANCH}"
           poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${SUITES}" --base-ref "origin/${BASE_BRANCH}" \
-            --out evals/runs/prompt-ab --judges > ab.log 2>&1 || { tail -n 80 ab.log; exit 1; }
+            --out evals/runs/prompt-ab --judges > ab.log 2>&1 || {
+            rc=$?
+            tail -n 80 ab.log
+            # Exit status 3 is the eval runner's "account/key spending limit reached" abort.
+            if [ "${rc}" -eq 3 ]; then echo "::error::RUN ABORTED: account limit"; fi
+            if [ -f evals/runs/prompt-ab/ab.md ]; then cat evals/runs/prompt-ab/ab.md >> "$GITHUB_STEP_SUMMARY"; fi
+            exit 1
+          }
           tail -n 60 ab.log
           cat evals/runs/prompt-ab/ab.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -558,6 +565,13 @@ jobs:
         run: |
           set -euo pipefail
           marker="<!-- prompt-eval -->"
+          # The A/B artifact is untrusted data: only whether its first line starts with the fixed
+          # abort prefix is used, and the comment then carries our own fixed text, never the line.
+          ab_aborted="false"
+          if ls results/prompt-eval-ab-*/ab.md >/dev/null 2>&1; then
+            ab_first="$(head -n 1 results/prompt-eval-ab-*/ab.md | head -n 1 || true)"
+            case "${ab_first}" in "RUN ABORTED: the account/key spending limit was reached"*) ab_aborted="true";; esac
+          fi
           state="success"; description="No prompt suites affected"
           {
             echo "${marker}"
@@ -575,7 +589,13 @@ jobs:
                 fi
               fi
             fi
-            if [ "${BASE_RESULT}" != "success" ]; then
+            if [ "${BASE_RESULT}" != "success" ] && [ "${AB_RESULT}" = "failure" ] && [ "${ab_aborted}" = "true" ]; then
+              state="failure"; description="A/B aborted: account limit"
+              echo; echo "Base-branch check skipped: A/B aborted on the account limit."
+              echo; echo "RUN ABORTED: the account/key spending limit was reached (HTTP 402 or 403). No verdict."
+              echo "The OpenRouter account owner raises the limit (workspace guardrail or key cap), then a maintainer re-runs: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, dry run off."
+              echo; echo "Run: ${RUN_URL}"
+            elif [ "${BASE_RESULT}" != "success" ]; then
               state="failure"; description="Base-branch check ${BASE_RESULT}"
               echo; echo "The base-branch check (detection and rule from the base branch) ended with **${BASE_RESULT}**: ${RUN_URL}"
               if [ "${REQUEST_IDENTICAL}" = "true" ]; then
@@ -630,6 +650,11 @@ jobs:
               elif [ "${AB_RESULT}" != "success" ]; then
                 state="failure"; description="A/B job ${AB_RESULT}"
                 echo; echo "The A/B job ended with **${AB_RESULT}**: ${RUN_URL}"
+                if [ "${ab_aborted}" = "true" ]; then
+                  description="A/B aborted: account limit"
+                  echo; echo "RUN ABORTED: the account/key spending limit was reached (HTTP 402 or 403). No verdict."
+                  echo "The OpenRouter account owner raises the limit (workspace guardrail or key cap), then a maintainer re-runs: **Actions > Prompt Evaluation > Run workflow**, mode \`ab\`, PR \`${PR}\`, dry run off."
+                fi
               else
                 if ls results/prompt-eval-ab-*/ab.md >/dev/null 2>&1; then echo; cat results/prompt-eval-ab-*/ab.md; fi
                 if ls results/prompt-eval-baserule-*/base-rule.md >/dev/null 2>&1; then echo; cat results/prompt-eval-baserule-*/base-rule.md; fi
@@ -1183,8 +1208,11 @@ jobs:
             if [ -f ab-artifact/base-rule.md ]; then cat ab-artifact/base-rule.md; fi
             echo; echo "_Run: ${RUN_URL}_"; } > comment.md
           gh pr comment "${PR}" --repo "${REPO}" --body-file comment.md
+          ab_first=""
+          if [ -f ab-artifact/ab.md ]; then ab_first="$(head -n 1 ab-artifact/ab.md || true)"; fi
           if [ "${RUN_RESULT}" != "success" ] || [ "${DECIDE_OUTCOME}" != "success" ]; then
             state=failure; description="A/B (maintainer run): run ${RUN_RESULT}, base-branch check ${DECIDE_OUTCOME}"
+            case "${ab_first}" in "RUN ABORTED"*) description="A/B aborted: account limit";; esac
           else
             case "${AB_STATUS}" in
               pass|pass-provisional|request-identical) state=success;;
