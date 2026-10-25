@@ -63,7 +63,7 @@ API mode is absent in rc7 (it is not on `master`), and the eval flow is unchange
   such a suite shows `stale (failed calls)` in the status. Eval tooling only. Merge `31adb58`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/470
 - Evaluation: `_secret_env_values` no longer crashes when an environment variable is removed during iteration. Eval tooling only. Merge `c67e411`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/472
 - CI: the prompt-eval and model-eval reports show when a run was aborted on the account limit. Workflow files only. Merge `0b318b5`. https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/467
-- Docs: maintainer review guide refreshed (rc6 status, v4.1 A/B record, harness fixes). Merges `7fca1e7` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/465) and `a843792` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/473).
+- Docs: maintainer review guide refreshed (rc6 status, v4.1 A/B record, harness fixes, record-job re-record confirmed). Merges `7fca1e7` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/465), `a843792` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/473) and `cfbbef5` (https://github.com/christopherqueenconsulting/cpcc_task_automation/pull/474, record-job re-record confirmed).
 
 ## 0.2.0-rc6 - 2026-10-24
 
