@@ -345,6 +345,26 @@ def _judge(expected: str, expected_reads: Sequence[int], got, ignore_patterns: S
     return cmp
 
 
+#: Stored program output, in characters: per text (the runner already stops stdout at 64 KB) and per
+#: report. Over either, the texts are not kept (``outputs_omitted``) and the UI shows the excerpt.
+MAX_STORED_OUTPUT_CHARS = 64 * 1024
+MAX_STORED_REPORT_CHARS = 512 * 1024
+
+
+def _keep_outputs(res: CaseResult, expected: str, actual: str, stored: int) -> int:
+    """Put the compared texts on ``res`` when it is a non-matching case and they fit the caps.
+    Returns the running total of stored characters."""
+    if res.verdict in (Verdict.MATCH.value, Verdict.NOT_RUN.value):
+        return stored
+    size = len(expected) + len(actual)
+    if (max(len(expected), len(actual)) > MAX_STORED_OUTPUT_CHARS
+            or stored + size > MAX_STORED_REPORT_CHARS):
+        res.outputs_omitted = True
+        return stored
+    res.expected_output, res.actual_output = clean_block(expected), clean_block(actual)
+    return stored + size
+
+
 def run_student_execution(plan: Optional[ExecutionPlan], source_files: Optional[dict], *,
                           runner: Optional[Callable] = None,
                           owner: Optional[str] = None) -> Optional[StudentExecution]:
@@ -415,16 +435,21 @@ def run_student_execution(plan: Optional[ExecutionPlan], source_files: Optional[
 
     by_id = {c.id: c for c in outcome.cases}
     results = []
+    stored = 0
     for case in cases:
         got = by_id.get(case.id)
         if got is None:
             results.append(CaseResult(case_id=case.id, verdict=Verdict.NOT_RUN.value))
             continue
         cmp = _judge(case.expected_output or "", case.expected_reads, got, plan.ignore_patterns, case)
-        results.append(CaseResult(case_id=case.id, verdict=cmp.verdict.value, detail=cmp.detail,
-                                  similarity=round(cmp.similarity, 4), diff_excerpt=clean_block(cmp.diff_excerpt),
-                                  excluded_lines=cmp.excluded_lines, total_lines=cmp.total_lines,
-                                  markers_rejected=cmp.markers_rejected))
+        res = CaseResult(case_id=case.id, verdict=cmp.verdict.value, detail=cmp.detail,
+                         similarity=round(cmp.similarity, 4), diff_excerpt=clean_block(cmp.diff_excerpt),
+                         output_cut_by_runner=bool(got.stdout_truncated),
+                         excluded_lines=cmp.excluded_lines, total_lines=cmp.total_lines,
+                         markers_rejected=cmp.markers_rejected)
+        stored = _keep_outputs(res, oc.comparable_output(case.expected_output or "", plan.ignore_patterns),
+                               oc.comparable_output(got.stdout or "", plan.ignore_patterns), stored)
+        results.append(res)
         if cmp.verdict in (Verdict.RUNTIME_ERROR, Verdict.TIMEOUT) and got.stderr:
             exe.stderr_by_case[case.id] = clean_block(got.stderr)[:MAX_STDERR_CHARS]
     exe.report = ExecutionReport(plan_hash=plan.plan_hash, status="ok", cases=results)
