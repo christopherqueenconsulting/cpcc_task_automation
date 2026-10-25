@@ -27,7 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from cqc_cpcc.utilities.output_compare import MAX_MARKER_CHARS, MAX_MARKERS, clean_markers  # noqa: F401
 
 CaseSource = Literal["sample", "llm", "manual"]
 
@@ -81,6 +83,12 @@ class TestCase(BaseModel):
     varying_markers: list[str] = Field(default_factory=list)
     #: A fixed sentence saying why the flag was set (never student or instruction text).
     variance_reason: str = ""
+
+    @field_validator("varying_markers", mode="before")
+    @classmethod
+    def _clean_markers(cls, value):
+        """A loaded or hand-built plan cannot carry a one-letter or oversized marker."""
+        return clean_markers(value)
 
     @property
     def fully_unverifiable(self) -> bool:
@@ -185,6 +193,9 @@ class CaseResult(BaseModel):
     detail: str = ""
     similarity: float = 0.0
     diff_excerpt: str = ""
+    #: Output lines left out by the case's varying markers, out of all non-blank lines (0 when none).
+    excluded_lines: int = 0
+    total_lines: int = 0
 
 
 class ExecutionReport(BaseModel):

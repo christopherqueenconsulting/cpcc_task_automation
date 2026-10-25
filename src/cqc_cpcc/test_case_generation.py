@@ -41,6 +41,7 @@ from typing import Annotated, Callable, Iterable, Literal, Mapping, Optional, Se
 
 from pydantic import BaseModel, Field
 
+from cqc_cpcc.execution_check import clean_markers, MAX_MARKERS, MAX_MARKER_CHARS  # noqa: F401
 from cqc_cpcc.execution_check import (
     MAX_LABEL_CHARS,
     MAX_STDIN_CHARS,
@@ -448,10 +449,14 @@ def normalize_suggestion(raw: TestCaseSuggestion) -> TestCaseSuggestion:
         seen_stdin.add(stdin)
         n = len(cases) + 1
         flag = bool(getattr(item, "values_may_differ", False))
+        markers = clean_markers(getattr(item, "varying_markers", []) or []) if flag else []
+        if flag and getattr(item, "varying_markers", None) and not markers:
+            logger.info("test-case suggestion: every marker was rejected; values_may_differ left off")
+            flag = False
         cases.append(SuggestedCase(id=f"T{n}", label=_clean_label(item.label, f"Case {n}"),
                                    inputs=stdin.split("\n")[:-1] if stdin else [], boundary_of=boundary,
                                    values_may_differ=flag,
-                                   varying_markers=clean_markers(getattr(item, "varying_markers", [])) if flag else []))
+                                   varying_markers=markers))
     return TestCaseSuggestion(conditions=conditions, cases=cases)
 
 
@@ -570,6 +575,7 @@ def validate_cases_on_solution(
         ignore_patterns: Sequence[str] = (),
         runner: Optional[Callable] = None,
         owner: Optional[str] = None,
+        variance_suggested: bool = False,
 ) -> ValidationResult:
     """Run every case twice on the solution in the sandbox and keep the usable ones.
 
@@ -621,13 +627,19 @@ def validate_cases_on_solution(
     for case in pool:
         got = by_id.get(case.id)
         reason = "crash" if got is None else _drop_reason(got)
-        if reason == "nondeterministic" and case.values_may_differ:
-            reason = None  # expected: a flagged case is meant to print something different each run
+        proven = False
+        if reason == "nondeterministic" and (case.values_may_differ or variance_suggested):
+            # The solution really prints something different each run. Keep the case only when the
+            # difference is confined to what the flag allows (the marker lines, or numbers and dates).
+            if _variance_confined(run, solution, sandbox_files, case, got, owner):
+                reason, proven = None, True
         if reason:
             result.dropped.append(DroppedCase(case.id, reason, case.label))
             continue
         reads = [int(r[2]) for r in got.stdin_reads] if got.segmented else []
         update = {"expected_output": got.stdout, "expected_reads": reads, "validated": True}
+        if proven and not case.values_may_differ:
+            update.update(values_may_differ=True, variance_reason=REASON_RUNS)
         shown = (sample_outputs or {}).get(case.id)
         if case.source == "sample" and shown and not case.values_may_differ and _sample_disagrees(shown, got.stdout, ignore_patterns):
             update["disagrees_with_instructions"] = True
@@ -654,6 +666,25 @@ def validate_cases_on_solution(
                 result.warnings.append(f"No test covers the exact edge of: {c.text}.")
     logger.info("test-case validation: status=%s kept=%d dropped=%d", result.status, len(kept), len(result.dropped))
     return result
+
+
+def _variance_confined(run, solution, sandbox_files, case, first, owner) -> bool:
+    """Run the solution once more on this case: the two outputs may differ only where the flag allows."""
+    from cqc_cpcc.utilities import program_runner as pr
+    from cqc_cpcc.utilities.output_compare import Verdict, compare_output
+
+    try:
+        again = run(solution.language, sandbox_files, [pr.SandboxCase(case.id, case.stdin)], mode="run",
+                    main=solution.main, repeat=1, owner=owner)
+    except Exception:  # noqa: BLE001 - cannot confirm, so the case is dropped
+        return False
+    if again.status != "ok" or again.compile is None or not again.compile.ok or not again.cases:
+        return False
+    second = again.cases[0]
+    if second.status != "OK" or second.exit_code not in (0, None) or second.eof_error or second.stdout_truncated:
+        return False
+    cmp = compare_output(first.stdout, second.stdout, values_may_differ=True, varying_markers=case.varying_markers)
+    return cmp.verdict in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER)
 
 
 _DROP_TEXT = {
@@ -732,13 +763,15 @@ _RISK_PATTERNS = {
         "The solution uses command-line arguments; the output check only supplies standard input."),
 }
 _RISK_RES = {code: (re.compile(pattern), message) for code, (pattern, message) in _RISK_PATTERNS.items()}
+_HASH_COMMENT = re.compile(r"#(?!\s*include)[^\n]*")
+_MAX_SOLUTION_SCAN_CHARS = 600 * 1024
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/|#(?!\s*include)[^\n]*", re.DOTALL)
 
 
 def scan_solution_risks(solution: Union[SolutionSources, str]) -> list:
     """Warn about things a stdin-only check cannot reproduce. Comments are ignored."""
     text = solution.combined_text() if isinstance(solution, SolutionSources) else (solution or "")
-    text = _COMMENT.sub(" ", text)
+    text = _HASH_COMMENT.sub(" ", _strip_comments(text[:_MAX_SOLUTION_SCAN_CHARS]))
     return [SolutionRisk(code, message) for code, (regex, message) in _RISK_RES.items() if regex.search(text)]
 
 
@@ -746,26 +779,11 @@ def scan_solution_risks(solution: Union[SolutionSources, str]) -> list:
 # 5. Output that legitimately varies ("values may differ")
 # --------------------------------------------------------------------------- #
 REASON_MODEL = "The AI model marked this output as varying between runs."
-MAX_MARKERS = 5
-MAX_MARKER_CHARS = 60
+REASON_RUNS = "The solution printed different output on two runs."
 _MAX_SCAN_CHARS = 60000
 _MAX_INSTRUCTION_CHARS = 20000
 _MAX_SENTENCE_CHARS = 2000
 _MAX_LINE_CHARS = 2000
-
-
-def clean_markers(markers: Iterable) -> list:
-    """Literal marker fragments from the model or the instructor: strings only, printable, short, unique."""
-    out: list = []
-    for item in markers or []:
-        if not isinstance(item, str):
-            continue
-        text = " ".join(_CONTROL.sub(" ", item).split())[:MAX_MARKER_CHARS]
-        if len(text) >= 2 and text.casefold() not in {m.casefold() for m in out}:
-            out.append(text)
-        if len(out) >= MAX_MARKERS:
-            break
-    return out
 
 
 @dataclass(frozen=True)
@@ -775,6 +793,8 @@ class VariationFinding:
     code: str  # random | time | varies
     text: str  # a fixed sentence, never text from the instructions or the solution
     flags: bool
+    #: "instructions": a suggestion only. "solution": a random or clock call that reaches a print.
+    source: str = "instructions"
 
 
 _REASON_TEXT = {
@@ -790,44 +810,51 @@ _REASON_TEXT = {
 }
 
 _SENTENCE = re.compile(r"[.!?](?=\s|$)|[;\n]")  # one character per match: linear on any run
+_CLAUSE = re.compile(r"[,:]| but ")
 _OUT_TIE = re.compile(
     r"\b(?:outputs?|prints?|printed|printing|displays?|displayed|displaying|shows?|showing|shown|"
     r"values?|results?)\b")
-_NEGATED = re.compile(r"\b(?:not|no|never|without|avoid|instead\s+of|don'?t|doesn'?t)\b")
+# A negation governs the clause it stands in, and only when it negates doing the thing ("no larger
+# than 10" and "does not exceed" do not).
+_NEGATED = re.compile(
+    r"\b(?:do\s+not|don'?t|never|without|avoid|must\s+not|should\s+not|"
+    r"not\s+(?:use|using|print|display|show|generate|include|call|rely))\b")
 _FORMAT_ONLY = re.compile(
     r"\b(?:spacing|whitespace|wording|format|formatting|capitali[sz]ation|punctuation|slightly|minor|style|"
     r"rounding|decimal|trailing)\b")
-_SEEDED = re.compile(r"\bseed(?:ed|s)?\b")
+# Only a literal seed makes a generator reproducible.
+_LITERAL_SEED = re.compile(r"\bseed(?:ed|s)?\b(?:\s+\w+){0,3}\s+\d+|\b(?:fixed|constant)\s+seed\b|\bseed\s*=\s*\d+")
 _RANDOM_WORDS = re.compile(
-    r"\b(?:random(?:ly)?|pseudo-?random|rand\s*\(|shuffle[sd]?|uuid|dice|die\s+roll)\b|\bmath\.random\b")
+    r"\b(?:random(?:ly)?|pseudo-?random|shuffle[sd]?|uuid|die\s+roll|dice\s+roll)\b|\brand\s{0,5}\(|"
+    r"\bmath\.random\b|\broll(?:s|ing)?\s+(?:\w+\s+){0,2}(?:die|dice)\b|"
+    r"\bseed\w*\s+(?:\w+\s+){0,4}(?:clock|time)\b")
 _TIME_WORDS = re.compile(
-    r"\bcurrent\s+(?:date|time|day|year|month)\b|\btoday'?s\s+date\b|\btimestamps?\b|"
-    r"\bsystem\s+(?:time|clock|date)\b|\bthe\s+date\s+and\s+time\s+(?:now|today)\b")
-_VARY_WORDS = re.compile(
-    r"\b(?:will|may|might|can|could)\s+(?:vary|differ|change)\b|"
-    r"\b(?:varies|differs|changes)\s+(?:each|every|between|from)\b|"
-    r"\b(?:different|differs|changes)\s+(?:each|every)\s+(?:time|run|execution)\b|"
-    r"\buser[- ]dependent\b|\bdepends\s+on\s+(?:the\s+)?user\b")
+    r"\bcurrent\s+(?:date|time)\b|\btoday'?s\s+date\b|\btimestamps?\b|"
+    r"\bsystem\s+(?:time|clock|date)\b|\btime\s+of\s+day\b")
+# The subject must be the output itself ("the number of students will vary" does not count).
+_VARY_SUBJECT = re.compile(
+    r"\b(?:outputs?|values?|results?|prints?|printed)\b(?:\s+\w+){0,4}\s+(?:will|may)\s+(?:vary|differ)\b")
+_VARY_EACH = re.compile(r"\b(?:different|differs?|changes?|varies)\s+(?:each|every)\s+(?:time|run|execution)\b")
 
 
 def _instruction_findings(instructions: str) -> list:
     text = (instructions or "")[:_MAX_INSTRUCTION_CHARS].casefold().encode("ascii", "ignore").decode("ascii")
     sentences = [" ".join(part[:_MAX_SENTENCE_CHARS].split()) for part in _SENTENCE.split(text)]
-    seeded = any(_SEEDED.search(sent) for sent in sentences)
     flagged: dict = {}
     hints: dict = {}
     for sent in sentences:
         if not sent:
             continue
-        negated = bool(_NEGATED.search(sent))
         tied = bool(_OUT_TIE.search(sent))
-        for code, regex in (("random", _RANDOM_WORDS), ("time", _TIME_WORDS), ("varies", _VARY_WORDS)):
-            if not regex.search(sent) or (code == "random" and seeded):
-                continue
-            if tied and not negated and not (code == "varies" and _FORMAT_ONLY.search(sent)):
-                flagged[code] = True
-            elif code != "varies":
-                hints[code] = True
+        seeded = bool(_LITERAL_SEED.search(sent))
+        for clause in _CLAUSE.split(sent):
+            for code, regex in (("random", _RANDOM_WORDS), ("time", _TIME_WORDS)):
+                if not regex.search(clause) or (code == "random" and seeded) or _NEGATED.search(clause):
+                    continue
+                (flagged if tied else hints)[code] = True
+        if (_VARY_SUBJECT.search(sent) or (tied and _VARY_EACH.search(sent))) \
+                and not _NEGATED.search(sent) and not _FORMAT_ONLY.search(sent):
+            flagged["varies"] = True
     out = [VariationFinding(code, _REASON_TEXT[(code, True)], True) for code in ("random", "time", "varies")
            if code in flagged]
     out += [VariationFinding(code, _REASON_TEXT[(code, False)], False) for code in ("random", "time")
@@ -908,7 +935,7 @@ def _solution_findings(solution: Union[SolutionSources, str]) -> list:
     for code, use in (("srandom", _RANDOM_USE), ("stime", _TIME_USE)):
         if any(use.search(line) and not _COMMENT_OR_IMPORT.match(line) for line in lines):
             reaches = _reaches_output(lines, use)
-            out.append(VariationFinding(code, _REASON_TEXT[(code, reaches)], reaches))
+            out.append(VariationFinding(code, _REASON_TEXT[(code, reaches)], reaches, "solution"))
     return out
 
 
@@ -928,8 +955,13 @@ def detect_variable_values(instructions: str, solution: Union[SolutionSources, s
 
 
 def variation_reason(findings: Iterable[VariationFinding]) -> str:
-    """The first flagging reason, or an empty string when nothing flags."""
-    return next((f.text for f in findings if f.flags), "")
+    """The reason to mark cases at once: only a solution that prints a random or clock value proves it."""
+    return next((f.text for f in findings if f.flags and f.source == "solution"), "")
+
+
+def variation_suggestion(findings: Iterable[VariationFinding]) -> str:
+    """What the instructions suggest. A suggestion marks nothing until the solution's runs prove variance."""
+    return next((f.text for f in findings if f.flags and f.source != "solution"), "")
 
 
 def flag_cases(cases: Iterable[TestCase], reason: str) -> list:

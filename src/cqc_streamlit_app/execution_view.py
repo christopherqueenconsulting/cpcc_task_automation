@@ -275,7 +275,9 @@ def _status_of(case: TestCase, dropped: dict) -> str:
     return "Ready" if case.validated else "Not run"
 
 
-CASE_COLUMNS = ["Use", "Label", "Kind", "Source", "Input", "May differ", "Status", "Expected", "id"]
+CASE_COLUMNS = ["Use", "Label", "Kind", "Source", "Input", "May differ", "Varies on", "Status", "Expected", "id"]
+MAY_DIFFER_WHOLE = ("May differ: only numbers, dates and times may vary; wording, labels and layout are still "
+                    "compared.")
 
 
 def cases_frame(cases: Sequence[TestCase], dropped: Optional[dict] = None):
@@ -284,7 +286,8 @@ def cases_frame(cases: Sequence[TestCase], dropped: Optional[dict] = None):
     dropped = dropped or {}
     return pd.DataFrame([{
         "Use": c.enabled, "Label": c.label, "Kind": _kind(c), "Source": c.source,
-        "Input": encode_stdin(c.stdin), "May differ": c.values_may_differ, "Status": _status_of(c, dropped),
+        "Input": encode_stdin(c.stdin), "May differ": c.values_may_differ,
+        "Varies on": "; ".join(c.varying_markers), "Status": _status_of(c, dropped),
         "Expected": _first_line(c.expected_output), "id": c.id} for c in cases], columns=CASE_COLUMNS)
 
 
@@ -326,6 +329,11 @@ def fold_editor(base: Sequence[TestCase], edited, variance_reason: str = "") -> 
             # The instructor's toggle wins over the detection and the model.
             update.update(values_may_differ=bool(vary), varying_markers=[] if not vary else old.varying_markers,
                           variance_reason=MARKED_BY_YOU if vary else "")
+        flagged = update.get("values_may_differ", old.values_may_differ)
+        if flagged and row.get("Varies on") is not None:
+            text = _text(row.get("Varies on"))
+            if text != "; ".join(old.varying_markers):
+                update["varying_markers"] = tcg.clean_markers([m for m in text.split(";")])
         if stdin != old.stdin:
             update.update(stdin=stdin, source="manual", validated=False, expected_output=None,
                           expected_reads=[], boundary_of=[], disagrees_with_instructions=False)
@@ -405,9 +413,11 @@ def _state_key(sources: SolutionSources, instructions: str) -> str:
 def _new_state(sources: SolutionSources, instructions: str) -> dict:
     samples = tcg.parse_sample_runs(instructions)
     findings = tcg.detect_variable_values(instructions, sources)
-    reason = tcg.variation_reason(findings)
+    reason = tcg.variation_reason(findings)  # proven by the solution's own code: marks the cases at once
     cases = tcg.flag_cases(tcg.merge_cases(tcg.cases_from_samples(samples)), reason)
-    return {"variance": reason, "variance_notes": [f.text for f in findings], "base": cases, "conditions": [], "dropped": {}, "warnings": [], "validated": False,
+    return {"variance": reason, "suggestion": tcg.variation_suggestion(findings),
+            "variance_notes": [f.text for f in findings if not (f.flags and f.source == "solution")],
+            "base": cases, "conditions": [], "dropped": {}, "warnings": [], "validated": False,
             "message": "", "gen": 0, "shown": {s.id: s.expected_output for s in samples},
             "risks": [r.message for r in tcg.scan_solution_risks(sources)]}
 
@@ -422,7 +432,7 @@ def _validate(state: dict, sources: SolutionSources, cases: list, ignore: list) 
     with st.spinner("Running your solution in the sandbox..."):
         validation = tcg.validate_cases_on_solution(
             sources, run, conditions=state["conditions"], sample_outputs=state["shown"],
-            ignore_patterns=ignore, owner=pr.new_owner_id())
+            ignore_patterns=ignore, owner=pr.new_owner_id(), variance_suggested=bool(state.get("suggestion")))
     state["gen"] += 1
     if validation.status in ("unavailable", "runner_error", "solution_compile_failed"):
         state.update(base=[c.model_copy(update={"validated": False}) for c in cases], validated=False,
@@ -524,7 +534,12 @@ def render_output_check_setup(instructions: str, solution_file_paths) -> Optiona
             "May differ": st.column_config.CheckboxColumn(
                 "May differ", default=False, width="small",
                 help="Tick when this case prints values that change between runs (random numbers, the date). "
-                     "Those lines are not compared with the solution and never cost points."),
+                     "With no text in Varies on, only numbers, dates and times may vary and wording and layout "
+                     "are still compared; they never cost points."),
+            "Varies on": st.column_config.TextColumn(
+                "Varies on", help="Optional. Text that labels each line whose value varies, such as Random number: "
+                                  "(separate several with ;). Lines containing it are not compared; all other lines "
+                                  "are. Two to 60 characters each, at most 5."),
             "Status": st.column_config.TextColumn("Status", disabled=True),
             "Expected": st.column_config.TextColumn("Expected", disabled=True,
                                                    help="The first line of your solution's output."),
@@ -532,13 +547,19 @@ def render_output_check_setup(instructions: str, solution_file_paths) -> Optiona
         })
     cases = fold_editor(state["base"], edited, state.get("variance", ""))
     for c in cases:
-        if c.values_may_differ and c.variance_reason:
-            st.caption(f"{safe_line(c.label or c.id)}: values may differ. {safe_line(c.variance_reason)}"
-                       + (" Compared except lines containing: " + ", ".join(safe_line(m) for m in c.varying_markers)
-                          if c.varying_markers else " The whole case is not compared."))
+        if c.values_may_differ:
+            st.caption(f"{safe_line(c.label or c.id)}: values may differ. {safe_line(c.variance_reason)} "
+                       + ("Lines containing " + ", ".join(safe_line(m) for m in c.varying_markers)
+                          + " are not compared; every other line is."
+                          if c.varying_markers else MAY_DIFFER_WHOLE))
+    suggestion = state.get("suggestion")
+    if suggestion and not any(c.values_may_differ for c in cases):
+        st.caption("Consider ticking May differ: " + safe_line(suggestion)
+                   + " It is not ticked for you; if the solution prints different output on its two runs, "
+                     "the case is marked automatically.")
     for text in state.get("variance_notes", []):
-        if text != state.get("variance"):
-            st.caption(safe_line(text))
+        if text != suggestion:
+            st.caption("Consider ticking May differ: " + safe_line(text))
     ignore_text = st.text_area("Ignore output lines containing", key=f"output_ignore_{key}", height=68,
                                help="One piece of text per line. A line of output that contains it is left out "
                                     "of both outputs before they are compared (a timestamp, a banner).")

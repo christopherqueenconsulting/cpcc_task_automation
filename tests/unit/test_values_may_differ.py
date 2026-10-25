@@ -28,46 +28,85 @@ ROOT = Path(__file__).resolve().parents[2]
 # --------------------------------------------------------------------------- #
 # Detection
 # --------------------------------------------------------------------------- #
-FLAGGED = [
-    ("Print a random number between 1 and 6.", "random"),
-    ("The program displays a randomly chosen card.", "random"),
-    ("The random number is printed on its own line.", "random"),
-    ("Display the current date.", "time"),
-    ("It prints today's date and the grade.", "time"),
-    ("Show a timestamp next to each result.", "time"),
-    ("The output will vary each time you run it.", "varies"),
-    ("The values may differ from run to run.", "varies"),
-    ("The output is different each time.", "varies"),
-    ("Printed results are user-dependent.", "varies"),
-]
-NOT_FLAGGED = [
-    "Choose a random student from the roster and discuss.",  # random, not tied to output
-    "Operandom values are printed.",  # inside a word
-    "Your output may differ in spacing from the sample.",  # format, not values
-    "Do not use random numbers in the output.",  # negated
-    "Seed the generator with 42 and print a random number.",  # fixed seed: reproducible
-    "Print the date the student entered.",  # a date, not the current one
-    "The grades will vary by student.",  # no output tie
-    "Prints the total with two decimals.",
-    "",
+#: Held-out sentences written after the detector, not taken from the eval datasets.
+#: (sentence, what an instructor would want, what the detector does). "flag" = suggestion flagged,
+#: "hint" = hint only, "none" = silent. Rows where wanted and actual disagree are known gaps.
+HELD_OUT = [
+    ("Print a random number between 1 and 6.", "flag", "flag"),
+    ("The program displays a randomly chosen card.", "flag", "flag"),
+    ("The random number is printed on its own line.", "flag", "flag"),
+    ("Generate a random number between 1 and 10 and ask the user to guess.", "flag", "hint"),
+    ("Randomly choose rock, paper or scissors for the computer, then announce the winner.", "flag", "hint"),
+    ("Print a random number, no larger than 10.", "flag", "flag"),
+    ("Use rand() to simulate a die roll and print the result.", "flag", "flag"),
+    ("Use rand ( ) to pick the value and display it.", "flag", "flag"),
+    ("Seed the generator with the clock and print the number.", "flag", "flag"),
+    ("Display the current date.", "flag", "flag"),
+    ("Display the current date and time.", "flag", "flag"),
+    ("It prints today's date and the grade.", "flag", "flag"),
+    ("Show a timestamp next to each result.", "flag", "flag"),
+    ("The program prints a greeting using the current time of day.", "flag", "flag"),
+    ("Timestamp each log line.", "flag", "hint"),
+    ("The output will vary each time you run it.", "flag", "flag"),
+    ("The printed values may differ from run to run.", "flag", "flag"),
+    ("The output is different each time.", "flag", "flag"),
+    ("Do not use random numbers.", "none", "none"),
+    ("Do not use random numbers in the output.", "none", "none"),
+    ("Output must match exactly.", "none", "none"),
+    ("The output may vary slightly in spacing.", "none", "none"),
+    ("Your output may differ in wording from the sample.", "none", "none"),
+    ("Print the results with two decimals.", "none", "none"),
+    ("Compare the random seed 42 output with the expected file.", "none", "none"),
+    ("Seed the generator with 42 and print a random number.", "none", "none"),
+    ("The number of students can change; display the average.", "none", "none"),
+    ("The number of students will vary; display the average.", "none", "none"),
+    ("Output depends on the user's input.", "none", "none"),
+    ("Print the current month's payment.", "none", "none"),
+    ("Print the date the student entered.", "none", "none"),
+    ("Choose a random student from the roster and discuss the results.", "none", "flag"),
+    ("A random student is chosen by the instructor.", "none", "hint"),
+    ("Operandom values are printed.", "none", "none"),
+    ("The grades will vary by student.", "none", "none"),
+    ("Prints the total with two decimal places.", "none", "none"),
+    ("Ask the user for a name and print a greeting.", "none", "none"),
+    ("Does not exceed 100 and prints the value.", "none", "none"),
+    ("", "none", "none"),
 ]
 
 
-@pytest.mark.parametrize("text,code", FLAGGED)
-def test_instructions_that_tie_a_varying_value_to_the_output_flag(text, code):
+def _actual(text):
     found = tcg.detect_variable_values(text)
-    assert [f.code for f in found if f.flags] == [code]
-    assert tcg.variation_reason(found) == found[0].text
+    return "flag" if any(f.flags for f in found) else "hint" if found else "none"
 
 
-@pytest.mark.parametrize("text", NOT_FLAGGED)
-def test_other_instructions_never_flag(text):
-    assert not [f for f in tcg.detect_variable_values(text) if f.flags]
-    assert tcg.variation_reason(tcg.detect_variable_values(text)) == ""
+@pytest.mark.parametrize("text,wanted,actual", HELD_OUT, ids=range(len(HELD_OUT)))
+def test_held_out_instruction_sentences(text, wanted, actual):
+    assert _actual(text) == actual
 
 
-def test_an_unrelated_random_mention_is_only_a_hint():
-    [hint] = tcg.detect_variable_values("Choose a random student from the roster and discuss.")
+def test_held_out_false_flag_and_false_negative_counts_are_pinned():
+    false_flags = [t for t, w, a in HELD_OUT if a == "flag" and w != "flag"]
+    false_negatives = [t for t, w, a in HELD_OUT if a != "flag" and w == "flag"]
+    assert len(HELD_OUT) == 39
+    assert len(false_flags) == 1 and len(false_negatives) == 3
+
+
+def test_instruction_findings_are_suggestions_and_never_mark_cases_by_themselves():
+    found = tcg.detect_variable_values("Print a random number between 1 and 6.")
+    assert tcg.variation_reason(found) == ""
+    assert tcg.variation_suggestion(found) == found[0].text and found[0].source == "instructions"
+    assert [(f.code, f.flags) for f in found] == [("random", True)]
+
+
+def test_a_negation_only_governs_its_own_clause_and_a_literal_seed_only_its_own_sentence():
+    assert _actual("Print a random number, no larger than 10.") == "flag"
+    assert _actual("Do not use random numbers, print the values.") == "none"
+    assert _actual("Use seed 42. Then print a random number.") == "flag"
+    assert _actual("Use seed 42 and print a random number.") == "none"
+
+
+def test_a_random_mention_with_no_output_word_is_only_a_hint():
+    [hint] = tcg.detect_variable_values("A random student is chosen by the instructor.")
     assert hint.code == "random" and not hint.flags
 
 
@@ -442,3 +481,140 @@ def test_block_comments_are_removed_without_regex_and_an_open_one_ends_the_text(
     assert out.rstrip().endswith("c")
     # A commented-out API call is not a finding.
     assert tcg.detect_variable_values("", "/* x = random.randint(1,2) */\nprint('hi')\n") == []
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes: whole-case masking, marker floor and cap, validator, confinement
+# --------------------------------------------------------------------------- #
+def test_a_whole_case_still_compares_wording_labels_and_missing_lines():
+    exp = "Your roll: 3\nYou win!\nTotal: 10\n"
+    assert oc.compare_output(exp, "Your roll: 5\nYou win!\nTotal: 12\n",
+                             values_may_differ=True).verdict is Verdict.VALUES_MAY_DIFFER
+    for wrong in ("Roll was: 5\nYou win!\nTotal: 12\n", "Your roll: 5\nYou lose!\nTotal: 10\n",
+                  "Your roll: 5\nTotal: 10\n"):
+        got = oc.compare_output(exp, wrong, values_may_differ=True)
+        assert got.verdict not in (Verdict.VALUES_MAY_DIFFER, Verdict.MATCH), wrong
+        assert got.diff_excerpt  # the real difference is shown, not the masked text
+    assert oc.compare_output("Time: 10:31:07 on 2026-10-25\nok\n", "Time: 09:02:55 on 2026-11-01\nok\n",
+                             values_may_differ=True).verdict is Verdict.VALUES_MAY_DIFFER
+    assert oc.compare_output(exp, exp, values_may_differ=True).verdict is Verdict.MATCH
+
+
+def test_marker_floor_and_count_where_markers_are_used():
+    exp, got = "Roll: 3\nTotal: 10\n", "Roll: 3\nTotal: 11\n"
+    assert oc.compare_output(exp, got, values_may_differ=True,
+                             varying_markers=["e", "", " "]).verdict is not Verdict.MATCH
+    # No usable marker leaves a whole-case flag: numbers are masked but nothing is dropped
+    six = ["Roll:", "aa", "bb", "cc", "dd", "Total:"]
+    used = oc.clean_markers(six)
+    assert used == six[:5] and "Total:" not in used
+    assert oc.compare_output(exp, got, values_may_differ=True,
+                             varying_markers=six).verdict is Verdict.VALUES_DIFFER  # Total: is the 6th, unused
+
+
+def test_markers_that_remove_most_of_the_output_are_not_trusted():
+    exp = "the answer is 4 here\nthis line has the other thing\nin the end it is done\n"
+    wrong = "completely different words\nnothing matches at all\n"
+    got = oc.compare_output(exp, wrong, values_may_differ=True, varying_markers=["er", "e ", "th", "in", "on"])
+    assert got.verdict not in (Verdict.MATCH, Verdict.VALUES_MAY_DIFFER)
+    same_words = oc.compare_output(exp, exp.replace("is 4", "is 7"), values_may_differ=True,
+                                   varying_markers=["er", "e ", "th", "in", "on"])
+    assert same_words.verdict is Verdict.VALUES_MAY_DIFFER and same_words.detail == oc.TOO_BROAD
+
+
+def test_excluded_line_counts_are_returned_and_reach_the_reconciliation_note(sandbox):
+    got = oc.compare_output("Roll: 3\nTotal: 10\nok\n", "Roll: 9\nTotal: 10\nok\n", values_may_differ=True,
+                            varying_markers=["Roll:"])
+    assert (got.excluded_lines, got.total_lines) == (1, 3)
+    plan = _plan(flag_ids={"T1", "T2", "T3"}, markers=["Roll:"])
+    exe = _run(plan, {f"T{i}": f"Roll: 6\nTotal: {i}\n" for i in (1, 2, 3)})
+    out, _ = eg.apply_execution_gate(_result(), exe, [])
+    assert any("3 of 6 output lines excluded by markers" in n.reason for n in out.reconciliation)
+    assert out.execution_report["gate"]["excluded_lines"] == 3
+
+
+def test_a_loaded_plan_cannot_carry_a_one_letter_or_oversized_marker():
+    assert TestCase(id="T1", varying_markers=["x", "Roll:", "roll:", "R" * 200]).varying_markers == ["Roll:", "R" * 60]
+    plan = ExecutionPlan.model_validate({"language": "java", "solution_sha256": "ab",
+                                         "cases": [{"id": "T1", "values_may_differ": True,
+                                                    "varying_markers": ["x", 5, "Roll:"]}]})
+    assert plan.cases[0].varying_markers == ["Roll:"]
+    assert TestCase(id="T2", varying_markers="Roll:").varying_markers == []
+
+
+def test_a_flag_whose_markers_were_all_rejected_is_left_off():
+    out = tcg.normalize_suggestion(_raw([{"id": "T1", "label": "a", "inputs": ["1"], "boundary_of": [],
+                                          "values_may_differ": True, "varying_markers": ["x"]}]))
+    assert out.cases[0].values_may_differ is False and out.cases[0].varying_markers == []
+    whole = tcg.normalize_suggestion(_raw([{"id": "T1", "label": "a", "inputs": ["1"], "boundary_of": [],
+                                            "values_may_differ": True}]))
+    assert whole.cases[0].values_may_differ is True  # no markers asked for: a whole-case flag the model chose
+
+
+def _calls_runner(second_stdout):
+    calls = []
+
+    def run(language, files, cases=(), *, mode="run", main=None, repeat=1, owner=None, **kw):
+        calls.append(repeat)
+        nondeterministic = repeat == 2
+        stdout = "Roll: 4\nTotal: 9\n" if repeat == 2 else second_stdout
+        return pr.RunOutcome(status="ok", compile=pr.CompileOutcome(ok=True), cases=tuple(
+            pr.CaseOutcome(id=c.id, status="OK", reason="", exit_code=0, stdout=stdout, stderr="",
+                           stdout_bytes=1, stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
+                           wall_ms=1, segmented=False, stdin_reads=(), eof_error=False,
+                           nondeterministic=nondeterministic) for c in cases))
+    run.calls = calls
+    return run
+
+
+def test_a_marked_case_is_kept_only_when_the_difference_is_confined_to_the_marker_lines():
+    solution = SolutionSources("java", (SourceFile("Dice.java", JAVA_DICE),))
+    case = TestCase(id="T1", stdin="1\n", source="llm", values_may_differ=True, varying_markers=["Roll:"])
+    ok = tcg.validate_cases_on_solution(solution, [case], runner=_calls_runner("Roll: 6\nTotal: 9\n"))
+    assert [c.id for c in ok.cases] == ["T1"]
+    bad = tcg.validate_cases_on_solution(solution, [case], runner=_calls_runner("Roll: 6\nTotal: 10\n"))
+    assert bad.cases == [] and [d.reason for d in bad.dropped] == ["nondeterministic"]
+
+
+def test_identical_solution_runs_leave_a_suggested_case_unflagged_and_different_ones_mark_it():
+    solution = SolutionSources("java", (SourceFile("Dice.java", JAVA_DICE),))
+    case = TestCase(id="T1", stdin="1\n", source="llm")
+
+    def steady(language, files, cases=(), **kw):
+        return pr.RunOutcome(status="ok", compile=pr.CompileOutcome(ok=True), cases=tuple(
+            pr.CaseOutcome(id=c.id, status="OK", reason="", exit_code=0, stdout="Roll: 4\n", stderr="",
+                           stdout_bytes=1, stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
+                           wall_ms=1, segmented=False, stdin_reads=(), eof_error=False,
+                           nondeterministic=False) for c in cases))
+    same = tcg.validate_cases_on_solution(solution, [case], runner=steady, variance_suggested=True)
+    assert not same.cases[0].values_may_differ
+    differ = tcg.validate_cases_on_solution(solution, [case], runner=_calls_runner("Roll: 6\nTotal: 9\n"),
+                                            variance_suggested=True)
+    assert differ.cases[0].values_may_differ and differ.cases[0].variance_reason == tcg.REASON_RUNS
+    unsuggested = tcg.validate_cases_on_solution(solution, [case], runner=_calls_runner("Roll: 6\nTotal: 9\n"))
+    assert unsuggested.cases == []  # no suggestion and no flag: a nondeterministic case is dropped as before
+
+
+def test_the_instructors_choice_wins_over_detection_and_the_model():
+    base = [TestCase(id="T1", stdin="5\n", source="llm", values_may_differ=True, varying_markers=["Roll:"],
+                     variance_reason=tcg.REASON_MODEL, validated=True, expected_output="x")]
+    frame = ev.cases_frame(base)
+    frame.loc[0, "May differ"] = False
+    [off] = ev.fold_editor(base, frame, "the solution prints a random value")
+    assert off.values_may_differ is False
+    frame2 = ev.cases_frame([off])
+    [again] = ev.fold_editor([off], frame2, "the solution prints a random value")
+    assert again.values_may_differ is False  # re-running with a reason does not tick it again
+    frame3 = ev.cases_frame(base)
+    frame3.loc[0, "Varies on"] = "Roll:; Dice: ; x"
+    [edited] = ev.fold_editor(base, frame3)
+    assert edited.varying_markers == ["Roll:", "Dice:"]
+
+
+def test_scan_solution_risks_is_linear_on_unterminated_block_comments():
+    import time
+
+    start = time.perf_counter()
+    risks = tcg.scan_solution_risks("/*" * 200000 + "\nx = random.random()")
+    assert time.perf_counter() - start < 1.0 and isinstance(risks, list)
+    assert [r.code for r in tcg.scan_solution_risks("import random\nx = random.random() # note\n")] == ["randomness"]

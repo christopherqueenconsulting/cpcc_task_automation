@@ -422,7 +422,8 @@ def run_student_execution(plan: Optional[ExecutionPlan], source_files: Optional[
             continue
         cmp = _judge(case.expected_output or "", case.expected_reads, got, plan.ignore_patterns, case)
         results.append(CaseResult(case_id=case.id, verdict=cmp.verdict.value, detail=cmp.detail,
-                                  similarity=round(cmp.similarity, 4), diff_excerpt=clean_block(cmp.diff_excerpt)))
+                                  similarity=round(cmp.similarity, 4), diff_excerpt=clean_block(cmp.diff_excerpt),
+                                  excluded_lines=cmp.excluded_lines, total_lines=cmp.total_lines))
         if cmp.verdict in (Verdict.RUNTIME_ERROR, Verdict.TIMEOUT) and got.stderr:
             exe.stderr_by_case[case.id] = clean_block(got.stderr)[:MAX_STDERR_CHARS]
     exe.report = ExecutionReport(plan_hash=plan.plan_hash, status="ok", cases=results)
@@ -640,6 +641,12 @@ def apply_execution_gate(
     varying = [r for r in report.cases if r.verdict == Verdict.VALUES_MAY_DIFFER.value]
     results = [r for r in report.cases if r.verdict != Verdict.VALUES_MAY_DIFFER.value]
     gate["values_may_differ"] = [r.case_id for r in varying]
+    excluded = sum(r.excluded_lines for r in report.cases)
+    seen = sum(r.total_lines for r in report.cases)
+    gate["excluded_lines"], gate["total_lines"] = excluded, seen
+    if excluded:
+        notes.append(note(STAGE, f"{excluded} of {seen} output lines excluded by markers: values may differ "
+                                 "on those lines, the rest was compared."))
     if varying:
         notes.append(note(STAGE, f"Values may differ on {len(varying)} of {len(report.cases)} test case(s): "
                                  "not compared, never counted as an output difference."))
@@ -877,11 +884,14 @@ async def derive_execution_plan(
     llm_cases, conditions = tcg.suggestion_to_plan_parts(suggestion)
     cases = tcg.merge_cases(list(manual_cases), tcg.cases_from_samples(samples), llm_cases)
     findings = tcg.detect_variable_values(instructions, solution)
-    cases = tcg.flag_cases(cases, tcg.variation_reason(findings))  # code ORs with the model's flag
+    # Only a solution that prints a random or clock value marks the cases at once; the instructions alone
+    # are a suggestion that the solution's own runs must confirm. Code ORs with the model's flag.
+    cases = tcg.flag_cases(cases, tcg.variation_reason(findings))
     shown = {s.id: s.expected_output for s in samples}
     validation = await asyncio.to_thread(
         tcg.validate_cases_on_solution, solution, cases, conditions=conditions, sample_outputs=shown,
-        ignore_patterns=list(ignore_patterns), runner=runner, owner=owner)
+        ignore_patterns=list(ignore_patterns), runner=runner, owner=owner,
+        variance_suggested=bool(tcg.variation_suggestion(findings)))
     risks = tcg.scan_solution_risks(solution)
     plan = tcg.build_plan(solution, validation, conditions, ignore_patterns=list(ignore_patterns), risks=risks,
                           all_cases=cases, extra_warnings=[f.text for f in findings])
