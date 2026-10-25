@@ -4792,4 +4792,4 @@ telemetry = ["posthog"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "de93d613cdd5bbabae57b922abfd69966418888a21d5278506da0681565ff00e"
+content-hash = "0d697f81b0142f6df24bad6caaea340174b40a0343fb1c570d0c3dedeb7a92b6"
