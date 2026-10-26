@@ -681,6 +681,11 @@ def extract_student_submissions_from_zip(
                     f"The ZIP inside the upload is larger than "
                     f"{MAX_NESTED_ZIP_BYTES // (1024 * 1024)} MiB; upload the inner "
                     "submissions ZIP directly.")
+            remaining_total = MAX_TOTAL_UNCOMPRESSED_BYTES - _bytes_used[0]
+            if nested.file_size > remaining_total:
+                raise _bomb_error(
+                    f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} "
+                    "in total")
     if nested is not None:
         logger.info("Reading the submissions ZIP nested in a Download All Feedback ZIP")
         inner_path: Optional[str] = None
@@ -689,7 +694,15 @@ def extract_student_submissions_from_zip(
                     tempfile.NamedTemporaryFile(
                         delete=False, prefix='nested_submissions_', suffix='.zip') as inner:
                 inner_path = inner.name
-                _bytes_used[0] += _copy_member_capped(src, inner)
+                remaining_total = MAX_TOTAL_UNCOMPRESSED_BYTES - _bytes_used[0]
+                nested_limit = min(MAX_NESTED_ZIP_BYTES, remaining_total)
+                total_error = _bomb_error(
+                    f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} "
+                    "in total")
+                copied = _copy_member_capped(
+                    src, inner, nested_limit,
+                    too_big=str(total_error) if nested_limit < MAX_NESTED_ZIP_BYTES else None)
+                _bytes_used[0] += copied
             return extract_student_submissions_from_zip(
                 inner_path, accepted_file_types, max_tokens_per_student,
                 _nested_depth=_nested_depth + 1, _bytes_used=_bytes_used)
