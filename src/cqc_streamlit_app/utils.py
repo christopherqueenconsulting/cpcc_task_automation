@@ -2198,6 +2198,12 @@ def _validate_submissions_zip(zip_path: str, keep_arcs: set) -> tuple[bool, str]
         submissions = extract_student_submissions_from_zip(zip_path, kept_extensions)
         return True, str(len(submissions))
     except Exception as e:  # noqa: BLE001
+        # This helper is only used to validate newly rebuilt preview ZIPs. If the
+        # grader cannot parse one, discard the student-file archive immediately.
+        try:
+            os.unlink(zip_path)
+        except FileNotFoundError:
+            pass
         return False, str(e)
 
 

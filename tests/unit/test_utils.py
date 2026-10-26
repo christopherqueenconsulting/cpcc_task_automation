@@ -654,6 +654,18 @@ class TestBrightSpaceZipPicker:
         assert ok is True
         assert detail == "2"  # two student folders survive
 
+    def test_failed_rebuilt_zip_validation_removes_student_archive(self, tmp_path):
+        from cqc_streamlit_app.utils import _validate_submissions_zip
+
+        out = tmp_path / "invalid-rebuilt.zip"
+        out.write_bytes(b"not a valid zip")
+
+        ok, detail = _validate_submissions_zip(str(out), {"Alice_123/sol.cpp"})
+
+        assert ok is False
+        assert detail
+        assert not out.exists()
+
     def test_deselecting_a_student_drops_their_folder(self, tmp_path):
         import zipfile
         from cqc_streamlit_app.utils import _rebuild_zip_from_kept
