@@ -6,6 +6,12 @@ on:
       - main
       - master
 
+concurrency:
+  # Cancel a superseded PR run. Never cancel merge_group or push runs:
+  # cancelling a merge-queue run evicts the PR from the queue.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: write
   pull-requests: write
@@ -13,6 +19,7 @@ permissions:
 jobs:
   dependabot:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     # Only run for Dependabot PRs
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     

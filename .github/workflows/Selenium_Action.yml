@@ -4,6 +4,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: CQ USA
     steps:
       - name: Checking out repo
