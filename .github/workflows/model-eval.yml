@@ -238,7 +238,6 @@ jobs:
     # recorded, so a candidate that keeps failing is not re-run every week.
     if: always() && needs.evaluate.result != 'skipped' && needs.evaluate.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     environment: model-eval
     concurrency:
       group: model-eval-state
@@ -383,7 +382,6 @@ jobs:
       needs.evaluate.outputs.status == 'complete' && needs.evaluate.outputs.dry_run != 'true' &&
       needs.evaluate.outputs.promote_allowed == 'true' && needs.cross-suite.outputs.cross_suite == 'pass'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     environment: model-eval
     steps:
       - name: Mint GitHub App token
@@ -455,7 +453,6 @@ jobs:
       needs.evaluate.outputs.incumbent_failed == 'true' ||
       needs.evaluate.outputs.incumbent_expiring != '' || needs.evaluate.outputs.incumbent_changed == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     permissions:
       issues: write
     steps:

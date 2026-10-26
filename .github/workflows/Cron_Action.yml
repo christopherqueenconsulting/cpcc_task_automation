@@ -16,7 +16,6 @@ env:
 jobs:
   cron-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     environment: Chris Queen CPCC
     steps:
       - name: Checking out repo
