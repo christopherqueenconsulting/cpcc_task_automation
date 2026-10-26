@@ -12,6 +12,40 @@ from cqc_cpcc.withdrawals import UNKNOWN_ACTIVITY_WEEK
 
 
 @pytest.mark.unit
+def test_eva_discovery_lists_assignment_and_quiz_candidates_with_due_dates():
+    def row(title, url, due):
+        link = MagicMock()
+        link.text = title
+        link.get_attribute.return_value = url
+        node = MagicMock()
+        node.text = due
+        item = MagicMock()
+        item.find_elements.side_effect = lambda _by, xpath: [link] if "a[contains" in xpath else [node]
+        return item
+
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.current_window_handle = "main"
+    course.driver.find_elements.side_effect = [
+        [row("EVA Intro", "https://d2l/assignment?db=77&ou=123", "Jan 7, 2026")],
+        [row("Quiz 1", "https://d2l/quiz?qi=88&ou=123", "Jan 8, 2026")],
+    ]
+    course.wait = MagicMock()
+    course.scrape_problems = []
+    course._scrape_problem = lambda message: course.scrape_problems.append(message)
+    course.click_course_tools_link = MagicMock()
+    course.modify_quiz_edit_url_to_attempt_log_url = lambda url: url
+    with patch("cqc_cpcc.brightspace.click_element_wait_retry"):
+        result = course.discover_eva_activities()
+
+    assert [(x["activity_type"], x["activity_id"], x["suggested"]) for x in result] == [
+        ("assignment", "77", True), ("quiz", "88", False),
+    ]
+    assert [x["observed_due_iso"] for x in result] == ["2026-01-07", "2026-01-08"]
+    assert course.driver.switch_to.window.call_args_list[-1].args == ("main",)
+
+
+@pytest.mark.unit
 class TestBrightSpaceShortWait:
     """Test BrightSpace short-wait wiring for optional course lookup."""
 

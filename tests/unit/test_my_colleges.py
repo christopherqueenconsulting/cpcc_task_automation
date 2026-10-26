@@ -8,7 +8,8 @@ from selenium.common import NoSuchElementException, TimeoutException
 from selenium.webdriver import Keys
 from selenium.webdriver.common.by import By
 
-from cqc_cpcc.my_colleges import MyColleges
+from cqc_cpcc.my_colleges import CourseContext, MyColleges
+from cqc_cpcc.attendance_ledger import AttendanceLedger
 
 
 @pytest.mark.unit
@@ -28,6 +29,81 @@ class TestAttendanceDateRouting:
         assert list(pending.keys()) == [DT.date(2026, 1, 10), DT.date(2026, 1, 12)]
         assert pending[DT.date(2026, 1, 10)] == ["Amy Student", "Bob Student"]
         assert pending[DT.date(2026, 1, 12)] == ["Amy Student", "Zed Student"]
+
+
+@pytest.mark.unit
+class TestEvaAttendanceSetup:
+    def _context(self, **overrides):
+        values = dict(
+            course_url="https://brightspace.example/d2l/home?ou=12345",
+            course_name="CSC-151-N801: Test Course",
+            course_start_date=DT.datetime(2026, 1, 5),
+            course_end_date=DT.datetime(2026, 12, 20),
+            eva_date=DT.date(2026, 2, 1),
+            eva_date_source="estimated",
+        )
+        values.update(overrides)
+        return CourseContext(**values)
+
+    def test_confirm_eva_date_persists_date_and_source(self, tmp_path):
+        mc = MyColleges(MagicMock(), MagicMock())
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        context = self._context()
+        mc._eva_setup_response = lambda request: {
+            "request_id": request["request_id"], "date_only": True,
+            "eva_date": "2026-02-03", "eva_date_source": "user_confirmed",
+        }
+
+        confirmed = mc._confirm_eva_date(
+            context, None, "estimated", DT.date(2026, 1, 20), "Spring 2026",
+            "CSC-151-N801", ledger, "12345",
+        )
+
+        assert confirmed == DT.date(2026, 2, 3)
+        saved = ledger.eva_activity("Spring 2026", "CSC-151-N801", "12345")
+        assert saved["eva_date"] == "2026-02-03"
+        assert saved["eva_date_source"] == "estimated"
+        ledger.close()
+
+    def test_authoritative_past_eva_date_skips_without_prompting(self, tmp_path):
+        mc = MyColleges(MagicMock(), MagicMock())
+        mc._eva_setup_response = MagicMock(side_effect=AssertionError("must not prompt"))
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        context = self._context(eva_date=DT.date(2026, 1, 10), eva_date_source="mycolleges")
+
+        confirmed = mc._confirm_eva_date(
+            context, None, "mycolleges", DT.date(2026, 1, 11), "Spring 2026",
+            "CSC-151-N801", ledger, "12345",
+        )
+
+        assert confirmed is None
+        mc._eva_setup_response.assert_not_called()
+        ledger.close()
+
+    def test_resolve_eva_activity_requires_durable_ledger(self):
+        mc = MyColleges(MagicMock(), MagicMock())
+        mc.ledger = AttendanceLedger(":memory:")
+
+        with pytest.raises(RuntimeError, match="Durable attendance storage is unavailable"):
+            mc._resolve_eva_activity(self._context(), "Spring 2026", "CSC-151-N801",
+                                     mc.ledger, DT.date(2026, 1, 20))
+
+    def test_saved_unknown_source_date_is_reused_without_prompt(self, tmp_path):
+        mc = MyColleges(MagicMock(), MagicMock())
+        mc._eva_setup_response = MagicMock(side_effect=AssertionError("must reuse saved date"))
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        context = self._context(eva_date=None, eva_date_source="unknown")
+        saved = {"eva_date": "2099-02-01", "observed_eva_date": None,
+                 "eva_date_source": "unknown"}
+
+        confirmed = mc._confirm_eva_date(
+            context, saved, "unknown", DT.date(2026, 1, 20), "Spring 2026",
+            "CSC-151-N801", ledger, "12345",
+        )
+
+        assert confirmed == DT.date(2099, 2, 1)
+        mc._eva_setup_response.assert_not_called()
+        ledger.close()
 
 
 @pytest.mark.unit

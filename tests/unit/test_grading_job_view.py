@@ -374,8 +374,15 @@ def test_use_another_model_reruns_only_the_failed_student_and_merges_under_the_s
         rerun = at.button(key=f"rerun_failed_{RUN_KEY}")
         assert rerun.label == "Re-run 1 with this model"
         rerun.click()
-        _rerun(at)
-        token = at.query_params["job"]
+        deadline = time.monotonic() + 5
+        token = None
+        while time.monotonic() < deadline:
+            _rerun(at)
+            token = at.query_params.get("job")
+            if token:
+                break
+            time.sleep(0.05)
+        assert token, "rerun should publish its job token"
         token = token[0] if isinstance(token, list) else token
         job = grading_job.attach(token)
         assert job is not None and set(job.submissions) == {"Student Bravo"}
