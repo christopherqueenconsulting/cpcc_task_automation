@@ -10,6 +10,7 @@ import webbrowser
 from enum import Enum
 from pathlib import Path
 from typing import Callable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import chromedriver_autoinstaller
 from pyvirtualdisplay import Display
@@ -745,7 +746,12 @@ def get_docker_driver(headless=False):
     warn_if_browser_timezone_differs(driver)
 
     vnc_url = f"{selenium_container_url}:{SELENIUM_VNC_PORT}/?autoconnect=1&view_only=true&resize=scale&password=secret"
-    logger.info("Selenium noVNC URL: %s", vnc_url)
+    vnc_parts = urlsplit(vnc_url)
+    safe_query = urlencode([
+        (key, "<redacted>" if key.lower() == "password" else value)
+        for key, value in parse_qsl(vnc_parts.query, keep_blank_values=True)
+    ])
+    logger.info("Selenium noVNC URL: %s", urlunsplit(vnc_parts._replace(query=safe_query)))
     if SELENIUM_OPEN_VNC_BROWSER:
         webbrowser.open(vnc_url)
 

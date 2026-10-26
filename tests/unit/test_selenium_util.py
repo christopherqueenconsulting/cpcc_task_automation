@@ -374,7 +374,9 @@ def test_docker_driver_logs_vnc_url_and_opens_only_when_enabled(monkeypatch, ope
         'http://localhost:17901/'
         '?autoconnect=1&view_only=true&resize=scale&password=secret'
     )
-    log_info.assert_called_once_with('Selenium noVNC URL: %s', expected_url)
+    logged_url = log_info.call_args.args[1]
+    assert logged_url == expected_url.replace('password=secret', 'password=%3Credacted%3E')
+    assert 'secret' not in logged_url
     if open_browser:
         browser_open.assert_called_once_with(expected_url)
     else:
