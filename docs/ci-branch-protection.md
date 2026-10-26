@@ -43,6 +43,14 @@ This project uses one GitHub Actions test workflow to run unit, integration, and
 single completion signal for coverage uploads on that commit. If any test lane fails, the
 finalizer is skipped.
 
+This ordering depends on `codecov.yml` setting `codecov.notify.manual_trigger: yes`. Each test
+lane uploads its coverage as soon as it finishes; Codecov holds coverage statuses and PR
+notifications until `send-notifications` signals that uploads are complete. Keep every job that
+uploads coverage in the finalizer's `needs` list. Do not replace this completion signal with a
+fixed `after_n_builds` count, since retries or skipped uploads can make the expected count wrong.
+See [Codecov's notification documentation](https://docs.codecov.com/docs/notifications) for the
+manual trigger behavior.
+
 ### Test Execution
 
 The workflow runs all tests marked with `@pytest.mark.unit` while excluding the `tests/e2e` directory (which requires playwright and is not part of unit tests).
