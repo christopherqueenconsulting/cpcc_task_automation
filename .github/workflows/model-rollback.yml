@@ -29,6 +29,7 @@ env:
 jobs:
   rollback:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: model-eval
     steps:
       - name: Mint GitHub App token

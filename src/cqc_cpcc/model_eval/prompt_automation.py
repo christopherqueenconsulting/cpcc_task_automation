@@ -13,6 +13,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -260,9 +261,37 @@ def _base_has_suite(worktree: Path, suite_id: str) -> bool:
     return init.exists() and f'"{suite_id}"' in init.read_text(encoding="utf-8")
 
 
+def _biggest_group(suite_ids, repeats: Optional[int], n_models: int) -> Optional[int]:
+    """The largest call count of one suite side, for the summary lines (None when it cannot be worked out: each
+    suite computes its own ceiling later, so this figure is only for the header)."""
+    try:
+        return max([len(get_suite(s).cases()) * (repeats or prompt_eval.suite_policy(s).repeats) * n_models
+                    for s in suite_ids] or [0]) or None
+    except Exception:  # noqa: BLE001 - only the summary figure
+        return None
+
+
+def _judge_pool_cap(cap: int, judge_calls: int, batch_judge: bool) -> int:
+    """The judge pool's size: ``cap``, widened to every judge call when batch mode is on (each may wait on the batch
+    at once), but never above the hard cap or the file-descriptor limit."""
+    return adaptive.clamp_pool(batch.widen(cap, judge_calls)) if batch_judge else cap
+
+
+def _base_hard_max(worktree: Path) -> int:
+    """The largest ``CQC_AB_MAX_CONCURRENCY`` the base checkout accepts: its own ``HARD_MAX_CONCURRENCY`` (read from
+    its ``adaptive.py``), at most this checkout's. A base that rejects a larger value fails its whole run (an error, not
+    a clamp). 256 when the file or the number cannot be read."""
+    try:
+        text = (worktree / "src" / "cqc_cpcc" / "model_eval" / "adaptive.py").read_text(encoding="utf-8")
+    except OSError:
+        return 256
+    m = re.search(r"^HARD_MAX_CONCURRENCY\s*=\s*(\d+)", text, re.M)
+    return min(int(m.group(1)), adaptive.HARD_MAX_CONCURRENCY) if m else 256
+
+
 #: Fixed calls in flight on each side of the A/B before it became adaptive. Only a base that predates
 #: ``adaptive.py`` still runs at this number (it is given through ``CQC_EVAL_CONCURRENCY``); the head, and
-#: any base from this change on, start at min(calls, ``adaptive.DEFAULT_MAX_CONCURRENCY``) and adapt.
+#: any base from this change on, start at min(calls, ceiling) (ceiling: all the calls, at most 512) and adapt.
 AB_CONCURRENCY = 12
 
 
@@ -384,7 +413,7 @@ def _run_base(worktree: Path, suite_id: str, models: list, repeats: int, out: Pa
     env[cache_session.ENV_SIDE] = "base"  # the base's own cache session (a base without it ignores this)
     if concurrency:
         env[adaptive.ENV_ADAPTIVE] = "1"
-        env[adaptive.ENV_MAX] = str(concurrency)
+        env[adaptive.ENV_MAX] = str(min(concurrency, _base_hard_max(worktree)))
         env["CQC_EVAL_CONCURRENCY"] = str(min(concurrency, AB_CONCURRENCY))
     if start_concurrency:
         env[adaptive.ENV_START] = str(start_concurrency)
@@ -769,7 +798,7 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
     judge_label = f"{getattr(suite, 'id', '')}:judge"
     bplan = batch.plan(getattr(suite, "dataset_dir", None), len(case_ids), reserving=True, label=judge_label,
                        cases=[cases[c] for c in case_ids])
-    gate = asyncio.Semaphore(batch.widen(workers, len(case_ids)) if bplan is not None else workers)
+    gate = asyncio.Semaphore(adaptive.clamp_pool(batch.widen(workers, len(case_ids))) if bplan is not None else workers)
 
     judge_timeout = _judge_sync_timeout(judge_model) if bplan is not None else 0.0
 
@@ -801,7 +830,8 @@ async def _pairwise_scores(jm, suite, cases: dict, case_ids: list, h0: dict, b0:
 
 def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[Path],
                judge_pool: Optional[dict] = None, base_dir: Optional[Path] = None,
-               start_concurrency: Optional[int] = None, suite_id: Optional[str] = None) -> dict:
+               start_concurrency: Optional[int] = None, suite_id: Optional[str] = None,
+               base_max_concurrency: Optional[int] = None) -> dict:
     """Wall-clock, retry counts and the adaptive pools' counters for one suite, for the log.
 
     ``concurrency`` is the ceiling on calls in flight per side (what it has always meant: the most
@@ -861,6 +891,7 @@ def _run_stats(started: float, workers: int, head_raw: Path, base_raw: Optional[
             "head_cost": cost(head_raw), "base_cost": cost(base_raw),
             "head_cache": cache(head_raw), "base_cache": cache(base_raw),
             "head_pool": head_pool, "base_pool": base_pool, "judge_pool": judge_pool,
+            **({"base_max_concurrency": base_max_concurrency} if base_max_concurrency is not None else {}),
             "rate_limited": sum(p.get("rate_limited", 0) for p in pools),
             "in_flight_budget": sum(p.get("in_flight_budget", 0) for p in pools)}
     # Batch mode (report only, additive: absent unless CQC_EVAL_BATCH was on). The events are this process's, so
@@ -964,8 +995,8 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
 
     Each side runs an adaptive pool (``adaptive.py``): it starts at min(calls in the suite, ceiling),
     halves on a 429 or an in-flight-budget 402/403 and earns permits back; the ceiling is
-    ``max_concurrency`` / ``CQC_AB_MAX_CONCURRENCY`` / 64. ``concurrency`` only sets the starting size.
-    The pairwise judge has its own, lower, pool. A setting outside 1 to 256 raises
+    ``max_concurrency`` / ``CQC_AB_MAX_CONCURRENCY``, else all the calls of the suite side (at most 512). ``concurrency`` only sets the starting size.
+    The pairwise judge has its own, lower, pool. A setting outside 1 to 512 raises
     ``adaptive.ConcurrencyError`` before any spend.
 
     The head and the base of a suite run at the same time, each with its own share of the budget,
@@ -978,9 +1009,12 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
     out = out.resolve()  # the base runs in another working directory
     out.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    workers = adaptive.ab_max_concurrency(max_concurrency)  # the ceiling per side
     start_override = adaptive.ab_start_concurrency(concurrency)
-    judge_cap = adaptive.judge_max_concurrency()
+    # The ceiling per side defaults to all the calls of a suite side (set per suite below); this is the largest
+    # of them, for the summary lines. An explicit --max-concurrency / CQC_AB_MAX_CONCURRENCY caps every suite.
+    biggest = _biggest_group(suite_ids, repeats, max(1, len(models)))
+    workers = adaptive.ab_max_concurrency(max_concurrency, calls=biggest)
+    judge_cap = adaptive.judge_max_concurrency(calls=biggest)
     batch.reset_events()
     if batch.is_on():  # raises before any paid call when the retention opt-in is missing or a value is bad
         print("Batch API mode ON (CQC_EVAL_BATCH): requests go to OpenRouter's Batch API, which keeps data for "
@@ -1025,6 +1059,9 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
             unchanged = prompts_unchanged(suite_id, base_ref)
             suite_started = time.monotonic()
             has_base = _base_has_suite(worktree, suite_id)
+            suite_workers = adaptive.ab_max_concurrency(max_concurrency, calls=len(suite.cases()) * r * len(suite_models))
+            suite_judge_cap = adaptive.judge_max_concurrency(calls=len(suite.cases()))
+            base_cap = min(suite_workers, _base_hard_max(worktree)) if has_base else None  # what the base is given
             base_estimate = prompt_eval.estimate_suites([suite_id], suite_models, r)
             # Each side spends from its own share of what is left, so neither can eat the other's
             # and the total cap still holds. Without a base run the head keeps the whole budget.
@@ -1033,7 +1070,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                 try:
                     head_sc = await prompt_eval.run(suite_id, suite_models, repeats=r, out=str(out / "head"),
                                                     budget=head_budget, concurrency=start_override,
-                                                    adaptive_mode=True, max_concurrency=workers)
+                                                    adaptive_mode=True, max_concurrency=suite_workers)
                     if head_sc.get("status") == account_limit.STATUS:
                         _terminate_live_base(stop_new=True)  # the same limit stops the base run too
                     return head_sc
@@ -1046,7 +1083,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
             jobs = [run_head()]
             if has_base:
                 jobs.append(asyncio.to_thread(_run_base, worktree, suite_id, labels, r, out / "base",
-                                              min(base_share.remaining, base_estimate * 1.5), workers,
+                                              min(base_share.remaining, base_estimate * 1.5), base_cap,
                                               clean_environ, start_override))
             # Wait for both even when one fails: the worktree is removed in `finally`, which must not
             # happen under a base run that is still going.
@@ -1074,15 +1111,16 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                 results[suite_id] = {"suite": suite_id, "status": "no-base",
                                      "reasons": [], "notes": ["the base ref has no such suite; absolute numbers only"],
                                      "models": {k: {"composite_head": v.get("composite")} for k, v in head.items()},
-                                     "run_stats": _run_stats(suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", None,
-                                                         start_concurrency=start_override, suite_id=suite_id)}
+                                     "run_stats": _run_stats(suite_started, suite_workers, out / "head" / suite_id / "raw_outputs.jsonl", None,
+                                                         start_concurrency=start_override, suite_id=suite_id,
+                                                             base_max_concurrency=base_cap)}
                 continue
             base_raw = outcomes[1]
             if base_raw is None:
                 # Fail closed: a base run that crashed or ran out of budget proves nothing.
                 results[suite_id] = {"suite": suite_id, "status": "fail", "models": {}, "notes": [],
                                      "reasons": ["the base run failed, so the change could not be compared"],
-                                     "run_stats": _run_stats(suite_started, workers,
+                                     "run_stats": _run_stats(suite_started, suite_workers,
                                                              out / "head" / suite_id / "raw_outputs.jsonl", None,
                                                              base_dir=out / "base" / suite_id,
                                                              start_concurrency=start_override, suite_id=suite_id)}
@@ -1101,7 +1139,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                 if jmodel:
                     # the judge's own, lower, pool: it throttles on its own and never starves the calls
                     batch_judge = batch.is_on()  # batch mode: every judge call may wait on the batch at once
-                    pool_cap = batch.widen(judge_cap, len(suite.cases())) if batch_judge else judge_cap
+                    pool_cap = _judge_pool_cap(suite_judge_cap, len(suite.cases()), batch_judge)
                     judge_limiter = adaptive.AdaptiveLimiter("judge", start=pool_cap, ceiling=pool_cap)
                     judge_profile = prompt_eval.profiles_for([suite_models[0][0]])[suite_models[0][0]]
                     judge_estimate = (prompt_eval._dearest_call(suite, judge_profile, suite.cases())
@@ -1120,7 +1158,7 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                             scores = await _pairwise_scores(
                                 jm, suite, cases, [c for c in sorted(set(h0) & set(b0))
                                                    if cases.get(c) is not None and cases[c].split == "holdout"],
-                                h0, b0, jmodel, cache, budget, judge_cap, item_estimate=judge_estimate)
+                                h0, b0, jmodel, cache, budget, suite_judge_cap, item_estimate=judge_estimate)
                         except account_limit.RunAborted:
                             break
                         except Exception as e:  # noqa: BLE001 - only the account limit is handled here
@@ -1139,8 +1177,9 @@ async def _prompt_ab(suite_ids: list, base_ref: str, models: list, out: Path, re
                                             judge_calibrated=calibrated, split=None if unchanged else "holdout")
             # Reporting only: nothing above or below reads it.
             results[suite_id]["run_stats"] = _run_stats(
-                suite_started, workers, out / "head" / suite_id / "raw_outputs.jsonl", base_raw,
-                judge_pool=judge_pool, start_concurrency=start_override, suite_id=suite_id)
+                suite_started, suite_workers, out / "head" / suite_id / "raw_outputs.jsonl", base_raw,
+                judge_pool=judge_pool, start_concurrency=start_override, suite_id=suite_id,
+                base_max_concurrency=base_cap)
             if unchanged:
                 results[suite_id]["notes"].append(
                     "prompts unchanged from the base: the paired test uses all cases when there are at least 30 "

@@ -487,12 +487,30 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
 `openai_client.py`, `openrouter_client.py` or `llm_gateway.py`, which every registered prompt shares).
 
 - **Start and ceiling.** Each side (head, and base in its own process) starts at
-  `min(calls in the suite, ceiling)` permits: `grading` is 360 calls per side, so 64. The ceiling
-  is `--max-concurrency N` on `prompt-ab` and `suite run`, else `CQC_AB_MAX_CONCURRENCY`, else **64**.
-  `--concurrency N` (or `CQC_AB_START_CONCURRENCY`) sets a smaller starting size. There is no silent
-  fallback: a value that is not a whole number from 1 to the **hard cap of 256** stops the command
-  with `error: max concurrency=... is outside 1 to 256` before any spend (the old rule quietly
-  replaced anything above 32 with 4 or 12).
+  `min(calls in the suite, ceiling)` permits. The ceiling is `--max-concurrency N` on `prompt-ab` and
+  `suite run`, else `CQC_AB_MAX_CONCURRENCY`, else **every call of the suite side** (at most the hard cap
+  of **512**), so `grading` (97 cases x 4 repeats = 388 calls per side and model, from the dataset and `suite_policy`) runs them all at once instead of in waves of 64. The first window is not ramped: up to 512 requests per side (about 1024 with the base) leave at once; a 429 burst is absorbed by halving plus jittered retries.
+  An explicit `--max-concurrency` or `CQC_AB_MAX_CONCURRENCY` still wins and can cap lower, as can a
+  smaller start (`--concurrency N` / `CQC_AB_START_CONCURRENCY`). The base side (its own process) gets
+  the same number through `CQC_AB_MAX_CONCURRENCY` (at most 256 when the base checkout predates the 512
+  cap, which rejects more). There is no silent fallback: a value that is not a whole number from 1 to
+  **512** stops the command with `error: max concurrency=... is outside 1 to 512` before any spend.
+  Cost is unchanged (the same calls are made and each still reserves its worst case on the budget
+  first); only the spend rate rises. The 429/timeout backoff is exactly as before, and an account-limit
+  error still aborts the run on the first one.
+- **Why 512 is safe for the transport.** `openai_client.py` and `openrouter_client.py` build `AsyncOpenAI` without an
+  `http_client`, so they use the SDK's default HTTP pool of 1000 connections (`openai.DEFAULT_CONNECTION_LIMITS`,
+  pinned by a test): 512 in flight never waits on the pool. The client modules are not edited (a shared-file edit
+  would re-run every suite). Each in-flight call is one
+  socket, so `adaptive.fd_safe_cap()` raises a soft file-descriptor limit below 4096 toward
+  `min(hard limit, 4096)` and lowers the ceiling to `limit - 256` if it cannot (a 1024 soft limit would
+  give 768, still above 512; the runner's actual `ulimit -n` was not measured here, so the check runs at
+  start-up rather than assuming it). The limit is raised in this process only; child processes (the base run)
+  inherit it, and macOS may refuse the raise, in which case the lower limit is used. If less than 16
+  connections would fit, a warning names the limit and `ulimit -n 4096`, and the ceiling is 16, not 1. A pool
+  widened to fit a whole batch group is clamped to the same cap.
+- **Rollback.** Set `CQC_AB_MAX_CONCURRENCY=64` and `CQC_AB_JUDGE_CONCURRENCY=16` in the environment (the old
+  defaults); no code change needed.
 - **AIMD, per pool.** A **throttle** is a 429, or a 402/403 whose body names
   `openrouter_in_flight_budget` (an out-of-credit 402 or a real permission error is not one, and is
   not retried). A throttle **halves** the permits (never below 1). A burst of throttles from calls
@@ -508,7 +526,7 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
   the output it would have returned the first time and scoring does not depend on order, so a 429
   storm and a calm run give the same results (a test checks this with a fake client).
 - **Judge pool.** The pairwise judge (haiku) runs in a separate pool: ceiling
-  `CQC_AB_JUDGE_CONCURRENCY`, default **16**, same hard cap, its own AIMD. A grader's 429 never
+  `CQC_AB_JUDGE_CONCURRENCY` when set, else the number of judge calls (at most 512), its own AIMD. A grader's 429 never
   shrinks the judge's pool and the judge's never shrinks the graders'.
 - **Budget margin.** `Budget.reserve` sets aside a call's worst-case cost (its estimate with the full
   output allowance) before the call is sent, and `Budget.settle` replaces it with the real cost in one
@@ -542,7 +560,7 @@ code is `src/cqc_cpcc/model_eval/adaptive.py`, in the eval harness only (it does
   a model priced at 0 (a free model) has no usable estimate, so its calls would be recorded as `budget`
   skips by the reserve guard.
 - **Changes in behaviour to know about.** `prompt-ab --concurrency N` is now only the **starting** size
-  (the ceiling stays 64 unless `--max-concurrency`). A bad `CQC_AB_MAX_CONCURRENCY` or
+  (the ceiling stays every call of the suite side unless `--max-concurrency`). A bad `CQC_AB_MAX_CONCURRENCY` or
   `CQC_AB_JUDGE_CONCURRENCY` now raises on a plain `suite run` too, not only in the A/B.
 - **First A/B after this merges:** the base side still runs the old code (fixed 12, 3 client
   attempts, no retry layer), so a 429 storm could fail base calls the head would have retried. Run
@@ -875,7 +893,7 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   | `CQC_EVAL_BATCH_MAX_ITEMS` | `1000` | Most requests per batch (more are split into several batches). |
   | `CQC_EVAL_BATCH_SETTLE_S` | `120` | Longest to wait for more requests before submitting what has been collected. |
 
-  The three paid steps of `prompt-eval.yml` (A/B base vs head prompts, Run the changed suites on master, Run) and the
+  The three paid steps of `prompt-eval.yml` and `prompt-eval-dispatch.yml` (A/B base vs head prompts, Run the changed suites on master, Run) and the
   two of `model-eval.yml` (Run evaluation, Run the winner on the other prompt suites of its roles) set the first two to
   `1`; local runs and everything else stay sync. A test pins exactly those five steps.
 - **Scheduled runs only** (owner ruling, 2026-10-25: a batch can take up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 2700 s), plus the time of any sync fallback, which is too long for runs an
@@ -928,7 +946,7 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
 - **Timeouts and merge order.** A request sent the ordinary way inside a batch group (the fallback after a failed
   batch, a group below `CQC_EVAL_BATCH_MIN`, a re-send after the deadline) keeps the normal request timeout for its role
   and effort; only a call waiting on a batch has the raised `CQC_LLM_TIMEOUT`. The deadline plus 600 s (the `CQC_LLM_TIMEOUT` bump, at most 3600 s) is below the
-  `timeout-minutes` of every one of the five paid steps' jobs (prompt-eval.yml `ab` 240, `record` 150, `dispatch` 240;
+  `timeout-minutes` of every one of the five paid steps' jobs (prompt-eval.yml `ab` 240, `record` 150, prompt-eval-dispatch.yml `dispatch` 240;
   model-eval.yml `evaluate` 150, `cross-suite` 120, all minutes).
 - **Account-limit abort.** The run-wide account-limit abort (described above) reaches the batch loops: an account-limit
   error (HTTP 402, or 403 whose gateway message names an exceeded budget or credit limit) on a batch submit or poll trips
@@ -1014,7 +1032,9 @@ A second job, `ab-base-rule` (and `dispatch-report` for a maintainer `ab` run), 
 What this protects against: an honest PR that relaxes the rule, or skips a suite, by
 mistake. It does not stop a hostile author. Both sides' saved outputs are written by PR code,
 and on a `pull_request` run the workflow file itself comes from the PR, so a PR that edits
-`prompt-eval.yml` could change these jobs. Every PR author today is a trusted account.
+`prompt-eval.yml` could change these jobs (the `dispatch` and `dispatch-report` jobs live in
+`prompt-eval-dispatch.yml`, the `merge-queue` job in `prompt-eval-merge-queue.yml`; neither runs on a
+pull request). Every PR author today is a trusted account.
 Hostile-author resistance (a `workflow_run` job that always runs master's workflow and posts
 its own required context with the bot's app token) is a follow-up for Christopher.
 
@@ -1110,7 +1130,7 @@ keeps that from happening. It reads only fields old rows already carry.
 
 **Thresholds start uncalibrated.** Until a live calibration, a suite reports its numbers
 and only blocks a PR on a *regression* against the base; it never raises "needs work".
-Calibrate once the setup below is done: Actions > Prompt Evaluation > Run workflow, mode
+Calibrate once the setup below is done: Actions > Prompt Evaluation (dispatch) > Run workflow, mode
 `calibrate`, dry run off. Review `policy_patch.json` in the artifact (each floor = the current
 model's measured score minus 0.10, health floor = composite minus 0.05) and apply it with
 `prompt-calibrate --apply` locally or by copying it into `model_policy.json`. Calibration re-sets floors only: the patch carries each suite's current `repeats`, and
