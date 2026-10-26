@@ -1741,7 +1741,11 @@ def add_brightspace_submission_element(
                 keep_arcs = _render_zip_keep_table(orig.zip_path, key_prefix + "review_")
                 if st.button("✅ Apply selection", key=key_prefix + "reapply"):
                     if keep_arcs:
-                        new_path = _rebuild_zip_from_kept(orig.zip_path, keep_arcs)
+                        try:
+                            new_path = _rebuild_zip_from_kept(orig.zip_path, keep_arcs)
+                        except ValueError as exc:
+                            st.error(f"Could not rebuild the ZIP: {exc}")
+                            return None
                         ok, detail = _validate_submissions_zip(new_path, keep_arcs)
                         if ok:
                             confirmed = {**confirmed, "path": new_path}
@@ -2164,13 +2168,16 @@ def _rebuild_zip_from_kept(src_zip_path: str, keep_arcs: set) -> str:
     Preserves the original folder/file arcnames so the grader's extractor still sees
     one folder per student. Returns the new ZIP's path.
     """
+    from cqc_cpcc.utilities.zip_grading_utils import rebuild_zip_from_members
     out = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
     out.close()
-    with zipfile.ZipFile(src_zip_path, "r") as src, \
-            zipfile.ZipFile(out.name, "w", zipfile.ZIP_DEFLATED) as dst:
-        for arc in keep_arcs:
-            with src.open(arc) as f:
-                dst.writestr(arc, f.read())
+    try:
+        # Same size, entry-count and expansion limits as the grader's extraction.
+        rebuild_zip_from_members(src_zip_path, out.name, keep_arcs)
+    except BaseException:
+        if os.path.exists(out.name):
+            os.unlink(out.name)
+        raise
     return out.name
 
 
@@ -2184,14 +2191,30 @@ def _validate_submissions_zip(zip_path: str, keep_arcs: set) -> tuple[bool, str]
         os.path.splitext(arc)[1].lstrip(".").lower()
         for arc in keep_arcs if os.path.splitext(arc)[1]
     })
+    submissions = {}
     try:
         from cqc_cpcc.utilities.zip_grading_utils import (
             extract_student_submissions_from_zip,
         )
         submissions = extract_student_submissions_from_zip(zip_path, kept_extensions)
-        return True, str(len(submissions))
+        detail = str(len(submissions))
     except Exception as e:  # noqa: BLE001
+        # This helper is only used to validate newly rebuilt preview ZIPs. If the
+        # grader cannot parse one, discard the student-file archive immediately.
+        try:
+            os.unlink(zip_path)
+        except FileNotFoundError:
+            pass
         return False, str(e)
+    finally:
+        # Validation needs only the parsed student count, not the extracted copies.
+        for submission in submissions.values():
+            for temp_path in submission.files.values():
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+    return True, detail
 
 
 def render_zip_preview_editor(fetch_result, key_prefix: str,
@@ -2251,7 +2274,11 @@ def render_zip_preview_editor(fetch_result, key_prefix: str,
             st.error("Select at least one file to keep.")
             return None
 
-        out_path = _rebuild_zip_from_kept(zip_path, keep_arcs)
+        try:
+            out_path = _rebuild_zip_from_kept(zip_path, keep_arcs)
+        except ValueError as exc:
+            st.error(f"Could not rebuild the ZIP: {exc}")
+            return None
         ok, detail = _validate_submissions_zip(out_path, keep_arcs)
         if ok:
             st.success(f"✅ Generated file ready: {detail} student submission(s).")

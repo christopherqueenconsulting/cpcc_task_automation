@@ -1,4 +1,4 @@
-name: CI / Unit Tests
+name: CI / Test Suite
 
 on:
   # Required checks must also run on merge-queue groups, or the queue waits
@@ -189,3 +189,132 @@ jobs:
             echo "::error::Shard counts (${a} + ${b}) differ from the unsharded count (${full}): tests were dropped or duplicated."
             exit 1
           }
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          # Shared with unit tests so both jobs can reuse the same exact environment cache.
+          install-args: "--with test"
+          skip-install-on-exact-hit: "true"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the exec-runner sandbox image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/exec-runner
+          tags: cpcc_task_automation/exec-runner:2
+          load: true
+          cache-from: type=gha,scope=exec-runner-v2
+          cache-to: type=gha,mode=min,scope=exec-runner-v2
+
+      - name: Run integration tests with coverage
+        shell: bash
+        env:
+          OPENAI_API_KEY: "test-key-not-used"
+        run: |
+          echo "Running integration tests with coverage..."
+          poetry run pytest -m integration --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml:coverage-integration.xml --cov-report=term-missing --junitxml=junit-integration.xml -o junit_family=legacy
+
+      - name: Upload integration coverage to Codecov
+        uses: codecov/codecov-action@v7
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        with:
+          name: integration-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage-integration.xml
+          disable_search: true
+          flags: integration
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: Upload integration test results to Codecov
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: integration
+          report_type: test_results
+          files: ./junit-integration.xml
+          disable_search: true
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test,e2e"
+          skip-install-on-exact-hit: "true"
+
+      - name: Install Playwright headless browser
+        shell: bash
+        run: poetry run playwright install chromium --only-shell
+
+      - name: Run E2E tests with coverage
+        shell: bash
+        env:
+          CQC_TEST_MODE: "true"
+          OPENAI_API_KEY: "test-key-not-used-in-test-mode"
+        run: |
+          echo "Running E2E tests with coverage..."
+          poetry run pytest -m e2e --cov=src --cov-branch --cov-report=xml:coverage-e2e.xml --cov-report=term-missing --junitxml=junit-e2e.xml -o junit_family=legacy
+
+      - name: Upload E2E coverage to Codecov
+        uses: codecov/codecov-action@v7
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        with:
+          name: e2e-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage-e2e.xml
+          disable_search: true
+          flags: e2e
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: Upload E2E test results to Codecov
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: e2e
+          report_type: test_results
+          files: ./junit-e2e.xml
+          disable_search: true
+
+  codecov-finalize:
+    name: Finalize Codecov reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [unit-tests, integration-tests, e2e-tests]
+    # The three coverage upload jobs are skipped for Dependabot PRs; don't send a
+    # completion signal for uploads that were intentionally not made.
+    if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Send Codecov notifications after all coverage uploads
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          run_command: send-notifications
+          fail_ci_if_error: true

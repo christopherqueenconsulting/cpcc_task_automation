@@ -1,14 +1,48 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
 import datetime as DT
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, call, patch
 
 import pytest
-from selenium.common import TimeoutException
+from selenium.common import NoSuchWindowException, TimeoutException
 
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.withdrawals import UNKNOWN_ACTIVITY_WEEK
+
+
+@pytest.mark.unit
+def test_eva_discovery_lists_assignment_and_quiz_candidates_with_due_dates():
+    def row(title, url, due):
+        link = MagicMock()
+        link.text = title
+        link.get_attribute.return_value = url
+        node = MagicMock()
+        node.text = due
+        item = MagicMock()
+        item.find_elements.side_effect = lambda _by, xpath: [link] if "a[contains" in xpath else [node]
+        return item
+
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.current_window_handle = "main"
+    course.driver.find_elements.side_effect = [
+        [row("EVA Intro", "https://d2l/assignment?db=77&ou=123", "Jan 7, 2026")],
+        [row("Quiz 1", "https://d2l/quiz?qi=88&ou=123", "Jan 8, 2026")],
+    ]
+    course.wait = MagicMock()
+    course.scrape_problems = []
+    course._scrape_problem = lambda message: course.scrape_problems.append(message)
+    course.click_course_tools_link = MagicMock()
+    course.modify_quiz_edit_url_to_attempt_log_url = lambda url: url
+    with patch("cqc_cpcc.brightspace.click_element_wait_retry"):
+        result = course.discover_eva_activities()
+
+    assert [(x["activity_type"], x["activity_id"], x["suggested"]) for x in result] == [
+        ("assignment", "77", True), ("quiz", "88", False),
+    ]
+    assert [x["observed_due_iso"] for x in result] == ["2026-01-07", "2026-01-08"]
+    assert course.driver.switch_to.window.call_args_list[-1].args == ("main",)
 
 
 @pytest.mark.unit
@@ -71,6 +105,8 @@ class TestBrightSpaceShortWait:
         assert wait.until.call_count == 2
         short_wait.until.assert_called_once()
         driver.get.assert_called_once_with(BRIGHTSPACE_URL)
+        assert course.course_return_tab == "main-tab"
+        driver.switch_to.window.assert_any_call("main-tab")
 
     @patch("cqc_cpcc.brightspace.click_element_wait_retry")
     @patch("cqc_cpcc.brightspace.login_if_needed")
@@ -81,7 +117,7 @@ class TestBrightSpaceShortWait:
     ):
         driver = MagicMock()
         driver.window_handles = ["main-tab"]
-        driver.current_window_handle = "course-tab"
+        driver.current_window_handle = "main-tab"
         wait = MagicMock()
         short_wait = MagicMock()
         course_link = MagicMock()
@@ -105,6 +141,154 @@ class TestBrightSpaceShortWait:
         assert driver.get.call_args_list[1].args == ("https://brightspace.example/course",)
 
 
+@pytest.mark.unit
+def test_close_course_tab_restores_the_original_browser_tab():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.window_handles = ["faculty-tab", "brightspace-tab"]
+    course.course_main_tab = "brightspace-tab"
+    course.course_return_tab = "faculty-tab"
+
+    with patch("cqc_cpcc.brightspace.close_tab") as mock_close_tab:
+        course.close_course_tab()
+
+    assert course.driver.switch_to.window.call_args_list == [
+        call("brightspace-tab"), call("faculty-tab"),
+    ]
+    mock_close_tab.assert_called_once_with(course.driver)
+
+
+@pytest.mark.unit
+def test_close_course_tab_tolerates_missing_brightspace_and_return_tabs():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.window_handles = ["remaining-tab"]
+    course.course_main_tab = "closed-brightspace-tab"
+    course.course_return_tab = "closed-parent-tab"
+
+    with patch("cqc_cpcc.brightspace.close_tab") as mock_close_tab:
+        course.close_course_tab()
+
+    course.driver.switch_to.window.assert_not_called()
+    mock_close_tab.assert_not_called()
+
+
+@pytest.mark.unit
+def test_open_course_tab_recovers_when_current_window_was_closed():
+    driver = MagicMock()
+    driver.window_handles = ["main-tab"]
+    wait = MagicMock()
+    short_wait = MagicMock()
+    short_wait.until.side_effect = TimeoutException()
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = driver
+    course.wait = wait
+    course.short_wait = short_wait
+    course.name = "CSC-151-B01: Intro to Java"
+    course.term_semester = "Spring"
+    course.term_year = "2026"
+
+    with (
+        patch.object(
+            type(driver), "current_window_handle", new_callable=PropertyMock,
+            side_effect=[NoSuchWindowException(), "course-tab"], create=True,
+        ),
+        patch("cqc_cpcc.brightspace.click_element_wait_retry"),
+        patch("cqc_cpcc.brightspace.login_if_needed"),
+    ):
+        assert course.open_course_tab() is False
+
+    driver.switch_to.window.assert_any_call("main-tab")
+    driver.switch_to.new_window.assert_called_once_with("tab")
+    assert course.course_return_tab == "main-tab"
+
+
+@pytest.mark.unit
+def test_open_course_tab_fails_clearly_when_no_browser_windows_remain():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.window_handles = []
+    course.driver.current_window_handle = "closed-tab"
+
+    with pytest.raises(NoSuchWindowException, match="browser has no open windows"):
+        course.open_course_tab()
+
+    course.driver.switch_to.new_window.assert_not_called()
+
+
+@pytest.mark.unit
+def test_eva_completion_reader_collects_all_supported_pages():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.scrape_problems = []
+    driver = MagicMock()
+    course.driver = driver
+    course._scrape_problem = lambda message: course.scrape_problems.append(message)
+
+    def row(name, date):
+        cells = [MagicMock() for _ in range(3)]
+        cells[1].text = name
+        cells[2].text = date
+        cells[2].find_elements.return_value = []
+        item = MagicMock()
+        item.find_elements.return_value = cells
+        return item
+
+    pages = [[row("Student One", "01/12/2026")], [row("Student One", "01/13/2026")]]
+    page_index = {"value": 0}
+    next_button = MagicMock()
+    next_button.is_enabled.side_effect = lambda: page_index["value"] == 0
+    next_button.get_attribute.return_value = "false"
+    next_button.click.side_effect = lambda: page_index.update(value=1)
+
+    def find_elements(_by, xpath):
+        if xpath.endswith("//tr"):
+            return pages[page_index["value"]]
+        return [next_button]
+
+    driver.find_elements.side_effect = find_elements
+    with patch("cqc_cpcc.brightspace.wait_for_ajax"):
+        rows = course._read_activity_rows("//table", 2, 3, "activity-url")
+
+    assert rows == [("Student One", "01/12/2026"), ("Student One", "01/13/2026")]
+    assert not course.scrape_problems
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("activity_type", ["assignment", "quiz"])
+def test_eva_completion_dates_use_eastern_boundaries_and_keep_resubmissions(
+        activity_type, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.current_window_handle = "main"
+    course.wait = MagicMock()
+    course.select_xpath = "//select"
+    course.course_start_date = DT.datetime(2026, 10, 31)
+    course.eva_date = DT.date(2026, 10, 31)
+    course.scrape_problems = []
+    course._scrape_problem = lambda message: course.scrape_problems.append(message)
+    course.click_max_results_select = lambda _xpath: True
+    rows = [
+        ("Student One", "10/30/2026"),
+        ("Student One", "10/31/2026 08:00 AM"),
+        # 03:30 UTC is still October 31 in New York during the fall DST change.
+        ("Student One", "2026-11-01T03:30:00+00:00"),
+        ("Student Two", "2026-11-01T04:30:00+00:00"),
+        ("Student Three", "11/02/2026"),
+    ]
+    monkeypatch.setattr(course, "_read_activity_rows", lambda *_args: rows)
+    monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.click_element_wait_retry", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.utilities.selenium_util.close_tab", lambda *_args: None)
+
+    completions = course.get_eva_activity_completions(
+        {"activity_type": activity_type, "activity_id": "a-1", "activity_url": "url"},
+        now=DT.datetime(2026, 11, 1, 1, 30, tzinfo=ZoneInfo("America/New_York")),
+    )
+
+    assert completions == {"10-31-2026": ["Student One"]}
+    assert any("future EVA completion date" in problem for problem in course.scrape_problems)
 
 @pytest.mark.unit
 class TestWithdrawalCollectionGate:

@@ -3,6 +3,8 @@
 import datetime as DT
 import re
 import time
+from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 
 from cqc_cpcc.utilities.date import convert_datetime_to_end_of_day, convert_date_to_datetime, \
@@ -16,8 +18,13 @@ from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry
 from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, login_if_needed, \
     LINE_DASH_COUNT
 from cqc_cpcc.withdrawals import UNKNOWN_ACTIVITY_WEEK, classify_withdrawal
-from selenium.common import TimeoutException, NoSuchElementException, ElementNotInteractableException, \
-    StaleElementReferenceException
+from selenium.common import (
+    ElementNotInteractableException,
+    NoSuchElementException,
+    NoSuchWindowException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 from selenium.webdriver import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -67,9 +74,15 @@ class BrightSpace_Course:
                  collect_withdrawals: bool = True,
                  force_withdrawals: bool = False,
                  eva_date: DT.date = None,
+                 eva_activity: dict | None = None,
+                 discover_eva_activities: bool = False,
                  ):
         self.name = name
         self.eva_date = eva_date
+        self.eva_activity = eva_activity
+        self.eva_attendance_records: dict[str, list[str]] = defaultdict(list)
+        self.eva_activity_candidates: list[dict] = []
+        self.eva_activity_id = eva_activity.get("activity_id") if eva_activity else None
         self.term_semester = term_semester
         self.term_year = term_year
         self.first_drop_day = convert_datetime_to_end_of_day(convert_date_to_datetime(first_drop_day))
@@ -109,6 +122,14 @@ class BrightSpace_Course:
             if collect_attendance:
                 self.get_attendance_from_assignments()
                 self.get_attendance_from_quizzes()
+
+                if eva_activity:
+                    self.eva_attendance_records = self.get_eva_activity_completions(eva_activity)
+                    for date_text, names in self.eva_attendance_records.items():
+                        self.attendance_records.setdefault(date_text, []).extend(names)
+
+            if discover_eva_activities:
+                self.eva_activity_candidates = self.discover_eva_activities()
 
                 # TODO: Fix the attendance from discussions
                 #  (Something going on with iframes)
@@ -171,15 +192,33 @@ class BrightSpace_Course:
         # norm_records = dict(map(lambda kv: (kv[0], get_unique_names(kv[1])), attendance_records.items()))
         self.attendance_records = dict(
             map(lambda kv: (kv[0], get_unique_names_flip_first_last(kv[1])), self.attendance_records.items()))
+        self.eva_attendance_records = dict(
+            map(lambda kv: (kv[0], get_unique_names_flip_first_last(kv[1])),
+                self.eva_attendance_records.items()))
 
     def close_course_tab(self):
-        # Switch back to tab
-        self.driver.switch_to.window(self.course_main_tab)
-        # Close tab when done
-        close_tab(self.driver)
+        """Close the BrightSpace tab and restore the tab that was active before it."""
+        try:
+            if self.course_main_tab in self.driver.window_handles:
+                self.driver.switch_to.window(self.course_main_tab)
+                close_tab(self.driver)
+        finally:
+            handles = self.driver.window_handles
+            if self.course_return_tab in handles:
+                self.driver.switch_to.window(self.course_return_tab)
 
     def open_course_tab(self) -> bool:
-        handles = set(self.driver.window_handles)
+        handles = self.driver.window_handles
+        try:
+            return_tab = self.driver.current_window_handle
+        except NoSuchWindowException:
+            return_tab = None
+        if return_tab not in handles:
+            if not handles:
+                raise NoSuchWindowException("Cannot open BrightSpace: browser has no open windows.")
+            return_tab = next(iter(handles))
+            self.driver.switch_to.window(return_tab)
+        self.course_return_tab = return_tab
 
         self.driver.switch_to.new_window('tab')
 
@@ -519,6 +558,162 @@ class BrightSpace_Course:
 
             # Get attendance from each url
             self.get_attendance_from_brightspace_assignment_urls(assignment_links)
+
+    @staticmethod
+    def _activity_id(activity_type: str, url: str) -> str:
+        params = parse_qs(urlparse(url).query)
+        key = "qi" if activity_type == "quiz" else "db"
+        return (params.get(key) or params.get("ou") or [url])[0]
+
+    def discover_eva_activities(self) -> list[dict]:
+        """List assignment and quiz activities with stable ids and visible due dates."""
+        candidates = []
+        main_tab = self.driver.current_window_handle
+        for activity_type, tool, title, table_xpath in (
+            ("assignment", "Assignments", "Assignments",
+             "//table[contains(@summary,'List of assignments')]//tr"),
+            ("quiz", "Quizzes", "Quizzes", "//table[contains(@summary,'list of quizzes')]//tr"),
+        ):
+            try:
+                self.driver.switch_to.window(main_tab)
+                self.click_course_tools_link()
+                click_element_wait_retry(
+                    self.driver, self.wait,
+                    "//d2l-menu-item-link[contains(@text,'%s')]" % tool,
+                    "Waiting for %s Link" % tool,
+                )
+                self.wait.until(EC.title_contains(title))
+                rows = self.driver.find_elements(By.XPATH, table_xpath)
+                for row in rows:
+                    links = row.find_elements(By.XPATH, ".//a[contains(@class,'d2l-link')]")
+                    for link in links:
+                        name, url = (link.text or "").strip(), link.get_attribute("href") or ""
+                        if not name or not url:
+                            continue
+                        if activity_type == "quiz":
+                            url = self.modify_quiz_edit_url_to_attempt_log_url(url) or url
+                        date_nodes = row.find_elements(By.XPATH,
+                            ".//*[contains(@class,'date') or contains(@class,'ds_b')]")
+                        due_text = " ".join((node.text or "").strip() for node in date_nodes).strip()
+                        activity_id = self._activity_id(activity_type, url)
+                        candidates.append({
+                            "activity_type": activity_type, "activity_id": activity_id,
+                            "activity_url": url, "title": name,
+                            "observed_due_date": due_text or None,
+                            "observed_due_iso": self._parse_due_iso(due_text),
+                            "suggested": "eva" in name.casefold(),
+                        })
+                        break
+            except (NoSuchElementException, TimeoutException) as error:
+                self._scrape_problem("could not list %s for EVA selection: %s" %
+                                     (activity_type, type(error).__name__))
+        self.driver.switch_to.window(main_tab)
+        return candidates
+
+    @staticmethod
+    def _parse_due_iso(text: str | None) -> str | None:
+        if not text or not looks_like_a_scraped_date(text):
+            return None
+        try:
+            return get_datetime(text).date().isoformat()
+        except (TypeError, ValueError):
+            return None
+
+    def _read_activity_rows(self, table_xpath: str, name_cell: int,
+                            date_cell: int, activity_url: str) -> list[tuple[str, str]]:
+        """Read every visible completion row and supported next page."""
+        rows_out: list[tuple[str, str]] = []
+        pages: set[tuple[tuple[str, str], ...]] = set()
+        for _ in range(100):
+            rows = self.driver.find_elements(By.XPATH, table_xpath + "//tr")
+            if not rows:
+                self._scrape_problem("EVA completion table was missing: %s" % activity_url)
+                break
+            page = []
+            for row in rows:
+                cells = row.find_elements(By.XPATH, "./td")
+                if len(cells) < max(name_cell, date_cell):
+                    continue
+                name = (cells[name_cell - 1].text or "").strip()
+                date_cell_el = cells[date_cell - 1]
+                date_nodes = date_cell_el.find_elements(By.XPATH, ".//label[1]")
+                completion_text = (date_nodes[0].text if date_nodes else date_cell_el.text or "").strip()
+                if name and completion_text:
+                    page.append((name, completion_text))
+            marker = tuple(page)
+            if marker in pages:
+                self._scrape_problem("EVA completion page repeated: %s" % activity_url)
+                break
+            pages.add(marker)
+            rows_out.extend(page)
+            next_buttons = self.driver.find_elements(By.XPATH,
+                "//button[@aria-label='Next page' or @title='Next Page'] | "
+                "//a[@aria-label='Next page' or @title='Next Page']")
+            next_button = next((b for b in next_buttons
+                                if b.is_enabled() and b.get_attribute("aria-disabled") != "true"), None)
+            if next_button is None:
+                break
+            next_button.click()
+            wait_for_ajax(self.driver)
+        else:
+            self._scrape_problem("EVA pagination exceeded safety limit: %s" % activity_url)
+        return rows_out
+
+    def get_eva_activity_completions(self, activity: dict,
+                                     now: DT.datetime | None = None) -> dict[str, list[str]]:
+        """Scrape every submitted/completed day for one confirmed activity."""
+        now = now or DT.datetime.now(ZoneInfo("America/New_York"))
+        main_tab = self.driver.current_window_handle
+        self.driver.switch_to.new_window("tab")
+        try:
+            self.driver.get(activity["activity_url"])
+            wait_for_ajax(self.driver)
+            if activity["activity_type"] == "assignment":
+                click_element_wait_retry(self.driver, self.wait,
+                    "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]",
+                    "Waiting for EVA assignment submissions")
+                if not self.click_max_results_select(self.select_xpath):
+                    raise RuntimeError("EVA assignment submissions did not load")
+                rows = self._read_activity_rows(
+                    "//table[contains(@summary,'List of users and the submissions')]",
+                    3, 2, activity["activity_url"])
+            else:
+                click_element_wait_retry(self.driver, self.wait,
+                    "//a[contains(.//text(),'Quiz Completion')]", "Waiting for EVA quiz attempts")
+                if not self.click_max_results_select("//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"):
+                    raise RuntimeError("EVA quiz attempts did not load")
+                rows = self._read_activity_rows("//div[@id='OverviewGrid']//table", 2, 3,
+                                                activity["activity_url"])
+
+            start = convert_date_to_datetime(self.course_start_date).date()
+            cutoff = self.eva_date
+            result: dict[str, list[str]] = defaultdict(list)
+            for name, raw_date in rows:
+                if not looks_like_a_scraped_date(raw_date):
+                    self._scrape_problem("invalid EVA completion date in %s" % activity["activity_id"])
+                    continue
+                try:
+                    parsed = get_datetime(raw_date)
+                except (TypeError, ValueError):
+                    self._scrape_problem("unparseable EVA completion date in %s" % activity["activity_id"])
+                    continue
+                completed = (parsed.astimezone(ZoneInfo("America/New_York")).date()
+                             if parsed.tzinfo else parsed.date())
+                today_et = now.astimezone(ZoneInfo("America/New_York")).date() \
+                    if now.tzinfo else now.date()
+                if completed > today_et:
+                    self._scrape_problem("future EVA completion date in %s" % activity["activity_id"])
+                    continue
+                if completed < start or (cutoff and completed > cutoff):
+                    continue
+                result[completed.strftime("%m-%d-%Y")].append(name)
+            for date_text, names in result.items():
+                result[date_text] = list(dict.fromkeys(names))
+            return dict(result)
+        finally:
+            from cqc_cpcc.utilities.selenium_util import close_tab
+            close_tab(self.driver)
+            self.driver.switch_to.window(main_tab)
 
             # logger.info("Attendance Records (after assignments):\n%s" % self.attendance_records)
 

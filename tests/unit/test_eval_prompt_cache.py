@@ -622,7 +622,9 @@ class TestAppSideSessionIdMeetsTheEvalSession:
 
     async def test_the_capture_hash_is_the_same_with_the_app_flag_on_or_off(self, monkeypatch):
         monkeypatch.delenv("CQC_PROMPT_CACHE_KEY", raising=False)
-        off = await rc.capture_suite("grading")
+        # The digest suite exercises the real capture path without re-running
+        # grading's much larger 81-case corpus for a routing-only setting.
+        off = await rc.capture_suite("digest")
         monkeypatch.setenv("CQC_PROMPT_CACHE_KEY", "on")
-        on = await rc.capture_suite("grading")
+        on = await rc.capture_suite("digest")
         assert off == on and any(off["requests"].values())

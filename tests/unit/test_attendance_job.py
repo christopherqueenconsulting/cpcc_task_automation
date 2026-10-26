@@ -77,6 +77,40 @@ class TestAttendanceJob:
         with pytest.raises(RuntimeError):
             AttendanceJob(tracker_url=None).submit_plan(RunPlan())
 
+    def test_eva_setup_pauses_worker_until_streamlit_submits_response(self):
+        job = AttendanceJob(tracker_url=None)
+        result = {}
+        request = {"request_id": "req-1", "course_name": "CSC-151-N855"}
+        waiter = threading.Thread(target=lambda: result.update(job.request_eva_setup(request)))
+        waiter.start()
+        _wait_for(job, "awaiting_eva_setup")
+        assert job.current_eva_setup_request() == request
+        job.submit_eva_setup({"request_id": "req-1", "skip": True})
+        waiter.join(2)
+        assert not waiter.is_alive()
+        assert result == {"request_id": "req-1", "skip": True}
+        assert job.phase == PHASE_RUNNING
+
+    def test_cancel_unblocks_eva_setup_wait(self):
+        job = AttendanceJob(tracker_url=None)
+        errors = []
+        waiter = threading.Thread(
+            target=lambda: self._capture_error(errors, lambda: job.request_eva_setup(
+                {"request_id": "req-2"})))
+        waiter.start()
+        _wait_for(job, "awaiting_eva_setup")
+        job.cancel()
+        waiter.join(2)
+        assert not waiter.is_alive()
+        assert errors and isinstance(errors[0], BaseException)
+
+    @staticmethod
+    def _capture_error(errors, action):
+        try:
+            action()
+        except BaseException as error:  # cancellation intentionally subclasses BaseException
+            errors.append(error)
+
     def test_cancel_at_the_form_stops_without_running(self, browser):
         driver, *_ = browser
         job = AttendanceJob(tracker_url=None)

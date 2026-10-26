@@ -85,6 +85,40 @@ class TestTakeAttendancePage:
         assert app.session_state["attendance_rendered_phase"] == PHASE_STARTING
         assert any("Starting" in block.value for block in app.info)
 
+    def test_eva_attendance_status_is_rendered_once(self):
+        job = FakeJob(PHASE_SUCCEEDED)
+        job.on_eva_status({
+            "course_section": "CSC-134-N851",
+            "activity": "Course Acceptance Agreement (EVA)",
+            "due_date": "2026-10-26",
+            "eva_cutoff": "2026-10-26",
+            "result": "verified",
+            "detail": "EVA collection and attendance write completed",
+        })
+        app = _app(job)
+
+        app.run()
+
+        assert not app.exception, app.exception
+        assert [caption.value for caption in app.caption].count("EVA attendance status") == 1
+        assert len(app.dataframe) == 1
+        assert app.dataframe[0].value.iloc[0]["course_section"] == "CSC-134-N851"
+
+    def test_eva_confirmation_page_shows_date_verification_skip_and_cancel(self):
+        job = FakeJob("awaiting_eva_setup")
+        job._eva_setup_request = {
+            "request_id": "r1", "course_name": "CSC-151-N855",
+            "date_only": True, "eva_date": "2026-11-01",
+            "eva_date_source": "estimated",
+        }
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        assert any("Confirm the course EVA/census date" in item.label for item in app.date_input)
+        assert any("I verified this course EVA/census date" == item.label for item in app.checkbox)
+        assert _button(app, "Skip EVA setup for this run")
+        assert _button(app, "Cancel attendance run")
+
     def test_warnings_stay_on_the_page_while_running_and_after(self):
         job = FakeJob(PHASE_STARTING)
         job.on_warning("Attendance is not working in MyColleges for CSC-134-N801")
