@@ -30,11 +30,13 @@ This repository uses automated security scanning workflows to detect vulnerabili
 
 ### 2. GitGuardian (GitHub app)
 
-**No workflow file.** The repository used to carry `.github/workflows/gitguardian-scan.yml` (ggshield, job `GitGuardian Scan`). It was removed because it duplicated the GitGuardian GitHub app, which reports the `GitGuardian Security Checks` status on every PR.
+**The GitGuardian workflow was removed; the GitGuardian GitHub app check remains.** There is no workflow file for it any more: `gitguardian-scan.yml` (ggshield, job `GitGuardian Scan`) was deleted because it duplicated the app.
 
-**Purpose**: Scans commits for exposed secrets, credentials, API keys and other sensitive information.
+**What the app scans**: commits on pull requests, for exposed secrets, credentials, API keys and other sensitive data. It reports the `GitGuardian Security Checks` status on the PR and opens incidents in the GitGuardian dashboard.
 
-**Where it runs and reports**: the GitGuardian app (installed on the repository), not GitHub Actions. Findings appear in the GitGuardian dashboard and as the `GitGuardian Security Checks` status on the PR. It is not a required check.
+**Unverified**: whether the app also scans pushes to `master`. The deleted workflow did (`push` to `master`); that coverage is not confirmed to be replaced.
+
+**Required?** No. The app check is not in the required status checks on `master`, and neither was the old workflow check.
 
 ### 3. Student PII Guard
 
@@ -52,7 +54,7 @@ Both security workflows are configured to **skip execution** when a PR is initia
 
 2. **Reduces unnecessary processing**: Security scans of dependency files don't provide meaningful value, as:
    - CodeQL analyzes application code, not dependency manifests
-   - GitGuardian scans for secrets in code, not in lock files
+   - Secret scanning looks at code, not at lock files
 
 3. **Faster merge cycles**: Dependabot PRs can be auto-merged more quickly for patch/minor updates without waiting for security scans.
 
