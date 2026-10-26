@@ -20,6 +20,8 @@ codecov:
   # e2e-coverage: one per workflow, none path-filtered) before posting any status. Without
   # this, codecov/patch is computed from whichever upload lands first (usually e2e or
   # integration) and reports a false low patch figure until the unit-tests upload arrives.
+  # Codecov counts uploads, not flags: re-running one workflow uploads again for the same
+  # commit and can reach 3 early, so re-run all three coverage workflows together.
   notify:
     after_n_builds: 3
 
@@ -73,8 +75,10 @@ coverage:
         # Only evaluate on pull requests
         only_pulls: true
 
-        # Fail if coverage upload is missing
-        # This prevents bypassing the gate by not uploading coverage
+        # Fail if the commit has no coverage at all. Note: with notify.after_n_builds: 3, a commit
+        # that gets fewer than 3 uploads (a job failed before its upload step, a fork PR without
+        # the token) gets NO codecov/patch status, not a failure. Re-run the coverage workflows
+        # for that commit, or check its upload count on the Codecov commit page.
         if_not_found: failure
 
         # Paths included in the ENFORCING patch gate: all backend logic EXCEPT the
