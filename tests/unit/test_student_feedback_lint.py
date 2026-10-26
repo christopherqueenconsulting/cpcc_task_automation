@@ -52,34 +52,64 @@ def test_match_is_case_sensitive():
 
 @pytest.mark.unit
 @pytest.mark.parametrize("phrase", [
-    "test case", "Test Cases", "test run", "the app", "output check", "grader", "reference solution",
-    "the reference", "the solution", "required output", "verified by", "checklist", "(incomplete)",
-    "(not implemented)"])
+    "output check", "Output Check", "reference solution", "(incomplete)", "(not implemented)",
+    "verified by g++", "Verified by javac", "verified by python", "verified by the compiler check",
+    "the grader reports", "the app checks", "the app graded", "scored by the grader"])
 def test_mechanics_phrases(phrase):
     assert _tokens(f"Here is {phrase} text.") == [("phrase", phrase)]
 
 
 @pytest.mark.unit
-def test_phrases_respect_word_boundaries():
-    assert lint_student_feedback("Open the application, then read the references and the solutions.") == []
+@pytest.mark.parametrize("sentence", [
+    "Open the application, then read the references.",
+    "a better solution is a for loop",
+    "write three test cases",
+    "run the test run again",
+    "the grader of the contest was kind",
+    "this checklist helps you plan",
+    "your reference variable is null",
+    "verified by hand",
+    "call nextInt() before nextLine()",
+    "the M1 chip and the C11 standard",
+    "type T1 is a template parameter",
+    "R1+ and T# are not ids",
+    "out of 100 points",
+    "rename lab_3.cpp and keep MAX_SIZE",
+    "the \"while\" condition is fine",
+    "the “while” loop is fine",
+    "Needs Improvement is a label that only counts at the start of a line",
+])
+def test_ordinary_feedback_lints_clean(sentence):
+    assert lint_student_feedback(sentence) == []
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("text,token", [("R1 is incomplete", "R1"), ("see T12.", "T12"), ("M3a fails", "M3a"),
-                                        ("the S1 case", "S1"), ("C4", "C4")])
-def test_ids(text, token):
+def test_phrases_and_identifiers_that_the_instructions_use_are_skipped():
+    text = "The required output is two lines. Use maxValue and the reference solution."
+    instructions = "The required output is two lines. Declare maxValue. See the Reference Solution."
+    assert lint_student_feedback(text, instructions_text=instructions) == []
+    assert _tokens(text) == [("identifier", "maxValue"), ("phrase", "reference solution")]
+
+
+@pytest.mark.unit
+def test_known_source_tokens_are_skipped():
+    assert lint_student_feedback("Rename runningTotal.", known_tokens={"runningTotal"}) == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("text,token", [("R1 is incomplete", "R1"), ("see T12.", "T12"), ("R3a fails", "R3a")])
+def test_generic_ids_without_a_glossary_are_r_and_t_only(text, token):
     assert ("id", token) in _tokens(text)
+    assert lint_student_feedback("M3a, S1 and C4 are not flagged") == []
 
 
 @pytest.mark.unit
-def test_ordinary_words_are_not_ids():
-    assert lint_student_feedback("Use R2D2, T-shirts, C++ and Mar 3 as examples; room M is fine.") == []
-
-
-@pytest.mark.unit
-def test_pattern_ids_in_backticks_are_student_code_but_glossary_ids_are_not():
+def test_with_a_glossary_only_its_ids_are_flagged():
+    glossary = {"T1": object()}
+    assert _tokens("R2 and T1 here", glossary=glossary) == [("id", "T1")]
+    assert _tokens("Rename `T1` to something clearer.", glossary=glossary) == [("id", "T1")]
     assert lint_student_feedback("Rename `T1` to something clearer.") == []
-    assert _tokens("Rename `T1` to something clearer.", glossary={"T1": object()}) == [("id", "T1")]
+    assert lint_student_feedback("the M1 chip, C11 standard, type T1", glossary={"R9": object()}) == []
 
 
 @pytest.mark.unit
@@ -96,15 +126,43 @@ def test_hidden_inputs_even_inside_code_spans():
 
 
 @pytest.mark.unit
-def test_short_hidden_inputs_are_ignored_and_multiline_inputs_match_each_line():
+def test_hidden_single_token_lines_are_ordinary_words():
+    assert lint_student_feedback("You reach the end; out of 100 points", hidden_inputs=("100\nyes\nend",)) == []
     assert lint_student_feedback("You scored 5 items.", hidden_inputs=("5",)) == []
     assert _tokens("Typing 'Pat Kim' broke it.", hidden_inputs=("7\nPat Kim\n",)) == [("hidden_input", "Pat Kim")]
+    assert _tokens("It broke on 100 yes end.", hidden_inputs=("100\nyes\nend",)) == [("hidden_input", "100 yes end")]
+    assert _tokens("Try verylongword.", hidden_inputs=("verylongword",)) == [("hidden_input", "verylongword")]
 
 
 @pytest.mark.unit
-def test_identifiers_outside_backticks_only():
-    assert [t for _, t in _tokens("The variable runningTotal and total_pay are reset.")] == ["runningTotal", "total_pay"]
+def test_hidden_inputs_in_the_instructions_are_skipped():
+    assert lint_student_feedback("Try 45 12.50 again.", hidden_inputs=("45 12.50",),
+                                 instructions_text="Sample run: 45 12.50") == []
+
+
+@pytest.mark.unit
+def test_identifiers_are_review_severity_and_outside_backticks_only():
+    found = lint_student_feedback("The variable runningTotal and total_pay are reset.")
+    assert [(f.token, f.severity) for f in found] == [("runningTotal", "review"), ("total_pay", "review")]
     assert lint_student_feedback("The variable `runningTotal` and `total_pay` are reset.") == []
+
+
+@pytest.mark.unit
+def test_other_kinds_are_block_severity():
+    assert {f.severity for f in lint_student_feedback("R1 values_differ the reference solution")} == {"block"}
+
+
+@pytest.mark.unit
+def test_level_label_only_at_the_start_of_a_line_or_bullet():
+    assert _tokens("Overview.\n- Logic: Needs Improvement: loop") == [("level_label", "Needs Improvement:")]
+    assert _tokens("Developing: your loop") == [("level_label", "Developing:")]
+    assert lint_student_feedback("Your loop is developing: it needs work.") == []
+
+
+@pytest.mark.unit
+def test_id_rewrite_needs_curly_quotes_and_a_leading_the():
+    assert _tokens("See the “Typical order” test.") == [("id_rewrite", "the “Typical order” test")]
+    assert lint_student_feedback("See “Typical order” test.") == []
 
 
 @pytest.mark.unit
@@ -114,7 +172,7 @@ def test_verdict_token_is_not_also_reported_as_identifier():
 
 @pytest.mark.unit
 def test_findings_carry_offsets_and_are_ordered():
-    text = "First the reference, then R2."
+    text = "First the output check, then R2."
     found = lint_student_feedback(text)
     assert all(text[f.start:f.end] == f.token for f in found)
     assert [f.start for f in found] == sorted(f.start for f in found)
@@ -124,11 +182,22 @@ def test_findings_carry_offsets_and_are_ordered():
 
 
 @pytest.mark.unit
-def test_empty_text_and_summary():
+def test_empty_text_and_grouped_summary():
     assert lint_student_feedback("") == [] and lint_student_feedback(None) == []
-    found = lint_student_feedback("R1 and R1 and R2 and the reference")
-    assert summarize_findings(found) == "“R1”, “R2”, “the reference”"
-    assert summarize_findings(found, limit=1).endswith("and 2 more")
+    found = lint_student_feedback("R1 and R1 and R2 and the output check and runningTotal")
+    summary = summarize_findings(found)
+    assert summary.startswith("These words come from grading, not teaching, and a student may not understand them: "
+                              "“R1” (requirement or test id), “R2” (requirement or test id), "
+                              "“output check” (grading wording). Rewrite them or delete the line")
+    assert "Check that these code names come from the student's own work: “runningTotal”." in summary
+    assert summarize_findings(found, limit=1).count("and 2 more") == 1
+    assert summarize_findings([]) == ""
+
+
+@pytest.mark.unit
+def test_hidden_line_scan_is_capped():
+    hidden = "\n".join(f"filler line {i}" for i in range(50)) + "\nsecret late line"
+    assert lint_student_feedback("It had secret late line in it.", hidden_inputs=(hidden,)) == []
 
 
 def _best_of(fn, runs=3) -> float:
@@ -187,10 +256,10 @@ def test_clean_seed_lints_clean():
 @pytest.mark.parametrize("kwargs,kind,token", [
     ({"desc": "The check shows values_differ for the first input."}, "verdict", "values_differ"),
     ({"overall": "R3 is incomplete in your program."}, "id", "R3"),
-    ({"notes": "Your output does not agree with the reference."}, "phrase", "the reference"),
+    ({"notes": "The output check disagrees."}, "phrase", "output check"),
     ({"crit": "Needs Improvement: the loop is wrong."}, "level_label", "Needs Improvement:"),
     ({"desc": "The variable totalPay is never updated."}, "identifier", "totalPay"),
-    ({"notes": "See the “Typical order” test."}, "id_rewrite", "“Typical order” test"),
+    ({"notes": "See the “Typical order” test."}, "id_rewrite", "the “Typical order” test"),
 ])
 def test_seeded_leak_is_caught(kwargs, kind, token):
     assert (kind, token) in _tokens(_seeded(**kwargs))

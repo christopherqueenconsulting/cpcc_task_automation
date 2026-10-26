@@ -4,21 +4,24 @@
 
 ``lint_student_feedback`` scans assembled student feedback (the output of
 ``build_student_feedback``, a feedback document or BrightSpace comment text) and returns a
-``Finding`` for every piece of internal wording:
+``Finding`` for every piece of internal wording. Findings are advisory: they are hints for the
+instructor, tuned to flag little ordinary teaching language, and a hit is never proof of a leak.
 
 ``verdict``       an output-check verdict token (``values_differ``, ``no_output``; ``MATCH`` is
                   case-sensitive)
-``phrase``        grading mechanics ("test case", "the app", "output check", "the reference",
-                  "(incomplete)", ...), case-insensitive
-``level_label``   a performance-level label used as a prefix ("Needs Improvement:")
-``id_rewrite``    the shape ``feedback_ids`` leaves behind: ``the “Typical order” test``
-``id``            a checklist, test-case or condition id (``R1``, ``T3``, ``M2``, ``S1``, ``C4``)
-                  outside backticks, and any glossary id anywhere
+``phrase``        unambiguous grading mechanics: "output check", "reference solution", "(incomplete)",
+                  "(not implemented)", "verified by g++", "the grader reports", ...
+``level_label``   a performance-level label opening a line or bullet ("Needs Improvement:")
+``id_rewrite``    the shape ``feedback_ids`` leaves behind: ``the “Typical order” test`` (curly quotes)
+``id``            with a glossary, only its ids (anywhere, backticks included); without one, a bare
+                  ``R1`` / ``T3`` outside backticks
 ``hidden_input``  a hidden test input (stdin) the caller passes in
-``identifier``    a camelCase or snake_case code identifier outside backticks
+``identifier``    a camelCase or snake_case name outside backticks. Severity ``review`` (the rest are
+                  ``block``): it may well be the student's own code.
 
-Text inside backtick code spans is ignored (a student's own code is quoted there), except for
-glossary ids and hidden inputs, which are internal wherever they appear.
+Text inside backtick code spans is otherwise ignored. A phrase, hidden input or identifier that also
+appears in the assignment instructions (``instructions_text``), and an identifier found in the
+student's source (``known_tokens``), is the instructor's or the student's own wording and is skipped.
 
 Every pattern is linear: anchored on a word boundary or a literal, with bounded repeats and no
 nested quantifiers, so a 50 KB input cannot cause catastrophic backtracking. The lint only
@@ -41,9 +44,12 @@ KIND_ID = "id"
 KIND_HIDDEN_INPUT = "hidden_input"
 KIND_IDENTIFIER = "identifier"
 
-#: A hidden input shorter than this (after whitespace is collapsed) is not searched for: "5" would
-#: flag every number in the feedback.
-MIN_HIDDEN_INPUT_CHARS = 3
+SEVERITY_BLOCK = "block"
+SEVERITY_REVIEW = "review"
+
+#: A hidden input line must be this long or hold a space to be searched: "yes", "end" and "100"
+#: are ordinary words and numbers in feedback.
+MIN_HIDDEN_TOKEN_CHARS = 6
 #: A glossary longer than this many ids is truncated (a hostile glossary cannot slow the scan).
 MAX_GLOSSARY_IDS = 500
 MAX_HIDDEN_INPUTS = 200
@@ -57,11 +63,12 @@ VERDICT_TOKENS = (
 _VERDICT_RE = re.compile(r"\b(?:" + "|".join(VERDICT_TOKENS) + r")\b", re.IGNORECASE)
 _MATCH_RE = re.compile(r"\bMATCH\b")  # case-sensitive: "match" is an ordinary word
 
+_CHECK_WORD = r"(?:checks?|graded|scored|reports?)"
 _PHRASE_RE = re.compile(
-    r"\b(?:test[ \t]+cases?|test[ \t]+runs?|the[ \t]+app|output[ \t]+check|grader|"
-    r"reference[ \t]+solution|the[ \t]+reference|the[ \t]+solution|required[ \t]+output|"
-    r"verified[ \t]+by|checklist)\b"
-    r"|\(incomplete\)|\(not implemented\)",
+    r"\boutput[ \t]+check\b|\breference[ \t]+solution\b|\(incomplete\)|\(not implemented\)"
+    r"|\bverified[ \t]+by[ \t]+(?:g\+\+|javac|python\b|the[ \t]+compiler[ \t]+check\b)"
+    rf"|\bthe[ \t]+(?:grader|app)[ \t]+{_CHECK_WORD}\b"
+    rf"|\b{_CHECK_WORD}[ \t]+(?:by[ \t]+)?the[ \t]+(?:grader|app)\b",
     re.IGNORECASE,
 )
 
@@ -71,26 +78,46 @@ LEVEL_LABELS = (
     "exemplary", "proficient", "developing", "approaching", "unsatisfactory", "satisfactory",
     "beginning",
 )
-_LEVEL_LABEL_RE = re.compile(r"\b(?:" + "|".join(LEVEL_LABELS) + r")[ \t]*:", re.IGNORECASE)
+# Start of a line or bullet, optionally after the "Criterion name:" prefix the builder adds.
+_LEVEL_LABEL_RE = re.compile(
+    r"^[ \t]*(?:[-*•][ \t]*)?(?:\*\*)?(?:[A-Za-z][^:\n]{0,40}:[ \t]*)?"
+    r"((?:" + "|".join(LEVEL_LABELS) + r")[ \t]*:)",
+    re.IGNORECASE | re.MULTILINE,
+)
 
-# ``the “Typical order” test``: a quoted label followed by the noun feedback_ids absorbed.
+# ``the “Typical order” test``: a leading "the", a curly-quoted label, then the absorbed noun.
 _ID_REWRITE_RE = re.compile(
-    r"[“\"‘][^”\"’\n]{1,200}[”\"’][ \t]+(?:tests?|requirements?|conditions?)\b", re.IGNORECASE)
+    r"\bthe[ \t]+“[^”\n]{1,200}”[ \t]+(?:tests?|requirements?|conditions?)\b", re.IGNORECASE)
 
-_ID_RE = re.compile(r"\b[RTMSC]\d{1,3}[a-z]?\b")
+# Without a glossary: R (requirement) and T (test) ids only; not "type T1", "R1+", "T#".
+_ID_RE = re.compile(r"(?<![\w+#])(?<![Tt]ype )[RT]\d{1,3}[a-z]?(?![\w+#])")
 
-_CAMEL_RE = re.compile(r"\b[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+\b")
-_SNAKE_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", re.IGNORECASE)
+# A name followed by "(" is a call the instructions may teach (nextInt()); "name.ext" is a file.
+_CAMEL_RE = re.compile(r"\b[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+\b(?![(\w]|\.\w)")
+_SNAKE_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b(?![(\w]|\.\w)")
+
+_KIND_REASONS = (
+    (KIND_ID, "requirement or test id"),
+    (KIND_VERDICT, "result word"),
+    (KIND_PHRASE, "grading wording"),
+    (KIND_LEVEL_LABEL, "level label"),
+    (KIND_ID_REWRITE, "reworded test or requirement label"),
+    (KIND_HIDDEN_INPUT, "hidden test input"),
+)
 
 
 @dataclass(frozen=True)
 class Finding:
-    """One piece of internal wording: what kind, the text found, and where (``text[start:end]``)."""
+    """One piece of internal wording: what kind, the text found, and where (``text[start:end]``).
+
+    ``severity`` is ``block`` (internal wording a student cannot use) or ``review`` (may be the
+    student's own code); only ``block`` findings should ever hold back a hand-back."""
 
     kind: str
     token: str
     start: int
     end: int
+    severity: str = SEVERITY_BLOCK
 
 
 def _mask_code_spans(text: str) -> str:
@@ -98,11 +125,17 @@ def _mask_code_spans(text: str) -> str:
     return _CODE_SPAN_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
-def _normalise_hidden(value: str) -> list[str]:
-    """The strings to search for one hidden input: the whole value and each line, whitespace collapsed."""
-    whole = " ".join(str(value or "").split())
-    parts = [" ".join(line.split()) for line in str(value or "").splitlines()[:MAX_HIDDEN_LINES]]
-    return [p for p in dict.fromkeys([whole, *parts]) if len(p) >= MIN_HIDDEN_INPUT_CHARS]
+def _squash(text: str) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def _hidden_candidates(value: str) -> list[str]:
+    """What to search for one hidden input: the whole value and each line, whitespace collapsed,
+    keeping only strings long enough (or with a space) to be distinctive."""
+    raw = str(value or "")
+    whole = " ".join(raw.split())
+    parts = [" ".join(line.split()) for line in raw.splitlines()[:MAX_HIDDEN_LINES]]
+    return [p for p in dict.fromkeys([whole, *parts]) if len(p) >= MIN_HIDDEN_TOKEN_CHARS or " " in p]
 
 
 def _hidden_pattern(value: str) -> re.Pattern:
@@ -116,31 +149,41 @@ def lint_student_feedback(
         *,
         glossary: Optional[Mapping] = None,
         hidden_inputs: Iterable[str] = (),
+        instructions_text: Optional[str] = None,
+        known_tokens: Iterable[str] = (),
 ) -> list[Finding]:
     """Findings in ``text``, in order of position; an empty list means it reads clean.
 
     ``glossary`` is ``feedback_ids.build_id_glossary(...)``; its ids are flagged wherever they
-    appear, backticks included. ``hidden_inputs`` are the stdin strings of hidden test cases.
+    appear, backticks included, and when it is non-empty they are the only ids flagged.
+    ``hidden_inputs`` are the stdin strings of hidden test cases. ``instructions_text`` is the
+    assignment's instructions and ``known_tokens`` the names in the student's source; wording found
+    in either is skipped.
     """
     text = text or ""
     if not text.strip():
         return []
     masked = _mask_code_spans(text)
+    instructions = _squash(instructions_text)
+    known = set(known_tokens or ())
     found: list[Finding] = []
     covered = bytearray(len(text))  # 1 where an accepted finding sits; later kinds skip overlaps
 
-    def add(kind: str, m: re.Match) -> None:
-        start, end = m.span()
+    def in_instructions(token: str) -> bool:
+        return bool(instructions) and _squash(token) in instructions
+
+    def add(kind: str, m: re.Match, severity: str = SEVERITY_BLOCK, group: int = 0) -> None:
+        start, end = m.span(group)
         if covered.find(1, start, end) != -1:
             return
         covered[start:end] = b"\x01" * (end - start)
-        found.append(Finding(kind, text[start:end], start, end))
+        found.append(Finding(kind, text[start:end], start, end, severity))
 
     # Hidden inputs and glossary ids are internal even inside backticks (the output-check note
     # quotes them there), so they scan the unmasked text and go first.
     hidden: list[str] = []
     for value in list(hidden_inputs or ())[:MAX_HIDDEN_INPUTS]:
-        hidden.extend(_normalise_hidden(value))
+        hidden.extend(c for c in _hidden_candidates(value) if not in_instructions(c))
     for value in sorted(set(hidden), key=len, reverse=True):
         for m in _hidden_pattern(value).finditer(text):
             add(KIND_HIDDEN_INPUT, m)
@@ -152,18 +195,46 @@ def lint_student_feedback(
         for m in glossary_re.finditer(text):
             add(KIND_ID, m)
 
-    for kind, pattern in ((KIND_VERDICT, _VERDICT_RE), (KIND_VERDICT, _MATCH_RE),
-                          (KIND_PHRASE, _PHRASE_RE), (KIND_LEVEL_LABEL, _LEVEL_LABEL_RE),
-                          (KIND_ID_REWRITE, _ID_REWRITE_RE), (KIND_ID, _ID_RE),
-                          (KIND_IDENTIFIER, _CAMEL_RE), (KIND_IDENTIFIER, _SNAKE_RE)):
-        # The id-rewrite shape contains a quote, which is not a code span, so it scans the same text.
+    for m in _VERDICT_RE.finditer(masked):
+        add(KIND_VERDICT, m)
+    for m in _MATCH_RE.finditer(masked):
+        add(KIND_VERDICT, m)
+    for m in _PHRASE_RE.finditer(masked):
+        if not in_instructions(m.group(0)):
+            add(KIND_PHRASE, m)
+    for m in _LEVEL_LABEL_RE.finditer(masked):
+        add(KIND_LEVEL_LABEL, m, group=1)
+    for m in _ID_REWRITE_RE.finditer(masked):
+        add(KIND_ID_REWRITE, m)
+    if not ids:
+        for m in _ID_RE.finditer(masked):
+            add(KIND_ID, m)
+    for pattern in (_CAMEL_RE, _SNAKE_RE):
         for m in pattern.finditer(masked):
-            add(kind, m)
+            if m.group(0) not in known and not in_instructions(m.group(0)):
+                add(KIND_IDENTIFIER, m, SEVERITY_REVIEW)
     return sorted(found, key=lambda f: (f.start, f.end))
 
 
+def _quoted(tokens: Iterable[str], limit: int) -> str:
+    tokens = list(tokens)
+    return ", ".join(tokens[:limit]) + (f" and {len(tokens) - limit} more" if len(tokens) > limit else "")
+
+
 def summarize_findings(findings: Iterable[Finding], limit: int = 8) -> str:
-    """One line for the instructor: the distinct tokens found, cut at ``limit``."""
-    tokens = list(dict.fromkeys(f.token.strip() for f in findings))
-    shown = ", ".join(f"“{t}”" for t in tokens[:limit])
-    return shown + (f" and {len(tokens) - limit} more" if len(tokens) > limit else "")
+    """Instructor-facing text, grouped: block findings with a reason each, then review findings.
+
+    The tokens come from model output, so a caller that renders Markdown must escape the result."""
+    findings = list(findings)
+    blocked = [f for f in findings if f.severity == SEVERITY_BLOCK]
+    review = [f for f in findings if f.severity == SEVERITY_REVIEW]
+    out = []
+    if blocked:
+        reasons = dict(_KIND_REASONS)
+        items = list(dict.fromkeys(f"“{f.token.strip()}” ({reasons.get(f.kind, f.kind)})" for f in blocked))
+        out.append("These words come from grading, not teaching, and a student may not understand them: "
+                   + _quoted(items, limit) + ". Rewrite them or delete the line before you hand this back.")
+    if review:
+        names = list(dict.fromkeys(f"“{f.token.strip()}”" for f in review))
+        out.append("Check that these code names come from the student's own work: " + _quoted(names, limit) + ".")
+    return " ".join(out)

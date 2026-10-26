@@ -209,11 +209,11 @@ def test_clean_feedback_shows_no_internal_wording_warning() -> None:
 
 @pytest.mark.unit
 def test_internal_wording_in_the_feedback_warns_the_instructor() -> None:
-    at = _app(_result(note="R2 is incomplete: values_differ against the reference."))
+    at = _app(_result(note="R2 is incomplete: values_differ against the reference solution."))
 
-    warnings = [w.value for w in at.warning if "Internal wording found; edit before handing back" in w.value]
+    warnings = [w.value for w in at.warning if "Internal wording found" in w.value]
     assert len(warnings) == 1
-    assert "R2" in warnings[0] and "values_differ" in warnings[0] and "the reference" in warnings[0]
+    assert "R2" in warnings[0] and "values_differ" in warnings[0] and "reference solution" in warnings[0]
 
 
 @pytest.mark.unit
@@ -224,3 +224,16 @@ def test_warning_tokens_from_model_text_render_no_image_or_link() -> None:
     assert "R2" in warning
     assert not re.search(r"(?<!\\)[\[\]]", warning)  # every bracket is escaped
     assert "` http://example.invalid/p.png `" in warning  # the URL is inert code, not an autolink
+
+
+@pytest.mark.unit
+def test_source_tokens_read_the_students_files_and_skip_unreadable_ones(tmp_path) -> None:
+    from cqc_streamlit_app.grade_assignment import _source_tokens
+
+    src = tmp_path / "Main.java"
+    src.write_text("int runningTotal = 0;", encoding="utf-8")
+
+    tokens = _source_tokens({"Main.java": str(src), "gone.java": str(tmp_path / "gone.java")})
+
+    assert "runningTotal" in tokens
+    assert _source_tokens(None) == set()

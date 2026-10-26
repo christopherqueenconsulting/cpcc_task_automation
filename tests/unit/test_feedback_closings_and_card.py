@@ -98,7 +98,7 @@ def test_result_card_formats():
     md = result_card_markdown("Ada Example", result, greeting_name="Ada Example")
     assert "# Result card: Ada Example" in md and "22 / 30 (73.3%)" in md
     assert "| Program Performance | 22/30 | Average | Works \\| mostly. |" in md
-    assert "## Requirements" in md and "## Overall summary (shown to the student)" in md and "Instructor notes" not in md
+    assert "## Requirements" in md and "## Overall summary (shown to the student; lines that mention a score are left out)" in md and "Instructor notes" not in md
     assert "**" not in result_card_text("Ada Example", result)
     assert json.loads(result_card_json("Ada Example", result))["result"]["total_points_earned"] == 22
     pdf = result_card_pdf("Ada Example", result)

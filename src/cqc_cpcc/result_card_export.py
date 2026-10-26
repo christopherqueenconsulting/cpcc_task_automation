@@ -14,7 +14,7 @@ import json
 from typing import Optional
 
 from cqc_cpcc.rubric_models import RubricAssessmentResult
-from cqc_cpcc.student_feedback_builder import build_student_feedback
+from cqc_cpcc.student_feedback_builder import _filter_score_mentions, build_student_feedback
 
 
 def _cell(text) -> str:
@@ -114,8 +114,10 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
 
     lines += ["", "## Feedback for the student", "",
               build_student_feedback(feedback_source, student_name=greeting_name)]
-    if result.overall_feedback:
-        lines += ["", "## Overall summary (shown to the student)", "", result.overall_feedback]
+    summary = _filter_score_mentions(result.overall_feedback or "")
+    if summary.strip():
+        lines += ["", "## Overall summary (shown to the student; lines that mention a score are left out)", "",
+                  summary]
     return "\n".join(lines).rstrip() + "\n"
 
 
