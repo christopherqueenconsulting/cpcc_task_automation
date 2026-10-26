@@ -25,6 +25,7 @@ openrouter = ">=0,<2"
 httpx = "^0"
 ordered-set = "^4"
 python-docx = "^1"
+docx2txt = "^0.9"
 #simplify_docx= { git = "https://github.com/gitchrisqueen/Simplify-Docx.git"}
 chromedriver-autoinstaller = "^0"
 pyvirtualdisplay = "^3"

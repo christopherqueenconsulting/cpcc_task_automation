@@ -11,6 +11,7 @@ from random import randint
 from typing import Optional, Annotated, List, Union
 
 import docx
+import docx2txt
 import mammoth
 # import markdownify
 import pandas as pd
@@ -24,6 +25,7 @@ from cqc_cpcc.utilities.selenium_util import (
     take_and_show_screenshot,
     wait_for_user_action,
 )
+from docx import Document
 from markdownify import markdownify as md
 from ordered_set import OrderedSet
 from pydantic import BaseModel, Field, StrictStr, PositiveInt
@@ -295,26 +297,18 @@ def merge_lists(list1, list2):
         return list1 + list2
 
 
-def docx_to_text(doc) -> str:
-    """Extract Word text and table JSON without a second parser dependency.
+def convert_tables_to_json_in_tmp_file(doc: Document) -> str:
+    """Replace Word tables with JSON paragraphs and save a temporary DOCX."""
+    for table in doc.tables:
+        data = [[cell.text for cell in row.cells] for row in table.rows]
+        t = table._element
+        t.getparent().remove(t)
+        doc.add_paragraph(pd.DataFrame(data).to_json(orient="records"))
+        t._t = t._element = None
 
-    Keep all document paragraphs first and table JSON afterward, matching the former
-    path that removed tables and appended their JSON to the end of a temporary DOCX.
-    """
-    from docx.oxml.ns import qn
-    from docx.table import Table
-    from docx.text.paragraph import Paragraph
-
-    paragraphs = []
-    tables = []
-    for child in doc.element.body.iterchildren():
-        if child.tag == qn("w:p"):
-            paragraphs.append(Paragraph(child, doc).text)
-        elif child.tag == qn("w:tbl"):
-            table = Table(child, doc)
-            data = [[cell.text for cell in row.cells] for row in table.rows]
-            tables.append(pd.DataFrame(data).to_json(orient="records"))
-    return "\n\n".join([*paragraphs, *tables])
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+    doc.save(temp_file.name)
+    return temp_file.name
 
 
 @lru_cache(maxsize=None)
@@ -564,7 +558,11 @@ Please manually review this video file for grading."""
         contents = convert_xlsx_to_markdown(file_path)
     # If file ends in .docx will convert it to json and return
     elif file_extension == ".docx":
-        contents = docx_to_text(docx.Document(file_path))
+        tmp_file = convert_tables_to_json_in_tmp_file(docx.Document(file_path))
+        try:
+            contents = docx2txt.process(tmp_file)
+        finally:
+            os.remove(tmp_file)
 
     else:
 
