@@ -1,7 +1,7 @@
 # Unit-test sharding
 
 `.github/workflows/unit-tests.yml` runs the unit suite as two parallel jobs
-(`Unit shard 1/2`, `Unit shard 2/2`), each using pytest-xdist (`-n auto --dist loadfile`).
+(`Unit shard 1/2`, `Unit shard 2/2`), each using pytest-xdist (`-n logical --dist loadfile`: every vCPU, since `-n auto` counts only physical cores).
 A gate job named exactly `unit-tests` waits for both.
 
 ## The required check is `unit-tests`
