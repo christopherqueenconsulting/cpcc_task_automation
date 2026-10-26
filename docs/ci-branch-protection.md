@@ -2,29 +2,16 @@
 
 ## Overview
 
-This project uses GitHub Actions to automatically run unit tests on every pull request and push to the `master` branch. The workflow ensures code quality by catching issues before they are merged.
+This project uses one GitHub Actions test workflow to run unit, integration, and E2E tests on every pull request, merge queue group, and push to `master`. The shared workflow lets Codecov publish one complete report after all coverage-producing jobs finish.
 
 ## Workflow Details
 
-### Unit Tests Workflow
+### Test Suite Workflow
 - **Workflow File**: `.github/workflows/unit-tests.yml`
-- **Workflow Name**: `CI / Unit Tests`
+- **Workflow Name**: `CI / Test Suite`
 - **Triggers**:
   - Pull requests targeting `master` branch
-  - Direct pushes to `master` branch
-
-### Integration Tests Workflow
-- **Workflow File**: `.github/workflows/integration-coverage.yml`
-- **Workflow Name**: `CI / Integration Test w/ Coverage`
-- **Triggers**:
-  - Pull requests targeting `master` branch
-  - Direct pushes to `master` branch
-
-### E2E Tests Workflow
-- **Workflow File**: `.github/workflows/e2e-coverage.yml`
-- **Workflow Name**: `CI / E2E Test w/ Coverage`
-- **Triggers**:
-  - Pull requests targeting `master` branch
+  - Merge queue groups targeting `master`
   - Direct pushes to `master` branch
 
 ### What the Workflows Do
@@ -50,6 +37,11 @@ This project uses GitHub Actions to automatically run unit tests on every pull r
 4. **Install Playwright**: Installs Playwright Chromium browser
 5. **Run E2E Tests**: Executes `poetry run pytest -m e2e` with coverage reporting
 6. **Upload Coverage**: Uploads coverage to Codecov with `e2e` flag
+
+**Codecov Finalization:** The `codecov-finalize` job waits for the `unit-tests`,
+`integration-tests`, and `e2e-tests` jobs to pass, then runs `send-notifications`. This is the
+single completion signal for coverage uploads on that commit. If any test lane fails, the
+finalizer is skipped.
 
 ### Test Execution
 
@@ -85,9 +77,9 @@ To enforce that pull requests must pass the unit tests before merging into `mast
      a GitHub App cannot approve its own pull request.
    
    **Note**: The PR check labels will appear as:
-   - `CI / Unit Tests`
-   - `CI / Integration Test w/ Coverage`
-   - `CI / E2E Test w/ Coverage`
+   - `unit-tests`
+   - `integration-tests`
+   - `e2e-tests`
 
 4. **Additional Recommended Settings** (optional but recommended)
    - ☑️ **Require a pull request before merging**
@@ -104,9 +96,9 @@ After enabling branch protection:
 
 1. Create a test pull request to `master`
 2. You should see the CI checks appear in the PR:
-   - "CI / Unit Tests"
-   - "CI / Integration Test w/ Coverage"
-   - "CI / E2E Test w/ Coverage"
+   - `unit-tests`
+   - `integration-tests`
+   - `e2e-tests`
 3. If any tests fail, the "Merge" button will be blocked
 4. Once all tests pass, the "Merge" button will become available
 
@@ -175,8 +167,7 @@ poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-report=term-missing
 
 - Ensure the workflow files exist at:
   - `.github/workflows/unit-tests.yml`
-  - `.github/workflows/integration-coverage.yml`
-  - `.github/workflows/e2e-coverage.yml`
+  - `.github/workflows/unit-tests.yml` (contains all three test lanes and Codecov finalization)
 - Check that the branch name is exactly `master` (not `main`)
 - Verify Actions are enabled in repository settings
 
