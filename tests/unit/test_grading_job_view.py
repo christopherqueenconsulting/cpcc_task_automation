@@ -288,7 +288,13 @@ def test_launching_starts_a_job_points_the_url_at_it_and_locks_the_page(tmp_path
         f = tmp_path / f"{name}.java"
         f.write_text("class A {}")
         files.append((f.name, str(f)))
-    grade = AsyncMock(return_value=_result())
+    release = threading.Event()
+
+    async def grade_after_assertions(*args, **kwargs):
+        await asyncio.get_running_loop().run_in_executor(None, release.wait, 30)
+        return _result()
+
+    grade = AsyncMock(side_effect=grade_after_assertions)
     with patch("cqc_cpcc.rubric_grading.grade_with_rubric", grade):
         at = AppTest.from_function(_launch_page, default_timeout=30)
         at.session_state["paths"] = files
@@ -302,6 +308,7 @@ def test_launching_starts_a_job_points_the_url_at_it_and_locks_the_page(tmp_path
         assert at.session_state["grading_status_by_key"][RUN_KEY] == "running"
         assert at.session_state["do_grade"] is False
         assert set(at.session_state["grading_inputs_by_key"][RUN_KEY]["submissions"]) == {"Lab One", "Lab Two"}
+        release.set()
         assert job.wait(10)
         at.run()
     assert not at.exception, at.exception
