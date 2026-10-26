@@ -63,7 +63,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v7
       name: Setup python ${{ inputs.python-version }}
       id: setup-python
       with:
@@ -71,7 +71,7 @@ runs:
 
     # Exact-match only, no restore-keys: a poetry binary built for a different
     # poetry/python version must never be restored in place of the pinned one.
-    - uses: actions/cache/restore@v4
+    - uses: actions/cache/restore@v6
       id: cache-bin-poetry
       name: Restore Poetry binary - Python ${{ inputs.python-version }}
       env:
@@ -122,7 +122,7 @@ runs:
       if: >-
         steps.cache-bin-poetry.outputs.cache-hit != 'true' &&
         github.event_name == 'push' && github.ref == 'refs/heads/master'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: |
           /opt/pipx/venvs/poetry
@@ -149,7 +149,7 @@ runs:
 
     - name: Restore Poetry virtualenv
       id: cache-venv
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       env:
         SEGMENT_DOWNLOAD_TIMEOUT_MIN: "4"
         WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
@@ -175,7 +175,7 @@ runs:
       if: >-
         steps.cache-venv.outputs.cache-hit != 'true' &&
         github.event_name == 'push' && github.ref == 'refs/heads/master'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       env:
         WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
       with:
