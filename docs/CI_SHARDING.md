@@ -25,11 +25,11 @@ If a pinned file is renamed, update the pin; `test_shard_selection.py` fails on 
 ## Run one shard locally
 
 ```bash
-UNIT_SHARDS=2 UNIT_SHARD=1 poetry run pytest -m unit --ignore=tests/e2e -n auto --dist loadfile
-UNIT_SHARDS=2 UNIT_SHARD=2 poetry run pytest -m unit --ignore=tests/e2e -n auto --dist loadfile
+UNIT_SHARDS=2 UNIT_SHARD=1 poetry run pytest -m unit --ignore=tests/e2e -n logical --dist loadfile
+UNIT_SHARDS=2 UNIT_SHARD=2 poetry run pytest -m unit --ignore=tests/e2e -n logical --dist loadfile
 ```
 
-Drop `-n auto --dist loadfile` for a serial run, and drop the two variables to run everything.
+Drop `-n logical --dist loadfile` for a serial run, and drop the two variables to run everything.
 
 ## Coverage
 
@@ -38,7 +38,8 @@ Each shard uploads its own `coverage.xml` to Codecov with flag `unit` and name
 
 `codecov.yml` waits for 4 coverage uploads (`notify.after_n_builds` and
 `comment.after_n_builds`): two unit shards, integration, e2e. Test-results uploads
-(`codecov/test-results-action`) do NOT count: with the value at 8 on PR #511 (4 coverage plus
-4 test-results uploads received, Codecov API `sessions: 4`) Codecov posted no status or
-comment for 25+ minutes. Changing the shard count means changing that number too;
+(`codecov-action` uploads with `report_type: test_results`) do NOT count: with the value at 8
+on PR #511 (4 coverage plus 4 test-results uploads received, Codecov API `sessions: 4`)
+Codecov posted no status or comment for 25+ minutes. Changing the shard count means changing
+that number too;
 `test_codecov_upload_contract.py` counts the `codecov-action` steps, matrix included.
