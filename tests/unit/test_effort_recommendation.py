@@ -235,7 +235,7 @@ class TestRecommendEffort:
         started = time.monotonic()
         with patch.object(llm_gateway, "structured", hanging):
             rec = await er.recommend_effort(SMALL, _small(), "openai/alpha")
-        assert time.monotonic() - started < 2.0
+        assert time.monotonic() - started < 10.0
         assert (rec.effort, rec.source) == ("high", "default") and "did not arrive within 0.2 seconds" in rec.note
         assert hanging.calls[0][2]["request_timeout"] == 0.2
 

@@ -12,6 +12,10 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
   process limit would not allow it. The first window is not ramped: up to 512 requests per side (about 1024 with the
   base) leave at once; a 429 burst is absorbed by halving plus jittered retries. Rollback: set
   `CQC_AB_MAX_CONCURRENCY=64` and `CQC_AB_JUDGE_CONCURRENCY=16`. Cost is unchanged; the spend rate rises.
+- CI: the `dispatch` and `dispatch-report` jobs of Prompt Evaluation moved to `prompt-eval-dispatch.yml` (workflow
+  "Prompt Evaluation (dispatch)", the Run workflow button) and `merge-queue` to `prompt-eval-merge-queue.yml`, so they stop
+  showing as skipped checks on pull requests. `prompt-eval/ab` is unchanged. `estimate`, `rescore` and `report` gained a
+  20-minute timeout.
 - Eval batch mode: a request sent the ordinary way inside a batch group (the fallback after a failed batch, a group
   below the minimum, a re-send after the deadline) now keeps the normal request timeout instead of the raised
   `CQC_LLM_TIMEOUT` (deadline + 600 s). Docs: the eval OpenRouter keys belong to a ZDR-off workspace; production and

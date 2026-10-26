@@ -182,7 +182,9 @@ Both grading prompts are sent as two messages, through `llm_gateway.structured(.
   never the matched text), and `unknown` (never deducted) when a lab-style keyword is present
   without a readable number (`Lab_Foo`, `Smith_Lab`) or a spelled-out number stands alone.
   `no` is left for names with no keyword and no number-like token at all (`Sum`). A bare `I`
-  or `V` word is not a number. The dataset moved to `flowgorithm-grade/v2` with 4 added
+  or `V` word is not a number, and a standalone roman numeral of two or more letters with no
+  keyword (`Smith_II`, `Ada_Example_IV`) reads `unknown`, not `no` and not `yes` (code only: prompt
+  text and version unchanged). The dataset moved to `flowgorithm-grade/v2` with 4 added
   file-name cases (v1 frozen, first 24 rows identical; see `evals/README.md`).
 - **v2**: structured output. (#479 added an alias for the file name in code only: no prompt text or registry change. v3 replaces it with the facts block.)
 - **v1**: free-text markdown, real file name.
@@ -891,7 +893,7 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   | `CQC_EVAL_BATCH_MAX_ITEMS` | `1000` | Most requests per batch (more are split into several batches). |
   | `CQC_EVAL_BATCH_SETTLE_S` | `120` | Longest to wait for more requests before submitting what has been collected. |
 
-  The three paid steps of `prompt-eval.yml` (A/B base vs head prompts, Run the changed suites on master, Run) and the
+  The three paid steps of `prompt-eval.yml` and `prompt-eval-dispatch.yml` (A/B base vs head prompts, Run the changed suites on master, Run) and the
   two of `model-eval.yml` (Run evaluation, Run the winner on the other prompt suites of its roles) set the first two to
   `1`; local runs and everything else stay sync. A test pins exactly those five steps.
 - **Scheduled runs only** (owner ruling, 2026-10-25: a batch can take up to 45 minutes per batch (`CQC_EVAL_BATCH_DEADLINE_S` default 2700 s), plus the time of any sync fallback, which is too long for runs an
@@ -944,7 +946,7 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
 - **Timeouts and merge order.** A request sent the ordinary way inside a batch group (the fallback after a failed
   batch, a group below `CQC_EVAL_BATCH_MIN`, a re-send after the deadline) keeps the normal request timeout for its role
   and effort; only a call waiting on a batch has the raised `CQC_LLM_TIMEOUT`. The deadline plus 600 s (the `CQC_LLM_TIMEOUT` bump, at most 3600 s) is below the
-  `timeout-minutes` of every one of the five paid steps' jobs (prompt-eval.yml `ab` 240, `record` 150, `dispatch` 240;
+  `timeout-minutes` of every one of the five paid steps' jobs (prompt-eval.yml `ab` 240, `record` 150, prompt-eval-dispatch.yml `dispatch` 240;
   model-eval.yml `evaluate` 150, `cross-suite` 120, all minutes).
 - **Account-limit abort.** The run-wide account-limit abort (described above) reaches the batch loops: an account-limit
   error (HTTP 402, or 403 whose gateway message names an exceeded budget or credit limit) on a batch submit or poll trips
@@ -1030,7 +1032,9 @@ A second job, `ab-base-rule` (and `dispatch-report` for a maintainer `ab` run), 
 What this protects against: an honest PR that relaxes the rule, or skips a suite, by
 mistake. It does not stop a hostile author. Both sides' saved outputs are written by PR code,
 and on a `pull_request` run the workflow file itself comes from the PR, so a PR that edits
-`prompt-eval.yml` could change these jobs. Every PR author today is a trusted account.
+`prompt-eval.yml` could change these jobs (the `dispatch` and `dispatch-report` jobs live in
+`prompt-eval-dispatch.yml`, the `merge-queue` job in `prompt-eval-merge-queue.yml`; neither runs on a
+pull request). Every PR author today is a trusted account.
 Hostile-author resistance (a `workflow_run` job that always runs master's workflow and posts
 its own required context with the bot's app token) is a follow-up for Christopher.
 
@@ -1126,7 +1130,7 @@ keeps that from happening. It reads only fields old rows already carry.
 
 **Thresholds start uncalibrated.** Until a live calibration, a suite reports its numbers
 and only blocks a PR on a *regression* against the base; it never raises "needs work".
-Calibrate once the setup below is done: Actions > Prompt Evaluation > Run workflow, mode
+Calibrate once the setup below is done: Actions > Prompt Evaluation (dispatch) > Run workflow, mode
 `calibrate`, dry run off. Review `policy_patch.json` in the artifact (each floor = the current
 model's measured score minus 0.10, health floor = composite minus 0.05) and apply it with
 `prompt-calibrate --apply` locally or by copying it into `model_policy.json`. Calibration re-sets floors only: the patch carries each suite's current `repeats`, and

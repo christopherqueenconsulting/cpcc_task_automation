@@ -1211,7 +1211,7 @@ class TestWorkflows:
     FIVE = {
         ("prompt-eval.yml", "ab", "A/B base vs head prompts"),
         ("prompt-eval.yml", "record", "Run the changed suites on master"),
-        ("prompt-eval.yml", "dispatch", "Run"),
+        ("prompt-eval-dispatch.yml", "dispatch", "Run"),
         ("model-eval.yml", "evaluate", "Run evaluation"),
         ("model-eval.yml", "cross-suite", "Run the winner on the other prompt suites of its roles"),
     }

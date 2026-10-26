@@ -28,27 +28,15 @@ This repository uses automated security scanning workflows to detect vulnerabili
 - Permissions: Security events, packages, contents, actions
 - Auto-build enabled
 
-### 2. GitGuardian Security Scan
+### 2. GitGuardian (GitHub app)
 
-**Workflow File**: `.github/workflows/gitguardian-scan.yml`
+**The GitGuardian workflow was removed; the GitGuardian GitHub app check remains.** There is no workflow file for it any more: `gitguardian-scan.yml` (ggshield, job `GitGuardian Scan`) was deleted because it duplicated the app.
 
-**Purpose**: Scans the codebase for exposed secrets, credentials, API keys, and other sensitive information.
+**What the app scans**: commits on pull requests, for exposed secrets, credentials, API keys and other sensitive data. It reports the `GitGuardian Security Checks` status on the PR and opens incidents in the GitGuardian dashboard.
 
-**Triggers**:
-- Pull requests to `master` branch
-- Direct pushes to `master` branch
+**Unverified**: whether the app also scans pushes to `master`. The deleted workflow did (`push` to `master`); that coverage is not confirmed to be replaced.
 
-**What it checks**:
-- API keys and tokens
-- Database credentials
-- Private keys and certificates
-- OAuth tokens
-- AWS/Azure/GCP credentials
-- Other sensitive data patterns
-
-**Configuration**:
-- Requires: `GITGUARDIAN_API_KEY` secret (see setup below)
-- Fetch depth: Full history
+**Required?** No. The app check is not in the required status checks on `master`, and neither was the old workflow check.
 
 ### 3. Student PII Guard
 
@@ -66,7 +54,7 @@ Both security workflows are configured to **skip execution** when a PR is initia
 
 2. **Reduces unnecessary processing**: Security scans of dependency files don't provide meaningful value, as:
    - CodeQL analyzes application code, not dependency manifests
-   - GitGuardian scans for secrets in code, not in lock files
+   - Secret scanning looks at code, not at lock files
 
 3. **Faster merge cycles**: Dependabot PRs can be auto-merged more quickly for patch/minor updates without waiting for security scans.
 
@@ -98,27 +86,6 @@ CodeQL is a GitHub-native feature and requires no additional setup. The workflow
 - Add custom queries for project-specific security rules
 - Adjust scan schedule
 
-### GitGuardian Setup
-
-GitGuardian requires an API key to function:
-
-1. **Get API Key**:
-   - Sign up at [GitGuardian](https://www.gitguardian.com/)
-   - Navigate to API Keys section
-   - Generate a new API key for your repository
-
-2. **Add Secret to GitHub**:
-   - Go to repository Settings > Secrets and variables > Actions
-   - Click "New repository secret"
-   - Name: `GITGUARDIAN_API_KEY`
-   - Value: Your GitGuardian API key
-   - Click "Add secret"
-
-3. **Verify Setup**:
-   - Create a test PR
-   - Check that the GitGuardian workflow runs successfully
-   - Review any findings in the workflow logs
-
 ## Branch Protection
 
 To enforce security checks as required status checks:
@@ -128,7 +95,6 @@ To enforce security checks as required status checks:
 3. Enable "Require status checks to pass before merging"
 4. Add required checks:
    - `analyze` (CodeQL)
-   - `scanning` (GitGuardian)
    - `unit-tests` (already required)
 
 **Note**: When adding security checks as required, Dependabot PRs will still bypass them due to the workflow-level skip logic.
@@ -138,13 +104,12 @@ To enforce security checks as required status checks:
 ### Viewing Results
 
 - **CodeQL**: Results appear in the Security tab > Code scanning alerts
-- **GitGuardian**: Results appear in workflow logs and can be sent to GitGuardian dashboard
+- **GitGuardian**: Results appear in the GitGuardian dashboard and as the `GitGuardian Security Checks` PR status (GitHub app, no workflow)
 
 ### Regular Maintenance
 
 - Review security alerts weekly
 - Update CodeQL queries as new patterns emerge
-- Rotate GitGuardian API key periodically
 - Monitor false positives and adjust configuration
 
 ### Troubleshooting
@@ -154,10 +119,9 @@ To enforce security checks as required status checks:
 - Verify Python code exists in repository
 - Review workflow logs for errors
 
-**GitGuardian not running**:
-- Verify `GITGUARDIAN_API_KEY` secret is set
-- Check API key is valid and not expired
-- Ensure sufficient GitGuardian quota
+**GitGuardian not reporting**:
+- Check the GitGuardian GitHub app is still installed on the repository
+- Check the GitGuardian dashboard for quota or integration errors
 
 **Workflow skipped unexpectedly**:
 - Verify PR author is not `dependabot[bot]`
@@ -170,7 +134,7 @@ To enforce security checks as required status checks:
 |---------|--------|-------------|------------|
 | **Scans Code** | ✅ Python source | ✅ All files | ✅ Python tests |
 | **Scans Dependencies** | ❌ | ❌ | ✅ (compatibility) |
-| **Runs on Dependabot PRs** | ❌ Skipped | ❌ Skipped | ✅ Required |
+| **Runs on Dependabot PRs** | ❌ Skipped | App-managed | ✅ Required |
 | **Scheduled Runs** | ✅ Weekly | ❌ | ❌ |
 | **Required for Merge** | Optional | Optional | ✅ Required |
 | **External Service** | ❌ GitHub native | ✅ GitGuardian | ❌ |
