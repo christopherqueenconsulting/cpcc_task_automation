@@ -307,8 +307,15 @@ class MyColleges:
                            context.course_name)
             self._publish_eva_status(context, saved, "incomplete", "Activity discovery was incomplete")
             return None
+        saved_activity_id = saved.get("activity_id") if saved else None
+        if saved and saved.get("activity_type") == "quiz" and saved.get("activity_url"):
+            # Older confirmations stored the course ``ou`` as the quiz ID because
+            # attempt-log URLs no longer carry ``qi`` in their query string.
+            saved_activity_id = BrightSpace_Course._activity_id(
+                "quiz", saved["activity_url"]
+            )
         found = next((item for item in candidates
-                      if saved and item["activity_id"] == saved["activity_id"]
+                      if saved and item["activity_id"] == saved_activity_id
                       and item["activity_type"] == saved["activity_type"]), None)
         current_due = found.get("observed_due_iso") if found else None
         saved_due = saved.get("confirmed_due_date") if saved else None
@@ -316,8 +323,21 @@ class MyColleges:
             current_due != saved_due and found.get("observed_due_date") != saved.get("observed_due_date")
         ) or (saved and DT.date.fromisoformat(saved["eva_date"]) != eva_date)
         if found and not needs_activity_confirmation:
-            ledger.update_eva_activity_title(term, section, course_id,
-                                              found["title"], found.get("observed_due_date"))
+            if saved.get("activity_id") != found["activity_id"]:
+                ledger.save_eva_activity({
+                    **saved, **found,
+                    "term": term, "course_section": section,
+                    "brightspace_course_id": course_id,
+                    "confirmed_due_date": saved_due,
+                    "eva_date": eva_date.isoformat(),
+                    "observed_eva_date": saved.get("observed_eva_date"),
+                    "eva_date_source": saved.get("eva_date_source", source),
+                })
+            else:
+                ledger.update_eva_activity_title(
+                    term, section, course_id, found["title"],
+                    found.get("observed_due_date"),
+                )
             config = {**found, "confirmed_due_date": saved_due, "eva_date": eva_date.isoformat()}
             self._publish_eva_status(context, config, "pending", "Saved activity reused")
             return config
