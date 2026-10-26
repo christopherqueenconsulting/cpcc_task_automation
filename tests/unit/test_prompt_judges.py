@@ -183,3 +183,16 @@ async def test_suite_run_with_judges_is_report_only_until_calibrated(tmp_path, m
     assert judge["mean"] == pytest.approx(2 / 3)  # test-mode verdict scores every criterion 3
     assert judge["calibrated"] is False and "per_case" not in judge
     assert "report-only" in prompt_eval.to_markdown(sc)
+
+
+async def test_adaptive_suite_run_gives_the_judges_a_pool_of_their_call_count(tmp_path, monkeypatch):
+    from cqc_cpcc.model_eval import adaptive, prompt_eval
+    from cqc_cpcc.utilities.AI import llm_gateway
+
+    monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
+    monkeypatch.delenv(adaptive.ENV_JUDGE, raising=False)
+    monkeypatch.setitem(adaptive._FD_CAP, "n", 100000)
+    sc = await prompt_eval.run("project-feedback", [], repeats=1, limit=2, out=str(tmp_path),
+                               judges=True, judge_model="anthropic/judge", adaptive_mode=True)
+    (_, m), = sc["models"].items()
+    assert m["judges"]["feedback-quality"]["mean"] == pytest.approx(2 / 3)

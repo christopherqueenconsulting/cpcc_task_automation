@@ -5,6 +5,13 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Prompt A/B concurrency: each suite side now starts with every call in flight at once (ceiling = the call
+  count, at most 512; was 64, hard cap 256) and judges the same, capped at the judge call count.
+  `CQC_AB_MAX_CONCURRENCY`, `CQC_AB_JUDGE_CONCURRENCY` and the start setting still cap lower; the 429/timeout
+  backoff and the first-account-limit abort are unchanged. A file-descriptor check lowers the ceiling if the
+  process limit would not allow it. The first window is not ramped: up to 512 requests per side (about 1024 with the
+  base) leave at once; a 429 burst is absorbed by halving plus jittered retries. Rollback: set
+  `CQC_AB_MAX_CONCURRENCY=64` and `CQC_AB_JUDGE_CONCURRENCY=16`. Cost is unchanged; the spend rate rises.
 - CI: the `dispatch` and `dispatch-report` jobs of Prompt Evaluation moved to `prompt-eval-dispatch.yml` (workflow
   "Prompt Evaluation (dispatch)", the Run workflow button) and `merge-queue` to `prompt-eval-merge-queue.yml`, so they stop
   showing as skipped checks on pull requests. `prompt-eval/ab` is unchanged. `estimate`, `rescore` and `report` gained a

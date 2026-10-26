@@ -236,7 +236,7 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     Fixed mode (the default): ``concurrency`` calls in flight (``eval_concurrency``).
     Adaptive mode (``adaptive_mode``, or ``CQC_AB_ADAPTIVE=1``): the pool starts at
     ``min(calls, ceiling)`` (or ``concurrency`` when given), the ceiling being ``max_concurrency``,
-    ``CQC_AB_MAX_CONCURRENCY`` or 64; AIMD and jittered retries live in ``adaptive.py``, and every call
+    ``CQC_AB_MAX_CONCURRENCY`` or, by default, all the calls (at most 512); AIMD and jittered retries live in ``adaptive.py``, and every call
     reserves its worst-case cost on the budget before it is sent. The pool's counters are appended
     to ``pool_stats`` (a list) when one is given.
 
@@ -266,17 +266,18 @@ async def run_suite(suite: Suite, model: str, effort: Optional[str], cases: list
     limiter = None
     semaphore = None
     if use_adaptive:
-        ceiling = adaptive.ab_max_concurrency(max_concurrency)
         total = max(1, len(cases) * repeats)
+        ceiling = adaptive.ab_max_concurrency(max_concurrency, calls=total)
         if bplan is not None:
-            ceiling = batch.widen(ceiling, total)
+            ceiling = adaptive.clamp_pool(batch.widen(ceiling, total))
         wanted = adaptive.ab_start_concurrency(concurrency)
         start = min(total, ceiling) if wanted is None else min(wanted, ceiling)
         limiter = adaptive.AdaptiveLimiter("calls", start=start, ceiling=ceiling)
         logger.info(f"[prompt-eval:{suite.id}] adaptive concurrency: start {start}, ceiling {ceiling}")
     else:
         semaphore = asyncio.Semaphore(
-            batch.widen(eval_concurrency(value=concurrency), len(cases) * repeats) if bplan is not None
+            adaptive.clamp_pool(batch.widen(eval_concurrency(value=concurrency), len(cases) * repeats))
+            if bplan is not None
             else eval_concurrency(value=concurrency))
 
     sid = session_id if session_id is not None else cache_session.session_for_run(suite.id, model, effort)
