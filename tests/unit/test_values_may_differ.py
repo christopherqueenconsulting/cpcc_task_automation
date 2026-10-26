@@ -636,7 +636,9 @@ def test_the_risk_scan_has_no_unbounded_whitespace_and_is_linear():
     tcg.scan_solution_risks("time(" + " " * 200000)
     tcg.scan_solution_risks("PrintWriter(" + " " * 200000)
     tcg.scan_solution_risks("new File" + "x" * 100000 + " " * 100000)
-    assert time.perf_counter() - start < 1.0
+    # A backtracking scan takes minutes on this input; the loose bound keeps a loaded
+    # pytest-xdist worker from failing a linear scan.
+    assert time.perf_counter() - start < 5.0
 
 
 def _solution():

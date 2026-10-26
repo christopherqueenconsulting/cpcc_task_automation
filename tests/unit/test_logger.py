@@ -30,7 +30,17 @@ def _reload_logger_module(monkeypatch: pytest.MonkeyPatch, **env_values):
 
     module_name = 'cqc_cpcc.utilities.logger'
     if module_name in sys.modules:
-        return importlib.reload(sys.modules[module_name])
+        module = importlib.reload(sys.modules[module_name])
+        # Each reload defines a new _WarningsToAppLog class, so install_sdk_log_guards()
+        # adds another handler instead of finding the old one. Left alone, every later test
+        # in this worker sees each SDK warning once per reload (order-dependent under xdist).
+        sdk_logger = logging.getLogger("openai")
+        for handler in list(sdk_logger.handlers):
+            if type(handler).__name__ == "_WarningsToAppLog" and not isinstance(
+                handler, module._WarningsToAppLog
+            ):
+                sdk_logger.removeHandler(handler)
+        return module
 
     return importlib.import_module(module_name)
 

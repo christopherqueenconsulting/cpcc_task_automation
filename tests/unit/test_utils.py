@@ -1446,7 +1446,9 @@ class TestReadablePathConfinement:
         """The classic crafted-filename case: ../../.. out of the temp directory."""
         from cqc_cpcc.utilities.utils import read_file
 
-        escape = os.path.join(str(tmp_path), "..", "..", "..", "..", "etc", "passwd")
+        # Enough ".." to reach the filesystem root however deep tmp_path is (pytest-xdist
+        # nests it one level deeper); extra ".." at the root stay at the root.
+        escape = os.path.join(str(tmp_path), *([".."] * 16), "etc", "passwd")
 
         with pytest.raises(ValueError, match="Refusing to read"):
             read_file(escape)
