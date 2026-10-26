@@ -208,7 +208,7 @@ class BrightSpace_Course:
                 self.driver.switch_to.window(self.course_return_tab)
 
     def open_course_tab(self) -> bool:
-        handles = set(self.driver.window_handles)
+        handles = self.driver.window_handles
         try:
             return_tab = self.driver.current_window_handle
         except NoSuchWindowException:
