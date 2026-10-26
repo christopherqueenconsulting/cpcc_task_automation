@@ -1,5 +1,6 @@
 import datetime as DT
 import os
+import sqlite3
 import stat
 
 import pytest
@@ -12,9 +13,11 @@ from cqc_cpcc.attendance_ledger import (
     RUN_COMPLETE,
     RUN_DRY_RUN,
     RUN_INCOMPLETE,
+    STATUS_CARRIED,
     STATUS_FAILED,
     STATUS_PENDING,
     STATUS_RECORDED,
+    STATUS_UNRECORDABLE,
     STATUS_VERIFIED,
     AttendanceLedger,
 )
@@ -158,3 +161,133 @@ class TestCountChecks:
         assert [m["student_id"] for m in mismatches] == ["2", "3"]
         ledger.finish_run(run, status=RUN_COMPLETE, expected=3, verified=3, failed=0, unmatched=0)
         assert ledger._conn.execute("SELECT status FROM runs").fetchone()[0] == RUN_COMPLETE
+
+
+@pytest.mark.unit
+class TestEvaActivity:
+    def test_config_survives_restart_and_is_scoped_to_course_identity(self, tmp_path):
+        path = str(tmp_path / "attendance.sqlite3")
+        identities = [
+            (TERM, COURSE, "123"),
+            ("Spring 2027", COURSE, "123"),
+            (TERM, "CSC-134-N802", "123"),
+            (TERM, COURSE, "456"),
+        ]
+        configs = []
+        led = AttendanceLedger(path)
+        try:
+            for index, (term, section, course_id) in enumerate(identities):
+                config = {
+                    "term": term, "course_section": section,
+                    "brightspace_course_id": course_id,
+                    "activity_type": "assignment" if index == 0 else "quiz",
+                    "activity_id": str(100 + index),
+                    "activity_url": "https://example.invalid/activity/%s" % index,
+                    "title": "EVA activity %s" % index,
+                    "observed_due_date": "2026-08-20",
+                    "confirmed_due_date": "2026-08-21",
+                    "eva_date": "2026-08-24", "eva_date_source": "user_confirmed",
+                }
+                led.save_eva_activity(config)
+                configs.append(config)
+        finally:
+            led.close()
+
+        reopened = AttendanceLedger(path)
+        try:
+            for identity, config in zip(identities, configs):
+                saved = reopened.eva_activity(*identity)
+                assert saved is not None
+                assert {key: saved[key] for key in config} == config
+                assert DT.datetime.fromisoformat(saved["confirmed_at"])
+            assert reopened.eva_activity(TERM, COURSE, "unknown") is None
+            updated = dict(configs[0], activity_id="999", title="Confirmed replacement")
+            reopened.save_eva_activity(updated)
+            assert reopened.eva_activity(*identities[0])["activity_id"] == "999"
+            assert reopened._conn.execute(
+                "SELECT COUNT(*) FROM eva_activity_config"
+            ).fetchone()[0] == len(identities)
+            assert reopened.eva_activity(*identities[1])["activity_id"] == "101"
+        finally:
+            reopened.close()
+
+    def test_expected_and_eva_evidence_are_durable_together(self, ledger):
+        day = DT.date(2026, 8, 19)
+        ledger.record_eva_expected(TERM, COURSE, "1", day, "activity-1")
+        reopened = AttendanceLedger(ledger.path)
+        try:
+            assert reopened.get_status(TERM, COURSE, "1", day) == STATUS_PENDING
+            rows = reopened._conn.execute("SELECT * FROM attendance_evidence").fetchall()
+            assert [dict(row) for row in rows] == [{
+                "term": TERM, "course_section": COURSE, "student_id": "1",
+                "attend_date": day.isoformat(), "source_type": "eva",
+                "source_id": "activity-1",
+            }]
+            assert reopened.outstanding(TERM, COURSE)[0].exact_date is True
+        finally:
+            reopened.close()
+
+    @pytest.mark.parametrize("initial_status", [None, STATUS_CARRIED, STATUS_UNRECORDABLE])
+    def test_evidence_failure_rolls_back_expected_insert_or_reopening(self, ledger, initial_status):
+        day = DT.date(2026, 8, 19)
+        if initial_status is not None:
+            ledger.set_status(TERM, COURSE, "1", day, initial_status, "prior error")
+        ledger._conn.execute(
+            "CREATE TRIGGER reject_eva_evidence BEFORE INSERT ON attendance_evidence "
+            "BEGIN SELECT RAISE(ABORT, 'simulated evidence failure'); END"
+        )
+        ledger._conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError, match="simulated evidence failure"):
+            ledger.record_eva_expected(TERM, COURSE, "1", day, "activity-1")
+
+        reopened = AttendanceLedger(ledger.path)
+        try:
+            assert reopened.get_status(TERM, COURSE, "1", day) == initial_status
+            assert reopened._conn.execute(
+                "SELECT COUNT(*) FROM attendance_evidence"
+            ).fetchone()[0] == 0
+            if initial_status is not None:
+                assert reopened._conn.execute(
+                    "SELECT last_error FROM attendance"
+                ).fetchone()[0] == "prior error"
+        finally:
+            reopened.close()
+
+    @pytest.mark.parametrize("initial_status", [STATUS_CARRIED, STATUS_UNRECORDABLE, STATUS_VERIFIED])
+    def test_eva_reopens_terminal_dates_but_preserves_verified_and_substitute(self, ledger, initial_status):
+        day = DT.date(2026, 8, 19)
+        substitute_day = day + DT.timedelta(days=1)
+        ledger.set_status(TERM, COURSE, "1", day, initial_status)
+        ledger.set_status(TERM, COURSE, "1", substitute_day, STATUS_VERIFIED)
+
+        ledger.record_eva_expected(TERM, COURSE, "1", day, "activity-1")
+
+        expected_status = STATUS_VERIFIED if initial_status == STATUS_VERIFIED else STATUS_PENDING
+        assert ledger.get_status(TERM, COURSE, "1", day) == expected_status
+        assert ledger.get_status(TERM, COURSE, "1", substitute_day) == STATUS_VERIFIED
+        entries = ledger.outstanding(TERM, COURSE)
+        if initial_status == STATUS_VERIFIED:
+            assert entries == []
+        else:
+            assert [(entry.attend_date, entry.exact_date) for entry in entries] == [(day, True)]
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM attendance_evidence"
+        ).fetchone()[0] == 1
+
+    def test_duplicate_evidence_is_idempotent_and_regular_overlap_keeps_exact_date(self, ledger):
+        day = DT.date(2026, 8, 19)
+        ledger.upsert_expected(TERM, COURSE, "ordinary", day)
+        ledger.upsert_expected(TERM, COURSE, "eva", day)
+        for _ in range(2):
+            ledger.record_eva_expected(TERM, COURSE, "eva", day, "activity-1")
+        ledger.upsert_expected(TERM, COURSE, "eva", day)
+
+        assert ledger._conn.execute("SELECT COUNT(*) FROM attendance").fetchone()[0] == 2
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM attendance_evidence"
+        ).fetchone()[0] == 1
+        assert {entry.student_id: entry.exact_date for entry in ledger.outstanding(TERM, COURSE)} == {
+            "ordinary": False, "eva": True,
+        }
+        assert all(entry.attempts == 0 for entry in ledger.outstanding(TERM, COURSE))

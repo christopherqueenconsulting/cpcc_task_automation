@@ -17,6 +17,7 @@ import streamlit as st
 from cqc_cpcc.attendance_job import (
     FINISHED_PHASES,
     PHASE_AWAITING_PLAN,
+    PHASE_AWAITING_EVA_SETUP,
     PHASE_CANCELLED,
     PHASE_FAILED,
     PHASE_STARTING,
@@ -259,17 +260,126 @@ def warnings_section(job: AttendanceJob) -> None:
 
 def _needs_full_page(phase: str) -> bool:
     """The form and the finish screen hold page-level widgets, so the page draws them."""
-    return phase == PHASE_AWAITING_PLAN or phase in FINISHED_PHASES
+    return phase in (PHASE_AWAITING_PLAN, PHASE_AWAITING_EVA_SETUP) or phase in FINISHED_PHASES
+
+
+def eva_setup_form(job: AttendanceJob) -> None:
+    """Confirm an activity and the course census date without touching Brightspace."""
+    request = job.current_eva_setup_request()
+    if not request:
+        st.info("Waiting for EVA activity details...")
+        return
+    st.subheader("Confirm the EVA activity")
+    st.caption(request.get("course_name", "Selected course"))
+    st.write("The chosen activity and dates are stored locally for later runs.")
+    if request.get("date_only"):
+        suggested = request.get("eva_date")
+        cutoff = st.date_input(
+            "Confirm the course EVA/census date",
+            value=DT.date.fromisoformat(suggested) if suggested else DT.date.today(),
+            key="eva_date_only_%s" % request["request_id"],
+        )
+        verified_date = st.checkbox(
+            "I verified this course EVA/census date",
+            key="eva_date_only_verified_%s" % request["request_id"],
+        )
+        confirm_date, skip_date = st.columns(2)
+        if confirm_date.button("Confirm date", type="primary", key="eva_date_confirm_%s" % request["request_id"]):
+            if not verified_date:
+                st.error("Verify the course date before continuing.")
+            else:
+                job.submit_eva_setup({
+                    "request_id": request["request_id"], "date_only": True,
+                    "eva_date": cutoff.isoformat(),
+                    "eva_date_source": request.get("eva_date_source", "user_confirmed"),
+                })
+                st.rerun()
+        if skip_date.button("Skip EVA setup for this run", key="eva_date_skip_%s" % request["request_id"]):
+            job.submit_eva_setup({"request_id": request["request_id"], "skip": True})
+            st.rerun()
+        if st.button("Cancel attendance run", key="eva_date_cancel_%s" % request["request_id"]):
+            job.cancel()
+            st.rerun()
+        return
+    candidates = request.get("candidates", [])
+    if not candidates:
+        st.warning("No assignment or quiz activities could be listed. Skip EVA setup "
+                   "and regular attendance will continue.")
+        if st.button("Skip EVA setup for this run", key="eva_setup_empty_skip"):
+            job.submit_eva_setup({"request_id": request["request_id"], "skip": True})
+            st.rerun()
+        if st.button("Cancel attendance run", key="eva_setup_empty_cancel"):
+            job.cancel()
+            st.rerun()
+        return
+
+    ordered = sorted(candidates, key=lambda item: (not item.get("suggested", False), item["title"].casefold()))
+    saved_id = request.get("saved_activity_id")
+    default = next((item for item in ordered if item["activity_id"] == saved_id), ordered[0])
+    selected = st.selectbox(
+        "EVA assignment or quiz",
+        options=ordered,
+        index=ordered.index(default),
+        format_func=lambda item: "%s · %s · due %s%s" % (
+            item["activity_type"].title(), item["title"],
+            item.get("observed_due_date") or "date unavailable",
+            " · suggested" if item.get("suggested") else "",
+        ),
+        key="eva_activity_choice_%s" % request["request_id"],
+    )
+    choice_key = "%s_%s" % (request["request_id"], selected["activity_id"])
+    prior_eva = request.get("eva_date")
+    eva_default = DT.date.fromisoformat(prior_eva) if prior_eva else DT.date.today()
+    due_default = DT.date.fromisoformat(selected["observed_due_iso"]) \
+        if selected.get("observed_due_iso") else DT.date.today()
+    with st.form("eva_confirmation_%s" % request["request_id"]):
+        due = st.date_input("Verify the activity due date", value=due_default,
+                            key="eva_due_%s" % choice_key)
+        eva_date = st.date_input("Verify the course EVA/census date", value=eva_default,
+                                 key="eva_cutoff_%s" % choice_key)
+        verified = st.checkbox("I verified the selected activity and both dates",
+                                key="eva_verify_%s" % choice_key)
+        confirm, skip = st.columns(2)
+        confirm_clicked = confirm.form_submit_button("Confirm and continue", type="primary")
+        skip_clicked = skip.form_submit_button("Skip EVA setup for this run")
+    if confirm_clicked:
+        if not verified:
+            st.error("Verify the activity and dates before continuing.")
+        else:
+            response = {
+                "request_id": request["request_id"], "activity": selected,
+                "confirmed_due_date": due.isoformat(), "eva_date": eva_date.isoformat(),
+                "eva_date_source": request.get("eva_date_source", "user_confirmed"),
+            }
+            job.submit_eva_setup(response)
+            st.rerun()
+    if skip_clicked:
+        job.submit_eva_setup({"request_id": request["request_id"], "skip": True})
+        st.rerun()
+    if st.button("Cancel attendance run", key="eva_activity_cancel_%s" % request["request_id"]):
+        job.cancel()
+        st.rerun()
+
+
+def eva_status_section(job: AttendanceJob) -> None:
+    statuses = job.eva_statuses()
+    if statuses:
+        st.caption("EVA attendance status")
+        st.dataframe(statuses, hide_index=True, width="stretch")
 
 
 def job_section(job: AttendanceJob) -> None:
     """The form or the finish screen; drawn by the full page run."""
     phase = job.phase
+    eva_status_section(job)
     if job.cancelled and phase not in FINISHED_PHASES:
         return
 
     if phase == PHASE_AWAITING_PLAN:
         plan_form(job)
+        return
+    if phase == PHASE_AWAITING_EVA_SETUP:
+        eva_setup_form(job)
         return
 
     if phase in FINISHED_PHASES:
@@ -329,6 +439,7 @@ def live_view() -> None:
             # The form or finish screen is due: redraw the whole page once.
             st.rerun(scope="app")
     if job is not None:
+        eva_status_section(job)
         eva_section(job)
         progress_section(job)
     screenshot_tab, log_tab = st.tabs(["Browser screenshot", "Log"])
@@ -418,8 +529,8 @@ def ledger_section() -> None:
     """What the local attendance ledger knows: per course, per date, by status.
 
     Ids and counts only; names are never stored. The ledger lives on this machine
-    (``~/.cqc_cpcc/attendance.sqlite3``), so on a hosted deployment it starts
-    empty each time and every course is simply re-checked from its start.
+    (``~/.cqc_cpcc/attendance.sqlite3``). Hosted deployments need a persistent volume
+    mounted there or configured with ``CQC_ATTENDANCE_DB`` to preserve it on restart.
     """
     from cqc_cpcc.attendance_ledger import AttendanceLedger, default_db_path
 
