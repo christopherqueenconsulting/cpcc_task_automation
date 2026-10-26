@@ -451,10 +451,19 @@ fallback for custom definitions (id and name only). The error-definitions editor
 
 ### Student transparency and Remove
 
-An error the gate adds has `source="execution"` and a note naming the test input and the expected and
-actual differing line (program output only, never solution source), shown in the student's feedback and
-the .docx, in code spans with control characters and backticks removed and each line cut at 80
-characters. `reconciliation.remove_added` takes a gate-added error out again (deterministic re-score,
+An error the gate adds has `source="execution"` and a plain-words note: "When your program runs
+[with the input `x`], one output line is not formatted as required: it prints `Y` where `X` is
+expected" (a misspelling says "one word in the output is misspelled: `Y` should be `X`"). It shows the
+expected and actual differing line (program output only, never solution source) in the student's
+feedback and the .docx, in code spans with control characters and backticks removed and each line cut
+at 80 characters (a longer line is cut to a window around its first difference; when only spacing
+differs the note says so; when several lines differ it says "the first difference is").
+
+The test **input is shown only when the case's `source == "sample"`** (copied from the instructions,
+so the student already has it). For a case the model or the instructor made, the note says "one of the
+instructor's test inputs (not listed here)". Trade-off: the student cannot always reproduce a hidden
+case, and for a hidden case the expected line is the solution's output on the hidden input; the
+instructor sees the case, its input and the diff on the Output tab. `reconciliation.remove_added` takes a gate-added error out again (deterministic re-score,
 note kept, `removed_by_instructor`); `reinstate` puts it back. The student drawer's **Remove** and
 **Reinstate** buttons (PR 15) call them.
 
