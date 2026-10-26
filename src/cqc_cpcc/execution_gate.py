@@ -611,18 +611,34 @@ def _case_by_id(plan: ExecutionPlan, case_id: str) -> Optional[TestCase]:
     return next((c for c in plan.cases if c.id == case_id), None)
 
 
-def _transparency_note(plan: ExecutionPlan, results: Sequence[CaseResult]) -> str:
-    """Student-facing: the case input and the expected vs actual line (program output only)."""
+def _misspelled_pair(expected: str, actual: str) -> Optional[tuple]:
+    """``(expected_word, actual_word)`` when the two lines differ in exactly one word, else None."""
+    exp, act = expected.split(), actual.split()
+    if len(exp) != len(act):
+        return None
+    diff = [(e, a) for e, a in zip(exp, act) if e != a]
+    return diff[0] if len(diff) == 1 else None
+
+
+def _transparency_note(plan: ExecutionPlan, results: Sequence[CaseResult], *, misspelling: bool = False) -> str:
+    """Student-facing, in plain words: what the program printed and what was expected (program output
+    only, never the solution's source). The input is shown only for a sample case copied from the
+    instructions; an instructor- or model-made case keeps its input hidden. Every piece of
+    student-derived text goes through :func:`inert`."""
     first = results[0] if results else None
-    if first is None:
-        return "Output check: your program's output differs from the expected output in format."
-    case = _case_by_id(plan, first.case_id)
-    shown = " ".join(ln for ln in (case.stdin if case else "").split())
-    pair = first_diff_pair(first.diff_excerpt)
-    head = f"Output check: with the input {inert(shown)}" if shown else "Output check: on one test run"
+    case = _case_by_id(plan, first.case_id) if first is not None else None
+    shown = " ".join((case.stdin if case.source == "sample" else "").split()) if case else ""
+    head = f"When your program runs with the input {inert(shown)}" if shown else "When your program runs"
+    problem = "one word in the output is misspelled" if misspelling else "one output line is not formatted as required"
+    pair = first_diff_pair(first.diff_excerpt) if first is not None else None
     if pair is None:
-        return f"{head}, your program's output differs from the expected output in format."
-    return f"{head}, the expected line was {inert(pair[0])} but your program printed {inert(pair[1])}."
+        return f"{head}, {problem}."
+    if misspelling:
+        words = _misspelled_pair(pair[0], pair[1])
+        if words is not None:
+            return f"{head}, {problem}: {inert(words[1])} should be {inert(words[0])}."
+        return f"{head}, {problem}: {inert(pair[1])} should be {inert(pair[0])}."
+    return f"{head}, {problem}: it prints {inert(pair[1])} where {inert(pair[0])} is expected."
 
 
 def apply_execution_gate(
@@ -870,7 +886,7 @@ def _route_misspelling(plan, results, model_errors, cats, error_definitions, err
     for e, definition in routes:
         miss = DetectedError(code=definition.error_id, name=definition.name, severity="minor",
                              description=definition.description, occurrences=1,
-                             notes=_transparency_note(plan, bad[:1]).replace("Output check:", "Output check (spelling):", 1),
+                             notes=_transparency_note(plan, bad[:1], misspelling=True),
                              source=SOURCE_EXECUTION)
         errors[:] = [x for x in errors if x is not e]
         notes.append(note_removed(STAGE, e, "The only difference is one misspelled output word: routed to "

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -256,6 +257,49 @@ def requirements_prompt_section(checklist: Optional[RequirementChecklist]) -> li
     return lines
 
 
+SUMMARY_MAX_WORDS = 12
+_LEAD_ID = re.compile(r"^\s*(?:\(?\[?R\d+\]?\)?\s*[:.)\-]\s*|\(?R\d+\)?\s+)", re.IGNORECASE)
+_LEAD_MODAL = re.compile(
+    r"^(?:the\s+)?(?:program|code|application|app|solution|student(?:'s program)?|submission)\s+"
+    r"(?:must|should|shall|needs to|has to|will)\s+", re.IGNORECASE)
+_LEAD_MUST = re.compile(r"^(?:must|should|shall|needs to|has to)\s+", re.IGNORECASE)
+_CLAUSE_SPLIT = re.compile(r"\s*(?:[;:]|\s[-–—]\s|,\s*(?:and|but|which|so|then|where|while)\b|\.\s)\s*")
+_PAREN = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+_DANGLING = frozenset({"a", "an", "the", "and", "or", "of", "to", "for", "with", "in", "on", "that",
+                       "using", "by", "from", "at", "as", "is", "are"})
+
+
+def student_summary(text: str) -> str:
+    """A short plain-language phrase for a requirement, for text the student reads.
+
+    Deterministic stand-in until the model writes a ``summary`` (plan PR 4): the first clause
+    of the checklist text, at most :data:`SUMMARY_MAX_WORDS` words, with the id, the leading
+    "The program must", parentheses and the trailing full stop removed. Never ends in a
+    dangling joining word.
+    """
+    one = " ".join((text or "").split())
+    one = _PAREN.sub("", _LEAD_ID.sub("", one)).strip()
+    one = _CLAUSE_SPLIT.split(one, maxsplit=1)[0].strip()
+    one = _LEAD_MUST.sub("", _LEAD_MODAL.sub("", one)).strip()
+    words = one.split()[:SUMMARY_MAX_WORDS]
+    while words and words[-1].lower().strip(",") in _DANGLING:
+        words.pop()
+    out = " ".join(words).rstrip(" ,.;:!")
+    if not out:
+        return "a part of the assignment"
+    # Mid-sentence use: lower the first letter unless the word is an acronym (SQL, ID).
+    if out[:1].isupper() and out[1:2].islower():
+        out = out[0].lower() + out[1:]
+    return out
+
+
+def requirement_error_description(summary: str, status: str) -> str:
+    """The sentence the student reads for a requirement error (no checklist words, no id)."""
+    if status == "missing":
+        return f"This part is missing: {summary}."
+    return f"This part is not finished yet: {summary}."
+
+
 def apply_requirement_coverage(
         result: RubricAssessmentResult,
         checklist: Optional[RequirementChecklist],
@@ -291,9 +335,11 @@ def apply_requirement_coverage(
             code=code,
             name="Missing Requirement" if verdict.status == "missing" else "Incomplete Requirement",
             severity="major" if major else "minor",
-            description=f"{req.text} ({'not implemented' if verdict.status == 'missing' else 'incomplete'})",
+            description=requirement_error_description(student_summary(req.text), verdict.status),
             occurrences=1,
-            notes=verdict.evidence,
+            # ``verdict.evidence`` is instructor-only (it may quote the solution or the checklist):
+            # never copied into text the student reads.
+            notes=None,
         ))
     update = {"detected_errors": errors}
     if info["unmarked"]:

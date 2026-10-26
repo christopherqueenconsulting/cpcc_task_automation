@@ -162,7 +162,11 @@ def test_gate_adds_missed_does_not_compile_with_diagnostics():
     res, info = apply_compile_gate(_make_result([]), BAD_PY, [_compile_def()])
     assert info["action"] == "added"
     added = [e for e in res.detected_errors if e.name == "Does Not Compile"]
-    assert len(added) == 1 and "does not compile" in (added[0].notes or "").lower()
+    assert len(added) == 1
+    # Plain words for the student: no tool name, no "Verified by", no diagnostics.
+    assert added[0].notes == "Your program does not compile. Fix the first compiler error and rebuild."
+    assert "verified" not in added[0].notes.lower() and info["tool"] not in added[0].notes
+    assert added[0].compiler_diagnostics  # the raw detail stays on the instructor-only field
     assert res.error_counts_by_severity is None
 
 
