@@ -212,6 +212,24 @@ class TestMarkAttendanceForCourse:
             )
         assert page.writes == []
 
+    def test_complete_eva_rows_without_activity_identity_stop_before_sis_write(self, ledger):
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+        course = _course({})
+        course.eva_activity_id = None
+        course.eva_collection_result = EVACompletionResult(
+            "complete", {"08-19-2026": ["Ann Adams"]}, pages_read=1, rows_read=1,
+        )
+        course.eva_attendance_records = course.eva_collection_result.records
+
+        with pytest.raises(RuntimeError, match="no confirmed activity identity"):
+            mc._mark_attendance_for_course(
+                _context(), course, ledger=ledger, term=TERM, section=SECTION, write=True,
+            )
+
+        assert page.writes == []
+        assert ledger.outstanding(TERM, SECTION) == []
+
     def test_a_write_that_does_not_survive_reload_is_failed(self, ledger):
         """The census bug: the page showed Present, MyColleges never kept it."""
         page = FakeAttendancePage(drops={(DT.date(2026, 8, 19), "1000002")})

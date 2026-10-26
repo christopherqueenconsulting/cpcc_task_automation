@@ -140,6 +140,39 @@ class TestEvaAttendanceSetup:
         assert "pagination_transition_unverified" in status_call[3]
         ledger.close()
 
+    def test_constructor_and_attendance_failures_replace_pending_eva_status(self):
+        for failure_stage in ("collection", "attendance"):
+            context = self._context(eva_date=DT.date(2026, 11, 1))
+            ledger = AttendanceLedger(":memory:")
+            mc = MyColleges(MagicMock(), MagicMock(), ledger=ledger)
+            mc.current_tab = "sis"
+            mc._open_course_context = MagicMock(return_value=context)
+            mc._resolve_eva_activity = MagicMock(return_value={
+                "activity_id": "eva-1", "activity_type": "assignment",
+                "title": "EVA assignment", "eva_date": "2026-11-01",
+            })
+            mc._publish_eva_status = MagicMock()
+            mc._record_course_attendance = MagicMock(side_effect=RuntimeError("ledger failure"))
+            constructor = (TimeoutException("browser session ended")
+                           if failure_stage == "collection" else MagicMock())
+            with patch("cqc_cpcc.my_colleges.BrightSpace_Course", side_effect=constructor):
+                with pytest.raises((TimeoutException, RuntimeError)):
+                    mc._process_single_course(
+                        context.course_url, {"name": context.course_name},
+                        RunPlan(course_urls=[context.course_url], write_attendance=True),
+                        collect_attendance=True, mark_attendance=True,
+                        collect_withdrawals=False, force_withdrawals=False,
+                    )
+
+            assert mc._publish_eva_status.call_args.args[2] == "incomplete"
+            if failure_stage == "collection":
+                mc._record_course_attendance.assert_not_called()
+                assert "before attendance processing" in mc._publish_eva_status.call_args.args[3]
+            else:
+                mc._record_course_attendance.assert_called_once()
+                assert "review the ledger" in mc._publish_eva_status.call_args.args[3]
+            ledger.close()
+
 
 @pytest.mark.unit
 class TestSelectAttendanceDate:

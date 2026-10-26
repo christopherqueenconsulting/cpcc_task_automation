@@ -375,6 +375,39 @@ def test_eva_pagination_retries_stale_and_rejects_hidden_next_controls():
 
 
 @pytest.mark.unit
+def test_eva_pagination_rejects_unreadable_or_ambiguous_controls():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course._page_fingerprint = MagicMock(return_value=None)
+    with pytest.raises(_EVAReadIncomplete, match="results_page_unreadable"):
+        course._advance_activity_page("//table", 0, 0)
+
+    course._page_fingerprint = MagicMock(return_value=("page",))
+    course._visible_next_controls = MagicMock(return_value=([], []))
+    with pytest.raises(_EVAReadIncomplete, match="pagination_control_missing"):
+        course._advance_activity_page("//table", 1, 0)
+
+    visible_disabled = MagicMock()
+    visible_disabled.is_displayed.return_value = True
+    visible_disabled.is_enabled.return_value = False
+    visible_disabled.get_attribute.return_value = None
+    hidden_enabled = MagicMock()
+    hidden_enabled.is_displayed.return_value = False
+    hidden_enabled.is_enabled.return_value = True
+    hidden_enabled.get_attribute.return_value = None
+    course._visible_next_controls = MagicMock(return_value=(
+        [visible_disabled, hidden_enabled], [visible_disabled],
+    ))
+    with pytest.raises(_EVAReadIncomplete, match="pagination_controls_ambiguous"):
+        course._advance_activity_page("//table", 1, 1)
+
+    course.EVA_MAX_PAGES = 1
+    course._snapshot_activity_page = MagicMock(return_value=(("Student One", "01/12/2026"),))
+    course._advance_activity_page = MagicMock(return_value=True)
+    with pytest.raises(_EVAReadIncomplete, match="pagination_page_limit"):
+        course._read_activity_rows("//table", 3, 2, "activity-url")
+
+
+@pytest.mark.unit
 def test_eva_reader_rejects_missing_table_malformed_and_repeated_pages():
     course = BrightSpace_Course.__new__(BrightSpace_Course)
     course.driver = MagicMock()
@@ -388,6 +421,14 @@ def test_eva_reader_rejects_missing_table_malformed_and_repeated_pages():
     table.find_elements.return_value = [malformed]
     course.driver.find_elements.return_value = [table]
     with pytest.raises(_EVAReadIncomplete, match="completion_row_malformed"):
+        course._snapshot_activity_page("//table", 3, 2, 0, 0)
+
+    missing_student = MagicMock()
+    missing_student.find_elements.return_value = [
+        MagicMock(text="ignored"), MagicMock(text="01/12/2026"), MagicMock(text=""),
+    ]
+    table.find_elements.return_value = [missing_student]
+    with pytest.raises(_EVAReadIncomplete, match="completion_row_missing_student"):
         course._snapshot_activity_page("//table", 3, 2, 0, 0)
 
     course._snapshot_activity_page = MagicMock(return_value=(("Student One", "01/12/2026"),))
@@ -425,6 +466,68 @@ def test_eva_reader_rejects_empty_table_without_explicit_empty_state():
 
     with pytest.raises(_EVAReadIncomplete, match="results_empty_state_unconfirmed"):
         course._snapshot_activity_page("//table", 3, 2, 0, 0)
+
+
+@pytest.mark.unit
+def test_eva_page_fingerprint_rejects_missing_and_stale_tables():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = []
+    assert course._page_fingerprint("//table") is None
+
+    table = MagicMock()
+    class StaleRow:
+        @property
+        def text(self):
+            raise StaleElementReferenceException("table redrawn")
+
+    row = StaleRow()
+    table.find_elements.return_value = [row]
+    course.driver.find_elements.return_value = [table]
+    assert course._page_fingerprint("//table") is None
+
+
+@pytest.mark.unit
+def test_eva_reader_skips_header_rows_and_fails_if_results_control_never_loads(monkeypatch):
+    header = MagicMock()
+    header.find_elements.return_value = []
+    data_row = MagicMock()
+    cells = [MagicMock(text="ignored"), MagicMock(text="01/12/2026"),
+             MagicMock(text="Student One")]
+    cells[1].find_elements.return_value = []
+    data_row.find_elements.return_value = cells
+    table = MagicMock()
+    table.text = ""
+    table.find_elements.return_value = [header, data_row]
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [table]
+    assert course._snapshot_activity_page("//table", 3, 2, 0, 0) == (
+        ("Student One", "01/12/2026"),
+    )
+
+    for activity_type, expected_error in (
+        ("assignment", "assignment_results_not_loaded"),
+        ("quiz", "quiz_results_not_loaded"),
+    ):
+        course = BrightSpace_Course.__new__(BrightSpace_Course)
+        course.driver = MagicMock()
+        course.driver.current_window_handle = "main"
+        course.driver.window_handles = ["main", "activity"]
+        course.wait = MagicMock()
+        course.select_xpath = "//select"
+        course.click_max_results_select = lambda _xpath: False
+        course.course_start_date = DT.datetime(2026, 1, 1)
+        course.eva_date = DT.date(2026, 1, 31)
+        monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
+        monkeypatch.setattr("cqc_cpcc.brightspace.click_element_wait_retry", lambda *_args: None)
+        monkeypatch.setattr("cqc_cpcc.brightspace.close_tab", lambda *_args: None)
+        result = course.get_eva_activity_completions(
+            {"activity_type": activity_type, "activity_id": "eva-1", "activity_url": "url"}
+        )
+        assert result.status == "incomplete"
+        assert result.records == {}
+        assert result.error_code == expected_error
 
 
 @pytest.mark.unit
@@ -493,6 +596,153 @@ def test_eva_invalid_row_discards_otherwise_valid_partial_results(monkeypatch):
     assert result.status == "incomplete"
     assert result.error_code == "invalid_completion_date"
     assert result.records == {}
+
+    monkeypatch.setattr(course, "_read_activity_rows", lambda *_args: (
+        [("Student One", "not a date")], 1,
+    ))
+    monkeypatch.setattr("cqc_cpcc.brightspace.looks_like_a_scraped_date", lambda _text: True)
+    result = course.get_eva_activity_completions(
+        {"activity_type": "quiz", "activity_id": "a-1", "activity_url": "url"},
+        now=DT.datetime(2026, 11, 1, 12, tzinfo=ZoneInfo("America/New_York")),
+    )
+    assert result.error_code == "unparseable_completion_date"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("activity_type", ["assignment", "quiz"])
+def test_eva_completion_returns_all_valid_distinct_days(activity_type, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.current_window_handle = "main"
+    course.wait = MagicMock()
+    course.select_xpath = "//select"
+    course.course_start_date = DT.datetime(2026, 10, 1)
+    course.eva_date = DT.date(2026, 10, 31)
+    course.click_max_results_select = lambda _xpath: True
+    rows = [
+        ("Student One", "10/31/2026"),
+        ("Student One", "10/31/2026"),
+        ("Student One", "10/30/2026"),
+    ]
+    monkeypatch.setattr(course, "_read_activity_rows", lambda *_args: (rows, 2))
+    monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.click_element_wait_retry", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.close_tab", lambda *_args: None)
+
+    result = course.get_eva_activity_completions(
+        {"activity_type": activity_type, "activity_id": "a-1", "activity_url": "url"},
+        now=DT.datetime(2026, 10, 31, 23, 30, tzinfo=ZoneInfo("America/New_York")),
+    )
+    assert result.status == "complete"
+    assert result.records == {
+        "10-30-2026": ["Student One"], "10-31-2026": ["Student One"],
+    }
+    assert result.pages_read == 2
+    assert result.rows_read == 3
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("parent_alive, probe_works", [(True, True), (False, True), (True, False)])
+def test_eva_webdriver_error_requires_a_healthy_parent_tab(monkeypatch, parent_alive, probe_works):
+    class FakeSwitch:
+        def __init__(self, driver):
+            self.driver = driver
+
+        def new_window(self, _kind):
+            self.driver.current = "activity"
+            if self.driver.parent_alive:
+                self.driver.handles.append("activity")
+            else:
+                self.driver.handles = ["activity"]
+
+        def window(self, handle):
+            self.driver.current = handle
+
+    class FakeDriver:
+        def __init__(self, parent_alive, probe_works):
+            self.current = "main"
+            self.handles = ["main"]
+            self.parent_alive = parent_alive
+            self.probe_works = probe_works
+            self.switch_to = FakeSwitch(self)
+
+        @property
+        def current_window_handle(self):
+            return self.current
+
+        @property
+        def window_handles(self):
+            return list(self.handles)
+
+        def get(self, _url):
+            return None
+
+        def execute_script(self, _script):
+            if not self.probe_works:
+                raise TimeoutException("parent tab did not respond")
+            return "complete"
+
+    driver = FakeDriver(parent_alive, probe_works)
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = driver
+    course.wait = MagicMock()
+    course.select_xpath = "//select"
+    course.click_max_results_select = lambda _xpath: True
+    monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
+    monkeypatch.setattr(
+        "cqc_cpcc.brightspace.click_element_wait_retry",
+        MagicMock(side_effect=TimeoutException("page did not respond")),
+    )
+    close = MagicMock(side_effect=lambda _driver: driver.handles.remove("activity"))
+    monkeypatch.setattr("cqc_cpcc.brightspace.close_tab", close)
+
+    if parent_alive and probe_works:
+        result = course.get_eva_activity_completions(
+            {"activity_type": "assignment", "activity_id": "a-1", "activity_url": "url"},
+        )
+        assert result.status == "incomplete"
+        assert result.records == {}
+        assert result.error_code == "TimeoutException"
+    else:
+        with pytest.raises(TimeoutException):
+            course.get_eva_activity_completions(
+                {"activity_type": "assignment", "activity_id": "a-1", "activity_url": "url"},
+            )
+    assert driver.current == ("main" if parent_alive else "activity")
+    close.assert_called_once_with(driver)
+
+
+@pytest.mark.unit
+def test_browser_session_health_probe_requires_live_course_window():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.course_main_tab = "course"
+    course.driver.window_handles = []
+    assert course._browser_session_healthy() is False
+
+    course.driver.window_handles = ["course"]
+    course.driver.execute_script.side_effect = TimeoutException("browser unavailable")
+    assert course._browser_session_healthy() is False
+
+    course.driver.execute_script.side_effect = None
+    assert course._browser_session_healthy() is True
+
+
+@pytest.mark.unit
+def test_page_transition_exception_can_recover_if_table_changes():
+    button = MagicMock()
+    button.is_displayed.return_value = True
+    button.is_enabled.return_value = True
+    button.get_attribute.return_value = None
+    button.click.side_effect = StaleElementReferenceException("redrawn control")
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course._visible_next_controls = MagicMock(return_value=([button], [button]))
+    course._page_fingerprint = MagicMock(side_effect=[("before",), ("after",)])
+    with patch("cqc_cpcc.brightspace.wait_for_ajax"):
+        assert course._advance_activity_page("//table", 1, 1) is True
 
 
 @pytest.mark.unit
