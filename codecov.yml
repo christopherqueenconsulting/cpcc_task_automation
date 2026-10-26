@@ -163,14 +163,9 @@ flags:
 # Component configuration for categorizing coverage by logical areas
 # Components provide virtual filters to isolate coverage data
 component_management:
-  default_rules:
-    # Default: all components have project status with 80% target
-    statuses:
-      - type: project
-        target: 80%
-        threshold: 1%
-        only_pulls: true
-  
+  # No default_rules.statuses and no per-component statuses: components only feed the
+  # "components" table in the PR comment. Statuses here would each post a
+  # codecov/project/<id> and codecov/patch/<id> check on every PR (about 17 in all).
   individual_components:
     # Core automation modules - web scraping and data collection
     # Currently at 20.82% - complex Selenium-based code requiring extensive mocking
@@ -181,17 +176,6 @@ component_management:
         - "src/cqc_cpcc/my_colleges.py"
         - "src/cqc_cpcc/attendance.py"
         - "src/cqc_cpcc/find_student.py"
-      statuses:
-        - type: project
-          target: 20%  # Current baseline - web scraping modules need infrastructure
-          threshold: 5%
-          informational: true  # Don't block PRs, but track trends
-        - type: patch
-          target: 80%  # New code should be well-tested
-          # INFORMATIONAL: reported on every PR, never blocks. See the note under
-          # "Component patch statuses" at the bottom of this file -- this gate was
-          # measuring docstrings and blank lines, not test coverage.
-          informational: true
     
     # AI/LLM functionality - OpenAI, OpenRouter, prompts
     # Currently at 75.13% - close to target
@@ -199,12 +183,6 @@ component_management:
       name: AI/LLM
       paths:
         - "src/cqc_cpcc/utilities/AI/**"
-      statuses:
-        - type: project
-          target: 75%  # Realistic target based on current coverage
-          threshold: 2%
-        - type: patch
-          target: 80%
     
     # Rubric grading system - models, config, scoring
     # Currently at 84.30% - exceeds target
@@ -213,15 +191,6 @@ component_management:
       paths:
         - "src/cqc_cpcc/rubric_*.py"
         - "src/cqc_cpcc/scoring/**"
-      statuses:
-        - type: project
-          target: 84%  # Maintain current high coverage
-          threshold: 2%
-        - type: patch
-          target: 90%  # Higher standard for new critical grading logic
-          # INFORMATIONAL for the same reason as Core Automation above; the 90%
-          # target is kept because it is the right bar to report against.
-          informational: true
     
     # Exam and project grading
     # Currently at 74.76% - good baseline
@@ -231,12 +200,6 @@ component_management:
         - "src/cqc_cpcc/exam_review.py"
         - "src/cqc_cpcc/project_feedback.py"
         - "src/cqc_cpcc/error_*.py"
-      statuses:
-        - type: project
-          target: 74%  # Current baseline
-          threshold: 2%
-        - type: patch
-          target: 80%
     
     # Feedback and document generation
     # Currently at 98.98% - excellent coverage!
@@ -245,12 +208,6 @@ component_management:
       paths:
         - "src/cqc_cpcc/feedback_doc_generator.py"
         - "src/cqc_cpcc/student_feedback_builder.py"
-      statuses:
-        - type: project
-          target: 98%  # Maintain current excellent coverage
-          threshold: 1%
-        - type: patch
-          target: 95%  # High coverage for student-facing output
     
     # Utilities - general, unit-testable helper functions only.
     # NOTE: utils.py (Selenium MFA/login bridge) and selenium_util.py (WebDriver
@@ -263,12 +220,6 @@ component_management:
         - "src/cqc_cpcc/utilities/logger.py"
         - "src/cqc_cpcc/utilities/pdf_utils.py"
         - "src/cqc_cpcc/utilities/zip_grading_utils.py"
-      statuses:
-        - type: project
-          target: 63%  # Current baseline
-          threshold: 3%
-        - type: patch
-          target: 80%  # New utility code should be well-tested
     
     # Streamlit UI - user interface components
     # Tested by unit tests (AppTest) and E2E. The 25% baseline predates unit
@@ -277,11 +228,6 @@ component_management:
       name: Streamlit UI
       paths:
         - "src/cqc_streamlit_app/**"
-      statuses:
-        - type: project
-          target: 25%  # Baseline from when only E2E coverage counted
-          threshold: 5%
-          informational: true  # Don't block PRs
 
     # Browser Automation & MFA - Selenium/WebDriver-driven modules.
     # These collect submissions/instructions from BrightSpace, drive the MFA/login
@@ -298,47 +244,13 @@ component_management:
         - "src/cqc_cpcc/utilities/brightspace_fetch.py"
         - "src/cqc_cpcc/utilities/brightspace_submissions.py"
         - "src/cqc_cpcc/utilities/brightspace_writeback.py"
-      statuses:
-        - type: project
-          target: 50%  # Current baseline; tracked, not enforced
-          threshold: 5%
-          informational: true  # Don't block PRs
-        - type: patch
-          target: 80%
-          informational: true  # Reported on PRs, but never blocks
 
 # ---------------------------------------------------------------------------
-# Component patch statuses: why two of them are informational
+# History: component patch statuses were removed
 # ---------------------------------------------------------------------------
 #
-# "Core Automation" and "Rubric Grading" report their patch coverage but do not
-# block, because the number they produced was not measuring test coverage.
-#
-# Codecov's diff-to-coverage line mapping counts lines that are not executable.
-# Measured against its own per-line API on three separate PRs:
-#
-#   PR #280  my_colleges.py: of 118 reported misses, 90 were not statements
-#            (44 continuation lines, 15 blank lines, 24 docstring lines,
-#            7 comments). Ceiling with every real line covered: 71.1% vs 80%.
-#
-#   PR #267  rubric_grading.py: ALL ELEVEN reported misses were docstring lines,
-#            blank lines, or function-signature parameters. Two were not even
-#            added by that PR. coverage.py measured 100% of the statements it
-#            added. Ceiling: 88.04% vs 90%.
-#
-#   PR #281  brightspace.py: a nine-line diff containing exactly ONE statement,
-#            covered by three tests, reported at 50%.
-#
-# A control rules out the obvious explanation: files written from scratch in
-# those PRs were line-wrapped just as heavily and showed ZERO non-statement
-# misses. The artifact appears where existing files are edited -- which is
-# exactly where refactoring happens, so the gate penalised the changes most
-# worth making.
-#
-# This is the same reasoning already applied to "Browser Automation & MFA"
-# (patch) and "Core Automation" (project): keep reporting a number that is
-# useful as a trend, stop blocking on one that cannot be satisfied. The
-# repository-wide `codecov/patch` gate at 80% is unaffected and still enforces.
-#
-# If codecov's mapping is fixed, or coverage reports stop emitting
-# non-statements, revert this and the targets take effect again unchanged.
+# Component patch statuses used to post per-component checks. Codecov's
+# diff-to-coverage line mapping counts docstring, blank and continuation lines in
+# edited files as misses (PR #280, #267, #281), so those gates measured formatting,
+# not tests. All per-component statuses are gone; the components remain as a table in
+# the PR comment. The repository-wide `codecov/patch` gate at 80% still enforces.
