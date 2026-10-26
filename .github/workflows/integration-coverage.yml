@@ -45,11 +45,23 @@ jobs:
           # Determines both the install and the cache scope. Identical to the
           # unit job's groups, so the two share one cache entry.
           install-args: "--with test"
+          skip-install-on-exact-hit: "true"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build the exec-runner sandbox image
         # The Docker integration tests (tests/integration/test_program_runner_docker.py)
         # skip when this image is missing. Same tag as program_runner.RUNNER_IMAGE.
-        run: docker build -t cpcc_task_automation/exec-runner:2 docker/exec-runner
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/exec-runner
+          tags: cpcc_task_automation/exec-runner:2
+          load: true
+          # GitHub scopes cache entries by branch: PRs can reuse master and their
+          # own cache but cannot write into master’s cache.
+          cache-from: type=gha,scope=exec-runner-v2
+          cache-to: type=gha,mode=min,scope=exec-runner-v2
 
       - name: Run integration tests with coverage
         shell: bash

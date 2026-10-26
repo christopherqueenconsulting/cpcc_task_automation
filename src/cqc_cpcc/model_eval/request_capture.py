@@ -177,8 +177,8 @@ def settings() -> dict:
                              openrouter_client.OPENROUTER_APP_URL])}
 
 
-async def capture_suite(suite_id: str) -> dict:
-    """``{"requests": {case: [hashes]}, "calls": {case: [hashes]}, "outputs": {case: hash}}`` per case."""
+async def capture_suite(suite_id: str, *, requests_only: bool = False) -> dict:
+    """Capture one suite; ``requests_only`` skips the fixed-answer/output pass."""
     from cqc_cpcc.model_eval import prompt_eval
     from cqc_cpcc.model_eval import adaptive
     from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, pinned_registry
@@ -205,6 +205,8 @@ async def capture_suite(suite_id: str) -> dict:
                 except Exception:  # noqa: BLE001 - the refused send (or anything after it) ends the case
                     pass
                 requests[case.case_id] = sorted(set(sink))
+        if requests_only:
+            return {"requests": requests}
         made: list = []
         with _patched(sink, test_mode=True, calls=made):
             for case in suite.cases():
@@ -220,6 +222,12 @@ async def capture_suite(suite_id: str) -> dict:
 def capture(suite_ids: list) -> dict:
     return {"format": FORMAT, "settings": settings(),
             "suites": {s: asyncio.run(capture_suite(s)) for s in suite_ids}}
+
+
+def capture_request_hashes(suite_ids: list) -> dict:
+    """Capture only outgoing request hashes, for the no-network determinism check."""
+    return {"format": FORMAT, "settings": settings(),
+            "suites": {s: asyncio.run(capture_suite(s, requests_only=True)) for s in suite_ids}}
 
 
 def compare(head: dict, base: dict, suite_ids: list) -> dict:

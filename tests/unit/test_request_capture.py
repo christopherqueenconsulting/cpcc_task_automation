@@ -53,21 +53,25 @@ class TestCompare:
 
 
 @pytest.fixture(scope="module")
-def two_captures():
+def captures():
     ids = list(SUITE_MODULES)
-    return ids, rc.capture(ids), rc.capture(ids)
+    # One full capture supplies fixed-answer/output assertions. The second capture
+    # only needs request hashes, avoiding a duplicate pass through every suite's
+    # answer handling while still checking no-network request determinism.
+    return rc.capture(ids), rc.capture_request_hashes(ids)
 
 
 class TestCapture:
     @pytest.mark.parametrize("suite_id", list(SUITE_MODULES))
-    def test_every_suite_captures_the_same_way_twice_with_no_network(self, two_captures, suite_id):
-        ids, a, b = two_captures
+    def test_every_suite_request_hash_is_stable_with_no_network(self, captures, suite_id):
+        a, b = captures
         requests = a["suites"][suite_id]["requests"]
-        assert any(requests.values()) and rc.compare(a, b, [suite_id]) == {suite_id: None}
+        assert a["format"] == b["format"] and a["settings"] == b["settings"]
+        assert any(requests.values()) and requests == b["suites"][suite_id]["requests"]
 
     @pytest.mark.parametrize("suite_id", list(SUITE_MODULES))
-    def test_every_suite_handles_the_fixed_answer_in_some_case(self, two_captures, suite_id):
-        ids, a, b = two_captures
+    def test_every_suite_handles_the_fixed_answer_in_some_case(self, captures, suite_id):
+        a, _ = captures
         outputs = a["suites"][suite_id]["outputs"]
         assert any(not v.startswith(rc.ERROR) for v in outputs.values())
         assert any(a["suites"][suite_id]["calls"].values())
