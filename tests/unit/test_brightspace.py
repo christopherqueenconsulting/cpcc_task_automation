@@ -1,10 +1,10 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
 import datetime as DT
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, call, patch
 
 import pytest
-from selenium.common import TimeoutException
+from selenium.common import NoSuchWindowException, TimeoutException
 
 from cqc_cpcc.brightspace import BrightSpace_Course
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
@@ -105,6 +105,8 @@ class TestBrightSpaceShortWait:
         assert wait.until.call_count == 2
         short_wait.until.assert_called_once()
         driver.get.assert_called_once_with(BRIGHTSPACE_URL)
+        assert course.course_return_tab == "main-tab"
+        driver.switch_to.window.assert_any_call("main-tab")
 
     @patch("cqc_cpcc.brightspace.click_element_wait_retry")
     @patch("cqc_cpcc.brightspace.login_if_needed")
@@ -115,7 +117,7 @@ class TestBrightSpaceShortWait:
     ):
         driver = MagicMock()
         driver.window_handles = ["main-tab"]
-        driver.current_window_handle = "course-tab"
+        driver.current_window_handle = "main-tab"
         wait = MagicMock()
         short_wait = MagicMock()
         course_link = MagicMock()
@@ -137,6 +139,81 @@ class TestBrightSpaceShortWait:
         short_wait.until.assert_called_once()
         assert driver.get.call_args_list[0].args == (BRIGHTSPACE_URL,)
         assert driver.get.call_args_list[1].args == ("https://brightspace.example/course",)
+
+
+@pytest.mark.unit
+def test_close_course_tab_restores_the_original_browser_tab():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.window_handles = ["faculty-tab", "brightspace-tab"]
+    course.course_main_tab = "brightspace-tab"
+    course.course_return_tab = "faculty-tab"
+
+    with patch("cqc_cpcc.brightspace.close_tab") as mock_close_tab:
+        course.close_course_tab()
+
+    assert course.driver.switch_to.window.call_args_list == [
+        call("brightspace-tab"), call("faculty-tab"),
+    ]
+    mock_close_tab.assert_called_once_with(course.driver)
+
+
+@pytest.mark.unit
+def test_close_course_tab_tolerates_missing_brightspace_and_return_tabs():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.window_handles = ["remaining-tab"]
+    course.course_main_tab = "closed-brightspace-tab"
+    course.course_return_tab = "closed-parent-tab"
+
+    with patch("cqc_cpcc.brightspace.close_tab") as mock_close_tab:
+        course.close_course_tab()
+
+    course.driver.switch_to.window.assert_not_called()
+    mock_close_tab.assert_not_called()
+
+
+@pytest.mark.unit
+def test_open_course_tab_recovers_when_current_window_was_closed():
+    driver = MagicMock()
+    driver.window_handles = ["main-tab"]
+    wait = MagicMock()
+    short_wait = MagicMock()
+    short_wait.until.side_effect = TimeoutException()
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = driver
+    course.wait = wait
+    course.short_wait = short_wait
+    course.name = "CSC-151-B01: Intro to Java"
+    course.term_semester = "Spring"
+    course.term_year = "2026"
+
+    with (
+        patch.object(
+            type(driver), "current_window_handle", new_callable=PropertyMock,
+            side_effect=[NoSuchWindowException(), "course-tab"], create=True,
+        ),
+        patch("cqc_cpcc.brightspace.click_element_wait_retry"),
+        patch("cqc_cpcc.brightspace.login_if_needed"),
+    ):
+        assert course.open_course_tab() is False
+
+    driver.switch_to.window.assert_any_call("main-tab")
+    driver.switch_to.new_window.assert_called_once_with("tab")
+    assert course.course_return_tab == "main-tab"
+
+
+@pytest.mark.unit
+def test_open_course_tab_fails_clearly_when_no_browser_windows_remain():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.window_handles = []
+    course.driver.current_window_handle = "closed-tab"
+
+    with pytest.raises(NoSuchWindowException, match="browser has no open windows"):
+        course.open_course_tab()
+
+    course.driver.switch_to.new_window.assert_not_called()
 
 
 @pytest.mark.unit

@@ -18,8 +18,13 @@ from cqc_cpcc.utilities.selenium_util import close_tab, click_element_wait_retry
 from cqc_cpcc.utilities.utils import get_unique_names_flip_first_last, first_two_uppercase, login_if_needed, \
     LINE_DASH_COUNT
 from cqc_cpcc.withdrawals import UNKNOWN_ACTIVITY_WEEK, classify_withdrawal
-from selenium.common import TimeoutException, NoSuchElementException, ElementNotInteractableException, \
-    StaleElementReferenceException
+from selenium.common import (
+    ElementNotInteractableException,
+    NoSuchElementException,
+    NoSuchWindowException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 from selenium.webdriver import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -192,13 +197,28 @@ class BrightSpace_Course:
                 self.eva_attendance_records.items()))
 
     def close_course_tab(self):
-        # Switch back to tab
-        self.driver.switch_to.window(self.course_main_tab)
-        # Close tab when done
-        close_tab(self.driver)
+        """Close the BrightSpace tab and restore the tab that was active before it."""
+        try:
+            if self.course_main_tab in self.driver.window_handles:
+                self.driver.switch_to.window(self.course_main_tab)
+                close_tab(self.driver)
+        finally:
+            handles = self.driver.window_handles
+            if self.course_return_tab in handles:
+                self.driver.switch_to.window(self.course_return_tab)
 
     def open_course_tab(self) -> bool:
-        handles = set(self.driver.window_handles)
+        handles = self.driver.window_handles
+        try:
+            return_tab = self.driver.current_window_handle
+        except NoSuchWindowException:
+            return_tab = None
+        if return_tab not in handles:
+            if not handles:
+                raise NoSuchWindowException("Cannot open BrightSpace: browser has no open windows.")
+            return_tab = next(iter(handles))
+            self.driver.switch_to.window(return_tab)
+        self.course_return_tab = return_tab
 
         self.driver.switch_to.new_window('tab')
 
