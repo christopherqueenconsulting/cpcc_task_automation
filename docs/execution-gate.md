@@ -47,7 +47,7 @@ Docker integration tests were verified on linux/amd64 only (builder's local run:
 Docker server linux/amd64). Not checked on arm64: there the driver's stdin-read detection falls back to a
 quiet-period guess, which is untested.
 
-Workflows without `setup-java` (`unit-tests.yml`, `integration-coverage.yml`) use the runner's default JDK
+The test workflow (`unit-tests.yml`) uses the runner's default JDK
 for host tests; Java sandbox tests run inside the container, so the container's JDK (25) is what they use.
 
 To remove the image on a full rollback of the sandbox feature: `docker rmi cpcc_task_automation/exec-runner:2`
