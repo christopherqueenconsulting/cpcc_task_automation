@@ -131,24 +131,37 @@ def test_empty_text_and_summary():
     assert summarize_findings(found, limit=1).endswith("and 2 more")
 
 
+def _best_of(fn, runs=3) -> float:
+    best = float("inf")
+    for _ in range(runs):
+        start = time.perf_counter()
+        fn()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize("make", [
-    lambda: "word " * 10_000,
-    lambda: "aA" * 25_000,
-    lambda: "a_" * 25_000,
-    lambda: "the “" * 10_000,
-    lambda: "`" + "a" * 49_000 + "`" * 9,
-    lambda: "`a" * 25_000,
-    lambda: "R1 " * 17_000,
-    lambda: "45 12.50 " * 5_500,
+    lambda n: "word " * (n // 5),
+    lambda n: "aA" * (n // 2),
+    lambda n: "a_" * (n // 2),
+    lambda n: "the “" * (n // 5),
+    lambda n: "`" + "a" * (n - 10) + "`" * 9,
+    lambda n: "`a" * (n // 2),
+    lambda n: "R1 " * (n // 3),
+    lambda n: "45 12.50 " * (n // 9),
 ])
-def test_fifty_kb_input_is_fast(make):
-    text = make()
-    assert len(text) >= 49_000
+def test_fifty_kb_input_grows_roughly_linearly(make):
     glossary = build_id_glossary(CHECKLIST, PLAN)
-    start = time.perf_counter()
-    lint_student_feedback(text, glossary=glossary, hidden_inputs=("45 12.50\n",))
-    assert time.perf_counter() - start < 2.0
+
+    def run(size):
+        text = make(size)
+        return _best_of(lambda: lint_student_feedback(text, glossary=glossary, hidden_inputs=("45 12.50\n",)))
+
+    small, large = run(5_000), run(50_000)
+    assert large < 10.0  # generous ceiling for a loaded CI shard
+    # 10x the input: linear is about 10x; quadratic would be about 100x. Allow a floor for timer noise.
+    assert large < max(small, 0.005) * 40
 
 
 # ---------- seeded leaks: today's leak classes in model-text fields ----------

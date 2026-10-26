@@ -214,3 +214,13 @@ def test_internal_wording_in_the_feedback_warns_the_instructor() -> None:
     warnings = [w.value for w in at.warning if "Internal wording found; edit before handing back" in w.value]
     assert len(warnings) == 1
     assert "R2" in warnings[0] and "values_differ" in warnings[0] and "the reference" in warnings[0]
+
+
+@pytest.mark.unit
+def test_warning_tokens_from_model_text_render_no_image_or_link() -> None:
+    at = _app(_result(note="See the “![](http://example.invalid/p.png)” test. R2 is incomplete."))
+
+    warning = next(w.value for w in at.warning if "Internal wording" in w.value)
+    assert "R2" in warning
+    assert not re.search(r"(?<!\\)[\[\]]", warning)  # every bracket is escaped
+    assert "` http://example.invalid/p.png `" in warning  # the URL is inert code, not an autolink

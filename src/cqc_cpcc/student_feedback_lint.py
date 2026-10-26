@@ -47,6 +47,8 @@ MIN_HIDDEN_INPUT_CHARS = 3
 #: A glossary longer than this many ids is truncated (a hostile glossary cannot slow the scan).
 MAX_GLOSSARY_IDS = 500
 MAX_HIDDEN_INPUTS = 200
+#: Lines scanned per hidden input.
+MAX_HIDDEN_LINES = 50
 
 VERDICT_TOKENS = (
     "format_only", "text_differs", "values_differ", "order_differs", "no_output",
@@ -99,7 +101,7 @@ def _mask_code_spans(text: str) -> str:
 def _normalise_hidden(value: str) -> list[str]:
     """The strings to search for one hidden input: the whole value and each line, whitespace collapsed."""
     whole = " ".join(str(value or "").split())
-    parts = [" ".join(line.split()) for line in str(value or "").splitlines()]
+    parts = [" ".join(line.split()) for line in str(value or "").splitlines()[:MAX_HIDDEN_LINES]]
     return [p for p in dict.fromkeys([whole, *parts]) if len(p) >= MIN_HIDDEN_INPUT_CHARS]
 
 

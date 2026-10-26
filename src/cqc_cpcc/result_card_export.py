@@ -115,7 +115,7 @@ def result_card_markdown(student: str, result: RubricAssessmentResult,
     lines += ["", "## Feedback for the student", "",
               build_student_feedback(feedback_source, student_name=greeting_name)]
     if result.overall_feedback:
-        lines += ["", "## Instructor notes", "", result.overall_feedback]
+        lines += ["", "## Overall summary (shown to the student)", "", result.overall_feedback]
     return "\n".join(lines).rstrip() + "\n"
 
 

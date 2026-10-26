@@ -3598,8 +3598,9 @@ def _render_feedback_lint_warning(feedback: str, run_key: str = "") -> None:
 
     findings = _feedback_lint_findings(feedback, run_key)
     if findings:
-        st.warning(f"Internal wording found; edit before handing back: {summarize_findings(findings)}",
-                   icon=":material/edit_note:")
+        # Tokens come from model output that can quote student text, and st.warning renders Markdown.
+        st.warning("Internal wording found; edit before handing back: "
+                   + render_safe_markdown(summarize_findings(findings)), icon=":material/edit_note:")
 
 
 def _remember_feedback_view(widget_key: str) -> None:
