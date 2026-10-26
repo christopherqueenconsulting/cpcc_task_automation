@@ -30,9 +30,23 @@ _GENERIC_LABEL_RE = re.compile(r"^\s*(?:test\s*case|case|test|run)?\s*#?\d*\s*$"
 # The noun a writer may put before an id ("case T1", "requirements R2 and R3"); it is absorbed so
 # the replacement does not read "case the "Typical order" test".
 _LEAD_NOUN = r"(?:(?:test\s+cases?|cases?|tests?|runs?|inputs?|requirements?|reqs?\.?|conditions?)\s+)?"
+# A "the" before the id and a kind noun after it ("the T1 test", "the R1 requirement") are absorbed
+# too: the replacement already carries both.
+_LEAD_THE = r"(?:\bthe\s+)?"
+_TAIL_NOUN = r"(?:\s+(?:test\s+cases?|cases?|tests?|runs?|requirements?|conditions?)\b)?"
+_POSSESSIVE = r"(?P<poss>['’]s?)?"
+# "the T1 output" -> "the ... test's output": a noun after the id that belongs to the test.
+_OWNED_NOUN_RE = re.compile(r"\s+(?:outputs?|results?|inputs?)\b", re.IGNORECASE)
+_SENTENCE_END_RE = re.compile(r"(?:^|[.!?]\s+|\n\s*)$")
 _SEPARATOR = r"\s*(?:/|,|&|\band\b|\bor\b|-|–)\s*"
 _RANGE_SEPARATORS = ("-", "–")
-_CODE_SPAN_RE = re.compile(r"(`+)(.+?)\1", re.DOTALL)
+# Bounded so a run of unmatched backticks cannot make the scan quadratic on long feedback.
+_CODE_SPAN_RE = re.compile(r"(`{1,8})((?:(?!\1).){1,2000}?)\1", re.DOTALL)
+_ID_SHAPE_RE = re.compile(r"[A-Za-z]{1,4}\d{1,4}")
+#: A range wider than this ("T1-T999") is not expanded.
+MAX_RANGE = 50
+# Characters that would turn quoted text into Markdown (links, code, emphasis, HTML) in a viewer.
+_MARKUP_RE = re.compile(r"[\[\]`*<>]")
 
 
 @dataclass(frozen=True)
@@ -44,7 +58,7 @@ class IdEntry:
 
 
 def _quote(text: str) -> str:
-    text = " ".join(str(text or "").split())
+    text = " ".join(_MARKUP_RE.sub("", str(text or "")).split())
     if len(text) > MAX_QUOTED_CHARS:
         text = text[:MAX_QUOTED_CHARS].rsplit(" ", 1)[0].rstrip(",;:.") + "…"
     return f"“{text}”"
@@ -59,12 +73,16 @@ def build_id_glossary(requirements=None, execution_plan=None) -> dict:
     for case in getattr(execution_plan, "cases", None) or []:
         if getattr(case, "id", None):
             label = str(getattr(case, "label", "") or "")
-            glossary[str(case.id)] = IdEntry(KIND_TEST, "" if _GENERIC_LABEL_RE.match(label) else label)
+            # A generated label is written by a model that read the reference solution: quote it only
+            # when it carries no number (a threshold, a sentinel, an input value).
+            hidden = getattr(case, "source", "manual") == "llm" and re.search(r"\d", label)
+            glossary[str(case.id)] = IdEntry(KIND_TEST, "" if hidden or _GENERIC_LABEL_RE.match(label) else label)
     for cond in getattr(execution_plan, "conditions", None) or []:
         if getattr(cond, "id", None):
             glossary[str(cond.id)] = IdEntry(KIND_CONDITION, str(getattr(cond, "text", "") or ""))
-    # A one-character id ("M") would match too much ordinary text.
-    return {k: v for k, v in glossary.items() if len(k) >= 2}
+    # Only short letter-number ids ("R1", "T12", "M3"): a one-character id ("M") would match too much
+    # ordinary text, and an id with spaces or separators would break the grouping.
+    return {k: v for k, v in glossary.items() if _ID_SHAPE_RE.fullmatch(k)}
 
 
 def _join(items: list) -> str:
@@ -96,16 +114,23 @@ def _phrase(entries: list) -> str:
 def _expand_range(first: str, last: str, glossary: dict) -> Optional[list]:
     """``T1``..``T3`` -> ``[T1, T2, T3]`` when both ends share a prefix and every id exists."""
     a, b = re.fullmatch(r"([A-Za-z]+)(\d+)", first), re.fullmatch(r"([A-Za-z]+)(\d+)", last)
-    if not a or not b or a.group(1) != b.group(1) or int(a.group(2)) >= int(b.group(2)):
+    if not a or not b or a.group(1) != b.group(1) or not 0 < int(b.group(2)) - int(a.group(2)) <= MAX_RANGE:
         return None
     ids = [f"{a.group(1)}{n}" for n in range(int(a.group(2)), int(b.group(2)) + 1)]
     return ids if all(i in glossary for i in ids) else None
 
 
+def _possessive(phrase: str, entries: list) -> str:
+    """``the "A" test`` -> ``the "A" test's``; ``the "A" and "B" tests`` -> ``... tests'``."""
+    if entries[0].kind == KIND_TEST and phrase.endswith("tests"):
+        return phrase + "’"
+    return phrase + "’s"
+
+
 def _rewrite_plain(text: str, glossary: dict, run_re: re.Pattern, id_re: re.Pattern) -> str:
     def replace(match: re.Match) -> str:
         body = match.group("run")
-        ids = id_re.findall(body)
+        ids = [_base_id(i, glossary) for i in id_re.findall(body)]
         seps = re.findall(_SEPARATOR, body)
         expanded: list = []
         for i, current in enumerate(ids):
@@ -117,24 +142,49 @@ def _rewrite_plain(text: str, glossary: dict, run_re: re.Pattern, id_re: re.Patt
             expanded.append(current)
         entries = [glossary[i] for i in dict.fromkeys(expanded)]
         if len({e.kind for e in entries}) == 1:
-            return _phrase(entries)
-        return _join([_phrase([e]) for e in entries])
+            phrase = _phrase(entries)
+            owned = entries[0].kind == KIND_TEST and _OWNED_NOUN_RE.match(text, match.end())
+            if match.group("poss") is not None or owned:
+                phrase = _possessive(phrase, entries)
+        else:
+            phrase = _join([_phrase([e]) for e in entries])
+        if _SENTENCE_END_RE.search(text[:match.start()]):
+            phrase = phrase[:1].upper() + phrase[1:]
+        return phrase
 
     return run_re.sub(replace, text)
 
 
+def _base_id(found: str, glossary: dict) -> str:
+    """``R3a`` (a sub-item the model invented) reads as its parent ``R3``."""
+    return found if found in glossary else found[:-1]
+
+
 def humanize_ids(text: Optional[str], glossary: dict) -> Optional[str]:
-    """Replace this run's ids in ``text`` with words; quoted code (backticks) is left as is."""
+    """Replace this run's ids in ``text`` with words.
+
+    Quoted code (backticks) is left as is, except a span that is exactly one id (`` `T1` ``),
+    which is the model formatting the id, not student code.
+    """
     if not text or not glossary:
         return text
     alternatives = "|".join(re.escape(k) for k in sorted(glossary, key=len, reverse=True))
-    one = rf"(?<![A-Za-z0-9_])(?:{alternatives})(?![A-Za-z0-9_])"
+    # An optional single lowercase letter after the id covers sub-items such as "R3a".
+    one = rf"(?<![A-Za-z0-9_])(?:{alternatives})[a-z]?(?![A-Za-z0-9_])"
     id_re = re.compile(one)
-    run_re = re.compile(rf"(?i:{_LEAD_NOUN})(?P<run>{one}(?:{_SEPARATOR}{one})*)")
+    run_re = re.compile(rf"(?i:{_LEAD_THE}{_LEAD_NOUN})(?P<run>{one}(?:{_SEPARATOR}{one})*){_POSSESSIVE}"
+                        rf"(?i:{_TAIL_NOUN})")
     out, last = [], 0
     for code in _CODE_SPAN_RE.finditer(text):
         out.append(_rewrite_plain(text[last:code.start()], glossary, run_re, id_re))
-        out.append(code.group(0))
+        inner = code.group(2).strip()
+        if inner in glossary:
+            words = _rewrite_plain(inner, glossary, run_re, id_re)
+            if not _SENTENCE_END_RE.search(text[:code.start()]):
+                words = words[:1].lower() + words[1:]
+            out.append(words)
+        else:
+            out.append(code.group(0))
         last = code.end()
     out.append(_rewrite_plain(text[last:], glossary, run_re, id_re))
     return "".join(out)

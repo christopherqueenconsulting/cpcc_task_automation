@@ -673,7 +673,10 @@ async def grade_with_rubric(
         # The prompt names requirements and test cases by short ids (R1, T1) to save tokens; the
         # student never sees that mapping, so every id the model copied into the feedback goes
         # back to words here (deterministic, no model call).
-        result = humanize_result_ids(result, requirements=requirements, execution_plan=execution_plan)
+        try:
+            result = humanize_result_ids(result, requirements=requirements, execution_plan=execution_plan)
+        except Exception as exc:  # noqa: BLE001 - a wording pass must never fail a grade
+            logger.warning("Feedback id rewrite skipped (%s)", type(exc).__name__)
 
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
