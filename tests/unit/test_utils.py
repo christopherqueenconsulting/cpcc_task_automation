@@ -1,5 +1,6 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
+import glob
 import os
 import pytest
 import tempfile
@@ -650,21 +651,25 @@ class TestBrightSpaceZipPicker:
         src = self._make_zip(tmp_path)
         keep = {"Alice_123/sol.cpp", "Bob_456/sol.cpp"}
         out = _rebuild_zip_from_kept(src, keep)
+        before = set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*")))
         ok, detail = _validate_submissions_zip(out, keep)
         assert ok is True
         assert detail == "2"  # two student folders survive
+        assert set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*"))) == before
 
     def test_failed_rebuilt_zip_validation_removes_student_archive(self, tmp_path):
         from cqc_streamlit_app.utils import _validate_submissions_zip
 
         out = tmp_path / "invalid-rebuilt.zip"
         out.write_bytes(b"not a valid zip")
+        before = set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*")))
 
         ok, detail = _validate_submissions_zip(str(out), {"Alice_123/sol.cpp"})
 
         assert ok is False
         assert detail
         assert not out.exists()
+        assert set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*"))) == before
 
     def test_deselecting_a_student_drops_their_folder(self, tmp_path):
         import zipfile

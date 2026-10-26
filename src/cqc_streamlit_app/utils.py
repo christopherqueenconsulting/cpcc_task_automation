@@ -2191,12 +2191,13 @@ def _validate_submissions_zip(zip_path: str, keep_arcs: set) -> tuple[bool, str]
         os.path.splitext(arc)[1].lstrip(".").lower()
         for arc in keep_arcs if os.path.splitext(arc)[1]
     })
+    submissions = {}
     try:
         from cqc_cpcc.utilities.zip_grading_utils import (
             extract_student_submissions_from_zip,
         )
         submissions = extract_student_submissions_from_zip(zip_path, kept_extensions)
-        return True, str(len(submissions))
+        detail = str(len(submissions))
     except Exception as e:  # noqa: BLE001
         # This helper is only used to validate newly rebuilt preview ZIPs. If the
         # grader cannot parse one, discard the student-file archive immediately.
@@ -2205,6 +2206,15 @@ def _validate_submissions_zip(zip_path: str, keep_arcs: set) -> tuple[bool, str]
         except FileNotFoundError:
             pass
         return False, str(e)
+    finally:
+        # Validation needs only the parsed student count, not the extracted copies.
+        for submission in submissions.values():
+            for temp_path in submission.files.values():
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+    return True, detail
 
 
 def render_zip_preview_editor(fetch_result, key_prefix: str,
