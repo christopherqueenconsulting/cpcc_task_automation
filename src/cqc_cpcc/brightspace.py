@@ -574,7 +574,7 @@ class BrightSpace_Course:
                         if len(student_names) == len(completed_dates):
                             break  # Success, exit loop
                         attempts += 1
-                        logger.warning(
+                        logger.warn(
                             "Attempt %d: Mismatched lengths for student names and completed dates for assignment: %s | Student Names: %s | Completed Dates: %s | .....retrying." % (
                                 attempts, au, len(student_names), len(completed_dates)))
 
@@ -855,7 +855,7 @@ class BrightSpace_Course:
                         if len(student_names) == len(completed_dates):
                             break  # Success, exit loop
                         attempts += 1
-                        logger.warning(
+                        logger.warn(
                             "Attempt %d: Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s | .....retrying." % (
                                 attempts, qu, len(student_names), len(completed_dates)))
 
@@ -1007,7 +1007,7 @@ class BrightSpace_Course:
                         if len(student_names) == len(post_dates):
                             break  # Success, exit loop
                         attempts += 1
-                        logger.warning(
+                        logger.warn(
                             "Attempt %d: Mismatched lengths for student names and post dates for discussion: %s | Student Names: %s | Post Dates: %s | .....retrying." % (
                                 attempts, du, len(student_names), len(post_dates)))
 
