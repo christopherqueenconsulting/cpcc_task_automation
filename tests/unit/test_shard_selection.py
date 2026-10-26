@@ -10,7 +10,7 @@ from tests.unit import conftest as shard_conftest
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
-UNIT_FILES = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "tests/unit").glob("test_*.py"))
+UNIT_FILES = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "tests/unit").rglob("test_*.py"))
 
 
 def _items(files, per_file=3):

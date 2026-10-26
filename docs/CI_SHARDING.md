@@ -34,6 +34,12 @@ Drop `-n auto --dist loadfile` for a serial run, and drop the two variables to r
 ## Coverage
 
 Each shard uploads its own `coverage.xml` to Codecov with flag `unit` and name
-`unit-coverage-<shard>`; Codecov merges them. `codecov.yml` therefore waits for 4 uploads
-(`notify.after_n_builds` and `comment.after_n_builds`): two unit shards, integration, e2e.
-Changing the shard count means changing that number too; the contract test checks it.
+`unit-coverage-<shard>`, plus its own test results; Codecov merges them.
+
+`codecov.yml` waits for 8 uploads (`notify.after_n_builds` and `comment.after_n_builds`):
+(2 unit shards + integration + e2e) x (coverage + test-results). Test-results uploads count as
+builds, not only coverage uploads. Evidence, PR #510 (head 3f21b76, with the value at 3): e2e
+finished 02:38:49Z and integration 02:39:39Z, and Codecov posted a red 50% comment at
+02:39:43Z while unit-tests was still running; only 2 coverage uploads had landed, but e2e and
+integration had each sent 2 uploads, so 4 >= 3. Changing the shard count means changing that
+number too; `test_codecov_upload_contract.py` counts both actions, matrix included.

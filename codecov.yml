@@ -16,19 +16,21 @@ codecov:
   max_report_age: off
   #max_report_age can be listed in hours '#h' (hours) or '#d' (days)
 
-  # Wait for all four coverage uploads on a commit (unit-coverage-1 and unit-coverage-2 from
-  # the two unit shards, integration-coverage, e2e-coverage; none path-filtered) before posting
-  # any status. Without this, codecov/patch is computed from whichever upload lands first
-  # (usually e2e or integration) and reports a false low patch figure until the unit uploads
-  # arrive. Codecov counts uploads, not flags: re-running one workflow uploads again for the
-  # same commit and can reach 4 early, so re-run all three coverage workflows together.
-  # merge_group and push-to-master commits also get the 4 uploads (patch is only_pulls, so no
-  # patch status is expected there). The later codecov/test-results-action step in each workflow
-  # uploads test results, not coverage, and is not one of the 4.
+  # Wait for ALL Codecov uploads on a commit before posting any status: 8 = (unit shard 1 and
+  # shard 2) x (coverage + test-results) + integration x 2 + e2e x 2. None is path-filtered.
+  # Codecov counts every upload as a build, and codecov/test-results-action uploads count too,
+  # not only codecov-action coverage uploads. Evidence: on PR #510 (head 3f21b76, when this was
+  # 3) e2e finished 02:38:49Z and integration 02:39:39Z, and Codecov posted its comment (red,
+  # 50%) at 02:39:43Z while unit-tests was still running: only 2 coverage uploads had landed,
+  # but e2e and integration had each sent 2 uploads (coverage + test results) = 4 >= 3.
+  # Without the full count, codecov/patch is computed from a partial report. Re-running one
+  # workflow uploads again for the same commit and can reach the count early, so re-run all
+  # three workflows together. merge_group and push-to-master commits also get all 8 (patch is
+  # only_pulls, so no patch status is expected there).
   # tests/unit/test_codecov_upload_contract.py fails if this number and the workflows disagree;
   # change the shard count and this number together.
   notify:
-    after_n_builds: 4
+    after_n_builds: 8
 
 # Coverage analysis configuration
 coverage:
@@ -80,8 +82,8 @@ coverage:
         # Only evaluate on pull requests
         only_pulls: true
 
-        # Fail if the commit has no coverage at all. Note: with notify.after_n_builds: 4, a commit
-        # that gets fewer than 4 uploads (a job failed before its upload step, a fork PR without
+        # Fail if the commit has no coverage at all. Note: with notify.after_n_builds: 8, a commit
+        # that gets fewer than 8 uploads (a job failed before its upload step, a fork PR without
         # the token) gets NO codecov/patch status, not a failure. Re-run the coverage workflows
         # for that commit, or check its upload count on the Codecov commit page.
         if_not_found: failure
@@ -115,8 +117,8 @@ comment:
   # Require changes to post new comment
   require_changes: false
 
-  # Same as codecov.notify.after_n_builds: no PR comment until all four uploads are in.
-  after_n_builds: 4
+  # Same as codecov.notify.after_n_builds: no PR comment until all eight uploads are in.
+  after_n_builds: 8
 
 # Ignore patterns - exclude files from coverage analysis
 # These match the patterns in pyproject.toml [tool.coverage.run] omit

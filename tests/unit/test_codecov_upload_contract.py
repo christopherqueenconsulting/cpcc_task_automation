@@ -1,4 +1,7 @@
-"""codecov.yml after_n_builds must equal the coverage uploads the three workflows make.
+"""codecov.yml after_n_builds must equal ALL Codecov uploads the three workflows make.
+
+Coverage (codecov-action) and test-results (test-results-action) uploads both count as
+builds; PR #510 got a premature comment because only coverage uploads were counted.
 
 If they disagree, Codecov either never posts codecov/patch (waits for uploads that never
 come) or posts it early from a partial report. Matrix jobs count once per matrix entry.
@@ -12,6 +15,7 @@ import yaml
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[2]
+UPLOAD_ACTIONS = ("codecov/codecov-action@", "codecov/test-results-action@")
 COVERAGE_WORKFLOWS = ("unit-tests.yml", "integration-coverage.yml", "e2e-coverage.yml")
 
 
@@ -33,7 +37,7 @@ def _uploads(workflow: str) -> int:
         n = sum(
             1
             for step in job.get("steps", [])
-            if str(step.get("uses", "")).startswith("codecov/codecov-action@")
+            if str(step.get("uses", "")).startswith(UPLOAD_ACTIONS)
         )
         total += n * _matrix_size(job)
     return total
