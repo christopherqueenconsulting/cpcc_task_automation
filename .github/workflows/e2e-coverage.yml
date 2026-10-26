@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           echo "Installing Playwright Chromium browser..."
-          poetry run playwright install chromium --with-deps --only-shell
+          poetry run playwright install chromium --only-shell
 
       - name: Run E2E tests with coverage
         shell: bash
