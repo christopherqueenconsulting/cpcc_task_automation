@@ -3579,6 +3579,29 @@ def render_safe_markdown(text: str) -> str:
     return "\n".join(out)
 
 
+def _feedback_lint_findings(feedback: str, run_key: str = "") -> list:
+    """Internal wording in the student feedback: ids, verdict words, grading mechanics, hidden test
+    inputs and code identifiers (``student_feedback_lint``). Warn-only; it never changes the text."""
+    from cqc_cpcc.feedback_ids import build_id_glossary
+    from cqc_cpcc.student_feedback_lint import lint_student_feedback
+
+    checklist = st.session_state.get("active_requirement_checklist")
+    plan = (st.session_state.get("grading_inputs_by_key", {}).get(run_key, {})
+            .get("kwargs", {}).get("execution_plan")) if run_key else None
+    # A sample case is copied from the instructions, so the student already has its input.
+    hidden = [c.stdin for c in (getattr(plan, "cases", None) or []) if getattr(c, "source", "") != "sample"]
+    return lint_student_feedback(feedback, glossary=build_id_glossary(checklist, plan), hidden_inputs=hidden)
+
+
+def _render_feedback_lint_warning(feedback: str, run_key: str = "") -> None:
+    from cqc_cpcc.student_feedback_lint import summarize_findings
+
+    findings = _feedback_lint_findings(feedback, run_key)
+    if findings:
+        st.warning(f"Internal wording found; edit before handing back: {summarize_findings(findings)}",
+                   icon=":material/edit_note:")
+
+
 def _remember_feedback_view(widget_key: str) -> None:
     st.session_state[FEEDBACK_SOURCE_PREF] = st.session_state[widget_key]
 
@@ -3631,9 +3654,12 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
             with st.container(border=True):
                 st.markdown(render_safe_markdown(feedback))
         copy_to_clipboard_button(feedback, "Copy feedback as Markdown", key=f"copy_feedback_{student_name}")
+        _render_feedback_lint_warning(feedback, run_key)
         st.divider()
-        st.markdown("**Instructor notes**")
-        st.caption("Not for the student.")
+        # The student reads this text too: it is the summary at the top of the feedback above.
+        st.markdown("**Overall summary**")
+        st.caption("As the grader wrote it. The student sees it at the top of the feedback, "
+                   "minus any line that mentions a score.")
         st.markdown(render_safe_markdown(result.overall_feedback or ""))
     with tabs[1]:
         st.dataframe(

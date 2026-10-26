@@ -188,3 +188,29 @@ def test_choice_carries_to_the_next_student_opened() -> None:
 
     assert at.toggle(key="student_feedback_show_source_Student B").value is True
     assert [c.language for c in at.code if c.language == "markdown"] == ["markdown"]
+
+
+@pytest.mark.unit
+def test_overall_feedback_is_not_labelled_instructor_only() -> None:
+    at = _app(_result(note="You built a working program."))
+
+    shown = [m.value for m in at.markdown] + [c.value for c in at.caption]
+    assert not any("Instructor notes" in v or "Not for the student" in v for v in shown)
+    assert "**Overall summary**" in shown
+
+
+@pytest.mark.unit
+def test_clean_feedback_shows_no_internal_wording_warning() -> None:
+    at = _app(_result(note="You built a working program."))
+
+    assert not at.exception
+    assert not [w for w in at.warning if "Internal wording" in w.value]
+
+
+@pytest.mark.unit
+def test_internal_wording_in_the_feedback_warns_the_instructor() -> None:
+    at = _app(_result(note="R2 is incomplete: values_differ against the reference."))
+
+    warnings = [w.value for w in at.warning if "Internal wording found; edit before handing back" in w.value]
+    assert len(warnings) == 1
+    assert "R2" in warnings[0] and "values_differ" in warnings[0] and "the reference" in warnings[0]
