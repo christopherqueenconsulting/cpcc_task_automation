@@ -17,6 +17,12 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   merge_group:
 
+concurrency:
+  # Cancel a superseded PR run. Never cancel merge_group or push runs:
+  # cancelling a merge-queue run evicts the PR from the queue.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   actions: read
@@ -31,6 +37,7 @@ env:
 jobs:
   model-registry-guard:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v7

@@ -17,14 +17,33 @@ permissions:
   contents: read
   pull-requests: read
 
+# One run per PR head: a new push cancels the superseded run. merge_group and push runs are
+# never cancelled (the queue and master history need every verdict).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: "3.12"
   POETRY_VERSION: "1.7.1"
 
 jobs:
-  unit-tests:
+  # Two shards, each running pytest-xdist inside. tests/unit/conftest.py keeps a whole FILE in
+  # one shard (UNIT_SHARDS / UNIT_SHARD), so module fixtures never run twice. Design and local
+  # use: docs/CI_SHARDING.md. The job name carries the matrix value; the REQUIRED check is the
+  # `unit-tests` gate job below, not these.
+  shard:
+    name: Unit shard ${{ matrix.shard }}/2
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      UNIT_SHARDS: "2"
+      UNIT_SHARD: ${{ matrix.shard }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -38,15 +57,45 @@ jobs:
           # Determines both the install and the cache scope. Identical to the
           # integration job's groups, so the two share one cache entry.
           install-args: "--with test"
+          # An exact venv-cache hit is already the finished environment.
+          skip-install-on-exact-hit: "true"
 
-      - name: Run unit tests
+      - name: Run unit tests (shard ${{ matrix.shard }} of 2)
         shell: bash
         run: |
-          echo "Running unit tests with pytest..."
-          poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-branch --cov-report=xml --junitxml=junit-unit.xml -o junit_family=legacy --durations=25
+          echo "Running unit tests shard ${UNIT_SHARD}/${UNIT_SHARDS} with pytest..."
+          poetry run pytest -m unit --ignore=tests/e2e -n auto --dist loadfile --cov=src --cov-branch --cov-report=xml --junitxml=junit-unit.xml -o junit_family=legacy --durations=25
 
+      # Collected-count guard (read by the gate): this shard's test count from its own junit
+      # file, and, from shard 2 only, the UNSHARDED collection count. The gate fails if the
+      # shard counts do not add up to the full count, so a conftest bug that drops a file from
+      # both shards cannot pass.
+      - name: Record collected counts
+        shell: bash
+        run: |
+          python3 - <<'PY' > "count-${UNIT_SHARD}.txt"
+          import xml.etree.ElementTree as ET
+          root = ET.parse("junit-unit.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+          print(sum(int(s.get("tests", 0)) for s in suites))
+          PY
+          if [ "${UNIT_SHARD}" = "2" ]; then
+            env -u UNIT_SHARDS -u UNIT_SHARD poetry run pytest -m unit --ignore=tests/e2e --collect-only -q -p no:cacheprovider \
+              | sed -nE 's#^([0-9]+)(/[0-9]+)? tests? collected.*#\1#p' > count-full.txt
+          fi
+          echo "shard ${UNIT_SHARD} count: $(cat count-${UNIT_SHARD}.txt)"
+          [ "${UNIT_SHARD}" != "2" ] || echo "unsharded count: $(cat count-full.txt)"
+
+      - name: Upload collected counts
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-count-${{ matrix.shard }}
+          path: count-*.txt
+          retention-days: 1
+
+      # Once per run, in shard 1 only; a failure here fails shard 1 and so the gate.
       - name: Prompt registry (changed prompts bumped their version)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && matrix.shard == 1
         shell: bash
         env:
           BASE_REF: ${{ github.base_ref }}
@@ -57,32 +106,32 @@ jobs:
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
-        # Skip Codecov upload for Dependabot PRs to reduce unnecessary uploads
-        # Still run if tests pass/fail (always()), but not for dependabot PRs
-        if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
+        # Skip Codecov upload for Dependabot PRs to reduce unnecessary uploads.
+        # Runs whether tests pass or fail, but not when the run was cancelled.
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
         with:
-          # Name for this upload
-          name: unit-coverage
-          
+          # Distinct name per shard. Both use flag `unit`; Codecov merges them.
+          name: unit-coverage-${{ matrix.shard }}
+
           # Codecov token for authentication
           token: ${{ secrets.CODECOV_TOKEN }}
-          
+
           # Coverage file(s) to upload
           files: ./coverage.xml
           # Upload only this job's report. Without this the uploader also picks up
           # any other coverage*.xml in the checkout (stale ones were once committed)
           # and Codecov merges their old line numbers into the new report.
           disable_search: true
-          
+
           # Flags to categorize this upload
           flags: unit
-          
+
           # Fail CI if upload fails (ensures patch gate is meaningful)
           fail_ci_if_error: true
-          
+
           # Verbose output for debugging
           verbose: true
-      
+
       - name: Upload test results to Codecov
         # Upload test results even if tests fail (using !cancelled())
         if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
@@ -91,3 +140,41 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: unit
           file: ./junit-unit.xml
+
+  # `unit-tests` is the REQUIRED check name in branch protection and the merge queue. A matrix
+  # job's name carries its matrix value, so this aggregate keeps the exact name reporting.
+  # Renaming or dropping it silently un-gates the unit lane.
+  #
+  # `if: always()` so a failed or cancelled shard still produces a verdict rather than leaving
+  # the required check pending; only `success` passes.
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: shard
+    if: always()
+    steps:
+      - name: Every shard passed
+        env:
+          SHARD_RESULT: ${{ needs.shard.result }}
+        run: |
+          echo "shard matrix result: ${SHARD_RESULT}"
+          [ "${SHARD_RESULT}" = "success" ] || {
+            echo "::error::Unit shards did not all pass (matrix result: ${SHARD_RESULT})."
+            exit 1
+          }
+
+      - name: Download collected counts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: unit-count-*
+          merge-multiple: true
+
+      # shard 1 + shard 2 must equal the unsharded collection (every test in exactly one shard).
+      - name: Shard counts add up to the full collection
+        run: |
+          a=$(cat count-1.txt); b=$(cat count-2.txt); full=$(cat count-full.txt)
+          echo "shard 1: ${a}, shard 2: ${b}, unsharded: ${full}"
+          [ -n "${full}" ] && [ "$((a + b))" -eq "${full}" ] || {
+            echo "::error::Shard counts (${a} + ${b}) differ from the unsharded count (${full}): tests were dropped or duplicated."
+            exit 1
+          }

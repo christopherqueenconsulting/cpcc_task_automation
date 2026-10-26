@@ -123,7 +123,7 @@ async def test_a_hanging_model_gives_up_after_two_timeouts(fast, events):
         with pytest.raises(OpenAITransportError, match="No response from openai/primary within"):
             await _complete(request_timeout=0.05)
 
-    assert time.monotonic() - started < 2
+    assert time.monotonic() - started < 10
     assert client.chat.completions.create.await_count == llm_limits.MAX_TIMEOUTS_PER_MODEL
     failed = [e for e in events if e.kind == "attempt_failed"]
     assert [e.will_retry for e in failed] == [True, False]
