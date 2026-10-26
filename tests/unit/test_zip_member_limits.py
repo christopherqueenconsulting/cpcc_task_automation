@@ -44,6 +44,20 @@ class TestMemberLimits:
             extract_student_submissions_from_zip(zip_path, ['.java'])
         assert _temp_files() == before
 
+    @pytest.mark.parametrize("case", ["size", "ratio"])
+    def test_rejected_member_error_does_not_expose_student_filename(self, tmp_path, monkeypatch, case):
+        student_name = "Jane Example Student-987654"
+        if case == "size":
+            monkeypatch.setattr(z, "MAX_MEMBER_BYTES", 100)
+            payload = "x" * 500
+        else:
+            payload = "0" * (3 * 1024 * 1024)
+        zip_path = _write_zip(tmp_path / f"private-{case}.zip", {
+            f"{student_name}/Main.java": payload})
+        with pytest.raises(ValueError) as exc:
+            extract_student_submissions_from_zip(zip_path, ['.java'])
+        assert student_name not in str(exc.value)
+
     def test_huge_ratio_member_is_rejected_before_any_read(self, tmp_path):
         zip_path = _write_zip(tmp_path / "ratio.zip", {
             "Student A/Main.java": JAVA, "Student B/Zeros.txt": "0" * (3 * 1024 * 1024)})

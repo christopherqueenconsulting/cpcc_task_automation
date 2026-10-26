@@ -480,7 +480,7 @@ def _member_limit(name: str, used: int) -> tuple[int, str]:
     remaining = MAX_TOTAL_UNCOMPRESSED_BYTES - used
     limit = min(MAX_MEMBER_BYTES, remaining)
     if limit == MAX_MEMBER_BYTES:
-        what = f"{name!r} expands to more than {_mib(MAX_MEMBER_BYTES)}"
+        what = f"A file expands to more than {_mib(MAX_MEMBER_BYTES)}"
     else:
         what = f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} in total"
     return limit, str(_bomb_error(what))
@@ -512,14 +512,14 @@ def rebuild_zip_from_members(src_zip_path: str, out_zip_path: str, keep_arcs) ->
 def _check_member_before_read(info: zipfile.ZipInfo, used: int) -> None:
     """Reject a member whose header already says it is too big or suspiciously packed."""
     if info.file_size > MAX_MEMBER_BYTES:
-        raise _bomb_error(f"{info.filename!r} expands to more than {_mib(MAX_MEMBER_BYTES)}")
+        raise _bomb_error(f"A file expands to more than {_mib(MAX_MEMBER_BYTES)}")
     if used + info.file_size > MAX_TOTAL_UNCOMPRESSED_BYTES:
         raise _bomb_error(
             f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} in total")
     if info.file_size > RATIO_MIN_BYTES and (
             info.compress_size <= 0 or info.file_size / info.compress_size > MAX_COMPRESSION_RATIO):
         raise _bomb_error(
-            f"{info.filename!r} is compressed more than {MAX_COMPRESSION_RATIO}:1")
+            f"A file is compressed more than {MAX_COMPRESSION_RATIO}:1")
 
 
 def _has_accepted_ext(file_name: str, accepted_file_types: list[str]) -> bool:
