@@ -90,6 +90,31 @@ class TestReadFileMarkdownDecoding:
 
 
 @pytest.mark.unit
+def test_read_file_docx_preserves_paragraphs_then_json_tables():
+    import docx
+
+    document = docx.Document()
+    document.add_paragraph("Before table")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Name"
+    table.cell(0, 1).text = "Value"
+    table.cell(1, 0).text = "Ada"
+    table.cell(1, 1).text = "42"
+    document.add_paragraph("After table")
+    path = _write_tmp(b"", ".docx", binary=True)
+    document.save(path)
+    try:
+        content = read_file(path)
+    finally:
+        os.remove(path)
+
+    assert content == (
+        "Before table\n\nAfter table\n\n"
+        '[{"0":"Name","1":"Value"},{"0":"Ada","1":"42"}]'
+    )
+
+
+@pytest.mark.unit
 class TestFirstTwoUppercase:
     """Test the first_two_uppercase function."""
     

@@ -60,6 +60,19 @@ jobs:
           # An exact venv-cache hit is already the finished environment.
           skip-install-on-exact-hit: "true"
 
+      # Community Cloud prefers requirements.txt and processes it with uv where
+      # possible. Keep the generated deployment manifest in sync with Poetry's lock.
+      - name: Set up uv for dependency export
+        if: matrix.shard == 1
+        uses: astral-sh/setup-uv@v9.0.0
+      - name: Verify Streamlit requirements export
+        if: matrix.shard == 1
+        shell: bash
+        run: |
+          uv tool run --from poetry==2.5.1 --with poetry-plugin-export==1.10.1 \
+            poetry export --without-hashes --format=requirements.txt > "$RUNNER_TEMP/requirements.txt"
+          diff -u requirements.txt "$RUNNER_TEMP/requirements.txt"
+
       # What the runner gives xdist. `-n auto` uses psutil physical cores (2 of 4 vCPUs) when psutil imports.
       - name: CPU diagnostic
         shell: bash

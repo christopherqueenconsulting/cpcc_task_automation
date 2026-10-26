@@ -11,10 +11,10 @@ from random import randint
 from typing import Optional, Annotated, List, Union
 
 import docx
+import docx2txt
 import mammoth
 # import markdownify
 import pandas as pd
-import textract
 from bs4 import BeautifulSoup
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import IS_GITHUB_ACTION
@@ -297,26 +297,17 @@ def merge_lists(list1, list2):
         return list1 + list2
 
 
-def convert_tables_to_json_in_tmp__file(doc: Document) -> str:
+def convert_tables_to_json_in_tmp_file(doc: Document) -> str:
+    """Replace Word tables with JSON paragraphs and save a temporary DOCX."""
     for table in doc.tables:
         data = [[cell.text for cell in row.cells] for row in table.rows]
-        df = pd.DataFrame(data)
-
-        # Remove the table
         t = table._element
-        parent = t.getparent()
-        parent.remove(t)
-
-        # Add new json string to the parent in its place
-        doc.add_paragraph(df.to_json(orient="records"))
-
-        # Clear the table reference
+        t.getparent().remove(t)
+        doc.add_paragraph(pd.DataFrame(data).to_json(orient="records"))
         t._t = t._element = None
 
-    # Save to temp file
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
     doc.save(temp_file.name)
-
     return temp_file.name
 
 
@@ -567,20 +558,11 @@ Please manually review this video file for grading."""
         contents = convert_xlsx_to_markdown(file_path)
     # If file ends in .docx will convert it to json and return
     elif file_extension == ".docx":
-        # read in a document
-        my_doc = docx.Document(file_path)
-
-        # Find any tables and replace with json strings
-        tmp_file = convert_tables_to_json_in_tmp__file(my_doc)
-
-        # coerce to JSON using the standard options
-
-        # contents = simplify(my_doc)
-
-        # contents = textract.parsers.process(file_path)
-        # print("Extracting contents from: %s" % tmp_file)
-        contents = textract.process(tmp_file).decode('utf-8')
-        os.remove(tmp_file)
+        tmp_file = convert_tables_to_json_in_tmp_file(docx.Document(file_path))
+        try:
+            contents = docx2txt.process(tmp_file)
+        finally:
+            os.remove(tmp_file)
 
     else:
 
