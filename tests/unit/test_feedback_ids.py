@@ -45,9 +45,9 @@ GLOSSARY = build_id_glossary(CHECKLIST, PLAN)
     ("so T1-T3 differ",
      "so the \u201cCash purchase\u201d, \u201cCoin purchase\u201d and \u201cRedeem tokens\u201d tests differ"),
     ("so T4 crashes",
-     "so one of the test runs crashes"),
+     "so a test run crashes"),
     ("so T3 and T4 differ",
-     "so the \u201cRedeem tokens\u201d test and one other test run differ"),
+     "so the \u201cRedeem tokens\u201d test and another test run differ"),
     ("so M1 passes",
      "so the \u201cInstructor case\u201d test passes"),
     ("so R1 is missing",
@@ -64,6 +64,12 @@ GLOSSARY = build_id_glossary(CHECKLIST, PLAN)
      "so the requirement \u201cRead the number of tokens to buy\u201d and the \u201cCash purchase\u201d test"),
     ("Done. T2 fails.\nT3 too",
      "Done. The \u201cCoin purchase\u201d test fails.\nThe \u201cRedeem tokens\u201d test too"),
+    ("see the T4 crash",
+     "see a test run\u2019s crash"),
+    ("so T3/T4 output differs",
+     "so the \u201cRedeem tokens\u201d test and another test run\u2019s output differs"),
+    ("Notes:\n- T1 fails",
+     "Notes:\n- The \u201cCash purchase\u201d test fails"),
     ("output of `T1` differs",
      "output of the \u201cCash purchase\u201d test differs"),
 ])
@@ -135,7 +141,7 @@ def test_generated_labels_with_numbers_are_not_quoted():
         TestCase(id="T2", label="Sentinel 999 ends loop", stdin="999\n", source="manual"),
         TestCase(id="T3", label="[x](http://example.invalid) *bold*", stdin="1\n", source="manual")])
     glossary = build_id_glossary(None, plan)
-    assert humanize_ids("so T1 fails", glossary) == "so one of the test runs fails"
+    assert humanize_ids("so T1 fails", glossary) == "so a test run fails"
     assert "999" in humanize_ids("so T2 fails", glossary)
     out = humanize_ids("so T3 fails", glossary)
     assert "](" not in out and "*" not in out and "[" not in out

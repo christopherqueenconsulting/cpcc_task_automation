@@ -36,8 +36,9 @@ _LEAD_THE = r"(?:\bthe\s+)?"
 _TAIL_NOUN = r"(?:\s+(?:test\s+cases?|cases?|tests?|runs?|requirements?|conditions?)\b)?"
 _POSSESSIVE = r"(?P<poss>['’]s?)?"
 # "the T1 output" -> "the ... test's output": a noun after the id that belongs to the test.
-_OWNED_NOUN_RE = re.compile(r"\s+(?:outputs?|results?|inputs?)\b", re.IGNORECASE)
-_SENTENCE_END_RE = re.compile(r"(?:^|[.!?]\s+|\n\s*)$")
+_OWNED_NOUN_RE = re.compile(r"\s+(?:outputs?|results?|inputs?|crash|failure|error|timeout)\b",
+                            re.IGNORECASE)
+_SENTENCE_END_RE = re.compile(r"(?:\A|[.!?]\s+|\n\s*(?:[-*\u2022]\s+|\d+[.)]\s+)?)\Z")
 _SEPARATOR = r"\s*(?:/|,|&|\band\b|\bor\b|-|–)\s*"
 _RANGE_SEPARATORS = ("-", "–")
 # Bounded so a run of unmatched backticks cannot make the scan quadratic on long feedback.
@@ -98,11 +99,11 @@ def _phrase(entries: list) -> str:
         labels = [_quote(e.text) for e in entries if e.text]
         generic = len(entries) - len(labels)
         if not labels:
-            return "one of the test runs" if generic == 1 else "some of the test runs"
+            return "a test run" if generic == 1 else "several test runs"
         noun = "test" if len(labels) == 1 else "tests"
         out = f"the {_join(labels)} {noun}"
         if generic:
-            out += " and " + ("one other test run" if generic == 1 else f"{generic} other test runs")
+            out += " and " + ("another test run" if generic == 1 else f"{generic} other test runs")
         return out
     noun = "requirement" if kind == KIND_REQUIREMENT else "condition"
     texts = [_quote(e.text) for e in entries if e.text]
@@ -122,7 +123,7 @@ def _expand_range(first: str, last: str, glossary: dict) -> Optional[list]:
 
 def _possessive(phrase: str, entries: list) -> str:
     """``the "A" test`` -> ``the "A" test's``; ``the "A" and "B" tests`` -> ``... tests'``."""
-    if entries[0].kind == KIND_TEST and phrase.endswith("tests"):
+    if phrase.endswith(("tests", "runs")):
         return phrase + "’"
     return phrase + "’s"
 
@@ -148,11 +149,16 @@ def _rewrite_plain(text: str, glossary: dict, run_re: re.Pattern, id_re: re.Patt
                 phrase = _possessive(phrase, entries)
         else:
             phrase = _join([_phrase([e]) for e in entries])
-        if _SENTENCE_END_RE.search(text[:match.start()]):
+        if _starts_sentence(text, match.start()):
             phrase = phrase[:1].upper() + phrase[1:]
         return phrase
 
     return run_re.sub(replace, text)
+
+
+def _starts_sentence(text: str, start: int) -> bool:
+    """True at the start of the text, a sentence, a line or a list item (only a short tail is read)."""
+    return bool(_SENTENCE_END_RE.search(text[max(0, start - 16):start])) if start else True
 
 
 def _base_id(found: str, glossary: dict) -> str:
@@ -180,7 +186,7 @@ def humanize_ids(text: Optional[str], glossary: dict) -> Optional[str]:
         inner = code.group(2).strip()
         if inner in glossary:
             words = _rewrite_plain(inner, glossary, run_re, id_re)
-            if not _SENTENCE_END_RE.search(text[:code.start()]):
+            if not _starts_sentence(text, code.start()):
                 words = words[:1].lower() + words[1:]
             out.append(words)
         else:
