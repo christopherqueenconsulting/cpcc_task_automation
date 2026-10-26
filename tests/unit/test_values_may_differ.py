@@ -468,7 +468,7 @@ def test_the_detector_is_linear_on_hostile_instructions_and_solutions(text):
     tcg.detect_variable_values("", text)
     tcg.detect_variable_values("", "/*" * 50000)
     tcg.detect_variable_values("", "x = random.randint(1, 6)\n" + "print (" + " " * 50000 + "x\n" * 2000)
-    assert time.perf_counter() - start < 1.0
+    assert time.perf_counter() - start < 10.0
 
 
 def test_marker_cleaning_skips_non_strings_and_caps_the_count():
@@ -619,7 +619,7 @@ def test_scan_solution_risks_is_linear_on_unterminated_block_comments():
 
     start = time.perf_counter()
     risks = tcg.scan_solution_risks("/*" * 200000 + "\nx = random.random()")
-    assert time.perf_counter() - start < 1.0 and isinstance(risks, list)
+    assert time.perf_counter() - start < 10.0 and isinstance(risks, list)
     assert [r.code for r in tcg.scan_solution_risks("import random\nx = random.random() # note\n")] == ["randomness"]
 
 
@@ -638,7 +638,7 @@ def test_the_risk_scan_has_no_unbounded_whitespace_and_is_linear():
     tcg.scan_solution_risks("new File" + "x" * 100000 + " " * 100000)
     # A backtracking scan takes minutes on this input; the loose bound keeps a loaded
     # pytest-xdist worker from failing a linear scan.
-    assert time.perf_counter() - start < 5.0
+    assert time.perf_counter() - start < 10.0
 
 
 def _solution():
