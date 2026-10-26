@@ -5,6 +5,10 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- CI: the `dispatch` and `dispatch-report` jobs of Prompt Evaluation moved to `prompt-eval-dispatch.yml` (workflow
+  "Prompt Evaluation (dispatch)", the Run workflow button) and `merge-queue` to `prompt-eval-merge-queue.yml`, so they stop
+  showing as skipped checks on pull requests. `prompt-eval/ab` is unchanged. `estimate`, `rescore` and `report` gained a
+  20-minute timeout.
 - Eval batch mode: a request sent the ordinary way inside a batch group (the fallback after a failed batch, a group
   below the minimum, a re-send after the deadline) now keeps the normal request timeout instead of the raised
   `CQC_LLM_TIMEOUT` (deadline + 600 s). Docs: the eval OpenRouter keys belong to a ZDR-off workspace; production and
