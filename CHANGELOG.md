@@ -5,6 +5,9 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc9 - 2026-10-26
+
+- Streamlit dependency install: removed the textract wrapper and its unused 27-package parser closure. DOCX extraction now uses docx2txt after the existing table-to-JSON conversion; xlrd remains explicit for pandas `.xls` support. Added a generated Poetry-exported `requirements.txt` for Community Cloud's uv-backed installer, checked for freshness in CI. Selenium/Chromium and both PDF libraries remain because the app uses them.
 - Prompt A/B concurrency: each suite side now starts with every call in flight at once (ceiling = the call
   count, at most 512; was 64, hard cap 256) and judges the same, capped at the judge call count.
   `CQC_AB_MAX_CONCURRENCY`, `CQC_AB_JUDGE_CONCURRENCY` and the start setting still cap lower; the 429/timeout
