@@ -397,20 +397,37 @@ def _check_zip_stream(fp) -> None:
     tail_len = min(size, 65536 + 22 + 20 + 56)
     fp.seek(size - tail_len)
     tail = fp.read(tail_len)
-    eocd = tail.rfind(b'PK\x05\x06')
-    if eocd < 0 or len(tail) - eocd < 22:
+    # EOCD comments are arbitrary bytes and may contain the signature too. Python's
+    # zipfile uses the last signature whose declared comment reaches EOF, so inspect
+    # every such candidate rather than trusting rfind() alone.
+    candidates = []
+    search_from = 0
+    while True:
+        eocd = tail.find(b'PK\x05\x06', search_from)
+        if eocd < 0:
+            break
+        search_from = eocd + 1
+        if len(tail) - eocd < 22:
+            continue
+        comment_size = struct.unpack_from('<H', tail, eocd + 20)[0]
+        if eocd + 22 + comment_size == len(tail):
+            candidates.append(eocd)
+    if not candidates:
         fp.seek(position)
         return  # not a ZIP: ZipFile will say so
-    entries = struct.unpack_from('<H', tail, eocd + 10)[0]
-    cd_size = struct.unpack_from('<I', tail, eocd + 12)[0]
+    entries = 0
+    cd_size = 0
     records = []
-    if eocd >= 20 and tail[eocd - 20:eocd - 16] == b'PK\x06\x07':
-        if eocd >= 76:
-            records.append(tail[eocd - 76:eocd - 20])  # the record just before the locator
-        locator_offset = struct.unpack_from('<Q', tail, eocd - 20 + 8)[0]
-        if 0 <= locator_offset <= size - 56:  # 3.13 also tries the locator's own offset
-            fp.seek(locator_offset)
-            records.append(fp.read(56))
+    for eocd in candidates:
+        entries = max(entries, struct.unpack_from('<H', tail, eocd + 10)[0])
+        cd_size = max(cd_size, struct.unpack_from('<I', tail, eocd + 12)[0])
+        if eocd >= 20 and tail[eocd - 20:eocd - 16] == b'PK\x06\x07':
+            if eocd >= 76:
+                records.append(tail[eocd - 76:eocd - 20])
+            locator_offset = struct.unpack_from('<Q', tail, eocd - 20 + 8)[0]
+            if 0 <= locator_offset <= size - 56:
+                fp.seek(locator_offset)
+                records.append(fp.read(56))
     for record in records:
         if len(record) == 56 and record[:4] == b'PK\x06\x06':
             entries = max(entries, *struct.unpack_from('<QQ', record, 24))

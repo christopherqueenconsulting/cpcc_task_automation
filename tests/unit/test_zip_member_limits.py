@@ -151,6 +151,16 @@ class TestPreOpenChecks:
         with pytest.raises(ValueError, match="more than 10,000 entries"):
             extract_student_submissions_from_zip(str(path), ['.java'])
 
+    def test_eocd_signature_in_valid_comment_cannot_hide_entry_limit(self, tmp_path, monkeypatch):
+        path = tmp_path / "comment-decoy.zip"
+        with zipfile.ZipFile(path, 'w') as zf:
+            zf.writestr("Student A/Main.java", JAVA)
+            # A comment may contain a decoy EOCD whose comment length also reaches EOF.
+            zf.comment = _eocd(11000)
+        self._no_zipfile(monkeypatch)
+        with pytest.raises(ValueError, match="more than 10,000 entries"):
+            extract_student_submissions_from_zip(str(path), ['.java'])
+
     def test_zip64_record_claiming_too_many_entries(self, tmp_path, monkeypatch):
         import struct
         record = struct.pack("<4sQHHIIQQQQ", b"PK\x06\x06", 44, 45, 45, 0, 0, 11000, 11000, 0, 0)
