@@ -22,6 +22,9 @@ codecov:
   # integration) and reports a false low patch figure until the unit-tests upload arrives.
   # Codecov counts uploads, not flags: re-running one workflow uploads again for the same
   # commit and can reach 3 early, so re-run all three coverage workflows together.
+  # merge_group and push-to-master commits also get the 3 uploads (patch is only_pulls, so no
+  # patch status is expected there). The later codecov/test-results-action step in each workflow
+  # uploads test results, not coverage, and is not one of the 3.
   notify:
     after_n_builds: 3
 
