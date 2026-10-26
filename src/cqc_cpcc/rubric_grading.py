@@ -35,6 +35,7 @@ from typing import Optional
 from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
 from cqc_cpcc.execution_check import ExecutionPlan
+from cqc_cpcc.feedback_ids import humanize_result_ids
 from cqc_cpcc.prompts.markers import neutralize_markers
 from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES
 from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUIREMENT, note, note_added,
@@ -668,6 +669,11 @@ async def grade_with_rubric(
         result = await _reconcile(result, source_files=source_files, error_definitions=error_definitions,
                                   requirements=requirements, gate_report=gate_report,
                                   execution=execution, reference_solution=reference_solution)
+
+        # The prompt names requirements and test cases by short ids (R1, T1) to save tokens; the
+        # student never sees that mapping, so every id the model copied into the feedback goes
+        # back to words here (deterministic, no model call).
+        result = humanize_result_ids(result, requirements=requirements, execution_plan=execution_plan)
 
         # Post-process: Apply backend scoring for non-manual criteria
         result = apply_backend_scoring(rubric, result)
