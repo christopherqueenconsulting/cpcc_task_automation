@@ -493,7 +493,7 @@ def read_file(file_path: str, convert_to_markdown: bool = False) -> str:
 
             # Run the async transcription - handle event loop properly
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
             except RuntimeError:
                 loop = None
 
@@ -533,7 +533,7 @@ Please manually review this audio file for grading."""
 
             # Run the async video processing - handle event loop properly
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
             except RuntimeError:
                 loop = None
 

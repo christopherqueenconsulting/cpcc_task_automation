@@ -17,6 +17,12 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  # Cancel a superseded PR run. Never cancel merge_group or push runs:
+  # cancelling a merge-queue run evicts the PR from the queue.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: "3.12"
   POETRY_VERSION: "1.7.1"
@@ -24,6 +30,7 @@ env:
 jobs:
   integration-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     
     steps:
       - name: Checkout repository
@@ -56,7 +63,7 @@ jobs:
       - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@v7
         # Skip for Dependabot PRs
-        if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
         with:
           # Name for this upload
           name: integration-coverage
@@ -83,8 +90,11 @@ jobs:
       - name: Upload test results to Codecov
         # Upload test results even if tests fail (using !cancelled())
         if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: integration
-          file: ./junit-integration.xml
+          # codecov/test-results-action is deprecated; codecov-action uploads test results with report_type
+          report_type: test_results
+          files: ./junit-integration.xml
+          disable_search: true

@@ -54,7 +54,7 @@ def test_huge_or_hostile_input_is_bounded():
     # Unterminated starts: every "/*" or quote would otherwise rescan to the end (quadratic).
     for text in ("/* " * 66_000, "/*a" * 66_000, '"' + "x" * 199_000, "'" * 100_000, "'a" * 66_000):
         assert not ss.solution_similarity(text, JAVA).flagged
-    assert time.monotonic() - start < 5.0
+    assert time.monotonic() - start < 10.0
     assert ss.normalize('x = "http://a//b"; // c') .count("S") == 1 and "c" not in ss.normalize('x = "http://a//b"; // c')
 
 

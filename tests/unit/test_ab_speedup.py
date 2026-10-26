@@ -43,7 +43,7 @@ class TestConcurrencySetting:
         assert base.eval_concurrency(value=3) == 3
         assert base.eval_concurrency(default=12) == 7
 
-    @pytest.mark.parametrize("bad", ["0", "-2", "257", "400", "many", "2.5"])
+    @pytest.mark.parametrize("bad", ["0", "-2", "513", "1000", "many", "2.5"])
     def test_nonsense_is_an_error_never_a_silent_default(self, monkeypatch, bad):
         monkeypatch.setenv("CQC_EVAL_CONCURRENCY", bad)
         with pytest.raises(adaptive.ConcurrencyError):
@@ -512,12 +512,16 @@ class TestTheBaseRunsBesideTheHead:
             pytest.skip("no base run in this checkout")
         assert times["base"][0] < times["head"][1] and times["head"][0] < times["base"][1]  # they overlapped
         # the starting size reaches the head's run; both sides get the same ceiling
-        assert budgets["concurrency"] == 5 and env_seen["args"][6] == 64
+        calls = len(pa.get_suite("requirement-extraction").cases())  # repeats=1: the ceiling is all the calls
+        # the base gets min(the suite's call count, the cap its own checkout accepts), not a fixed 64
+        base_cap = min(calls, pa._base_hard_max(env_seen["args"][0]))
+        assert budgets["concurrency"] == 5 and env_seen["args"][6] == base_cap
+        assert r["run_stats"]["base_max_concurrency"] == base_cap
         # each side had its own share, and the head's spend was handed back to the whole
         assert budgets["head"].limit < prompt_eval.shared_budget().limit
-        assert report["concurrency"] == 64 and report["wall_clock_s"] > 0
+        assert report["concurrency"] == calls and report["wall_clock_s"] > 0
         stats = r["run_stats"]
-        assert stats["concurrency"] == 64 and stats["start_concurrency"] == 5 and stats["head"]["calls"] > 0 and stats["base"]["calls"] > 0
+        assert stats["concurrency"] == calls and stats["start_concurrency"] == 5 and stats["head"]["calls"] > 0 and stats["base"]["calls"] > 0
         assert r["status"] in ("pass", "pass-provisional")  # same answers both sides: no regression
 
     async def test_the_last_lines_of_the_log_sum_up_each_suite(self, tmp_path, monkeypatch, capsys):

@@ -171,8 +171,13 @@ def test_cdata_content_stripped():
 
 @pytest.mark.parametrize("unit", ["<attribute ", "<!ENTITY ", "<!DOCTYPE ", "<!DOCTYPE [", '<attribute name="', "a."])
 def test_hostile_repeats_run_in_linear_time(unit):
-    src = unit * 200000
-    start = time.perf_counter()
-    out = sanitize_fprg(src)
-    assert time.perf_counter() - start < 2.0
+    def timed(n):
+        start = time.perf_counter()
+        out = sanitize_fprg(unit * n)
+        return time.perf_counter() - start, out
+
+    small, _ = timed(50000)
+    big, out = timed(200000)  # 4x the input: linear is ~4x, quadratic ~16x
+    # Relative, so a loaded xdist worker slows both runs alike; the absolute cap is generous.
+    assert big < max(small, 0.05) * 10 and big < 10.0
     assert "DOCTYPE" not in out

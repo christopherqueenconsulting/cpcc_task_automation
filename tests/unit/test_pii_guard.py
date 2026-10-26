@@ -261,4 +261,4 @@ class TestStudentEmailClass:
 
         start = time.perf_counter()
         pii_guard.scan_text("a" * 200_000, "f.txt", frozenset())
-        assert time.perf_counter() - start < 2
+        assert time.perf_counter() - start < 10

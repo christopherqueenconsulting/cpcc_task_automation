@@ -1,0 +1,88 @@
+"""codecov.yml after_n_builds must equal the coverage uploads the three workflows make.
+
+Only codecov-action coverage uploads count toward after_n_builds. Test-results uploads do
+not: with the value at 8 on PR #511 (4 coverage + 4 test-results uploads), Codecov never
+posted a status. The contract test therefore counts codecov-action coverage steps only;
+a codecov-action step with report_type: test_results is a test-results upload and is skipped.
+
+If they disagree, Codecov either never posts codecov/patch (waits for uploads that never
+come) or posts it early from a partial report. Matrix jobs count once per matrix entry.
+"""
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+pytestmark = pytest.mark.unit
+
+ROOT = Path(__file__).resolve().parents[2]
+UPLOAD_ACTIONS = ("codecov/codecov-action@",)
+COVERAGE_WORKFLOWS = ("unit-tests.yml", "integration-coverage.yml", "e2e-coverage.yml")
+
+
+def _matrix_size(job: dict) -> int:
+    matrix = (job.get("strategy") or {}).get("matrix") or {}
+    size = 1
+    for key, values in matrix.items():
+        if key in ("include", "exclude"):
+            continue
+        assert isinstance(values, list), f"matrix.{key} must be a literal list to be counted"
+        size *= len(values)
+    return size
+
+
+def _is_coverage_upload(step: dict) -> bool:
+    if not str(step.get("uses", "")).startswith(UPLOAD_ACTIONS):
+        return False
+    return (step.get("with") or {}).get("report_type", "coverage") == "coverage"
+
+
+def _uploads(workflow: str) -> int:
+    doc = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
+    total = 0
+    for job in doc["jobs"].values():
+        n = sum(
+            1
+            for step in job.get("steps", [])
+            if _is_coverage_upload(step)
+        )
+        total += n * _matrix_size(job)
+    return total
+
+
+def test_after_n_builds_matches_upload_count():
+    cfg = yaml.safe_load((ROOT / "codecov.yml").read_text())
+    expected = cfg["codecov"]["notify"]["after_n_builds"]
+    assert cfg["comment"]["after_n_builds"] == expected
+    counts = {w: _uploads(w) for w in COVERAGE_WORKFLOWS}
+    assert sum(counts.values()) == expected, counts
+
+
+def test_test_results_upload_is_not_counted_as_a_coverage_build():
+    results = {"uses": "codecov/codecov-action@v7", "with": {"report_type": "test_results"}}
+    coverage = {"uses": "codecov/codecov-action@v7", "with": {"flags": "unit"}}
+    explicit = {"uses": "codecov/codecov-action@v7", "with": {"report_type": "coverage"}}
+    assert not _is_coverage_upload(results)
+    assert _is_coverage_upload(coverage)
+    assert _is_coverage_upload(explicit)
+
+
+def test_unit_shard_uploads_are_distinctly_named():
+    doc = yaml.safe_load((ROOT / ".github/workflows/unit-tests.yml").read_text())
+    step = next(
+        s
+        for s in doc["jobs"]["shard"]["steps"]
+        if str(s.get("uses", "")).startswith("codecov/codecov-action@")
+        and _is_coverage_upload(s)
+    )
+    assert "matrix.shard" in step["with"]["name"]
+    assert step["with"]["flags"] == "unit"
+
+
+def test_gate_job_keeps_the_required_check_name():
+    doc = yaml.safe_load((ROOT / ".github/workflows/unit-tests.yml").read_text())
+    gate = doc["jobs"]["unit-tests"]
+    assert "name" not in gate, "a custom name would change the required check context"
+    assert gate["needs"] == "shard"
+    assert str(gate["if"]).strip() == "always()"
