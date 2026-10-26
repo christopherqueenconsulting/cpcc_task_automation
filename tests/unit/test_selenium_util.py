@@ -346,6 +346,42 @@ class TestGetBrowserDriver:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize('open_browser', [False, True])
+def test_docker_driver_logs_vnc_url_and_opens_only_when_enabled(monkeypatch, open_browser):
+    import cqc_cpcc.utilities.selenium_util as su
+
+    monkeypatch.setattr(su, 'SELENIUM_OPEN_VNC_BROWSER', open_browser, raising=False)
+    monkeypatch.setattr(su, 'SELENIUM_VNC_PORT', 17901)
+    monkeypatch.setattr(su, 'INSTRUCTOR_USERID', 'test-instructor')
+    for name in ('set_docker_usage_flag', 'getBaseOptions', 'add_docker_chrome_options',
+                 'start_container_if_not_running', 'warn_if_browser_timezone_differs'):
+        monkeypatch.setattr(su, name, MagicMock())
+    monkeypatch.setattr(su, 'which_docker', lambda: su.DockerType.LOCAL)
+    response = MagicMock()
+    response.json.return_value = {'value': {'ready': True}}
+    monkeypatch.setattr(su.requests, 'get', MagicMock(return_value=response))
+    monkeypatch.setattr(su.time, 'sleep', MagicMock())
+    remote = MagicMock()
+    monkeypatch.setattr(su.webdriver, 'Remote', remote)
+    browser_open = MagicMock()
+    monkeypatch.setattr(su.webbrowser, 'open', browser_open)
+    log_info = MagicMock()
+    monkeypatch.setattr(su.logger, 'info', log_info)
+
+    assert su.get_docker_driver() is remote.return_value
+
+    expected_url = (
+        'http://localhost:17901/'
+        '?autoconnect=1&view_only=true&resize=scale&password=secret'
+    )
+    log_info.assert_called_once_with('Selenium noVNC URL: %s', expected_url)
+    if open_browser:
+        browser_open.assert_called_once_with(expected_url)
+    else:
+        browser_open.assert_not_called()
+
+
+@pytest.mark.unit
 class TestDockerComposeHelpers:
     """Test Docker Compose startup and usage-flag helpers."""
 

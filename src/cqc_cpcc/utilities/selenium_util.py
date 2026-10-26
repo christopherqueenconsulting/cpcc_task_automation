@@ -744,9 +744,10 @@ def get_docker_driver(headless=False):
     time.sleep(3)
     warn_if_browser_timezone_differs(driver)
 
-    # Open the command executor URL in the user's local browser
-    webbrowser.open(f"{selenium_container_url}:{SELENIUM_VNC_PORT}/?autoconnect=1&view_only=true&resize=scale&password=secret")
-    #logger.info("The VNC password is: secret")
+    vnc_url = f"{selenium_container_url}:{SELENIUM_VNC_PORT}/?autoconnect=1&view_only=true&resize=scale&password=secret"
+    logger.info("Selenium noVNC URL: %s", vnc_url)
+    if SELENIUM_OPEN_VNC_BROWSER:
+        webbrowser.open(vnc_url)
 
     return driver
 
