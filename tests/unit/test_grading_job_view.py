@@ -392,13 +392,24 @@ def test_use_another_model_reruns_only_the_failed_student_and_merges_under_the_s
 
 
 def test_retry_failed_uses_the_runs_own_model_as_a_job(tmp_path):
-    grade = AsyncMock(return_value=_result(75))
+    started = threading.Event()
+    release = threading.Event()
+
+    async def delayed_grade(**_kwargs):
+        started.set()
+        await asyncio.to_thread(release.wait, 10)
+        return _result(75)
+
+    grade = AsyncMock(side_effect=delayed_grade)
     at = _failed_app(tmp_path)
     with patch("cqc_cpcc.rubric_grading.grade_with_rubric", grade):
         _rerun(at)
         at.button(key=f"retry_failed_{RUN_KEY}").click()
         _rerun(at)
-        token = at.query_params["job"]
+        assert started.wait(10)
+        token = at.query_params.get("job")
+        release.set()
+        assert token, "grading job token should remain while grading is blocked"
         job = grading_job.attach(token[0] if isinstance(token, list) else token)
         assert job.wait(10)
         _rerun(at)
