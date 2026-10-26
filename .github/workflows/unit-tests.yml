@@ -60,6 +60,14 @@ jobs:
           # An exact venv-cache hit is already the finished environment.
           skip-install-on-exact-hit: "true"
 
+      # What the runner gives xdist. `-n auto` counts affinity CPUs (no psutil in the lock).
+      - name: CPU diagnostic
+        shell: bash
+        run: |
+          echo "nproc: $(nproc)"
+          poetry run python -c "import os; print('cpu_count, affinity:', os.cpu_count(), len(os.sched_getaffinity(0)))"
+          poetry run python -c "import psutil; print('psutil', psutil.__version__, 'physical:', psutil.cpu_count(logical=False), 'logical:', psutil.cpu_count())" || echo "psutil: not installed"
+
       - name: Run unit tests (shard ${{ matrix.shard }} of 2)
         shell: bash
         run: |
