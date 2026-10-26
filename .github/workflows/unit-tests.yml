@@ -135,11 +135,14 @@ jobs:
       - name: Upload test results to Codecov
         # Upload test results even if tests fail (using !cancelled())
         if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: unit
-          file: ./junit-unit.xml
+          # codecov/test-results-action is deprecated; codecov-action uploads test results with report_type
+          report_type: test_results
+          files: ./junit-unit.xml
+          disable_search: true
 
   # `unit-tests` is the REQUIRED check name in branch protection and the merge queue. A matrix
   # job's name carries its matrix value, so this aggregate keeps the exact name reporting.

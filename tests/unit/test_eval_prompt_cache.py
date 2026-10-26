@@ -387,8 +387,9 @@ class TestLayoutOfTheRealSuites:
                      "test-case-generation", "digest", "project-feedback", "flowgorithm-grade")
     CASES_PER_SUITE = 12
 
+    @classmethod
     @pytest.fixture(scope="class")
-    def rendered(self):
+    def rendered(cls):
         from cqc_cpcc.model_eval import prompt_eval
         from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, pinned_registry
         from cqc_cpcc.model_eval.suites import get_suite
@@ -401,7 +402,7 @@ class TestLayoutOfTheRealSuites:
             model, effort = prompt_eval.incumbent_of(suite.role)
             profile = prompt_eval.profiles_for([model]).get(model)
             seen = {}
-            cases = suite.cases()[:self.CASES_PER_SUITE]
+            cases = suite.cases()[:cls.CASES_PER_SUITE]
             original = openrouter_client._get_openrouter_client
             current = [None]
 
@@ -427,7 +428,7 @@ class TestLayoutOfTheRealSuites:
                     openrouter_client._get_openrouter_client = original
             return seen
 
-        for sid in self.SYSTEM_SUITES + self.SINGLE_SUITES:
+        for sid in cls.SYSTEM_SUITES + cls.SINGLE_SUITES:
             out[sid] = asyncio.run(one(sid))
         return out
 
