@@ -288,22 +288,33 @@ def test_launching_starts_a_job_points_the_url_at_it_and_locks_the_page(tmp_path
         f = tmp_path / f"{name}.java"
         f.write_text("class A {}")
         files.append((f.name, str(f)))
-    grade = AsyncMock(return_value=_result())
+    release = threading.Event()
+
+    async def grade_after_token_is_published(student_submission=None, **_kwargs):
+        await asyncio.get_running_loop().run_in_executor(None, release.wait, 10)
+        return _result()
+
+    grade = AsyncMock(side_effect=grade_after_token_is_published)
     with patch("cqc_cpcc.rubric_grading.grade_with_rubric", grade):
         at = AppTest.from_function(_launch_page, default_timeout=30)
         at.session_state["paths"] = files
         at.session_state["run_key"] = RUN_KEY
         at.session_state["kwargs"] = dict(KWARGS)
-        at.run()
-        assert not at.exception, at.exception
-        token = at.query_params["job"][0] if isinstance(at.query_params["job"], list) else at.query_params["job"]
-        job = grading_job.attach(token)
-        assert job is not None and job.run_key == RUN_KEY
-        assert at.session_state["grading_status_by_key"][RUN_KEY] == "running"
-        assert at.session_state["do_grade"] is False
-        assert set(at.session_state["grading_inputs_by_key"][RUN_KEY]["submissions"]) == {"Lab One", "Lab Two"}
-        assert job.wait(10)
-        at.run()
+        try:
+            at.run()
+            assert not at.exception, at.exception
+            token = at.query_params["job"]
+            token = token[0] if isinstance(token, list) else token
+            job = grading_job.attach(token)
+            assert job is not None and job.run_key == RUN_KEY
+            assert at.session_state["grading_status_by_key"][RUN_KEY] == "running"
+            assert at.session_state["do_grade"] is False
+            assert set(at.session_state["grading_inputs_by_key"][RUN_KEY]["submissions"]) == {"Lab One", "Lab Two"}
+            release.set()
+            assert job.wait(10)
+            at.run()
+        finally:
+            release.set()
     assert not at.exception, at.exception
     assert {sid for sid, _ in at.session_state["grading_results_by_key"][RUN_KEY]} == {"Lab One", "Lab Two"}
     assert grade.await_count == 2
