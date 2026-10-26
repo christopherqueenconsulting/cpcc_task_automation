@@ -310,33 +310,46 @@ class AttendanceLedger:
     def record_eva_expected(self, term: str, course_section: str, student_id: str,
                             attend_date: DT.date | str, activity_id: str) -> None:
         """Persist EVA provenance with the expected row before any SIS write."""
-        date = _iso(attend_date)
-        now = _now()
+        self.record_eva_expected_batch(
+            term, course_section, [(student_id, attend_date, activity_id)]
+        )
+
+    def record_eva_expected_batch(
+            self, term: str, course_section: str,
+            completions: list[tuple[str, DT.date | str, str]],
+    ) -> None:
+        """Atomically persist every roster-matched EVA row and its provenance."""
+        normalized = list(dict.fromkeys(
+            (str(student_id), _iso(attend_date), str(activity_id))
+            for student_id, attend_date, activity_id in completions
+        ))
         with self._conn:
-            self._conn.execute(
-                "INSERT INTO attendance (term, course_section, student_id, attend_date, status, "
-                "first_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(term, course_section, student_id, attend_date) DO NOTHING",
-                (term, course_section, str(student_id), date, STATUS_PENDING, now, now),
-            )
-            status = self._conn.execute(
-                "SELECT status FROM attendance WHERE term=? AND course_section=? "
-                "AND student_id=? AND attend_date=?",
-                (term, course_section, str(student_id), date),
-            ).fetchone()["status"]
-            if status in (STATUS_CARRIED, STATUS_UNRECORDABLE):
+            for student_id, date, activity_id in normalized:
+                now = _now()
                 self._conn.execute(
-                    "UPDATE attendance SET status=?, last_error=?, updated_at=? WHERE term=? "
-                    "AND course_section=? AND student_id=? AND attend_date=?",
-                    (STATUS_PENDING, "EVA confirms original date; prior substitute retained", now,
-                     term, course_section, str(student_id), date),
+                    "INSERT INTO attendance (term, course_section, student_id, attend_date, status, "
+                    "first_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(term, course_section, student_id, attend_date) DO NOTHING",
+                    (term, course_section, student_id, date, STATUS_PENDING, now, now),
                 )
-            self._conn.execute(
-                "INSERT OR IGNORE INTO attendance_evidence "
-                "(term, course_section, student_id, attend_date, source_type, source_id) "
-                "VALUES (?, ?, ?, ?, 'eva', ?)",
-                (term, course_section, str(student_id), date, str(activity_id)),
-            )
+                status = self._conn.execute(
+                    "SELECT status FROM attendance WHERE term=? AND course_section=? "
+                    "AND student_id=? AND attend_date=?",
+                    (term, course_section, student_id, date),
+                ).fetchone()["status"]
+                if status in (STATUS_CARRIED, STATUS_UNRECORDABLE):
+                    self._conn.execute(
+                        "UPDATE attendance SET status=?, last_error=?, updated_at=? WHERE term=? "
+                        "AND course_section=? AND student_id=? AND attend_date=?",
+                        (STATUS_PENDING, "EVA confirms original date; prior substitute retained", now,
+                         term, course_section, student_id, date),
+                    )
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO attendance_evidence "
+                    "(term, course_section, student_id, attend_date, source_type, source_id) "
+                    "VALUES (?, ?, ?, ?, 'eva', ?)",
+                    (term, course_section, student_id, date, activity_id),
+                )
 
     def record_eva_completion(self, term: str, course_section: str, student_id: str,
                               attend_date: DT.date | str, activity_id: str) -> None:

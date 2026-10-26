@@ -8,8 +8,10 @@ from selenium.common import NoSuchElementException, TimeoutException
 from selenium.webdriver import Keys
 from selenium.webdriver.common.by import By
 
-from cqc_cpcc.my_colleges import CourseContext, MyColleges
 from cqc_cpcc.attendance_ledger import AttendanceLedger
+from cqc_cpcc.brightspace import EVACompletionResult
+from cqc_cpcc.my_colleges import AttendanceOutcome, CourseContext, MyColleges
+from cqc_cpcc.run_plan import RunPlan
 
 
 @pytest.mark.unit
@@ -103,6 +105,39 @@ class TestEvaAttendanceSetup:
 
         assert confirmed == DT.date(2099, 2, 1)
         mc._eva_setup_response.assert_not_called()
+        ledger.close()
+
+    def test_incomplete_eva_status_survives_successful_ordinary_attendance(self):
+        context = self._context(eva_date=DT.date(2026, 11, 1))
+        ledger = AttendanceLedger(":memory:")
+        mc = MyColleges(MagicMock(), MagicMock(), ledger=ledger)
+        mc.current_tab = "sis"
+        mc._open_course_context = MagicMock(return_value=context)
+        mc._resolve_eva_activity = MagicMock(return_value={
+            "activity_id": "eva-1", "activity_type": "assignment",
+            "title": "EVA assignment", "eva_date": "2026-11-01",
+        })
+        mc._publish_eva_status = MagicMock()
+        mc._record_course_attendance = MagicMock(return_value=AttendanceOutcome())
+        mc._check_eva_attendance = MagicMock()
+        bsc = MagicMock()
+        bsc.eva_collection_result = EVACompletionResult(
+            "incomplete", {}, pages_read=1, rows_read=2,
+            error_code="pagination_transition_unverified",
+        )
+        bsc.scrape_problems = []
+        with patch("cqc_cpcc.my_colleges.BrightSpace_Course", return_value=bsc):
+            mc._process_single_course(
+                context.course_url, {"name": context.course_name},
+                RunPlan(course_urls=[context.course_url], write_attendance=True),
+                collect_attendance=True, mark_attendance=True,
+                collect_withdrawals=False, force_withdrawals=False,
+            )
+
+        mc._record_course_attendance.assert_called_once()
+        status_call = mc._publish_eva_status.call_args.args
+        assert status_call[2] == "incomplete"
+        assert "pagination_transition_unverified" in status_call[3]
         ledger.close()
 
 
