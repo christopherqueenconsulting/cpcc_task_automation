@@ -44,12 +44,13 @@ jobs:
           working-directory: "."
           # Extra e2e group, so this job gets its own cache scope.
           install-args: "--with test,e2e"
+          skip-install-on-exact-hit: "true"
 
       - name: Install Playwright browsers
         shell: bash
         run: |
           echo "Installing Playwright Chromium browser..."
-          poetry run playwright install chromium --with-deps
+          poetry run playwright install chromium --with-deps --only-shell
 
       - name: Run E2E tests with coverage
         shell: bash

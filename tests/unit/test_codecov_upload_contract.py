@@ -1,4 +1,4 @@
-"""codecov.yml after_n_builds must equal the coverage uploads the three workflows make.
+"""Codecov waits for CI and the configured number of coverage uploads.
 
 Only codecov-action coverage uploads count toward after_n_builds. Test-results uploads do
 not: with the value at 8 on PR #511 (4 coverage + 4 test-results uploads), Codecov never
@@ -53,6 +53,7 @@ def _uploads(workflow: str) -> int:
 
 def test_after_n_builds_matches_upload_count():
     cfg = yaml.safe_load((ROOT / "codecov.yml").read_text())
+    assert cfg["codecov"]["notify"]["wait_for_ci"] is True
     expected = cfg["codecov"]["notify"]["after_n_builds"]
     assert cfg["comment"]["after_n_builds"] == expected
     counts = {w: _uploads(w) for w in COVERAGE_WORKFLOWS}
