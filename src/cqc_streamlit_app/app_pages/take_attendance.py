@@ -371,7 +371,6 @@ def eva_status_section(job: AttendanceJob) -> None:
 def job_section(job: AttendanceJob) -> None:
     """The form or the finish screen; drawn by the full page run."""
     phase = job.phase
-    eva_status_section(job)
     if job.cancelled and phase not in FINISHED_PHASES:
         return
 

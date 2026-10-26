@@ -1,7 +1,7 @@
 #  Copyright (c) 2026. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
 import datetime as DT
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from selenium.common import TimeoutException
@@ -105,6 +105,8 @@ class TestBrightSpaceShortWait:
         assert wait.until.call_count == 2
         short_wait.until.assert_called_once()
         driver.get.assert_called_once_with(BRIGHTSPACE_URL)
+        assert course.course_return_tab == "main-tab"
+        driver.switch_to.window.assert_any_call("main-tab")
 
     @patch("cqc_cpcc.brightspace.click_element_wait_retry")
     @patch("cqc_cpcc.brightspace.login_if_needed")
@@ -137,6 +139,23 @@ class TestBrightSpaceShortWait:
         short_wait.until.assert_called_once()
         assert driver.get.call_args_list[0].args == (BRIGHTSPACE_URL,)
         assert driver.get.call_args_list[1].args == ("https://brightspace.example/course",)
+
+
+@pytest.mark.unit
+def test_close_course_tab_restores_the_original_browser_tab():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.window_handles = ["faculty-tab", "brightspace-tab"]
+    course.course_main_tab = "brightspace-tab"
+    course.course_return_tab = "faculty-tab"
+
+    with patch("cqc_cpcc.brightspace.close_tab") as mock_close_tab:
+        course.close_course_tab()
+
+    assert course.driver.switch_to.window.call_args_list == [
+        call("brightspace-tab"), call("faculty-tab"),
+    ]
+    mock_close_tab.assert_called_once_with(course.driver)
 
 
 @pytest.mark.unit
