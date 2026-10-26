@@ -121,7 +121,7 @@ class BrightSpace_Course:
             self.normalize_attendance_records()
             logger.info("Attendance Records (ALL):\n%s" % self.attendance_records)
         else:
-            logger.warn("No Attendance Records - Cant find Course")
+            logger.warning("No Attendance Records - Cant find Course")
 
     def _scrape_problem(self, description: str) -> None:
         self.scrape_problems.append(description)
@@ -239,7 +239,7 @@ class BrightSpace_Course:
 
             course_in_brightspace = True
         except TimeoutException:
-            logger.warn("Course Name: %s| Not Found In BrightSpace" % self.name)
+            logger.warning("Course Name: %s| Not Found In BrightSpace" % self.name)
 
         return course_in_brightspace
 

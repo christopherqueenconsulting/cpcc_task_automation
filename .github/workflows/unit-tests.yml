@@ -60,11 +60,19 @@ jobs:
           # An exact venv-cache hit is already the finished environment.
           skip-install-on-exact-hit: "true"
 
+      # What the runner gives xdist. `-n auto` uses psutil physical cores (2 of 4 vCPUs) when psutil imports.
+      - name: CPU diagnostic
+        shell: bash
+        run: |
+          echo "nproc: $(nproc)"
+          poetry run python -c "import os; print('cpu_count, affinity:', os.cpu_count(), len(os.sched_getaffinity(0)))"
+          poetry run python -c "import psutil; print('psutil', psutil.__version__, 'physical:', psutil.cpu_count(logical=False), 'logical:', psutil.cpu_count())" || echo "psutil: not installed"
+
       - name: Run unit tests (shard ${{ matrix.shard }} of 2)
         shell: bash
         run: |
           echo "Running unit tests shard ${UNIT_SHARD}/${UNIT_SHARDS} with pytest..."
-          poetry run pytest -m unit --ignore=tests/e2e -n auto --dist loadfile --cov=src --cov-branch --cov-report=xml --junitxml=junit-unit.xml -o junit_family=legacy --durations=25
+          poetry run pytest -m unit --ignore=tests/e2e -n logical --dist loadfile --cov=src --cov-branch --cov-report=xml --junitxml=junit-unit.xml -o junit_family=legacy --durations=25
 
       # Collected-count guard (read by the gate): this shard's test count from its own junit
       # file, and, from shard 2 only, the UNSHARDED collection count. The gate fails if the
@@ -135,11 +143,14 @@ jobs:
       - name: Upload test results to Codecov
         # Upload test results even if tests fail (using !cancelled())
         if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: unit
-          file: ./junit-unit.xml
+          # codecov/test-results-action is deprecated; codecov-action uploads test results with report_type
+          report_type: test_results
+          files: ./junit-unit.xml
+          disable_search: true
 
   # `unit-tests` is the REQUIRED check name in branch protection and the merge queue. A matrix
   # job's name carries its matrix value, so this aggregate keeps the exact name reporting.

@@ -90,8 +90,11 @@ jobs:
       - name: Upload test results to Codecov
         # Upload test results even if tests fail (using !cancelled())
         if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: integration
-          file: ./junit-integration.xml
+          # codecov/test-results-action is deprecated; codecov-action uploads test results with report_type
+          report_type: test_results
+          files: ./junit-integration.xml
+          disable_search: true
