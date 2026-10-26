@@ -16,6 +16,13 @@ codecov:
   max_report_age: off
   #max_report_age can be listed in hours '#h' (hours) or '#d' (days)
 
+  # Wait for all three coverage uploads on a commit (unit-coverage, integration-coverage,
+  # e2e-coverage: one per workflow, none path-filtered) before posting any status. Without
+  # this, codecov/patch is computed from whichever upload lands first (usually e2e or
+  # integration) and reports a false low patch figure until the unit-tests upload arrives.
+  notify:
+    after_n_builds: 3
+
 # Coverage analysis configuration
 coverage:
   # Precision for coverage percentages (2 decimal places)
@@ -98,6 +105,9 @@ comment:
   
   # Require changes to post new comment
   require_changes: false
+
+  # Same as codecov.notify.after_n_builds: no PR comment until all three uploads are in.
+  after_n_builds: 3
 
 # Ignore patterns - exclude files from coverage analysis
 # These match the patterns in pyproject.toml [tool.coverage.run] omit
