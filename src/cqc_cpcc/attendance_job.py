@@ -24,6 +24,7 @@ from cqc_cpcc.utilities.logger import logger
 
 PHASE_STARTING = "starting"
 PHASE_AWAITING_PLAN = "awaiting_plan"
+PHASE_AWAITING_EVA_SETUP = "awaiting_eva_setup"
 PHASE_RUNNING = "running"
 PHASE_SUCCEEDED = "succeeded"
 PHASE_FAILED = "failed"
@@ -69,6 +70,7 @@ class AttendanceJob:
         self._phase = PHASE_STARTING
         self._progress: list[str] = []
         self._warnings: list[str] = []
+        self._eva_statuses: dict[str, dict] = {}
         # course section -> EvaFlag list from that course's latest no-attendance check
         self._eva_flags: dict = {}
         self._screenshot_b64: str | None = None
@@ -77,6 +79,9 @@ class AttendanceJob:
         self._active_handle: str | None = None
         self._lock = threading.Lock()
         self._plan_ready = threading.Event()
+        self._eva_setup_ready = threading.Event()
+        self._eva_setup_request: dict | None = None
+        self._eva_setup_response: dict | None = None
         self._cancelled = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="attendance-job")
 
@@ -94,10 +99,40 @@ class AttendanceJob:
         self._set_phase(PHASE_RUNNING)
         self._plan_ready.set()
 
+    def request_eva_setup(self, request: dict) -> dict:
+        """Pause the browser worker while the Streamlit page confirms one course."""
+        with self._lock:
+            self._eva_setup_request = dict(request)
+            self._eva_setup_response = None
+            self._eva_setup_ready.clear()
+            self._phase = PHASE_AWAITING_EVA_SETUP
+        self._eva_setup_ready.wait()
+        self._raise_if_cancelled()
+        with self._lock:
+            response = self._eva_setup_response
+            self._eva_setup_request = None
+            self._eva_setup_response = None
+        self._set_phase(PHASE_RUNNING, "Resuming attendance...")
+        return dict(response or {"skip": True})
+
+    def current_eva_setup_request(self) -> dict | None:
+        with self._lock:
+            return dict(self._eva_setup_request) if self._eva_setup_request else None
+
+    def submit_eva_setup(self, response: dict) -> None:
+        """Submit a plain-data response from the Streamlit main thread."""
+        with self._lock:
+            if self._phase != PHASE_AWAITING_EVA_SETUP or self._eva_setup_request is None:
+                raise RuntimeError("No EVA confirmation is waiting for a response.")
+            self._eva_setup_response = dict(response)
+            self._phase = PHASE_RUNNING
+            self._eva_setup_ready.set()
+
     def cancel(self) -> None:
         self._cancelled.set()
         self.bridge.cancel()
         self._plan_ready.set()
+        self._eva_setup_ready.set()
 
     @property
     def phase(self) -> str:
@@ -116,6 +151,16 @@ class AttendanceJob:
         """Problems the instructor should act on (for example, a course to re-run)."""
         with self._lock:
             return list(self._warnings)
+
+    def on_eva_status(self, status: dict) -> None:
+        """Keep the latest non-student EVA status for each course on the page."""
+        key = str(status.get("course_section") or status.get("course_name") or "unknown")
+        with self._lock:
+            self._eva_statuses[key] = dict(status)
+
+    def eva_statuses(self) -> list[dict]:
+        with self._lock:
+            return [dict(row) for row in self._eva_statuses.values()]
 
     def eva_flags(self) -> list:
         """Students with no Present mark, every course checked so far, past-EVA first."""

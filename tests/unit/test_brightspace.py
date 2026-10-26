@@ -105,6 +105,79 @@ class TestBrightSpaceShortWait:
         assert driver.get.call_args_list[1].args == ("https://brightspace.example/course",)
 
 
+@pytest.mark.unit
+def test_eva_completion_reader_collects_all_supported_pages():
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.scrape_problems = []
+    driver = MagicMock()
+    course.driver = driver
+    course._scrape_problem = lambda message: course.scrape_problems.append(message)
+
+    def row(name, date):
+        cells = [MagicMock() for _ in range(3)]
+        cells[1].text = name
+        cells[2].text = date
+        cells[2].find_elements.return_value = []
+        item = MagicMock()
+        item.find_elements.return_value = cells
+        return item
+
+    pages = [[row("Student One", "01/12/2026")], [row("Student One", "01/13/2026")]]
+    page_index = {"value": 0}
+    next_button = MagicMock()
+    next_button.is_enabled.side_effect = lambda: page_index["value"] == 0
+    next_button.get_attribute.return_value = "false"
+    next_button.click.side_effect = lambda: page_index.update(value=1)
+
+    def find_elements(_by, xpath):
+        if xpath.endswith("//tr"):
+            return pages[page_index["value"]]
+        return [next_button]
+
+    driver.find_elements.side_effect = find_elements
+    with patch("cqc_cpcc.brightspace.wait_for_ajax"):
+        rows = course._read_activity_rows("//table", 2, 3, "activity-url")
+
+    assert rows == [("Student One", "01/12/2026"), ("Student One", "01/13/2026")]
+    assert not course.scrape_problems
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("activity_type", ["assignment", "quiz"])
+def test_eva_completion_dates_use_eastern_boundaries_and_keep_resubmissions(
+        activity_type, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.current_window_handle = "main"
+    course.wait = MagicMock()
+    course.select_xpath = "//select"
+    course.course_start_date = DT.datetime(2026, 10, 31)
+    course.eva_date = DT.date(2026, 10, 31)
+    course.scrape_problems = []
+    course._scrape_problem = lambda message: course.scrape_problems.append(message)
+    course.click_max_results_select = lambda _xpath: True
+    rows = [
+        ("Student One", "10/30/2026"),
+        ("Student One", "10/31/2026 08:00 AM"),
+        # 03:30 UTC is still October 31 in New York during the fall DST change.
+        ("Student One", "2026-11-01T03:30:00+00:00"),
+        ("Student Two", "2026-11-01T04:30:00+00:00"),
+        ("Student Three", "11/02/2026"),
+    ]
+    monkeypatch.setattr(course, "_read_activity_rows", lambda *_args: rows)
+    monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.click_element_wait_retry", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.utilities.selenium_util.close_tab", lambda *_args: None)
+
+    completions = course.get_eva_activity_completions(
+        {"activity_type": activity_type, "activity_id": "a-1", "activity_url": "url"},
+        now=DT.datetime(2026, 11, 1, 1, 30, tzinfo=ZoneInfo("America/New_York")),
+    )
+
+    assert completions == {"10-31-2026": ["Student One"]}
+    assert any("future EVA completion date" in problem for problem in course.scrape_problems)
 
 @pytest.mark.unit
 class TestWithdrawalCollectionGate:

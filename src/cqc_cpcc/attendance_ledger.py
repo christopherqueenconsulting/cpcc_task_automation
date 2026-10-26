@@ -116,6 +116,33 @@ CREATE TABLE IF NOT EXISTS eva_checks (
     owed INTEGER NOT NULL DEFAULT 0,
     checked_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS eva_activity_config (
+    term TEXT NOT NULL,
+    course_section TEXT NOT NULL,
+    brightspace_course_id TEXT NOT NULL,
+    activity_type TEXT,
+    activity_id TEXT,
+    activity_url TEXT,
+    title TEXT,
+    observed_due_date TEXT,
+    confirmed_due_date TEXT,
+    eva_date TEXT NOT NULL,
+    observed_eva_date TEXT,
+    eva_date_source TEXT NOT NULL,
+    confirmed_at TEXT NOT NULL,
+    PRIMARY KEY (term, course_section, brightspace_course_id)
+);
+CREATE TABLE IF NOT EXISTS attendance_evidence (
+    term TEXT NOT NULL,
+    course_section TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    attend_date TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    PRIMARY KEY (term, course_section, student_id, attend_date, source_type, source_id),
+    FOREIGN KEY (term, course_section, student_id, attend_date)
+        REFERENCES attendance(term, course_section, student_id, attend_date)
+);
 """
 
 
@@ -141,6 +168,7 @@ class OutstandingEntry:
     attend_date: DT.date
     status: str
     attempts: int
+    exact_date: bool = False
 
 
 class AttendanceLedger:
@@ -215,16 +243,114 @@ class AttendanceLedger:
         """Every row still owed to MyColleges for the course, oldest date first."""
         placeholders = ",".join("?" for _ in OUTSTANDING_STATUSES)
         rows = self._conn.execute(
-            "SELECT student_id, attend_date, status, attempts FROM attendance"
-            " WHERE term=? AND course_section=? AND status IN (%s)"
-            " ORDER BY attend_date, student_id" % placeholders,
+            "SELECT a.student_id, a.attend_date, a.status, a.attempts, "
+            "EXISTS (SELECT 1 FROM attendance_evidence e WHERE e.term=a.term "
+            "AND e.course_section=a.course_section AND e.student_id=a.student_id "
+            "AND e.attend_date=a.attend_date AND e.source_type='eva') AS exact_date "
+            "FROM attendance a"
+            " WHERE a.term=? AND a.course_section=? AND a.status IN (%s)"
+            " ORDER BY a.attend_date, a.student_id" % placeholders,
             (term, course_section, *OUTSTANDING_STATUSES),
         ).fetchall()
         return [
             OutstandingEntry(r["student_id"], DT.date.fromisoformat(r["attend_date"]),
-                             r["status"], r["attempts"])
+                             r["status"], r["attempts"], bool(r["exact_date"]))
             for r in rows
         ]
+
+    def eva_activity(self, term: str, course_section: str,
+                     brightspace_course_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM eva_activity_config WHERE term=? AND course_section=? "
+            "AND brightspace_course_id=?",
+            (term, course_section, brightspace_course_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def save_eva_activity(self, config: dict) -> None:
+        """Save one user-confirmed EVA activity and its course census date."""
+        values = (
+            config["term"], config["course_section"], config["brightspace_course_id"],
+            config["activity_type"], config["activity_id"], config["activity_url"],
+            config["title"], config.get("observed_due_date"), config.get("confirmed_due_date"),
+            _iso(config["eva_date"]), config.get("observed_eva_date"),
+            config["eva_date_source"], _now(),
+        )
+        self._conn.execute(
+            "INSERT INTO eva_activity_config (term, course_section, brightspace_course_id, "
+            "activity_type, activity_id, activity_url, title, observed_due_date, "
+            "confirmed_due_date, eva_date, observed_eva_date, eva_date_source, confirmed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(term, course_section, brightspace_course_id) DO UPDATE SET "
+            "activity_type=excluded.activity_type, activity_id=excluded.activity_id, "
+            "activity_url=excluded.activity_url, title=excluded.title, "
+            "observed_due_date=excluded.observed_due_date, "
+            "confirmed_due_date=excluded.confirmed_due_date, eva_date=excluded.eva_date, "
+            "observed_eva_date=excluded.observed_eva_date, "
+            "eva_date_source=excluded.eva_date_source, confirmed_at=excluded.confirmed_at",
+            values,
+        )
+        self._conn.commit()
+
+    def save_eva_course_date(self, *, term: str, course_section: str,
+                             brightspace_course_id: str, eva_date: DT.date | str,
+                             observed_eva_date: str | None, eva_date_source: str) -> None:
+        """Persist a confirmed cutoff even when the user skips activity selection."""
+        self._conn.execute(
+            "INSERT INTO eva_activity_config (term, course_section, brightspace_course_id, "
+            "eva_date, observed_eva_date, eva_date_source, confirmed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(term, course_section, brightspace_course_id) "
+            "DO UPDATE SET eva_date=excluded.eva_date, observed_eva_date=excluded.observed_eva_date, "
+            "eva_date_source=excluded.eva_date_source, confirmed_at=excluded.confirmed_at",
+            (term, course_section, brightspace_course_id, _iso(eva_date), observed_eva_date,
+             eva_date_source, _now()),
+        )
+        self._conn.commit()
+
+    def record_eva_expected(self, term: str, course_section: str, student_id: str,
+                            attend_date: DT.date | str, activity_id: str) -> None:
+        """Persist EVA provenance with the expected row before any SIS write."""
+        date = _iso(attend_date)
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO attendance (term, course_section, student_id, attend_date, status, "
+                "first_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(term, course_section, student_id, attend_date) DO NOTHING",
+                (term, course_section, str(student_id), date, STATUS_PENDING, now, now),
+            )
+            status = self._conn.execute(
+                "SELECT status FROM attendance WHERE term=? AND course_section=? "
+                "AND student_id=? AND attend_date=?",
+                (term, course_section, str(student_id), date),
+            ).fetchone()["status"]
+            if status in (STATUS_CARRIED, STATUS_UNRECORDABLE):
+                self._conn.execute(
+                    "UPDATE attendance SET status=?, last_error=?, updated_at=? WHERE term=? "
+                    "AND course_section=? AND student_id=? AND attend_date=?",
+                    (STATUS_PENDING, "EVA confirms original date; prior substitute retained", now,
+                     term, course_section, str(student_id), date),
+                )
+            self._conn.execute(
+                "INSERT OR IGNORE INTO attendance_evidence "
+                "(term, course_section, student_id, attend_date, source_type, source_id) "
+                "VALUES (?, ?, ?, ?, 'eva', ?)",
+                (term, course_section, str(student_id), date, str(activity_id)),
+            )
+
+    def record_eva_completion(self, term: str, course_section: str, student_id: str,
+                              attend_date: DT.date | str, activity_id: str) -> None:
+        self.record_eva_expected(term, course_section, student_id, attend_date, activity_id)
+
+    def update_eva_activity_title(self, term: str, course_section: str,
+                                   brightspace_course_id: str, title: str,
+                                   observed_due_date: str | None) -> None:
+        self._conn.execute(
+            "UPDATE eva_activity_config SET title=?, observed_due_date=? WHERE term=? "
+            "AND course_section=? AND brightspace_course_id=?",
+            (title, observed_due_date, term, course_section, brightspace_course_id),
+        )
+        self._conn.commit()
 
     def verified_count_by_student(self, term: str, course_section: str) -> dict[str, int]:
         rows = self._conn.execute(
