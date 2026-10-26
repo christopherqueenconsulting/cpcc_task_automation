@@ -2,7 +2,8 @@
 
 Only codecov-action coverage uploads count toward after_n_builds. Test-results uploads do
 not: with the value at 8 on PR #511 (4 coverage + 4 test-results uploads), Codecov never
-posted a status. The contract test therefore counts codecov-action steps only.
+posted a status. The contract test therefore counts codecov-action coverage steps only;
+a codecov-action step with report_type: test_results is a test-results upload and is skipped.
 
 If they disagree, Codecov either never posts codecov/patch (waits for uploads that never
 come) or posts it early from a partial report. Matrix jobs count once per matrix entry.
@@ -39,6 +40,7 @@ def _uploads(workflow: str) -> int:
             1
             for step in job.get("steps", [])
             if str(step.get("uses", "")).startswith(UPLOAD_ACTIONS)
+            and (step.get("with") or {}).get("report_type") != "test_results"
         )
         total += n * _matrix_size(job)
     return total
@@ -55,7 +57,10 @@ def test_after_n_builds_matches_upload_count():
 def test_unit_shard_uploads_are_distinctly_named():
     doc = yaml.safe_load((ROOT / ".github/workflows/unit-tests.yml").read_text())
     step = next(
-        s for s in doc["jobs"]["shard"]["steps"] if str(s.get("uses", "")).startswith("codecov/codecov-action@")
+        s
+        for s in doc["jobs"]["shard"]["steps"]
+        if str(s.get("uses", "")).startswith("codecov/codecov-action@")
+        and (s.get("with") or {}).get("report_type") != "test_results"
     )
     assert "matrix.shard" in step["with"]["name"]
     assert step["with"]["flags"] == "unit"
