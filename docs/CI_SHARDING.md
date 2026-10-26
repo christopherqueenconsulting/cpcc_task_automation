@@ -33,6 +33,30 @@ poetry run pytest -m "unit and compiler" tests/unit/test_model_eval.py tests/uni
 
 Drop `-n logical --dist loadfile` for a serial run, and drop the two variables to run everything.
 
+## Unit shard timing (PR #521, measured 2026-10-26)
+
+The original PR run before the performance changes measured shard 1 at 219 seconds and
+shard 2 at 312 seconds. After replacing the seven-suite gate test and moving exhaustive
+compiler cases out of the shards, shard 2 measured 85 seconds while shard 1 was 215 seconds.
+After optimizing request-capture fixtures, two subsequent runs measured:
+
+| Run | Unit shard 1 | Unit shard 2 | Compiler lane | Full CI workflow |
+| --- | ---: | ---: | ---: | ---: |
+| Capture optimization run | 123 s | 92 s | 82 s | about 2m 49s |
+| Final strict-compiler run | 98 s | 107 s | 94 s | 2m 59s |
+
+The final run completed 2,936 tests in shard 1 and 2,676 tests plus one expected failure in
+shard 2. Both marked compiler tests passed; the strict CI setting checks that Java and C++
+compiler coverage cannot silently disappear. Compared with the initial PR run, the final
+shard times were 55% and 66% lower. The final run took 3m from workflow start to completion,
+including integration, E2E, and Codecov finalization.
+
+These are hosted-runner wall-clock observations, not a controlled benchmark: runner load and
+workflow revisions vary. Two post-fixture-optimization runs show shard 1 between 98–123 seconds
+and shard 2 between 92–107 seconds. Keep tracking the slowest shard across future runs; rebalance
+the heavy-file pins if that time regresses. The exhaustive compiler checks still run as a required
+parallel lane, preserving the checks while removing their cost from both shard critical paths.
+
 ## Coverage
 
 Each shard uploads its own `coverage.xml` to Codecov with flag `unit` and name
