@@ -436,21 +436,33 @@ async def test_prompt_ab_end_to_end_in_test_mode(tmp_path, monkeypatch):
 
 
 async def test_suite_gate_runs_the_other_suites_of_the_roles(tmp_path, monkeypatch, uncalibrated_policy):
-    from cqc_cpcc.utilities.AI import llm_gateway
+    from cqc_cpcc.model_eval.__main__ import parse_model
 
-    monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
     ran = []
-    real_run = prompt_eval.run
+    models = [parse_model("openai/gpt-6-luna@high"), parse_model("openai/gpt-5-mini")]
+    labels = [prompt_eval.label_of(*model) for model in models]
 
-    async def small_run(suite_id, models, **kw):
+    async def small_run(suite_id, run_models, **kw):
+        assert [prompt_eval.label_of(*model) for model in run_models] == labels
         ran.append(suite_id)
-        return await real_run(suite_id, models, repeats=2, out=kw["out"])
+        return {"status": "complete", "models": {
+            label: {"health": {"failures": [], "calibrated": False}} for label in labels
+        }}
 
     monkeypatch.setattr(prompt_eval, "run", small_run)
+    monkeypatch.setattr(prompt_eval, "estimate_suites", lambda *args: 0)
+    monkeypatch.setattr(pa, "_aggregates", lambda suite, raw_path: {
+        labels[0]: {"composite": 0.8}, labels[1]: {"composite": 0.8}
+    })
+    monkeypatch.setattr(pa.base, "compare", lambda *args, **kwargs: {
+        "comparative": False, "noninferior": True
+    })
     report = await pa.suite_gate("openai/gpt-6-luna@high", "openai/gpt-5-mini", ["grading"], tmp_path)
-    assert set(ran) == {"grading-levelband", "grading-solution", "requirement-extraction", "exam-grading",
-                       "effort-recommendation", "requirement-solution-check", "test-case-generation"}
-    assert report["status"] == "pass"  # same canned answers for both models
+    expected = [suite_id for suite_id in SUITE_MODULES
+                if get_suite(suite_id).role == "grading" and suite_id != "grading"]
+    assert ran == expected
+    assert set(report["suites"]) == set(expected)
+    assert report["status"] == "pass"  # controlled equal aggregates for both models
     assert json.loads((tmp_path / "cross_suite.json").read_text())["candidate"] == "openai/gpt-5-mini"
 
 

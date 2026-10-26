@@ -72,6 +72,7 @@ def test_coverage_three_courses_twenty_bug_twins_and_equivalents(cases):
             assert not c.error_ids, c.case_id
 
 
+@pytest.mark.compiler
 def test_the_solution_and_every_twin_match_the_real_compilers(cases):
     from cqc_cpcc.utilities.compiler_gate import check_submission
 

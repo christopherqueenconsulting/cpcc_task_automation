@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project uses one GitHub Actions test workflow to run unit, integration, and E2E tests on every pull request, merge queue group, and push to `master`. The shared workflow lets Codecov publish one complete report after all coverage-producing jobs finish.
+This project uses one GitHub Actions test workflow to run unit, compiler, integration, and E2E tests on every pull request, merge queue group, and push to `master`. The shared workflow lets Codecov publish one complete report after all coverage-producing jobs finish.
 
 ## Workflow Details
 
@@ -20,8 +20,13 @@ This project uses one GitHub Actions test workflow to run unit, integration, and
 1. **Checkout**: Clones the repository code
 2. **Setup Python & Poetry**: Installs Python 3.12 and Poetry 1.7.1 using the reusable `.github/actions/poetry_setup` action
 3. **Install Dependencies**: Installs project dependencies with `poetry install --with test`
-4. **Run Unit Tests**: Executes `poetry run pytest -m unit --ignore=tests/e2e` with coverage reporting
+4. **Run Unit Tests**: Executes `poetry run pytest -m "unit and not compiler" --ignore=tests/e2e` across the two shards with coverage reporting
 5. **Upload Coverage**: Uploads coverage to Codecov with `unit` flag
+
+**Compiler Checks:** The separate `compiler-tests` job runs the exhaustive real-compiler checks
+for the grading datasets in parallel with the unit shards. The required `unit-tests` gate waits
+for both the shard matrix and compiler job, so these checks remain merge-blocking. Their coverage
+and test results upload under the `unit` flag.
 
 **Integration Tests:**
 1. **Checkout**: Clones the repository code
@@ -39,6 +44,7 @@ This project uses one GitHub Actions test workflow to run unit, integration, and
 6. **Upload Coverage**: Uploads coverage to Codecov with `e2e` flag
 
 **Codecov Finalization:** The `codecov-finalize` job waits for the `unit-tests`,
+`compiler-tests`,
 `integration-tests`, and `e2e-tests` jobs to pass, then runs `send-notifications`. This is the
 single completion signal for coverage uploads on that commit. If any test lane fails, the
 finalizer is skipped.
@@ -53,7 +59,9 @@ manual trigger behavior.
 
 ### Test Execution
 
-The workflow runs all tests marked with `@pytest.mark.unit` while excluding the `tests/e2e` directory (which requires playwright and is not part of unit tests).
+The unit shards run tests marked `unit` except those marked `compiler`; the parallel compiler job
+runs the exhaustive compiler checks. Both lanes are required through `unit-tests` and upload
+coverage under the `unit` flag. The `tests/e2e` directory is excluded from unit selection.
 
 Coverage reports are generated in both terminal and XML format for easy review.
 
@@ -175,7 +183,7 @@ poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-report=term-missing
 
 - Ensure the workflow files exist at:
   - `.github/workflows/unit-tests.yml`
-  - `.github/workflows/unit-tests.yml` (contains all three test lanes and Codecov finalization)
+  - `.github/workflows/unit-tests.yml` (contains unit shards, compiler checks, integration/E2E lanes, and Codecov finalization)
 - Check that the branch name is exactly `master` (not `main`)
 - Verify Actions are enabled in repository settings
 
@@ -188,7 +196,7 @@ poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-report=term-missing
 ### Status Check Not Appearing
 
 - Ensure the workflows have run at least once on the target branch
-- Check that the job names match exactly: `unit-tests`, `integration-tests`, `e2e-tests`
+- Check that the required job names match exactly: `unit-tests`, `integration-tests`, `e2e-tests`; `unit-tests` also waits for the `compiler-tests` job
 - Wait a few minutes after creating the branch protection rule
 
 ## Monitoring and Maintenance

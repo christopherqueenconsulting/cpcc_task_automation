@@ -173,8 +173,9 @@ def test_something():
 
 ## Coverage
 
-`pytest-cov` is configured and CI uploads three separate reports — `unit`,
-`integration`, and `e2e` — to Codecov, which combines them. Run it locally with:
+`pytest-cov` is configured and CI uploads unit-shard and exhaustive compiler reports
+under the `unit` flag, plus `integration` and `e2e` reports. Codecov combines them.
+Run the complete unit suite locally with:
 
 ```bash
 poetry run pytest -m unit --cov=src/cqc_cpcc --cov-report=term-missing
@@ -184,9 +185,10 @@ poetry run pytest -m unit --cov=src/cqc_cpcc --cov-report=term-missing
 poetry run pytest -m unit --cov=src/cqc_cpcc --cov-report=html && open htmlcov/index.html
 ```
 
-Note that a local `-m unit` run reports **lower** coverage than CI, because CI adds
-the integration and e2e suites on top. Compare like with like before concluding a
-change lost coverage.
+CI excludes compiler-marked tests from the sharded jobs, then runs them in a parallel
+job that is included in the required `unit-tests` gate. A local `-m unit` run includes
+both kinds of tests. CI coverage also includes the integration and e2e suites; compare
+like with like before concluding a change lost coverage.
 
 ### What the gates actually are
 

@@ -15,7 +15,9 @@ The following CI workflows run on every PR:
 1. **Unit Tests** (`.github/workflows/unit-tests.yml`)
    - Runs all unit tests with pytest
    - Required for PR merge
-   - Command: `poetry run pytest -m unit --ignore=tests/e2e`
+   - Unit shards: `poetry run pytest -m "unit and not compiler" --ignore=tests/e2e`
+   - Required compiler lane: `poetry run pytest -m "unit and compiler"`
+   - Both lanes are included in the required `unit-tests` gate.
 
 2. **Integration Tests** (`integration-tests` job in `.github/workflows/unit-tests.yml`)
    - Runs integration tests

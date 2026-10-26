@@ -31,7 +31,8 @@ jobs:
   # Two shards, each running pytest-xdist inside. tests/unit/conftest.py keeps a whole FILE in
   # one shard (UNIT_SHARDS / UNIT_SHARD), so module fixtures never run twice. Design and local
   # use: docs/CI_SHARDING.md. The job name carries the matrix value; the REQUIRED check is the
-  # `unit-tests` gate job below, not these.
+  # `unit-tests` gate job below, not these. Exhaustive real-compiler checks run in
+  # `compiler-tests` alongside the shards and are included in that required gate.
   shard:
     name: Unit shard ${{ matrix.shard }}/2
     runs-on: ubuntu-latest
@@ -72,7 +73,7 @@ jobs:
         shell: bash
         run: |
           echo "Running unit tests shard ${UNIT_SHARD}/${UNIT_SHARDS} with pytest..."
-          poetry run pytest -m unit --ignore=tests/e2e -n logical --dist loadfile --cov=src --cov-branch --cov-report=xml --junitxml=junit-unit.xml -o junit_family=legacy --durations=25
+          poetry run pytest -m "unit and not compiler" --ignore=tests/e2e -n logical --dist loadfile --cov=src --cov-branch --cov-report=xml --junitxml=junit-unit.xml -o junit_family=legacy --durations=25
 
       # Collected-count guard (read by the gate): this shard's test count from its own junit
       # file, and, from shard 2 only, the UNSHARDED collection count. The gate fails if the
@@ -88,7 +89,7 @@ jobs:
           print(sum(int(s.get("tests", 0)) for s in suites))
           PY
           if [ "${UNIT_SHARD}" = "2" ]; then
-            env -u UNIT_SHARDS -u UNIT_SHARD poetry run pytest -m unit --ignore=tests/e2e --collect-only -q -p no:cacheprovider \
+            env -u UNIT_SHARDS -u UNIT_SHARD poetry run pytest -m "unit and not compiler" --ignore=tests/e2e --collect-only -q -p no:cacheprovider \
               | sed -nE 's#^([0-9]+)(/[0-9]+)? tests? collected.*#\1#p' > count-full.txt
           fi
           echo "shard ${UNIT_SHARD} count: $(cat count-${UNIT_SHARD}.txt)"
@@ -161,16 +162,18 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: shard
+    needs: [shard, compiler-tests]
     if: always()
     steps:
       - name: Every shard passed
         env:
           SHARD_RESULT: ${{ needs.shard.result }}
+          COMPILER_RESULT: ${{ needs.compiler-tests.result }}
         run: |
           echo "shard matrix result: ${SHARD_RESULT}"
-          [ "${SHARD_RESULT}" = "success" ] || {
-            echo "::error::Unit shards did not all pass (matrix result: ${SHARD_RESULT})."
+          echo "compiler test result: ${COMPILER_RESULT}"
+          [ "${SHARD_RESULT}" = "success" ] && [ "${COMPILER_RESULT}" = "success" ] || {
+            echo "::error::Unit shards or exhaustive compiler tests failed (shards: ${SHARD_RESULT}; compiler: ${COMPILER_RESULT})."
             exit 1
           }
 
@@ -189,6 +192,53 @@ jobs:
             echo "::error::Shard counts (${a} + ${b}) differ from the unsharded count (${full}): tests were dropped or duplicated."
             exit 1
           }
+
+  # Dataset-wide javac/g++ checks remain required through the unit-tests gate,
+  # but run separately so their compiler subprocesses do not lengthen a unit shard.
+  compiler-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+          skip-install-on-exact-hit: "true"
+
+      - name: Run exhaustive real-compiler checks
+        shell: bash
+        run: |
+          poetry run pytest -m "unit and compiler" tests/unit/test_model_eval.py tests/unit/test_grading_solution_suite.py \
+            --cov=src --cov-branch --cov-report=xml:coverage-compiler.xml \
+            --junitxml=junit-compiler.xml -o junit_family=legacy --durations=25
+
+      - name: Upload compiler coverage to Codecov
+        uses: codecov/codecov-action@v7
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        with:
+          name: compiler-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage-compiler.xml
+          disable_search: true
+          flags: unit
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: Upload compiler test results to Codecov
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: unit
+          report_type: test_results
+          files: ./junit-compiler.xml
+          disable_search: true
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -304,8 +354,8 @@ jobs:
     name: Finalize Codecov reports
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [unit-tests, integration-tests, e2e-tests]
-    # The three coverage upload jobs are skipped for Dependabot PRs; don't send a
+    needs: [unit-tests, compiler-tests, integration-tests, e2e-tests]
+    # The coverage upload jobs are skipped for Dependabot PRs; don't send a
     # completion signal for uploads that were intentionally not made.
     if: ${{ success() && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     steps:

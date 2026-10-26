@@ -86,6 +86,7 @@ class TestDataset:
         assert result.returncode == 0, result.stderr
 
     @pytest.mark.compile
+    @pytest.mark.compiler
     def test_compile_labels_match_real_compilers(self, cases):
         from cqc_cpcc.utilities.compiler_gate import check_submission
 

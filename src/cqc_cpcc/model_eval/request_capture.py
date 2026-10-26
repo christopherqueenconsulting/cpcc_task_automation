@@ -197,8 +197,11 @@ async def capture_suite(suite_id: str, *, requests_only: bool = False) -> dict:
     # so an unchanged prompt hashes the same in the head and base processes.
     with pinned_registry(model, effort, profile, roles=(suite.role,),
                          max_output_tokens=adaptive.eval_max_tokens() or DEFAULT_MAX_OUTPUT_TOKENS), deterministic_nonce():
+        # Loading validates and stamps the full dataset. Reuse the same case objects
+        # for both passes instead of reading and validating the dataset twice.
+        cases = suite.cases()
         with _patched(sink, test_mode=False):
-            for case in suite.cases():
+            for case in cases:
                 sink.clear()
                 try:
                     await suite.invoke(case)
@@ -209,7 +212,7 @@ async def capture_suite(suite_id: str, *, requests_only: bool = False) -> dict:
             return {"requests": requests}
         made: list = []
         with _patched(sink, test_mode=True, calls=made):
-            for case in suite.cases():
+            for case in cases:
                 made.clear()
                 try:
                     outputs[case.case_id] = _hash(suite.to_payload(await suite.invoke(case)))

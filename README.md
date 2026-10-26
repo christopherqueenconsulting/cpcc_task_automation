@@ -279,14 +279,14 @@ poetry run pytest
 
 The project uses GitHub Actions for automated testing:
 
-- **unit-tests.yml**: Runs unit shards, integration tests, and Playwright E2E tests in parallel on pull requests, merge queues, and pushes to `master`; uploads each coverage report and sends one Codecov completion signal after all three test lanes pass
+- **unit-tests.yml**: Runs unit shards, exhaustive compiler checks, integration tests, and Playwright E2E tests in parallel on pull requests, merge queues, and pushes to `master`; uploads each coverage report and sends one Codecov completion signal after all test lanes pass
 
 To enable required status checks for pull requests, see **[docs/ci-branch-protection.md](docs/ci-branch-protection.md)** for detailed setup instructions.
 
 ## GitHub Actions
 
 Workflows in `.github/workflows/`:
-- **unit-tests.yml**: Test CI and Codecov finalization (PRs, merge queue, and pushes to `master`)
+- **unit-tests.yml**: Unit shards, exhaustive compiler checks, integration/E2E tests, and Codecov finalization (PRs, merge queue, and pushes to `master`)
 - **codeql.yml**, **pii-guard.yml**: Code scanning and student-PII guard (secret scanning is the GitGuardian GitHub app, not a workflow)
 - **dependabot-auto-merge.yml**, **dependabot-ci-autofix.yml**: Dependabot housekeeping
 - **Cron_Action.yml**: Manual dispatch only (the schedule is commented out); `cron.py` currently prints a placeholder and does not take attendance
