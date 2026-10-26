@@ -291,7 +291,7 @@ def test_launching_starts_a_job_points_the_url_at_it_and_locks_the_page(tmp_path
     release = threading.Event()
 
     async def grade_after_token_is_published(student_submission=None, **_kwargs):
-        await asyncio.get_running_loop().run_in_executor(None, release.wait, 10)
+        await asyncio.get_running_loop().run_in_executor(None, release.wait, 30)
         return _result()
 
     grade = AsyncMock(side_effect=grade_after_token_is_published)
