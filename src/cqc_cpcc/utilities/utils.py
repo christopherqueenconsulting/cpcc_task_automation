@@ -14,7 +14,6 @@ import docx
 import mammoth
 # import markdownify
 import pandas as pd
-import textract
 from bs4 import BeautifulSoup
 from cqc_cpcc.utilities.date import get_datetime
 from cqc_cpcc.utilities.env_constants import IS_GITHUB_ACTION
@@ -25,7 +24,6 @@ from cqc_cpcc.utilities.selenium_util import (
     take_and_show_screenshot,
     wait_for_user_action,
 )
-from docx import Document
 from markdownify import markdownify as md
 from ordered_set import OrderedSet
 from pydantic import BaseModel, Field, StrictStr, PositiveInt
@@ -297,27 +295,26 @@ def merge_lists(list1, list2):
         return list1 + list2
 
 
-def convert_tables_to_json_in_tmp__file(doc: Document) -> str:
-    for table in doc.tables:
-        data = [[cell.text for cell in row.cells] for row in table.rows]
-        df = pd.DataFrame(data)
+def docx_to_text(doc) -> str:
+    """Extract Word text and table JSON without a second parser dependency.
 
-        # Remove the table
-        t = table._element
-        parent = t.getparent()
-        parent.remove(t)
+    Keep all document paragraphs first and table JSON afterward, matching the former
+    path that removed tables and appended their JSON to the end of a temporary DOCX.
+    """
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
-        # Add new json string to the parent in its place
-        doc.add_paragraph(df.to_json(orient="records"))
-
-        # Clear the table reference
-        t._t = t._element = None
-
-    # Save to temp file
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
-    doc.save(temp_file.name)
-
-    return temp_file.name
+    paragraphs = []
+    tables = []
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            paragraphs.append(Paragraph(child, doc).text)
+        elif child.tag == qn("w:tbl"):
+            table = Table(child, doc)
+            data = [[cell.text for cell in row.cells] for row in table.rows]
+            tables.append(pd.DataFrame(data).to_json(orient="records"))
+    return "\n\n".join([*paragraphs, *tables])
 
 
 @lru_cache(maxsize=None)
@@ -567,20 +564,7 @@ Please manually review this video file for grading."""
         contents = convert_xlsx_to_markdown(file_path)
     # If file ends in .docx will convert it to json and return
     elif file_extension == ".docx":
-        # read in a document
-        my_doc = docx.Document(file_path)
-
-        # Find any tables and replace with json strings
-        tmp_file = convert_tables_to_json_in_tmp__file(my_doc)
-
-        # coerce to JSON using the standard options
-
-        # contents = simplify(my_doc)
-
-        # contents = textract.parsers.process(file_path)
-        # print("Extracting contents from: %s" % tmp_file)
-        contents = textract.process(tmp_file).decode('utf-8')
-        os.remove(tmp_file)
+        contents = docx_to_text(docx.Document(file_path))
 
     else:
 
