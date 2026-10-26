@@ -212,7 +212,6 @@ poetry run ruff check --fix .        # Auto-fix issues
 - **integration-coverage.yml**: Integration tests with coverage (required for PR merge)
 - **e2e-coverage.yml**: E2E tests with Playwright (required for PR merge)
 - **codeql.yml** / **codeql-analysis.yml**: Security scanning
-- **gitguardian-scan.yml**: Secret scanning
 - **dependabot-auto-merge.yml**: Auto-approve and merge Dependabot PRs
 - **Selenium_Action.yml**: Manual web scraping workflow (workflow_dispatch)
 - **Cron_Action.yml**: Scheduled automation workflow with secrets/vars

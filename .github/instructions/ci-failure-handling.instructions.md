@@ -31,9 +31,9 @@ The following CI workflows run on every PR:
    - Security scanning
    - May require code changes if vulnerabilities found
 
-5. **GitGuardian Scan** (`.github/workflows/gitguardian-scan.yml`)
-   - Scans for secrets in code
-   - Should not require code changes
+5. **GitGuardian Security Checks** (GitHub app, no workflow file)
+   - Scans commits for secrets
+   - Not a required check; a finding is reviewed in the GitGuardian dashboard
 
 6. **Dependabot CI Auto-Fix Trigger** (`.github/workflows/dependabot-ci-autofix.yml`)
    - Listens for failed CI runs on Dependabot `chore(deps)` PRs

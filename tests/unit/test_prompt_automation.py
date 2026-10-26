@@ -871,8 +871,12 @@ class TestWorkflowWiring:
     def jobs(cls):
         import yaml
 
-        path = pa.REPO_ROOT / ".github" / "workflows" / "prompt-eval.yml"
-        return yaml.safe_load(path.read_text())["jobs"]
+        # The workflow is split over files (dispatch jobs and the merge-queue job have their own); the
+        # rules below hold for the jobs as a whole.
+        jobs = {}
+        for name in ("prompt-eval.yml", "prompt-eval-dispatch.yml", "prompt-eval-merge-queue.yml"):
+            jobs.update(yaml.safe_load((pa.REPO_ROOT / ".github" / "workflows" / name).read_text())["jobs"])
+        return jobs
 
     def test_the_report_uses_the_base_branch_verdict(self, jobs):
         assert "ab-base-rule" in jobs["report"]["needs"]

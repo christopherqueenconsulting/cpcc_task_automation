@@ -17,6 +17,12 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  # Cancel a superseded PR run. Never cancel merge_group or push runs:
+  # cancelling a merge-queue run evicts the PR from the queue.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   PYTHON_VERSION: "3.12"
   POETRY_VERSION: "1.7.1"
@@ -24,6 +30,7 @@ env:
 jobs:
   e2e-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     
     steps:
       - name: Checkout repository
@@ -57,7 +64,7 @@ jobs:
       - name: Upload E2E coverage to Codecov
         uses: codecov/codecov-action@v7
         # Skip for Dependabot PRs
-        if: always() && github.event.pull_request.user.login != 'dependabot[bot]'
+        if: ${{ !cancelled() && github.event.pull_request.user.login != 'dependabot[bot]' }}
         with:
           # Name for this upload
           name: e2e-coverage

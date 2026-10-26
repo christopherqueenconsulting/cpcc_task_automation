@@ -33,10 +33,13 @@
 #      packages a second time as downloaded wheels. Caching all of them stored
 #      every dependency roughly three times over.
 #
-# `poetry install` always runs, even on an exact cache hit. That is deliberate:
+# `poetry install` runs by default, even on an exact cache hit. That is deliberate:
 # it makes the restore-keys ladder below completely safe (a near-miss venv is
 # reconciled against poetry.lock rather than trusted), and it keeps this action
-# a pure speed-up that can never change what actually gets installed.
+# a pure speed-up that can never change what actually gets installed. A caller may
+# opt out with `skip-install-on-exact-hit: "true"`: the key embeds the poetry.lock
+# hash and the install args, so an exact hit is already the finished environment.
+# A restore-keys (near) hit still installs. Saving is unchanged (rule 1).
 name: poetry-install-with-caching
 description: Poetry install with support for caching of dependency groups.
 
@@ -59,6 +62,18 @@ inputs:
   working-directory:
     description: Directory whose poetry.lock file should be cached
     required: true
+
+  skip-install-on-exact-hit:
+    description: >-
+      "true" skips `poetry install` when the venv cache key matched exactly.
+      Default "false" keeps the always-reconcile behaviour.
+    required: false
+    default: "false"
+
+outputs:
+  venv-cache-hit:
+    description: '"true" when the venv cache key matched exactly.'
+    value: ${{ steps.cache-venv.outputs.cache-hit }}
 
 runs:
   using: composite
@@ -165,6 +180,7 @@ runs:
           venv-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-
 
     - name: Install dependencies
+      if: ${{ !(inputs.skip-install-on-exact-hit == 'true' && steps.cache-venv.outputs.cache-hit == 'true') }}
       shell: bash
       working-directory: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
       run: poetry install ${{ inputs.install-args }} --no-interaction --no-ansi

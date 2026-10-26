@@ -23,6 +23,7 @@ env:
 jobs:
   notify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       HAS_CLICKUP: ${{ secrets.CLICKUP_API_TOKEN != '' }}
     steps:

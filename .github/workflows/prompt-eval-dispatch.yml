@@ -1,0 +1,338 @@
+name: Prompt Evaluation (dispatch)
+
+# The maintainer-run half of the Prompt Evaluation workflow (prompt-eval.yml), split out so
+# `dispatch` and `dispatch-report` stop showing as skipped checks on every pull request.
+# Nothing else changed: same jobs, steps, environments, permissions and concurrency. The
+# `prompt-eval/ab` status posted by `dispatch-report` in mode ab is the same context, state
+# rules and description as before. See docs/PROMPTS.md.
+#
+#   dispatch     -> mode=suites (consider a model for any suite), mode=calibrate (propose
+#                   thresholds), mode=ab (A/B a PR a maintainer has reviewed), mode=judges.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "suites = run suites on models; calibrate = propose thresholds; ab = A/B a PR; judges = calibrate the LLM judges on the committed labels"
+        required: true
+        type: choice
+        options: [suites, calibrate, ab, judges]
+        default: suites
+      suites:
+        description: "Comma-separated suite ids, or 'all' (suites/calibrate modes); in ab mode, extra suites to add to the PR's detection ('all' adds none)"
+        required: false
+        type: string
+        default: "all"
+      models:
+        description: "Comma-separated model[@effort] ids (blank = each suite's current model; in ab mode the list must include it)"
+        required: false
+        type: string
+        default: ""
+      pr_number:
+        description: "PR to A/B (ab mode)"
+        required: false
+        type: string
+        default: ""
+      judges:
+        description: "Also run the model graders (report-only until calibrated)"
+        required: false
+        type: boolean
+        default: true
+      dry_run:
+        description: "Print cost estimates only"
+        required: false
+        type: boolean
+        default: true
+      full_ab:
+        description: "ab mode: run the paid A/B even when every request is identical to the base's"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  POETRY_VERSION: "1.7.1"
+
+jobs:
+  dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # ab mode runs PR code with a key: only the prompt-eval environment's key, and only a
+    # maintainer can dispatch. Other modes run master's code with the model-eval key.
+    environment: ${{ inputs.mode == 'ab' && 'prompt-eval' || 'model-eval' }}
+    timeout-minutes: 240
+    # Read-only token: ab mode runs PR code here, so posting the result is left to the
+    # dispatch-report job, which runs no PR code.
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: prompt-eval-dispatch-${{ inputs.mode }}-${{ inputs.pr_number }}
+      cancel-in-progress: false
+    outputs:
+      sha: ${{ steps.pr.outputs.sha }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the PR (ab mode)
+        id: pr
+        if: inputs.mode == 'ab'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${PR}" =~ ^[0-9]+$ ]]; then echo "::error::pr_number must be a number"; exit 1; fi
+          info="$(gh pr view "${PR}" --repo "${REPO}" --json isCrossRepository,headRefOid,baseRefName)"
+          if [ "$(jq -r .isCrossRepository <<< "${info}")" = "true" ]; then
+            echo "::error::fork PRs are not run with a key; push the branch to this repository first"; exit 1
+          fi
+          base="$(jq -r .baseRefName <<< "${info}")"
+          echo "sha=$(jq -r .headRefOid <<< "${info}")" >> "$GITHUB_OUTPUT"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+          git fetch -q origin "${base}"
+          echo "base_sha=$(git rev-parse "origin/${base}")" >> "$GITHUB_OUTPUT"
+
+      # The PR's tree goes into pr/, so the workspace root (and the setup action below) stay
+      # this workflow's own ref.
+      - name: Check out the PR head (pinned SHA) into pr/
+        if: inputs.mode == 'ab'
+        shell: bash
+        env:
+          SHA: ${{ steps.pr.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "${SHA}"
+          git worktree add -q --detach pr "${SHA}"
+
+      - name: Set up Java (compile gate)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: ${{ inputs.mode == 'ab' && 'pr' || '.' }}
+          install-args: "--with test"
+
+      - name: Run
+        id: run
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ inputs.mode == 'ab' && secrets.OPENROUTER_PROMPT_EVAL_API_KEY || secrets.OPENROUTER_EVAL_API_KEY }}
+          CQC_EVAL_BATCH: "1"  # OpenRouter Batch API (synthetic eval data only); the code default is off
+          CQC_EVAL_BATCH_ALLOW_RETENTION: "1"  # 30-day provider retention accepted for eval runs (owner, 2026-10)
+          MODE: ${{ inputs.mode }}
+          SUITES: ${{ inputs.suites }}
+          MODELS: ${{ inputs.models }}
+          JUDGES: ${{ inputs.judges }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FULL_AB: ${{ inputs.full_ab }}
+          FAST_PATH: ${{ vars.PROMPT_EVAL_FAST_PATH }}
+          BASE: ${{ steps.pr.outputs.base }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          models=()
+          IFS=',' read -ra list <<< "${MODELS}"
+          for m in "${list[@]}"; do m="$(echo "$m" | xargs)"; if [ -n "$m" ]; then models+=(--model "$m"); fi; done
+          judges=(); if [ "${JUDGES}" = "true" ]; then judges=(--judges); fi
+          mkdir -p evals/runs/dispatch
+          case "${MODE}" in
+            suites)
+              dry=(); if [ "${DRY_RUN}" = "true" ]; then dry=(--dry-run); fi
+              poetry run python -m cqc_cpcc.model_eval suite run --suite "${SUITES:-all}" "${models[@]}" "${judges[@]}" \
+                "${dry[@]}" --out evals/runs/dispatch --run-id "${RUN_ID}" | tee run.log ;;
+            calibrate)
+              if [ "${DRY_RUN}" = "true" ]; then
+                poetry run python -m cqc_cpcc.model_eval suite run --suite "${SUITES:-all}" --repeats 3 --dry-run | tee run.log
+              else
+                suites=(); if [ -n "${SUITES}" ] && [ "${SUITES}" != "all" ]; then suites=(--suites "${SUITES}"); fi
+                poetry run python -m cqc_cpcc.model_eval prompt-calibrate "${suites[@]}" --out evals/runs/dispatch | tee run.log
+                # The baseline scorecards the patch cites (baseline_report), at their repo paths.
+                if [ -d evals/reports/prompt-calibration ]; then cp -r evals/reports evals/runs/dispatch/; fi
+                echo "Review policy_patch.json in the artifact. To apply it, commit the artifact's reports/ folder under evals/ and merge the patch into model_policy.json (prompt-calibrate --apply does the merge) in a PR." >> "$GITHUB_STEP_SUMMARY"
+              fi ;;
+            judges)
+              # Live judge calls on the committed human labels (about $0.20 per judge).
+              # Judge model: the first entry of `models`, else the policy pin / auto-pick.
+              jm=(); if [ "${#models[@]}" -ge 2 ]; then jm=(--judge-model "${models[1]%@*}"); fi
+              for j in feedback-quality faithfulness; do
+                if [ "${DRY_RUN}" = "true" ]; then
+                  echo "[dry run] would calibrate judge ${j}" | tee -a run.log; continue
+                fi
+                poetry run python -m cqc_cpcc.model_eval judge-calibrate --judge "${j}" "${jm[@]}" | tee -a run.log
+                cp "evals/judges/calibration/${j}.report.json" evals/runs/dispatch/
+              done
+              echo "Commit the two report files from the artifact to evals/judges/calibration/ and pin prompt_eval.judge.model to the reports' judge_model." >> "$GITHUB_STEP_SUMMARY" ;;
+            ab)
+              # The PR's own detection picks what to run; dispatch-report re-checks it from the base.
+              cd pr
+              suites="$(poetry run python -m cqc_cpcc.model_eval prompts-affected --base-ref "origin/${BASE}" 2>/dev/null \
+                | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["run"]))')"
+              # A maintainer can add suites (for example ones only the base branch's detection requires).
+              if [ -n "${SUITES}" ] && [ "${SUITES}" != "all" ]; then suites="$(printf '%s,%s' "${suites}" "${SUITES}" \
+                | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)"; fi
+              if [ -z "${suites}" ]; then echo "No suites affected (this PR's detection)"; exit 0; fi
+              # $0 first: when every request is identical to the base's, skip the paid A/B
+              # (dispatch-report re-checks the claim with the base's code). full_ab forces the run.
+              if [ "${FULL_AB}" != "true" ] && [ "$(printf %s "${FAST_PATH}" | tr "[:upper:]" "[:lower:]")" != "off" ] && env -u OPENROUTER_API_KEY -u OPENAI_API_KEY \
+                  poetry run python -m cqc_cpcc.model_eval prompt-requests-identical \
+                  --suites "${suites}" --base-ref "origin/${BASE}" --out ../evals/runs/dispatch \
+                  && python3 -c 'import json,sys; sys.exit(0 if json.load(open("../evals/runs/dispatch/requests.json"))["identical"] else 1)'; then
+                echo "Requests identical to the base's: no model A/B"; cd ..; exit 0
+              fi
+              rm -f ../evals/runs/dispatch/requests.json
+              poetry run python -m cqc_cpcc.model_eval prompt-ab --suites "${suites}" --base-ref "origin/${BASE}" \
+                "${models[@]}" "${judges[@]}" --out ../evals/runs/dispatch | tee ../run.log
+              cd .. ;;
+          esac
+          for f in evals/runs/dispatch/*/scorecard.md evals/runs/dispatch/ab.md; do
+            if [ -f "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+          exit 0
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-dispatch-${{ github.run_id }}
+          path: evals/runs/dispatch/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  dispatch-report:
+    # Posts a maintainer ab run's result. It runs no PR code: the base branch is checked out,
+    # the PR's tree and the dispatch artifact are read as data only, and the base re-decides
+    # (detection, graders, rule). A failed re-decide posts failure, never the PR's verdict.
+    needs: dispatch
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'ab' && needs.dispatch.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Check out the base branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.dispatch.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }} (base branch's lock)
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      # The PR is read through the API as data: GitHub's own list of its changed files, its two
+      # registries, and its changed dataset files. Nothing from the PR is checked out or run.
+      - name: Fetch the PR's changed files and data (API, no checkout)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ needs.dispatch.outputs.sha }}
+        run: |
+          set -euo pipefail
+          now="$(gh api "repos/${REPO}/pulls/${PR}" --jq .head.sha)"
+          if [ "${now}" != "${HEAD_SHA}" ]; then
+            echo "::error::PR ${PR} moved to ${now} after ${HEAD_SHA} was evaluated; re-run"; exit 1
+          fi
+          dest="${RUNNER_TEMP}/pr-head"
+          mkdir -p "${dest}"
+          gh api --paginate "repos/${REPO}/pulls/${PR}/files" \
+            --jq '.[] | [.status, .filename, (.previous_filename // "")] | @tsv' > "${RUNNER_TEMP}/pr-files.tsv"
+          { cut -f2 "${RUNNER_TEMP}/pr-files.tsv"; awk -F'\t' '$3 != "" {print $3}' "${RUNNER_TEMP}/pr-files.tsv"; } \
+            > "${RUNNER_TEMP}/changed.txt"
+          fetch() {
+            mkdir -p "$(dirname "${dest}/$1")"
+            gh api -H "Accept: application/vnd.github.raw" "repos/${REPO}/contents/$1?ref=${HEAD_SHA}" > "${dest}/$1"
+          }
+          # The PR's datasets start as the base's; its changed dataset files replace them.
+          cp -R evals "${dest}/evals"
+          fetch src/cqc_cpcc/config/prompt_registry.json
+          fetch src/cqc_cpcc/config/model_registry.json
+          while IFS=$'\t' read -r status file previous; do
+            if [[ "${previous}" == evals/datasets/* ]]; then rm -f "${dest}/${previous}"; fi
+            [[ "${file}" == evals/datasets/* ]] || continue
+            if [ "${status}" = "removed" ]; then rm -f "${dest}/${file}"; else fetch "${file}"; fi
+          done < "${RUNNER_TEMP}/pr-files.tsv"
+
+      - name: Download the A/B outputs (data)
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: prompt-eval-dispatch-${{ github.run_id }}
+          path: ab-artifact
+
+      - name: Re-decide with the base branch's detection, graders and rule
+        id: decide
+        shell: bash
+        env:
+          BASE_SHA: ${{ needs.dispatch.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.dispatch.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ab-artifact
+          if ! grep -q '"prompt-ab-decide"' src/cqc_cpcc/model_eval/prompt_automation.py; then
+            echo "::error::the base branch has no prompt-ab-decide; dispatch from a branch whose base has it"
+            exit 1
+          fi
+          poetry run python -m cqc_cpcc.model_eval prompt-ab-decide --dir ab-artifact --head-root "${RUNNER_TEMP}/pr-head" \
+            --base-sha "${BASE_SHA}" --head-sha "${HEAD_SHA}" --changed-files "${RUNNER_TEMP}/changed.txt"
+          cat ab-artifact/base-rule.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report the A/B on the PR
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr_number }}
+          SHA: ${{ needs.dispatch.outputs.sha }}
+          RUN_RESULT: ${{ needs.dispatch.result }}
+          DECIDE_OUTCOME: ${{ steps.decide.outcome }}
+          AB_STATUS: ${{ steps.decide.outputs.ab_status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          { echo "<!-- prompt-eval -->"; echo "## Prompt evaluation (maintainer run)"; echo
+            if [ "${RUN_RESULT}" != "success" ]; then echo "The A/B run ended with **${RUN_RESULT}**."; echo; fi
+            if [ "${DECIDE_OUTCOME}" != "success" ]; then echo "The base-branch check ended with **${DECIDE_OUTCOME}**."; echo; fi
+            if [ -f ab-artifact/ab.md ]; then cat ab-artifact/ab.md; echo; fi
+            if [ -f ab-artifact/base-rule.md ]; then cat ab-artifact/base-rule.md; fi
+            echo; echo "_Run: ${RUN_URL}_"; } > comment.md
+          gh pr comment "${PR}" --repo "${REPO}" --body-file comment.md
+          ab_first=""
+          if [ -f ab-artifact/ab.md ]; then ab_first="$(head -n 1 ab-artifact/ab.md || true)"; fi
+          if [ "${RUN_RESULT}" != "success" ] || [ "${DECIDE_OUTCOME}" != "success" ]; then
+            state=failure; description="A/B (maintainer run): run ${RUN_RESULT}, base-branch check ${DECIDE_OUTCOME}"
+            case "${ab_first}" in "RUN ABORTED"*) description="A/B aborted: account limit";; esac
+          else
+            case "${AB_STATUS}" in
+              pass|pass-provisional|request-identical) state=success;;
+              *) state=failure;;
+            esac
+            description="A/B (maintainer run): ${AB_STATUS:-unknown}"
+          fi
+          gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="${state}" -f context="prompt-eval/ab" \
+            -f description="${description}" -f target_url="${RUN_URL}" >/dev/null

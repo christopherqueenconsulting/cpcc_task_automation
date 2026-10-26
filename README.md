@@ -291,7 +291,7 @@ To enable required status checks for pull requests, see **[docs/ci-branch-protec
 
 Workflows in `.github/workflows/`:
 - **unit-tests.yml**, **integration-coverage.yml**, **e2e-coverage.yml**: Test CI (PRs and pushes to `master`)
-- **codeql.yml**, **gitguardian-scan.yml**, **pii-guard.yml**: Code scanning, secret scanning, and student-PII guard
+- **codeql.yml**, **pii-guard.yml**: Code scanning and student-PII guard (secret scanning is the GitGuardian GitHub app, not a workflow)
 - **dependabot-auto-merge.yml**, **dependabot-ci-autofix.yml**: Dependabot housekeeping
 - **Cron_Action.yml**: Manual dispatch only (the schedule is commented out); `cron.py` currently prints a placeholder and does not take attendance
 - **release.yml**: A pushed tag `vX.Y.Z` or `vX.Y.Z-rcN` creates a GitHub release (see `docs/RELEASING.md`)

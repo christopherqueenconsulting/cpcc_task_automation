@@ -40,6 +40,7 @@ jobs:
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: model-eval
     # One queue per PR branch, so a burst of guard runs cannot cancel another PR's
     # auto-merge or a pending evaluation/rollback run.

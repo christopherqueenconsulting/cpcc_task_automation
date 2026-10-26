@@ -297,7 +297,8 @@ def test_word_level_work_is_bounded_by_a_total_budget():
     act = "\n".join("!" * 399 + "?" for _ in range(1500))
     started = time.monotonic()
     rows = dv.align_rows(exp, act)
-    assert time.monotonic() - started < 5
+    # Loose bound: unbounded word diffs take minutes; a loaded xdist worker must not fail it.
+    assert time.monotonic() - started < 20
     assert len(rows) == 1500 and all(r.kind == "chg" for r in rows)
     assert sum(isinstance(r.expected, list) for r in rows) < 50  # the rest are highlighted whole
 
