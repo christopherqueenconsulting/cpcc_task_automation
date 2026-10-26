@@ -213,7 +213,7 @@
     "canonical_slug": "google/gemini-2.5-flash",
     "completion": "0.0000025",
     "created": 1750172488,
-    "expiration_date": "2026-10-20",
+    "expiration_date": null,
     "prompt": "0.0000003"
   },
   "google/gemini-2.5-flash-image": {
@@ -227,28 +227,14 @@
     "canonical_slug": "google/gemini-2.5-flash-lite",
     "completion": "0.0000004",
     "created": 1753200276,
-    "expiration_date": "2026-10-20",
-    "prompt": "0.0000001"
-  },
-  "google/gemini-2.5-flash-lite:batch": {
-    "canonical_slug": "google/gemini-2.5-flash-lite",
-    "completion": "0.0000002",
-    "created": 1753200276,
     "expiration_date": null,
-    "prompt": "0.00000005"
-  },
-  "google/gemini-2.5-flash:batch": {
-    "canonical_slug": "google/gemini-2.5-flash",
-    "completion": "0.00000125",
-    "created": 1750172488,
-    "expiration_date": "2026-10-20",
-    "prompt": "0.00000015"
+    "prompt": "0.0000001"
   },
   "google/gemini-2.5-pro": {
     "canonical_slug": "google/gemini-2.5-pro",
     "completion": "0.00001",
     "created": 1750169544,
-    "expiration_date": "2026-10-20",
+    "expiration_date": null,
     "prompt": "0.00000125"
   },
   "google/gemini-2.5-pro-preview": {
@@ -257,13 +243,6 @@
     "created": 1749137257,
     "expiration_date": null,
     "prompt": "0.00000125"
-  },
-  "google/gemini-2.5-pro:batch": {
-    "canonical_slug": "google/gemini-2.5-pro",
-    "completion": "0.000005",
-    "created": 1750169544,
-    "expiration_date": "2026-10-20",
-    "prompt": "0.000000625"
   },
   "google/gemini-3-flash-preview": {
     "canonical_slug": "google/gemini-3-flash-preview-20251217",
@@ -470,10 +449,10 @@
   },
   "google/gemma-3-4b-it": {
     "canonical_slug": "google/gemma-3-4b-it",
-    "completion": "0.0000001",
+    "completion": "0.00000005",
     "created": 1741905510,
     "expiration_date": null,
-    "prompt": "0.00000005"
+    "prompt": "0.00000004"
   },
   "google/gemma-4-26b-a4b-it": {
     "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
@@ -517,13 +496,6 @@
     "expiration_date": null,
     "prompt": "0"
   },
-  "openai/gpt-3.5-turbo": {
-    "canonical_slug": "openai/gpt-3.5-turbo",
-    "completion": "0.0000015",
-    "created": 1685232000,
-    "expiration_date": null,
-    "prompt": "0.0000005"
-  },
   "openai/gpt-3.5-turbo-0613": {
     "canonical_slug": "openai/gpt-3.5-turbo-0613",
     "completion": "0.000002",
@@ -537,20 +509,6 @@
     "created": 1693180800,
     "expiration_date": null,
     "prompt": "0.000003"
-  },
-  "openai/gpt-3.5-turbo-instruct": {
-    "canonical_slug": "openai/gpt-3.5-turbo-instruct",
-    "completion": "0.000002",
-    "created": 1695859200,
-    "expiration_date": null,
-    "prompt": "0.0000015"
-  },
-  "openai/gpt-3.5-turbo:batch": {
-    "canonical_slug": "openai/gpt-3.5-turbo",
-    "completion": "0.00000075",
-    "created": 1685232000,
-    "expiration_date": null,
-    "prompt": "0.00000025"
   },
   "openai/gpt-4": {
     "canonical_slug": "openai/gpt-4",
