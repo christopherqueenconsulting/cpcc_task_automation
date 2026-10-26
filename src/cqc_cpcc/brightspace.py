@@ -619,6 +619,13 @@ class BrightSpace_Course:
     def _activity_id(activity_type: str, url: str) -> str:
         params = parse_qs(urlparse(url).query)
         key = "qi" if activity_type == "quiz" else "db"
+        if activity_type == "quiz":
+            # The attempt-log URL rewrites ``qi`` from a query parameter into
+            # the path: /attemptLogs/<org-unit>/<quiz-id>/Logs?ou=<org-unit>.
+            # Falling back to ``ou`` makes every quiz in a course share one ID.
+            match = re.search(r"/attemptLogs/\d+/(\d+)/", url)
+            if match:
+                return match.group(1)
         return (params.get(key) or params.get("ou") or [url])[0]
 
     def discover_eva_activities(self) -> list[dict]:
@@ -774,13 +781,10 @@ class BrightSpace_Course:
                 if not controls:
                     raise _EVAReadIncomplete("pagination_control_missing", pages_read, rows_read)
                 if visible and all(self._next_control_disabled(button) for button in visible):
-                    if any(
-                        not button.is_displayed() and not self._next_control_disabled(button)
-                        for button in controls
-                    ):
-                        raise _EVAReadIncomplete(
-                            "pagination_controls_ambiguous", pages_read, rows_read
-                        )
+                    # Responsive Brightspace views can leave an enabled duplicate
+                    # pager in a hidden container. Only the visible pager describes
+                    # the current page; never let an off-screen duplicate block a
+                    # verified end-of-results state.
                     return False
                 button = next(
                     (item for item in visible if not self._next_control_disabled(item)), None

@@ -55,6 +55,15 @@ def test_eva_discovery_lists_assignment_and_quiz_candidates_with_due_dates():
 
 
 @pytest.mark.unit
+def test_quiz_activity_id_comes_from_rewritten_attempt_log_path():
+    first = "https://d2l/d2l/lms/quizzing/admin/attemptLogs/123/88/Logs?ou=123"
+    second = "https://d2l/d2l/lms/quizzing/admin/attemptLogs/123/99/Logs?ou=123"
+
+    assert BrightSpace_Course._activity_id("quiz", first) == "88"
+    assert BrightSpace_Course._activity_id("quiz", second) == "99"
+
+
+@pytest.mark.unit
 class TestBrightSpaceShortWait:
     """Test BrightSpace short-wait wiring for optional course lookup."""
 
@@ -375,7 +384,7 @@ def test_eva_pagination_retries_stale_and_rejects_hidden_next_controls():
 
 
 @pytest.mark.unit
-def test_eva_pagination_rejects_unreadable_or_ambiguous_controls():
+def test_eva_pagination_uses_visible_controls_and_rejects_unreadable_state():
     course = BrightSpace_Course.__new__(BrightSpace_Course)
     course._page_fingerprint = MagicMock(return_value=None)
     with pytest.raises(_EVAReadIncomplete, match="results_page_unreadable"):
@@ -397,8 +406,7 @@ def test_eva_pagination_rejects_unreadable_or_ambiguous_controls():
     course._visible_next_controls = MagicMock(return_value=(
         [visible_disabled, hidden_enabled], [visible_disabled],
     ))
-    with pytest.raises(_EVAReadIncomplete, match="pagination_controls_ambiguous"):
-        course._advance_activity_page("//table", 1, 1)
+    assert course._advance_activity_page("//table", 1, 1) is False
 
     course.EVA_MAX_PAGES = 1
     course._snapshot_activity_page = MagicMock(return_value=(("Student One", "01/12/2026"),))
