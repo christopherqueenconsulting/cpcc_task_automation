@@ -103,10 +103,11 @@ def test_gate_job_keeps_the_required_check_name():
 
 def test_exhaustive_compiler_checks_are_separate_and_covered_by_the_unit_gate():
     jobs = _workflow()["jobs"]
-    command = next(
-        step["run"]
-        for step in jobs["compiler-tests"]["steps"]
-        if step.get("name") == "Run exhaustive real-compiler checks"
-    )
+    steps = jobs["compiler-tests"]["steps"]
+    compiler_step = next(step for step in steps
+                         if step.get("name") == "Run exhaustive real-compiler checks")
+    command = compiler_step["run"]
     assert '-m "unit and compiler"' in command
     assert "--cov=src" in command
+    assert compiler_step["env"]["CQC_REQUIRE_REAL_COMPILERS"] == "true"
+    assert any(step.get("uses") == "actions/setup-java@v6" for step in steps)
