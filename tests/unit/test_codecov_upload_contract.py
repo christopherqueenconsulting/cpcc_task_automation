@@ -48,7 +48,9 @@ def test_codecov_notifications_require_explicit_finalization():
 def test_finalizer_waits_for_every_coverage_producer_and_unit_gate():
     jobs = _workflow()["jobs"]
     finalizer = jobs["codecov-finalize"]
-    assert set(finalizer["needs"]) == {"unit-tests", "integration-tests", "e2e-tests"}
+    assert set(finalizer["needs"]) == {
+        "unit-tests", "compiler-tests", "integration-tests", "e2e-tests"
+    }
     assert "always()" not in str(finalizer.get("if", ""))
     send = next(
         step
@@ -68,6 +70,7 @@ def test_coverage_uploads_are_in_the_orchestrated_workflow():
     }
     assert counts == {
         "shard": 2,
+        "compiler-tests": 1,
         "unit-tests": 0,
         "integration-tests": 1,
         "e2e-tests": 1,
@@ -94,5 +97,17 @@ def test_unit_shard_uploads_are_distinctly_named():
 def test_gate_job_keeps_the_required_check_name():
     gate = _workflow()["jobs"]["unit-tests"]
     assert "name" not in gate, "a custom name would change the required check context"
-    assert gate["needs"] == "shard"
+    assert set(gate["needs"]) == {"shard", "compiler-tests"}
     assert str(gate["if"]).strip() == "always()"
+
+
+def test_exhaustive_compiler_checks_are_separate_and_covered_by_the_unit_gate():
+    jobs = _workflow()["jobs"]
+    steps = jobs["compiler-tests"]["steps"]
+    compiler_step = next(step for step in steps
+                         if step.get("name") == "Run exhaustive real-compiler checks")
+    command = compiler_step["run"]
+    assert '-m "unit and compiler"' in command
+    assert "--cov=src" in command
+    assert compiler_step["env"]["CQC_REQUIRE_REAL_COMPILERS"] == "true"
+    assert any(step.get("uses") == "actions/setup-java@v6" for step in steps)

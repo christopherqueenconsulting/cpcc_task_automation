@@ -2,14 +2,15 @@
 
 `.github/workflows/unit-tests.yml` runs the unit suite as two parallel jobs
 (`Unit shard 1/2`, `Unit shard 2/2`), each using pytest-xdist (`-n logical --dist loadfile`: every vCPU, since `-n auto` counts only physical cores).
-A gate job named exactly `unit-tests` waits for both.
+A gate job named exactly `unit-tests` waits for both shards and the exhaustive compiler-check
+job. The compiler checks run concurrently with the unit shards.
 
 ## The required check is `unit-tests`
 
 Branch protection and the merge queue require the check named `unit-tests`. That is the gate
 job, not the shard jobs (a matrix job's name carries its matrix value). The gate passes only
-when `needs.shard.result == 'success'`; a failed, skipped or cancelled shard fails it. Do not
-rename it, give it a `name:`, or remove it: that silently un-gates the unit lane
+when both the shard matrix and `compiler-tests` pass; a failed, skipped or cancelled lane fails
+it. Do not rename it, give it a `name:`, or remove it: that silently un-gates the unit lane
 (`tests/unit/test_codecov_upload_contract.py` guards this).
 
 ## How files are assigned
@@ -25,21 +26,47 @@ If a pinned file is renamed, update the pin; `test_shard_selection.py` fails on 
 ## Run one shard locally
 
 ```bash
-UNIT_SHARDS=2 UNIT_SHARD=1 poetry run pytest -m unit --ignore=tests/e2e -n logical --dist loadfile
-UNIT_SHARDS=2 UNIT_SHARD=2 poetry run pytest -m unit --ignore=tests/e2e -n logical --dist loadfile
+UNIT_SHARDS=2 UNIT_SHARD=1 poetry run pytest -m "unit and not compiler" --ignore=tests/e2e -n logical --dist loadfile
+UNIT_SHARDS=2 UNIT_SHARD=2 poetry run pytest -m "unit and not compiler" --ignore=tests/e2e -n logical --dist loadfile
+poetry run pytest -m "unit and compiler" tests/unit/test_model_eval.py tests/unit/test_grading_solution_suite.py
 ```
 
 Drop `-n logical --dist loadfile` for a serial run, and drop the two variables to run everything.
 
+## Unit shard timing (PR #521, measured 2026-10-26)
+
+The original PR run before the performance changes measured shard 1 at 219 seconds and
+shard 2 at 312 seconds. After replacing the seven-suite gate test and moving exhaustive
+compiler cases out of the shards, shard 2 measured 85 seconds while shard 1 was 215 seconds.
+After optimizing request-capture fixtures, two subsequent runs measured:
+
+| Run | Unit shard 1 | Unit shard 2 | Compiler lane | Full CI workflow |
+| --- | ---: | ---: | ---: | ---: |
+| Capture optimization run | 123 s | 92 s | 82 s | about 2m 49s |
+| Final strict-compiler run | 98 s | 107 s | 94 s | 2m 59s |
+
+The final run completed 2,936 tests in shard 1 and 2,676 tests plus one expected failure in
+shard 2. Both marked compiler tests passed; the strict CI setting checks that Java and C++
+compiler coverage cannot silently disappear. Compared with the initial PR run, the final
+shard times were 55% and 66% lower. The final run took 3m from workflow start to completion,
+including integration, E2E, and Codecov finalization.
+
+These are hosted-runner wall-clock observations, not a controlled benchmark: runner load and
+workflow revisions vary. Two post-fixture-optimization runs show shard 1 between 98–123 seconds
+and shard 2 between 92–107 seconds. Keep tracking the slowest shard across future runs; rebalance
+the heavy-file pins if that time regresses. The exhaustive compiler checks still run as a required
+parallel lane, preserving the checks while removing their cost from both shard critical paths.
+
 ## Coverage
 
 Each shard uploads its own `coverage.xml` to Codecov with flag `unit` and name
-`unit-coverage-<shard>`, plus its own test results; Codecov merges the coverage. Integration
-and E2E reports are uploaded by sibling jobs in the same workflow. The `codecov-finalize`
-job needs the unit aggregate gate, integration, and E2E jobs before it runs Codecov's
-`send-notifications` command. Do not add `if: always()` to this job: failed or missing test
+`unit-coverage-<shard>`, plus its own test results; Codecov merges the coverage. The
+`compiler-tests` job uploads its coverage and test results with the same `unit` flag.
+Integration and E2E reports are uploaded by sibling jobs in the same workflow. The
+`codecov-finalize` job needs the unit aggregate gate, compiler checks, integration, and E2E jobs
+before it runs Codecov's `send-notifications` command. Do not add `if: always()` to this job: failed or missing test
 lanes must not signal that a complete coverage set is ready. The Codecov contract tests
-verify all three upload lanes are dependencies of the finalizer and that the required
+verify every coverage upload lane is a dependency of the finalizer and that the required
 `unit-tests` gate name remains intact.
 
 ## CI setup optimizations (PR #518, measured 2026-10-26)
@@ -75,7 +102,7 @@ Playwright's headless Chromium mode.
 ### Codecov notification ordering
 
 `codecov.yml` sets `notify.manual_trigger: yes` and `notify.wait_for_ci: yes`. The finalizer
-explicitly signals completion only after unit, integration, and E2E jobs finish, replacing
+explicitly signals completion only after unit, compiler, integration, and E2E jobs finish, replacing
 the fragile fixed `after_n_builds` count. The repo still sets `strict_yaml_branch: master`,
 so Codecov uses configuration from `master`; this behavior can only be measured after the
 manual-trigger setting reaches `master`. Verify the Codecov status/comment timestamps on

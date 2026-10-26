@@ -177,8 +177,13 @@ def settings() -> dict:
                              openrouter_client.OPENROUTER_APP_URL])}
 
 
-async def capture_suite(suite_id: str, *, requests_only: bool = False) -> dict:
-    """Capture one suite; ``requests_only`` skips the fixed-answer/output pass."""
+async def capture_suite(suite_id: str, *, requests_only: bool = False,
+                        outputs_only: bool = False, first_success_only: bool = False) -> dict:
+    """Capture one suite; tests may limit capture to requests or a successful fixed-answer case."""
+    if requests_only and outputs_only:
+        raise ValueError("requests_only and outputs_only cannot both be set")
+    if first_success_only and not outputs_only:
+        raise ValueError("first_success_only is available only for outputs_only captures")
     from cqc_cpcc.model_eval import prompt_eval
     from cqc_cpcc.model_eval import adaptive
     from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, pinned_registry
@@ -197,25 +202,32 @@ async def capture_suite(suite_id: str, *, requests_only: bool = False) -> dict:
     # so an unchanged prompt hashes the same in the head and base processes.
     with pinned_registry(model, effort, profile, roles=(suite.role,),
                          max_output_tokens=adaptive.eval_max_tokens() or DEFAULT_MAX_OUTPUT_TOKENS), deterministic_nonce():
-        with _patched(sink, test_mode=False):
-            for case in suite.cases():
-                sink.clear()
-                try:
-                    await suite.invoke(case)
-                except Exception:  # noqa: BLE001 - the refused send (or anything after it) ends the case
-                    pass
-                requests[case.case_id] = sorted(set(sink))
-        if requests_only:
-            return {"requests": requests}
+        # Loading validates and stamps the full dataset. Reuse the same case objects
+        # for both passes instead of reading and validating the dataset twice.
+        cases = suite.cases()
+        if not outputs_only:
+            with _patched(sink, test_mode=False):
+                for case in cases:
+                    sink.clear()
+                    try:
+                        await suite.invoke(case)
+                    except Exception:  # noqa: BLE001 - the refused send (or anything after it) ends the case
+                        pass
+                    requests[case.case_id] = sorted(set(sink))
+            if requests_only:
+                return {"requests": requests}
         made: list = []
         with _patched(sink, test_mode=True, calls=made):
-            for case in suite.cases():
+            for case in cases:
                 made.clear()
                 try:
                     outputs[case.case_id] = _hash(suite.to_payload(await suite.invoke(case)))
                 except Exception as e:  # noqa: BLE001 - a failure is an output too
                     outputs[case.case_id] = ERROR + type(e).__name__
                 calls[case.case_id] = list(made)
+                if (first_success_only and not outputs[case.case_id].startswith(ERROR)
+                        and calls[case.case_id]):
+                    break
     return {"requests": requests, "calls": calls, "outputs": outputs}
 
 
@@ -228,6 +240,17 @@ def capture_request_hashes(suite_ids: list) -> dict:
     """Capture only outgoing request hashes, for the no-network determinism check."""
     return {"format": FORMAT, "settings": settings(),
             "suites": {s: asyncio.run(capture_suite(s, requests_only=True)) for s in suite_ids}}
+
+
+def capture_output_smoke(suite_ids: list) -> dict:
+    """Capture fixed-answer handling through each suite's first successful case.
+
+    This is for tests that assert every suite can handle one canned answer. The full
+    ``capture`` path still records every case for production comparisons.
+    """
+    return {"format": FORMAT, "settings": settings(),
+            "suites": {s: asyncio.run(capture_suite(s, outputs_only=True, first_success_only=True))
+                       for s in suite_ids}}
 
 
 def compare(head: dict, base: dict, suite_ids: list) -> dict:

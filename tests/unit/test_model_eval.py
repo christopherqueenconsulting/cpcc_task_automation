@@ -86,19 +86,34 @@ class TestDataset:
         assert result.returncode == 0, result.stderr
 
     @pytest.mark.compile
+    @pytest.mark.compiler
     def test_compile_labels_match_real_compilers(self, cases):
         from cqc_cpcc.utilities.compiler_gate import check_submission
 
         checked = 0
+        checked_languages = set()
+        required_languages = {c.language for c in cases if not c.is_empty}
         for c in cases:
             if c.is_empty:
                 continue
             result = check_submission(list(c.files.items()))
             if not result.supported:
-                pytest.skip("javac/g++ not available")
+                # The host gate deliberately refuses unsafe includes; continue so
+                # the rest of the dataset is still checked. CI requires both
+                # Java and C++ to have supported cases below.
+                continue
             assert result.compiles == c.compiles, c.case_id
             checked += 1
+            checked_languages.add(result.language)
+        strict_compilers = os.getenv("CQC_REQUIRE_REAL_COMPILERS") == "true"
+        if not checked and not strict_compilers:
+            pytest.skip("no dataset cases could be checked with installed compilers")
         assert checked > 0
+        if strict_compilers:
+            assert checked_languages == required_languages, (
+                f"CI did not exercise all dataset languages: checked {sorted(checked_languages)}, "
+                f"expected {sorted(required_languages)}"
+            )
 
 
 @pytest.mark.unit
