@@ -381,7 +381,10 @@ class TestRecords:
         assert result["healthy"] == []
         assert len(history.read_text().splitlines()) == 1
         text = status.read_text()
-        assert f"| `exam-grading` | {_registry_version('exam-grading')} | `exam-grading` | `openai/x@high` |" in text and "needs work" in text
+        assert (
+            f"| `exam-grading` | {_registry_version('exam-grading')} | `exam-grading` | `openai/x@high` |" in text
+            and "needs work" in text
+        )
         assert "Never evaluated on master yet" in text
 
     def test_a_passing_run_marks_the_prompt_healthy(self, tmp_path):
@@ -608,6 +611,7 @@ class TestCli:
 
 
 def test_power_script_exits_1_when_no_case_has_matching_runs(tmp_path, monkeypatch, capsys):
+    import logging
     import runpy
     import sys
 
@@ -618,8 +622,14 @@ def test_power_script_exits_1_when_no_case_has_matching_runs(tmp_path, monkeypat
         (out / "raw_outputs.jsonl").write_text(rec.to_json() + "\n", encoding="utf-8")
     script = Path(__file__).resolve().parents[2] / "scripts" / "prompt_ab_power.py"
     monkeypatch.setattr(sys, "argv", ["prompt_ab_power.py", str(tmp_path), "digest", "--sims", "1"])
-    with pytest.raises(SystemExit) as exit_info:
-        runpy.run_path(str(script), run_name="__main__")
+    # The CLI disables logging for its process. Running it in pytest's process
+    # must restore that state so later redaction/SDK logging tests still run.
+    previous_disable = logging.root.manager.disable
+    try:
+        with pytest.raises(SystemExit) as exit_info:
+            runpy.run_path(str(script), run_name="__main__")
+    finally:
+        logging.disable(previous_disable)
     assert exit_info.value.code == 1
     assert "too few for a paired test" in capsys.readouterr().err
 

@@ -4,8 +4,10 @@ import datetime as DT
 from unittest.mock import MagicMock, PropertyMock, call, patch
 
 import pytest
+from freezegun import freeze_time
 from selenium.common import (
     ElementNotInteractableException,
+    NoSuchElementException,
     NoSuchWindowException,
     StaleElementReferenceException,
     TimeoutException,
@@ -18,6 +20,246 @@ from cqc_cpcc.brightspace import (
 )
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.withdrawals import UNKNOWN_ACTIVITY_WEEK
+
+
+@pytest.mark.unit
+@freeze_time("2026-10-27 16:00:00")
+@pytest.mark.parametrize("end, expected_end", [(DT.datetime(2026, 12, 11), DT.date(2026, 10, 27)),
+                                               (DT.datetime(2026, 10, 26), DT.date(2026, 10, 26))])
+def test_attendance_window_includes_scan_day_and_respects_course_end(end, expected_end):
+    with patch.object(BrightSpace_Course, "open_course_tab", return_value=False):
+        course = BrightSpace_Course(
+            "CSC-134-N801", "Fall", "2026", DT.date(2026, 8, 26), DT.date(2026, 11, 1),
+            DT.datetime(2026, 8, 17), end, MagicMock(), MagicMock(),
+            date_range_start=DT.date(2026, 10, 25),
+        )
+    assert course.collection_date == DT.date(2026, 10, 27)
+    assert course.date_range_start == DT.date(2026, 10, 26)
+    assert course.date_range_end == expected_end
+
+
+@pytest.mark.unit
+@freeze_time("2026-10-28 02:00:00")
+def test_attendance_window_uses_eastern_day_and_defaults_to_course_start():
+    with patch.object(BrightSpace_Course, "open_course_tab", return_value=False):
+        course = BrightSpace_Course(
+            "CSC-134-N801", "Fall", "2026", DT.date(2026, 8, 26), DT.date(2026, 11, 1),
+            DT.datetime(2026, 8, 17), DT.datetime(2026, 12, 11), MagicMock(), MagicMock(),
+        )
+    assert course.date_range_start == DT.date(2026, 8, 17)
+    assert course.collection_date == course.date_range_end == DT.date(2026, 10, 27)
+
+
+@pytest.fixture
+def ordinary_completion_course(monkeypatch):
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.current_window_handle = "course"
+    course.driver.window_handles = ["course"]
+    course.wait = MagicMock()
+    course.name = "CSC-134-N801"
+    course.select_xpath = "//select"
+    course.attendance_records = {}
+    course.scrape_problems = []
+    course.date_range_start = DT.date(2026, 10, 20)
+    course.date_range_end = DT.date(2026, 10, 27)
+    course.course_start_date = DT.datetime(2026, 8, 17)
+    course.course_end_date = DT.datetime(2026, 12, 11)
+    course.collection_date = DT.date(2026, 10, 27)
+
+    def switch_tab(tab):
+        course.driver.current_window_handle = tab
+
+    def open_tab(_kind):
+        course.driver.window_handles.append("activity")
+        switch_tab("activity")
+
+    def close_tab(_driver):
+        course.driver.window_handles.remove(course.driver.current_window_handle)
+        switch_tab("course")
+
+    course.driver.switch_to.window.side_effect = switch_tab
+    course.driver.switch_to.new_window.side_effect = open_tab
+    course.click_max_results_select = MagicMock(return_value=True)
+    monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.click_element_wait_retry", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.close_tab", close_tab)
+    return course
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("activity_type", ["assignment", "quiz"])
+@pytest.mark.parametrize("failure", ["load", "missing_rows", "pagination"])
+def test_ordinary_completion_failure_marks_scan_incomplete_and_restores_tab(
+        ordinary_completion_course, activity_type, failure):
+    course = ordinary_completion_course
+    course._read_activity_rows = MagicMock()
+    if failure == "load":
+        course.click_max_results_select.return_value = False
+    elif failure == "missing_rows":
+        course._read_activity_rows.side_effect = NoSuchElementException("redrawn table")
+    else:
+        course._read_activity_rows.side_effect = _EVAReadIncomplete("pagination_transition_unverified", 1, 1)
+    course._collect_ordinary_activity_completions(["https://example.invalid/activity"], activity_type)
+    assert len(course.scrape_problems) == 1
+    assert "incomplete" in course.scrape_problems[0]
+    assert course.attendance_records == {}
+    assert course.driver.window_handles == ["course"]
+    assert course.driver.current_window_handle == "course"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("activity_type", ["assignment", "quiz"])
+def test_ordinary_completion_collects_all_pages_and_keeps_actual_completion_dates(
+        ordinary_completion_course, activity_type):
+    course = ordinary_completion_course
+    course._snapshot_activity_page = MagicMock(side_effect=[
+        (("Student One", "10/19/2026"),),
+        (("Student Two", "10/27/2026"), ("Student One", "10/27/2026")),
+    ])
+    course._advance_activity_page = MagicMock(side_effect=[True, False])
+    # The due date already made the activity eligible; an earlier completion
+    # still counts. Multiple attempts must not overwrite another attendance day.
+    method = (course.get_attendance_from_brightspace_assignment_urls if activity_type == "assignment"
+              else course.get_attendance_from_brightspace_quizzes_urls)
+    method(["https://example.invalid/activity"])
+    assert course.attendance_records == {
+        "10-19-2026": ["Student One"], "10-27-2026": ["Student Two", "Student One"],
+    }
+    assert course.scrape_problems == []
+    assert course._snapshot_activity_page.call_count == 2
+    assert course.driver.window_handles == ["course"]
+
+
+@pytest.mark.unit
+def test_ordinary_completion_invalid_date_discards_activity_batch(ordinary_completion_course):
+    course = ordinary_completion_course
+    course._read_activity_rows = MagicMock(return_value=(
+        [("Student One", "10/27/2026"), ("Student Two", "N/A")], 1,
+    ))
+    course.get_attendance_from_brightspace_assignment_urls(["https://example.invalid/activity"])
+    assert course.attendance_records == {}
+    assert "invalid_completion_date" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("activity_type", ["assignment", "quiz"])
+def test_ordinary_completion_enforces_course_bounds_but_keeps_prior_lookback_activity(
+        ordinary_completion_course, activity_type):
+    course = ordinary_completion_course
+    course.course_end_date = DT.datetime(2026, 10, 26)
+    course._read_activity_rows = MagicMock(return_value=([
+        ("Student One", "08/16/2026"),
+        ("Student One", "08/17/2026"),
+        ("Student One", "10/19/2026"),
+        ("Student One", "10/26/2026"),
+        ("Student One", "10/27/2026"),
+    ], 1))
+    course._collect_ordinary_activity_completions(["https://example.invalid/activity"], activity_type)
+    assert course.attendance_records == {
+        "08-17-2026": ["Student One"], "10-19-2026": ["Student One"], "10-26-2026": ["Student One"],
+    }
+    assert course.scrape_problems == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("activity_type", ["assignment", "quiz"])
+def test_ordinary_completion_future_date_discards_activity_batch_without_removing_other_evidence(
+        ordinary_completion_course, activity_type):
+    course = ordinary_completion_course
+    course.attendance_records = {"10-19-2026": ["Student One"]}
+    course._read_activity_rows = MagicMock(return_value=([
+        ("Student Two", "10/26/2026"), ("Student Three", "10/28/2026"),
+    ], 1))
+    course._collect_ordinary_activity_completions(["https://example.invalid/activity"], activity_type)
+    assert course.attendance_records == {"10-19-2026": ["Student One"]}
+    assert "future_completion_date" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+def test_due_date_timeout_marks_scan_incomplete(ordinary_completion_course, monkeypatch):
+    course = ordinary_completion_course
+    monkeypatch.setattr("cqc_cpcc.brightspace.get_elements_text_as_list_wait_stale",
+                        MagicMock(side_effect=TimeoutException("dates never loaded")))
+    assert course.get_inrange_duedates_from_xpath("//due-date") == []
+    assert course.scrape_problems == ["due-date collection incomplete (TimeoutException)"]
+
+
+@pytest.mark.unit
+def test_due_date_nonempty_first_inventory_page_cannot_hide_later_activities(
+        ordinary_completion_course, monkeypatch):
+    course = ordinary_completion_course
+    button = MagicMock()
+    button.get_attribute.return_value = None
+    button.is_enabled.return_value = True
+    course._visible_next_controls = MagicMock(return_value=([button], [button]))
+    monkeypatch.setattr("cqc_cpcc.brightspace.get_elements_text_as_list_wait_stale",
+                        MagicMock(return_value=["10/26/2026"]))
+    assert course.get_inrange_duedates_from_xpath("//due-date", "//activity-table") == ["10/26/2026"]
+    assert course.scrape_problems == ["activity inventory has uncollected pages"]
+
+
+@pytest.mark.unit
+def test_due_date_helper_swallowed_timeout_still_marks_scan_incomplete(ordinary_completion_course, monkeypatch):
+    course = ordinary_completion_course
+    # The shared Selenium text helper converts timeout/stale errors into [].
+    monkeypatch.setattr("cqc_cpcc.brightspace.get_elements_text_as_list_wait_stale",
+                        MagicMock(return_value=[]))
+    assert course.get_inrange_duedates_from_xpath("//due-date") == []
+    assert course.scrape_problems == ["due-date collection empty or unconfirmed"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("message", ["No assignments found", "No quizzes found", "No results found"])
+def test_due_date_loaded_explicit_empty_list_is_complete(ordinary_completion_course, monkeypatch, message):
+    course = ordinary_completion_course
+    table = MagicMock(text=message)
+    table.find_elements.return_value = []
+    course.driver.find_elements.return_value = [table]
+    monkeypatch.setattr("cqc_cpcc.brightspace.get_elements_text_as_list_wait_stale",
+                        MagicMock(return_value=[]))
+    assert course.get_inrange_duedates_from_xpath("//due-date", "//activity-table") == []
+    assert course.scrape_problems == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("table_state", ["missing", "blank", "activity_named_no_assignments"])
+def test_due_date_unconfirmed_empty_list_stays_incomplete(ordinary_completion_course, monkeypatch, table_state):
+    course = ordinary_completion_course
+    table = MagicMock(text="No assignments found" if table_state == "activity_named_no_assignments" else "")
+    table.find_elements.return_value = [MagicMock()] if table_state == "activity_named_no_assignments" else []
+    course.driver.find_elements.return_value = [] if table_state == "missing" else [table]
+    monkeypatch.setattr("cqc_cpcc.brightspace.get_elements_text_as_list_wait_stale",
+                        MagicMock(return_value=[]))
+    assert course.get_inrange_duedates_from_xpath("//due-date", "//activity-table") == []
+    assert course.scrape_problems == ["due-date collection empty or unconfirmed"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("row_text, date_text, has_next, complete", [
+    ("Practice exercise", "", False, True),
+    ("Practice exercise Due on Oct 27, 2026", "", False, False),
+    ("Practice exercise", "Oct 27, 2026", False, False),
+    ("Practice exercise", "", True, False),
+])
+def test_due_date_undated_rows_require_loaded_rows_without_hidden_dates_or_pages(
+        ordinary_completion_course, monkeypatch, row_text, date_text, has_next, complete):
+    course = ordinary_completion_course
+    row = MagicMock(text=row_text)
+    link = MagicMock()
+    date_node = MagicMock(text=date_text)
+    date_node.get_attribute.return_value = None
+    row.find_elements.side_effect = lambda _by, xpath: [link] if "a[contains" in xpath else [date_node]
+    table = MagicMock(text=row_text)
+    table.find_elements.side_effect = lambda _by, xpath: [link] if "a[contains" in xpath else [row]
+    course.driver.find_elements.return_value = [table]
+    button = MagicMock()
+    button.get_attribute.return_value = None
+    button.is_enabled.return_value = True
+    course._visible_next_controls = MagicMock(return_value=([button], [button]) if has_next else ([], []))
+    monkeypatch.setattr("cqc_cpcc.brightspace.get_elements_text_as_list_wait_stale", MagicMock(return_value=[]))
+    assert course.get_inrange_duedates_from_xpath("//due-date", "//activity-table") == []
+    assert (course.scrape_problems == []) is complete
 
 
 @pytest.mark.unit

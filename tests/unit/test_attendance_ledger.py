@@ -4,6 +4,7 @@ import sqlite3
 import stat
 
 import pytest
+from freezegun import freeze_time
 
 from cqc_cpcc.attendance_ledger import (
     COUNT_MATCH,
@@ -103,6 +104,54 @@ class TestAttendanceRows:
 
 @pytest.mark.unit
 class TestLookback:
+    @freeze_time("2026-10-27 16:00:00")
+    def test_same_day_runs_leave_today_open_and_next_day_revisits_it(self, ledger):
+        today = DT.date(2026, 10, 27)
+        for _run in range(2):
+            ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
+                                       window_start=COURSE_START, window_end=today,
+                                       collection_date=today)
+            assert ledger.course_states()[0]["verified_through"] == "2026-10-26"
+        assert ledger.lookback_start(TERM, COURSE, COURSE_START, today=DT.date(2026, 10, 28))[0] <= today
+        ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
+                                   window_start=DT.date(2026, 10, 20), window_end=DT.date(2026, 10, 28),
+                                   collection_date=DT.date(2026, 10, 28))
+        assert ledger.course_states()[0]["verified_through"] == "2026-10-27"
+
+    @freeze_time("2026-10-28 05:00:00")
+    def test_midnight_crossing_closes_only_days_before_collection_started(self, ledger):
+        ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
+                                   window_start=COURSE_START, window_end=DT.date(2026, 10, 27),
+                                   collection_date=DT.date(2026, 10, 27))
+        assert ledger.course_states()[0]["verified_through"] == "2026-10-26"
+
+    @freeze_time("2026-10-27 16:00:00")
+    def test_first_day_run_never_creates_a_checkpoint_before_the_course_started(self, ledger):
+        today = DT.date(2026, 10, 27)
+        ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
+                                   window_start=today, window_end=today, collection_date=today)
+        assert ledger.course_states()[0]["verified_through"] is None
+
+    @freeze_time("2026-10-27 16:00:00")
+    def test_later_window_does_not_advance_across_uncollected_days(self, ledger):
+        ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
+                                   window_start=COURSE_START, window_end=DT.date(2026, 10, 20))
+        ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
+                                   window_start=DT.date(2026, 10, 23), window_end=DT.date(2026, 10, 27))
+        assert ledger.course_states()[0]["verified_through"] == "2026-10-20"
+        assert ledger.course_states()[0]["last_run_status"] == RUN_INCOMPLETE
+
+    @freeze_time("2026-10-27 16:00:00")
+    def test_legacy_today_checkpoint_is_reopened(self, ledger):
+        ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
+                                   window_start=COURSE_START, window_end=DT.date(2026, 10, 20))
+        ledger._conn.execute("UPDATE course_state SET verified_through='2026-10-29'")
+        ledger._conn.commit()
+        assert ledger.lookback_start(TERM, COURSE, COURSE_START)[0] <= DT.date(2026, 10, 27)
+        ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
+                                   window_start=DT.date(2026, 10, 20), window_end=DT.date(2026, 10, 27))
+        assert ledger.course_states()[0]["verified_through"] == "2026-10-26"
+
     def test_empty_ledger_starts_at_course_start(self, ledger):
         start, reason = ledger.lookback_start(TERM, COURSE, COURSE_START)
         assert start == COURSE_START
@@ -286,7 +335,7 @@ class TestEvaActivity:
         assert ledger._conn.execute("SELECT COUNT(*) FROM attendance").fetchone()[0] == 2
         assert ledger._conn.execute(
             "SELECT COUNT(*) FROM attendance_evidence"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 3  # Two ordinary sources and one deduplicated EVA source.
         assert {entry.student_id: entry.exact_date for entry in ledger.outstanding(TERM, COURSE)} == {
             "ordinary": False, "eva": True,
         }

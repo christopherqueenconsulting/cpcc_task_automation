@@ -93,6 +93,14 @@ class TestNotify:
         with browser_observer_scope(observer):
             ec.notify_eva_flags(SECTION, _flags(DT.date(2026, 10, 6)))
 
+    def test_empty_result_notifies_observer_to_clear_previous_flags(self):
+        from cqc_cpcc.utilities.selenium_util import browser_observer_scope
+
+        observer = MagicMock()
+        with browser_observer_scope(observer):
+            ec.notify_eva_flags(SECTION, [])
+        observer.on_eva_flags.assert_called_once_with(SECTION, [])
+
     def test_nothing_flagged_is_silent(self, capsys):
         ec.notify_eva_flags(SECTION, [])
         assert capsys.readouterr().out == ""
@@ -107,6 +115,26 @@ class TestLedgerEvaChecks:
         rows = ledger.latest_eva_flags("Fall 2026", SECTION)
         assert [(r["student_id"], r["phase"]) for r in rows] == [("4340773", ec.PHASE_PAST_EVA)]
         assert "student_name" not in rows[0]
+        ledger.close()
+
+    def test_empty_check_clears_previous_flags_across_restart(self, tmp_path):
+        path = str(tmp_path / "attendance.sqlite3")
+        ledger = AttendanceLedger(path)
+        ledger.record_eva_check("Fall 2026", SECTION, _flags(DT.date(2026, 10, 6)))
+        ledger.record_eva_check("Fall 2026", SECTION, [])
+        ledger.close()
+
+        reopened = AttendanceLedger(path)
+        try:
+            assert reopened.latest_eva_flags("Fall 2026", SECTION) == []
+        finally:
+            reopened.close()
+
+    def test_incomplete_check_invalidates_previous_definitive_flags(self):
+        ledger = AttendanceLedger(":memory:")
+        ledger.record_eva_check("Fall 2026", SECTION, _flags(DT.date(2026, 10, 6)))
+        ledger.record_eva_check("Fall 2026", SECTION, [], status="incomplete")
+        assert ledger.latest_eva_flags("Fall 2026", SECTION) == []
         ledger.close()
 
     def test_owed_by_student_counts_outstanding_through_a_date(self):
@@ -136,6 +164,9 @@ class TestCheckEvaAttendance:
     def test_flags_are_kept_recorded_and_announced(self):
         ledger = AttendanceLedger(":memory:")
         mc = self._mc({"4340773": 0, "4396124": 2, "4436785": 1})
+        for student_id in ("4396124", "4436785"):
+            ledger.upsert_expected("Fall 2026", SECTION, student_id, EVA)
+            ledger.set_status("Fall 2026", SECTION, student_id, EVA, STATUS_VERIFIED)
         with patch("cqc_cpcc.my_colleges.notify_eva_flags") as notify:
             flags = mc._check_eva_attendance(self._context(), ledger, "Fall 2026", SECTION,
                                              today=DT.date(2026, 10, 6))
@@ -157,4 +188,33 @@ class TestCheckEvaAttendance:
             assert mc._check_eva_attendance(self._context(eva), ledger, "Fall 2026",
                                             SECTION, today=today) == []
         notify.assert_not_called()
+        ledger.close()
+
+    def test_present_attendance_after_cutoff_does_not_hide_missing_eva(self):
+        ledger = AttendanceLedger(":memory:")
+        mc = self._mc({"4340773": 1})
+        mc._read_attendance_roster = lambda: [ROSTER[0]]
+        day_after = EVA + DT.timedelta(days=1)
+        ledger.upsert_expected("Fall 2026", SECTION, "4340773", day_after)
+        ledger.set_status("Fall 2026", SECTION, "4340773", day_after, STATUS_VERIFIED)
+        with patch("cqc_cpcc.my_colleges.notify_eva_flags"):
+            flags = mc._check_eva_attendance(
+                self._context(), ledger, "Fall 2026", SECTION,
+                today=DT.date(2026, 10, 6), coverage_complete=True,
+            )
+        assert [flag.student_id for flag in flags] == ["4340773"]
+        ledger.close()
+
+    def test_incomplete_eva_coverage_clears_stale_flags_without_withdrawal_advice(self):
+        ledger = AttendanceLedger(":memory:")
+        mc = self._mc({"4340773": 0})
+        ledger.record_eva_check("Fall 2026", SECTION, _flags(DT.date(2026, 10, 6)))
+        with patch("cqc_cpcc.my_colleges.notify_eva_flags") as notify:
+            flags = mc._check_eva_attendance(
+                self._context(), ledger, "Fall 2026", SECTION,
+                today=DT.date(2026, 10, 6), coverage_complete=False,
+            )
+        assert flags == []
+        assert ledger.latest_eva_flags("Fall 2026", SECTION) == []
+        assert all(not call.args[1] for call in notify.call_args_list)
         ledger.close()

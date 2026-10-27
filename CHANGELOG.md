@@ -5,6 +5,12 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Attendance now collects through today while keeping the current day open for the next run.
+  Added custom recovery dates, historical EVA re-runs after census, assignment change/detach/reset
+  controls, and evidence-based reconciliation that preserves unrelated attendance. Incomplete
+  collection and uncertain historical records no longer produce definitive missing-EVA results.
+  See [Attendance and EVA recovery](docs/attendance-eva-recovery.md).
+
 ## 0.2.0-rc9 - 2026-10-26
 
 - Streamlit dependency install: removed the textract wrapper and its unused 27-package parser closure. DOCX extraction now uses docx2txt after the existing table-to-JSON conversion; xlrd remains explicit for pandas `.xls` support. Added a generated Poetry-exported `requirements.txt` for Community Cloud's uv-backed installer, checked for freshness in CI. Selenium/Chromium and both PDF libraries remain because the app uses them.

@@ -9,6 +9,7 @@ a prompt nobody can see.
 
 import datetime as DT
 from dataclasses import dataclass, field
+from zoneinfo import ZoneInfo
 
 from cqc_cpcc.utilities.date import (
     convert_date_to_datetime,
@@ -134,9 +135,12 @@ class RunPlan:
 
     course_urls: list[str] = field(default_factory=list)
     # The start of each course's attendance window is worked out per course from
-    # the attendance ledger; the teacher never picks it. ``full_recheck`` forces
-    # every course back to its start date (safe to repeat: verified entries skip).
+    # the attendance ledger. ``full_recheck`` forces
+    # every course back to its start date and revalidates its supported entries.
     full_recheck: bool = False
+    # An inclusive recovery boundary may widen the automatic window, never skip
+    # dates the ledger still needs to collect.
+    attendance_start: DT.date | None = None
     # False = dry run: read MyColleges and report what is missing, write nothing.
     write_attendance: bool = True
     process_withdrawals: bool = False
@@ -149,6 +153,25 @@ class RunPlan:
     remove_reenrolled: bool = False
     # Push-only runs sync these already-written CSV files instead of scraping.
     csv_paths: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.attendance_start is not None:
+            if type(self.attendance_start) is not DT.date:
+                raise ValueError("Attendance start must be a date.")
+            if self.attendance_start > DT.datetime.now(ZoneInfo("America/New_York")).date():
+                raise ValueError("Attendance start cannot be in the future.")
+
+    def attendance_window_start(
+            self, automatic_start: DT.date | DT.datetime, course_start: DT.date | DT.datetime,
+    ) -> DT.date:
+        """Apply an inclusive recovery boundary without skipping unfinished dates."""
+        automatic_start = convert_date_to_datetime(automatic_start).date()
+        course_start = convert_date_to_datetime(course_start).date()
+        if self.full_recheck:
+            return course_start
+        if self.attendance_start is None:
+            return automatic_start
+        return min(automatic_start, max(course_start, self.attendance_start))
 
     @property
     def is_push_only(self) -> bool:
@@ -189,6 +212,7 @@ class RunPlan:
             *,
             course_urls: list[str],
             full_recheck: bool = False,
+            attendance_start: DT.date | None = None,
             write_attendance: bool = True,
             process_withdrawals: bool = True,
             sync_to_tracker: bool = False,
@@ -212,6 +236,7 @@ class RunPlan:
         return cls(
             course_urls=list(course_urls),
             full_recheck=full_recheck,
+            attendance_start=attendance_start,
             write_attendance=write_attendance,
             process_withdrawals=process_withdrawals,
             withdrawals_mode=MODE_SCRAPE,

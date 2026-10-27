@@ -3,8 +3,8 @@
 
 A student needs at least one Present attendance by the EVA date (the last day to
 drop without a grade) to stay in the course. After every course's attendance pass
-the run reads MyColleges' own per-student Present totals and flags each student
-whose total is 0:
+the run reconciles dated attendance through census with MyColleges and flags
+students with no qualifying Present mark when collection is complete:
 
 * before EVA: "at risk", with the days left;
 * after EVA: "past EVA", to withdraw (never attended) or confirm.
@@ -138,18 +138,18 @@ def notify_eva_flags(section: str, flags: list[EvaFlag]) -> None:
     The log gets ids only. A run with a page (an observer with ``on_eva_flags``)
     shows them there; a console run prints the boxed block with names.
     """
-    if not flags:
-        return
     from cqc_cpcc.utilities.selenium_util import current_browser_observer
 
-    logger.warning(
-        "%s: %d student(s) with no Present attendance (%s, EVA %s): %s",
-        section, len(flags), "past EVA" if flags[0].past_eva else "before EVA",
-        flags[0].eva_date.isoformat(), ", ".join(flag.student_id for flag in flags),
-    )
+    if flags:
+        logger.warning(
+            "%s: %d student(s) with no Present attendance (%s, EVA %s): %s",
+            section, len(flags), "past EVA" if flags[0].past_eva else "before EVA",
+            flags[0].eva_date.isoformat(), ", ".join(flag.student_id for flag in flags),
+        )
     callback = getattr(current_browser_observer(), "on_eva_flags", None)
     if callback is None:
-        print_eva_block(flags)
+        if flags:
+            print_eva_block(flags)
         return
     try:
         callback(section, list(flags))

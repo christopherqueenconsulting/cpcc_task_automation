@@ -190,6 +190,10 @@ Calculates student attendance by analyzing activity completion in BrightSpace an
 4. Records attendance in MyColleges
 5. Optionally processes withdrawals and syncs them to the tracker workbook (dry-run by default)
 
+Attendance collects through today, leaves today open for the next run, and supports
+historical EVA re-runs, assignment changes, and resets. See
+[Attendance and EVA recovery](docs/attendance-eva-recovery.md) for the recovery workflow.
+
 ### 2. Give Feedback
 
 Generates feedback on student programming projects with an LLM.
@@ -228,7 +232,7 @@ For detailed technical documentation, see:
 ### BrightSpace Integration
 - Uses Selenium web scraping (not BrightSpace API)
 - Attendance is inferred from activity completion dates
-- Default date range: last 7 days, ending 2 days ago
+- Date range: ledger-driven recovery through today; today stays open and is revisited on the next run
 - Scraping is slow; it walks the BrightSpace pages for each course
 
 ### MyColleges Integration

@@ -384,3 +384,126 @@ class TestDesignPieceU5:
         app.multiselect[0].set_value(["url-now", "url-old"]).run()
         _button(app, "Continue").click().run()
         assert app_settings.load_settings().last_attendance_courses == ["url-now", "url-old"]
+
+
+@pytest.mark.unit
+class TestAttendanceRecoveryControls:
+    def test_custom_start_date_reaches_run_plan(self):
+        job = FakeJob(PHASE_AWAITING_PLAN)
+        app = _app(job).run()
+        next(box for box in app.checkbox if box.key == "attendance_custom_start").check().run()
+        start = (TODAY - DT.timedelta(days=5)).date()
+        next(field for field in app.date_input if field.key == "attendance_start_date").set_value(start).run()
+        _button(app, "Continue").click().run()
+        assert not app.exception, app.exception
+        assert job.plan.attendance_start == start
+
+    def test_management_does_not_open_storage_until_requested(self, monkeypatch):
+        def forbidden_open(*args, **kwargs):
+            raise AssertionError("Unopened management must not read attendance storage")
+
+        monkeypatch.setattr("cqc_cpcc.attendance_ledger.AttendanceLedger", forbidden_open)
+        app = _app(FakeJob(PHASE_AWAITING_PLAN)).run()
+        assert not app.exception, app.exception
+        assert not any("could not be updated" in error.value for error in app.error)
+
+    def test_management_is_unavailable_while_attendance_runs(self):
+        app = _app(FakeJob(PHASE_STARTING)).run()
+        assert not app.exception, app.exception
+        assert "attendance_manage_eva" not in [box.key for box in app.checkbox]
+        assert not any(button.label == "Reset EVA results" for button in app.button)
+
+    @pytest.mark.parametrize("label,detach", [
+        ("Change assignment", True), ("Detach assignment", True), ("Reset EVA results", False),
+    ])
+    def test_management_resets_selected_config_and_preserves_review_across_sessions(self, label, detach):
+        from cqc_cpcc.attendance_ledger import STATUS_VERIFIED, AttendanceLedger
+
+        config = {
+            "term": "Fall 2026", "course_section": "CSC-151-N855", "brightspace_course_id": "course-fixture",
+            "activity_type": "assignment", "activity_id": "activity-fixture", "activity_url": "https://example.test/activity",
+            "title": "Acceptance agreement", "confirmed_due_date": "2026-10-26", "observed_due_date": "2026-10-26",
+            "eva_date": "2026-10-26", "observed_eva_date": "2026-10-26", "eva_date_source": "user_confirmed",
+        }
+        ledger = AttendanceLedger()
+        ledger.save_eva_activity(config)
+        ledger.record_eva_completion("Fall 2026", "CSC-151-N855", "student-fixture", "2026-10-25", "activity-fixture")
+        ledger.set_status("Fall 2026", "CSC-151-N855", "student-fixture", "2026-10-25", STATUS_VERIFIED)
+        ledger.close()
+
+        app = _app(FakeJob(PHASE_AWAITING_PLAN)).run()
+        next(box for box in app.checkbox if box.key == "attendance_manage_eva").check().run()
+        assert not app.exception, app.exception
+        assert any("Acceptance agreement" in text.value for text in app.markdown)
+        _button(app, label).click().run()
+        assert not app.exception, app.exception
+        ledger = AttendanceLedger()
+        try:
+            saved = ledger.eva_activity("Fall 2026", "CSC-151-N855", "course-fixture")
+            assert bool(saved["activity_id"]) is not detach
+            assert saved["eva_date"] == "2026-10-26"
+        finally:
+            ledger.close()
+
+        # A new browser session must still show the unresolved recorded attendance.
+        new_app = _app(FakeJob(PHASE_AWAITING_PLAN)).run()
+        next(box for box in new_app.checkbox if box.key == "attendance_manage_eva").check().run()
+        assert not new_app.exception, new_app.exception
+        assert any("does not remove recorded attendance" in warning.value for warning in new_app.warning)
+        assert any("student-fixture" in str(table.value.to_dict()) for table in new_app.dataframe)
+
+    def test_storage_failure_is_visible_without_crashing_the_plan(self, monkeypatch, tmp_path):
+        path = tmp_path / "attendance.sqlite3"
+        path.write_bytes(b"not a sqlite database")
+        monkeypatch.setenv("CQC_ATTENDANCE_DB", str(path))
+        app = _app(FakeJob(PHASE_AWAITING_PLAN)).run()
+        next(box for box in app.checkbox if box.key == "attendance_manage_eva").check().run()
+        assert not app.exception, app.exception
+        assert any("could not be updated" in error.value for error in app.error)
+        assert _button(app, "Continue")
+
+    def test_rerun_selects_hidden_course_preserves_selection_and_write_options(self):
+        from cqc_cpcc.attendance_ledger import AttendanceLedger
+        from cqc_cpcc.utilities.date import term_for_date
+
+        job = FakeJob(PHASE_AWAITING_PLAN)
+        old = job.course_information["url-old"]
+        ledger = AttendanceLedger()
+        ledger.save_eva_activity({
+            "term": " ".join(term_for_date(old["start_date"])), "course_section": "CSC-134-N801",
+            "brightspace_course_id": "course-fixture", "activity_type": "assignment",
+            "activity_id": "activity-fixture", "activity_url": "https://example.test/activity",
+            "title": "Acceptance agreement", "confirmed_due_date": "2024-10-26",
+            "eva_date": "2024-10-26", "eva_date_source": "user_confirmed",
+        })
+        ledger.close()
+        app = _app(job).run()
+        assert app.multiselect[0].value == ["url-now"]
+        next(box for box in app.checkbox if box.key == "attendance_write").uncheck().run()
+        next(box for box in app.checkbox if box.key == "attendance_manage_eva").check().run()
+        _button(app, "Re-run EVA").click().run()
+        assert not app.exception, app.exception
+        assert set(app.multiselect[0].value) == {"url-now", "url-old"}
+        assert app.toggle[0].value is True
+        assert any("was selected for a fresh EVA run" in item.value for item in app.info)
+        _button(app, "Continue").click().run()
+        assert not app.exception, app.exception
+        assert set(job.plan.course_urls) == {"url-now", "url-old"}
+        assert job.plan.write_attendance is False
+
+    def test_rerun_unavailable_for_saved_course_outside_signed_in_list(self):
+        from cqc_cpcc.attendance_ledger import AttendanceLedger
+
+        ledger = AttendanceLedger()
+        ledger.save_eva_activity({
+            "term": "Fall 2020", "course_section": "CSC-151-N855",
+            "brightspace_course_id": "course-fixture", "activity_type": "assignment",
+            "activity_id": "activity-fixture", "activity_url": "https://example.test/activity",
+            "title": "Acceptance agreement", "confirmed_due_date": "2020-10-26",
+            "eva_date": "2020-10-26", "eva_date_source": "user_confirmed",
+        })
+        ledger.close()
+        app = _app(FakeJob(PHASE_AWAITING_PLAN)).run()
+        next(box for box in app.checkbox if box.key == "attendance_manage_eva").check().run()
+        assert not app.exception, app.exception
+        assert _button(app, "Re-run EVA").disabled is True

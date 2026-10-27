@@ -11,6 +11,7 @@
 """
 import datetime as DT
 import os
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -25,6 +26,7 @@ from cqc_cpcc.attendance_job import (
     AttendanceJob,
 )
 from cqc_cpcc.run_plan import RunPlan, course_choices
+from cqc_cpcc.utilities.date import term_for_date
 from cqc_cpcc.utilities.env_constants import WITHDRAWALS_TRACKER_DRY_RUN
 from cqc_cpcc.utilities.logger import LOGGING_FILENAME, logger
 from cqc_streamlit_app.app_settings import load_settings, remember
@@ -53,6 +55,11 @@ def plan_form(job: AttendanceJob) -> None:
             job.cancel()
         return
 
+    # Apply a staged EVA selection before creating either widget. Streamlit forbids
+    # changing widget state after its widget was instantiated on the same run.
+    queued = st.session_state.pop("attendance_eva_queued_courses", None)
+    if queued and any(url not in course_choices(info).urls for url in queued):
+        st.session_state["attendance_include_all_terms"] = True
     include_all = st.toggle("Show courses from other terms", value=False,
                             key="attendance_include_all_terms")
     choices = course_choices(info, include_all_terms=include_all)
@@ -60,6 +67,9 @@ def plan_form(job: AttendanceJob) -> None:
 
     # Last run's courses when they are still offered, else the active term's courses.
     remembered = [url for url in load_settings().last_attendance_courses if url in choices.urls]
+    if queued:
+        selection_key = "attendance_courses_%s" % ("all" if include_all else "term")
+        st.session_state[selection_key] = [url for url in queued if url in choices.urls]
     selected = st.multiselect(
         "Courses to process",
         options=choices.urls,
@@ -75,6 +85,8 @@ def plan_form(job: AttendanceJob) -> None:
     elif not include_all:
         st.caption("No %s courses found, so every course is listed." % choices.term_text)
 
+    eva_management_section(job, selected)
+
     options = st.container(border=True)
     options.markdown("**Options**")
     full_recheck = options.checkbox(
@@ -82,9 +94,26 @@ def plan_form(job: AttendanceJob) -> None:
         value=False,
         key="attendance_full_recheck",
         help="Normally each course looks back automatically from its last verified "
-             "date. Tick this after errors or reported holes; entries already "
-             "verified are skipped, so it is safe to repeat.",
+             "date. Tick this after errors or reported holes; previously verified entries "
+             "are read back again and restored if missing, without duplicate attendance.",
     )
+    custom_start = options.checkbox(
+        "Choose an attendance start date",
+        value=False, disabled=full_recheck, key="attendance_custom_start",
+        help="Revisit activity from this date. Unfinished earlier dates are still recovered.",
+    )
+    attendance_start = None
+    if custom_start and not full_recheck:
+        today = DT.datetime.now(ZoneInfo("America/New_York")).date()
+        starts = [info[url].get("start_date") for url in selected]
+        dates = [value.date() if isinstance(value, DT.datetime) else value
+                 for value in starts if isinstance(value, (DT.date, DT.datetime))]
+        attendance_start = options.date_input(
+            "Attendance start date", value=min(dates + [today]), max_value=today,
+            key="attendance_start_date",
+        )
+    options.caption("Attendance includes today's available activity. Today stays open and is "
+                    "checked again on the next run to pick up later submissions.")
     write_attendance = options.checkbox(
         "Write attendance to MyColleges (unchecked = dry run, report missing only)",
         value=True,
@@ -125,6 +154,7 @@ def plan_form(job: AttendanceJob) -> None:
                 info,
                 course_urls=selected,
                 full_recheck=full_recheck,
+                attendance_start=attendance_start,
                 write_attendance=write_attendance,
                 process_withdrawals=process_withdrawals,
                 sync_to_tracker=sync_to_tracker,
@@ -142,6 +172,95 @@ def plan_form(job: AttendanceJob) -> None:
         job.cancel()
         st.rerun()
 
+
+def _eva_course_url(config: dict, course_information: dict) -> str | None:
+    """Match a saved EVA course without selecting a same-named section in another term."""
+    matches = []
+    for url, course in course_information.items():
+        section = course.get("name", "").split(":")[0].strip()
+        if section != config["course_section"]:
+            continue
+        if course.get("brightspace_course_id") == config["brightspace_course_id"]:
+            matches.append(url)
+            continue
+        term = term_for_date(course.get("start_date"))
+        if term and " ".join(term) == config["term"]:
+            matches.append(url)
+    return matches[0] if len(matches) == 1 else None
+
+
+def eva_management_section(job: AttendanceJob, selected_courses: list[str]) -> None:
+    """Manage saved EVA setup only while the worker is waiting for its run plan."""
+    if job.phase != PHASE_AWAITING_PLAN:
+        return
+    if not st.checkbox("Manage saved EVA activities", key="attendance_manage_eva"):
+        return
+    from cqc_cpcc.attendance_ledger import AttendanceLedger, default_db_path
+
+    if not os.path.exists(default_db_path()):
+        st.info("No saved EVA activities yet. Select courses and continue to set them up.")
+        return
+    ledger = None
+    try:
+        ledger = AttendanceLedger()
+        configs = ledger.list_eva_activities()
+        if not configs:
+            st.info("No saved EVA activities yet. Select courses and continue to set them up.")
+            return
+        config = st.selectbox(
+            "Saved EVA course", options=configs,
+            format_func=lambda row: "%s · %s" % (row["term"], row["course_section"]),
+            key="attendance_saved_eva_course",
+        )
+        st.write("Attached activity: %s" % (config.get("title") or "Not selected"))
+        st.caption("Due: %s · EVA cutoff: %s" % (
+            config.get("confirmed_due_date") or "Not confirmed", config["eva_date"]))
+        st.caption("Last EVA check: %s" % (config.get("check_status") or "Not checked"))
+        st.caption("EVA can run after the cutoff. Every run reads fresh activity through the "
+                   "EVA date. Select this course above before continuing.")
+        change, detach, rerun, reset = st.columns(4)
+        change_clicked = change.button("Change assignment", key="attendance_eva_change")
+        detach_clicked = detach.button("Detach assignment", key="attendance_eva_detach")
+        matching_url = _eva_course_url(config, job.course_information)
+        rerun_clicked = rerun.button(
+            "Re-run EVA", key="attendance_eva_rerun", disabled=matching_url is None,
+            help="Select this course for a fresh run using the options below." if matching_url
+            else "This saved course could not be uniquely matched to the signed-in course list.",
+        )
+        reset_clicked = reset.button("Reset EVA results", key="attendance_eva_reset")
+        if change_clicked or detach_clicked or reset_clicked:
+            ledger.reset_eva_activity(
+                config["term"], config["course_section"], config["brightspace_course_id"],
+                detach=change_clicked or detach_clicked,
+            )
+            st.session_state["attendance_eva_management_message"] = (
+                "%s: %s. Select the course and continue to collect fresh EVA results." % (
+                    config["course_section"],
+                    "assignment detached; choose its replacement during setup" if change_clicked
+                    else "assignment detached" if detach_clicked else "EVA results reset"))
+            st.rerun()
+        if rerun_clicked:
+            st.session_state["attendance_eva_queued_courses"] = list(dict.fromkeys(
+                [*selected_courses, matching_url]))
+            st.session_state["attendance_eva_management_message"] = (
+                "%s was selected for a fresh EVA run. Review the options below and press Continue. "
+                "The full EVA window is checked every run, so a full-course recheck is optional."
+                % config["course_section"])
+            st.rerun()
+        message = st.session_state.get("attendance_eva_management_message")
+        if message:
+            st.info(message)
+        rows = ledger.eva_reconciliation(config["term"], config["course_section"])
+        if rows:
+            st.warning("Prior EVA evidence affected the attendance records below. Review them "
+                       "against MyColleges; detaching or resetting does not remove recorded attendance.")
+            st.dataframe(rows, hide_index=True, width="stretch")
+    except Exception as error:  # noqa: BLE001 - optional management must not block regular attendance
+        logger.warning("Saved EVA management failed (%s).", type(error).__name__)
+        st.error("Saved EVA activities could not be updated (%s). Retry before continuing." % type(error).__name__)
+    finally:
+        if ledger is not None:
+            ledger.close()
 
 def _placeholder_image() -> str | None:
     """A stock landscape shown until the first screenshot arrives (one per session)."""
@@ -226,7 +345,7 @@ def _eva_rows(flags) -> list[dict]:
 
 
 def eva_section(job: AttendanceJob) -> None:
-    """Students with no Present attendance at all: red after EVA, yellow before."""
+    """Students without verified attendance through EVA: red after, yellow before."""
     flags = job.eva_flags()
     if not flags:
         return
@@ -236,8 +355,9 @@ def eva_section(job: AttendanceJob) -> None:
                      for name, text in EVA_COLUMNS_HELP.items()}
     if past:
         with st.container(border=True):
-            st.error("**Past EVA: no attendance recorded** for %d student(s). They should "
-                     "not stay in the course without a Present mark." % len(past), icon=":material/error:")
+            st.error("**Past EVA: no attendance recorded** through the cutoff for %d student(s). "
+                     "Review qualifying activity and the suggested action before deciding next steps."
+                     % len(past), icon=":material/error:")
             st.dataframe(_eva_rows(past), hide_index=True, width="stretch",
                          column_config=column_config)
         seen = st.session_state.setdefault(SEEN_EVA_TOASTS_KEY, set())
@@ -272,11 +392,13 @@ def eva_setup_form(job: AttendanceJob) -> None:
     st.subheader("Confirm the EVA activity")
     st.caption(request.get("course_name", "Selected course"))
     st.write("The chosen activity and dates are stored locally for later runs.")
+    st.caption("Setup and re-runs remain available after the EVA date; qualifying completion "
+               "dates must still fall on or before the confirmed cutoff.")
     if request.get("date_only"):
         suggested = request.get("eva_date")
         cutoff = st.date_input(
             "Confirm the course EVA/census date",
-            value=DT.date.fromisoformat(suggested) if suggested else DT.date.today(),
+            value=DT.date.fromisoformat(suggested) if suggested else DT.datetime.now(ZoneInfo("America/New_York")).date(),
             key="eva_date_only_%s" % request["request_id"],
         )
         verified_date = st.checkbox(
@@ -329,9 +451,9 @@ def eva_setup_form(job: AttendanceJob) -> None:
     )
     choice_key = "%s_%s" % (request["request_id"], selected["activity_id"])
     prior_eva = request.get("eva_date")
-    eva_default = DT.date.fromisoformat(prior_eva) if prior_eva else DT.date.today()
+    eva_default = DT.date.fromisoformat(prior_eva) if prior_eva else DT.datetime.now(ZoneInfo("America/New_York")).date()
     due_default = DT.date.fromisoformat(selected["observed_due_iso"]) \
-        if selected.get("observed_due_iso") else DT.date.today()
+        if selected.get("observed_due_iso") else DT.datetime.now(ZoneInfo("America/New_York")).date()
     with st.form("eva_confirmation_%s" % request["request_id"]):
         due = st.date_input("Verify the activity due date", value=due_default,
                             key="eva_due_%s" % choice_key)
@@ -511,7 +633,7 @@ LEDGER_GLOSSARY = {
     "ledger_count": "Days the ledger has verified for the student.",
     "eva_date": "Census date: the last day to drop without a grade.",
     "phase": "before_eva = EVA not reached yet (at risk); past_eva = EVA passed with no "
-             "Present mark (should be withdrawn or confirmed).",
+             "verified Present mark through the cutoff (review qualifying activity).",
     "owed": "Entries on or before EVA that BrightSpace shows but MyColleges does not "
             "have yet. Above 0: re-run attendance first.",
     "checked_at": "When the check ran.",

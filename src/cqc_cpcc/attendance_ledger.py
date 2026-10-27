@@ -20,10 +20,12 @@ from __future__ import annotations
 import contextlib
 import csv
 import datetime as DT
+import json
 import os
 import sqlite3
 import uuid
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 
 from cqc_cpcc.utilities.logger import logger
 
@@ -37,6 +39,8 @@ STATUS_FAILED = "failed"  # a write or read-back did not show Present
 STATUS_CARRIED = "carried"
 # Terminal: the date could not be selected and no later date was available.
 STATUS_UNRECORDABLE = "unrecordable"
+STATUS_REVIEW_REQUIRED = "review_required"
+STATUS_INVALIDATED = "invalidated"
 
 # Statuses a run still has to (re)write.
 OUTSTANDING_STATUSES = (STATUS_PENDING, STATUS_RECORDED, STATUS_FAILED)
@@ -143,6 +147,23 @@ CREATE TABLE IF NOT EXISTS attendance_evidence (
     FOREIGN KEY (term, course_section, student_id, attend_date)
         REFERENCES attendance(term, course_section, student_id, attend_date)
 );
+CREATE TABLE IF NOT EXISTS eva_check_runs (
+    check_id TEXT PRIMARY KEY,
+    term TEXT NOT NULL,
+    course_section TEXT NOT NULL,
+    status TEXT NOT NULL,
+    checked_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS eva_reset_history (
+    reset_id TEXT PRIMARY KEY,
+    term TEXT NOT NULL,
+    course_section TEXT NOT NULL,
+    brightspace_course_id TEXT NOT NULL,
+    configuration TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    detached INTEGER NOT NULL,
+    reset_at TEXT NOT NULL
+);
 """
 
 
@@ -209,6 +230,20 @@ class AttendanceLedger:
             " ON CONFLICT(term, course_section, student_id, attend_date) DO NOTHING",
             (term, course_section, str(student_id), _iso(attend_date), STATUS_PENDING, now, now),
         )
+        # Ordinary evidence must remain distinguishable from a selected EVA
+        # activity, so changing that selection cannot erase independent support.
+        self._conn.execute(
+            "INSERT OR IGNORE INTO attendance_evidence "
+            "(term, course_section, student_id, attend_date, source_type, source_id) "
+            "VALUES (?, ?, ?, ?, 'ordinary', 'attendance')",
+            (term, course_section, str(student_id), _iso(attend_date)),
+        )
+        self._conn.execute(
+            "UPDATE attendance SET status=?, updated_at=? WHERE term=? AND course_section=? "
+            "AND student_id=? AND attend_date=? AND status IN (?, ?)",
+            (STATUS_PENDING, now, term, course_section, str(student_id), _iso(attend_date),
+             STATUS_INVALIDATED, STATUS_REVIEW_REQUIRED),
+        )
         self._conn.commit()
 
     def set_status(
@@ -267,8 +302,160 @@ class AttendanceLedger:
         ).fetchone()
         return dict(row) if row else None
 
+    def list_eva_activities(self) -> list[dict]:
+        """Saved course settings and their most recent check state."""
+        return [dict(row) for row in self._conn.execute(
+            "SELECT c.*, (SELECT r.status FROM eva_check_runs r WHERE r.term=c.term "
+            "AND r.course_section=c.course_section ORDER BY r.rowid DESC LIMIT 1) AS check_status "
+            "FROM eva_activity_config c ORDER BY c.term, c.course_section"
+        )]
+
+    def eva_reconciliation(self, term: str, course_section: str) -> list[dict]:
+        """Previously written attendance whose EVA support was invalidated."""
+        return [dict(row) for row in self._conn.execute(
+            "SELECT student_id, attend_date, status FROM attendance WHERE term=? "
+            "AND course_section=? AND status=? ORDER BY attend_date, student_id",
+            (term, course_section, STATUS_REVIEW_REQUIRED),
+        )]
+
+    def latest_eva_check_status(self, term: str, course_section: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT status FROM eva_check_runs WHERE term=? AND course_section=? ORDER BY rowid DESC LIMIT 1",
+            (term, course_section),
+        ).fetchone()
+        return row["status"] if row else None
+
+    def recheck_verified(self, term: str, course_section: str) -> None:
+        """Reopen supported rows for fresh SIS read-back during a recovery run."""
+        self._conn.execute(
+            "UPDATE attendance SET status=?, updated_at=? WHERE term=? AND course_section=? AND status=?",
+            (STATUS_PENDING, _now(), term, course_section, STATUS_VERIFIED),
+        )
+        self._conn.commit()
+
+    def migrate_eva_evidence(self, config: dict) -> None:
+        """Attribute legacy raw activity IDs before replacing a complete snapshot.
+
+        Ambiguous legacy sources require review; never guess which LMS course
+        supplied them. Archived evidence remains available for reconciliation.
+        """
+        term, section = config["term"], config["course_section"]
+        raw = str(config["activity_id"])
+        owners = self._conn.execute(
+            "SELECT COUNT(*) FROM eva_activity_config WHERE term=? AND course_section=? AND activity_id=?",
+            (term, section, raw),
+        ).fetchone()[0]
+        with self._conn:
+            if owners > 1:
+                rows = [dict(row) for row in self._conn.execute(
+                    "SELECT * FROM attendance_evidence WHERE term=? AND course_section=? "
+                    "AND source_type='eva' AND source_id=?", (term, section, raw),
+                )]
+                if rows:
+                    self._conn.execute(
+                        "INSERT INTO eva_reset_history VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                        (uuid.uuid4().hex, term, section, config["brightspace_course_id"],
+                         json.dumps(config), json.dumps(rows), _now()),
+                    )
+                for row in rows:
+                    self._conn.execute(
+                        "UPDATE attendance SET status=?, last_error=? WHERE term=? AND course_section=? "
+                        "AND student_id=? AND attend_date=? AND NOT EXISTS "
+                        "(SELECT 1 FROM attendance_evidence e WHERE e.term=attendance.term "
+                        "AND e.course_section=attendance.course_section AND e.student_id=attendance.student_id "
+                        "AND e.attend_date=attendance.attend_date AND e.source_type='ordinary')",
+                        (STATUS_REVIEW_REQUIRED, "Ambiguous legacy EVA source; review MyColleges", term,
+                         section, row["student_id"], row["attend_date"]),
+                    )
+                self._conn.execute(
+                    "DELETE FROM attendance_evidence WHERE term=? AND course_section=? "
+                    "AND source_type='eva' AND source_id=?", (term, section, raw),
+                )
+            else:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO attendance_evidence "
+                    "SELECT term, course_section, student_id, attend_date, source_type, ? "
+                    "FROM attendance_evidence WHERE term=? AND course_section=? AND source_type='eva' AND source_id=?",
+                    (self.eva_source_id(config), term, section, raw),
+                )
+                self._conn.execute(
+                    "DELETE FROM attendance_evidence WHERE term=? AND course_section=? AND source_type='eva' AND source_id=?",
+                    (term, section, raw),
+                )
+
+    @staticmethod
+    def eva_source_id(config: dict) -> str:
+        """Include course and activity type because LMS activity IDs can overlap."""
+        return "%s:%s:%s" % (config["brightspace_course_id"], config["activity_type"], config["activity_id"])
+
+    def reset_eva_activity(self, term: str, course_section: str,
+                           brightspace_course_id: str, *, detach: bool = False) -> list[dict]:
+        """Archive and invalidate EVA support; never change live SIS attendance.
+
+        Rows with independent evidence retain their status. EVA-only rows that
+        may have reached the SIS require reconciliation; unwritten rows stop
+        being owed. A fresh supported scan can reactivate either kind.
+        """
+        config = self.eva_activity(term, course_section, brightspace_course_id)
+        if config is None:
+            return []
+        sources = [str(config.get("activity_id") or ""), self.eva_source_id(config)]
+        with self._conn:
+            evidence = [dict(row) for row in self._conn.execute(
+                "SELECT e.*, a.status, a.attempts FROM attendance_evidence e "
+                "JOIN attendance a USING (term, course_section, student_id, attend_date) "
+                "WHERE e.term=? AND e.course_section=? AND e.source_type='eva' AND e.source_id IN (?, ?)",
+                (term, course_section, *sources),
+            )]
+            self._conn.execute(
+                "INSERT INTO eva_reset_history VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (uuid.uuid4().hex, term, course_section, brightspace_course_id,
+                 json.dumps(config), json.dumps(evidence), int(detach), _now()),
+            )
+            self._conn.execute(
+                "DELETE FROM attendance_evidence WHERE term=? AND course_section=? "
+                "AND source_type='eva' AND source_id IN (?, ?)",
+                (term, course_section, *sources),
+            )
+            for row in evidence:
+                other = self._conn.execute(
+                    "SELECT 1 FROM attendance_evidence WHERE term=? AND course_section=? "
+                    "AND student_id=? AND attend_date=? LIMIT 1",
+                    (term, course_section, row["student_id"], row["attend_date"]),
+                ).fetchone()
+                if other is None:
+                    written = row["attempts"] > 0 or row["status"] in (
+                        STATUS_RECORDED, STATUS_VERIFIED, STATUS_REVIEW_REQUIRED,
+                    )
+                    self._conn.execute(
+                        "UPDATE attendance SET status=?, last_error=?, updated_at=? WHERE term=? "
+                        "AND course_section=? AND student_id=? AND attend_date=?",
+                        (STATUS_REVIEW_REQUIRED if written else STATUS_INVALIDATED,
+                         "EVA support reset; review existing SIS attendance" if written else "EVA support reset",
+                         _now(), term, course_section, row["student_id"], row["attend_date"]),
+                    )
+            if detach:
+                self._conn.execute(
+                    "UPDATE eva_activity_config SET activity_type=NULL, activity_id=NULL, activity_url=NULL, "
+                    "title=NULL, observed_due_date=NULL, confirmed_due_date=NULL WHERE term=? "
+                    "AND course_section=? AND brightspace_course_id=?",
+                    (term, course_section, brightspace_course_id),
+                )
+            self._insert_eva_check(term, course_section, [], "setup_required" if detach else "pending")
+            self._conn.execute(
+                "UPDATE course_state SET needs_full_recheck=1 WHERE term=? AND course_section=?",
+                (term, course_section),
+            )
+        return self.eva_reconciliation(term, course_section)
+
     def save_eva_activity(self, config: dict) -> None:
         """Save one user-confirmed EVA activity and its course census date."""
+        prior = self.eva_activity(config["term"], config["course_section"], config["brightspace_course_id"])
+        if prior and prior.get("activity_id") and any(
+            prior.get(key) != config.get(key)
+            for key in ("activity_type", "activity_id", "confirmed_due_date", "eva_date")
+        ):
+            self.reset_eva_activity(config["term"], config["course_section"], config["brightspace_course_id"])
         values = (
             config["term"], config["course_section"], config["brightspace_course_id"],
             config["activity_type"], config["activity_id"], config["activity_url"],
@@ -296,6 +483,9 @@ class AttendanceLedger:
                              brightspace_course_id: str, eva_date: DT.date | str,
                              observed_eva_date: str | None, eva_date_source: str) -> None:
         """Persist a confirmed cutoff even when the user skips activity selection."""
+        prior = self.eva_activity(term, course_section, brightspace_course_id)
+        if prior and prior["eva_date"] != _iso(eva_date):
+            self.reset_eva_activity(term, course_section, brightspace_course_id)
         self._conn.execute(
             "INSERT INTO eva_activity_config (term, course_section, brightspace_course_id, "
             "eva_date, observed_eva_date, eva_date_source, confirmed_at) "
@@ -337,7 +527,7 @@ class AttendanceLedger:
                     "AND student_id=? AND attend_date=?",
                     (term, course_section, student_id, date),
                 ).fetchone()["status"]
-                if status in (STATUS_CARRIED, STATUS_UNRECORDABLE):
+                if status in (STATUS_CARRIED, STATUS_UNRECORDABLE, STATUS_INVALIDATED, STATUS_REVIEW_REQUIRED):
                     self._conn.execute(
                         "UPDATE attendance SET status=?, last_error=?, updated_at=? WHERE term=? "
                         "AND course_section=? AND student_id=? AND attend_date=?",
@@ -354,6 +544,45 @@ class AttendanceLedger:
     def record_eva_completion(self, term: str, course_section: str, student_id: str,
                               attend_date: DT.date | str, activity_id: str) -> None:
         self.record_eva_expected(term, course_section, student_id, attend_date, activity_id)
+
+    def reconcile_eva_expected_batch(
+            self, term: str, course_section: str,
+            completions: list[tuple[str, DT.date | str, str]], activity_id: str,
+    ) -> None:
+        """Replace one complete, roster-matched scan; retain an audit of removed support."""
+        expected = {(str(sid), _iso(day)) for sid, day, _source in completions}
+        previous = [dict(row) for row in self._conn.execute(
+            "SELECT e.*, a.status, a.attempts FROM attendance_evidence e JOIN attendance a "
+            "USING (term, course_section, student_id, attend_date) "
+            "WHERE e.term=? AND e.course_section=? AND e.source_type='eva' AND e.source_id=?",
+            (term, course_section, activity_id),
+        )]
+        stale = [row for row in previous if (row["student_id"], row["attend_date"]) not in expected]
+        with self._conn:
+            if stale:
+                self._conn.execute(
+                    "INSERT INTO eva_reset_history VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                    (uuid.uuid4().hex, term, course_section, activity_id, "{}", json.dumps(stale), _now()),
+                )
+            for row in stale:
+                key = (term, course_section, row["student_id"], row["attend_date"])
+                self._conn.execute(
+                    "DELETE FROM attendance_evidence WHERE term=? AND course_section=? AND student_id=? "
+                    "AND attend_date=? AND source_type='eva' AND source_id=?", (*key, activity_id),
+                )
+                supported = self._conn.execute(
+                    "SELECT 1 FROM attendance_evidence WHERE term=? AND course_section=? AND student_id=? "
+                    "AND attend_date=? LIMIT 1", key,
+                ).fetchone()
+                if supported is None:
+                    written = row["attempts"] > 0 or row["status"] in (STATUS_RECORDED, STATUS_VERIFIED)
+                    self._conn.execute(
+                        "UPDATE attendance SET status=?, last_error=?, updated_at=? WHERE term=? "
+                        "AND course_section=? AND student_id=? AND attend_date=?",
+                        (STATUS_REVIEW_REQUIRED if written else STATUS_INVALIDATED,
+                         "Latest complete EVA scan no longer supports this date", _now(), *key),
+                    )
+            self.record_eva_expected_batch(term, course_section, completions)
 
     def update_eva_activity_title(self, term: str, course_section: str,
                                    brightspace_course_id: str, title: str,
@@ -385,7 +614,7 @@ class AttendanceLedger:
 
     def lookback_start(
             self, term: str, course_section: str, course_start: DT.date | DT.datetime,
-            *, force_full_recheck: bool = False,
+            *, force_full_recheck: bool = False, today: DT.date | None = None,
     ) -> tuple[DT.date, str]:
         """Where this course's scrape window should start, and why.
 
@@ -405,21 +634,44 @@ class AttendanceLedger:
         if state["needs_full_recheck"]:
             return course_start_date, "attendance count mismatch flagged"
 
-        verified_through = DT.date.fromisoformat(state["verified_through"])
+        today = today or DT.datetime.now(ZoneInfo("America/New_York")).date()
+        # Old versions could close the current day. Reopen it (and any future
+        # checkpoint) before choosing a restart boundary.
+        verified_through = min(
+            DT.date.fromisoformat(state["verified_through"]), today - DT.timedelta(days=1),
+        )
         start = verified_through + DT.timedelta(days=1 - LOOKBACK_OVERLAP_DAYS)
         return max(course_start_date, start), "verified through %s" % verified_through.isoformat()
 
     def update_course_state(
             self, term: str, course_section: str, *, run_status: str,
             window_end: DT.date | None = None, needs_full_recheck: bool | None = None,
+            collection_date: DT.date | None = None, window_start: DT.date | None = None,
     ) -> None:
-        """Record the run outcome. ``verified_through`` only moves on a complete run."""
+        """Close fully collected past days; the scan's current day remains open.
+
+        ``collection_date`` is captured when collection starts, rather than when
+        writes finish. A run crossing midnight cannot close a partially read day.
+        ``window_start`` prevents a narrowed recovery run from skipping a gap.
+        """
         state = self._course_state(term, course_section)
         verified_through = state["verified_through"] if state else None
         if run_status == RUN_COMPLETE and window_end is not None:
-            candidate = _iso(window_end)
-            if verified_through is None or candidate > verified_through:
-                verified_through = candidate
+            collection_date = collection_date or DT.datetime.now(ZoneInfo("America/New_York")).date()
+            last_closed_day = collection_date - DT.timedelta(days=1)
+            if verified_through is not None:
+                verified_through = min(verified_through, _iso(last_closed_day))
+            candidate = min(DT.date.fromisoformat(_iso(window_end)), last_closed_day)
+            leaves_gap = (
+                verified_through is not None and window_start is not None
+                and DT.date.fromisoformat(_iso(window_start))
+                > DT.date.fromisoformat(verified_through) + DT.timedelta(days=1)
+            )
+            if leaves_gap:
+                run_status = RUN_INCOMPLETE
+            elif window_start is None or candidate >= DT.date.fromisoformat(_iso(window_start)):
+                if verified_through is None or candidate.isoformat() > verified_through:
+                    verified_through = candidate.isoformat()
         recheck = (state["needs_full_recheck"] if state else 0) if needs_full_recheck is None \
             else int(needs_full_recheck)
         last_status = run_status
@@ -484,26 +736,40 @@ class AttendanceLedger:
         self._conn.commit()
         return outcome
 
-    def record_eva_check(self, term: str, course_section: str, flags) -> str:
-        """Store one course's EVA check (ids only; an empty list records "none flagged")."""
+    def _insert_eva_check(self, term: str, course_section: str, flags, status: str) -> str:
         check_id = uuid.uuid4().hex
         now = _now()
+        self._conn.execute(
+            "INSERT INTO eva_check_runs VALUES (?, ?, ?, ?, ?)",
+            (check_id, term, course_section, status, now),
+        )
         self._conn.executemany(
             "INSERT INTO eva_checks (check_id, term, course_section, student_id, eva_date,"
             " phase, owed, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [(check_id, term, course_section, str(flag.student_id), _iso(flag.eva_date),
               flag.phase, int(flag.owed), now) for flag in flags],
         )
-        self._conn.commit()
         return check_id
+
+    def record_eva_check(self, term: str, course_section: str, flags, *, status: str = "verified") -> str:
+        """Record every check, including empty results and incomplete coverage."""
+        with self._conn:
+            return self._insert_eva_check(term, course_section, flags, status)
 
     def latest_eva_flags(self, term: str, course_section: str) -> list[dict]:
         """Students flagged by the course's most recent EVA check."""
         row = self._conn.execute(
-            "SELECT check_id FROM eva_checks WHERE term=? AND course_section=?"
-            " ORDER BY checked_at DESC, rowid DESC LIMIT 1",
+            "SELECT check_id FROM eva_check_runs WHERE term=? AND course_section=?"
+            " ORDER BY rowid DESC LIMIT 1",
             (term, course_section),
         ).fetchone()
+        # Databases created before check-run headers still expose their history
+        # until the first new check explicitly supersedes it.
+        if row is None:
+            row = self._conn.execute(
+                "SELECT check_id FROM eva_checks WHERE term=? AND course_section=? "
+                "ORDER BY checked_at DESC, rowid DESC LIMIT 1", (term, course_section),
+            ).fetchone()
         if row is None:
             return []
         return [dict(r) for r in self._conn.execute(
@@ -511,6 +777,22 @@ class AttendanceLedger:
             " WHERE check_id=? ORDER BY student_id",
             (row["check_id"],),
         ).fetchall()]
+
+    def qualifying_attendance_by_student(self, term: str, course_section: str,
+                                         through: DT.date) -> dict[str, int]:
+        """Verified dates through census; later attendance cannot satisfy EVA."""
+        return {row["student_id"]: row["n"] for row in self._conn.execute(
+            "SELECT student_id, COUNT(*) AS n FROM attendance WHERE term=? AND course_section=? "
+            "AND attend_date<=? AND status=? GROUP BY student_id",
+            (term, course_section, _iso(through), STATUS_VERIFIED),
+        )}
+
+    def verified_entries_through(self, term: str, course_section: str, through: DT.date) -> list[dict]:
+        return [dict(row) for row in self._conn.execute(
+            "SELECT student_id, attend_date FROM attendance WHERE term=? AND course_section=? "
+            "AND attend_date<=? AND status=? ORDER BY attend_date, student_id",
+            (term, course_section, _iso(through), STATUS_VERIFIED),
+        )]
 
     def owed_by_student(self, term: str, course_section: str,
                         through: DT.date | None = None) -> dict[str, int]:
