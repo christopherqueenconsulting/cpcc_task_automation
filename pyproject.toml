@@ -29,7 +29,7 @@ docx2txt = "^0.9"
 #simplify_docx= { git = "https://github.com/gitchrisqueen/Simplify-Docx.git"}
 chromedriver-autoinstaller = "^0"
 pyvirtualdisplay = "^3"
-streamlit = "^1"
+streamlit = "^1.66.0"
 mammoth = "^1"
 markdownify = "^1"
 pexels-api = "^1"
