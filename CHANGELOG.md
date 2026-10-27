@@ -10,6 +10,11 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
   controls, and evidence-based reconciliation that preserves unrelated attendance. Incomplete
   collection and uncertain historical records no longer produce definitive missing-EVA results.
   See [Attendance and EVA recovery](docs/attendance-eva-recovery.md).
+- Attendance recovery now accepts an inclusive start and end date. Assignment collection opens
+  the per-user submissions view directly; quiz collection retries through the Attempts page when
+  attempt logs do not load. The run page shows each activity's source/results links, view, pages,
+  rows, and collection error. Bounded runs leave out-of-range SIS work pending and cannot move the
+  course checkpoint across an unprocessed gap.
 
 ## 0.2.0-rc9 - 2026-10-26
 

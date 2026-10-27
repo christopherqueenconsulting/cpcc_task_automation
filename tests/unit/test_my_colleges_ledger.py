@@ -153,6 +153,23 @@ class TestMarkAttendanceForCourse:
         assert (outcome.expected, outcome.verified, outcome.failed) == (3, 3, 0)
         assert ledger.outstanding(TERM, SECTION) == []
 
+    def test_bounded_range_leaves_outside_records_and_ledger_debt_untouched(self, ledger):
+        old_day, selected_day = DT.date(2026, 10, 19), DT.date(2026, 10, 25)
+        ledger.upsert_expected(TERM, SECTION, "1000001", old_day)
+        course = _course({"10-19-2026": ["Ann Adams"], "10-25-2026": ["Bob Brown"]},
+                         window_end=DT.date(2026, 10, 27))
+        course.attendance_start_bound = DT.date(2026, 10, 20)
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+
+        outcome = mc._mark_attendance_for_course(
+            _context(), course, ledger=ledger, term=TERM, section=SECTION,
+        )
+
+        assert page.writes == [(selected_day, "1000002")]
+        assert ledger.get_status(TERM, SECTION, "1000001", old_day) == STATUS_PENDING
+        assert outcome.expected == 1
+
     def test_complete_eva_batch_is_exact_date_and_unmatched_scan_writes_no_eva(self, ledger):
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)

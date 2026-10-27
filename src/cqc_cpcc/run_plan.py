@@ -138,9 +138,12 @@ class RunPlan:
     # the attendance ledger. ``full_recheck`` forces
     # every course back to its start date and revalidates its supported entries.
     full_recheck: bool = False
-    # An inclusive recovery boundary may widen the automatic window, never skip
-    # dates the ledger still needs to collect.
+    # Inclusive recovery boundary. With no explicit end it widens automatic
+    # lookback; with an end it defines the exact user-selected range.
     attendance_start: DT.date | None = None
+    # Explicit inclusive end for a bounded reprocessing window. When present,
+    # the selected range is authoritative and unfinished dates outside it stay owed.
+    attendance_end: DT.date | None = None
     # False = dry run: read MyColleges and report what is missing, write nothing.
     write_attendance: bool = True
     process_withdrawals: bool = False
@@ -160,6 +163,15 @@ class RunPlan:
                 raise ValueError("Attendance start must be a date.")
             if self.attendance_start > DT.datetime.now(ZoneInfo("America/New_York")).date():
                 raise ValueError("Attendance start cannot be in the future.")
+        if self.attendance_end is not None:
+            if type(self.attendance_end) is not DT.date:
+                raise ValueError("Attendance end must be a date.")
+            if self.attendance_end > DT.datetime.now(ZoneInfo("America/New_York")).date():
+                raise ValueError("Attendance end cannot be in the future.")
+        if self.attendance_start and self.attendance_end and self.attendance_start > self.attendance_end:
+            raise ValueError("Attendance start must be on or before attendance end.")
+        if self.full_recheck and self.attendance_end is not None:
+            raise ValueError("Full recheck cannot be combined with a bounded attendance range.")
 
     def attendance_window_start(
             self, automatic_start: DT.date | DT.datetime, course_start: DT.date | DT.datetime,
@@ -171,7 +183,18 @@ class RunPlan:
             return course_start
         if self.attendance_start is None:
             return automatic_start
+        if self.attendance_end is not None:
+            return max(course_start, self.attendance_start)
         return min(automatic_start, max(course_start, self.attendance_start))
+
+    def attendance_window_end(self, course_end: DT.date | DT.datetime,
+                              today: DT.date | None = None) -> DT.date:
+        """Return the selected inclusive end, capped to course end and today."""
+        today = today or DT.datetime.now(ZoneInfo("America/New_York")).date()
+        end = min(convert_date_to_datetime(course_end).date(), today)
+        if self.attendance_end is not None:
+            end = min(end, self.attendance_end)
+        return end
 
     @property
     def is_push_only(self) -> bool:
@@ -213,6 +236,7 @@ class RunPlan:
             course_urls: list[str],
             full_recheck: bool = False,
             attendance_start: DT.date | None = None,
+            attendance_end: DT.date | None = None,
             write_attendance: bool = True,
             process_withdrawals: bool = True,
             sync_to_tracker: bool = False,
@@ -237,6 +261,7 @@ class RunPlan:
             course_urls=list(course_urls),
             full_recheck=full_recheck,
             attendance_start=attendance_start,
+            attendance_end=attendance_end,
             write_attendance=write_attendance,
             process_withdrawals=process_withdrawals,
             withdrawals_mode=MODE_SCRAPE,

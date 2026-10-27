@@ -472,9 +472,82 @@ def test_open_course_tab_fails_clearly_when_no_browser_windows_remain():
 
     with pytest.raises(NoSuchWindowException, match="browser has no open windows"):
         course.open_course_tab()
-
     course.driver.switch_to.new_window.assert_not_called()
 
+
+@pytest.mark.unit
+def test_activity_result_routes_use_user_summary_and_attempts_fallback_shapes():
+    assignment = BrightSpace_Course._submissions_users_url(
+        "https://d2l.example/d2l/lms/dropbox/user/folder_submit_files.d2l?ou=111&db=222")
+    assert assignment == (
+        "https://d2l.example/d2l/lms/dropbox/admin/mark/folder_submissions_users.d2l?ou=111&db=222"
+    )
+    quiz = BrightSpace_Course._quiz_attempts_url(
+        "https://d2l.example/d2l/lms/quizzing/admin/attemptLogs/111/222/Logs?ou=111")
+    assert quiz == (
+        "https://d2l.example/d2l/lms/quizzing/admin/mark/quiz_mark_attempts.d2l"
+        "?d2l_isfromtab=1&qi=222&ou=111"
+    )
+
+
+@pytest.mark.unit
+def test_activity_diagnostic_url_removes_unrelated_query_values():
+    safe = BrightSpace_Course._diagnostic_url(
+        "https://viewer:fixture@d2l.example/results?ou=111&qi=222&tracking=discard-me#student")
+    assert safe == "https://d2l.example/results?ou=111&qi=222"
+
+
+@pytest.mark.unit
+def test_eva_quiz_reader_falls_back_from_attempt_logs_to_attempts(monkeypatch):
+    class Switch:
+        def __init__(self, driver):
+            self.driver = driver
+
+        def new_window(self, _kind):
+            self.driver.current_window_handle = "activity"
+            self.driver.window_handles.append("activity")
+
+        def window(self, handle):
+            self.driver.current_window_handle = handle
+
+    class Driver:
+        def __init__(self):
+            self.current_window_handle = "main"
+            self.window_handles = ["main"]
+            self.switch_to = Switch(self)
+            self.urls = []
+            self.current_url = ""
+
+        def get(self, url):
+            self.current_url = url
+            self.urls.append(url)
+
+    driver = Driver()
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = driver
+    course.wait = MagicMock()
+    course.select_xpath = "//select"
+    course.eva_date = DT.date(2026, 1, 31)
+    course.course_start_date = DT.date(2026, 1, 1)
+    course.name = "CSC-111-N001"
+    course.date_range_start = DT.date(2026, 1, 1)
+    course.date_range_end = DT.date(2026, 1, 31)
+    errors = [_EVAReadIncomplete("completion_headers_unrecognized", 1, 0),
+              ([('Student One', '01/10/2026')], 1)]
+    course._read_activity_rows = MagicMock(side_effect=errors)
+    course.click_max_results_select = MagicMock(return_value=True)
+    monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.close_tab", lambda _driver: driver.window_handles.remove("activity"))
+
+    result = course.get_eva_activity_completions({
+        "activity_type": "quiz", "activity_id": "222", "title": "EVA Quiz",
+        "activity_url": "https://d2l.example/d2l/lms/quizzing/admin/attemptLogs/111/222/Logs?ou=111",
+    }, now=DT.datetime(2026, 1, 20, tzinfo=DT.timezone.utc))
+
+    assert result.complete
+    assert result.records == {"01-10-2026": ["Student One"]}
+    assert len(driver.urls) == 2
+    assert driver.urls[1].endswith("?d2l_isfromtab=1&qi=222&ou=111")
 
 @pytest.mark.unit
 def test_eva_completion_reader_collects_all_supported_pages():

@@ -325,12 +325,18 @@ class AttendanceLedger:
         ).fetchone()
         return row["status"] if row else None
 
-    def recheck_verified(self, term: str, course_section: str) -> None:
+    def recheck_verified(self, term: str, course_section: str,
+                         start: DT.date | None = None, end: DT.date | None = None) -> None:
         """Reopen supported rows for fresh SIS read-back during a recovery run."""
-        self._conn.execute(
-            "UPDATE attendance SET status=?, updated_at=? WHERE term=? AND course_section=? AND status=?",
-            (STATUS_PENDING, _now(), term, course_section, STATUS_VERIFIED),
-        )
+        query = "UPDATE attendance SET status=?, updated_at=? WHERE term=? AND course_section=? AND status=?"
+        params: list = [STATUS_PENDING, _now(), term, course_section, STATUS_VERIFIED]
+        if start is not None:
+            query += " AND attend_date>=?"
+            params.append(_iso(start))
+        if end is not None:
+            query += " AND attend_date<=?"
+            params.append(_iso(end))
+        self._conn.execute(query, params)
         self._conn.commit()
 
     def migrate_eva_evidence(self, config: dict) -> None:
@@ -647,6 +653,7 @@ class AttendanceLedger:
             self, term: str, course_section: str, *, run_status: str,
             window_end: DT.date | None = None, needs_full_recheck: bool | None = None,
             collection_date: DT.date | None = None, window_start: DT.date | None = None,
+            course_start: DT.date | None = None,
     ) -> None:
         """Close fully collected past days; the scan's current day remains open.
 
@@ -662,10 +669,11 @@ class AttendanceLedger:
             if verified_through is not None:
                 verified_through = min(verified_through, _iso(last_closed_day))
             candidate = min(DT.date.fromisoformat(_iso(window_end)), last_closed_day)
-            leaves_gap = (
-                verified_through is not None and window_start is not None
-                and DT.date.fromisoformat(_iso(window_start))
-                > DT.date.fromisoformat(verified_through) + DT.timedelta(days=1)
+            leaves_gap = window_start is not None and (
+                (verified_through is not None and DT.date.fromisoformat(_iso(window_start))
+                 > DT.date.fromisoformat(verified_through) + DT.timedelta(days=1))
+                or (verified_through is None and course_start is not None
+                    and DT.date.fromisoformat(_iso(window_start)) > DT.date.fromisoformat(_iso(course_start)))
             )
             if leaves_gap:
                 run_status = RUN_INCOMPLETE

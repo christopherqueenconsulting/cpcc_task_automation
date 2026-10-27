@@ -97,23 +97,29 @@ def plan_form(job: AttendanceJob) -> None:
              "date. Tick this after errors or reported holes; previously verified entries "
              "are read back again and restored if missing, without duplicate attendance.",
     )
-    custom_start = options.checkbox(
-        "Choose an attendance start date",
+    custom_range = options.checkbox(
+        "Choose an attendance date range",
         value=False, disabled=full_recheck, key="attendance_custom_start",
-        help="Revisit activity from this date. Unfinished earlier dates are still recovered.",
+        help="Reprocess only dates in this inclusive range. Earlier unfinished dates remain owed "
+             "and keep the course checkpoint from skipping ahead.",
     )
     attendance_start = None
-    if custom_start and not full_recheck:
+    attendance_end = None
+    if custom_range and not full_recheck:
         today = DT.datetime.now(ZoneInfo("America/New_York")).date()
         starts = [info[url].get("start_date") for url in selected]
         dates = [value.date() if isinstance(value, DT.datetime) else value
                  for value in starts if isinstance(value, (DT.date, DT.datetime))]
         attendance_start = options.date_input(
-            "Attendance start date", value=min(dates + [today]), max_value=today,
+            "Attendance start date (inclusive)", value=min(dates + [today]), max_value=today,
             key="attendance_start_date",
         )
-    options.caption("Attendance includes today's available activity. Today stays open and is "
-                    "checked again on the next run to pick up later submissions.")
+        attendance_end = options.date_input(
+            "Attendance end date (inclusive)", value=today, max_value=today,
+            key="attendance_end_date",
+        )
+    options.caption("The selected dates are inclusive. Today stays open and is checked again "
+                    "on the next run to pick up submissions made later today.")
     write_attendance = options.checkbox(
         "Write attendance to MyColleges (unchecked = dry run, report missing only)",
         value=True,
@@ -155,6 +161,7 @@ def plan_form(job: AttendanceJob) -> None:
                 course_urls=selected,
                 full_recheck=full_recheck,
                 attendance_start=attendance_start,
+                attendance_end=attendance_end,
                 write_attendance=write_attendance,
                 process_withdrawals=process_withdrawals,
                 sync_to_tracker=sync_to_tracker,
@@ -213,6 +220,9 @@ def eva_management_section(job: AttendanceJob, selected_courses: list[str]) -> N
             key="attendance_saved_eva_course",
         )
         st.write("Attached activity: %s" % (config.get("title") or "Not selected"))
+        if config.get("activity_url"):
+            st.link_button("Open saved activity", config["activity_url"])
+            st.caption("Activity type: %s" % (config.get("activity_type") or "unknown"))
         st.caption("Due: %s · EVA cutoff: %s" % (
             config.get("confirmed_due_date") or "Not confirmed", config["eva_date"]))
         st.caption("Last EVA check: %s" % (config.get("check_status") or "Not checked"))
@@ -449,6 +459,8 @@ def eva_setup_form(job: AttendanceJob) -> None:
         ),
         key="eva_activity_choice_%s" % request["request_id"],
     )
+    if selected.get("activity_url"):
+        st.link_button("Open selected activity", selected["activity_url"])
     choice_key = "%s_%s" % (request["request_id"], selected["activity_id"])
     prior_eva = request.get("eva_date")
     eva_default = DT.date.fromisoformat(prior_eva) if prior_eva else DT.datetime.now(ZoneInfo("America/New_York")).date()
@@ -487,7 +499,24 @@ def eva_status_section(job: AttendanceJob) -> None:
     statuses = job.eva_statuses()
     if statuses:
         st.caption("EVA attendance status")
-        st.dataframe(statuses, hide_index=True, width="stretch")
+        st.dataframe(statuses, hide_index=True, width="stretch", column_config={
+            "activity_url": st.column_config.LinkColumn("Selected activity", display_text="Open activity"),
+        })
+
+
+def attendance_activity_section(job: AttendanceJob) -> None:
+    diagnostics = job.attendance_activities()
+    if not diagnostics:
+        return
+    st.subheader("Activity collection details")
+    st.caption("Each row shows the activity link, results view, page and row counts, and any collection error.")
+    st.dataframe(
+        diagnostics, hide_index=True, width="stretch",
+        column_config={
+            "source_url": st.column_config.LinkColumn("Selected activity", display_text="Open source"),
+            "final_url": st.column_config.LinkColumn("Results page", display_text="Open results"),
+        },
+    )
 
 
 def job_section(job: AttendanceJob) -> None:
@@ -572,6 +601,7 @@ def live_view() -> None:
             st.rerun(scope="app")
     if job is not None:
         eva_status_section(job)
+        attendance_activity_section(job)
         eva_section(job)
         progress_section(job)
     screenshot_tab, log_tab = st.tabs(["Browser screenshot", "Log"])
