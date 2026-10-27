@@ -498,6 +498,29 @@ def test_activity_diagnostic_url_removes_unrelated_query_values():
 
 
 @pytest.mark.unit
+def test_activity_diagnostic_identity_distinguishes_same_title_activities(monkeypatch):
+    diagnostics = []
+    observer = MagicMock()
+    observer.on_attendance_activity.side_effect = diagnostics.append
+    monkeypatch.setattr("cqc_cpcc.brightspace.current_browser_observer", lambda: observer)
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.name = "CSC-111-N001: Test Course"
+    course.date_range_start = DT.date(2026, 1, 1)
+    course.date_range_end = DT.date(2026, 1, 31)
+
+    for dropbox_id in ("222", "333"):
+        url = "https://d2l.example/d2l/lms/dropbox/admin/mark/folder_submissions_users.d2l?ou=111&db=" + dropbox_id
+        course._emit_activity_diagnostic(
+            scope="ordinary", activity_type="assignment", title="Weekly Reflection",
+            source_url=url, final_url=url, view="assignment per-user submissions", status="complete",
+        )
+
+    assert len(diagnostics) == 2
+    assert diagnostics[0]["title"] == diagnostics[1]["title"]
+    assert diagnostics[0]["activity_key"] != diagnostics[1]["activity_key"]
+
+
+@pytest.mark.unit
 def test_eva_quiz_reader_falls_back_from_attempt_logs_to_attempts(monkeypatch):
     class Switch:
         def __init__(self, driver):

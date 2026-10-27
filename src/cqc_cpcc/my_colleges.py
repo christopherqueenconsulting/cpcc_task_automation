@@ -1239,7 +1239,7 @@ class MyColleges:
         if not isinstance(window_end, DT.date):
             window_end = DT.datetime.now(ZoneInfo("America/New_York")).date()
         def in_window(day: DT.date) -> bool:
-            return not bounded_range or window_start <= day <= window_end
+            return day <= window_end and (not bounded_range or day >= window_start)
         pending_by_name = {
             day: names for day, names in self._build_pending_attendance_records(bsc.attendance_records).items()
             if in_window(day)
@@ -1346,15 +1346,26 @@ class MyColleges:
                     record_date, context.last_selectable_attendance_date,
                     context.selectable_attendance_dates,
                 )
+                carry_within_window = next_date is not None and next_date <= window_end
                 for student_id in student_ids:
                     if (record_date, student_id) in exact_dates:
                         ledger.set_status(
                             term, section, student_id, record_date, STATUS_PENDING,
                             "EVA completion date is not selectable; exact date retained",
                         )
+                    elif bounded_range and not carry_within_window:
+                        ledger.set_status(
+                            term, section, student_id, record_date, STATUS_PENDING,
+                            "date not selectable within the selected attendance range",
+                        )
                     elif next_date is None:
                         ledger.set_status(term, section, student_id, record_date,
                                           STATUS_UNRECORDABLE, "date not selectable")
+                    elif not carry_within_window:
+                        ledger.set_status(
+                            term, section, student_id, record_date, STATUS_PENDING,
+                            "next selectable date is outside the current attendance window",
+                        )
                     else:
                         ledger.set_status(term, section, student_id, record_date,
                                           STATUS_CARRIED, "carried to %s" % next_date.isoformat())
@@ -1364,6 +1375,10 @@ class MyColleges:
                 if not carry_ids:
                     logger.warning("Cannot select %s; %s EVA entr(ies) remain pending on "
                                    "their actual date.", formatted_date, len(student_ids))
+                elif not carry_within_window:
+                    logger.warning("Cannot select %s within the current attendance window; "
+                                   "%s entr(ies) remain pending.",
+                                   formatted_date, len(carry_ids))
                 elif next_date is None:
                     logger.warning("Cannot select %s and no later date is available; "
                                    "%s entr(ies) not recordable.", formatted_date, len(carry_ids))

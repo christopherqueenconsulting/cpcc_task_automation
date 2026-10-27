@@ -170,6 +170,53 @@ class TestMarkAttendanceForCourse:
         assert ledger.get_status(TERM, SECTION, "1000001", old_day) == STATUS_PENDING
         assert outcome.expected == 1
 
+    def test_bounded_range_does_not_carry_unselectable_date_past_its_end(self, ledger):
+        day, outside_day = DT.date(2026, 10, 25), DT.date(2026, 10, 26)
+        course = _course({"10-25-2026": ["Ann Adams"]}, window_end=day)
+        course.attendance_start_bound = DT.date(2026, 10, 20)
+        page = FakeAttendancePage(unselectable={day})
+        mc = _my_colleges(page, ledger)
+
+        mc._mark_attendance_for_course(
+            _context(last_selectable_attendance_date=outside_day), course,
+            ledger=ledger, term=TERM, section=SECTION,
+        )
+
+        assert page.writes == []
+        assert ledger.get_status(TERM, SECTION, "1000001", day) == STATUS_PENDING
+        assert ledger.get_status(TERM, SECTION, "1000001", outside_day) is None
+
+    def test_automatic_run_does_not_carry_attendance_past_course_collection_end(self, ledger):
+        day, outside_day = DT.date(2026, 10, 25), DT.date(2026, 10, 26)
+        course = _course({"10-25-2026": ["Ann Adams"]}, window_end=day)
+        page = FakeAttendancePage(unselectable={day})
+        mc = _my_colleges(page, ledger)
+
+        mc._mark_attendance_for_course(
+            _context(last_selectable_attendance_date=outside_day), course,
+            ledger=ledger, term=TERM, section=SECTION,
+        )
+
+        assert page.writes == []
+        assert ledger.get_status(TERM, SECTION, "1000001", day) == STATUS_PENDING
+        assert ledger.get_status(TERM, SECTION, "1000001", outside_day) is None
+
+    def test_automatic_run_leaves_existing_future_ledger_debt_pending(self, ledger):
+        collection_end = DT.date(2026, 10, 25)
+        future_day = collection_end + DT.timedelta(days=1)
+        ledger.upsert_expected(TERM, SECTION, "1000001", future_day)
+        course = _course({}, window_end=collection_end)
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+
+        mc._mark_attendance_for_course(
+            _context(last_selectable_attendance_date=future_day), course,
+            ledger=ledger, term=TERM, section=SECTION,
+        )
+
+        assert page.writes == []
+        assert ledger.get_status(TERM, SECTION, "1000001", future_day) == STATUS_PENDING
+
     def test_complete_eva_batch_is_exact_date_and_unmatched_scan_writes_no_eva(self, ledger):
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)

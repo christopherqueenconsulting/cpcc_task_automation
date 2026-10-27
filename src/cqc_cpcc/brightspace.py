@@ -751,10 +751,13 @@ class BrightSpace_Course:
         callback = getattr(current_browser_observer(), "on_attendance_activity", None)
         if callback is None:
             return
+        stable_id = self._activity_id(activity_type, source_url)
+        if not stable_id or stable_id == source_url:
+            stable_id = self._diagnostic_url(source_url) or "unknown-activity"
         callback({
             "course_section": self.name.split(":")[0].strip(), "scope": scope,
             "activity_type": activity_type, "title": title or "Untitled activity",
-            "activity_key": "%s:%s" % (activity_type, title),
+            "activity_key": "%s:%s" % (activity_type, stable_id),
             "source_url": self._diagnostic_url(source_url),
             "final_url": self._diagnostic_url(final_url), "view": view,
             "status": status, "pages_read": pages, "rows_read": rows,
@@ -1210,6 +1213,9 @@ class BrightSpace_Course:
         course_end = min(self.date_range_end, convert_date_to_datetime(self.course_end_date).date())
         for url in urls:
             activity_tab = None
+            rows: list[tuple[str, str]] = []
+            pages_read = 0
+            view = "unknown"
             try:
                 self.driver.switch_to.window(current_tab)
                 handles = set(self.driver.window_handles)
@@ -1281,9 +1287,11 @@ class BrightSpace_Course:
                 self._emit_activity_diagnostic(
                     scope="ordinary", activity_type=activity_type,
                     title=str(getattr(self.driver, "title", "") or "").split("|")[0].strip(), source_url=url,
-                    final_url=getattr(self.driver, "current_url", None), view=locals().get("view", "unknown"),
-                    status="incomplete", pages=locals().get("pages_read", 0),
-                    rows=locals().get("rows", []).__len__(), error_code=code,
+                    final_url=getattr(self.driver, "current_url", None), view=view,
+                    status="incomplete",
+                    pages=error.pages_read if isinstance(error, _EVAReadIncomplete) else pages_read,
+                    rows=error.rows_read if isinstance(error, _EVAReadIncomplete) else len(rows),
+                    error_code=code,
                 )
             finally:
                 if activity_tab is not None and activity_tab != current_tab:
