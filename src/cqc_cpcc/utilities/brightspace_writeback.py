@@ -445,6 +445,7 @@ class GradeWriteReport:
     unmatched_students: list[str] = field(default_factory=list)
     unmatched_learners: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    feedback_mode: str = "attach"
 
     @property
     def matched_count(self) -> int:
@@ -453,6 +454,30 @@ class GradeWriteReport:
     @property
     def saved_count(self) -> int:
         return sum(1 for o in self.outcomes if o.saved)
+
+    @property
+    def complete(self) -> bool:
+        """Whether the selected write-back path completed all reported checks."""
+        # This validation was added for assignment write-back only. Keep quiz
+        # report presentation unchanged while its write paths remain out of scope.
+        if self.route != "assignment":
+            return True
+        if self.warnings or self.unmatched_students:
+            return False
+        for outcome in self.outcomes:
+            if not outcome.matched or not outcome.fields_found or outcome.rubric_missing:
+                return False
+            if not self.dry_run:
+                if not outcome.saved:
+                    return False
+                if self.route == "assignment":
+                    delivered = (outcome.feedback_attached if self.feedback_mode == "attach"
+                                 else outcome.feedback_written)
+                    if not delivered or (
+                        self.feedback_mode == "inline" and outcome.score_written is None
+                    ):
+                        return False
+        return True
 
 
 # Deep-DOM JS: locate the score input + feedback editor host (crossing shadow roots),
@@ -592,7 +617,7 @@ def _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run,
         _open_and_login, _set_max_results_per_page, _open_quiz_attempt,
     )
 
-    report = GradeWriteReport(route="quiz", dry_run=dry_run)
+    report = GradeWriteReport(route="quiz", dry_run=dry_run, feedback_mode=feedback_mode)
     grading_url = derive_quiz_grading_url(url)
     _open_and_login(driver, wait, grading_url, progress, mfa_handler)
     _set_max_results_per_page(driver, wait, progress)
@@ -633,7 +658,7 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
     """
     from cqc_cpcc.utilities.brightspace_fetch import _open_and_login, _set_max_results_per_page
 
-    report = GradeWriteReport(route="assignment", dry_run=dry_run)
+    report = GradeWriteReport(route="assignment", dry_run=dry_run, feedback_mode=feedback_mode)
     _open_and_login(driver, wait, url, progress, mfa_handler)
 
     import os
@@ -1104,31 +1129,46 @@ def _ensure_score_committed(driver, score, attempts: int = 4) -> bool:
 def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
                        progress, dry_run: bool, feedback_mode: str = "attach") -> None:
     """Locate (and, when not dry_run, fill + save-draft) one student's score + feedback."""
-    # Wait for the Lit inputs to hydrate before locating (they render a beat after nav).
-    targets = _wait_for_write_targets(driver)
-    outcome.fields_found = bool(targets.get("score"))
-    if not targets.get("score"):
-        outcome.note = "score field not found"
-        progress(f"{item.display_name}: write targets not found")
+    attach = _use_attach(feedback_mode, item)
+    # Wait for every selected write target before touching any field. In inline mode
+    # the feedback editor can hydrate after the score input, so require both.
+    targets = _wait_for_write_targets(driver, require_feedback=not attach)
+    rubric_check = _select_rubric_levels(driver, item.rubric_selections, dry_run=True)
+    rubric_selected = rubric_check.get("selected") or []
+    rubric_missing = rubric_check.get("missing") or []
+    save_target = _locate_save_draft(driver)
+    feedback_target = _locate_attach_control(driver) if attach else bool(targets.get("feedback"))
+
+    outcome.rubric_selected = len(rubric_selected)
+    outcome.rubric_missing = rubric_missing
+    outcome.fields_found = bool(
+        targets.get("score") and feedback_target and save_target and not rubric_missing
+    )
+    if not outcome.fields_found:
+        checks = [
+            f"score {'found' if targets.get('score') else 'NOT found'}",
+            (f"attach control {'found' if feedback_target else 'NOT found'}" if attach else
+             f"inline feedback editor {'found' if feedback_target else 'NOT found'}"),
+            f"Save Draft {'found' if save_target else 'NOT found'}",
+        ]
+        if item.rubric_selections:
+            checks.append(
+                f"rubric {outcome.rubric_selected}/{len(item.rubric_selections)} matched"
+            )
+        outcome.note = "write targets incomplete: " + "; ".join(checks)
+        progress(f"{item.display_name}: {outcome.note}")
         return
 
-    attach = _use_attach(feedback_mode, item)
-
     if dry_run:
-        # Report which rubric levels WOULD be selected (matched, not clicked).
-        rres = _select_rubric_levels(driver, item.rubric_selections, dry_run=True)
-        outcome.rubric_selected = len(rres.get("selected") or [])
-        outcome.rubric_missing = rres.get("missing") or []
         outcome.score_written = item.score
-        rub = (f"; {outcome.rubric_selected}/{len(item.rubric_selections)} rubric level(s) matched"
-               if item.rubric_selections else "")
-        if attach:
-            fb = (" + attach feedback doc" if _locate_attach_control(driver)
-                  else " (attach control NOT found)")
-        else:
-            fb = " + inline feedback"
-        outcome.note = f"dry run — would set rubric + write {item.score}{fb} (not saved){rub}"
-        progress(f"{item.display_name}: would write {item.score}/{item.max_points}{rub} (dry run)")
+        feedback_name = "attach control" if attach else "inline feedback editor"
+        checks = ["score found", f"{feedback_name} found", "Save Draft found"]
+        if item.rubric_selections:
+            checks.append(f"rubric {outcome.rubric_selected}/{len(item.rubric_selections)} matched")
+        outcome.note = (
+            f"dry run — {'; '.join(checks)}; would write {item.score} (nothing saved)"
+        )
+        progress(f"{item.display_name}: {outcome.note}")
         return
 
     try:
@@ -1229,6 +1269,45 @@ def _save_draft(driver) -> bool:
         ))
     except Exception as e:  # noqa: BLE001
         logger.info("Save Draft click failed: %s", e)
+        return False
+
+
+_LOCATE_SAVE_DRAFT_JS = r"""
+const SAVE_TEXTS = arguments[0];
+const PUBLISH_TEXTS = arguments[1];
+function* deep(root) {
+  const stack = [root.documentElement || root];
+  while (stack.length) {
+    const n = stack.pop();
+    if (!n) continue;
+    yield n;
+    if (n.shadowRoot) stack.push(n.shadowRoot);
+    for (const c of (n.children || [])) stack.push(c);
+  }
+}
+function txt(el) {
+  return ((el.getAttribute && (el.getAttribute('text') || el.getAttribute('aria-label')) || '')
+          + ' ' + (el.textContent || '')).toLowerCase().trim();
+}
+for (const el of deep(document)) {
+  const tag = (el.tagName || '').toLowerCase();
+  if (!/button/.test(tag) && tag !== 'a') continue;
+  const t = txt(el);
+  if (!t || PUBLISH_TEXTS.some(p => t.indexOf(p) >= 0)) continue;
+  if (SAVE_TEXTS.some(s => t.indexOf(s) >= 0)) return true;
+}
+return false;
+"""
+
+
+def _locate_save_draft(driver) -> bool:
+    """Check for a safe Save Draft control without clicking it."""
+    try:
+        return bool(driver.execute_script(
+            _LOCATE_SAVE_DRAFT_JS, list(SAVE_DRAFT_BUTTON_TEXTS), list(PUBLISH_BUTTON_TEXTS)
+        ))
+    except Exception as e:  # noqa: BLE001
+        logger.info("Save Draft lookup failed: %s", e)
         return False
 
 
@@ -1346,20 +1425,19 @@ def _confirm_dialog(driver, include: tuple, exclude: tuple = _DESTRUCTIVE_DIALOG
         return False
 
 
-def _wait_for_write_targets(driver, timeout: int = 15) -> dict:
+def _wait_for_write_targets(driver, timeout: int = 15, require_feedback: bool = False) -> dict:
     """Poll until the evaluation page's write targets hydrate; return {'score','feedback'}.
 
     The Consistent Evaluation UI renders its Lit score input a beat AFTER navigation, so
-    an immediate ``_locate_write_targets`` reports nothing — the dry-run "fields not
-    found" bug. Poll until the score input appears (or timeout) so dry-run and real
-    writes both see the real fields.
+    an immediate ``_locate_write_targets`` reports nothing. Poll until the score input
+    appears, and also wait for feedback when the selected route requires it.
     """
     import time as _t
     deadline = _t.time() + timeout
     targets = {"score": False, "feedback": False}
     while _t.time() < deadline:
         targets = _locate_write_targets(driver)
-        if targets.get("score"):
+        if targets.get("score") and (targets.get("feedback") or not require_feedback):
             return targets
         _t.sleep(0.5)
     return targets
@@ -1683,6 +1761,29 @@ def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None)
 
 
 # Deep-scan (crossing shadow roots) for the submissions-page "Add Feedback Files"
+# control without clicking it. Used by dry-run to confirm the upload target exists.
+_LOCATE_ADD_FEEDBACK_FILES_JS = r"""
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
+for(const el of deep(document)){
+  const t=(el.tagName||'').toLowerCase();
+  if(!(t==='button'||t==='a'||t==='d2l-button'||t==='d2l-menu-item')) continue;
+  const txt=((el.textContent||'')+' '+((el.getAttribute&&el.getAttribute('aria-label'))||'')).replace(/\s+/g,' ').trim().toLowerCase();
+  if(txt.indexOf('add feedback files')!==-1) return true;
+}
+return false;
+"""
+
+
+def _locate_add_feedback_files_control(driver) -> bool:
+    """Check for the bulk feedback upload control without opening it."""
+    try:
+        return bool(driver.execute_script(_LOCATE_ADD_FEEDBACK_FILES_JS))
+    except Exception as e:  # noqa: BLE001
+        logger.info("Add Feedback Files lookup failed: %s", e)
+        return False
+
+
+# Deep-scan (crossing shadow roots) for the submissions-page "Add Feedback Files"
 # button and click it (opens the bulk-upload iframe dialog).
 _CLICK_ADD_FEEDBACK_FILES_JS = r"""
 function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
@@ -1776,28 +1877,67 @@ def _import_assignment_feedback_docs(driver, url, items, doc_items, report,
     and records a per-student outcome. Scores/rubric are NOT written here — run inline
     mode for those. In dry-run the ZIP is built and reported but never uploaded.
     """
+    import os
+
+    available_doc_items = [
+        it for it in doc_items if it.feedback_doc_path and os.path.exists(it.feedback_doc_path)
+    ]
+    available_keys = {it.student_key for it in available_doc_items}
+    upload_control = _locate_add_feedback_files_control(driver)
+    if not upload_control:
+        report.warnings.append("The 'Add Feedback Files' upload control was not found.")
+        progress(
+            f"{len(available_doc_items)} feedback DOCX file(s) available; "
+            "'Add Feedback Files' control NOT found (nothing uploaded)"
+        )
+        for it in items:
+            has_doc = it.student_key in available_keys
+            report.outcomes.append(StudentWriteOutcome(
+                student_key=it.student_key, display_name=it.display_name,
+                matched=has_doc, fields_found=False,
+                note=(
+                    "DOCX available; Add Feedback Files control NOT found; "
+                    "nothing uploaded (dry run)" if dry_run and has_doc else
+                    "DOCX available; Add Feedback Files control NOT found; "
+                    "nothing uploaded" if has_doc else "no feedback DOCX available"
+                ),
+            ))
+        return report
+
     zip_path = build_feedback_docs_zip(
-        {it.student_key: it.feedback_doc_path for it in doc_items})
+        {it.student_key: it.feedback_doc_path for it in available_doc_items})
     if not zip_path:
         report.warnings.append("No feedback .docx files were available to import.")
+        for it in items:
+            report.outcomes.append(StudentWriteOutcome(
+                student_key=it.student_key, display_name=it.display_name,
+                matched=False, fields_found=False, note="no feedback DOCX available",
+            ))
         return report
 
     ok = True
     if dry_run:
-        progress(f"Would bulk-import {len(doc_items)} feedback doc(s) as draft (dry run)")
+        progress(
+            f"Would bulk-import {len(available_doc_items)} feedback doc(s) as draft; "
+            "Add Feedback Files control found (dry run; nothing uploaded)"
+        )
     else:
-        progress(f"Bulk-importing {len(doc_items)} feedback doc(s) via 'Add Feedback Files'...")
+        progress(f"Bulk-importing {len(available_doc_items)} feedback doc(s) via 'Add Feedback Files'...")
         ok = import_feedback_zip(driver, zip_path, progress)
 
     for it in items:
+        has_doc = it.student_key in available_keys
         outcome = StudentWriteOutcome(
             student_key=it.student_key, display_name=it.display_name,
-            matched=bool(it.feedback_doc_path),
+            matched=has_doc, fields_found=has_doc and upload_control,
         )
-        if not it.feedback_doc_path:
+        if not has_doc:
             outcome.note = "no feedback doc to import"
         elif dry_run:
-            outcome.note = "would import feedback doc as draft (dry run)"
+            outcome.note = (
+                "dry run — DOCX available; Add Feedback Files control found; "
+                "would import as draft (nothing uploaded)"
+            )
         elif ok:
             outcome.feedback_attached = True
             outcome.saved = True

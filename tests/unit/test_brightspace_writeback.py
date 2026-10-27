@@ -320,14 +320,48 @@ def test_save_draft_returns_bool_and_swallows_errors():
 
 
 @pytest.mark.unit
+def test_locate_save_draft_checks_without_clicking():
+    driver = MagicMock()
+    driver.execute_script.return_value = True
+    assert wb._locate_save_draft(driver) is True
+    assert wb._LOCATE_SAVE_DRAFT_JS in driver.execute_script.call_args.args
+
+
+@pytest.mark.unit
+def test_locate_add_feedback_files_control_checks_without_clicking():
+    driver = MagicMock()
+    driver.execute_script.return_value = True
+    assert wb._locate_add_feedback_files_control(driver) is True
+    assert driver.execute_script.call_args.args == (wb._LOCATE_ADD_FEEDBACK_FILES_JS,)
+
+
+@pytest.mark.unit
+def test_wait_for_write_targets_can_wait_for_feedback_hydration(mocker):
+    driver = MagicMock()
+    locate = mocker.patch.object(wb, "_locate_write_targets", side_effect=[
+        {"score": True, "feedback": False},
+        {"score": True, "feedback": True},
+    ])
+    mocker.patch("time.sleep")
+
+    targets = wb._wait_for_write_targets(driver, timeout=1, require_feedback=True)
+
+    assert targets == {"score": True, "feedback": True}
+    assert locate.call_count == 2
+
+
+@pytest.mark.unit
 def test_write_one_student_dry_run_does_not_fill_or_save(mocker):
     driver = MagicMock()
     mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
     save = mocker.patch.object(wb, "_save_draft")
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
     assert o.fields_found and o.score_written == 90.0 and not o.saved
+    assert "score found" in o.note and "inline feedback editor found" in o.note
+    assert "Save Draft found" in o.note
     save.assert_not_called()
     driver.execute_script.assert_not_called()   # dry run fills nothing
 
@@ -337,6 +371,7 @@ def test_write_one_student_real_fills_and_saves_draft(mocker):
     driver = MagicMock()
     mocker.patch("time.sleep")
     mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
     mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     mocker.patch.object(wb, "_fill_score", return_value=True)
     mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
@@ -383,12 +418,35 @@ def test_write_one_student_no_score_field_reports_not_found(mocker):
     driver = MagicMock()
     # Patch the hydration wait directly so the test doesn't sit through the poll timeout.
     mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": False, "feedback": False})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=False)
     save = mocker.patch.object(wb, "_save_draft")
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
     assert not o.fields_found and not o.saved
-    assert "not found" in o.note
+    assert "score NOT found" in o.note and "Save Draft NOT found" in o.note
+    save.assert_not_called()
+
+
+@pytest.mark.unit
+def test_write_one_student_refuses_write_when_save_draft_control_missing(mocker):
+    driver = MagicMock()
+    mocker.patch.object(wb, "_wait_for_write_targets",
+                        return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=False)
+    save = mocker.patch.object(wb, "_save_draft")
+    fill = mocker.patch.object(wb, "_fill_score")
+    feedback = mocker.patch.object(wb, "_write_feedback_via_editor")
+    outcome = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+
+    wb._write_one_student(driver, MagicMock(), item, outcome, lambda *_: None, dry_run=False)
+
+    assert not outcome.fields_found
+    assert "Save Draft NOT found" in outcome.note
+    assert outcome.score_written is None
+    fill.assert_not_called()
+    feedback.assert_not_called()
     save.assert_not_called()
 
 
@@ -429,6 +487,7 @@ def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
     driver = MagicMock()
     mocker.patch("time.sleep")
     mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
     mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     mocker.patch.object(wb, "_fill_score", return_value=True)
     mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
@@ -439,7 +498,7 @@ def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
     item = wb.GradeWriteItem("k", "Jane", 24, 27, 30, "<p>fb</p>",
                              rubric_selections=[wb.RubricLevelSelection("Program Performance", "Above Average")])
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=False)
-    rub.assert_called_once()
+    assert rub.call_count == 2
     assert rub.call_args.kwargs.get("dry_run") is False    # real selection, not dry-run
     assert o.rubric_selected == 1 and o.saved and o.score_written == 27.0
 
@@ -448,6 +507,7 @@ def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
 def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker):
     driver = MagicMock()
     mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
     rub = mocker.patch.object(wb, "_select_rubric_levels", return_value={
         "selected": [{"criterion": "Program Performance", "level": "Above Average"}],
         "missing": [{"criterion": "Style", "level": "Full", "reason": "level not found"}]})
@@ -460,6 +520,7 @@ def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker)
     rub.assert_called_once()
     assert rub.call_args.kwargs.get("dry_run") is True     # matched only, not clicked
     assert o.rubric_selected == 1 and len(o.rubric_missing) == 1 and not o.saved
+    assert not o.fields_found and "rubric 1/2 matched" in o.note
     save.assert_not_called()
 
 
@@ -782,7 +843,26 @@ def test_import_assignment_feedback_docs_dry_run_does_not_upload(mocker, tmp_pat
         MagicMock(), "url", [item], [item], report, lambda *_: None, dry_run=True)
     imp.assert_not_called()
     assert out.outcomes[0].feedback_attached is False
+    assert out.outcomes[0].fields_found is True
     assert "dry run" in out.outcomes[0].note
+    assert out.complete
+
+
+@pytest.mark.unit
+def test_import_assignment_feedback_docs_dry_run_requires_upload_control(mocker, tmp_path):
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    mocker.patch.object(wb, "_locate_add_feedback_files_control", return_value=False)
+    imp = mocker.patch.object(wb, "import_feedback_zip")
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+    report = wb._import_assignment_feedback_docs(
+        MagicMock(), "url", [item], [item], wb.GradeWriteReport("assignment", True),
+        lambda *_: None, dry_run=True)
+    imp.assert_not_called()
+    assert not report.complete
+    assert not report.outcomes[0].fields_found
+    assert "control NOT found" in report.outcomes[0].note
+    assert any("upload control was not found" in warning for warning in report.warnings)
 
 
 @pytest.mark.unit
@@ -920,6 +1000,7 @@ def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
     ])
     mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
     save = mocker.patch.object(wb, "_save_draft")
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
 
     items = [wb.GradeWriteItem("k1", "Jane Doe", 80, 90, 100, "<p>fb</p>")]
     report = wb.push_grades_to_brightspace(
@@ -928,6 +1009,25 @@ def test_push_assignment_grades_dry_run_matches_and_reports(mocker):
     )
     assert report.route == "assignment" and report.matched_count == 1
     assert report.saved_count == 0
+
+
+@pytest.mark.unit
+def test_assignment_inline_dry_run_fails_when_feedback_editor_missing(mocker):
+    driver = MagicMock(); wait = MagicMock()
+    wait_targets = mocker.patch.object(
+        wb, "_wait_for_write_targets", return_value={"score": True, "feedback": False})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
+    save = mocker.patch.object(wb, "_save_draft")
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+
+    wb._write_one_student(driver, wait, item, o, lambda *_: None,
+                          dry_run=True, feedback_mode="inline")
+
+    assert not o.fields_found and "inline feedback editor NOT found" in o.note
+    assert o.score_written is None
+    assert wait_targets.call_args.kwargs["require_feedback"] is True
+    save.assert_not_called()
 
 
 @pytest.mark.unit
@@ -948,3 +1048,45 @@ def test_push_assignment_grades_attach_no_docs_reports_clearly(mocker):
     gather.assert_not_called()  # and no per-student navigation
     assert any("feedback" in w.lower() and "docx" in w.lower() for w in report.warnings)
     assert report.outcomes and not report.outcomes[0].matched
+
+
+@pytest.mark.unit
+def test_assignment_report_incomplete_when_inline_feedback_failed():
+    report = wb.GradeWriteReport(route="assignment", dry_run=False, feedback_mode="inline")
+    report.outcomes.append(wb.StudentWriteOutcome(
+        "k", "Jane", matched=True, fields_found=True, saved=True, feedback_written=False,
+    ))
+    assert not report.complete
+    report.outcomes[0].feedback_written = True
+    assert not report.complete  # score missing despite a saved feedback body
+
+
+@pytest.mark.unit
+def test_quiz_report_completeness_keeps_existing_presentation_behavior():
+    report = wb.GradeWriteReport(route="quiz", dry_run=True)
+    report.outcomes.append(wb.StudentWriteOutcome(
+        "k", "Jane", matched=True, fields_found=False,
+        note="quiz completion feedback target unavailable",
+    ))
+
+    assert report.complete
+
+
+@pytest.mark.unit
+def test_writeback_report_shows_warning_when_required_target_is_missing(mocker):
+    from cqc_streamlit_app import utils
+
+    success = mocker.patch.object(utils.st, "success")
+    warning = mocker.patch.object(utils.st, "warning")
+    mocker.patch.object(utils.st, "dataframe")
+    report = wb.GradeWriteReport(route="assignment", dry_run=True, feedback_mode="inline")
+    report.outcomes.append(wb.StudentWriteOutcome(
+        "k", "Jane", matched=True, fields_found=False,
+        note="write targets incomplete: inline feedback editor NOT found",
+    ))
+
+    utils._render_writeback_report(report)
+
+    success.assert_not_called()
+    warning.assert_called_once()
+    assert "incomplete" in warning.call_args.args[0]
