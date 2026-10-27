@@ -11,7 +11,6 @@ pre-filled.
 from typing import Optional
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from cqc_cpcc.reconciliation import safe_line
 from cqc_cpcc.utilities.code_preview import (
@@ -117,6 +116,6 @@ def render_submission_code(source_files: Optional[dict], widget_key: str,
     if not runnable_files(code_files, lang):
         st.warning("No runnable source file to send.", icon=":material/warning:")
         return
-    components.html(build_runner_html(build_onecompiler_payload(code_files, lang),
-                                      height=RUNNER_HEIGHT - 20),
-                    height=RUNNER_HEIGHT)
+    st.iframe(build_runner_html(build_onecompiler_payload(code_files, lang),
+                                height=RUNNER_HEIGHT - 20),
+              height=RUNNER_HEIGHT, alt="OneCompiler code runner")

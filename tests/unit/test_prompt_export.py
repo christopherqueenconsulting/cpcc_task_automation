@@ -116,3 +116,23 @@ def test_the_prompt_is_never_saved_or_exported():
     assert loaded.llm_request is None
     assert "Grade this." not in result_card_json("Ada Example", _result())
     assert "llm_request" not in RubricAssessmentResult.model_json_schema()["properties"]
+
+
+def test_clipboard_buttons_keep_separate_containers_and_embed_escaped_text(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from cqc_streamlit_app import utils
+
+    st = MagicMock()
+    monkeypatch.setattr(utils, "st", st)
+    text = "</script><script>alert(1)</script>"
+    utils.copy_to_clipboard_button(text, "Copy feedback as Markdown", "feedback")
+    utils.copy_to_clipboard_button(text, "Copy prompt as Markdown", "prompt", height=64)
+
+    assert [call.kwargs["key"] for call in st.container.call_args_list] == [
+        "clip_feedback", "clip_prompt",
+    ]
+    first, second = st.iframe.call_args_list
+    assert first.args == (pe.clipboard_button_html(text, "Copy feedback as Markdown"),)
+    assert first.kwargs == {"height": 48, "alt": "Copy feedback as Markdown"}
+    assert second.kwargs == {"height": 64, "alt": "Copy prompt as Markdown"}

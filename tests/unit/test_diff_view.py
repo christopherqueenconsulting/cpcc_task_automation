@@ -520,3 +520,13 @@ def test_one_term_student_output_in_the_unified_captions():
     at = _app(_case(), mode="Unified")
     texts = [str(c.value) for c in at.caption]
     assert any("+ student output" in t for t in texts) and not any("this program" in t for t in texts)
+
+
+def test_embed_preserves_generated_html_height_and_accessible_title(monkeypatch):
+    from unittest.mock import MagicMock
+
+    st = MagicMock()
+    monkeypatch.setattr(dv, "st", st)
+    html = dv.build_side_by_side_html(dv.align_rows("expected", "actual"))
+    dv._embed(html, 480)
+    st.iframe.assert_called_once_with(html, height=480, alt=dv.IFRAME_TITLE)

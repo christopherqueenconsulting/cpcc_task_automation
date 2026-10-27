@@ -2623,12 +2623,10 @@ def copy_to_clipboard_button(text: str, label: str, key: str, height: int = 48) 
     """A button that copies ``text`` to the clipboard in the browser (no network, no third
     party). The text is embedded as escaped JSON; when the clipboard API is missing (a
     non-secure origin) or refuses, the button says so and the caller's download stays."""
-    import streamlit.components.v1 as components
-
     from cqc_cpcc.prompt_export import clipboard_button_html
 
     with st.container(key=f"clip_{key}"):
-        components.html(clipboard_button_html(text, label), height=height)
+        st.iframe(clipboard_button_html(text, label), height=height, alt=label)
 
 
 def render_openai_debug_panel(
