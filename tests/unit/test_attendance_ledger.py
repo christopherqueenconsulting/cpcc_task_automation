@@ -291,3 +291,24 @@ class TestEvaActivity:
             "ordinary": False, "eva": True,
         }
         assert all(entry.attempts == 0 for entry in ledger.outstanding(TERM, COURSE))
+
+    def test_eva_batch_is_atomic_across_all_expected_rows_and_provenance(self, ledger):
+        first_day = DT.date(2026, 8, 19)
+        second_day = DT.date(2026, 8, 20)
+        ledger._conn.execute(
+            "CREATE TRIGGER reject_second_eva_evidence BEFORE INSERT ON attendance_evidence "
+            "WHEN NEW.source_id='activity-2' "
+            "BEGIN SELECT RAISE(ABORT, 'simulated batch failure'); END"
+        )
+        ledger._conn.commit()
+
+        with pytest.raises(sqlite3.IntegrityError, match="simulated batch failure"):
+            ledger.record_eva_expected_batch(TERM, COURSE, [
+                ("1", first_day, "activity-1"),
+                ("2", second_day, "activity-2"),
+            ])
+
+        assert ledger._conn.execute("SELECT COUNT(*) FROM attendance").fetchone()[0] == 0
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM attendance_evidence"
+        ).fetchone()[0] == 0

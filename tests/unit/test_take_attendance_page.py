@@ -12,6 +12,7 @@ from cqc_cpcc.attendance_job import (
     PHASE_SUCCEEDED,
     AttendanceJob,
 )
+from cqc_cpcc.run_plan import RunPlan
 from cqc_cpcc.utilities.selenium_util import MfaChallenge
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
@@ -103,6 +104,20 @@ class TestTakeAttendancePage:
         assert [caption.value for caption in app.caption].count("EVA attendance status") == 1
         assert len(app.dataframe) == 1
         assert app.dataframe[0].value.iloc[0]["course_section"] == "CSC-134-N851"
+
+    def test_incomplete_eva_is_visible_in_final_run_summary(self):
+        job = FakeJob(PHASE_SUCCEEDED)
+        job.plan = RunPlan(course_urls=["url-now"])
+        job.on_eva_status({
+            "course_section": "CSC-134-N851", "activity": "EVA assignment",
+            "due_date": "2026-10-26", "eva_cutoff": "2026-10-26",
+            "result": "incomplete", "detail": "EVA scan incomplete (stale_completion_rows)",
+        })
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        assert any("EVA collection is incomplete" in item.value for item in app.warning)
+        assert [caption.value for caption in app.caption].count("EVA attendance status") == 1
 
     def test_eva_confirmation_page_shows_date_verification_skip_and_cancel(self):
         job = FakeJob("awaiting_eva_setup")

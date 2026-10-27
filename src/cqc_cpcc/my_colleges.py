@@ -41,37 +41,42 @@ from cqc_cpcc.attendance_ledger import (
     open_default_ledger,
 )
 from cqc_cpcc.brightspace import BrightSpace_Course
-from cqc_cpcc.eva_check import EvaFlag, flag_no_attendance, notify_eva_flags, print_eva_block
+from cqc_cpcc.eva_check import (
+    EvaFlag,
+    flag_no_attendance,
+    notify_eva_flags,
+    print_eva_block,
+)
 from cqc_cpcc.run_plan import RunPlan
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.date import (
     calculate_census_date,
     convert_date_to_datetime,
     get_datetime,
     is_date_in_range,
+    looks_like_a_scraped_date,
 )
 from cqc_cpcc.utilities.env_constants import (
     EVA_DATE_DRIFT_WARNING_DAYS,
     EVA_DATE_PERCENT,
     MYCOLLEGE_URL,
 )
-from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
     close_tab,
+    current_browser_observer,
     describe_page,
     get_driver_wait,
     get_element_wait_retry,
     get_elements_text_as_list_wait_stale,
     getText,
-    current_browser_observer,
     notify_progress,
     notify_warning,
     wait_for_ajax,
     wait_for_element_to_hide,
 )
-from cqc_cpcc.utilities.date import looks_like_a_scraped_date
 from cqc_cpcc.utilities.utils import login_if_needed
 
 
@@ -108,6 +113,8 @@ class AttendanceOutcome:
     unmatched: list = field(default_factory=list)
     # (date, student id) pairs a dry run found not marked Present.
     missing: list = field(default_factory=list)
+    # EVA completions that did not map to exactly one roster row.
+    eva_unmatched: int = 0
     # Writes MyColleges refused with "Unable to update student attendance".
     update_errors: int = 0
     # True when refusals reached UPDATE_ERRORS_TO_SKIP_COURSE and the rest was skipped.
@@ -300,8 +307,15 @@ class MyColleges:
                            context.course_name)
             self._publish_eva_status(context, saved, "incomplete", "Activity discovery was incomplete")
             return None
+        saved_activity_id = saved.get("activity_id") if saved else None
+        if saved and saved.get("activity_type") == "quiz" and saved.get("activity_url"):
+            # Older confirmations stored the course ``ou`` as the quiz ID because
+            # attempt-log URLs no longer carry ``qi`` in their query string.
+            saved_activity_id = BrightSpace_Course._activity_id(
+                "quiz", saved["activity_url"]
+            )
         found = next((item for item in candidates
-                      if saved and item["activity_id"] == saved["activity_id"]
+                      if saved and item["activity_id"] == saved_activity_id
                       and item["activity_type"] == saved["activity_type"]), None)
         current_due = found.get("observed_due_iso") if found else None
         saved_due = saved.get("confirmed_due_date") if saved else None
@@ -309,8 +323,21 @@ class MyColleges:
             current_due != saved_due and found.get("observed_due_date") != saved.get("observed_due_date")
         ) or (saved and DT.date.fromisoformat(saved["eva_date"]) != eva_date)
         if found and not needs_activity_confirmation:
-            ledger.update_eva_activity_title(term, section, course_id,
-                                              found["title"], found.get("observed_due_date"))
+            if saved.get("activity_id") != found["activity_id"]:
+                ledger.save_eva_activity({
+                    **saved, **found,
+                    "term": term, "course_section": section,
+                    "brightspace_course_id": course_id,
+                    "confirmed_due_date": saved_due,
+                    "eva_date": eva_date.isoformat(),
+                    "observed_eva_date": saved.get("observed_eva_date"),
+                    "eva_date_source": saved.get("eva_date_source", source),
+                })
+            else:
+                ledger.update_eva_activity_title(
+                    term, section, course_id, found["title"],
+                    found.get("observed_due_date"),
+                )
             config = {**found, "confirmed_due_date": saved_due, "eva_date": eva_date.isoformat()}
             self._publish_eva_status(context, config, "pending", "Saved activity reused")
             return config
@@ -1211,25 +1238,49 @@ class MyColleges:
         """
         outcome = AttendanceOutcome()
         pending_by_name = self._build_pending_attendance_records(bsc.attendance_records)
-        eva_names_by_date = {
-            self._normalize_attendance_record_date(date): set(names)
-            for date, names in getattr(bsc, "eva_attendance_records", {}).items()
-        }
         eva_activity_id = getattr(bsc, "eva_activity_id", None)
+        eva_result = getattr(bsc, "eva_collection_result", None)
+        eva_records = (getattr(bsc, "eva_attendance_records", {})
+                       if eva_result is not None and eva_result.complete else {})
+        eva_by_date = self._build_pending_attendance_records(eva_records)
+        roster = self._read_attendance_roster() if pending_by_name or eva_by_date else []
 
-        roster = self._read_attendance_roster() if pending_by_name else []
+        # Match every EVA completion before committing any evidence. The ledger
+        # batch is atomic and completes before the SIS write loop begins.
+        eva_rows: list[tuple[str, DT.date, str]] = []
+        eva_unmatched: list[tuple[DT.date, str]] = []
+        for record_date, names in eva_by_date.items():
+            for name in names:
+                student_id = self._match_student_id(name, roster)
+                if student_id is None:
+                    eva_unmatched.append((record_date, alias(name)))
+                else:
+                    eva_rows.append((student_id, record_date, eva_activity_id))
+
+        if eva_unmatched:
+            outcome.eva_unmatched = len(eva_unmatched)
+            outcome.unmatched.extend(eva_unmatched)
+        elif eva_rows:
+            if not eva_activity_id:
+                raise RuntimeError("Complete EVA evidence has no confirmed activity identity.")
+            try:
+                ledger.record_eva_expected_batch(term, section, eva_rows)
+            except Exception as error:
+                raise RuntimeError(
+                    "Could not persist complete EVA attendance evidence; refusing SIS writes."
+                ) from error
+            for record_date, names in eva_by_date.items():
+                self._merge_students_for_date(pending_by_name, record_date, names)
+
         for record_date, names in pending_by_name.items():
             for name in names:
                 student_id = self._match_student_id(name, roster)
                 if student_id is None:
-                    outcome.unmatched.append((record_date, alias(name)))
+                    unmatched = (record_date, alias(name))
+                    if unmatched not in outcome.unmatched:
+                        outcome.unmatched.append(unmatched)
                     continue
-                if eva_activity_id and name in eva_names_by_date.get(record_date, set()):
-                    ledger.record_eva_expected(
-                        term, section, student_id, record_date, eva_activity_id
-                    )
-                else:
-                    ledger.upsert_expected(term, section, student_id, record_date)
+                ledger.upsert_expected(term, section, student_id, record_date)
 
         if outcome.unmatched:
             logger.warning(
@@ -1648,30 +1699,55 @@ class MyColleges:
                 window_start - DT.timedelta(days=1)
             )
 
-        bsc = BrightSpace_Course(
-            context.course_name, context.term_semester, context.term_year,
-            context.first_day_to_drop, context.final_day_to_drop,
-            context.course_start_date, context.course_end_date,
-            self.driver, self.wait, context.last_attendance_record_date,
-            collect_attendance=collect_attendance,
-            collect_withdrawals=collect_withdrawals,
-            force_withdrawals=force_withdrawals,
-            eva_date=context.eva_date,
-            eva_activity=eva_activity,
-        )
+        try:
+            bsc = BrightSpace_Course(
+                context.course_name, context.term_semester, context.term_year,
+                context.first_day_to_drop, context.final_day_to_drop,
+                context.course_start_date, context.course_end_date,
+                self.driver, self.wait, context.last_attendance_record_date,
+                collect_attendance=collect_attendance,
+                collect_withdrawals=collect_withdrawals,
+                force_withdrawals=force_withdrawals,
+                eva_date=context.eva_date,
+                eva_activity=eva_activity,
+            )
+        except Exception:
+            if eva_activity:
+                self._publish_eva_status(
+                    context, eva_activity, "incomplete",
+                    "EVA collection failed before attendance processing; no EVA marks were made",
+                )
+            raise
 
         if mark_attendance:
             # Switch back to the MyColleges course tab; BrightSpace used its own.
             self.driver.switch_to.window(self.current_tab)
-            attendance_outcome = self._record_course_attendance(
-                context, bsc, plan, ledger, term, section, window_start
-            )
+            try:
+                attendance_outcome = self._record_course_attendance(
+                    context, bsc, plan, ledger, term, section, window_start
+                )
+            except Exception:
+                if eva_activity:
+                    self._publish_eva_status(
+                        context, eva_activity, "incomplete",
+                        "Attendance processing stopped before the EVA result was finalized; "
+                        "review the ledger and SIS before retrying",
+                    )
+                raise
             if eva_activity:
-                if bsc.scrape_problems:
+                eva_result = getattr(bsc, "eva_collection_result", None)
+                if eva_result is not None and not eva_result.complete:
+                    code = eva_result.error_code or "reader_error"
+                    result = "incomplete"
+                    detail = (
+                        "EVA scan incomplete (%s; %s page(s), %s row(s)); ordinary attendance was processed"
+                        % (code, eva_result.pages_read, eva_result.rows_read)
+                    )
+                elif bsc.scrape_problems:
                     result, detail = "incomplete", "; ".join(bsc.scrape_problems)
                 elif not plan.write_attendance:
                     result, detail = "pending", "Dry run; SIS was not changed"
-                elif attendance_outcome.unmatched:
+                elif attendance_outcome.eva_unmatched:
                     result, detail = "incomplete", "Some completion names did not match the roster"
                 elif bsc.eva_attendance_records and ledger.outstanding(term, section):
                     result, detail = "pending", "EVA-backed attendance remains outstanding"

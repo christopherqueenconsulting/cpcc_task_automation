@@ -16,8 +16,8 @@ import streamlit as st
 
 from cqc_cpcc.attendance_job import (
     FINISHED_PHASES,
-    PHASE_AWAITING_PLAN,
     PHASE_AWAITING_EVA_SETUP,
+    PHASE_AWAITING_PLAN,
     PHASE_CANCELLED,
     PHASE_FAILED,
     PHASE_STARTING,
@@ -387,8 +387,19 @@ def job_section(job: AttendanceJob) -> None:
             if plan is None or not plan.course_urls:
                 st.info("Nothing was processed: no courses were selected.")
             else:
-                st.success("Attendance finished for %d course(s)." % len(plan.course_urls),
-                           icon=":material/check_circle:")
+                incomplete_eva = sum(
+                    row.get("result") == "incomplete" for row in job.eva_statuses()
+                )
+                if incomplete_eva:
+                    st.warning(
+                        "Attendance run finished for %d course(s); EVA collection is incomplete "
+                        "for %d course(s). Review the EVA status and retry attendance."
+                        % (len(plan.course_urls), incomplete_eva),
+                        icon=":material/warning:",
+                    )
+                else:
+                    st.success("Attendance finished for %d course(s)." % len(plan.course_urls),
+                               icon=":material/check_circle:")
         elif phase == PHASE_FAILED:
             st.error("Attendance failed: %s" % job.error, icon=":material/error:")
         elif phase == PHASE_CANCELLED:
