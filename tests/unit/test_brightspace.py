@@ -492,8 +492,12 @@ def test_activity_result_routes_use_user_summary_and_attempts_fallback_shapes():
 
 @pytest.mark.unit
 def test_activity_diagnostic_url_removes_unrelated_query_values():
-    safe = BrightSpace_Course._diagnostic_url(
-        "https://viewer:fixture@d2l.example/results?ou=111&qi=222&tracking=discard-me#student")
+    test_userinfo = ":".join(("synthetic", "example"))
+    test_url = (
+        f"https://{test_userinfo}@d2l.example/results?"
+        "ou=111&qi=222&tracking=discard-me#student"
+    )
+    safe = BrightSpace_Course._diagnostic_url(test_url)
     assert safe == "https://d2l.example/results?ou=111&qi=222"
 
 
