@@ -1894,8 +1894,12 @@ def _render_writeback_report(report) -> None:
     saved_word = "posted" if is_quiz else "saved"
     saved_unit = "grade(s)" if is_quiz else "draft(s)"
     mode = "DRY RUN — nothing was saved" if report.dry_run else f"{saved_word} {saved} {saved_unit}"
-    st.success(f"Write-back ({report.route}) complete — matched "
+    summary = (f"Write-back ({report.route}) matched "
                f"{report.matched_count}/{len(report.outcomes)} shown · {mode}.")
+    if report.complete:
+        st.success(summary)
+    else:
+        st.warning(summary + " Required targets or writes are incomplete; review the results below.")
     if is_quiz and not report.dry_run and saved:
         # Only claim feedback was posted if it actually was — o.saved can be true with
         # just the score posted (feedback write/attach may have failed for a student).
