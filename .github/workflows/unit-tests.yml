@@ -72,6 +72,8 @@ jobs:
         run: |
           uv tool run --from poetry==2.5.1 --with poetry-plugin-export==1.10.1 \
             poetry export --without-hashes --format=requirements.txt > "$RUNNER_TEMP/requirements.txt"
+          # Community Cloud installs this manifest with uv; include the src-layout app itself.
+          printf '%s\n' '-e .' >> "$RUNNER_TEMP/requirements.txt"
           diff -u requirements.txt "$RUNNER_TEMP/requirements.txt"
 
       # What the runner gives xdist. `-n auto` uses psutil physical cores (2 of 4 vCPUs) when psutil imports.
