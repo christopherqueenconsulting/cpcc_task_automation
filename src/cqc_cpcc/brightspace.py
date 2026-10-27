@@ -885,6 +885,7 @@ class BrightSpace_Course:
                 if not data_rows:
                     raise _EVAReadIncomplete("results_empty_state_unconfirmed", pages_read, rows_read)
                 page: list[tuple[str, str]] = []
+                completion_rows = 0
                 for row in rows:
                     cells = row.find_elements(By.XPATH, "./td")
                     if not cells:  # Header rows use th and carry no completion data.
@@ -893,8 +894,16 @@ class BrightSpace_Course:
                     # carry no student completion and must not poison the page.
                     colspan = cells[0].get_attribute("colspan") if len(cells) == 1 else None
                     row_class = cells[0].get_attribute("class") if len(cells) == 1 else None
+                    row_text = " ".join(str(getattr(row, "text", "") or "").split())
+                    is_pager_summary = bool(re.search(
+                        r"\bpage\s+\d+\s+of\s+\d+\b|\bshowing\s+\d+\s*(?:to|[-–])\s*\d+\s+of\s+\d+\b",
+                        row_text, flags=re.IGNORECASE,
+                    ))
                     if len(cells) == 1 and ((isinstance(colspan, str) and colspan) or
-                                            (isinstance(row_class, str) and "pager" in row_class.casefold())):
+                                            (isinstance(row_class, str) and "pager" in row_class.casefold())
+                                            or is_pager_summary):
+                        continue
+                    if is_pager_summary:
                         continue
                     name_col, date_col = header_indexes or (name_cell - 1, date_cell - 1)
                     if len(cells) <= max(name_col, date_col):
@@ -912,9 +921,12 @@ class BrightSpace_Course:
                     ).strip()
                     if not name:
                         raise _EVAReadIncomplete("completion_row_missing_student", pages_read, rows_read)
+                    completion_rows += 1
                     # Blank dates represent rows without a submitted/completed event.
                     if completion_text:
                         page.append((name, completion_text))
+                if not completion_rows:
+                    raise _EVAReadIncomplete("results_empty_state_unconfirmed", pages_read, rows_read)
                 return tuple(page)
             except StaleElementReferenceException:
                 continue
