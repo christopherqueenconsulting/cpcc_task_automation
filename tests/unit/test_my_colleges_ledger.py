@@ -89,8 +89,12 @@ def _context(**kwargs):
 def _course(records, problems=(), window_end=DT.date(2026, 8, 30)):
     course = MagicMock()
     course.attendance_records = records
+    course.eva_activity = None
+    course.eva_activity_id = None
+    course.eva_collection_result = None
     course.scrape_problems = list(problems)
     course.date_range_end = window_end
+    course.collection_date = window_end + DT.timedelta(days=1)
     return course
 
 
@@ -109,7 +113,9 @@ def _my_colleges(page, ledger, totals=None):
     mc._read_present_by_id = page.read
     mc._update_error_shown = page.take_alert
     mc._read_attendance_roster = lambda: ROSTER
-    mc._read_attendance_totals = lambda: dict(totals or {})
+    mc._read_attendance_totals = lambda: (dict(totals) if totals is not None else {
+        row["id"]: sum(sid == row["id"] for _day, sid in page.saved) for row in ROSTER
+    })
     return mc
 
 
@@ -194,7 +200,9 @@ class TestMarkAttendanceForCourse:
         )
         assert outcome.verified == 1
         assert page.writes == [(DT.date(2026, 8, 20), "1000001")]
-        assert ledger._conn.execute("SELECT COUNT(*) FROM attendance_evidence").fetchone()[0] == 0
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM attendance_evidence WHERE source_type='eva'"
+        ).fetchone()[0] == 0
 
     def test_eva_persistence_failure_stops_before_any_sis_write(self, ledger):
         page = FakeAttendancePage()

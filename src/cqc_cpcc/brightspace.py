@@ -138,20 +138,20 @@ class BrightSpace_Course:
         self.wait = wait
         self.short_wait = get_driver_wait(driver, 3)
         self.select_xpath = "//select[.//option[contains(., 'per page')]]"
-        # TODO: Create delta date function in the date utility file for below
-        
-        # If the course_end_date is today or already passed, set the date_range_end to the course_end_date, otherwise set it to today - 2 days 
-        if self.course_end_date.date() <= DT.date.today():
-            self.date_range_end = self.course_end_date.date()
-        else:
-            self.date_range_end = DT.date.today() - DT.timedelta(days=2) # TODO: This should be 2s
+        # Capture the scan day before scraping. A scan that crosses midnight
+        # still cannot prove its original current day was fully collected.
+        self.collection_date = DT.datetime.now(ZoneInfo("America/New_York")).date()
+        self.date_range_end = min(self.course_end_date.date(), self.collection_date)
 
         if date_range_start is None:
-            self.date_range_start = self.date_range_end - DT.timedelta(days=7)  # TODO: This should be 7
+            self.date_range_start = self.course_start_date.date()
         else:
-            self.date_range_start = (date_range_start
-                                     + DT.timedelta(days=1)
-                                     )  # Start from the passed in date non-inclusive
+            # Existing callers pass the last already-processed date. MyColleges
+            # passes the day before its inclusive ledger look-back boundary.
+            self.date_range_start = max(
+                self.course_start_date.date(),
+                convert_date_to_datetime(date_range_start).date() + DT.timedelta(days=1),
+            )
         self.attendance_records = {}
         # Anything that means this scrape may have missed activity (a list of due
         # items whose links could not be read, a table that would not line up).
@@ -513,7 +513,8 @@ class BrightSpace_Course:
                                  "//button[contains(.//text(), 'Course Tools')]",
                                  "Waiting for Course Tools Link")
 
-    def get_inrange_duedates_from_xpath(self, find_by_xpath_value: str) -> list[str]:
+    def get_inrange_duedates_from_xpath(self, find_by_xpath_value: str,
+                                       activity_list_xpath: str | None = None) -> list[str]:
         due_dates = []
 
         try:
@@ -522,6 +523,20 @@ class BrightSpace_Course:
                                                              find_by_xpath_value,
                                                              "Waiting for Dates",
                                                              refresh_on_stale=True)
+            _controls, visible = self._visible_next_controls()
+            if any(not self._next_control_disabled(button) for button in visible):
+                # Completion pages are exhausted separately. An activity-list
+                # pager can still hide assignments/quizzes whose due dates have
+                # not been examined, so this inventory cannot close any days.
+                self._scrape_problem("activity inventory has uncollected pages")
+            if not due_dates:
+                # The shared text helper returns [] after timeout/staleness as
+                # well as for an empty locator. This does not prove that a
+                # loaded activity list contains no eligible work.
+                if activity_list_xpath and self._activity_list_has_no_due_dates(activity_list_xpath):
+                    return []
+                self._scrape_problem("due-date collection empty or unconfirmed")
+                return []
             # print("Found Due Dates: (before)")
             # pprint(due_dates)
             # print("-" * LINE_DASH_COUNT)
@@ -569,10 +584,51 @@ class BrightSpace_Course:
             logger.debug("%s", "-" * LINE_DASH_COUNT)
             # logger.info(due_dates)
 
-        except TimeoutException:
-            logger.info("No Dates For Xpath: %s" % find_by_xpath_value)
+        except (TimeoutException, NoSuchElementException, StaleElementReferenceException) as error:
+            self._scrape_problem("due-date collection incomplete (%s)" % type(error).__name__)
 
         return due_dates
+
+    def _activity_list_has_no_due_dates(self, table_xpath: str) -> bool:
+        """Confirm an empty list or stable undated rows, never a missing table."""
+        tables = self.driver.find_elements(By.XPATH, table_xpath)
+        if not tables:
+            return False
+        table = tables[0]
+        text = " ".join((table.text or "").casefold().split())
+        has_empty_message = self._has_explicit_empty_results(text) or any(
+            marker in text for marker in ("no assignments", "no quizzes", "no items found")
+        )
+        # A matching activity link means the table contains actual work; an
+        # empty-message phrase in an activity title cannot prove emptiness.
+        links = table.find_elements(By.XPATH, ".//a[contains(@href,'db=') or contains(@href,'qi=')]")
+        if has_empty_message and not links:
+            return True
+        if not links:
+            return False
+        # A loaded, recognized activity row can legitimately have no due date.
+        # Reject unexpected date markup/text rather than assuming a changed date
+        # selector means all listed activities are undated.
+        rows = table.find_elements(By.XPATH, ".//tr")
+        recognized_rows = 0
+        for row in rows:
+            if not row.find_elements(By.XPATH, ".//a[contains(@href,'db=') or contains(@href,'qi=')]"):
+                continue
+            recognized_rows += 1
+            row_text = " ".join((row.text or "").casefold().split())
+            if not row_text:
+                return False
+            date_nodes = row.find_elements(By.XPATH, ".//*[contains(@class,'date') or @datetime or self::time]")
+            if any((node.text or "").strip() or node.get_attribute("datetime") for node in date_nodes):
+                return False
+            if re.search(
+                    r"\b(?:due on|available on|ends|starts|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|"
+                    r"may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b"
+                    r"|\b\d{1,4}[-/]\d{1,2}[-/]\d{1,4}\b", row_text):
+                return False
+        # An enabled list pager could hide dated activities on a later page.
+        _controls, visible = self._visible_next_controls()
+        return bool(recognized_rows) and not any(not self._next_control_disabled(button) for button in visible)
 
     def get_attendance_from_assignments(self):
         """Navigate to assignments and find all due between the date ranges"""
@@ -586,11 +642,14 @@ class BrightSpace_Course:
         self.wait.until(EC.title_contains("Assignments"))
 
         # Set the xpath prefix for the searched table or element
-        table_prefix_xpath = "//table[contains(@summary,'List of assignments')]//div[contains(@class,'d2l-folderdates-wrapper')]"
+        table_prefix_xpath = (
+            "//table[contains(@summary,'List of assignments')]//div[contains(@class,'d2l-folderdates-wrapper')]"
+        )
 
         # Get all the Due Dates
         due_dates = self.get_inrange_duedates_from_xpath(
-            table_prefix_xpath + "//div[contains(@class,'date')]")
+            table_prefix_xpath + "//div[contains(@class,'date')]",
+            "//table[contains(@summary,'List of assignments')]")
 
         if not due_dates:
             logger.info("No Assignment Link(s) Due Between %s - %s:" % (self.date_range_start, self.date_range_end))
@@ -923,97 +982,79 @@ class BrightSpace_Course:
             # logger.info("Attendance Records (after assignments):\n%s" % self.attendance_records)
 
     def get_attendance_from_brightspace_assignment_urls(self, assignment_urls: list):
-        # Keep track of current tab
+        """Collect every submission page for the assignments already selected by due date."""
+        self._collect_ordinary_activity_completions(assignment_urls, "assignment")
+
+    def _collect_ordinary_activity_completions(self, urls: list[str], activity_type: str) -> None:
+        """Merge an activity only after every results page and date was read safely.
+
+        A failed load is not evidence of zero submissions. The same complete-page
+        reader used by EVA protects ordinary attendance checkpoints from partial
+        pages, stale rows, and unverified pagination.
+        """
         current_tab = self.driver.current_window_handle
-
-        # Visit each assignment url
-        for au in assignment_urls:
-            # Switch back to tab
-            self.driver.switch_to.window(current_tab)
-
-            handles = set(self.driver.window_handles)
-            self.driver.switch_to.new_window('tab')
-
-            # Wait for the new window or tab
-            self.wait.until(EC.new_window_is_opened(handles))
-
-            # Got to assignment url
-            self.driver.get(au)
-
-            # Wait for ajax to load
-            wait_for_ajax(self.driver)
-
-            # Get the Completion Summary Link
-            click_element_wait_retry(self.driver, self.wait,
-                                     "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]",
-                                     "Waiting for Submissions Link")
-
-            # Click the Results per page select element
-            if self.click_max_results_select(self.select_xpath):
-
-                # Find the student names and the dates the for completed assignments
-                table_prefix_xpath = "//table[contains(@summary,'List of users and the submissions')]"
-                try:
-
-                    attempts = 0
-                    max_attempts = 2
-                    student_names = []
-                    completed_dates = []
-                    while attempts < max_attempts:
-
-                        student_names = get_elements_text_as_list_wait_stale(self.driver, self.wait,
-                                                                             table_prefix_xpath + "//td[3]",
-                                                                             "Waiting for Student Names",
-                                                                             refresh_on_stale=True)
-                        register_students(student_names)
-
-                        completed_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
-                                                                               table_prefix_xpath + "//td[2]//label[1]",
-                                                                               "Waiting for Completion Dates",
-                                                                               refresh_on_stale=True)
-                        if len(student_names) == len(completed_dates):
-                            break  # Success, exit loop
-                        attempts += 1
-                        logger.warn(
-                            "Attempt %d: Mismatched lengths for student names and completed dates for assignment: %s | Student Names: %s | Completed Dates: %s | .....retrying." % (
-                                attempts, au, len(student_names), len(completed_dates)))
-
-                    if len(student_names) == 0:
-                        logger.info("No Student Names Found")
-                    if len(completed_dates) == 0:
-                        logger.info("No Completion Dates Found")
-                    # If the student names and completed dates lengths do not match, log an error and skip this assignment
-                    if len(student_names) != len(completed_dates):
-                        logger.error(
-                            "Mismatched lengths for student names and completed dates for assignment: %s | Student Names: %s | Completed Dates: %s" % (
-                                au, len(student_names), len(completed_dates)))
-                        self._scrape_problem("assignment table did not line up: %s" % au)
+        is_assignment = activity_type == "assignment"
+        table_xpath = (
+            "//table[contains(@summary,'List of users and the submissions')]" if is_assignment
+            else "//div[@id='OverviewGrid']//table"
+        )
+        select_xpath = (
+            self.select_xpath if is_assignment
+            else "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
+        )
+        tab_xpath = (
+            "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]" if is_assignment
+            else "//a[contains(.//text(),'Quiz Completion')]"
+        )
+        name_cell, date_cell = (3, 2) if is_assignment else (2, 3)
+        course_start = convert_date_to_datetime(self.course_start_date).date()
+        course_end = min(convert_date_to_datetime(self.course_end_date).date(), self.collection_date)
+        for url in urls:
+            activity_tab = None
+            try:
+                self.driver.switch_to.window(current_tab)
+                handles = set(self.driver.window_handles)
+                self.driver.switch_to.new_window("tab")
+                activity_tab = self.driver.current_window_handle
+                self.wait.until(EC.new_window_is_opened(handles))
+                self.driver.get(url)
+                wait_for_ajax(self.driver)
+                click_element_wait_retry(self.driver, self.wait, tab_xpath,
+                                         "Waiting for activity completion results")
+                if not self.click_max_results_select(select_xpath):
+                    raise _EVAReadIncomplete("results_not_loaded")
+                rows, _pages = self._read_activity_rows(table_xpath, name_cell, date_cell, url)
+                pending: dict[str, list[str]] = defaultdict(list)
+                register_students(name for name, _date in rows)
+                for name, raw_date in rows:
+                    if not looks_like_a_scraped_date(raw_date):
+                        raise _EVAReadIncomplete("invalid_completion_date")
+                    try:
+                        parsed = get_datetime(raw_date)
+                    except (TypeError, ValueError):
+                        raise _EVAReadIncomplete("unparseable_completion_date") from None
+                    completed = (parsed.astimezone(ZoneInfo("America/New_York")).date()
+                                 if parsed.tzinfo else parsed.date())
+                    if completed > self.collection_date:
+                        raise _EVAReadIncomplete("future_completion_date")
+                    if completed < course_start or completed > course_end:
                         continue
-
-                    student_completions_dict = dict(zip(student_names, completed_dates))
-
-                    for student_name in student_completions_dict:
-                        # logger.info("Student Name: %s" % student_name)
-
-                        proper_date = get_datetime(student_completions_dict[student_name])
-                        proper_date_string = proper_date.strftime("%m-%d-%Y")
-                        # logger.info("Student: %s | Completion Date: %s" % (student_name, proper_date_string))
-
-                        if proper_date_string not in self.attendance_records:
-                            self.attendance_records[proper_date_string] = []
-
-                        # Add student attendance to date
-                        self.attendance_records.get(proper_date_string).append(student_name)
-                        # logger.info("Student Name: %s | Attendance Date: %s | Added!!!" % (student_name, proper_date_string))
-
-                    # TODO: Need to see if next page > is clickable and continue with those results
-                except NoSuchElementException:
-                    logger.info("No submissions found for assignment: %s" % au)
-            else:
-                logger.info("No submissions found for assignment: %s" % au)
-
-            # Close tab when done
-            close_tab(self.driver)
+                    pending[completed.strftime("%m-%d-%Y")].append(name)
+                # Due-date eligibility is decided by the caller. Preserve the
+                # activity's actual submission dates, including earlier dates.
+                for date, names in pending.items():
+                    existing = self.attendance_records.setdefault(date, [])
+                    existing.extend(name for name in names if name not in existing)
+            except (_EVAReadIncomplete, NoSuchElementException, TimeoutException,
+                    StaleElementReferenceException, ElementNotInteractableException) as error:
+                code = error.code if isinstance(error, _EVAReadIncomplete) else type(error).__name__
+                self._scrape_problem("%s completion collection incomplete (%s)" % (activity_type, code))
+            finally:
+                if activity_tab is not None and activity_tab != current_tab:
+                    if activity_tab in self.driver.window_handles:
+                        self.driver.switch_to.window(activity_tab)
+                        close_tab(self.driver)
+                self.driver.switch_to.window(current_tab)
 
     def modify_quiz_edit_url_to_attempt_log_url(self, original_url):
         # Extracting numbers after "qi=" and "ou=" using regular expressions
@@ -1048,7 +1089,7 @@ class BrightSpace_Course:
 
         # Get all the Due Dates
         due_dates = self.get_inrange_duedates_from_xpath(
-            table_prefix_xpath + "//span[contains(@class,'ds_b')]")
+            table_prefix_xpath + "//span[contains(@class,'ds_b')]", table_prefix_xpath)
         # logger.info("Found Due Dates:")
         # logger.info(due_dates)
 
@@ -1105,7 +1146,8 @@ class BrightSpace_Course:
                 #                              select_option_xpath),
                 #"Waiting for Select options")
                 # select_options = self.driver.find_elements(By.XPATH, select_xpath)
-                select_options = self.wait.until(EC.presence_of_all_elements_located((By.XPATH, select_option_xpath)), "Waiting for Select Options")
+                select_options = self.wait.until(
+                    EC.presence_of_all_elements_located((By.XPATH, select_option_xpath)), "Waiting for Select Options")
 
                 # Get Max Value
                 option_values = [x.get_attribute('value') for x in
@@ -1189,7 +1231,7 @@ class BrightSpace_Course:
                 logger.info("Select not interactable or missing: %s | Error: %s", select_xpath, e)
                 return False
 
-            except (StaleElementReferenceException, TimeoutException) as e:
+            except (StaleElementReferenceException, TimeoutException):
                 logger.info(
                     "Retrying select max results. Attempt %s/%s | XPath: %s",
                     attempt + 1,
@@ -1205,97 +1247,8 @@ class BrightSpace_Course:
         return False
 
     def get_attendance_from_brightspace_quizzes_urls(self, quizzes_urls: list):
-        # Keep track of current tab
-        current_tab = self.driver.current_window_handle
-
-        # Visit each quizzes url
-        for qu in quizzes_urls:
-            # Switch back to tab
-            self.driver.switch_to.window(current_tab)
-
-            handles = set(self.driver.window_handles)
-            self.driver.switch_to.new_window('tab')
-
-            # Wait for the new window or tab
-            self.wait.until(EC.new_window_is_opened(handles))
-
-            # Got to quizzes url
-            self.driver.get(qu)
-
-            # Wait for ajax to load
-            wait_for_ajax(self.driver)
-
-            # Click the Quiz Completion Link
-            click_element_wait_retry(self.driver, self.wait, "//a[contains(.//text(),'Quiz Completion')]",
-                                     "Waiting for Quiz Completion Link")
-
-            # Click the max results per page
-            if self.click_max_results_select("//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"):
-
-                # Find the student names and the dates the for completed assignments
-                table_prefix_xpath = "//div[@id='OverviewGrid']//table"
-                try:
-
-                    attempts = 0
-                    max_attempts = 2
-                    student_names = []
-                    completed_dates = []
-                    while attempts < max_attempts:
-                        student_names = get_elements_text_as_list_wait_stale(self.driver, self.wait,
-                                                                             table_prefix_xpath + "//td[2]",
-                                                                             "Waiting for Student Names",
-                                                                             refresh_on_stale=True)
-                        register_students(student_names)
-
-                        completed_dates = get_elements_text_as_list_wait_stale(self.driver, self.wait,
-                                                                               table_prefix_xpath + "//td[3]",
-                                                                               "Waiting for Completion Dates",
-                                                                               refresh_on_stale=True)
-
-                        if len(student_names) == len(completed_dates):
-                            break  # Success, exit loop
-                        attempts += 1
-                        logger.warn(
-                            "Attempt %d: Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s | .....retrying." % (
-                                attempts, qu, len(student_names), len(completed_dates)))
-
-                    if len(student_names) == 0:
-                        logger.info("No Student Names Found")
-                    if len(completed_dates) == 0:
-                        logger.info("No Completion Dates Found")
-                    # If the student names and post-dates lengths do not match, log an error and skip this quiz
-                    if len(student_names) != len(completed_dates):
-                        logger.error(
-                            "Mismatched lengths for student names and completed dates for quiz: %s | Student Names: %s | Completed Dates: %s" % (
-                                qu, len(student_names), len(completed_dates)))
-                        self._scrape_problem("quiz table did not line up: %s" % qu)
-                        continue
-
-                    student_completions_dict = dict(zip(student_names, completed_dates))
-
-                    for student_name in student_completions_dict:
-                        # logger.info("Student Name: %s" % student_name)
-
-                        proper_date = get_datetime(student_completions_dict[student_name])
-                        proper_date_string = proper_date.strftime("%m-%d-%Y")
-                        # logger.info("Student: %s | Completion Date: %s" % (student_name, proper_date_string))
-
-                        if proper_date_string not in self.attendance_records:
-                            self.attendance_records[proper_date_string] = []
-
-                        # Add student attendance to date
-                        self.attendance_records.get(proper_date_string).append(student_name)
-                        # logger.info("Student Name: %s | Attendance Date: %s | Added!!!" % (student_name, proper_date_string))
-
-                    # TODO: Need to see if next page > is clickable and continue with those results
-                except NoSuchElementException:
-                    logger.info("No Attempts found for Quizz: %s" % qu)
-
-            else:
-                logger.info("No Attempts found for Quizz: %s" % qu)
-
-            # Close tab when done
-            close_tab(self.driver)
+        """Collect every attempt page for the quizzes already selected by due date."""
+        self._collect_ordinary_activity_completions(quizzes_urls, "quiz")
 
     def get_attendance_from_discussions(self):
         """Navigate to discussions and find all due between the date ranges"""
@@ -1328,7 +1281,7 @@ class BrightSpace_Course:
                                                                     "Waiting for Discussions Links",
                                                                     refresh_on_stale=True)
             logger.info("Discussion Latest Post Link(s) Between %s - %s:" % (
-                self.date_range_start, DT.date.today()))  # Use today as the end date incase someone posted recently
+                self.date_range_start, self.date_range_end))
             logger.info("\n".join(discussion_links))
 
             # Get discussion from each url
@@ -1408,7 +1361,8 @@ class BrightSpace_Course:
                             break  # Success, exit loop
                         attempts += 1
                         logger.warn(
-                            "Attempt %d: Mismatched lengths for student names and post dates for discussion: %s | Student Names: %s | Post Dates: %s | .....retrying." % (
+                            "Attempt %d: Mismatched lengths for student names and post dates for discussion: %s | "
+                            "Student Names: %s | Post Dates: %s | .....retrying." % (
                                 attempts, du, len(student_names), len(post_dates)))
 
                     if len(student_names) == 0:
@@ -1419,7 +1373,8 @@ class BrightSpace_Course:
                     # If the student names and post-dates lengths do not match, log an error and skip this quiz
                     if len(student_names) != len(post_dates):
                         logger.error(
-                            "Mismatched lengths for student names and post-dates for Discussion: %s | Student Names: %s | Post Dates: %s" % (
+                            "Mismatched lengths for student names and post-dates for Discussion: %s | "
+                            "Student Names: %s | Post Dates: %s" % (
                                 du, len(student_names), len(post_dates)))
                         continue
 
@@ -1447,7 +1402,6 @@ class BrightSpace_Course:
 
                             # Add student attendance to date
                             self.attendance_records.get(proper_date_string).append(student_name)
-                            # logger.info("Student Name: %s | Attendance Date: %s | Added!!!" % (student_name, proper_date_string))
 
                     # TODO: Need to see if next page > is clickable and continue with those results
                 except NoSuchElementException:
