@@ -397,6 +397,17 @@ class TestAttendanceRecoveryControls:
         _button(app, "Continue").click().run()
         assert not app.exception, app.exception
         assert job.plan.attendance_start == start
+        assert job.plan.attendance_end == TODAY.date()
+
+    def test_custom_range_end_reaches_run_plan(self):
+        job = FakeJob(PHASE_AWAITING_PLAN)
+        app = _app(job).run()
+        next(box for box in app.checkbox if box.key == "attendance_custom_start").check().run()
+        end = (TODAY - DT.timedelta(days=2)).date()
+        next(field for field in app.date_input if field.key == "attendance_end_date").set_value(end).run()
+        _button(app, "Continue").click().run()
+        assert not app.exception, app.exception
+        assert job.plan.attendance_end == end
 
     def test_management_does_not_open_storage_until_requested(self, monkeypatch):
         def forbidden_open(*args, **kwargs):

@@ -19,8 +19,17 @@ checkpoint; make the full activity list available before retrying.
 Without verified history, collection starts at course start. Failed scans, unmatched
 students, count mismatches, unresolved EVA reconciliation, or unverified writes leave
 the run incomplete. A recovery run rechecks from course start and verifies supported
-attendance again. A custom inclusive start date can widen the automatic window, but
-cannot skip earlier unfinished dates. Full recheck takes precedence over a custom date.
+attendance again. Choose an inclusive attendance start and end date to reprocess a
+bounded window. Only selected dates are written or revalidated in MyColleges; ledger
+work outside the range remains pending, and the completed-through checkpoint cannot
+cross those unprocessed dates. A partial range does not produce a course-wide
+missing-EVA result. Full recheck uses the full course window.
+
+The collection details list shows each ordinary or EVA activity, its selected link,
+the final results page, the view that was read, page and row counts, and any error
+code. Assignment results open the per-user Submissions view directly to avoid the
+per-file redirect. If quiz attempt logs do not produce a readable result table, the
+collector retries using the quiz Attempts page.
 
 ## Changing or re-running EVA
 

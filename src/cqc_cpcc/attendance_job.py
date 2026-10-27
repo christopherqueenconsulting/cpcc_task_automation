@@ -71,6 +71,7 @@ class AttendanceJob:
         self._progress: list[str] = []
         self._warnings: list[str] = []
         self._eva_statuses: dict[str, dict] = {}
+        self._attendance_activities: dict[tuple[str, str, str], dict] = {}
         # course section -> EvaFlag list from that course's latest no-attendance check
         self._eva_flags: dict = {}
         self._screenshot_b64: str | None = None
@@ -161,6 +162,23 @@ class AttendanceJob:
     def eva_statuses(self) -> list[dict]:
         with self._lock:
             return [dict(row) for row in self._eva_statuses.values()]
+
+    def on_attendance_activity(self, diagnostic: dict) -> None:
+        """Keep one privacy-filtered collection diagnostic per activity and scope."""
+        key = (str(diagnostic.get("course_section") or "unknown"),
+               str(diagnostic.get("scope") or "ordinary"),
+               str(diagnostic.get("activity_key") or diagnostic.get("title") or "activity"))
+        allowed = {
+            "course_section", "scope", "activity_type", "title", "source_url", "final_url",
+            "view", "status", "pages_read", "rows_read", "error_code", "window_start", "window_end",
+        }
+        with self._lock:
+            self._attendance_activities[key] = {name: diagnostic.get(name) for name in allowed
+                                                if name in diagnostic}
+
+    def attendance_activities(self) -> list[dict]:
+        with self._lock:
+            return [dict(row) for row in self._attendance_activities.values()]
 
     def eva_flags(self) -> list:
         """Students with no Present mark, every course checked so far, past-EVA first."""

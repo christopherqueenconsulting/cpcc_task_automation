@@ -142,6 +142,17 @@ class TestLookback:
         assert ledger.course_states()[0]["last_run_status"] == RUN_INCOMPLETE
 
     @freeze_time("2026-10-27 16:00:00")
+    def test_first_bounded_run_cannot_create_a_checkpoint_past_unprocessed_course_start(self, ledger):
+        ledger.update_course_state(
+            TERM, COURSE, run_status=RUN_COMPLETE, window_start=DT.date(2026, 10, 1),
+            window_end=DT.date(2026, 10, 20), collection_date=DT.date(2026, 10, 27),
+            course_start=COURSE_START,
+        )
+        state = ledger.course_states()[0]
+        assert state["verified_through"] is None
+        assert state["last_run_status"] == RUN_INCOMPLETE
+
+    @freeze_time("2026-10-27 16:00:00")
     def test_legacy_today_checkpoint_is_reopened(self, ledger):
         ledger.update_course_state(TERM, COURSE, run_status=RUN_COMPLETE,
                                    window_start=COURSE_START, window_end=DT.date(2026, 10, 20))

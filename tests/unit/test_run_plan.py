@@ -487,3 +487,22 @@ class TestAttendanceRecoveryBoundary:
     def test_non_date_is_rejected(self):
         with pytest.raises(ValueError, match="must be a date"):
             RunPlan(attendance_start="2026-10-01")
+
+    def test_explicit_range_is_exact_and_end_is_capped_to_today_and_course_end(self):
+        plan = RunPlan(attendance_start=DT.date(2026, 10, 10), attendance_end=DT.date(2026, 10, 20))
+        assert plan.attendance_window_start(DT.date(2026, 10, 1), DT.date(2026, 8, 17)) == DT.date(2026, 10, 10)
+        assert plan.attendance_window_end(DT.date(2026, 12, 1)) == DT.date(2026, 10, 20)
+        assert plan.attendance_window_end(DT.date(2026, 10, 15)) == DT.date(2026, 10, 15)
+
+    def test_range_end_must_not_precede_start(self):
+        with pytest.raises(ValueError, match="on or before"):
+            RunPlan(attendance_start=DT.date(2026, 10, 20), attendance_end=DT.date(2026, 10, 19))
+
+    def test_range_end_cannot_be_future(self):
+        with pytest.raises(ValueError, match="future"):
+            RunPlan(attendance_end=DT.date(2026, 10, 28))
+
+    def test_full_recheck_cannot_silently_override_a_bounded_range(self):
+        with pytest.raises(ValueError, match="cannot be combined"):
+            RunPlan(full_recheck=True, attendance_start=DT.date(2026, 10, 1),
+                    attendance_end=DT.date(2026, 10, 20))

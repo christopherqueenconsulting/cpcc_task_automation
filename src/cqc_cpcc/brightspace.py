@@ -5,7 +5,7 @@ import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 from selenium.common import (
@@ -40,6 +40,7 @@ from cqc_cpcc.utilities.pii_redaction import alias, register_student, register_s
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
     close_tab,
+    current_browser_observer,
     get_driver_wait,
     get_elements_href_as_list_wait_stale,
     get_elements_text_as_list_wait_stale,
@@ -120,6 +121,8 @@ class BrightSpace_Course:
                  eva_date: DT.date = None,
                  eva_activity: dict | None = None,
                  discover_eva_activities: bool = False,
+                 attendance_end: DT.date | None = None,
+                 attendance_start_bound: DT.date | None = None,
                  ):
         self.name = name
         self.eva_date = eva_date
@@ -128,6 +131,7 @@ class BrightSpace_Course:
         self.eva_collection_result: EVACompletionResult | None = None
         self.eva_activity_candidates: list[dict] = []
         self.eva_activity_id = eva_activity.get("activity_id") if eva_activity else None
+        self.attendance_start_bound = attendance_start_bound
         self.term_semester = term_semester
         self.term_year = term_year
         self.first_drop_day = convert_datetime_to_end_of_day(convert_date_to_datetime(first_drop_day))
@@ -142,6 +146,8 @@ class BrightSpace_Course:
         # still cannot prove its original current day was fully collected.
         self.collection_date = DT.datetime.now(ZoneInfo("America/New_York")).date()
         self.date_range_end = min(self.course_end_date.date(), self.collection_date)
+        if attendance_end is not None:
+            self.date_range_end = min(self.date_range_end, convert_date_to_datetime(attendance_end).date())
 
         if date_range_start is None:
             self.date_range_start = self.course_start_date.date()
@@ -687,6 +693,79 @@ class BrightSpace_Course:
                 return match.group(1)
         return (params.get(key) or params.get("ou") or [url])[0]
 
+    @staticmethod
+    def _submissions_users_url(url: str) -> str:
+        """Open the per-user assignment completion view directly.
+
+        Brightspace's Submissions tab can redirect from this user summary to a
+        per-file view. Keep the course and dropbox identifiers from the discovered
+        link and use the stable user summary route.
+        """
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        ou = (params.get("ou") or [None])[0]
+        db = (params.get("db") or [None])[0]
+        if not (ou and db and ou.isdigit() and db.isdigit()):
+            return url
+        query = urlencode((("ou", ou), ("db", db)))
+        return urlunparse((parsed.scheme or "https", parsed.netloc,
+                           "/d2l/lms/dropbox/admin/mark/folder_submissions_users.d2l",
+                           "", query, ""))
+
+    @staticmethod
+    def _quiz_attempts_url(url: str) -> str | None:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        qi = (params.get("qi") or [None])[0]
+        ou = (params.get("ou") or [None])[0]
+        if qi is None:
+            match = re.search(r"/attemptLogs/(\d+)/(\d+)/", parsed.path)
+            if match:
+                ou, qi = match.groups()
+        if not (qi and ou and qi.isdigit() and ou.isdigit()):
+            return None
+        query = urlencode((("d2l_isfromtab", "1"), ("qi", qi), ("ou", ou)))
+        return urlunparse((parsed.scheme or "https", parsed.netloc,
+                           "/d2l/lms/quizzing/admin/mark/quiz_mark_attempts.d2l",
+                           "", query, ""))
+
+    @staticmethod
+    def _diagnostic_url(url: str | None) -> str | None:
+        """Strip credentials, fragments, and non-identifying query parameters."""
+        if not url:
+            return None
+        parsed = urlparse(url)
+        if parsed.scheme.casefold() not in ("http", "https") or not parsed.hostname:
+            return None
+        host = parsed.hostname
+        if parsed.port:
+            host = "%s:%s" % (host, parsed.port)
+        safe_query = [(key, value) for key in ("ou", "qi", "db", "d2l_isfromtab")
+                      for value in parse_qs(parsed.query).get(key, [])]
+        return urlunparse((parsed.scheme, host, parsed.path, "", urlencode(safe_query), ""))
+
+    def _emit_activity_diagnostic(self, *, scope: str, activity_type: str, title: str,
+                                  source_url: str, final_url: str | None, view: str,
+                                  status: str, pages: int = 0, rows: int = 0,
+                                  error_code: str | None = None) -> None:
+        callback = getattr(current_browser_observer(), "on_attendance_activity", None)
+        if callback is None:
+            return
+        stable_id = self._activity_id(activity_type, source_url)
+        if not stable_id or stable_id == source_url:
+            stable_id = self._diagnostic_url(source_url) or "unknown-activity"
+        callback({
+            "course_section": self.name.split(":")[0].strip(), "scope": scope,
+            "activity_type": activity_type, "title": title or "Untitled activity",
+            "activity_key": "%s:%s" % (activity_type, stable_id),
+            "source_url": self._diagnostic_url(source_url),
+            "final_url": self._diagnostic_url(final_url), "view": view,
+            "status": status, "pages_read": pages, "rows_read": rows,
+            "error_code": error_code,
+            "window_start": self.date_range_start.isoformat(),
+            "window_end": self.date_range_end.isoformat(),
+        })
+
     def discover_eva_activities(self) -> list[dict]:
         """List assignment and quiz activities with stable ids and visible due dates."""
         candidates = []
@@ -713,7 +792,23 @@ class BrightSpace_Course:
                         if not name or not url:
                             continue
                         if activity_type == "quiz":
-                            url = self.modify_quiz_edit_url_to_attempt_log_url(url) or url
+                            parsed = urlparse(url)
+                            query = parse_qs(parsed.query)
+                            valid_identity = bool((query.get("qi") or [None])[0] and
+                                                  (query.get("ou") or [None])[0])
+                            if not valid_identity:
+                                continue
+                            url = self.modify_quiz_edit_url_to_attempt_log_url(url)
+                            if not url:
+                                continue
+                        else:
+                            parsed = urlparse(url)
+                            query = parse_qs(parsed.query)
+                            db = (query.get("db") or [None])[0]
+                            ou = (query.get("ou") or [None])[0]
+                            if not (db and ou and db.isdigit() and ou.isdigit()):
+                                continue
+                            url = self._submissions_users_url(url)
                         date_nodes = row.find_elements(By.XPATH,
                             ".//*[contains(@class,'date') or contains(@class,'ds_b')]")
                         due_text = " ".join((node.text or "").strip() for node in date_nodes).strip()
@@ -758,30 +853,83 @@ class BrightSpace_Course:
                 if not tables:
                     raise _EVAReadIncomplete("results_table_missing", pages_read, rows_read)
                 table_text = (getattr(tables[0], "text", "") or "").strip()
-                rows = tables[0].find_elements(By.XPATH, ".//tr")
+                rows = tables[0].find_elements(By.XPATH, "./tr | ./tbody/tr")
+                # Prefer the actual result headers. Brightspace layouts add and
+                # remove columns by role; fixed indexes can silently read a
+                # status/attempt cell as a student or date.
+                header_rows = tables[0].find_elements(By.XPATH, "./thead/tr[1]")
+                header_indexes = None
+                semantic_header = False
+                if header_rows:
+                    header_cells = header_rows[0].find_elements(By.XPATH, "./th | ./td")
+                    if any(getattr(cell, "tag_name", "").casefold() == "th" for cell in header_cells):
+                        semantic_header = True
+                        headers = [" ".join(str(cell.text or "").casefold().split()) for cell in header_cells]
+                    else:
+                        headers = []
+                    name_index = next((i for i, value in enumerate(headers)
+                                       if any(word in value for word in
+                                              ("student", "user name", "learner"))), None)
+                    if name_index is None:
+                        name_index = next((i for i, value in enumerate(headers) if value == "name"), None)
+                    if name_index is None and "first name" in headers and "last name" in headers:
+                        name_index = headers.index("first name")
+                    date_index = next((i for i, value in enumerate(headers)
+                                       if ("date" in value and any(word in value for word in
+                                                                   ("completion", "submitted", "attempt", "completed")))
+                                       or value in ("submitted", "completed")), None)
+                    if name_index is not None and date_index is not None:
+                        header_indexes = (name_index, date_index)
+                    elif semantic_header:
+                        raise _EVAReadIncomplete("completion_headers_unrecognized", pages_read, rows_read)
                 data_rows = [row for row in rows if row.find_elements(By.XPATH, "./td")]
                 if not data_rows and self._has_explicit_empty_results(table_text):
                     return ()
                 if not data_rows:
                     raise _EVAReadIncomplete("results_empty_state_unconfirmed", pages_read, rows_read)
                 page: list[tuple[str, str]] = []
+                completion_rows = 0
                 for row in rows:
                     cells = row.find_elements(By.XPATH, "./td")
                     if not cells:  # Header rows use th and carry no completion data.
                         continue
-                    if len(cells) < max(name_cell, date_cell):
+                    # Pager and group rows often use one spanning cell. They
+                    # carry no student completion and must not poison the page.
+                    colspan = cells[0].get_attribute("colspan") if len(cells) == 1 else None
+                    row_class = cells[0].get_attribute("class") if len(cells) == 1 else None
+                    row_text = " ".join(str(getattr(row, "text", "") or "").split())
+                    is_pager_summary = bool(re.search(
+                        r"\bpage\s+\d+\s+of\s+\d+\b|\bshowing\s+\d+\s*(?:to|[-–])\s*\d+\s+of\s+\d+\b",
+                        row_text, flags=re.IGNORECASE,
+                    ))
+                    if len(cells) == 1 and ((isinstance(colspan, str) and colspan) or
+                                            (isinstance(row_class, str) and "pager" in row_class.casefold())
+                                            or is_pager_summary):
+                        continue
+                    if is_pager_summary:
+                        continue
+                    name_col, date_col = header_indexes or (name_cell - 1, date_cell - 1)
+                    if len(cells) <= max(name_col, date_col):
                         raise _EVAReadIncomplete("completion_row_malformed", pages_read, rows_read)
-                    name = (cells[name_cell - 1].text or "").strip()
-                    date_cell_el = cells[date_cell - 1]
+                    if header_indexes and "first name" in headers and "last name" in headers:
+                        first = (cells[headers.index("first name")].text or "").strip()
+                        last = (cells[headers.index("last name")].text or "").strip()
+                        name = " ".join(part for part in (first, last) if part)
+                    else:
+                        name = (cells[name_col].text or "").strip()
+                    date_cell_el = cells[date_col]
                     date_nodes = date_cell_el.find_elements(By.XPATH, ".//label[1]")
                     completion_text = (
                         date_nodes[0].text if date_nodes else date_cell_el.text or ""
                     ).strip()
                     if not name:
                         raise _EVAReadIncomplete("completion_row_missing_student", pages_read, rows_read)
+                    completion_rows += 1
                     # Blank dates represent rows without a submitted/completed event.
                     if completion_text:
                         page.append((name, completion_text))
+                if not completion_rows:
+                    raise _EVAReadIncomplete("results_empty_state_unconfirmed", pages_read, rows_read)
                 return tuple(page)
             except StaleElementReferenceException:
                 continue
@@ -805,13 +953,18 @@ class BrightSpace_Course:
         controls = self.driver.find_elements(By.XPATH, self.EVA_NEXT_XPATH)
         return controls, [button for button in controls if button.is_displayed()]
 
+    def _has_elements(self, xpath: str) -> bool:
+        """Selenium returns lists; keep mock-like non-list objects from looking loaded."""
+        elements = self.driver.find_elements(By.XPATH, xpath)
+        return isinstance(elements, (list, tuple)) and bool(elements)
+
     def _page_fingerprint(self, table_xpath: str) -> tuple[str, ...] | None:
         """Return a transient row fingerprint for transition checks; never log it."""
         try:
             tables = self.driver.find_elements(By.XPATH, table_xpath)
             if not tables:
                 return None
-            rows = tables[0].find_elements(By.XPATH, ".//tr")
+            rows = tables[0].find_elements(By.XPATH, "./tr | ./tbody/tr")
             row_text = tuple((row.text or "").strip() for row in rows)
             current_page = self.driver.find_elements(
                 By.XPATH, "//*[@aria-current='page']"
@@ -838,6 +991,13 @@ class BrightSpace_Course:
             try:
                 controls, visible = self._visible_next_controls()
                 if not controls:
+                    tables = (self.driver.find_elements(By.XPATH, table_xpath)
+                              if hasattr(self, "driver") else [])
+                    if tables:
+                        text = " ".join(str(getattr(tables[0], "text", "") or "").split())
+                        if re.search(r"\bpage\s+1\s+of\s+1\b|\b1\s*[-–]\s*(\d+)\s+of\s+\1\b",
+                                     text, flags=re.IGNORECASE):
+                            return False
                     raise _EVAReadIncomplete("pagination_control_missing", pages_read, rows_read)
                 if visible and all(self._next_control_disabled(button) for button in visible):
                     # Responsive Brightspace views can leave an enabled duplicate
@@ -894,27 +1054,54 @@ class BrightSpace_Course:
         activity_tab = None
         rows: list[tuple[str, str]] = []
         pages_read = 0
+        final_view = "unknown"
         try:
             activity_tab = self.driver.current_window_handle
-            self.driver.get(activity["activity_url"])
-            wait_for_ajax(self.driver)
             if activity["activity_type"] == "assignment":
-                click_element_wait_retry(self.driver, self.wait,
-                    "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]",
-                    "Waiting for EVA assignment submissions")
-                if not self.click_max_results_select(self.select_xpath):
-                    raise _EVAReadIncomplete("assignment_results_not_loaded")
-                rows, pages_read = self._read_activity_rows(
-                    "//table[contains(@summary,'List of users and the submissions')]",
-                    3, 2, activity["activity_url"])
-            else:
-                click_element_wait_retry(self.driver, self.wait,
-                    "//a[contains(.//text(),'Quiz Completion')]", "Waiting for EVA quiz attempts")
-                if not self.click_max_results_select("//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"):
-                    raise _EVAReadIncomplete("quiz_results_not_loaded")
-                rows, pages_read = self._read_activity_rows(
-                    "//div[@id='OverviewGrid']//table", 2, 3, activity["activity_url"]
+                source_url = self._submissions_users_url(activity["activity_url"])
+                self.driver.get(source_url)
+                wait_for_ajax(self.driver)
+                final_view = "assignment per-user submissions"
+                if source_url == activity["activity_url"]:
+                    click_element_wait_retry(self.driver, self.wait,
+                        "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]",
+                        "Waiting for EVA assignment submissions")
+                table_xpath = (
+                    "//table[contains(@summary,'List of users and the submissions')] | "
+                    "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]"
                 )
+                if not self.click_max_results_select(self.select_xpath) and not self._has_elements(table_xpath):
+                    raise _EVAReadIncomplete("assignment_results_not_loaded")
+                rows, pages_read = self._read_activity_rows(table_xpath, 3, 2, source_url)
+            else:
+                attempts_url = self._quiz_attempts_url(activity["activity_url"])
+                routes = [(activity["activity_url"], "quiz attempt logs"),
+                          (attempts_url, "quiz attempts")]
+                last_error = None
+                for route_index, (route_url, view) in enumerate(routes):
+                    if not route_url:
+                        continue
+                    try:
+                        self.driver.get(route_url)
+                        wait_for_ajax(self.driver)
+                        final_view = view
+                        table_xpath = ("//div[@id='OverviewGrid']//table | //table[.//th[contains(.,'Student') "
+                                       "or contains(.,'User') or contains(.,'Name')]]")
+                        select_xpath = "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
+                        if not self.click_max_results_select(select_xpath) and not self._has_elements(table_xpath):
+                            raise _EVAReadIncomplete("quiz_results_not_loaded")
+                        rows, pages_read = self._read_activity_rows(table_xpath, 2, 3, route_url)
+                        source_url = route_url
+                        break
+                    except (_EVAReadIncomplete, NoSuchElementException, TimeoutException) as error:
+                        last_error = error if isinstance(error, _EVAReadIncomplete) else _EVAReadIncomplete(
+                            type(error).__name__, pages_read, len(rows))
+                        if route_index == len(routes) - 1:
+                            raise
+                        logger.warning("Quiz results view was incomplete (%s); trying Attempts view.",
+                                       last_error.code)
+                else:
+                    raise last_error or _EVAReadIncomplete("quiz_results_not_loaded")
 
             start = convert_date_to_datetime(self.course_start_date).date()
             cutoff = self.eva_date
@@ -937,16 +1124,33 @@ class BrightSpace_Course:
                 result[completed.strftime("%m-%d-%Y")].append(name)
             for date_text, names in result.items():
                 result[date_text] = list(dict.fromkeys(names))
+            self._emit_activity_diagnostic(
+                scope="eva", activity_type=activity["activity_type"], title=activity.get("title", ""),
+                source_url=activity["activity_url"], final_url=self.driver.current_url, view=final_view,
+                status="complete", pages=pages_read, rows=len(rows),
+            )
             return EVACompletionResult(
                 status="complete", records=dict(result), pages_read=pages_read,
                 rows_read=len(rows),
             )
         except _EVAReadIncomplete as error:
+            self._emit_activity_diagnostic(
+                scope="eva", activity_type=activity["activity_type"], title=activity.get("title", ""),
+                source_url=activity["activity_url"], final_url=getattr(self.driver, "current_url", None),
+                view=final_view, status="incomplete", pages=error.pages_read, rows=error.rows_read,
+                error_code=error.code,
+            )
             return EVACompletionResult(
                 status="incomplete", pages_read=error.pages_read,
                 rows_read=error.rows_read, error_code=error.code,
             )
         except WebDriverException as error:
+            self._emit_activity_diagnostic(
+                scope="eva", activity_type=activity["activity_type"], title=activity.get("title", ""),
+                source_url=activity["activity_url"], final_url=getattr(self.driver, "current_url", None),
+                view=final_view, status="incomplete", pages=pages_read, rows=len(rows),
+                error_code=type(error).__name__,
+            )
             # Continue ordinary attendance only when the original MyColleges tab
             # and WebDriver session remain available.
             try:
@@ -995,35 +1199,60 @@ class BrightSpace_Course:
         current_tab = self.driver.current_window_handle
         is_assignment = activity_type == "assignment"
         table_xpath = (
-            "//table[contains(@summary,'List of users and the submissions')]" if is_assignment
+            "//table[contains(@summary,'List of users and the submissions')] | "
+            "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]" if is_assignment
             else "//div[@id='OverviewGrid']//table"
         )
         select_xpath = (
             self.select_xpath if is_assignment
             else "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
         )
-        tab_xpath = (
-            "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]" if is_assignment
-            else "//a[contains(.//text(),'Quiz Completion')]"
-        )
         name_cell, date_cell = (3, 2) if is_assignment else (2, 3)
         course_start = convert_date_to_datetime(self.course_start_date).date()
-        course_end = min(convert_date_to_datetime(self.course_end_date).date(), self.collection_date)
+        course_start = max(course_start, getattr(self, "attendance_start_bound", None) or course_start)
+        course_end = min(self.date_range_end, convert_date_to_datetime(self.course_end_date).date())
         for url in urls:
             activity_tab = None
+            rows: list[tuple[str, str]] = []
+            pages_read = 0
+            view = "unknown"
             try:
                 self.driver.switch_to.window(current_tab)
                 handles = set(self.driver.window_handles)
                 self.driver.switch_to.new_window("tab")
                 activity_tab = self.driver.current_window_handle
                 self.wait.until(EC.new_window_is_opened(handles))
-                self.driver.get(url)
+                source_url = self._submissions_users_url(url) if is_assignment else url
+                self.driver.get(source_url)
                 wait_for_ajax(self.driver)
-                click_element_wait_retry(self.driver, self.wait, tab_xpath,
-                                         "Waiting for activity completion results")
-                if not self.click_max_results_select(select_xpath):
-                    raise _EVAReadIncomplete("results_not_loaded")
-                rows, _pages = self._read_activity_rows(table_xpath, name_cell, date_cell, url)
+                view = "assignment per-user submissions" if is_assignment else "quiz attempt logs"
+                if is_assignment:
+                    if source_url == url:
+                        click_element_wait_retry(self.driver, self.wait,
+                            "//a[contains(.//text(),'Submissions')] | //d2l-tab[contains(@text,'Submissions')]",
+                            "Waiting for activity completion results")
+                    if not self.click_max_results_select(select_xpath) and not self._has_elements(table_xpath):
+                        raise _EVAReadIncomplete("results_not_loaded")
+                    rows, pages_read = self._read_activity_rows(table_xpath, name_cell, date_cell, source_url)
+                else:
+                    attempts_url = self._quiz_attempts_url(url)
+                    try:
+                        click_element_wait_retry(self.driver, self.wait,
+                            "//a[contains(.//text(),'Quiz Completion')]", "Waiting for quiz completion results")
+                        if not self.click_max_results_select(select_xpath) and not self._has_elements(table_xpath):
+                            raise _EVAReadIncomplete("quiz_results_not_loaded")
+                        rows, pages_read = self._read_activity_rows(table_xpath, name_cell, date_cell, source_url)
+                    except (_EVAReadIncomplete, NoSuchElementException, TimeoutException):
+                        if not attempts_url:
+                            raise
+                        source_url, view = attempts_url, "quiz attempts"
+                        self.driver.get(source_url)
+                        wait_for_ajax(self.driver)
+                        generic_table = "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]"
+                        if not self.click_max_results_select("//select[.//option[contains(.,'per page')]]") \
+                                and not self._has_elements(generic_table):
+                            raise _EVAReadIncomplete("quiz_results_not_loaded")
+                        rows, pages_read = self._read_activity_rows(generic_table, name_cell, date_cell, source_url)
                 pending: dict[str, list[str]] = defaultdict(list)
                 register_students(name for name, _date in rows)
                 for name, raw_date in rows:
@@ -1045,10 +1274,25 @@ class BrightSpace_Course:
                 for date, names in pending.items():
                     existing = self.attendance_records.setdefault(date, [])
                     existing.extend(name for name in names if name not in existing)
+                self._emit_activity_diagnostic(
+                    scope="ordinary", activity_type=activity_type,
+                    title=(getattr(self.driver, "title", "") or "").split("|")[0].strip(),
+                    source_url=url, final_url=getattr(self.driver, "current_url", None), view=view,
+                    status="complete", pages=pages_read, rows=len(rows),
+                )
             except (_EVAReadIncomplete, NoSuchElementException, TimeoutException,
                     StaleElementReferenceException, ElementNotInteractableException) as error:
                 code = error.code if isinstance(error, _EVAReadIncomplete) else type(error).__name__
                 self._scrape_problem("%s completion collection incomplete (%s)" % (activity_type, code))
+                self._emit_activity_diagnostic(
+                    scope="ordinary", activity_type=activity_type,
+                    title=str(getattr(self.driver, "title", "") or "").split("|")[0].strip(), source_url=url,
+                    final_url=getattr(self.driver, "current_url", None), view=view,
+                    status="incomplete",
+                    pages=error.pages_read if isinstance(error, _EVAReadIncomplete) else pages_read,
+                    rows=error.rows_read if isinstance(error, _EVAReadIncomplete) else len(rows),
+                    error_code=code,
+                )
             finally:
                 if activity_tab is not None and activity_tab != current_tab:
                     if activity_tab in self.driver.window_handles:
