@@ -1065,7 +1065,7 @@ class BrightSpace_Course:
                         "Waiting for EVA assignment submissions")
                 table_xpath = (
                     "//table[contains(@summary,'List of users and the submissions')] | "
-                    "//table[.//th[contains(.,'Student') or contains(.,'User')]]"
+                    "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]"
                 )
                 if not self.click_max_results_select(self.select_xpath) and not self._has_elements(table_xpath):
                     raise _EVAReadIncomplete("assignment_results_not_loaded")
@@ -1083,7 +1083,7 @@ class BrightSpace_Course:
                         wait_for_ajax(self.driver)
                         final_view = view
                         table_xpath = ("//div[@id='OverviewGrid']//table | //table[.//th[contains(.,'Student') "
-                                       "or contains(.,'User')]]")
+                                       "or contains(.,'User') or contains(.,'Name')]]")
                         select_xpath = "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
                         if not self.click_max_results_select(select_xpath) and not self._has_elements(table_xpath):
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
@@ -1196,7 +1196,8 @@ class BrightSpace_Course:
         current_tab = self.driver.current_window_handle
         is_assignment = activity_type == "assignment"
         table_xpath = (
-            "//table[contains(@summary,'List of users and the submissions')]" if is_assignment
+            "//table[contains(@summary,'List of users and the submissions')] | "
+            "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]" if is_assignment
             else "//div[@id='OverviewGrid']//table"
         )
         select_xpath = (
@@ -1241,7 +1242,7 @@ class BrightSpace_Course:
                         source_url, view = attempts_url, "quiz attempts"
                         self.driver.get(source_url)
                         wait_for_ajax(self.driver)
-                        generic_table = "//table[.//th[contains(.,'Student') or contains(.,'User')]]"
+                        generic_table = "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]"
                         if not self.click_max_results_select("//select[.//option[contains(.,'per page')]]") \
                                 and not self._has_elements(generic_table):
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
