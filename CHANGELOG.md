@@ -5,6 +5,9 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc10 - 2026-10-27
+
+- Streamlit Community Cloud now installs the local `src`-layout application from the uv-backed requirements manifest, preserving the faster dependency install while preventing startup import failures.
 - Attendance now collects through today while keeping the current day open for the next run.
   Added custom recovery dates, historical EVA re-runs after census, assignment change/detach/reset
   controls, and evidence-based reconciliation that preserves unrelated attendance. Incomplete
