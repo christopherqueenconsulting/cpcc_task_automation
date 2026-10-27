@@ -334,6 +334,21 @@ class TestRecordCourseAttendance:
         assert state["verified_through"] == "2026-08-30"
         assert ledger.lookback_start(TERM, SECTION, COURSE_START)[0] == DT.date(2026, 8, 24)
 
+    def test_bounded_run_does_not_clear_an_existing_full_recheck_requirement(self, ledger):
+        ledger.update_course_state(TERM, SECTION, run_status=RUN_INCOMPLETE,
+                                   needs_full_recheck=True)
+        course = _course(self.RECORDS)
+        course.attendance_start_bound = DT.date(2026, 8, 19)
+        mc = _my_colleges(FakeAttendancePage(), ledger, totals={"1000001": 2, "1000002": 1})
+
+        mc._record_course_attendance(
+            _context(), course, RunPlan(attendance_start=DT.date(2026, 8, 19),
+                                       attendance_end=DT.date(2026, 8, 27)),
+            ledger, TERM, SECTION, DT.date(2026, 8, 19),
+        )
+
+        assert ledger.course_states()[0]["needs_full_recheck"] == 1
+
     def test_scrape_problem_keeps_the_run_incomplete(self, ledger):
         mc = _my_colleges(FakeAttendancePage(), ledger)
         self._record(mc, ledger, _course(self.RECORDS, problems=["quiz links timed out"]))

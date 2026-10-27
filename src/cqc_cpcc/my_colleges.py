@@ -1562,9 +1562,12 @@ class MyColleges:
         outcome = AttendanceOutcome()
         run_status = RUN_INCOMPLETE
         counts_lower = None
+        bounded_range = isinstance(getattr(bsc, "attendance_start_bound", None), DT.date)
+        preserve_full_recheck = False
         notes: list[str] = []
         try:
             state = ledger._course_state(term, section)
+            preserve_full_recheck = bool(bounded_range and state is not None and state["needs_full_recheck"])
             if plan.full_recheck or (state is not None and state["needs_full_recheck"]):
                 ledger.recheck_verified(term, section, window_start, selected_end)
             outcome = self._mark_attendance_for_course(
@@ -1603,7 +1606,7 @@ class MyColleges:
         finally:
             ledger.update_course_state(
                 term, section, run_status=run_status, window_end=selected_end,
-                needs_full_recheck=bool(counts_lower) if write else None,
+                needs_full_recheck=(True if preserve_full_recheck else bool(counts_lower)) if write else None,
                 window_start=window_start,
                 collection_date=(bsc.collection_date if isinstance(getattr(bsc, "collection_date", None), DT.date)
                                  else DT.datetime.now(ZoneInfo("America/New_York")).date()),
