@@ -188,3 +188,52 @@ def test_choice_carries_to_the_next_student_opened() -> None:
 
     assert at.toggle(key="student_feedback_show_source_Student B").value is True
     assert [c.language for c in at.code if c.language == "markdown"] == ["markdown"]
+
+
+@pytest.mark.unit
+def test_overall_feedback_is_not_labelled_instructor_only() -> None:
+    at = _app(_result(note="You built a working program."))
+
+    shown = [m.value for m in at.markdown] + [c.value for c in at.caption]
+    assert not any("Instructor notes" in v or "Not for the student" in v for v in shown)
+    assert "**Overall summary**" in shown
+
+
+@pytest.mark.unit
+def test_clean_feedback_shows_no_internal_wording_warning() -> None:
+    at = _app(_result(note="You built a working program."))
+
+    assert not at.exception
+    assert not [w for w in at.warning if "Internal wording" in w.value]
+
+
+@pytest.mark.unit
+def test_internal_wording_in_the_feedback_warns_the_instructor() -> None:
+    at = _app(_result(note="R2 is incomplete: values_differ against the reference solution."))
+
+    warnings = [w.value for w in at.warning if "Internal wording found" in w.value]
+    assert len(warnings) == 1
+    assert "R2" in warnings[0] and "values_differ" in warnings[0] and "reference solution" in warnings[0]
+
+
+@pytest.mark.unit
+def test_warning_tokens_from_model_text_render_no_image_or_link() -> None:
+    at = _app(_result(note="See the “![](http://example.invalid/p.png)” test. R2 is incomplete."))
+
+    warning = next(w.value for w in at.warning if "Internal wording" in w.value)
+    assert "R2" in warning
+    assert not re.search(r"(?<!\\)[\[\]]", warning)  # every bracket is escaped
+    assert "` http://example.invalid/p.png `" in warning  # the URL is inert code, not an autolink
+
+
+@pytest.mark.unit
+def test_source_tokens_read_the_students_files_and_skip_unreadable_ones(tmp_path) -> None:
+    from cqc_streamlit_app.grade_assignment import _source_tokens
+
+    src = tmp_path / "Main.java"
+    src.write_text("int runningTotal = 0;", encoding="utf-8")
+
+    tokens = _source_tokens({"Main.java": str(src), "gone.java": str(tmp_path / "gone.java")})
+
+    assert "runningTotal" in tokens
+    assert _source_tokens(None) == set()

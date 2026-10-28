@@ -50,6 +50,11 @@ def test_build_feedback_html_overall_only():
 
 
 @pytest.mark.unit
+def test_build_feedback_html_drops_score_lines_from_the_summary():
+    html = wb.build_feedback_html("Nice work.\nYou earned 25/30 here.\nKeep going.")
+    assert "25/30" not in html and "Nice work." in html and "Keep going." in html
+
+
 def test_build_feedback_html_escapes_and_includes_criteria_and_band():
     crit = SimpleNamespace(
         criterion_name="Logic & Flow", criterion_id="logic",

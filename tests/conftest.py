@@ -83,3 +83,8 @@ def _isolate_app_settings(tmp_path, monkeypatch):
 def _isolate_grading_results(tmp_path, monkeypatch):
     """Never read or write the real ~/.cqc_cpcc/grading_results (student data)."""
     monkeypatch.setenv("CQC_GRADING_RESULTS_DIR", str(tmp_path / "grading_results"))
+
+
+def pytest_addoption(parser):
+    parser.addoption("--update-golden", action="store_true", default=False,
+                     help="rewrite tests/golden/student_feedback/*.md from the builder current output")

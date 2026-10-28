@@ -107,8 +107,12 @@ def build_feedback_html(
     Returns:
         An HTML string (``<p>``/``<ul>``) safe to inject into the editor.
     """
+    from cqc_cpcc.student_feedback_builder import _filter_score_mentions
+
     parts: list[str] = []
-    if overall_feedback:
+    # The student reads this paragraph: drop any line that mentions a score, as the builder does.
+    overall_feedback = _filter_score_mentions(overall_feedback or "")
+    if overall_feedback.strip():
         parts.append(f"<p>{_esc(overall_feedback)}</p>")
     if band_label:
         parts.append(f"<p><strong>Overall:</strong> {_esc(str(band_label))}</p>")

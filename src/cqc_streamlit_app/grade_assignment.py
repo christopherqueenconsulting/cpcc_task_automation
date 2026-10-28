@@ -3589,6 +3589,51 @@ def render_safe_markdown(text: str) -> str:
     return "\n".join(out)
 
 
+_SOURCE_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_MAX_SOURCE_BYTES = 200_000
+
+
+def _source_tokens(source_files: Optional[dict]) -> set:
+    """Every identifier-like word in the student's source files (capped), so the lint does not
+    call the student's own variable names internal wording."""
+    tokens: set = set()
+    for path in list((source_files or {}).values())[:50]:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                tokens.update(_SOURCE_TOKEN_RE.findall(fh.read(_MAX_SOURCE_BYTES)))
+        except (OSError, TypeError, ValueError):
+            continue
+    return tokens
+
+
+def _feedback_lint_findings(feedback: str, run_key: str = "", source_files: Optional[dict] = None) -> list:
+    """Internal wording in the student feedback: ids, verdict words, grading mechanics, hidden test
+    inputs and code identifiers (``student_feedback_lint``). Advisory and warn-only; it never changes
+    the text."""
+    from cqc_cpcc.feedback_ids import build_id_glossary
+    from cqc_cpcc.student_feedback_lint import lint_student_feedback
+
+    checklist = st.session_state.get("active_requirement_checklist")
+    kwargs = (st.session_state.get("grading_inputs_by_key", {}).get(run_key, {}).get("kwargs", {})
+              if run_key else {})
+    plan = kwargs.get("execution_plan")
+    # A sample case is copied from the instructions, so the student already has its input.
+    hidden = [c.stdin for c in (getattr(plan, "cases", None) or []) if getattr(c, "source", "") != "sample"]
+    return lint_student_feedback(
+        feedback, glossary=build_id_glossary(checklist, plan), hidden_inputs=hidden,
+        instructions_text=kwargs.get("assignment_instructions"), known_tokens=_source_tokens(source_files))
+
+
+def _render_feedback_lint_warning(feedback: str, run_key: str = "", source_files: Optional[dict] = None) -> None:
+    from cqc_cpcc.student_feedback_lint import summarize_findings
+
+    findings = _feedback_lint_findings(feedback, run_key, source_files)
+    if findings:
+        # Tokens come from model output that can quote student text, and st.warning renders Markdown.
+        st.warning("Internal wording found. " + render_safe_markdown(summarize_findings(findings)),
+                   icon=":material/edit_note:")
+
+
 def _remember_feedback_view(widget_key: str) -> None:
     st.session_state[FEEDBACK_SOURCE_PREF] = st.session_state[widget_key]
 
@@ -3641,9 +3686,12 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
             with st.container(border=True):
                 st.markdown(render_safe_markdown(feedback))
         copy_to_clipboard_button(feedback, "Copy feedback as Markdown", key=f"copy_feedback_{student_name}")
+        _render_feedback_lint_warning(feedback, run_key, source_files)
         st.divider()
-        st.markdown("**Instructor notes**")
-        st.caption("Not for the student.")
+        # The student reads this text too: it is the summary at the top of the feedback above.
+        st.markdown("**Overall summary**")
+        st.caption("Written by the model. Students see it at the top of their feedback, "
+                   "except any sentence that mentions a score.")
         st.markdown(render_safe_markdown(result.overall_feedback or ""))
     with tabs[1]:
         st.dataframe(
