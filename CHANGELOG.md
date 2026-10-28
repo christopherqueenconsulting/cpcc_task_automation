@@ -5,6 +5,10 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc11 - 2026-10-28
+
+- OneCompiler runner filenames replace whitespace with underscores for C++, C, Java, Python, and C# submissions. Matching quoted C/C++ includes follow renamed submitted headers; original submissions and other student code errors are preserved.
+
 ## 0.2.0-rc10 - 2026-10-27
 
 - Streamlit Community Cloud now installs the local `src`-layout application from the uv-backed requirements manifest, preserving the faster dependency install while preventing startup import failures.
