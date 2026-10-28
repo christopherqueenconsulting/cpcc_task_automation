@@ -160,7 +160,7 @@ def build_student_feedback(
     return "\n".join(lines)
 
 
-def _filter_score_mentions(text: str) -> str:
+def _filter_score_mentions(text: str, *, allow_code_spans: bool = False) -> str:
     """Remove lines containing numeric scores, points, or percentages.
     
     Args:
@@ -173,7 +173,12 @@ def _filter_score_mentions(text: str) -> str:
     for line in text.split("\n"):
         # Skip lines with score patterns like "85%", "25/30", etc.
         pattern = r'\d+\s*[/%]|\d+\s*/\s*\d+|score|points|percentage|earned'
-        if re.search(pattern, line, re.IGNORECASE):
+        # Opt-in, for a note the output check wrote: text in its code spans is the student's own
+        # program output (for example a printed "50%" or "Total points"), not a grade. Model text
+        # (overall feedback, model notes) always gets the strict filter: a model can put a grade
+        # in backticks.
+        outside_code = re.sub(r"`[^`\n]*`", " ", line) if allow_code_spans else line
+        if re.search(pattern, outside_code, re.IGNORECASE):
             continue
         filtered_lines.append(line)
 
@@ -288,15 +293,11 @@ def _format_error_for_student(error) -> str:
     lines.append(f"  - **{error.name}**: {error.description}")
 
     # Additional context if available
-    if error.notes and getattr(error, "source", None) == "execution":
-        # An error the output check added: the note names the test input and the expected and actual
-        # line (program output only, never the solution's source). It is written by the gate, in code
-        # spans, so the score-word filter below must not drop it (a line can contain "%", "/" or
-        # "points").
-        lines.append("    " + " ".join(error.notes.split()))
-    elif error.notes:
-        # Filter out technical details, keep student-relevant info
-        notes_filtered = _filter_score_mentions(error.notes)
+    if error.notes:
+        # Filter out technical details, keep student-relevant info. A note the output check wrote
+        # puts program output in code spans, which the filter leaves alone.
+        notes_filtered = _filter_score_mentions(
+            error.notes, allow_code_spans=getattr(error, "source", None) == "execution")
         if notes_filtered.strip():
             lines.append(f"    {notes_filtered}")
 

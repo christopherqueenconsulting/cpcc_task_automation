@@ -1010,7 +1010,8 @@ async def _reconcile(
             notes.append(note("execution", "The output check failed unexpectedly: graded without it."))
 
     # Requirement coverage: unimplemented requirements become errors, so incomplete
-    # work cannot outscore complete work with mistakes.
+    # work cannot outscore complete work with mistakes. The student sees a short plain
+    # sentence; the model's per-requirement evidence stays instructor-only (checklist view).
     if requirements is not None:
         result, coverage_info = apply_requirement_coverage(result, requirements)
         if gate_report is not None:
@@ -1119,7 +1120,9 @@ def apply_compile_gate(
                     occurrences=1,
                     # Raw diagnostics go only to the instructor-only field: they can quote
                     # any file the compiler opened, so they never reach student feedback.
-                    notes=f"Verified by {cr.tool}: the submission does not compile.",
+                    # Plain words for the student; the tool that verified it is on the
+                    # (instructor-only) reconciliation note written by the caller.
+                    notes="Your program does not compile. Fix the first compiler error and rebuild.",
                     compiler_diagnostics=diag,
                 ))
                 info["action"] = "added"

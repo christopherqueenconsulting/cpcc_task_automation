@@ -202,15 +202,87 @@ def test_two_different_details_add_two_different_format_errors_once_each():
     assert sorted(e.code.rsplit("_", 1)[-1] for e in result.detected_errors) == ["FORMATTING", "SCALE"]
 
 
-def test_a_gate_added_error_shows_the_input_and_the_differing_line_but_never_the_solution():
+def test_a_gate_added_error_shows_the_differing_line_but_never_the_solution():
     plan = make_plan()
     result, _ = gate(unscored(), report_exec(plan, [("format_only", "number_format")] * 3), defs("CSC_251"))
     [added] = result.detected_errors
-    assert "`5`" in added.notes and "`Total: 10.50`" in added.notes and "`Total: 10.5`" in added.notes
+    assert added.notes == ("When your program runs on one of the instructor's test inputs (not listed here), "
+                           "one output line is not formatted as required: "
+                           "it prints `Total: 10.5` where `Total: 10.50` is expected.")
     result = result.model_copy(update={"criteria_results": result.criteria_results})
     text = build_student_feedback(result)
-    assert "`Total: 10.5`" in text and "Output check:" in text
+    assert "it prints `Total: 10.5` where `Total: 10.50` is expected." in text
+    assert "Output check" not in text
     assert "the instructor's solution" not in text and SOLUTION not in text
+
+
+def test_the_input_is_shown_only_for_a_sample_case():
+    # Sample-only plans never add an error, so the first case is a sample and the rest independent.
+    for sources, shown in ((("sample", "llm", "llm"), True), (("llm", "llm", "llm"), False),
+                           (("manual", "llm", "llm"), False), (("llm", "sample", "llm"), False)):
+        source = sources[0]
+        plan = make_plan(sources=sources)
+        result, _ = gate(unscored(), report_exec(plan, [("format_only", "number_format")] * 3), defs("CSC_251"))
+        note = result.detected_errors[0].notes
+        assert ("with the input `5`" in note) is shown, (source, note)
+        assert note.startswith("When your program runs")
+        if not shown:
+            assert "`5`" not in note and "with the input" not in note
+            assert "the instructor's test inputs (not listed here)" in note
+
+
+def test_a_sample_input_is_inert_and_capped():
+    plan = make_plan(sources=("sample",) * 3)
+    plan.cases[0].stdin = "x`y\n" + "9" * 300
+    note = eg._transparency_note(plan, [CaseResult(case_id="T1", verdict="text_differs",
+                                                   diff_excerpt="-a\n+b")])
+    assert "x'y" in note and "9" * 100 not in note and "`" in note
+
+
+def test_a_note_with_no_diff_lines_still_reads_plainly():
+    plan = make_plan()
+    head = "When your program runs on one of the instructor's test inputs (not listed here)"
+    hint = "Compare your program's output with the sample output in the instructions."
+    assert eg._transparency_note(plan, []) == f"{head}, one output line is not formatted as required. {hint}"
+    note = eg._transparency_note(plan, [CaseResult(case_id="T1", verdict="text_differs", diff_excerpt="")])
+    assert note == f"{head}, one output line is not formatted as required. {hint}"
+    # A misspelling with no usable pair names nothing invented.
+    assert eg._transparency_note(plan, [], misspelling=True) == f"{head}, one word in the output is misspelled. {hint}"
+
+
+def _one_case_note(diff, detail="", source="llm", **kw):
+    plan = make_plan(sources=(source,) * 3)
+    return eg._transparency_note(plan, [CaseResult(case_id="T1", verdict="format_only", detail=detail,
+                                                   diff_excerpt=diff)], **kw)
+
+
+def test_two_lines_that_look_equal_after_inert_say_the_spacing_differs():
+    note = _one_case_note("--- expected\n+++ actual\n@@\n-Total:   10\n+Total: 10", detail="spacing")
+    assert note.endswith("the spacing or blank lines differ from what is expected.")
+    assert "it prints" not in note
+
+
+def test_a_long_line_with_a_late_difference_shows_the_difference():
+    base = "word " * 30
+    diff = f"--- expected\n+++ actual\n@@\n-{base}Total: 10.50\n+{base}Total: 10.5"
+    note = _one_case_note(diff)
+    assert "10.50" in note and "10.5`" in note and "it prints" in note
+    assert note.count("...") >= 2  # a window, not the start of the line
+    assert max(len(s) for s in note.split("`")[1::2]) <= eg.MAX_SNIPPET_CHARS
+
+
+def test_more_than_one_differing_line_says_the_first_difference():
+    diff = "--- expected\n+++ actual\n@@\n-Total: 10.50\n-Tax: 1.00\n+Total: 10.5\n+Tax: 1.0"
+    note = _one_case_note(diff)
+    assert "The first difference is: it prints `Total: 10.5` where `Total: 10.50` is expected." in note
+    assert "first difference" not in _one_case_note("--- expected\n+++ actual\n@@\n-a\n+b")
+
+
+def test_a_hidden_case_does_not_name_its_input_but_a_sample_does():
+    hidden = _one_case_note("--- expected\n+++ actual\n@@\n-a\n+b", source="llm")
+    sample = _one_case_note("--- expected\n+++ actual\n@@\n-a\n+b", source="sample")
+    assert "(not listed here)" in hidden and "`5`" not in hidden
+    assert sample.startswith("When your program runs with the input `5`,") and "not listed" not in sample
 
 
 def test_a_student_line_is_a_code_span_with_no_markdown_or_html_in_it():
@@ -218,7 +290,7 @@ def test_a_student_line_is_a_code_span_with_no_markdown_or_html_in_it():
     plan = make_plan()
     result, _ = gate(unscored(), report_exec(plan, [("format_only", "spacing")] * 3, diff=evil), defs("CSC_251"))
     note = result.detected_errors[0].notes
-    assert "`" in note and "\x1b" not in note and note.count("`") == 6  # three code spans, backtick turned to a quote
+    assert "`" in note and "\x1b" not in note and note.count("`") == 4  # two code spans, backtick turned to a quote
     assert "'code'" in note
 
 
@@ -500,6 +572,9 @@ def test_csc134_a_single_misspelled_output_word_becomes_the_misspelling_error():
     result, _ = gate(unscored(major), exe, definitions)
     [kept] = result.detected_errors
     assert kept.code.endswith("_MISSPELLING") and kept.severity == "minor" and kept.source == "execution"
+    assert kept.notes == ("When your program runs on one of the instructor's test inputs (not listed here), "
+                          "one word in the output is misspelled: "
+                          "`freind` should be `friend`.")
     # the model reported nothing: nothing is added
     nothing, info = gate(unscored(), exe, definitions)
     assert not nothing.detected_errors and info["disagrees"]

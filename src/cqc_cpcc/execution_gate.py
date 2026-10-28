@@ -24,8 +24,11 @@ What the gate may do, all deterministic (``docs/execution-gate.md`` has the tabl
   never removed, and neither is one that cites a concrete input unless that input, run as an
   extra case on the solution and on the student's program, also matches.
 * **Set the format error** per the course's own definitions (:data:`FORMAT_POLICY`) when the only
-  differences are format differences. A gate-added error carries the case input and the expected
-  and actual line in its ``notes`` (student feedback shows them; the solution source never).
+  differences are format differences. A gate-added error carries the expected and actual line
+  in its ``notes`` in plain words (student feedback shows them; the solution source never). The case
+  input is shown only when the case's ``source == "sample"`` (copied from the instructions); a hidden
+  case says "one of the instructor's test inputs (not listed here)". Trade-off: the student may not be
+  able to reproduce a hidden case; the instructor sees it on the Output tab.
 * **Keep** the model's errors, with evidence, when anything worse than a format difference shows
   up (a "disagrees" flag in the report when the model reported no output error at all).
 * Never touches requirement errors or compiler errors, never sets ``needs_review``, never adds a
@@ -611,18 +614,73 @@ def _case_by_id(plan: ExecutionPlan, case_id: str) -> Optional[TestCase]:
     return next((c for c in plan.cases if c.id == case_id), None)
 
 
-def _transparency_note(plan: ExecutionPlan, results: Sequence[CaseResult]) -> str:
-    """Student-facing: the case input and the expected vs actual line (program output only)."""
+def _misspelled_pair(expected: str, actual: str) -> Optional[tuple]:
+    """``(expected_word, actual_word)`` when the two lines differ in exactly one word, else None."""
+    exp, act = expected.split(), actual.split()
+    if len(exp) != len(act):
+        return None
+    diff = [(e, a) for e, a in zip(exp, act) if e != a]
+    return diff[0] if len(diff) == 1 else None
+
+
+def _transparency_note(plan: ExecutionPlan, results: Sequence[CaseResult], *, misspelling: bool = False) -> str:
+    """Student-facing, in plain words: what the program printed and what was expected (program output
+    only, never the solution's source). The input is shown only for a sample case copied from the
+    instructions; an instructor- or model-made case keeps its input hidden. Every piece of
+    student-derived text goes through :func:`inert`."""
     first = results[0] if results else None
-    if first is None:
-        return "Output check: your program's output differs from the expected output in format."
-    case = _case_by_id(plan, first.case_id)
-    shown = " ".join(ln for ln in (case.stdin if case else "").split())
-    pair = first_diff_pair(first.diff_excerpt)
-    head = f"Output check: with the input {inert(shown)}" if shown else "Output check: on one test run"
+    case = _case_by_id(plan, first.case_id) if first is not None else None
+    shown = " ".join((case.stdin if case.source == "sample" else "").split()) if case else ""
+    head = (f"When your program runs with the input {inert(shown)}" if shown else
+            "When your program runs on one of the instructor's test inputs (not listed here)")
+    problem = "one word in the output is misspelled" if misspelling else "one output line is not formatted as required"
+    pair = first_diff_pair(first.diff_excerpt) if first is not None else None
     if pair is None:
-        return f"{head}, your program's output differs from the expected output in format."
-    return f"{head}, the expected line was {inert(pair[0])} but your program printed {inert(pair[1])}."
+        return f"{head}, {problem}. {COMPARE_HINT}"
+    if misspelling:
+        words = _misspelled_pair(pair[0], pair[1])
+        if words is not None:
+            return f"{head}, {problem}: {inert(words[1])} should be {inert(words[0])}."
+        shown_pair = _visible_pair(pair[0], pair[1])
+        if shown_pair is None:
+            return f"{head}, {problem}. {COMPARE_HINT}"
+        return f"{head}, {problem}: {inert(shown_pair[1])} should be {inert(shown_pair[0])}."
+    several = _differing_line_count(first.diff_excerpt) > 1
+    lead = f"{head}, {problem}. The first difference is" if several else f"{head}, {problem}"
+    shown_pair = _visible_pair(pair[0], pair[1])
+    if shown_pair is None:
+        return f"{lead}: the spacing or blank lines differ from what is expected."
+    return f"{lead}: it prints {inert(shown_pair[1])} where {inert(shown_pair[0])} is expected."
+
+
+COMPARE_HINT = "Compare your program's output with the sample output in the instructions."
+
+
+def _differing_line_count(diff_excerpt: str) -> int:
+    """Lines the excerpt marks as removed or added (the larger of the two counts)."""
+    lines = [ln for ln in (diff_excerpt or "").splitlines() if not ln.startswith(("--- ", "+++ ", "@@"))]
+    return max(sum(1 for ln in lines if ln.startswith("-")), sum(1 for ln in lines if ln.startswith("+")))
+
+
+def _visible_pair(expected: str, actual: str) -> Optional[tuple]:
+    """``(expected, actual)`` cut to what :func:`inert` shows, so the difference is in view.
+
+    None when the two lines differ only in spacing (the snippets would look identical). A line over
+    the snippet limit is cut to a window around the first differing character instead of its start.
+    """
+    exp, act = " ".join(clean_text(expected).split()), " ".join(clean_text(actual).split())
+    if exp == act:
+        return None
+    if max(len(exp), len(act)) <= MAX_SNIPPET_CHARS:
+        return exp, act
+    at = next((i for i, (a, b) in enumerate(zip(exp, act)) if a != b), min(len(exp), len(act)))
+    start = max(0, at - 30)
+    width = MAX_SNIPPET_CHARS - 12  # room for the two "..." marks
+
+    def window(text: str) -> str:
+        part = text[start:start + width]
+        return ("..." if start else "") + part + ("..." if start + width < len(text) else "")
+    return window(exp), window(act)
 
 
 def apply_execution_gate(
@@ -870,7 +928,7 @@ def _route_misspelling(plan, results, model_errors, cats, error_definitions, err
     for e, definition in routes:
         miss = DetectedError(code=definition.error_id, name=definition.name, severity="minor",
                              description=definition.description, occurrences=1,
-                             notes=_transparency_note(plan, bad[:1]).replace("Output check:", "Output check (spelling):", 1),
+                             notes=_transparency_note(plan, bad[:1], misspelling=True),
                              source=SOURCE_EXECUTION)
         errors[:] = [x for x in errors if x is not e]
         notes.append(note_removed(STAGE, e, "The only difference is one misspelled output word: routed to "

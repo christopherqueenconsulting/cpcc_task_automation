@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -256,6 +257,128 @@ def requirements_prompt_section(checklist: Optional[RequirementChecklist]) -> li
     return lines
 
 
+SUMMARY_MAX_WORDS = 18
+_LEAD_ID = re.compile(r"^\s*(?:\(?\[?R\d+\]?\)?\s*[:.)\-]\s*|\(?R\d+\)?\s+)", re.IGNORECASE)
+_LEAD_MODAL = re.compile(
+    r"^(?:the\s+)?(?:program|code|application|app|solution|student(?:'s program)?|submission)\s+"
+    r"(?:must|should|shall|needs to|has to|will)\s+", re.IGNORECASE)
+_LEAD_MUST = re.compile(r"^(?:must|should|shall|needs to|has to)\s+", re.IGNORECASE)
+# Only ";" and sentence ends split a requirement. Commas and colons stay: cutting at ", and" or
+# ":" produced fragments that read as the whole requirement.
+_CLAUSE_SPLIT = re.compile(r"\s*;\s*|(?<=[.!?])\s+")
+_PAREN = re.compile(r"\s*[\(\[]([^\)\]]*)[\)\]]")
+_KEEP_PAREN = re.compile(r"\d|inclusive|exclusive|rounded", re.IGNORECASE)
+_CONDITION = re.compile(r"\b(?:if|when|unless|otherwise|else|then|also)\b", re.IGNORECASE)
+_PROHIBITION = re.compile(r"^(?:do not|don't|never|avoid)\b", re.IGNORECASE)
+# A summary never ends on one of these (articles, prepositions, comparators, joiners, "is/are/be").
+_DANGLING = frozenset({
+    "a", "an", "the", "and", "or", "but", "nor", "of", "to", "for", "with", "in", "on", "at", "by", "from",
+    "as", "into", "onto", "over", "under", "per", "via", "that", "which", "than", "between", "is", "are",
+    "be", "was", "were", "if", "when", "then", "so", "using", "less", "greater", "more", "fewer", "larger",
+    "smaller", "equal", "not", "each", "every", "any", "all", "its", "their", "his", "her", "your", "this",
+    "these", "those", "both", "either", "neither", "also", "both"})
+_CUT_BEFORE = frozenset({"that", "to", "is", "are", "between", "than"})
+_LABEL_VERBS = frozenset({
+    "print", "display", "show", "read", "ask", "prompt", "use", "call", "compute", "calculate", "write",
+    "validate", "store", "create", "define", "include", "return", "accept", "handle", "loop", "check",
+    "do", "don't", "never", "avoid", "must", "should"})
+ELLIPSIS = "…"
+
+
+def _tidy_parentheses(text: str) -> str:
+    """Drop parentheticals, except a short one (4 words or fewer) that carries a number or an
+    inclusive/exclusive/rounded note: it can change what the requirement means."""
+    def keep(m) -> str:
+        inner = " ".join(m.group(1).split())
+        if inner and len(inner.split()) <= 4 and _KEEP_PAREN.search(inner):
+            return f" ({inner})"
+        return ""
+    return _PAREN.sub(keep, text)
+
+
+def _drop_dangling(words: list) -> list:
+    while words and words[-1].lower().strip(",.;:") in _DANGLING:
+        words.pop()
+    while words and words[-1].endswith(","):
+        words[-1] = words[-1].rstrip(",")
+    return words
+
+
+def _shorten(text: str, limit: int) -> tuple:
+    """``(text, was_cut)`` of at most ``limit`` words: whole when it fits, else cut at the last
+    comma within the limit, else before the last that/to/is/are/between/than, else at the limit."""
+    words = text.split()
+    if len(words) <= limit:
+        return text, False
+    head = words[:limit]
+    cut = next((i + 1 for i in range(len(head) - 1, 2, -1) if head[i].endswith(",")), None)
+    if cut is None:
+        cut = next((i for i in range(len(head) - 1, 2, -1) if head[i].lower() in _CUT_BEFORE), limit)
+    return " ".join(_drop_dangling(head[:cut])), True
+
+
+def student_summary(text: str) -> str:
+    """A plain-language phrase for a requirement, for text the student reads.
+
+    Deterministic stand-in until the model writes a ``summary`` (plan PR 4). It never states
+    less than it claims: it splits only on ";" and sentence ends; a text of
+    :data:`SUMMARY_MAX_WORDS` words or fewer is kept whole; a clause that holds a condition or a
+    sequence word (if, when, unless, otherwise, else, then, also) is kept; whatever else is cut
+    ends in an ellipsis; and it never ends on an article, preposition, comparator or "is/are/be".
+    """
+    one = " ".join((text or "").split())
+    one = _tidy_parentheses(_LEAD_ID.sub("", one)).strip()
+    # A short noun label before ":" ("Output format: ...") is not part of the requirement.
+    label, sep, rest = one.partition(":")
+    if sep and rest.strip() and len(label.split()) <= 3 and label.split()[0].lower() not in _LABEL_VERBS:
+        one = rest.strip()
+    clauses = [c.strip() for c in _CLAUSE_SPLIT.split(one) if c.strip()]
+    if not clauses:
+        return "a part of the assignment"
+    last = 0
+    for i, clause in enumerate(clauses[1:], start=1):
+        if _CONDITION.search(clause):
+            last = i
+            break
+    kept = "; ".join(c.rstrip(" .!?") for c in clauses[: last + 1])
+    dropped = last + 1 < len(clauses)
+    kept = _LEAD_MUST.sub("", _LEAD_MODAL.sub("", kept)).strip()
+    if re.match(r"^not\b", kept, re.IGNORECASE):
+        kept = "do " + kept  # "The program must not X" -> "do not X"
+    out, cut = _shorten(kept, SUMMARY_MAX_WORDS)
+    out = " ".join(_drop_dangling(out.split())).rstrip(" ,.;:!")
+    if not out:
+        return "a part of the assignment"
+    out = _lower_first(out, one)
+    return out + ELLIPSIS if (dropped or cut) else out
+
+
+def _lower_first(out: str, original: str) -> str:
+    """Mid-sentence use: lower the first letter, unless the word is an acronym (SQL), is followed by
+    a colon, or is capitalised elsewhere in the text (Scanner, Java)."""
+    first = out.split()[0]
+    bare = first.strip(",:;()")
+    if not (bare[:1].isupper() and bare[1:2].islower()) or first.endswith(":"):
+        return out
+    if bare in original.split()[1:] or bare in [w.strip(",:;().") for w in original.split()[1:]]:
+        return out
+    return out[0].lower() + out[1:]
+
+
+def requirement_error_description(summary: str, status: str) -> str:
+    """The sentence the student reads for a requirement error (no checklist words, no id).
+
+    A rule ("do not ...") is broken, not missing. A part that is only partly done gets a next step.
+    """
+    end = "" if summary.endswith(ELLIPSIS) else "."
+    if _PROHIBITION.match(summary):
+        return f"This rule was not followed: {summary}{end}"
+    if status == "missing":
+        return f"This part is missing: {summary}{end}"
+    return (f"This part is not finished yet: {summary}{end} "
+            "Re-read the instructions for this part and check that your program does all of it.")
+
+
 def apply_requirement_coverage(
         result: RubricAssessmentResult,
         checklist: Optional[RequirementChecklist],
@@ -291,9 +414,11 @@ def apply_requirement_coverage(
             code=code,
             name="Missing Requirement" if verdict.status == "missing" else "Incomplete Requirement",
             severity="major" if major else "minor",
-            description=f"{req.text} ({'not implemented' if verdict.status == 'missing' else 'incomplete'})",
+            description=requirement_error_description(student_summary(req.text), verdict.status),
             occurrences=1,
-            notes=verdict.evidence,
+            # ``verdict.evidence`` is instructor-only (it may quote the solution or the checklist):
+            # never copied into text the student reads.
+            notes=None,
         ))
     update = {"detected_errors": errors}
     if info["unmarked"]:

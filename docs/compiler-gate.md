@@ -103,11 +103,13 @@ Mac (Christopher, or an agent working there) searches the saved runs. Results li
 only counts, never note text:
 
 ```bash
-python3 -c "import glob,json,os;d=os.environ.get('CQC_GRADING_RESULTS_DIR') or os.path.expanduser('~/.cqc_cpcc/grading_results');n=[f for f in glob.glob(d+'/*.json') if any('Verified by' in (e.get('notes') or '') and '\n' in (e.get('notes') or '').strip() or e.get('compiler_diagnostics') for r in json.load(open(f)).get('results',[]) if isinstance(r,list) and isinstance(r[-1],dict) for e in r[-1].get('detected_errors') or [])];print(len(glob.glob(d+'/*.json')),'runs,',len(n),'to review:',[os.path.basename(f) for f in n])"
+python3 -c "import glob,json,os;d=os.environ.get('CQC_GRADING_RESULTS_DIR') or os.path.expanduser('~/.cqc_cpcc/grading_results');n=[f for f in glob.glob(d+'/*.json') if any('compile' in (e.get('name') or '').lower() and '\n' in (e.get('notes') or '').strip() or e.get('compiler_diagnostics') for r in json.load(open(f)).get('results',[]) if isinstance(r,list) and isinstance(r[-1],dict) for e in r[-1].get('detected_errors') or [])];print(len(glob.glob(d+'/*.json')),'runs,',len(n),'to review:',[os.path.basename(f) for f in n])"
 ```
 
-1. A run is listed when a gate note holds more than the one line "Verified by ...: the
-   submission does not compile.", or when it carries `compiler_diagnostics`. Open each
+1. A run is listed when a compile error's note holds more than one line (the gate writes
+   the one line "Your program does not compile. Fix the first compiler error and rebuild.";
+   runs saved before 2026-10-26 hold "Verified by g++: the submission does not compile."),
+   or when it carries `compiler_diagnostics`. Open each
    one and look for text that is not from the student's own files. Delete or re-grade
    any run that has such text before downloading feedback from it again.
 2. If any note quotes a host file, rotate every key in `.env` (by name:
@@ -147,8 +149,10 @@ Compiler diagnostics have the throwaway temp path replaced with the student's re
 filename before they reach a report, and are truncated at 1500 characters — g++ can
 emit thousands of lines for one mistake. They are kept in the instructor-only
 `DetectedError.compiler_diagnostics` field, which is outside the model's schema. The
-student-facing `notes` get only a generic "Verified by g++: the submission does not
-compile." line, so student feedback never shows raw diagnostics.
+student-facing `notes` get only "Your program does not compile. Fix the first compiler
+error and rebuild." The tool name appears only on the instructor-only reconciliation note
+("{tool} reports that the submission does not compile."), so student feedback never shows
+raw diagnostics or the tool.
 
 ## Configuration
 
