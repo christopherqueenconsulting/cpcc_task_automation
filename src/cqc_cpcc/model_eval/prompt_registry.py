@@ -293,14 +293,14 @@ def _render_project_feedback() -> list[str]:
     # The production builder with the eval dataset's legacy feedback types.
     giver = FeedbackGiver(course_name=FIXTURE_COURSE, assignment_instructions=FIXTURE_INSTRUCTIONS,
                           assignment_solution=FIXTURE_SOLUTION, feedback_type_list=DefaultFeedbackType.list())
-    return [giver.build_prompt(FIXTURE_SUBMISSION)]
+    return [giver.build_prompt(FIXTURE_SUBMISSION, nonce=FIXTURE_NONCE)]
 
 
 def _render_flowgorithm_grade() -> list[str]:
     from cqc_cpcc.flowgorithm_grading import build_flowgorithm_prompt
 
     return [build_flowgorithm_prompt(FIXTURE_INSTRUCTIONS, FIXTURE_RUBRIC_TABLE, FIXTURE_SUBMISSION,
-                                     FIXTURE_FILE_NAME, FIXTURE_TOTAL_POINTS)]
+                                     FIXTURE_FILE_NAME, FIXTURE_TOTAL_POINTS, nonce=FIXTURE_NONCE)]
 
 
 def _render_structured_fallback() -> list[str]:

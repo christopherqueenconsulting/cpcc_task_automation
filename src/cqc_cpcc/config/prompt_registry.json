@@ -238,7 +238,7 @@
       ]
     },
     "project-feedback": {
-      "version": 5,
+      "version": 7,
       "status": "live",
       "role": "feedback",
       "description": "Give Feedback page: student-facing FeedbackReport (found / why / fix / approach / learn more) on a project submission.",
@@ -258,13 +258,13 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:25c6faa7a2a98dcf55f6a63c0753403e62b6e204f86710fd4d235b3eea901856",
+      "fingerprint": "sha256:29cc42310615ed12766b692eb63b1c74599f2afb0fda8229b454045304df715b",
       "suites": [
         "project-feedback"
       ]
     },
     "flowgorithm-grade": {
-      "version": 3,
+      "version": 5,
       "status": "live",
       "role": "flowgorithm",
       "description": "Flowgorithm grading: per-criterion deductions + feedback (structured; backend computes the final grade).",
@@ -285,7 +285,7 @@
         "src/cqc_cpcc/utilities/AI/model_registry.py",
         "poetry.lock"
       ],
-      "fingerprint": "sha256:06ffa6d18fa5b593ccf791a0a8feac0c38ca1a00afe35a682496179510504516",
+      "fingerprint": "sha256:a366566cd0cab1d592af49a99c22010493436a51e7cac254a1c35e0c83e8fea4",
       "suites": [
         "flowgorithm-grade"
       ]

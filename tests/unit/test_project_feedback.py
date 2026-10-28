@@ -442,7 +442,7 @@ class TestGiveProjectFeedbackRun:
 
 @pytest.mark.unit
 class TestExtraGuidance:
-    """Give Feedback's "Extra prompt guidance" reaches the prompt (project-feedback v5)."""
+    """Give Feedback's "Extra prompt guidance" reaches the prompt (project-feedback v6)."""
 
     def _giver(self, **kwargs):
         return FeedbackGiver(course_name="CSC 151", assignment_instructions="Print Hello",
@@ -462,6 +462,7 @@ class TestExtraGuidance:
         structured = mocker.patch('cqc_cpcc.project_feedback.llm_gateway.structured',
                                   new_callable=AsyncMock, return_value=_report())
         mocker.patch('cqc_cpcc.project_feedback.JavaCode')
+        mocker.patch('cqc_cpcc.utilities.AI.untrusted_fence.new_nonce', return_value="0123456789abcdef")
         giver = self._giver(extra_guidance="Top 3 issues only.")
         await giver.generate_feedback("class A {}")
         assert structured.call_args.kwargs["prompt"] == giver.build_prompt("class A {}")

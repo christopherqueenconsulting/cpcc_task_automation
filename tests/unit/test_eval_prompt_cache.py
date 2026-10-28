@@ -467,7 +467,12 @@ class TestLayoutOfTheRealSuites:
                 assert shared > cs.MIN_PREFIX_CHARS, (sid, shared)
             else:
                 assert roles == {("user",)}
-                assert shared < cs.MIN_PREFIX_CHARS, (sid, shared)
+                if sid == "project-feedback":
+                    # v7 puts every static part first and the fenced submission last, so the
+                    # cases share a long prefix (the per-call nonce comes after it).
+                    assert shared > cs.MIN_PREFIX_CHARS, (sid, shared)
+                else:
+                    assert shared < cs.MIN_PREFIX_CHARS, (sid, shared)
         print("\nsuite | roles | cases rendered | system chars | shared prefix chars (all cases) | approx tokens (4 chars/token)")
         for sid, roles, n, sys_chars, shared in rows:
             print(f"{sid} | {roles} | {n} | {sys_chars} | {shared} | ~{shared // 4}")

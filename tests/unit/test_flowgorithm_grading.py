@@ -144,7 +144,7 @@ def test_unknown_file_name_asks_for_no_deduction():
 def test_the_rule_is_in_the_template_and_nothing_else_moved():
     assert "{file_name_facts}" in FLOWGORITHM_GRADE_PROMPT
     assert "{submission_file_name}" not in FLOWGORITHM_GRADE_PROMPT
-    for needle in ("{assignment}", "{submission}", "{rubric_criteria_markdown_table}", "{total_possible_points}",
+    for needle in ("{assignment}", "{submission_fence}", "{rubric_criteria_markdown_table}", "{total_possible_points}",
                    "Output Instructions (structured JSON):"):
         assert needle in FLOWGORITHM_GRADE_PROMPT
 

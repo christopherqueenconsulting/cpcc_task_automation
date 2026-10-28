@@ -13,6 +13,7 @@ from typing import Annotated, Optional
 from pydantic import BaseModel, Field
 
 from cqc_cpcc.prompts.flowgorithm import FLOWGORITHM_GRADE_PROMPT
+from cqc_cpcc.utilities.AI import untrusted_fence
 from cqc_cpcc.utilities.fprg_filename_facts import file_name_facts, render_facts
 from cqc_cpcc.utilities.fprg_sanitize import sanitize_fprg
 from cqc_cpcc.utilities.logger import logger
@@ -36,14 +37,24 @@ class FlowgorithmGrade(BaseModel):
 
 
 def build_flowgorithm_prompt(assignment: str, rubric_criteria_markdown_table: str, submission: str,
-                             submission_file_name: str, total_possible_points: str) -> str:
+                             submission_file_name: str, total_possible_points: str,
+                             nonce: Optional[str] = None) -> str:
     """The prompt text. The file name is never put in it: two facts about it, computed here
     (``fprg_filename_facts``), take its place, so the file-name rubric criteria can still be
-    decided without the name leaving the machine."""
+    decided without the name leaving the machine.
+
+    The submission is untrusted, so it sits where it always did but inside a nonce fence
+    (``utilities/AI/untrusted_fence``). The line that carries the per-call nonce is directly
+    above the fence, after all the static text before it. ``nonce`` is fixed only for prompt
+    fingerprints; real calls leave it unset.
+    """
+    nonce = nonce or untrusted_fence.new_nonce()
     return FLOWGORITHM_GRADE_PROMPT.strip().format(
         assignment=assignment,
         file_name_facts=render_facts(file_name_facts(submission_file_name)),
-        submission=submission,
+        submission_fence="\n".join([
+            untrusted_fence.instruction_line(nonce),
+            untrusted_fence.fence("Submission", submission, nonce)]),
         rubric_criteria_markdown_table=rubric_criteria_markdown_table,
         total_possible_points=total_possible_points,
     )
