@@ -260,16 +260,16 @@ def requirements_prompt_section(checklist: Optional[RequirementChecklist]) -> li
 SUMMARY_MAX_WORDS = 18
 _LEAD_ID = re.compile(r"^\s*(?:\(?\[?R\d+\]?\)?\s*[:.)\-]\s*|\(?R\d+\)?\s+)", re.IGNORECASE)
 _LEAD_MODAL = re.compile(
-    r"^(?:the\s+)?(?:program|code|application|app|solution|student(?:'s program)?|submission)\s+"
+    r"^(?:(?:the|your)\s+)?(?:program|code|application|app|solution|students?(?:'s program)?|submission|you|it)\s+"
     r"(?:must|should|shall|needs to|has to|will)\s+", re.IGNORECASE)
 _LEAD_MUST = re.compile(r"^(?:must|should|shall|needs to|has to)\s+", re.IGNORECASE)
 # Only ";" and sentence ends split a requirement. Commas and colons stay: cutting at ", and" or
 # ":" produced fragments that read as the whole requirement.
-_CLAUSE_SPLIT = re.compile(r"\s*;\s*|(?<=[.!?])\s+")
+_CLAUSE_SPLIT = re.compile(r";|(?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)(?<!etc\.)(?<!E\.g\.)\s+(?=[A-Z])")
 _PAREN = re.compile(r"\s*[\(\[]([^\)\]]*)[\)\]]")
 _KEEP_PAREN = re.compile(r"\d|inclusive|exclusive|rounded", re.IGNORECASE)
 _CONDITION = re.compile(r"\b(?:if|when|unless|otherwise|else|then|also)\b", re.IGNORECASE)
-_PROHIBITION = re.compile(r"^(?:do not|don't|never|avoid)\b", re.IGNORECASE)
+_PROHIBITION = re.compile(r"\b(?:do not|don't|never|avoid)\b", re.IGNORECASE)
 # A summary never ends on one of these (articles, prepositions, comparators, joiners, "is/are/be").
 _DANGLING = frozenset({
     "a", "an", "the", "and", "or", "but", "nor", "of", "to", "for", "with", "in", "on", "at", "by", "from",
@@ -283,6 +283,9 @@ _LABEL_VERBS = frozenset({
     "validate", "store", "create", "define", "include", "return", "accept", "handle", "loop", "check",
     "do", "don't", "never", "avoid", "must", "should"})
 ELLIPSIS = "…"
+_KEEP_CASE = frozenset({"Java", "Python", "Scanner", "String", "ArrayList", "C++", "SQL", "JUnit", "Math"})
+_CAMEL = re.compile(r"[A-Z][A-Za-z0-9]*[A-Z]")
+_CHECK_REST = " Check the rest of this requirement in the instructions."
 
 
 def _tidy_parentheses(text: str) -> str:
@@ -313,7 +316,9 @@ def _shorten(text: str, limit: int) -> tuple:
     head = words[:limit]
     cut = next((i + 1 for i in range(len(head) - 1, 2, -1) if head[i].endswith(",")), None)
     if cut is None:
-        cut = next((i for i in range(len(head) - 1, 2, -1) if head[i].lower() in _CUT_BEFORE), limit)
+        # Never cut before a number: the number is what the student checks.
+        cut = next((i for i in range(len(head) - 1, 2, -1)
+                    if head[i].lower() in _CUT_BEFORE and not any(c.isdigit() for w in words[i:] for c in w)), limit)
     return " ".join(_drop_dangling(head[:cut])), True
 
 
@@ -330,7 +335,8 @@ def student_summary(text: str) -> str:
     one = _tidy_parentheses(_LEAD_ID.sub("", one)).strip()
     # A short noun label before ":" ("Output format: ...") is not part of the requirement.
     label, sep, rest = one.partition(":")
-    if sep and rest.strip() and len(label.split()) <= 3 and label.split()[0].lower() not in _LABEL_VERBS:
+    if (sep and rest.strip() and len(label.split()) <= 3 and label.split()[0].lower() not in _LABEL_VERBS
+            and not re.match(r"[A-Z]\w*:", rest.strip())):
         one = rest.strip()
     clauses = [c.strip() for c in _CLAUSE_SPLIT.split(one) if c.strip()]
     if not clauses:
@@ -347,10 +353,19 @@ def student_summary(text: str) -> str:
         kept = "do " + kept  # "The program must not X" -> "do not X"
     out, cut = _shorten(kept, SUMMARY_MAX_WORDS)
     out = " ".join(_drop_dangling(out.split())).rstrip(" ,.;:!")
+    if out.count("(") > out.count(")"):
+        out = out[:out.rindex("(")].rstrip(" ,.;:!")  # drop the unclosed tail
+        cut = True
     if not out:
         return "a part of the assignment"
     out = _lower_first(out, one)
     return out + ELLIPSIS if (dropped or cut) else out
+
+
+def _kept_label(text: str) -> bool:
+    """True for 'Label: Total: ...', where the short label was kept (so it keeps its capital)."""
+    parts = text.split(": ", 2)
+    return len(parts) == 3 and len(parts[0].split()) <= 3 and parts[1][:1].isupper() and parts[1].isalnum()
 
 
 def _lower_first(out: str, original: str) -> str:
@@ -358,6 +373,8 @@ def _lower_first(out: str, original: str) -> str:
     a colon, or is capitalised elsewhere in the text (Scanner, Java)."""
     first = out.split()[0]
     bare = first.strip(",:;()")
+    if bare in _KEEP_CASE or _CAMEL.match(bare) or _kept_label(out):
+        return out
     if not (bare[:1].isupper() and bare[1:2].islower()) or first.endswith(":"):
         return out
     if bare in original.split()[1:] or bare in [w.strip(",:;().") for w in original.split()[1:]]:
@@ -370,8 +387,9 @@ def requirement_error_description(summary: str, status: str) -> str:
 
     A rule ("do not ...") is broken, not missing. A part that is only partly done gets a next step.
     """
-    end = "" if summary.endswith(ELLIPSIS) else "."
-    if _PROHIBITION.match(summary):
+    cut = summary.endswith(ELLIPSIS)
+    end = _CHECK_REST if cut else "."
+    if _PROHIBITION.search(summary):
         return f"This rule was not followed: {summary}{end}"
     if status == "missing":
         return f"This part is missing: {summary}{end}"

@@ -164,7 +164,7 @@ def test_gate_adds_missed_does_not_compile_with_diagnostics():
     added = [e for e in res.detected_errors if e.name == "Does Not Compile"]
     assert len(added) == 1
     # Plain words for the student: no tool name, no "Verified by", no diagnostics.
-    assert added[0].notes == "Your program does not compile. Fix the first compiler error and rebuild."
+    assert added[0].notes == "Your program does not compile. Compile it yourself and fix the first error it shows. If it compiles on your computer, ask your instructor."
     assert "verified" not in added[0].notes.lower() and info["tool"] not in added[0].notes
     assert added[0].compiler_diagnostics  # the raw detail stays on the instructor-only field
     assert res.error_counts_by_severity is None

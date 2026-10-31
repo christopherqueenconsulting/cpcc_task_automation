@@ -49,7 +49,15 @@ def _llm_result(rubric, statuses: dict):
      "display each transaction's type, denomination breakdown, and total tokens transacted" + rc.ELLIPSIS),
     ("Print the total; if there were no transactions, display an appropriate message",
      "print the total; if there were no transactions, display an appropriate message"),
-    ("Output format: Total: $x with two decimals", "Total: $x with two decimals"),
+    ("Output format: Total: $x with two decimals", "Output format: Total: $x with two decimals"),
+    ("Print the total (e.g. 10.50)", "print the total (e.g. 10.50)"),
+    ("Round to 2 decimals, e.g. 3.14", "round to 2 decimals, e.g. 3.14"),
+    ("Scanner must be used to read input", "Scanner must be used to read input"),
+    ("ArrayList must hold the scores", "ArrayList must hold the scores"),
+    ("Your program must print a menu", "print a menu"),
+    ("Students must submit one file", "submit one file"),
+    ("Use a while loop to validate that the coin count is between 0 and 100 and reject anything outside that range",
+     "use a while loop to validate that the coin count is between 0 and 100 and reject anything" + rc.ELLIPSIS),
     ("Create a Scanner object, then use Scanner to read the numbers", "create a Scanner object, then use Scanner to read the numbers"),
     ("", "a part of the assignment"),
 ])
@@ -99,7 +107,22 @@ def test_a_partial_requirement_gets_a_next_step_and_a_missing_one_does_not():
     cut = rc.student_summary("Print the total; also show the average")
     assert cut == "print the total; also show the average"
     assert rc.requirement_error_description("print the total" + rc.ELLIPSIS, "missing") == (
-        "This part is missing: print the total" + rc.ELLIPSIS)
+        "This part is missing: print the total" + rc.ELLIPSIS
+        + " Check the rest of this requirement in the instructions.")
+
+
+@pytest.mark.unit
+def test_a_mid_sentence_do_not_is_never_called_missing():
+    got = rc.requirement_error_description(rc.student_summary("Read the age and do not accept negative values"),
+                                           "missing")
+    assert got.startswith("This rule was not followed: ") and "missing" not in got
+
+
+@pytest.mark.unit
+def test_an_unclosed_bracket_is_dropped_from_a_cut_summary():
+    got = rc.student_summary("Compute the average of all the quiz scores entered by the user and print it "
+                             "to the screen (rounded to two decimal places for display")
+    assert "(" not in got and got.endswith(rc.ELLIPSIS)
 
 
 @pytest.mark.unit

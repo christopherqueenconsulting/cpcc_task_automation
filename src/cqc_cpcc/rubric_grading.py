@@ -1122,7 +1122,7 @@ def apply_compile_gate(
                     # any file the compiler opened, so they never reach student feedback.
                     # Plain words for the student; the tool that verified it is on the
                     # (instructor-only) reconciliation note written by the caller.
-                    notes="Your program does not compile. Fix the first compiler error and rebuild.",
+                    notes="Your program does not compile. Compile it yourself and fix the first error it shows. If it compiles on your computer, ask your instructor.",
                     compiler_diagnostics=diag,
                 ))
                 info["action"] = "added"
