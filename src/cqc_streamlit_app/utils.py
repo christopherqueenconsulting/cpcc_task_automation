@@ -1741,7 +1741,11 @@ def add_brightspace_submission_element(
                 keep_arcs = _render_zip_keep_table(orig.zip_path, key_prefix + "review_")
                 if st.button("✅ Apply selection", key=key_prefix + "reapply"):
                     if keep_arcs:
-                        new_path = _rebuild_zip_from_kept(orig.zip_path, keep_arcs)
+                        try:
+                            new_path = _rebuild_zip_from_kept(orig.zip_path, keep_arcs)
+                        except ValueError as exc:
+                            st.error(f"Could not rebuild the ZIP: {exc}")
+                            return None
                         ok, detail = _validate_submissions_zip(new_path, keep_arcs)
                         if ok:
                             confirmed = {**confirmed, "path": new_path}
@@ -1890,8 +1894,12 @@ def _render_writeback_report(report) -> None:
     saved_word = "posted" if is_quiz else "saved"
     saved_unit = "grade(s)" if is_quiz else "draft(s)"
     mode = "DRY RUN — nothing was saved" if report.dry_run else f"{saved_word} {saved} {saved_unit}"
-    st.success(f"Write-back ({report.route}) complete — matched "
+    summary = (f"Write-back ({report.route}) matched "
                f"{report.matched_count}/{len(report.outcomes)} shown · {mode}.")
+    if report.complete:
+        st.success(summary)
+    else:
+        st.warning(summary + " Required targets or writes are incomplete; review the results below.")
     if is_quiz and not report.dry_run and saved:
         # Only claim feedback was posted if it actually was — o.saved can be true with
         # just the score posted (feedback write/attach may have failed for a student).
@@ -2164,13 +2172,16 @@ def _rebuild_zip_from_kept(src_zip_path: str, keep_arcs: set) -> str:
     Preserves the original folder/file arcnames so the grader's extractor still sees
     one folder per student. Returns the new ZIP's path.
     """
+    from cqc_cpcc.utilities.zip_grading_utils import rebuild_zip_from_members
     out = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
     out.close()
-    with zipfile.ZipFile(src_zip_path, "r") as src, \
-            zipfile.ZipFile(out.name, "w", zipfile.ZIP_DEFLATED) as dst:
-        for arc in keep_arcs:
-            with src.open(arc) as f:
-                dst.writestr(arc, f.read())
+    try:
+        # Same size, entry-count and expansion limits as the grader's extraction.
+        rebuild_zip_from_members(src_zip_path, out.name, keep_arcs)
+    except BaseException:
+        if os.path.exists(out.name):
+            os.unlink(out.name)
+        raise
     return out.name
 
 
@@ -2184,14 +2195,30 @@ def _validate_submissions_zip(zip_path: str, keep_arcs: set) -> tuple[bool, str]
         os.path.splitext(arc)[1].lstrip(".").lower()
         for arc in keep_arcs if os.path.splitext(arc)[1]
     })
+    submissions = {}
     try:
         from cqc_cpcc.utilities.zip_grading_utils import (
             extract_student_submissions_from_zip,
         )
         submissions = extract_student_submissions_from_zip(zip_path, kept_extensions)
-        return True, str(len(submissions))
+        detail = str(len(submissions))
     except Exception as e:  # noqa: BLE001
+        # This helper is only used to validate newly rebuilt preview ZIPs. If the
+        # grader cannot parse one, discard the student-file archive immediately.
+        try:
+            os.unlink(zip_path)
+        except FileNotFoundError:
+            pass
         return False, str(e)
+    finally:
+        # Validation needs only the parsed student count, not the extracted copies.
+        for submission in submissions.values():
+            for temp_path in submission.files.values():
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+    return True, detail
 
 
 def render_zip_preview_editor(fetch_result, key_prefix: str,
@@ -2251,7 +2278,11 @@ def render_zip_preview_editor(fetch_result, key_prefix: str,
             st.error("Select at least one file to keep.")
             return None
 
-        out_path = _rebuild_zip_from_kept(zip_path, keep_arcs)
+        try:
+            out_path = _rebuild_zip_from_kept(zip_path, keep_arcs)
+        except ValueError as exc:
+            st.error(f"Could not rebuild the ZIP: {exc}")
+            return None
         ok, detail = _validate_submissions_zip(out_path, keep_arcs)
         if ok:
             st.success(f"✅ Generated file ready: {detail} student submission(s).")
@@ -2596,12 +2627,10 @@ def copy_to_clipboard_button(text: str, label: str, key: str, height: int = 48) 
     """A button that copies ``text`` to the clipboard in the browser (no network, no third
     party). The text is embedded as escaped JSON; when the clipboard API is missing (a
     non-secure origin) or refuses, the button says so and the caller's download stays."""
-    import streamlit.components.v1 as components
-
     from cqc_cpcc.prompt_export import clipboard_button_html
 
     with st.container(key=f"clip_{key}"):
-        components.html(clipboard_button_html(text, label), height=height)
+        st.iframe(clipboard_button_html(text, label), height=height, alt=label)
 
 
 def render_openai_debug_panel(

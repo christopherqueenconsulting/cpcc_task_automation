@@ -152,7 +152,7 @@
           }
         },
         "health_floor": 0.887,
-        "repeats": 2
+        "repeats": 6
       },
       "requirement-extraction": {
         "baseline_report": "evals/reports/prompt-calibration/2026-10-08/requirement-extraction/scorecard.json",

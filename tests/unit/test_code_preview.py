@@ -85,6 +85,63 @@ class TestRunnerLanguage:
 
 @pytest.mark.unit
 class TestOneCompilerPayload:
+    @pytest.mark.parametrize("lang, source_names, expected_names, contents", [
+        ("cpp", ["Lab One.cpp", "Helper File.cpp"], ["Lab_One.cpp", "Helper_File.cpp"],
+         ["int main() { return helper(); }", "int helper() { return 0; }"]),
+        ("c", ["Lab One.c", "Helper File.c"], ["Lab_One.c", "Helper_File.c"],
+         ["int main(void) { return helper(); }", "int helper(void) { return 0; }"]),
+        ("java", ["Lab One.java", "Helper File.java"], ["Lab_One.java", "Helper_File.java"],
+         ["public class LabOne { public static void main(String[] a) {} }", "class HelperFile {}"]),
+        ("python", ["Helper File.py", "Lab One.py"], ["Helper_File.py", "Lab_One.py"],
+         ["value = 1", "import helper_file"]),
+        ("csharp", ["Lab One.cs", "Helper File.cs"], ["Lab_One.cs", "Helper_File.cs"],
+         ["class Program { static void Main() {} }", "class HelperFile {}"]),
+    ])
+    def test_whitespace_names_for_each_runner_language_preserve_source(
+            self, lang, source_names, expected_names, contents):
+        files, _ = collect_code_files(dict(zip(source_names, contents)))
+
+        payload = build_onecompiler_payload(files, lang)
+
+        assert [f["name"] for f in payload["files"]] == expected_names
+        assert [f["content"] for f in payload["files"]] == contents
+
+    def test_cpp_header_include_tracks_renamed_header(self):
+        files, _ = collect_code_files({
+            "Lab One.cpp": '#include "Helper File.h"\nint main() { return helper(); }',
+            "Helper File.h": "int helper();",
+        })
+        payload = build_onecompiler_payload(files, "cpp")
+
+        assert [(f["name"], f["content"]) for f in payload["files"]] == [
+            ("Lab_One.cpp", '#include "Helper_File.h"\nint main() { return helper(); }'),
+            ("Helper_File.h", "int helper();"),
+        ]
+
+    @pytest.mark.parametrize("lang, name, broken", [
+        ("cpp", "Bad Program.cpp", "#include \"missing.h\"\nint main( {"),
+        ("c", "Bad Program.c", "int main(void) { return missing_symbol; }"),
+        ("java", "Bad Program.java", "public class DifferentName { syntax error }"),
+        ("python", "Bad Program.py", "def broken(:\n    pass"),
+        ("csharp", "Bad Program.cs", "namespace Bad Namespace {"),
+    ])
+    def test_filename_conversion_does_not_repair_student_errors(self, lang, name, broken):
+        files, _ = collect_code_files({name: broken})
+
+        payload = build_onecompiler_payload(files, lang)
+
+        assert payload["files"][0]["name"] == name.replace(" ", "_")
+        assert payload["files"][0]["content"] == broken
+
+    def test_name_collision_gets_deterministic_suffix(self):
+        files, _ = collect_code_files({
+            "Lab One.cpp": "int main() {}", "Lab_One.cpp": "int other() {}",
+        })
+
+        payload = build_onecompiler_payload(files, "cpp")
+
+        assert [f["name"] for f in payload["files"]] == ["Lab_One_2.cpp", "Lab_One.cpp"]
+
     def test_every_java_file_is_sent_by_name(self):
         files, _ = collect_code_files({"Shape.java": SHAPE_JAVA, "Main.java": MAIN_JAVA,
                                        "notes.txt": "hi"})

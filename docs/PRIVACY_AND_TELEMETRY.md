@@ -139,3 +139,21 @@ see `docs/security-workflows.md`) blocks BrightSpace submission-folder names and
 hashed known-leaked tokens, and any e-mail address at `cpcc.edu` or `*.cpcc.edu`. Fixtures
 and docs use only the synthetic local parts the script allowlists, for example
 `student.example@email.cpcc.edu`.
+
+## ZIP upload limits
+
+A submissions ZIP is read under limits that stop a small, damaged or hostile ZIP from
+filling memory or disk (`src/cqc_cpcc/utilities/zip_grading_utils.py`). One member over
+the per-member limit rejects the whole ZIP; the message tells the instructor to upload
+the student files without the ZIP.
+
+| Limit | Local default | Streamlit Community Cloud | Override |
+|---|---|---|---|
+| One member, uncompressed | 100 MiB | 25 MiB | `CQC_ZIP_MAX_MEMBER_MB` |
+| All members together (a nested ZIP included) | 1 GiB | 256 MiB | `CQC_ZIP_MAX_TOTAL_MB` |
+| The ZIP file itself | 250 MiB | 250 MiB | none |
+| Entries in one ZIP | 10,000 | 10,000 | none |
+| Compression ratio of a member over 1 MiB | 100:1 | 100:1 | none |
+
+The overrides are whole MiB from 1 to 65536; any other value is ignored with a warning and
+the default is used. The 100 MiB per-member figure is a judgement, not a measured one.

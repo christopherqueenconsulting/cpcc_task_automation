@@ -3,9 +3,7 @@ name: Dependabot CI Auto-Fix Trigger
 on:
   workflow_run:
     workflows:
-      - CI / Unit Tests
-      - CI / Integration Test w/ Coverage
-      - CI / E2E Test w/ Coverage
+      - CI / Test Suite
       - CodeQL Advanced
     types:
       - completed

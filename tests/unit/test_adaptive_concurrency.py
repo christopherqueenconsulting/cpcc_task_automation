@@ -60,7 +60,7 @@ class Sleeps:
 # --- settings ---------------------------------------------------------------------------------
 
 class TestSettings:
-    def test_defaults_are_64_per_side_and_16_for_the_judge(self, monkeypatch):
+    def test_unknown_call_count_falls_back_to_64_per_side_and_16_for_the_judge(self, monkeypatch):
         for var in (adaptive.ENV_MAX, adaptive.ENV_JUDGE):
             monkeypatch.delenv(var, raising=False)
         assert adaptive.ab_max_concurrency() == 64
@@ -72,18 +72,18 @@ class TestSettings:
         assert adaptive.ab_max_concurrency() == 100
         assert adaptive.ab_max_concurrency(8) == 8  # an argument beats the environment
 
-    @pytest.mark.parametrize("bad", [0, -1, 257, 400, "many", "2.5"])
+    @pytest.mark.parametrize("bad", [0, -1, 513, 1000, "many", "2.5"])
     def test_a_bad_value_is_a_loud_error_not_a_fallback(self, bad):
         with pytest.raises(adaptive.ConcurrencyError, match="max concurrency"):
             adaptive.ab_max_concurrency(bad)
 
     def test_the_old_32_fallback_is_gone(self, monkeypatch):
         monkeypatch.delenv("CQC_EVAL_CONCURRENCY", raising=False)
-        assert base.MAX_CONCURRENCY == adaptive.HARD_MAX_CONCURRENCY == 256
+        assert base.MAX_CONCURRENCY == adaptive.HARD_MAX_CONCURRENCY == 512
         assert base.eval_concurrency(value=64) == 64
-        assert base.eval_concurrency(value=256) == 256
+        assert base.eval_concurrency(value=512) == 512
         with pytest.raises(adaptive.ConcurrencyError):
-            base.eval_concurrency(value=257)
+            base.eval_concurrency(value=513)
 
     def test_adaptive_is_off_unless_asked(self, monkeypatch):
         monkeypatch.delenv(adaptive.ENV_ADAPTIVE, raising=False)
@@ -621,6 +621,245 @@ def test_mode(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
+class TestAllCallsInParallel:
+    """The ceiling defaults to every call of the group (at most HARD_MAX), the start is min(calls, ceiling), and an
+    explicit setting still caps lower."""
+
+    @pytest.fixture(autouse=True)
+    def _env(self, monkeypatch):
+        for var in (adaptive.ENV_MAX, adaptive.ENV_JUDGE, adaptive.ENV_START):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 100000)  # the descriptor limit is tested on its own below
+
+    def test_the_hard_max_is_512(self):
+        assert adaptive.HARD_MAX_CONCURRENCY == 512
+
+    @pytest.mark.parametrize("calls, expected", [(1, 1), (250, 250), (266, 266), (511, 511), (512, 512),
+                                                  (513, 512), (5000, 512)])
+    def test_ceiling_is_the_call_count_up_to_the_hard_max(self, calls, expected):
+        assert adaptive.ab_max_concurrency(calls=calls) == expected
+
+    def test_an_explicit_setting_caps_lower_and_wins(self, monkeypatch):
+        assert adaptive.ab_max_concurrency(8, calls=250) == 8
+        monkeypatch.setenv(adaptive.ENV_MAX, "40")
+        assert adaptive.ab_max_concurrency(calls=250) == 40
+        assert adaptive.ab_max_explicit() == 40
+
+    def test_no_explicit_setting_is_reported_as_none(self):
+        assert adaptive.ab_max_explicit() is None
+
+    @pytest.mark.parametrize("calls, expected", [(40, 40), (700, 512)])
+    def test_judges_get_the_judge_call_count_up_to_the_hard_max(self, calls, expected):
+        assert adaptive.judge_max_concurrency(calls=calls) == expected
+
+    def test_the_judge_environment_caps_lower(self, monkeypatch):
+        monkeypatch.setenv(adaptive.ENV_JUDGE, "5")
+        assert adaptive.judge_max_concurrency(calls=200) == 5
+
+    def test_the_descriptor_limit_lowers_the_ceiling(self, monkeypatch):
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 100)
+        assert adaptive.ab_max_concurrency(calls=250) == 100
+        assert adaptive.judge_max_concurrency(calls=250) == 100
+
+    def test_fd_safe_cap_leaves_headroom_below_the_soft_limit(self):
+        adaptive._FD_CAP.pop("n", None)
+        try:
+            import resource
+
+            soft = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        except ImportError:
+            pytest.skip("no resource module")
+        cap = adaptive.fd_safe_cap()
+        assert cap >= 1 and (soft == resource.RLIM_INFINITY or cap <= soft - adaptive.FD_HEADROOM or cap == 1)
+
+    def test_the_http_pool_takes_at_least_the_hard_max_connections(self):
+        import openai
+
+        limits = openai.DEFAULT_CONNECTION_LIMITS
+        assert limits.max_connections >= adaptive.HARD_MAX_CONCURRENCY
+
+    def test_the_client_modules_use_the_sdk_default_pool(self):
+        from pathlib import Path
+
+        root = Path(adaptive.__file__).resolve().parents[1] / "utilities" / "AI"
+        for name in ("openai_client.py", "openrouter_client.py"):
+            text = (root / name).read_text(encoding="utf-8")
+            assert "http_client" not in text and "max_connections" not in text, name
+
+    def test_a_base_that_predates_512_is_given_at_most_256(self, tmp_path):
+        d = tmp_path / "src" / "cqc_cpcc" / "model_eval"
+        d.mkdir(parents=True)
+        (d / "adaptive.py").write_text("HARD_MAX_CONCURRENCY = 256\n", encoding="utf-8")
+        assert pa._base_hard_max(tmp_path) == 256
+        (d / "adaptive.py").write_text("HARD_MAX_CONCURRENCY = 512\n", encoding="utf-8")
+        assert pa._base_hard_max(tmp_path) == 512
+        (d / "adaptive.py").write_text("HARD_MAX_CONCURRENCY = 1024\n", encoding="utf-8")
+        assert pa._base_hard_max(tmp_path) == 512  # never above this checkout's cap
+        (d / "adaptive.py").write_text("HARD_MAX_CONCURRENCY = 300\n", encoding="utf-8")
+        assert pa._base_hard_max(tmp_path) == 300
+        (d / "adaptive.py").write_text("# no number here\n", encoding="utf-8")
+        assert pa._base_hard_max(tmp_path) == 256
+        assert pa._base_hard_max(tmp_path / "missing") == 256
+
+    async def test_run_suite_starts_every_call_at_once(self, test_mode):
+        box, stats = {"peak": 0}, []
+        suite = _counting(_toy_suite(), box, delay=0.05)
+        records = await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(150), 1, Budget(1000.0, 900.0),
+                                       adaptive_mode=True, pool_stats=stats)
+        assert len(records) == 150 and box["peak"] == 150
+        assert stats[0]["start"] == 150 and stats[0]["ceiling"] == 150
+
+    async def test_run_suite_with_more_calls_than_the_hard_max_starts_at_the_hard_max(self, test_mode):
+        box, stats = {"peak": 0}, []
+        suite = _counting(_toy_suite(), box, delay=0.05)
+        await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(600), 1, Budget(100000.0, 90000.0),
+                             adaptive_mode=True, pool_stats=stats)
+        assert stats[0]["start"] == 512 and stats[0]["ceiling"] == 512 and box["peak"] == 512
+
+    async def test_run_suite_env_cap_and_start_win(self, test_mode, monkeypatch):
+        box, stats = {"peak": 0}, []
+        suite = _counting(_toy_suite(), box, delay=0.02)
+        monkeypatch.setenv(adaptive.ENV_MAX, "30")
+        await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(100), 1, Budget(1000.0, 900.0),
+                             adaptive_mode=True, pool_stats=stats)
+        assert stats[0]["start"] == 30 and stats[0]["ceiling"] == 30 and box["peak"] == 30
+        monkeypatch.setenv(adaptive.ENV_START, "10")
+        box["peak"], stats[:] = 0, []
+        await base.run_suite(suite, "openai/gpt-5-mini", None, _cases(100), 1, Budget(1000.0, 900.0),
+                             adaptive_mode=True, pool_stats=stats)
+        assert stats[0]["start"] == 10 and stats[0]["ceiling"] == 30
+
+    def test_a_429_still_halves_the_pool(self):
+        pool = AdaptiveLimiter("calls", start=250, ceiling=250)
+        pool.on_throttle(adaptive.RATE_LIMIT, pool.epoch)
+        assert pool.limit == 125
+
+
+class FakeResource:
+    RLIMIT_NOFILE = 7
+    RLIM_INFINITY = -1
+
+    def __init__(self, soft, hard, set_error=None, get_error=None):
+        self.soft, self.hard, self.set_error, self.get_error = soft, hard, set_error, get_error
+        self.set_calls = []
+
+    def getrlimit(self, which):
+        if self.get_error:
+            raise self.get_error
+        return self.soft, self.hard
+
+    def setrlimit(self, which, pair):
+        if self.set_error:
+            raise self.set_error
+        self.set_calls.append(pair)
+        self.soft = pair[0]
+
+
+class TestFdSafeCap:
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.delitem(adaptive._FD_CAP, "n", raising=False)
+        yield
+        adaptive._FD_CAP.pop("n", None)
+
+    def _use(self, monkeypatch, fake):
+        import sys
+
+        monkeypatch.setitem(sys.modules, "resource", fake)
+        return fake
+
+    def test_a_low_soft_limit_is_raised_to_4096(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(1024, 1048576))
+        assert adaptive.fd_safe_cap() == 4096 - adaptive.FD_HEADROOM == 3840
+        assert fake.set_calls == [(4096, 1048576)]
+
+    def test_a_refused_raise_uses_the_soft_limit_minus_headroom(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(1024, 1048576, set_error=OSError("refused")))
+        assert adaptive.fd_safe_cap() == 1024 - adaptive.FD_HEADROOM == 768
+        assert fake.set_calls == []
+
+    def test_a_low_hard_limit_is_the_target(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(1024, 2048))
+        assert adaptive.fd_safe_cap() == 2048 - adaptive.FD_HEADROOM
+        assert fake.set_calls == [(2048, 2048)]
+
+    def test_an_unlimited_soft_limit_gives_the_hard_cap(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(-1, -1))
+        assert adaptive.fd_safe_cap() == adaptive.HARD_MAX_CONCURRENCY
+        assert fake.set_calls == []
+
+    def test_an_unreadable_limit_gives_the_hard_cap(self, monkeypatch):
+        self._use(monkeypatch, FakeResource(1024, 1024, get_error=ValueError("bad")))
+        assert adaptive.fd_safe_cap() == adaptive.HARD_MAX_CONCURRENCY
+
+    def test_no_resource_module_gives_the_hard_cap(self, monkeypatch):
+        import sys
+
+        monkeypatch.setitem(sys.modules, "resource", None)  # an import of it now raises ImportError
+        assert adaptive.fd_safe_cap() == adaptive.HARD_MAX_CONCURRENCY
+
+    def test_the_result_is_cached(self, monkeypatch):
+        fake = self._use(monkeypatch, FakeResource(1024, 1048576))
+        first = adaptive.fd_safe_cap()
+        fake.soft = 100  # a second read would give a different answer
+        assert adaptive.fd_safe_cap() == first and len(fake.set_calls) == 1
+
+    def test_a_tiny_budget_warns_and_uses_the_floor_not_one(self, monkeypatch):
+        self._use(monkeypatch, FakeResource(200, 200))
+        warnings = []
+        monkeypatch.setattr(adaptive.logger, "warning", warnings.append)
+        assert adaptive.fd_safe_cap() == adaptive.FD_FLOOR == 16
+        assert len(warnings) == 1 and "ulimit -n 4096" in warnings[0] and "200" in warnings[0]
+
+    def test_clamp_pool_applies_both_caps(self, monkeypatch):
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 300)
+        assert adaptive.clamp_pool(700) == 300 and adaptive.clamp_pool(50) == 50
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 100000)
+        assert adaptive.clamp_pool(700) == 512
+
+
+class TestBurstOf429s:
+    async def test_250_calls_that_all_get_a_429_first_halve_the_pool_and_all_complete(self):
+        pool = AdaptiveLimiter("calls", start=250, ceiling=250)
+        tries, sleeps, rng = {}, Sleeps(), Top(False)
+
+        async def call(i):
+            tries[i] = tries.get(i, 0) + 1
+            if tries[i] == 1:
+                await asyncio.sleep(0)  # all 250 are in flight before the first answer
+                raise RateLimitError(retry_after=5)
+            return i
+
+        results = await asyncio.gather(*[adaptive.throttled_call(pool, lambda i=i: call(i), sleep=sleeps, rng=rng)
+                                         for i in range(250)])
+        assert sorted(results) == list(range(250))
+        assert pool.stats.rate_limited == 250 and pool.stats.halvings == 1 and pool.stats.min == 125
+        assert all(w >= 5 for w in sleeps.waits)  # Retry-After is the floor of every wait
+
+
+class TestHeaderHelpers:
+    def test_biggest_group_is_the_largest_suite_side(self, monkeypatch):
+        sizes = {"a": 10, "b": 40}
+        monkeypatch.setattr(pa, "get_suite", lambda s: SimpleNamespace(cases=lambda: [0] * sizes[s]))
+        monkeypatch.setattr(pa.prompt_eval, "suite_policy", lambda s: SimpleNamespace(repeats=2))
+        assert pa._biggest_group(["a", "b"], None, 3) == 40 * 2 * 3
+        assert pa._biggest_group(["a", "b"], 5, 1) == 200
+        assert pa._biggest_group([], None, 1) is None
+
+    def test_biggest_group_is_none_when_it_cannot_be_worked_out(self, monkeypatch):
+        def boom(s):
+            raise KeyError(s)
+
+        monkeypatch.setattr(pa, "get_suite", boom)
+        assert pa._biggest_group(["nope"], 1, 1) is None
+
+    def test_judge_pool_cap_is_widened_and_clamped_only_in_batch_mode(self, monkeypatch):
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 300)
+        assert pa._judge_pool_cap(16, 700, False) == 16
+        assert pa._judge_pool_cap(16, 700, True) == 300
+        assert pa._judge_pool_cap(16, 40, True) == 40
+
+
 class TestRunSuiteAdaptive:
     async def test_a_request_for_64_really_gets_64_permits(self, test_mode):
         box, stats = {"peak": 0}, []
@@ -808,9 +1047,9 @@ class TestWiring:
         from cqc_cpcc.model_eval.__main__ import main
 
         with pytest.raises(SystemExit, match="max concurrency"):
-            main(["suite", "run", "--suite", "grading", "--max-concurrency", "300", "--dry-run"])
+            main(["suite", "run", "--suite", "grading", "--max-concurrency", "600", "--dry-run"])
         with pytest.raises(SystemExit, match="max concurrency"):
-            main(["prompt-ab", "--suites", "grading", "--base-ref", "HEAD", "--max-concurrency", "300",
+            main(["prompt-ab", "--suites", "grading", "--base-ref", "HEAD", "--max-concurrency", "600",
                   "--out", str(tmp_path / "ab")])
 
     async def test_prompt_ab_refuses_a_bad_ceiling_before_it_builds_anything(self, tmp_path):

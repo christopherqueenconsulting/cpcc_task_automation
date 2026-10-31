@@ -5,6 +5,34 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+## 0.2.0-rc11 - 2026-10-28
+
+- OneCompiler runner filenames replace whitespace with underscores for C++, C, Java, Python, and C# submissions. Matching quoted C/C++ includes follow renamed submitted headers; original submissions and other student code errors are preserved.
+
+## 0.2.0-rc10 - 2026-10-27
+
+- Streamlit Community Cloud now installs the local `src`-layout application from the uv-backed requirements manifest, preserving the faster dependency install while preventing startup import failures.
+- Attendance now collects through today while keeping the current day open for the next run.
+  Added custom recovery dates, historical EVA re-runs after census, assignment change/detach/reset
+  controls, and evidence-based reconciliation that preserves unrelated attendance. Incomplete
+  collection and uncertain historical records no longer produce definitive missing-EVA results.
+  See [Attendance and EVA recovery](docs/attendance-eva-recovery.md).
+- Attendance recovery now accepts an inclusive start and end date. Assignment collection opens
+  the per-user submissions view directly; quiz collection retries through the Attempts page when
+  attempt logs do not load. The run page shows each activity's source/results links, view, pages,
+  rows, and collection error. Bounded runs leave out-of-range SIS work pending and cannot move the
+  course checkpoint across an unprocessed gap.
+
+## 0.2.0-rc9 - 2026-10-26
+
+- Streamlit dependency install: removed the textract wrapper and its unused 27-package parser closure. DOCX extraction now uses docx2txt after the existing table-to-JSON conversion; xlrd remains explicit for pandas `.xls` support. Added a generated Poetry-exported `requirements.txt` for Community Cloud's uv-backed installer, checked for freshness in CI. Selenium/Chromium and both PDF libraries remain because the app uses them.
+- Prompt A/B concurrency: each suite side now starts with every call in flight at once (ceiling = the call
+  count, at most 512; was 64, hard cap 256) and judges the same, capped at the judge call count.
+  `CQC_AB_MAX_CONCURRENCY`, `CQC_AB_JUDGE_CONCURRENCY` and the start setting still cap lower; the 429/timeout
+  backoff and the first-account-limit abort are unchanged. A file-descriptor check lowers the ceiling if the
+  process limit would not allow it. The first window is not ramped: up to 512 requests per side (about 1024 with the
+  base) leave at once; a 429 burst is absorbed by halving plus jittered retries. Rollback: set
+  `CQC_AB_MAX_CONCURRENCY=64` and `CQC_AB_JUDGE_CONCURRENCY=16`. Cost is unchanged; the spend rate rises.
 - CI: the `dispatch` and `dispatch-report` jobs of Prompt Evaluation moved to `prompt-eval-dispatch.yml` (workflow
   "Prompt Evaluation (dispatch)", the Run workflow button) and `merge-queue` to `prompt-eval-merge-queue.yml`, so they stop
   showing as skipped checks on pull requests. `prompt-eval/ab` is unchanged. `estimate`, `rescore` and `report` gained a

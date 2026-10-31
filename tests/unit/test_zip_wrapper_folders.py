@@ -313,12 +313,31 @@ class TestNestedZipHardening:
             extract_student_submissions_from_zip(outer, ['.java'])
         assert set(_nested_temp_files()) == before
 
+    def test_nested_zip_respects_remaining_shared_budget_before_copy(
+            self, tmp_path, monkeypatch):
+        from cqc_cpcc.utilities import zip_grading_utils as z
+        outer = self._feedback_zip(tmp_path, {"Student A/Main.java": JAVA})
+        before = set(_nested_temp_files())
+        copy_calls = []
+        monkeypatch.setattr(z, "MAX_TOTAL_UNCOMPRESSED_BYTES", 16)
+        monkeypatch.setattr(
+            z, "_copy_member_capped",
+            lambda *args, **kwargs: copy_calls.append((args, kwargs)))
+
+        with pytest.raises(ValueError, match="total"):
+            extract_student_submissions_from_zip(outer, ['.java'])
+
+        assert copy_calls == []
+        assert set(_nested_temp_files()) == before
+
     def test_chunked_copy_cap_raises_and_temp_file_removed(self, tmp_path, monkeypatch):
         from cqc_cpcc.utilities import zip_grading_utils as z
         outer = self._feedback_zip(tmp_path, {"Student A/Main.java": JAVA})
         before = set(_nested_temp_files())
         real_copy = z._copy_member_capped
-        monkeypatch.setattr(z, "_copy_member_capped", lambda s, d, limit=10: real_copy(s, d, 10))
+        monkeypatch.setattr(
+            z, "_copy_member_capped",
+            lambda s, d, limit=10, **kwargs: real_copy(s, d, 10, **kwargs))
         with pytest.raises(ValueError, match="larger than"):
             extract_student_submissions_from_zip(outer, ['.java'])
         assert set(_nested_temp_files()) == before

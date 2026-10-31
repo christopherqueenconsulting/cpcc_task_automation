@@ -263,7 +263,7 @@ async def _run_one_suite(suite_id: str, models: list[tuple[str, Optional[str]]],
             cache = jm.VerdictCache(Path(judge_cache) if judge_cache else out_dir / "judge-cache",
                                     read_only=judge_cache_read_only)
             if adaptive.adaptive_enabled(adaptive_mode):  # judges get their own, lower, pool
-                cap = adaptive.judge_max_concurrency()
+                cap = adaptive.judge_max_concurrency(calls=len(cases))
                 judge_pool = adaptive.AdaptiveLimiter("judge", start=cap, ceiling=cap)
                 adaptive.use_judge_pool(judge_pool, budget, _dearest_call(suite, profiles[models[0][0]], cases) * adaptive.JUDGE_ESTIMATE_FACTOR)
         recorded = {"calls": 0, "ok": 0}
