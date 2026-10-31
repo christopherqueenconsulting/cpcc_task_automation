@@ -29,7 +29,6 @@ from dataclasses import dataclass, replace
 from typing import Callable, Optional, Sequence, Union
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from cqc_cpcc.execution_evidence import clean_block
 from cqc_cpcc.utilities import output_compare as oc
@@ -527,12 +526,8 @@ definitions.</li>
 # Streamlit (thin)
 # --------------------------------------------------------------------------- #
 def _embed(html: str, height: int) -> None:
-    """Draw the page in a sandboxed iframe. ``st.iframe`` where this Streamlit has it (it replaces
-    ``components.v1.html``, which is deprecated), else ``components.html``. One seam, patched in tests."""
-    if hasattr(st, "iframe"):
-        st.iframe(html, height=height, alt=IFRAME_TITLE)
-    else:  # pragma: no cover - older Streamlit
-        components.html(html, height=height, scrolling=True)
+    """Draw the generated diff page in an iframe. One seam, patched in tests."""
+    st.iframe(html, height=height, alt=IFRAME_TITLE)
 
 
 def _within_guard(expected: str, actual: str, max_lines: int, max_cells: int) -> bool:

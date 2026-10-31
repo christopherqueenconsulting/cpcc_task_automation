@@ -120,6 +120,20 @@ class TestGetConstantFromEnv:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize('value', [None, '', 'false', 'true', '1'])
+def test_selenium_open_vnc_browser_env(monkeypatch, value):
+    import runpy
+    from cqc_cpcc.utilities import env_constants
+
+    if value is None:
+        monkeypatch.delenv('SELENIUM_OPEN_VNC_BROWSER', raising=False)
+    else:
+        monkeypatch.setenv('SELENIUM_OPEN_VNC_BROWSER', value)
+    constants = runpy.run_path(env_constants.__file__)
+    assert constants['SELENIUM_OPEN_VNC_BROWSER'] is (value in ('true', '1'))
+
+
+@pytest.mark.unit
 class TestConstants:
     """Test that constants are properly loaded (with mocked environment)."""
     

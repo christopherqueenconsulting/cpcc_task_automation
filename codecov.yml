@@ -16,23 +16,13 @@ codecov:
   max_report_age: off
   #max_report_age can be listed in hours '#h' (hours) or '#d' (days)
 
-  # Wait for all four COVERAGE uploads on a commit before posting any status: unit shard 1,
-  # unit shard 2, integration, e2e (none path-filtered). Codecov counts coverage uploads
-  # (codecov-action, one "session" each); test-results uploads do NOT count, whether made by the
-  # old codecov/test-results-action or by codecov-action with report_type: test_results.
-  # Evidence, PR #511 head a2805d4 with after_n_builds: 8 (4 coverage + 4 test-results uploads
-  # all received, Codecov API reported sessions: 4): no codecov status or coverage comment was
-  # posted in the 25+ minutes after the last upload, so 8 is never reached. Do not add the
-  # test-results uploads to this number. (PR #510's early comment is explained by Codecov
-  # computing it before the third coverage upload had finished processing, not by
-  # test-results uploads.) Re-running one workflow uploads again for the same commit and can
-  # reach the count early, so re-run all three coverage workflows together. merge_group and
-  # push-to-master commits also get the 4 uploads (patch is only_pulls, so no patch status
-  # is expected there).
-  # tests/unit/test_codecov_upload_contract.py fails if this number and the workflows disagree;
-  # change the shard count and this number together.
+  # The coverage workflow explicitly sends notifications only after every coverage-producing
+  # job has completed. Do not use an upload count here: retries and variable/missing uploads
+  # make a count an unreliable completion signal.
   notify:
-    after_n_builds: 4
+    manual_trigger: yes
+    # Continue waiting for non-Codecov GitHub checks after the explicit upload-complete signal.
+    wait_for_ci: yes
 
 # Coverage analysis configuration
 coverage:
@@ -84,10 +74,9 @@ coverage:
         # Only evaluate on pull requests
         only_pulls: true
 
-        # Fail if the commit has no coverage at all. Note: with notify.after_n_builds: 4, a commit
-        # that gets fewer than 4 uploads (a job failed before its upload step, a fork PR without
-        # the token) gets NO codecov/patch status, not a failure. Re-run the coverage workflows
-        # for that commit, or check its upload count on the Codecov commit page.
+        # Fail if the commit has no coverage at all. With manual notifications, a commit whose
+        # coverage workflow does not reach its finalizer gets no Codecov status; the required
+        # test checks still report the underlying workflow failure.
         if_not_found: failure
 
         # Paths included in the ENFORCING patch gate: all backend logic EXCEPT the
@@ -118,9 +107,6 @@ comment:
   
   # Require changes to post new comment
   require_changes: false
-
-  # Same as codecov.notify.after_n_builds: no PR comment until all four coverage uploads are in.
-  after_n_builds: 4
 
 # Ignore patterns - exclude files from coverage analysis
 # These match the patterns in pyproject.toml [tool.coverage.run] omit

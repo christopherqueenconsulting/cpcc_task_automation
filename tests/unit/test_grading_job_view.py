@@ -288,22 +288,33 @@ def test_launching_starts_a_job_points_the_url_at_it_and_locks_the_page(tmp_path
         f = tmp_path / f"{name}.java"
         f.write_text("class A {}")
         files.append((f.name, str(f)))
-    grade = AsyncMock(return_value=_result())
+    release = threading.Event()
+
+    async def grade_after_token_is_published(student_submission=None, **_kwargs):
+        await asyncio.get_running_loop().run_in_executor(None, release.wait, 30)
+        return _result()
+
+    grade = AsyncMock(side_effect=grade_after_token_is_published)
     with patch("cqc_cpcc.rubric_grading.grade_with_rubric", grade):
         at = AppTest.from_function(_launch_page, default_timeout=30)
         at.session_state["paths"] = files
         at.session_state["run_key"] = RUN_KEY
         at.session_state["kwargs"] = dict(KWARGS)
-        at.run()
-        assert not at.exception, at.exception
-        token = at.query_params["job"][0] if isinstance(at.query_params["job"], list) else at.query_params["job"]
-        job = grading_job.attach(token)
-        assert job is not None and job.run_key == RUN_KEY
-        assert at.session_state["grading_status_by_key"][RUN_KEY] == "running"
-        assert at.session_state["do_grade"] is False
-        assert set(at.session_state["grading_inputs_by_key"][RUN_KEY]["submissions"]) == {"Lab One", "Lab Two"}
-        assert job.wait(10)
-        at.run()
+        try:
+            at.run()
+            assert not at.exception, at.exception
+            token = at.query_params["job"]
+            token = token[0] if isinstance(token, list) else token
+            job = grading_job.attach(token)
+            assert job is not None and job.run_key == RUN_KEY
+            assert at.session_state["grading_status_by_key"][RUN_KEY] == "running"
+            assert at.session_state["do_grade"] is False
+            assert set(at.session_state["grading_inputs_by_key"][RUN_KEY]["submissions"]) == {"Lab One", "Lab Two"}
+            release.set()
+            assert job.wait(10)
+            at.run()
+        finally:
+            release.set()
     assert not at.exception, at.exception
     assert {sid for sid, _ in at.session_state["grading_results_by_key"][RUN_KEY]} == {"Lab One", "Lab Two"}
     assert grade.await_count == 2
@@ -374,8 +385,15 @@ def test_use_another_model_reruns_only_the_failed_student_and_merges_under_the_s
         rerun = at.button(key=f"rerun_failed_{RUN_KEY}")
         assert rerun.label == "Re-run 1 with this model"
         rerun.click()
-        _rerun(at)
-        token = at.query_params["job"]
+        deadline = time.monotonic() + 5
+        token = None
+        while time.monotonic() < deadline:
+            _rerun(at)
+            token = at.query_params.get("job")
+            if token:
+                break
+            time.sleep(0.05)
+        assert token, "rerun should publish its job token"
         token = token[0] if isinstance(token, list) else token
         job = grading_job.attach(token)
         assert job is not None and set(job.submissions) == {"Student Bravo"}
@@ -392,13 +410,24 @@ def test_use_another_model_reruns_only_the_failed_student_and_merges_under_the_s
 
 
 def test_retry_failed_uses_the_runs_own_model_as_a_job(tmp_path):
-    grade = AsyncMock(return_value=_result(75))
+    started = threading.Event()
+    release = threading.Event()
+
+    async def delayed_grade(**_kwargs):
+        started.set()
+        await asyncio.to_thread(release.wait, 10)
+        return _result(75)
+
+    grade = AsyncMock(side_effect=delayed_grade)
     at = _failed_app(tmp_path)
     with patch("cqc_cpcc.rubric_grading.grade_with_rubric", grade):
         _rerun(at)
         at.button(key=f"retry_failed_{RUN_KEY}").click()
         _rerun(at)
-        token = at.query_params["job"]
+        assert started.wait(10)
+        token = at.query_params.get("job")
+        release.set()
+        assert token, "grading job token should remain while grading is blocked"
         job = grading_job.attach(token[0] if isinstance(token, list) else token)
         assert job.wait(10)
         _rerun(at)

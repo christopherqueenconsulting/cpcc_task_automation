@@ -3,6 +3,7 @@
 
 import collections
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -72,19 +73,33 @@ def test_coverage_three_courses_twenty_bug_twins_and_equivalents(cases):
             assert not c.error_ids, c.case_id
 
 
+@pytest.mark.compiler
 def test_the_solution_and_every_twin_match_the_real_compilers(cases):
     from cqc_cpcc.utilities.compiler_gate import check_submission
 
     checked = 0
+    checked_languages = set()
+    required_languages = {c.language for c in cases}
     for c in cases:
         result = check_submission(list(c.files.items()))
         if not result.supported:
-            pytest.skip("javac/g++ not available")
+            continue
         assert result.compiles == c.compiles, c.case_id
         solution = check_submission([(c.files and next(iter(c.files)), c.reference_solution)])
+        if not solution.supported:
+            continue
         assert solution.compiles is True, c.case_id
         checked += 1
+        checked_languages.add(result.language)
+    strict_compilers = os.getenv("CQC_REQUIRE_REAL_COMPILERS") == "true"
+    if not checked and not strict_compilers:
+        pytest.skip("no dataset cases could be checked with installed compilers")
     assert checked > 0
+    if strict_compilers:
+        assert checked_languages == required_languages, (
+            f"CI did not exercise all dataset languages: checked {sorted(checked_languages)}, "
+            f"expected {sorted(required_languages)}"
+        )
 
 
 def test_the_builder_is_deterministic_and_every_edit_matches():
