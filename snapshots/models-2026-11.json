@@ -426,6 +426,20 @@
     "expiration_date": null,
     "prompt": "0.0000015"
   },
+  "google/gemini-omni-1.1-flash": {
+    "canonical_slug": "google/gemini-omni-1.1-flash-20260911",
+    "completion": "0.000009",
+    "created": 1793825668,
+    "expiration_date": null,
+    "prompt": "0.0000015"
+  },
+  "google/gemini-omni-1.2-flash": {
+    "canonical_slug": "google/gemini-omni-1.2-flash-20261105",
+    "completion": "0.000009",
+    "created": 1793898961,
+    "expiration_date": null,
+    "prompt": "0.0000015"
+  },
   "google/gemma-2-27b-it": {
     "canonical_slug": "google/gemma-2-27b-it",
     "completion": "0.00000065",
@@ -442,7 +456,7 @@
   },
   "google/gemma-3-27b-it": {
     "canonical_slug": "google/gemma-3-27b-it",
-    "completion": "0.00000035",
+    "completion": "0.00000045",
     "created": 1741756359,
     "expiration_date": null,
     "prompt": "0.00000008"
@@ -456,10 +470,10 @@
   },
   "google/gemma-4-26b-a4b-it": {
     "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
-    "completion": "0.000000205",
+    "completion": "0.0000003",
     "created": 1775227989,
     "expiration_date": null,
-    "prompt": "0.000000068"
+    "prompt": "0.00000009"
   },
   "google/gemma-4-26b-a4b-it:free": {
     "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
@@ -640,7 +654,7 @@
     "canonical_slug": "openai/gpt-5-image-mini",
     "completion": "0.000002",
     "created": 1760624583,
-    "expiration_date": null,
+    "expiration_date": "2026-12-01",
     "prompt": "0.0000025"
   },
   "openai/gpt-5-mini": {
@@ -1128,10 +1142,10 @@
   },
   "openai/gpt-oss-20b": {
     "canonical_slug": "openai/gpt-oss-20b",
-    "completion": "0.00000013",
+    "completion": "0.00000009",
     "created": 1754414229,
     "expiration_date": null,
-    "prompt": "0.00000003"
+    "prompt": "0.000000018"
   },
   "openai/gpt-oss-20b:batch": {
     "canonical_slug": "openai/gpt-oss-20b",
