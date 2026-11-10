@@ -152,10 +152,13 @@ class CallUsage:
     #: Set by ``batch.py`` on a response that came from the Batch API (None for a sync response).
     batch: Optional[bool] = None
     cost_allocated: Optional[bool] = None
+    #: Set by ``batch.py``: how the batched row's cost was set (see ``batch.COST_METHOD_*``).
+    cost_method: Optional[str] = None
 
     def add(self, response: Any) -> None:
         self.batch = True if getattr(response, "cqc_batch", None) else None
         self.cost_allocated = True if getattr(response, "cqc_cost_allocated", None) else None
+        self.cost_method = getattr(response, "cqc_cost_method", None) or None
         usage = getattr(response, "usage", None)
         if usage is None:
             return
