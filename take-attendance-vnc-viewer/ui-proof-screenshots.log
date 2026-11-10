@@ -1,0 +1,4 @@
+[23:15:55] started the run; waiting for the browser to open
+[23:16:16] PASS no live iframe without a reachable viewer 
+[23:16:16] PASS screenshot shown instead 
+[23:16:30] CPU F running, screenshots       {"container_cpu_pct_median": 43.1, "container_mem": "486.1MiB", "streamlit_server_cpu_pct": 16.5, "viewing_browser_cpu_pct": 8.8, "window_seconds": 13.6}

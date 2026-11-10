@@ -1,0 +1,30 @@
+{
+  "checks": {
+    "no live iframe without a reachable viewer": {
+      "ok": true,
+      "detail": ""
+    },
+    "screenshot shown instead": {
+      "ok": true,
+      "detail": ""
+    }
+  },
+  "cpu": {
+    "F running, screenshots": {
+      "container_cpu_pct_median": 43.1,
+      "container_cpu_pct_samples": [
+        34.38,
+        48.14,
+        26.27,
+        49.52,
+        43.07,
+        44.93,
+        41.17
+      ],
+      "container_mem": "486.1MiB",
+      "streamlit_server_cpu_pct": 16.5,
+      "viewing_browser_cpu_pct": 8.8,
+      "window_seconds": 13.6
+    }
+  }
+}

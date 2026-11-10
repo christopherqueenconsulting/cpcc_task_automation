@@ -1,0 +1,23 @@
+[22:49:05] running: 6 clicks in 3 s
+[22:49:05] PAUSED (hold 150 s, keepalive every 20 s)
+[22:49:07] frozen at 6 clicks; now sending NO commands of our own: only the gate's keepalive may talk to the grid
+[22:49:17] paused: worker commands since pause=0 keepalives=0
+[22:49:27] paused: worker commands since pause=0 keepalives=1
+[22:49:37] paused: worker commands since pause=0 keepalives=1
+[22:49:47] paused: worker commands since pause=0 keepalives=2
+[22:49:57] paused: worker commands since pause=0 keepalives=2
+[22:50:07] paused: worker commands since pause=0 keepalives=3
+[22:50:17] paused: worker commands since pause=0 keepalives=3
+[22:50:27] paused: worker commands since pause=0 keepalives=4
+[22:50:37] paused: worker commands since pause=0 keepalives=4
+[22:50:47] paused: worker commands since pause=0 keepalives=5
+[22:50:57] paused: worker commands since pause=0 keepalives=5
+[22:51:07] paused: worker commands since pause=0 keepalives=6
+[22:51:17] paused: worker commands since pause=0 keepalives=6
+[22:51:27] paused: worker commands since pause=0 keepalives=7
+[22:51:37] paused: worker commands since pause=0 keepalives=7
+[22:51:37] browser stayed alive: page timer advanced 150 s during the pause
+[22:51:40] RESUMED: clicks 6 -> 15
+[22:51:40] command after resume ok: document.title = 'pause-proof'
+[22:51:40] keepalives sent: 7; commands issued by the worker: 15
+[22:51:40] PASS: paused 150 s, session alive, worker frozen then resumed

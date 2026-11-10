@@ -1,0 +1,125 @@
+{
+  "checks": {
+    "iframe is the view-only noVNC url": {
+      "ok": true,
+      "detail": ""
+    },
+    "no login or url typed by the user": {
+      "ok": true,
+      "detail": ""
+    },
+    "noVNC canvas has drawn pixels (not blank)": {
+      "ok": true,
+      "detail": "{\"w\": 1920, \"h\": 1080, \"colours\": 895, \"nonDark\": 21374}"
+    },
+    "iframe screenshot is not one flat colour": {
+      "ok": true,
+      "detail": "900 colours, 37.9% not the main colour"
+    },
+    "iframe was not reloaded by the polling refresh": {
+      "ok": true,
+      "detail": ""
+    },
+    "viewer closed in Log view": {
+      "ok": true,
+      "detail": ""
+    },
+    "Pause button gives 'Paused since HH:MM ET'": {
+      "ok": true,
+      "detail": ""
+    },
+    "run is frozen while paused": {
+      "ok": true,
+      "detail": "clicks: before=40 at-pause=40 +3s=40 +13s=40 (lag 0)"
+    },
+    "browser stays live while paused (page timer keeps ticking in the viewer)": {
+      "ok": true,
+      "detail": ""
+    },
+    "viewer iframe stays mounted while paused": {
+      "ok": true,
+      "detail": ""
+    },
+    "Tab 2 chosen": {
+      "ok": true,
+      "detail": "['Tab snapshots', 'Tab 2']"
+    },
+    "view and tab are kept after a rerun": {
+      "ok": true,
+      "detail": "['Tab snapshots', 'Tab 2']"
+    },
+    "Resume carries on": {
+      "ok": true,
+      "detail": "clicks 40 -> 41"
+    },
+    "Pause is offered again": {
+      "ok": true,
+      "detail": ""
+    }
+  },
+  "cpu": {
+    "B running, viewer open": {
+      "container_cpu_pct_median": 60.4,
+      "container_cpu_pct_samples": [
+        53.48,
+        63.36,
+        52.15,
+        62.1,
+        60.36,
+        54.15,
+        175.56
+      ],
+      "container_mem": "639.7MiB",
+      "streamlit_server_cpu_pct": 12.1,
+      "viewing_browser_cpu_pct": 43.9,
+      "window_seconds": 13.2
+    },
+    "A running, no viewer": {
+      "container_cpu_pct_median": 39.0,
+      "container_cpu_pct_samples": [
+        82.02,
+        42.02,
+        37.85,
+        21.01,
+        35.35,
+        40.17
+      ],
+      "container_mem": "637.2MiB",
+      "streamlit_server_cpu_pct": 18.5,
+      "viewing_browser_cpu_pct": 5.0,
+      "window_seconds": 12.1
+    },
+    "C paused, viewer open": {
+      "container_cpu_pct_median": 10.4,
+      "container_cpu_pct_samples": [
+        12.4,
+        8.53,
+        12.91,
+        8.52,
+        10.41,
+        8.3,
+        12.95
+      ],
+      "container_mem": "646.1MiB",
+      "streamlit_server_cpu_pct": 8.0,
+      "viewing_browser_cpu_pct": 26.2,
+      "window_seconds": 13.1
+    },
+    "D paused, no viewer": {
+      "container_cpu_pct_median": 3.6,
+      "container_cpu_pct_samples": [
+        2.91,
+        3.15,
+        4.01,
+        5.8,
+        5.84,
+        3.56,
+        3.45
+      ],
+      "container_mem": "627.8MiB",
+      "streamlit_server_cpu_pct": 20.8,
+      "viewing_browser_cpu_pct": 10.0,
+      "window_seconds": 13.6
+    }
+  }
+}

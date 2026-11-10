@@ -1,0 +1,74 @@
+[22:52:14] running: 8 clicks in 3 s
+[22:52:14] PAUSED (hold 660 s, keepalive every 60 s)
+[22:52:16] frozen at 8 clicks; now sending NO commands of our own: only the gate's keepalive may talk to the grid
+[22:52:26] paused: worker commands since pause=0 keepalives=0
+[22:52:36] paused: worker commands since pause=0 keepalives=0
+[22:52:46] paused: worker commands since pause=0 keepalives=0
+[22:52:56] paused: worker commands since pause=0 keepalives=0
+[22:53:06] paused: worker commands since pause=0 keepalives=0
+[22:53:16] paused: worker commands since pause=0 keepalives=1
+[22:53:26] paused: worker commands since pause=0 keepalives=1
+[22:53:36] paused: worker commands since pause=0 keepalives=1
+[22:53:46] paused: worker commands since pause=0 keepalives=1
+[22:53:56] paused: worker commands since pause=0 keepalives=1
+[22:54:06] paused: worker commands since pause=0 keepalives=1
+[22:54:16] paused: worker commands since pause=0 keepalives=2
+[22:54:26] paused: worker commands since pause=0 keepalives=2
+[22:54:36] paused: worker commands since pause=0 keepalives=2
+[22:54:46] paused: worker commands since pause=0 keepalives=2
+[22:54:56] paused: worker commands since pause=0 keepalives=2
+[22:55:06] paused: worker commands since pause=0 keepalives=2
+[22:55:16] paused: worker commands since pause=0 keepalives=3
+[22:55:26] paused: worker commands since pause=0 keepalives=3
+[22:55:36] paused: worker commands since pause=0 keepalives=3
+[22:55:46] paused: worker commands since pause=0 keepalives=3
+[22:55:56] paused: worker commands since pause=0 keepalives=3
+[22:56:06] paused: worker commands since pause=0 keepalives=3
+[22:56:16] paused: worker commands since pause=0 keepalives=4
+[22:56:26] paused: worker commands since pause=0 keepalives=4
+[22:56:36] paused: worker commands since pause=0 keepalives=4
+[22:56:46] paused: worker commands since pause=0 keepalives=4
+[22:56:56] paused: worker commands since pause=0 keepalives=4
+[22:57:06] paused: worker commands since pause=0 keepalives=4
+[22:57:16] paused: worker commands since pause=0 keepalives=5
+[22:57:26] paused: worker commands since pause=0 keepalives=5
+[22:57:36] paused: worker commands since pause=0 keepalives=5
+[22:57:46] paused: worker commands since pause=0 keepalives=5
+[22:57:56] paused: worker commands since pause=0 keepalives=5
+[22:58:06] paused: worker commands since pause=0 keepalives=5
+[22:58:16] paused: worker commands since pause=0 keepalives=6
+[22:58:26] paused: worker commands since pause=0 keepalives=6
+[22:58:36] paused: worker commands since pause=0 keepalives=6
+[22:58:46] paused: worker commands since pause=0 keepalives=6
+[22:58:56] paused: worker commands since pause=0 keepalives=6
+[22:59:06] paused: worker commands since pause=0 keepalives=6
+[22:59:16] paused: worker commands since pause=0 keepalives=7
+[22:59:26] paused: worker commands since pause=0 keepalives=7
+[22:59:36] paused: worker commands since pause=0 keepalives=7
+[22:59:46] paused: worker commands since pause=0 keepalives=7
+[22:59:56] paused: worker commands since pause=0 keepalives=7
+[23:00:06] paused: worker commands since pause=0 keepalives=7
+[23:00:16] paused: worker commands since pause=0 keepalives=8
+[23:00:26] paused: worker commands since pause=0 keepalives=8
+[23:00:36] paused: worker commands since pause=0 keepalives=8
+[23:00:46] paused: worker commands since pause=0 keepalives=8
+[23:00:56] paused: worker commands since pause=0 keepalives=8
+[23:01:06] paused: worker commands since pause=0 keepalives=8
+[23:01:16] paused: worker commands since pause=0 keepalives=9
+[23:01:26] paused: worker commands since pause=0 keepalives=9
+[23:01:36] paused: worker commands since pause=0 keepalives=9
+[23:01:46] paused: worker commands since pause=0 keepalives=9
+[23:01:56] paused: worker commands since pause=0 keepalives=9
+[23:02:06] paused: worker commands since pause=0 keepalives=9
+[23:02:16] paused: worker commands since pause=0 keepalives=10
+[23:02:26] paused: worker commands since pause=0 keepalives=10
+[23:02:36] paused: worker commands since pause=0 keepalives=10
+[23:02:46] paused: worker commands since pause=0 keepalives=10
+[23:02:56] paused: worker commands since pause=0 keepalives=10
+[23:03:06] paused: worker commands since pause=0 keepalives=10
+[23:03:16] paused: worker commands since pause=0 keepalives=11
+[23:03:16] browser stayed alive: page timer advanced 660 s during the pause
+[23:03:19] RESUMED: clicks 8 -> 15
+[23:03:19] command after resume ok: document.title = 'pause-proof'
+[23:03:19] keepalives sent: 11; commands issued by the worker: 15
+[23:03:19] PASS: paused 660 s, session alive, worker frozen then resumed

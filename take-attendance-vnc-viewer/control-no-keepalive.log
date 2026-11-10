@@ -1,0 +1,15 @@
+[22:47:19] running: 8 clicks in 3 s
+[22:47:19] PAUSED (hold 90 s, keepalive off)
+[22:47:21] frozen at 8 clicks; now sending NO commands of our own: only the gate's keepalive may talk to the grid
+[22:47:31] paused: worker commands since pause=0 keepalives=0
+[22:47:41] paused: worker commands since pause=0 keepalives=0
+[22:47:51] paused: worker commands since pause=0 keepalives=0
+[22:48:01] paused: worker commands since pause=0 keepalives=0
+[22:48:11] paused: worker commands since pause=0 keepalives=0
+[22:48:21] paused: worker commands since pause=0 keepalives=0
+[22:48:31] paused: worker commands since pause=0 keepalives=0
+[22:48:41] paused: worker commands since pause=0 keepalives=0
+[22:48:51] paused: worker commands since pause=0 keepalives=0
+[22:48:51] session is gone after the hold: InvalidSessionIdException
+[22:48:51] CONTROL OK: without the keepalive the session did not survive the pause
+[22:48:51] worker stopped: InvalidSessionIdException: Message: Unable to find session with ID: db68e6dbc8f2c73cfdab53e899012770. Session was removed at 2026-11-10T22:48:27.55

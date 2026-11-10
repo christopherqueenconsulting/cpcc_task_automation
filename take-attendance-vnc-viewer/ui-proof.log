@@ -1,0 +1,19 @@
+[23:13:25] started the run; waiting for the browser to open
+[23:13:33] PASS iframe is the view-only noVNC url 
+[23:13:33] PASS no login or url typed by the user 
+[23:13:42] PASS noVNC canvas has drawn pixels (not blank) {"w": 1920, "h": 1080, "colours": 895, "nonDark": 21374}
+[23:13:42] PASS iframe screenshot is not one flat colour 900 colours, 37.9% not the main colour
+[23:13:50] PASS iframe was not reloaded by the polling refresh 
+[23:14:03] CPU B running, viewer open       {"container_cpu_pct_median": 60.4, "container_mem": "639.7MiB", "streamlit_server_cpu_pct": 12.1, "viewing_browser_cpu_pct": 43.9, "window_seconds": 13.2}
+[23:14:05] PASS viewer closed in Log view 
+[23:14:17] CPU A running, no viewer         {"container_cpu_pct_median": 39.0, "container_mem": "637.2MiB", "streamlit_server_cpu_pct": 18.5, "viewing_browser_cpu_pct": 5.0, "window_seconds": 12.1}
+[23:14:37] PASS Pause button gives 'Paused since HH:MM ET' 
+[23:14:37] PASS run is frozen while paused clicks: before=40 at-pause=40 +3s=40 +13s=40 (lag 0)
+[23:14:41] PASS browser stays live while paused (page timer keeps ticking in the viewer) 
+[23:14:41] PASS viewer iframe stays mounted while paused 
+[23:14:54] CPU C paused, viewer open        {"container_cpu_pct_median": 10.4, "container_mem": "646.1MiB", "streamlit_server_cpu_pct": 8.0, "viewing_browser_cpu_pct": 26.2, "window_seconds": 13.1}
+[23:15:09] CPU D paused, no viewer          {"container_cpu_pct_median": 3.6, "container_mem": "627.8MiB", "streamlit_server_cpu_pct": 20.8, "viewing_browser_cpu_pct": 10.0, "window_seconds": 13.6}
+[23:15:14] PASS Tab 2 chosen ['Tab snapshots', 'Tab 2']
+[23:15:20] PASS view and tab are kept after a rerun ['Tab snapshots', 'Tab 2']
+[23:15:24] PASS Resume carries on clicks 40 -> 41
+[23:15:24] PASS Pause is offered again 
