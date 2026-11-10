@@ -1087,7 +1087,9 @@ class MyColleges:
         "Ann Lee" vs "Ann Leeson" -- whole-word matching breaks the tie. Anything
         still ambiguous is left unmatched rather than marking the wrong student.
         """
-        parts = [part.lower() for part in (full_name or "").split() if part]
+        # "Last, First" names carry commas that the roster text may not have next to the same word.
+        parts = [part.lower().strip(",;") for part in (full_name or "").split()]
+        parts = [part for part in parts if part]
         if not parts:
             return None
 

@@ -131,6 +131,13 @@ class TestMatchStudentId:
         roster = [{"id": "1", "text": "Lee, Ann 1"}, {"id": "2", "text": "Leeson, Ann 2"}]
         assert MyColleges._match_student_id("Ann Lee", roster) == "1"
 
+    def test_a_last_comma_first_name_matches_its_roster_row(self):
+        roster = [{"id": "1", "text": "Lee, Ann M. 1000001 Ann Lee"}, {"id": "2", "text": "Leeson, Ann 2"}]
+        assert MyColleges._match_student_id("Lee, Ann", roster) == "1"
+
+    def test_a_name_that_is_only_punctuation_matches_nothing(self):
+        assert MyColleges._match_student_id(" , ", ROSTER) is None
+
     def test_true_ambiguity_is_left_unmatched(self):
         roster = [{"id": "1", "text": "Lee, Ann 1"}, {"id": "2", "text": "Lee, Ann 2"}]
         assert MyColleges._match_student_id("Ann Lee", roster) is None
