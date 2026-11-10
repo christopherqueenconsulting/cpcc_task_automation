@@ -46,7 +46,7 @@ conservative: it fires only when at least ``MIN_EFFORT_ITEMS`` (4) delivered ite
 is discarded (its items re-run sync) and its price counts toward the double-charge bound. Items delivered by a
 batch that passed are kept and never charged twice.
 
-Verified by a live probe (2026-10-25, eval workspace with Zero Data Retention off): the batch is accepted (HTTP 202),
+Reported from a live probe (2026-10-25, the owner's report, no repo artifact; eval workspace with Zero Data Retention off): the batch is accepted (HTTP 202),
 the plain model id, ``max_completion_tokens`` and ``session_id`` are accepted, a ``json_schema`` response format is
 honoured, per-item usage carries ``cached_tokens`` and ``reasoning_tokens`` but **no cost**, and the batch-level
 ``usage.cost`` is reported. That probe could not show whether the reasoning effort is honoured, so reports flag it
@@ -94,13 +94,13 @@ HARD_MAX_SETTLE_S = 3600.0
 #: The API allows 200 MB per request body (verified); stay well under it.
 MAX_BODY_BYTES = 120 * 1024 * 1024
 
-# --- API facts, verified by a live probe on 2026-10-25 (see docs/PROMPTS.md) ----------------------------
-#: Appended to the model id in the batch body. "" sends the plain id: verified by a live probe 2026-10-25 (accepted).
+# --- API facts, reported from the owner's live probe on 2026-10-25 (no repo artifact; see docs/PROMPTS.md) ----------------------------
+#: Appended to the model id in the batch body. "" sends the plain id: reported by the owner's live probe 2026-10-25 (accepted).
 MODEL_ID_SUFFIX = ""
 #: Name of the output-token limit in a batch body. None keeps whatever the sync request used
-#: (``max_completion_tokens``): verified by a live probe 2026-10-25 (accepted).
+#: (``max_completion_tokens``): reported by the owner's live probe 2026-10-25 (accepted).
 TOKEN_LIMIT_PARAM: Optional[str] = None
-#: Whether ``session_id`` (the prompt-cache routing key) is sent inside batch request bodies: verified by a live
+#: Whether ``session_id`` (the prompt-cache routing key) is sent inside batch request bodies: reported by the owner's live
 #: probe 2026-10-25 (accepted).
 SEND_SESSION_ID = True
 #: Body fields removed from every batch request (none rejected in the 2026-10-25 live probe).
