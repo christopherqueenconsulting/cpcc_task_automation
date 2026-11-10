@@ -846,6 +846,12 @@ class BrightSpace_Course:
     PER_USER_TABLE_SUMMARY = "users and the submissions"
 
     @classmethod
+    def _is_per_user_table(cls, table) -> bool:
+        get_summary = getattr(table, "get_attribute", None)
+        summary = get_summary("summary") if callable(get_summary) else None
+        return isinstance(summary, str) and cls.PER_USER_TABLE_SUMMARY in summary.casefold()
+
+    @classmethod
     def _results_table(cls, tables):
         """Pick the results table among the XPath matches.
 
@@ -855,9 +861,7 @@ class BrightSpace_Course:
         first match, as before.
         """
         for table in tables:
-            get_summary = getattr(table, "get_attribute", None)
-            summary = get_summary("summary") if callable(get_summary) else None
-            if isinstance(summary, str) and cls.PER_USER_TABLE_SUMMARY in summary.casefold():
+            if cls._is_per_user_table(table):
                 return table
         return tables[0]
 
@@ -871,6 +875,11 @@ class BrightSpace_Course:
                 if not tables:
                     raise _EVAReadIncomplete("results_table_missing", pages_read, rows_read)
                 results_table = self._results_table(tables)
+                # Counts and a flag only (no row text): shows which table was read and whether the
+                # per-user summary matched, so a repeat failure can be told apart from a bypassed fix.
+                logger.info("Results table: %d matched, chose index %d, per-user summary %s.",
+                            len(tables), tables.index(results_table),
+                            "matched" if self._is_per_user_table(results_table) else "not found (first match)")
                 table_text = (getattr(results_table, "text", "") or "").strip()
                 rows = results_table.find_elements(By.XPATH, "./tr | ./tbody/tr")
                 # Prefer the actual result headers. Brightspace layouts add and
