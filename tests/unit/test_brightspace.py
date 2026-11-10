@@ -1108,7 +1108,8 @@ def test_page_size_is_recorded_even_when_the_select_is_not_tied_to_the_table_con
 def test_pager_class_hint_skips_the_results_table_and_its_wrapper():
     from lxml import html
     page = html.fromstring('<div><div class="d2l-pagination">x</div>'
-                           '<div class="wrap-pager"><table><tr class="d2l-pager-row"><td>x</td></tr></table></div></div>')
+                           '<div class="wrap-pager"><table><tr class="d2l-pager-row"><td>x</td></tr></table>'
+                           '</div></div>')
     xpath = (BrightSpace_Course.PAGER_HINT_XPATH.replace("//*", "descendant::*")
              .replace("| //d2l-pager", "| descendant::d2l-pager"))
     found = page.xpath(xpath)
