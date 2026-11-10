@@ -851,3 +851,32 @@ class TestLiveViewerUrl:
 
         assert su.vnc_viewer_url('http://localhost:17900/') == (
             'http://localhost:17900/?autoconnect=1&view_only=true&resize=scale&password=secret')
+
+
+@pytest.mark.unit
+class TestLiveViewerExposureWarning:
+    """Reachable beyond this machine with the public default password is worth a warning."""
+
+    @staticmethod
+    def _setup(monkeypatch, *, bind='127.0.0.1', public='', credential='secret'):
+        su, _ = TestLiveViewerUrl._docker(monkeypatch, bind=bind, public=public)
+        monkeypatch.setattr(su, 'SELENIUM_VNC_PASSWORD', credential)
+        log = MagicMock()
+        monkeypatch.setattr(su, 'logger', log)
+        return su, log
+
+    def test_loopback_with_the_default_password_is_quiet(self, monkeypatch):
+        su, log = self._setup(monkeypatch)
+        assert su.live_viewer_url() is not None
+        log.warning.assert_not_called()
+
+    @pytest.mark.parametrize('bind, public', [('0.0.0.0', ''), ('192.168.1.5', ''), ('127.0.0.1', 'https://vnc.example.com')])
+    def test_exposed_with_the_default_password_warns_but_still_works(self, monkeypatch, bind, public):
+        su, log = self._setup(monkeypatch, bind=bind, public=public)
+        assert su.live_viewer_url() is not None
+        log.warning.assert_called_once()
+
+    def test_exposed_with_a_changed_password_is_quiet(self, monkeypatch):
+        su, log = self._setup(monkeypatch, bind='0.0.0.0', credential='rotated-by-the-owner')
+        assert su.live_viewer_url() is not None
+        log.warning.assert_not_called()

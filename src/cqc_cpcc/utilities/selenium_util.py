@@ -683,7 +683,11 @@ def vnc_viewer_url(base_url: str) -> str:
 
 
 def live_viewer_url(timeout: float = 1.0) -> str | None:
-    """The view-only noVNC URL for the Docker browser, or ``None`` when it cannot be shown.
+    """The noVNC URL for the Docker browser, or ``None`` when it cannot be shown.
+
+    ``view_only=true`` is a noVNC *client* setting. The URL also carries the container's
+    VNC password, so anyone who holds it can connect with full control of the signed-in
+    browser; the container is not view-only. Show it only to the instructor.
 
     Shown only when the run really uses the Docker browser (not headless, not a local
     or virtual-display Chrome) and the noVNC port answers. The probe goes to the
@@ -705,6 +709,11 @@ def live_viewer_url(timeout: float = 1.0) -> str | None:
     if not reachable:
         logger.debug("noVNC viewer is not reachable on %s:%s.", probe_host, SELENIUM_VNC_PORT)
         return None
+    exposed = bool((VNC_PUBLIC_URL or "").strip()) or SELENIUM_VNC_BIND not in ("127.0.0.1", "::1", "localhost")
+    if exposed and SELENIUM_VNC_PASSWORD == "secret":
+        logger.warning("The live browser view is reachable beyond this machine (SELENIUM_VNC_BIND / "
+                       "VNC_PUBLIC_URL) while SELENIUM_VNC_PASSWORD is still the public default. "
+                       "Change the password and require authentication at your proxy.")
     return vnc_viewer_url((VNC_PUBLIC_URL or "").strip() or f"http://localhost:{SELENIUM_VNC_PORT}")
 
 

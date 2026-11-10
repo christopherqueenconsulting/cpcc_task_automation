@@ -582,7 +582,8 @@ class TestPauseControls:
         app = _app(job)
         app.run()
         assert not app.exception, app.exception
-        assert any("over 15 minutes" in w.value for w in app.warning)
+        assert any("over 15 minutes" in w.value and "resumes by itself after 30 minutes" in w.value
+                   for w in app.warning)
 
     def test_a_short_pause_does_not_warn(self):
         job = FakeJob(PHASE_RUNNING)

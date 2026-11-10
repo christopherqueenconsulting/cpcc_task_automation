@@ -26,6 +26,7 @@ from cqc_cpcc.attendance_job import (
     PHASE_SUCCEEDED,
     AttendanceJob,
 )
+from cqc_cpcc.pause_gate import MAX_PAUSE_SECONDS
 from cqc_cpcc.run_plan import RunPlan, course_choices
 from cqc_cpcc.utilities.date import term_for_date
 from cqc_cpcc.utilities.env_constants import WITHDRAWALS_TRACKER_DRY_RUN
@@ -319,10 +320,14 @@ def view_picker() -> str:
 
 def viewer_frame(viewer_url: str) -> None:
     """The Docker browser's screen, live. Drawn outside the polled fragments, so the
-    refresh timer never reloads it. The URL is view-only and local; the instructor
-    never types it or signs in."""
-    st.caption("Live view of the browser (watch only). It shows the tab the run is "
-               "using; open Tab snapshots for the others.")
+    refresh timer never reloads it. The instructor never types the URL or signs in.
+
+    The URL asks the noVNC client to be view-only (``view_only=true``) but that is a
+    client setting: it also carries the container's VNC password, so anyone who has it
+    can connect with full control of the signed-in browser. Keep it on the page.
+    """
+    st.caption("Live view of the browser. It shows the tab the run is using; open Tab "
+               "snapshots for the others. Do not share this page or its link: it shows student records.")
     iframe = getattr(st, "iframe", None)
     if iframe is not None:
         iframe(viewer_url, height=VIEWER_HEIGHT)
@@ -616,8 +621,10 @@ def pause_controls(job: AttendanceJob) -> None:
             " since " + _paused_since_text(since) if since else ""), icon=":material/pause_circle:")
         if since is not None and time.time() - since >= PAUSE_WARN_SECONDS:
             st.warning("Paused for over %d minutes. MyColleges may sign you out while "
-                       "idle; if the run fails after resuming, start it again."
-                       % (PAUSE_WARN_SECONDS // 60), icon=":material/schedule:")
+                       "idle; if the run fails after resuming, start it again. A pause "
+                       "resumes by itself after %d minutes."
+                       % (PAUSE_WARN_SECONDS // 60, MAX_PAUSE_SECONDS // 60),
+                       icon=":material/schedule:")
         st.button("Resume", key="attendance_resume", type="primary",
                   icon=":material/play_arrow:", on_click=job.resume)
     elif job.pausable:

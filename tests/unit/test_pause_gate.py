@@ -191,3 +191,108 @@ class TestKeepalive:
         finally:
             gate.resume()
             thread.join(2)
+
+
+@pytest.mark.unit
+class TestMaxPause:
+    """A pause nobody resumes (the tab was closed) must not hold the grid slot forever."""
+
+    def test_a_pause_ends_by_itself_after_the_cap(self):
+        clock = FakeClock()
+        gate = PauseGate(max_pause=1800, clock=clock, poll_interval=0.001)
+        gate.pause()
+        thread, outcome = _in_thread(gate.wait_if_paused)
+        try:
+            time.sleep(0.03)
+            assert thread.is_alive() and gate.paused, "still held before the cap"
+
+            clock.now += 1801
+            thread.join(2)
+            assert not thread.is_alive()
+            assert outcome == [None]
+            assert not gate.paused
+            assert gate.paused_since is None
+        finally:
+            gate.resume()
+
+    def test_the_cap_is_logged_as_a_warning(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from cqc_cpcc import pause_gate
+
+        log = MagicMock()
+        monkeypatch.setattr(pause_gate, "logger", log)
+        clock = FakeClock()
+        gate = PauseGate(max_pause=1800, clock=clock, poll_interval=0.001)
+        gate.pause()
+        clock.now += 1801
+
+        gate.wait_if_paused()  # a worker reaching the gate after the cap is not held
+
+        log.warning.assert_called_once()
+        assert "30 minutes" in log.warning.call_args.args[0] % log.warning.call_args.args[1:]
+
+    def test_a_pause_inside_the_cap_keeps_holding(self):
+        clock = FakeClock()
+        gate = PauseGate(max_pause=1800, clock=clock, poll_interval=0.001)
+        gate.pause()
+        clock.now += 1799
+        thread, _ = _in_thread(gate.wait_if_paused)
+        time.sleep(0.05)
+        try:
+            assert thread.is_alive() and gate.paused
+        finally:
+            gate.resume()
+            thread.join(2)
+
+    def test_no_cap_when_unset(self):
+        clock = FakeClock()
+        gate = PauseGate(max_pause=None, clock=clock, poll_interval=0.001)
+        gate.pause()
+        clock.now += 10_000_000
+        thread, _ = _in_thread(gate.wait_if_paused)
+        time.sleep(0.05)
+        try:
+            assert thread.is_alive() and gate.paused
+        finally:
+            gate.resume()
+            thread.join(2)
+
+    def test_the_default_cap_is_thirty_minutes(self):
+        from cqc_cpcc.pause_gate import MAX_PAUSE_SECONDS
+
+        assert MAX_PAUSE_SECONDS == 1800
+        assert PauseGate().max_pause == 1800
+
+    def test_resuming_by_hand_clears_the_cap_clock(self):
+        clock = FakeClock()
+        gate = PauseGate(max_pause=1800, clock=clock, poll_interval=0.001)
+        gate.pause()
+        clock.now += 1000
+        gate.resume()
+        gate.pause()  # a new pause starts its own 30 minutes
+        clock.now += 1000
+        thread, _ = _in_thread(gate.wait_if_paused)
+        time.sleep(0.05)
+        try:
+            assert thread.is_alive() and gate.paused
+        finally:
+            gate.resume()
+            thread.join(2)
+
+
+@pytest.mark.unit
+def test_a_failing_keepalive_is_logged_as_a_warning_with_the_error_type(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from cqc_cpcc import pause_gate
+
+    log = MagicMock()
+    monkeypatch.setattr(pause_gate, "logger", log)
+    gate = PauseGate(keepalive=MagicMock(side_effect=ConnectionError("gone")))
+
+    gate._send_keepalive()
+
+    log.warning.assert_called_once()
+    assert log.warning.call_args.args[1] == "ConnectionError"
+    assert gate.keepalive_count == 0
