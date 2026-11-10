@@ -358,6 +358,22 @@ class TestSuiteRunSwitch:
         entered, runs = self._go(monkeypatch, None)
         assert entered == [] and runs == ["digest"]
 
+    def test_an_account_limit_stops_the_later_suites(self, monkeypatch, capsys):
+        from cqc_cpcc.model_eval import account_limit, prompt_eval
+
+        runs = []
+
+        async def limited(*args, **kwargs):
+            runs.append(args[0])
+            return {"status": account_limit.STATUS, "abort": {}, "spent_usd": 0}
+
+        monkeypatch.setattr(prompt_eval, "run", limited)
+        monkeypatch.delenv("CQC_EVAL_RECORD_RAW", raising=False)
+        args = self._args()
+        args.suite = "digest,feedback"
+        assert prompt_eval.cmd_suite(args) == account_limit.EXIT_CODE
+        assert runs == ["digest"] and "Not started: feedback" in capsys.readouterr().out
+
     def test_on_when_the_directory_is_named(self, tmp_path, monkeypatch):
         entered, runs = self._go(monkeypatch, tmp_path / "raw-responses")
         assert entered == [(tmp_path / "raw-responses", ["digest"])] and runs == ["digest"]
@@ -537,6 +553,36 @@ class TestReplaySuite:
         result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
         assert result["status"] == "unusable" and "RuntimeError" in result["reason"]
         assert openrouter_client._get_openrouter_client is original
+
+
+class TestReplayLeftovers:
+    def test_a_miss_the_head_swallowed_still_makes_the_replay_unusable(self, tmp_path, monkeypatch, no_network):
+        async def run(suite_id, models, repeats=None, out="x", case_ids=None, **kwargs):
+            client = openrouter_client._get_openrouter_client()
+            for _ in range(2):  # the store holds one answer: the second call is a miss the code swallows
+                try:
+                    await client.chat.completions.create(**REQUEST)
+                except rr.ReplayMiss:
+                    pass
+            out_dir = rr.Path(out) / suite_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "raw_outputs.jsonl").write_text(_rec("a", 0, {}).to_json() + "\n", encoding="utf-8")
+            return {}
+
+        monkeypatch.setattr(prompt_eval, "run", run)
+        monkeypatch.setattr(rr, "ensure_fixtures_only", lambda ids: None)
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
+        assert result == {"status": "unusable", "reason": "1 request(s) had no recorded answer"}
+
+    def test_the_recording_client_forwards_other_attributes(self, tmp_path):
+        class Inner:
+            timeout = 12.5
+
+            def __init__(self):
+                self.chat = type("Chat", (), {"completions": type("C", (), {"model": "m"})()})()
+
+        client = rr.RecordingClient(Inner(), rr.RawResponseStore(tmp_path / "raw"))
+        assert client.timeout == 12.5 and client.chat.completions.model == "m"
 
 
 class TestReplayCommand:
