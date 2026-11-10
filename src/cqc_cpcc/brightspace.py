@@ -838,12 +838,53 @@ class BrightSpace_Course:
 
     EVA_PAGE_RETRIES = 3
     EVA_MAX_PAGES = 100
+    # Case-insensitive: a differently cased pager label must not look like "no pager".
     EVA_NEXT_XPATH = (
-        "//button[@aria-label='Next page' or @title='Next Page'] | "
-        "//a[@aria-label='Next page' or @title='Next Page']"
+        "//button[translate(@aria-label,'NEXTPAGE','nextpage')='next page' "
+        "or translate(@title,'NEXTPAGE','nextpage')='next page'] | "
+        "//a[translate(@aria-label,'NEXTPAGE','nextpage')='next page' "
+        "or translate(@title,'NEXTPAGE','nextpage')='next page']"
     )
 
+    # Any visible control that looks like a pager although EVA_NEXT_XPATH did not match it (a label such
+    # as "Next" or "Next >", a d2l-pager element, or a pager/pagination-classed element). The rule "no
+    # pager, fewer rows than the page size, so complete" must not fire on a page that has one. Class
+    # matches skip anything inside the results table (it carries pager-classed summary rows) or wrapping it.
+    PAGER_HINT_XPATH = (
+        "//*[self::button or self::a][contains(translate(@aria-label,'NEXT','next'),'next') "
+        "or contains(translate(@title,'NEXT','next'),'next') "
+        "or contains(translate(normalize-space(.),'NEXT','next'),'next')] | //d2l-pager | "
+        "//*[contains(@class,'pager') or contains(@class,'pagination')]"
+        "[not(ancestor::table)][not(.//table)]"
+    )
+    # "Page 2 of 5" or "1 - 20 of 49" anywhere on the page: the results continue on another page.
+    PAGE_COUNT_RE = re.compile(
+        r"\bpage\s+(\d+)\s+of\s+(\d+)\b|\b(\d+)\s*[-–]\s*(\d+)\s+of\s+(\d+)\b", re.IGNORECASE)
+
     PER_USER_TABLE_SUMMARY = "users and the submissions"
+
+    @classmethod
+    def _count_text_shows_more(cls, text: str) -> bool:
+        for match in cls.PAGE_COUNT_RE.finditer(text or ""):
+            if match.group(1) and int(match.group(2)) > 1:
+                return True
+            if match.group(3) and int(match.group(4)) < int(match.group(5)):
+                return True
+        return False
+
+    def _page_text_shows_more(self) -> bool:
+        bodies = self.driver.find_elements(By.XPATH, "//body")
+        text = " ".join(str(getattr(body, "text", "") or "") for body in bodies)
+        return self._count_text_shows_more(text)
+
+    def _visible_pager_hint(self) -> bool:
+        for element in self.driver.find_elements(By.XPATH, self.PAGER_HINT_XPATH):
+            try:
+                if element.is_displayed():
+                    return True
+            except StaleElementReferenceException:
+                continue
+        return False
 
     @classmethod
     def _is_per_user_table(cls, table) -> bool:
@@ -863,7 +904,27 @@ class BrightSpace_Course:
         for table in tables:
             if cls._is_per_user_table(table):
                 return table
+        # The header XPath also matches every table that merely contains the grid (layout
+        # wrappers). Prefer a table whose own header cells name the learner.
+        for table in tables:
+            if cls._owns_result_header(table):
+                return table
         return tables[0]
+
+    RESULT_OWN_HEADER_XPATH = "./thead/tr/th | ./tr/th | ./tbody/tr/th"
+
+    @classmethod
+    def _owns_result_header(cls, table) -> bool:
+        headers = table.find_elements(By.XPATH, cls.RESULT_OWN_HEADER_XPATH)
+        return any(any(word in " ".join(str(getattr(cell, "text", "") or "").casefold().split())
+                       for word in ("student", "user", "learner", "name"))
+                   for cell in headers)
+
+    @staticmethod
+    def _is_header_row(row) -> bool:
+        """A body header row: more than one th and at most one td (the select-all checkbox)."""
+        return (len(row.find_elements(By.XPATH, "./th")) > 1
+                and len(row.find_elements(By.XPATH, "./td")) <= 1)
 
     def _snapshot_activity_page(self, table_xpath: str, name_cell: int,
                                 date_cell: int, pages_read: int,
@@ -877,15 +938,31 @@ class BrightSpace_Course:
                 results_table = self._results_table(tables)
                 # Counts and a flag only (no row text): shows which table was read and whether the
                 # per-user summary matched, so a repeat failure can be told apart from a bypassed fix.
+                if self._is_per_user_table(results_table):
+                    summary_state = "matched"
+                elif self._owns_result_header(results_table):
+                    summary_state = "not found (own header)"
+                else:
+                    summary_state = "not found (first match)"
                 logger.info("Results table: %d matched, chose index %d, per-user summary %s.",
-                            len(tables), tables.index(results_table),
-                            "matched" if self._is_per_user_table(results_table) else "not found (first match)")
+                            len(tables), tables.index(results_table), summary_state)
                 table_text = (getattr(results_table, "text", "") or "").strip()
                 rows = results_table.find_elements(By.XPATH, "./tr | ./tbody/tr")
                 # Prefer the actual result headers. Brightspace layouts add and
                 # remove columns by role; fixed indexes can silently read a
                 # status/attempt cell as a student or date.
+                get_summary = getattr(results_table, "get_attribute", None)
+                table_summary = get_summary("summary") if callable(get_summary) else None
+                two_row_layout = (isinstance(table_summary, str)
+                                  and self.PER_USER_TABLE_SUMMARY in table_summary.casefold())
                 header_rows = results_table.find_elements(By.XPATH, "./thead/tr[1]")
+                header_from_body = False
+                if not header_rows and not two_row_layout:
+                    # Some grids (quiz attempts) put the header row in the body, with several th.
+                    body_header = next((row for row in rows if self._is_header_row(row)), None)
+                    if body_header is not None:
+                        header_rows = [body_header]
+                        header_from_body = True
                 header_indexes = None
                 semantic_header = False
                 if header_rows:
@@ -910,7 +987,7 @@ class BrightSpace_Course:
                                        or value in ("submitted", "completed")), None)
                     if name_index is not None and date_index is not None:
                         header_indexes = (name_index, date_index)
-                    elif semantic_header:
+                    elif semantic_header and not header_from_body:
                         raise _EVAReadIncomplete("completion_headers_unrecognized", pages_read, rows_read)
                 data_rows = [row for row in rows if row.find_elements(By.XPATH, "./td")]
                 if not data_rows and self._has_explicit_empty_results(table_text):
@@ -920,15 +997,14 @@ class BrightSpace_Course:
                 page: list[tuple[str, str]] = []
                 completion_rows = 0
                 # The per-user assignment view lists each learner on two rows: the name row
-                # (date cell empty) and, right after it, a date row (name cell empty).
-                get_summary = getattr(results_table, "get_attribute", None)
-                table_summary = get_summary("summary") if callable(get_summary) else None
-                two_row_layout = (isinstance(table_summary, str)
-                                  and self.PER_USER_TABLE_SUMMARY in table_summary.casefold())
+                # (a checkbox td, the learner name in its th) and, right after it, a date row
+                # (3 tds: empty, date, delete).
                 pending_name: str | None = None
                 for row in rows:
                     cells = row.find_elements(By.XPATH, "./td")
                     if not cells:  # Header rows use th and carry no completion data.
+                        continue
+                    if self._is_header_row(row):  # Header row: several th beside one checkbox td.
                         continue
                     # Pager and group rows often use one spanning cell. They
                     # carry no student completion and must not poison the page.
@@ -947,6 +1023,13 @@ class BrightSpace_Course:
                         continue
                     name_col, date_col = header_indexes or (name_cell - 1, date_cell - 1)
                     if len(cells) <= max(name_col, date_col):
+                        # Per-user view: the learner row has one td and the name in its single th.
+                        th_cells = row.find_elements(By.XPATH, "./th") if two_row_layout else []
+                        th_name = (th_cells[0].text or "").strip() if len(th_cells) == 1 else ""
+                        if th_name:
+                            completion_rows += 1
+                            pending_name = th_name
+                            continue
                         raise _EVAReadIncomplete("completion_row_malformed", pages_read, rows_read)
                     if header_indexes and "first name" in headers and "last name" in headers:
                         first = (cells[headers.index("first name")].text or "").strip()
@@ -1036,10 +1119,26 @@ class BrightSpace_Course:
                     tables = (self.driver.find_elements(By.XPATH, table_xpath)
                               if hasattr(self, "driver") else [])
                     if tables:
-                        text = " ".join(str(getattr(self._results_table(tables), "text", "") or "").split())
+                        results_table = self._results_table(tables)
+                        text = " ".join(str(getattr(results_table, "text", "") or "").split())
                         if re.search(r"\bpage\s+1\s+of\s+1\b|\b1\s*[-–]\s*(\d+)\s+of\s+\1\b",
                                      text, flags=re.IGNORECASE):
                             return False
+                        # No pager at all: with the per-page select verified at its maximum, a table
+                        # with fewer rows than that size holds every result (a full page would
+                        # have a Next control).
+                        page_size = getattr(self, "results_page_size", None)
+                        if page_size:
+                            table_rows = len(results_table.find_elements(By.XPATH, "./tr | ./tbody/tr"))
+                            if table_rows < page_size and (
+                                    self._visible_pager_hint() or self._count_text_shows_more(text)
+                                    or self._page_text_shows_more()):
+                                logger.info("No pager matched, but the page shows a pager-like control or more "
+                                            "results; not treating %d rows as the full result set.", table_rows)
+                            elif table_rows < page_size:
+                                logger.info("No pager: %d table rows is below the verified page size %d; "
+                                            "treating the page as the full result set.", table_rows, page_size)
+                                return False
                     raise _EVAReadIncomplete("pagination_control_missing", pages_read, rows_read)
                 if visible and all(self._next_control_disabled(button) for button in visible):
                     # Responsive Brightspace views can leave an enabled duplicate
@@ -1110,7 +1209,8 @@ class BrightSpace_Course:
                         "Waiting for EVA assignment submissions")
                 table_xpath = (
                     "//table[contains(@summary,'List of users and the submissions')] | "
-                    "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]"
+                    "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') "
+                    "or contains(.,'Learner')]]"
                 )
                 if not self.click_max_results_select(self.select_xpath) and not self._has_elements(table_xpath):
                     raise _EVAReadIncomplete("assignment_results_not_loaded")
@@ -1129,8 +1229,8 @@ class BrightSpace_Course:
                         wait_for_ajax(self.driver)
                         final_view = view
                         table_xpath = ("//div[@id='OverviewGrid']//table | //table[.//th[contains(.,'Student') "
-                                       "or contains(.,'User') or contains(.,'Name')]]")
-                        select_xpath = "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
+                                       "or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]")
+                        select_xpath = self.QUIZ_SELECT_XPATH
                         if not self.click_max_results_select(select_xpath) and not self._has_elements(table_xpath):
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
                         rows, pages_read = self._read_activity_rows(table_xpath, 2, 3, route_url)
@@ -1243,12 +1343,13 @@ class BrightSpace_Course:
         is_assignment = activity_type == "assignment"
         table_xpath = (
             "//table[contains(@summary,'List of users and the submissions')] | "
-            "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]" if is_assignment
+            "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') "
+            "or contains(.,'Learner')]]" if is_assignment
             else "//div[@id='OverviewGrid']//table"
         )
         select_xpath = (
             self.select_xpath if is_assignment
-            else "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
+            else self.QUIZ_SELECT_XPATH
         )
         # Assignment per-user view cells: 1 = learner name, 2 = submission date (read live 2026-11-09).
         name_cell, date_cell = (1, 2) if is_assignment else (2, 3)
@@ -1292,7 +1393,8 @@ class BrightSpace_Course:
                         source_url, view = attempts_url, "quiz attempts"
                         self.driver.get(source_url)
                         wait_for_ajax(self.driver)
-                        generic_table = "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]"
+                        generic_table = ("//table[.//th[contains(.,'Student') or contains(.,'User') "
+                                         "or contains(.,'Name') or contains(.,'Learner')]]")
                         if not self.click_max_results_select("//select[.//option[contains(.,'per page')]]") \
                                 and not self._has_elements(generic_table):
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
@@ -1472,12 +1574,23 @@ class BrightSpace_Course:
 
         return select_successful
 
+    # Largest results-per-page size the select was verified to hold after the last
+    # click_max_results_select call; None when it was not set to its maximum.
+    # The attempts grid (quiz_mark_attempts.d2l) has no OverviewGrid wrapper, so fall back to any
+    # per-page select (read live 2026-11-10).
+    QUIZ_SELECT_XPATH = (
+        "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')] | "
+        "//select[.//option[contains(.,'per page')]]"
+    )
+    results_page_size: int | None = None
+
     def click_max_results_select(self, select_xpath: str, retry: int = 1) -> bool:
         attempts = retry + 1
+        self.results_page_size = None
 
         for attempt in range(attempts):
             try:
-                select_option_xpath = f"{select_xpath}//option"
+                select_option_xpath = f"({select_xpath})//option"
 
                 # Wait until options are present
                 select_options = self.wait.until(
@@ -1512,6 +1625,24 @@ class BrightSpace_Course:
                 select_element.send_keys(Keys.TAB)
 
                 wait_for_ajax(self.driver)
+
+                # Prove the select took the maximum before anything relies on it: re-find every
+                # visible select the XPath matches (the clicked node can be replaced by a reload)
+                # and require all of them to hold it.
+                # Accepted risk (reviewer H): the select is not tied to the results table's container. The
+                # table's own per-page select is among the matches and must hold the maximum too, so a stray
+                # select only matters when the real table has none. A pager or count text keeps the page
+                # incomplete regardless (see _advance_activity_page).
+                # Hidden duplicates are ignored on purpose: the attempt-logs page carries a second,
+                # hidden per-page select that stays at 10 (read live 2026-11-10).
+                fresh = [item for item in self.driver.find_elements(By.XPATH, select_xpath)
+                         if item.is_displayed()]
+                held = bool(fresh) and all(
+                    (Select(item).first_selected_option.get_attribute("value") or "").strip()
+                    == str(max_value)
+                    for item in fresh
+                )
+                self.results_page_size = max_value if held else None
 
                 return True
 

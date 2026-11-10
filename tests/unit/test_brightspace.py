@@ -738,6 +738,134 @@ def test_date_header_accepts_submission_date_and_still_rejects_unknown_headers()
         course._snapshot_activity_page("//table", 1, 2, 0, 0)
 
 
+class _LiveRow:
+    """A row with ordered td and th cells, as the live probe reported them."""
+
+    def __init__(self, *cells):
+        self.cells = list(cells)
+        self.text = " ".join(cell.text for cell in cells)
+
+    def find_elements(self, _by, xpath):
+        if xpath == "./td":
+            return [c for c in self.cells if c.tag_name == "td"]
+        if xpath == "./th":
+            return [c for c in self.cells if c.tag_name == "th"]
+        return self.cells if xpath == "./th | ./td" else []
+
+
+def _live_per_user_rows(*learners):
+    """Live per-user layout: header row, then per learner a name row and (if submitted) a date row."""
+    rows = [_LiveRow(_PerUserCell(""), _PerUserCell("Learner", "th"),
+                     _PerUserCell("Submission Date", "th"), _PerUserCell("Delete", "th"))]
+    for name, date in learners:
+        rows.append(_LiveRow(_PerUserCell(""), _PerUserCell(name, "th")))
+        if date:
+            rows.append(_LiveRow(_PerUserCell(""), _PerUserCell(date, label=_PerUserCell(date)),
+                                 _PerUserCell("Delete")))
+    return rows
+
+
+@pytest.mark.unit
+def test_live_per_user_layout_reads_the_name_from_the_learner_row_th():
+    rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"),
+                               ("Student Two", None),
+                               ("Student Three", "Aug 20, 2026 11:29 AM"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    page = course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+    # A learner with no date row (nothing submitted) records nothing and never borrows a neighbour's date.
+    assert page == (("Student One", "Nov 9, 2026 10:06 PM"), ("Student Three", "Aug 20, 2026 11:29 AM"))
+
+
+@pytest.mark.unit
+def test_live_learner_row_without_a_th_name_is_still_malformed():
+    rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"))
+    rows.insert(1, _LiveRow(_PerUserCell(""), _PerUserCell("", "th")))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    with pytest.raises(_EVAReadIncomplete, match="completion_row_malformed"):
+        course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+
+def _quiz_attempts_rows(*attempts):
+    """quiz_mark_attempts.d2l: a body header (checkbox td + 6 th), then 7-td attempt rows."""
+    rows = [_LiveRow(_PerUserCell(""), *[_PerUserCell(h, "th") for h in
+                     ("Attempt", "Learner", "Completed", "Score", "Grade", "Status")])]
+    for name, completed in attempts:
+        rows.append(_LiveRow(*[_PerUserCell(t) for t in
+                               ("", "1", name, completed, "10", "A", "Graded")]))
+    return rows
+
+
+@pytest.mark.unit
+def test_quiz_attempts_grid_reads_learner_and_completed_from_the_body_header():
+    rows = _quiz_attempts_rows(("Student One", "Nov 9, 2026 10:06 PM"),
+                               ("Student Two", "Nov 8, 2026 9:00 AM"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows, summary="")]
+
+    # name_cell=2 and date_cell=3 are the fixed fallback; the header row must win over them.
+    page = course._snapshot_activity_page("//table", 2, 3, 0, 0)
+
+    assert page == (("Student One", "Nov 9, 2026 10:06 PM"), ("Student Two", "Nov 8, 2026 9:00 AM"))
+
+
+@pytest.mark.unit
+def test_quiz_grid_with_unrecognized_body_header_falls_back_to_fixed_indexes():
+    rows = _quiz_attempts_rows(("Student One", "Nov 9, 2026 10:06 PM"))
+    rows[0] = _LiveRow(_PerUserCell(""), *[_PerUserCell(h, "th") for h in ("A", "B", "C")])
+    rows[1] = _LiveRow(*[_PerUserCell(t) for t in ("", "Student One", "Nov 9, 2026 10:06 PM")])
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows, summary="")]
+
+    assert course._snapshot_activity_page("//table", 2, 3, 0, 0) == (("Student One", "Nov 9, 2026 10:06 PM"),)
+
+
+class _OwnHeaderTable(_PerUserTable):
+    """A table with direct header cells; `own` is what its ./tr/th cells say (empty for a wrapper)."""
+
+    def __init__(self, rows, own=(), summary=""):
+        super().__init__(rows, None, summary)
+        self.own = own
+
+    def find_elements(self, _by, xpath):
+        if xpath == BrightSpace_Course.RESULT_OWN_HEADER_XPATH:
+            return [_PerUserCell(text, "th") for text in self.own]
+        return super().find_elements(_by, xpath)
+
+
+@pytest.mark.unit
+def test_table_that_owns_the_learner_header_wins_over_an_outer_layout_wrapper():
+    wrapper = _OwnHeaderTable([_PerUserRow([_PerUserCell("layout")])])
+    grid = _OwnHeaderTable(_quiz_attempts_rows(("Student One", "Nov 9, 2026 10:06 PM")),
+                           own=("Attempt", "Learner", "Completed"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [wrapper, grid]
+
+    assert BrightSpace_Course._results_table([wrapper, grid]) is grid
+    assert course._snapshot_activity_page("//table", 2, 3, 0, 0) == (("Student One", "Nov 9, 2026 10:06 PM"),)
+
+
+@pytest.mark.unit
+def test_own_header_choice_is_logged_as_such():
+    grid = _OwnHeaderTable(_quiz_attempts_rows(("Student One", "Nov 9, 2026 10:06 PM")), own=("Learner",))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_OwnHeaderTable([]), grid]
+    with patch("cqc_cpcc.brightspace.logger") as log:
+        course._snapshot_activity_page("//table", 2, 3, 0, 0)
+
+    assert log.info.call_args.args[1:] == (2, 1, "not found (own header)")
+
+
 def _decoy_table():
     """A layout/filter table that the assignment XPath also matches (it has a User header)."""
     return _PerUserTable([_PerUserRow([_PerUserCell("filter")])], ["User"], summary="Filter users")
@@ -917,6 +1045,149 @@ def test_eva_pagination_uses_visible_controls_and_rejects_unreadable_state():
     course._advance_activity_page = MagicMock(return_value=True)
     with pytest.raises(_EVAReadIncomplete, match="pagination_page_limit"):
         course._read_activity_rows("//table", 3, 2, "activity-url")
+
+
+def _no_pager_course(table_rows, page_size, pager_hints=None, body_text=""):
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.results_page_size = page_size
+    table = MagicMock()
+    table.text = "table"
+    table.get_attribute.return_value = None
+    table.find_elements.return_value = [MagicMock() for _ in range(table_rows)]
+    hints = [] if pager_hints is None else pager_hints
+    body = MagicMock()
+    body.text = body_text
+
+    def _find(by, xpath):
+        if xpath == BrightSpace_Course.PAGER_HINT_XPATH:
+            return hints
+        return [body] if xpath == "//body" else [table]
+
+    course.driver.find_elements.side_effect = _find
+    course._page_fingerprint = MagicMock(return_value=("page",))
+    course._visible_next_controls = MagicMock(return_value=([], []))
+    return course
+
+
+@pytest.mark.unit
+def test_no_pager_is_the_full_result_set_when_the_verified_page_size_is_not_filled():
+    assert _no_pager_course(49, 200)._advance_activity_page("//table", 1, 22) is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("table_rows,page_size", [(200, 200), (49, 20), (49, None)])
+def test_no_pager_stays_incomplete_when_the_page_may_be_full_or_the_size_is_unverified(table_rows, page_size):
+    with pytest.raises(_EVAReadIncomplete, match="pagination_control_missing"):
+        _no_pager_course(table_rows, page_size)._advance_activity_page("//table", 1, 22)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body_text", ["Page 1 of 3", "Showing 1 - 20 of 49", "page 2 of 5"])
+def test_no_pager_page_whose_text_says_more_results_exist_stays_incomplete(body_text):
+    with pytest.raises(_EVAReadIncomplete, match="pagination_control_missing"):
+        _no_pager_course(21, 200, body_text=body_text)._advance_activity_page("//table", 1, 22)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body_text", ["", "Page 1 of 1", "Showing 1 - 22 of 22", "2 of 5 attachments"])
+def test_no_pager_page_whose_text_says_everything_is_shown_is_complete(body_text):
+    assert _no_pager_course(22, 200, body_text=body_text)._advance_activity_page("//table", 1, 22) is False
+
+
+@pytest.mark.unit
+def test_page_size_is_recorded_even_when_the_select_is_not_tied_to_the_table_container():
+    # Accepted risk, pinned: a per-page select elsewhere on the page can set the size. The table's own
+    # select must hold the maximum too, and a pager or count text still keeps the page incomplete.
+    course, selects = _select_course("200")
+    assert _click_max(course, selects) is True
+    assert course.results_page_size == 200
+
+
+@pytest.mark.unit
+def test_pager_class_hint_skips_the_results_table_and_its_wrapper():
+    from lxml import html
+    page = html.fromstring('<div><div class="d2l-pagination">x</div>'
+                           '<div class="wrap-pager"><table><tr class="d2l-pager-row"><td>x</td></tr></table>'
+                           '</div></div>')
+    xpath = (BrightSpace_Course.PAGER_HINT_XPATH.replace("//*", "descendant::*")
+             .replace("| //d2l-pager", "| descendant::d2l-pager"))
+    found = page.xpath(xpath)
+    assert [element.get("class") for element in found] == ["d2l-pagination"]
+
+
+def _hint(displayed):
+    element = MagicMock()
+    element.is_displayed.return_value = displayed
+    return element
+
+
+@pytest.mark.unit
+def test_no_pager_page_with_a_visible_pager_like_control_stays_incomplete():
+    # A control labelled just "Next", or a d2l-pager element, that EVA_NEXT_XPATH does not match.
+    with pytest.raises(_EVAReadIncomplete, match="pagination_control_missing"):
+        _no_pager_course(21, 200, pager_hints=[_hint(True)])._advance_activity_page("//table", 1, 22)
+
+
+@pytest.mark.unit
+def test_no_pager_page_ignores_hidden_pager_like_controls():
+    assert _no_pager_course(49, 200, pager_hints=[_hint(False)])._advance_activity_page("//table", 1, 22) is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("label", ["Next", "NEXT >", "Next Results"])
+def test_pager_hint_xpath_matches_next_labels_and_the_d2l_pager_tag(label):
+    from lxml import html
+    page = html.fromstring(f'<div><button>{label}</button><a aria-label="{label}">x</a>'
+                           '<d2l-pager></d2l-pager><button>Context</button>'
+                           '<table><tr class="d2l-pager-row"><td>x</td></tr></table></div>')
+    found = page.xpath(BrightSpace_Course.PAGER_HINT_XPATH.replace("//*", "descendant::*")
+                       .replace("| //d2l-pager", "| descendant::d2l-pager"))
+    assert len(found) == 3
+
+
+def _select_course(*fresh_values):
+    """A course whose per-page select was clicked; `fresh_values` are the values the visible selects
+    hold when they are found again after the change (a value of None marks a hidden select)."""
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.wait = MagicMock()
+    options = [MagicMock(), MagicMock(), MagicMock()]
+    for option, value in zip(options, ("20", "100", "200")):
+        option.get_attribute.return_value = value
+    course.wait.until.side_effect = [options, MagicMock()]
+    selects, elements = [MagicMock()], []
+    for value in fresh_values:
+        element = MagicMock()
+        element.is_displayed.return_value = value is not None
+        elements.append(element)
+        item = MagicMock()
+        item.first_selected_option.get_attribute.return_value = value or "10"
+        selects.append(item)
+    course.driver.find_elements.return_value = elements
+    return course, selects
+
+
+def _click_max(course, selects):
+    with patch("cqc_cpcc.brightspace.Select", side_effect=selects), \
+            patch("cqc_cpcc.brightspace.wait_for_ajax"):
+        return course.click_max_results_select("//select")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fresh,expected", [
+    (("200",), 200),
+    (("20",), None),
+    (("200", "20"), None),
+    (("200", None), 200),
+    ((), None),
+])
+def test_max_results_select_records_the_page_size_only_when_every_visible_select_holds_the_maximum(
+        fresh, expected):
+    course, selects = _select_course(*fresh)
+    assert _click_max(course, selects) is True
+    selects[0].select_by_value.assert_called_once_with("200")
+    assert course.results_page_size == expected
 
 
 @pytest.mark.unit
@@ -1662,3 +1933,29 @@ class TestXpathTextContains:
         xpath = ("//tr[.//span[contains(@class,'ds_b') and %s]]//a[contains(@href,'qi=')]"
                  % _xpath_text_contains(".", "Aug 28, 2026 11:59 PM"))
         assert len(doc.xpath(xpath)) == 1
+
+
+@pytest.mark.unit
+def test_quiz_select_xpath_falls_back_to_any_per_page_select_and_options_follow_the_whole_union():
+    xpath = BrightSpace_Course.QUIZ_SELECT_XPATH
+    assert "OverviewGrid" in xpath and "per page" in xpath
+
+    course, selects = _select_course("200")
+    with patch("cqc_cpcc.brightspace.Select", side_effect=selects), \
+            patch("cqc_cpcc.brightspace.wait_for_ajax"), \
+            patch("cqc_cpcc.brightspace.EC") as ec:
+        assert course.click_max_results_select(xpath) is True
+
+    options_locator = ec.presence_of_all_elements_located.call_args.args[0]
+    assert options_locator[1] == f"({xpath})//option"
+    assert course.results_page_size == 200
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("label", ["Next page", "NEXT PAGE", "next Page"])
+def test_next_control_xpath_matches_any_casing_of_the_label(label):
+    from lxml import html
+    page = html.fromstring(f'<div><button aria-label="{label}">&gt;</button><a title="{label}">&gt;</a>'
+                           f'<button aria-label="Previous page">&lt;</button></div>')
+    # lxml has no namespace here; the XPath is plain XPath 1.0.
+    assert len(page.xpath(BrightSpace_Course.EVA_NEXT_XPATH.replace("//", "descendant-or-self::"))) == 2
