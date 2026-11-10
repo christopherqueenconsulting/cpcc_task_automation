@@ -757,11 +757,12 @@ def _live_per_user_rows(*learners):
     """Live per-user layout: header row, then per learner a name row and (if submitted) a date row."""
     rows = [_LiveRow(_PerUserCell(""), _PerUserCell("Learner", "th"),
                      _PerUserCell("Submission Date", "th"), _PerUserCell("Delete", "th"))]
-    for name, date in learners:
+    for name, dates in learners:
         rows.append(_LiveRow(_PerUserCell(""), _PerUserCell(name, "th")))
-        if date:
+        # A learner has one date row per file or resubmission (live: td x3 plus a th that is not the name).
+        for date in ([dates] if isinstance(dates, str) else dates or []):
             rows.append(_LiveRow(_PerUserCell(""), _PerUserCell(date, label=_PerUserCell(date)),
-                                 _PerUserCell("Delete")))
+                                 _PerUserCell("Delete"), _PerUserCell("a-file.cpp", "th")))
     return rows
 
 
@@ -778,6 +779,49 @@ def test_live_per_user_layout_reads_the_name_from_the_learner_row_th():
 
     # A learner with no date row (nothing submitted) records nothing and never borrows a neighbour's date.
     assert page == (("Student One", "Nov 9, 2026 10:06 PM"), ("Student Three", "Aug 20, 2026 11:29 AM"))
+
+
+@pytest.mark.unit
+def test_every_date_row_under_a_learner_is_read_for_that_learner():
+    rows = _live_per_user_rows(("Student One", ["Nov 9, 2026 10:06 PM", "Nov 8, 2026 9:00 AM", "Nov 7, 2026 8:00 AM"]),
+                               ("Student Two", None),
+                               ("Student Three", "Aug 20, 2026 11:29 AM"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    page = course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+    assert page == (("Student One", "Nov 9, 2026 10:06 PM"), ("Student One", "Nov 8, 2026 9:00 AM"),
+                    ("Student One", "Nov 7, 2026 8:00 AM"), ("Student Three", "Aug 20, 2026 11:29 AM"))
+
+
+@pytest.mark.unit
+def test_a_date_row_before_any_learner_row_is_still_missing_a_student():
+    rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"))
+    rows.insert(1, rows.pop(2))  # the date row now sits above its learner row
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    with pytest.raises(_EVAReadIncomplete, match="completion_row_missing_student"):
+        course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("pager_cells", [
+    (_PerUserCell("Page 1 of 2"),),
+    (_PerUserCell(""), _PerUserCell("Page 1 of 2")),
+])
+def test_a_pager_row_between_a_learner_row_and_its_date_row_ends_the_learner(pager_cells):
+    rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"))
+    rows.insert(2, _LiveRow(*pager_cells))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    with pytest.raises(_EVAReadIncomplete, match="completion_row_missing_student"):
+        course._snapshot_activity_page("//table", 1, 2, 0, 0)
 
 
 @pytest.mark.unit

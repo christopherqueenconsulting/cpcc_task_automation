@@ -1018,8 +1018,10 @@ class BrightSpace_Course:
                     if len(cells) == 1 and ((isinstance(colspan, str) and colspan) or
                                             (isinstance(row_class, str) and "pager" in row_class.casefold())
                                             or is_pager_summary):
+                        pending_name = None  # a group or pager row ends the learner above it
                         continue
                     if is_pager_summary:
+                        pending_name = None
                         continue
                     name_col, date_col = header_indexes or (name_cell - 1, date_cell - 1)
                     if len(cells) <= max(name_col, date_col):
@@ -1043,13 +1045,14 @@ class BrightSpace_Course:
                         date_nodes[0].text if date_nodes else date_cell_el.text or ""
                     ).strip()
                     if two_row_layout and not name and completion_text and pending_name:
-                        # The date row of a two-row learner: it belongs to the name row just above.
+                        # A date row belongs to the learner row above it. A learner with several
+                        # files or resubmissions has several date rows in a row (read live 2026-11-10),
+                        # so the name stays until the next learner row.
                         name = pending_name
                     if not name:
                         raise _EVAReadIncomplete("completion_row_missing_student", pages_read, rows_read)
                     completion_rows += 1
-                    # Only a name row with no date can be completed by the very next row.
-                    pending_name = name if two_row_layout and not completion_text else None
+                    pending_name = name if two_row_layout else None
                     # Blank dates represent rows without a submitted/completed event.
                     if completion_text:
                         page.append((name, completion_text))
