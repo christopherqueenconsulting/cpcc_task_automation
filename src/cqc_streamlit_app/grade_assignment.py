@@ -3627,7 +3627,11 @@ def _feedback_lint_findings(feedback: str, run_key: str = "", source_files: Opti
 def _render_feedback_lint_warning(feedback: str, run_key: str = "", source_files: Optional[dict] = None) -> None:
     from cqc_cpcc.student_feedback_lint import summarize_findings
 
-    findings = _feedback_lint_findings(feedback, run_key, source_files)
+    try:
+        findings = _feedback_lint_findings(feedback, run_key, source_files)
+    except Exception as e:  # noqa: BLE001 - an advisory lint must never break the Feedback tab
+        logger.warning(f"Student feedback lint skipped: {type(e).__name__}")
+        return
     if findings:
         # Tokens come from model output that can quote student text, and st.warning renders Markdown.
         st.warning("Internal wording found. " + render_safe_markdown(summarize_findings(findings)),
@@ -3691,7 +3695,7 @@ def display_rubric_assessment_result(result, student_name: str, correlation_id: 
         # The student reads this text too: it is the summary at the top of the feedback above.
         st.markdown("**Overall summary**")
         st.caption("Written by the model. Students see it at the top of their feedback, "
-                   "except any sentence that mentions a score.")
+                   "except any line that mentions a score (a summary written as one paragraph is left out whole).")
         st.markdown(render_safe_markdown(result.overall_feedback or ""))
     with tabs[1]:
         st.dataframe(

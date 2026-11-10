@@ -55,6 +55,14 @@ def test_build_feedback_html_drops_score_lines_from_the_summary():
     assert "25/30" not in html and "Nice work." in html and "Keep going." in html
 
 
+@pytest.mark.unit
+def test_build_feedback_html_omits_a_one_paragraph_summary_that_mentions_a_score():
+    # The filter drops whole lines, so a summary written as one paragraph is left out entirely.
+    html = wb.build_feedback_html("Nice work, and you earned 25 points on this one.")
+    assert "Nice work" not in html and "25 points" not in html
+
+
+@pytest.mark.unit
 def test_build_feedback_html_escapes_and_includes_criteria_and_band():
     crit = SimpleNamespace(
         criterion_name="Logic & Flow", criterion_id="logic",

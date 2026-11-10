@@ -217,6 +217,22 @@ def test_internal_wording_in_the_feedback_warns_the_instructor() -> None:
 
 
 @pytest.mark.unit
+def test_a_failing_lint_never_breaks_the_feedback_tab(monkeypatch) -> None:
+    import cqc_streamlit_app.grade_assignment as page
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("lint broke")
+
+    monkeypatch.setattr(page, "_feedback_lint_findings", boom)
+    result = _result(note="R2 is incomplete.")
+    at = _app(result)
+
+    assert not at.exception
+    assert not [w for w in at.warning if "Internal wording" in w.value]
+    assert render_safe_markdown(_feedback(result)) in [m.value for m in at.markdown]
+
+
+@pytest.mark.unit
 def test_warning_tokens_from_model_text_render_no_image_or_link() -> None:
     at = _app(_result(note="See the “![](http://example.invalid/p.png)” test. R2 is incomplete."))
 
