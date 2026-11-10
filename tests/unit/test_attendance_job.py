@@ -350,3 +350,128 @@ def test_eva_flags_replace_per_course_and_list_past_eva_first():
     assert [f.course_section for f in job.eva_flags()] == ["CSC-134", "CSC-151"]
     job.on_eva_flags("CSC-134", [])
     assert [f.course_section for f in job.eva_flags()] == ["CSC-151"]
+
+
+@pytest.mark.unit
+class TestPause:
+    """The page pauses the run; the worker holds before its next browser command."""
+
+    @staticmethod
+    def _job(phase):
+        job = AttendanceJob(tracker_url=None)
+        job._phase = phase
+        return job
+
+    @pytest.mark.parametrize("phase", ["starting", "running"])
+    def test_pause_and_resume_while_the_browser_works(self, phase):
+        job = self._job(phase)
+        assert job.pausable
+        job.pause()
+        assert job.paused
+        assert job.paused_since is not None
+        job.resume()
+        assert not job.paused
+        assert job.paused_since is None
+
+    @pytest.mark.parametrize("phase", [
+        "awaiting_plan", "awaiting_eva_setup", "succeeded", "failed", "cancelled"])
+    def test_no_pause_on_a_form_or_after_the_run(self, phase):
+        job = self._job(phase)
+        assert not job.pausable
+        job.pause()
+        assert not job.paused
+
+    def test_no_pause_while_an_mfa_number_waits_for_approval(self):
+        from cqc_cpcc.utilities.selenium_util import MfaChallenge
+
+        job = self._job("running")
+        job.bridge.on_challenge(MfaChallenge(context="microsoft", number="47"))
+        assert not job.pausable
+        job.pause()
+        assert not job.paused
+
+        job.bridge.on_resolved()
+        assert job.pausable
+
+    def test_no_pause_once_cancelled(self):
+        job = self._job("running")
+        job.cancel()
+        assert not job.pausable
+
+    def test_cancel_frees_a_paused_worker(self):
+        job = self._job("running")
+        job._gate._poll_interval = 0.001
+        job.pause()
+        errors = []
+
+        def worker():
+            try:
+                job._gate.wait_if_paused()
+            except BaseException as error:  # noqa: BLE001 - AttendanceJobCancelled is a BaseException
+                errors.append(error)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(0.05)
+        assert thread.is_alive()
+
+        job.cancel()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(errors) == 1 and type(errors[0]).__name__ == "AttendanceJobCancelled"
+
+    def test_a_run_that_ends_while_paused_is_not_left_paused(self, browser):
+        job = AttendanceJob(tracker_url=None)
+        with patch("cqc_cpcc.attendance.run_attendance_plan"):
+            job.start()
+            _wait_for(job, PHASE_AWAITING_PLAN)
+            job._gate.pause()
+            job.cancel()
+            assert job.done.wait(5)
+        assert not job.paused
+
+
+@pytest.mark.unit
+class TestLiveViewerWiring:
+    @staticmethod
+    def _open(monkeypatch, viewer):
+        from cqc_cpcc.utilities import selenium_util
+
+        raw_driver, wait = MagicMock(), MagicMock()
+        monkeypatch.setattr(selenium_util, "unattended_browser_problem", lambda: None)
+        monkeypatch.setattr(selenium_util, "get_session_driver", lambda: (raw_driver, wait))
+        monkeypatch.setattr(selenium_util, "live_viewer_url", lambda: viewer)
+        job = AttendanceJob(tracker_url=None)
+        with patch("selenium.webdriver.support.event_firing_webdriver.EventFiringWebDriver") as efd, \
+                patch("cqc_cpcc.my_colleges.MyColleges"):
+            job._open_browser()
+        return job, raw_driver, efd.call_args.args[1]
+
+    def test_viewer_url_is_kept_and_screenshots_narrow_to_tab_changes(self, monkeypatch):
+        job, _raw, listener = self._open(monkeypatch, "http://localhost:17900/?x=1")
+
+        assert job.viewer_url == "http://localhost:17900/?x=1"
+        assert listener.tab_change_only is True
+
+    def test_without_a_viewer_every_event_screenshots(self, monkeypatch):
+        job, _raw, listener = self._open(monkeypatch, None)
+
+        assert job.viewer_url is None
+        assert listener.tab_change_only is False
+
+    def test_listener_and_keepalive_are_wired_to_the_jobs_gate(self, monkeypatch):
+        job, raw_driver, listener = self._open(monkeypatch, None)
+
+        assert listener.pause_gate is job._gate
+        # The keepalive talks to the raw driver, so it never re-enters the blocked listener.
+        raw_driver.current_url = "https://example.test/"
+        assert job._gate.keepalive() == "https://example.test/"
+
+    def test_a_viewer_check_that_errors_means_screenshots(self, monkeypatch):
+        from cqc_cpcc.utilities import selenium_util
+
+        def boom():
+            raise RuntimeError("probe broke")
+
+        monkeypatch.setattr(selenium_util, "live_viewer_url", boom)
+        assert AttendanceJob._find_viewer_url() is None

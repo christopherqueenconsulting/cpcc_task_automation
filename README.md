@@ -303,7 +303,7 @@ Workflows in `.github/workflows/`:
 docker compose up -d selenium-chrome
 ```
 
-This starts only a `selenium/standalone-chrome` container (host ports 14444 and 17900 by default) for the `DOCKER_CHROME` browser type. There is no Dockerfile for the app itself. Port and project-name overrides come from `.env` if present.
+This starts only a `selenium/standalone-chrome` container (host ports 14444 and 17900 by default; the noVNC port 17900 is published on `127.0.0.1` only, change it with `SELENIUM_VNC_BIND`) for the `DOCKER_CHROME` browser type. With `HEADLESS_BROWSER=false`, the Take Attendance page embeds a live, view-only picture of that browser and offers Pause and Resume; see `.env.example` for `SELENIUM_VNC_BIND`, `SELENIUM_VNC_PASSWORD` and `VNC_PUBLIC_URL`. There is no Dockerfile for the app itself. Port and project-name overrides come from `.env` if present.
 
 ## Support
 

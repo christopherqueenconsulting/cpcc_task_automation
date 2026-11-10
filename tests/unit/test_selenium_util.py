@@ -747,3 +747,107 @@ def test_clear_persisted_browser_profile_skips_missing_dirs(tmp_path, mocker):
     mocker.patch.object(sel_util, "LOCAL_CHROME_PROFILE_DIR", tmp_path / "also-nope")
 
     assert sel_util.clear_persisted_browser_profile() == []
+
+
+@pytest.mark.unit
+class TestLiveViewerUrl:
+    """The noVNC address the page embeds, or None when the browser cannot be watched."""
+
+    @staticmethod
+    def _docker(monkeypatch, *, headless=False, browser='DOCKER_CHROME', reachable=True,
+                bind='127.0.0.1', public=''):
+        import cqc_cpcc.utilities.selenium_util as su
+
+        monkeypatch.setattr(su, 'IS_GITHUB_ACTION', False)
+        monkeypatch.setattr(su, 'USE_VIRTUAL_DISPLAY', False)
+        monkeypatch.setattr(su, 'HEADLESS_BROWSER', headless)
+        monkeypatch.setattr(su, 'BROWSER_TYPE', browser)
+        monkeypatch.setattr(su, 'SELENIUM_VNC_PORT', 17900)
+        monkeypatch.setattr(su, 'SELENIUM_VNC_BIND', bind)
+        monkeypatch.setattr(su, 'SELENIUM_VNC_PASSWORD', 'secret')
+        monkeypatch.setattr(su, 'VNC_PUBLIC_URL', public)
+        probe = MagicMock()
+        if reachable:
+            probe.return_value.ok = True
+        else:
+            probe.side_effect = su.requests.ConnectionError('refused')
+        monkeypatch.setattr(su.requests, 'get', probe)
+        return su, probe
+
+    def test_docker_browser_with_a_reachable_viewer_gets_the_view_only_url(self, monkeypatch):
+        su, probe = self._docker(monkeypatch)
+
+        assert su.live_viewer_url() == (
+            'http://localhost:17900/?autoconnect=1&view_only=true&resize=scale&password=secret')
+        assert probe.call_args.args[0] == 'http://127.0.0.1:17900/'
+        assert probe.call_args.kwargs['timeout'] == 1.0
+
+    def test_headless_has_no_viewer_and_makes_no_probe(self, monkeypatch):
+        su, probe = self._docker(monkeypatch, headless=True)
+
+        assert su.live_viewer_url() is None
+        probe.assert_not_called()
+
+    @pytest.mark.parametrize('browser', ['LOCAL_CHROME', 'BROWSERLESS', '', None])
+    def test_only_the_docker_browser_has_a_viewer(self, monkeypatch, browser):
+        su, probe = self._docker(monkeypatch, browser=browser)
+
+        assert su.live_viewer_url() is None
+        probe.assert_not_called()
+
+    def test_virtual_display_and_github_actions_have_no_viewer(self, monkeypatch):
+        su, probe = self._docker(monkeypatch)
+        monkeypatch.setattr(su, 'USE_VIRTUAL_DISPLAY', True)
+        assert su.live_viewer_url() is None
+        monkeypatch.setattr(su, 'USE_VIRTUAL_DISPLAY', False)
+        monkeypatch.setattr(su, 'IS_GITHUB_ACTION', True)
+        assert su.live_viewer_url() is None
+        probe.assert_not_called()
+
+    def test_unreachable_viewer_means_none(self, monkeypatch):
+        su, _ = self._docker(monkeypatch, reachable=False)
+
+        assert su.live_viewer_url() is None
+
+    def test_a_viewer_that_answers_with_an_error_means_none(self, monkeypatch):
+        su, probe = self._docker(monkeypatch)
+        probe.return_value.ok = False
+
+        assert su.live_viewer_url() is None
+
+    def test_public_url_replaces_the_host_the_viewer_browser_opens(self, monkeypatch):
+        su, probe = self._docker(monkeypatch, public='https://vnc.example.com/')
+
+        assert su.live_viewer_url() == (
+            'https://vnc.example.com/?autoconnect=1&view_only=true&resize=scale&password=secret')
+        # The server still probes the local port; only the viewer's address changes.
+        assert probe.call_args.args[0] == 'http://127.0.0.1:17900/'
+
+    @pytest.mark.parametrize('bind, probed', [
+        ('0.0.0.0', 'http://localhost:17900/'),
+        ('', 'http://localhost:17900/'),
+        ('192.168.1.5', 'http://192.168.1.5:17900/'),
+        ('::1', 'http://[::1]:17900/'),
+    ])
+    def test_probe_goes_to_the_address_compose_binds(self, monkeypatch, bind, probed):
+        su, probe = self._docker(monkeypatch, bind=bind)
+
+        su.live_viewer_url()
+
+        assert probe.call_args.args[0] == probed
+
+    def test_password_comes_from_the_environment_setting_and_is_encoded(self, monkeypatch):
+        from urllib.parse import quote_plus
+
+        su, _ = self._docker(monkeypatch)
+        odd = 'a b&c'  # a space and an ampersand must be percent-encoded in the URL
+        monkeypatch.setattr(su, 'SELENIUM_VNC_PASSWORD', odd)
+
+        assert su.live_viewer_url().endswith('&' + 'password' + '=' + quote_plus(odd))
+        assert quote_plus(odd) == 'a+b%26c'
+
+    def test_the_logged_url_and_the_embedded_url_share_one_builder(self, monkeypatch):
+        su, _ = self._docker(monkeypatch)
+
+        assert su.vnc_viewer_url('http://localhost:17900/') == (
+            'http://localhost:17900/?autoconnect=1&view_only=true&resize=scale&password=secret')

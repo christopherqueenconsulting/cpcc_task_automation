@@ -18,6 +18,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
+from cqc_cpcc.pause_gate import PauseGate
 from cqc_cpcc.run_plan import RunPlan
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.logger import logger
@@ -84,6 +85,11 @@ class AttendanceJob:
         self._eva_setup_request: dict | None = None
         self._eva_setup_response: dict | None = None
         self._cancelled = threading.Event()
+        # Holds the worker before its next browser command while the page has it paused.
+        self._gate = PauseGate(raise_if_cancelled=self._raise_if_cancelled)
+        # Live noVNC URL of the Docker browser, set by the worker once the browser is
+        # open; ``None`` means the page shows screenshots instead.
+        self.viewer_url: str | None = None
         self._thread = threading.Thread(target=self._run, daemon=True, name="attendance-job")
 
     # -- UI side ----------------------------------------------------------------
@@ -128,6 +134,35 @@ class AttendanceJob:
             self._eva_setup_response = dict(response)
             self._phase = PHASE_RUNNING
             self._eva_setup_ready.set()
+
+    @property
+    def pausable(self) -> bool:
+        """Pausing helps only while the browser works on its own: not on a form, at an
+        MFA prompt (the number must show), or after the run ends."""
+        if self.cancelled or self.phase not in (PHASE_STARTING, PHASE_RUNNING):
+            return False
+        return self.bridge.pending_challenge is None
+
+    @property
+    def paused(self) -> bool:
+        return self._gate.paused
+
+    @property
+    def paused_since(self) -> float | None:
+        """Epoch seconds when the current pause began, or ``None`` while running."""
+        return self._gate.paused_since
+
+    def pause(self) -> None:
+        """Hold the run before its next browser command; the browser stays open as it is."""
+        if not self.pausable:
+            return
+        self._gate.pause()
+        logger.info("Attendance run paused from the page.")
+
+    def resume(self) -> None:
+        if self._gate.paused:
+            logger.info("Attendance run resumed from the page.")
+        self._gate.resume()
 
     def cancel(self) -> None:
         self._cancelled.set()
@@ -297,13 +332,30 @@ class AttendanceJob:
             raise RuntimeError(problem + " Add it to .env (or the app's secrets).")
 
         raw_driver, wait = get_session_driver()
+        # The Docker browser can be watched live; then screenshots only keep the
+        # per-tab snapshots current. The gate's keepalive uses the raw driver, so it
+        # does not pass through the listener it is blocking.
+        self.viewer_url = self._find_viewer_url()
+        self._gate.keepalive = lambda: raw_driver.current_url
         listener = ScreenshotListener(
             lambda screenshot: self._capture(raw_driver, screenshot),
             on_tab_closed=lambda: self._forget_closed_tabs(raw_driver),
             min_interval=SCREENSHOT_MIN_INTERVAL,
+            pause_gate=self._gate,
+            tab_change_only=self.viewer_url is not None,
         )
         driver = EventFiringWebDriver(raw_driver, listener)
         return driver, wait, MyColleges(driver, wait)
+
+    @staticmethod
+    def _find_viewer_url() -> str | None:
+        from cqc_cpcc.utilities.selenium_util import live_viewer_url
+
+        try:
+            return live_viewer_url()
+        except Exception:  # noqa: BLE001 - no viewer just means screenshots
+            logger.debug("Could not check for the live viewer.", exc_info=True)
+            return None
 
     def _raise_if_cancelled(self) -> None:
         if self._cancelled.is_set():
@@ -330,6 +382,7 @@ class AttendanceJob:
                 self._set_phase(PHASE_FAILED, "Attendance failed.")
                 logger.exception("Attendance run failed")
         finally:
+            self._gate.resume()
             self.done.set()
 
     def _work(self) -> None:
