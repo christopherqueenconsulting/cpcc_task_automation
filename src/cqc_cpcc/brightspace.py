@@ -846,7 +846,26 @@ class BrightSpace_Course:
         "or translate(@title,'NEXTPAGE','nextpage')='next page']"
     )
 
+    # Any visible control that looks like a pager although EVA_NEXT_XPATH did not match it (a label such
+    # as "Next" or "Next >", or a d2l-pager element). The rule "no pager, fewer rows than the page size,
+    # so complete" must not fire on a page that has one. A bare class match is left out on purpose: the
+    # results table itself carries pager-classed summary rows.
+    PAGER_HINT_XPATH = (
+        "//*[self::button or self::a][contains(translate(@aria-label,'NEXT','next'),'next') "
+        "or contains(translate(@title,'NEXT','next'),'next') "
+        "or contains(translate(normalize-space(.),'NEXT','next'),'next')] | //d2l-pager"
+    )
+
     PER_USER_TABLE_SUMMARY = "users and the submissions"
+
+    def _visible_pager_hint(self) -> bool:
+        for element in self.driver.find_elements(By.XPATH, self.PAGER_HINT_XPATH):
+            try:
+                if element.is_displayed():
+                    return True
+            except StaleElementReferenceException:
+                continue
+        return False
 
     @classmethod
     def _is_per_user_table(cls, table) -> bool:
@@ -1092,7 +1111,10 @@ class BrightSpace_Course:
                         page_size = getattr(self, "results_page_size", None)
                         if page_size:
                             table_rows = len(results_table.find_elements(By.XPATH, "./tr | ./tbody/tr"))
-                            if table_rows < page_size:
+                            if table_rows < page_size and self._visible_pager_hint():
+                                logger.info("No pager matched, but a visible pager-like control is on the "
+                                            "page; not treating %d rows as the full result set.", table_rows)
+                            elif table_rows < page_size:
                                 logger.info("No pager: %d table rows is below the verified page size %d; "
                                             "treating the page as the full result set.", table_rows, page_size)
                                 return False
@@ -1586,6 +1608,8 @@ class BrightSpace_Course:
                 # Prove the select took the maximum before anything relies on it: re-find every
                 # visible select the XPath matches (the clicked node can be replaced by a reload)
                 # and require all of them to hold it.
+                # Hidden duplicates are ignored on purpose: the attempt-logs page carries a second,
+                # hidden per-page select that stays at 10 (read live 2026-11-10).
                 fresh = [item for item in self.driver.find_elements(By.XPATH, select_xpath)
                          if item.is_displayed()]
                 held = bool(fresh) and all(
