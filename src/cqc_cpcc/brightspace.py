@@ -1078,10 +1078,21 @@ class BrightSpace_Course:
                     tables = (self.driver.find_elements(By.XPATH, table_xpath)
                               if hasattr(self, "driver") else [])
                     if tables:
-                        text = " ".join(str(getattr(self._results_table(tables), "text", "") or "").split())
+                        results_table = self._results_table(tables)
+                        text = " ".join(str(getattr(results_table, "text", "") or "").split())
                         if re.search(r"\bpage\s+1\s+of\s+1\b|\b1\s*[-–]\s*(\d+)\s+of\s+\1\b",
                                      text, flags=re.IGNORECASE):
                             return False
+                        # No pager at all: with the per-page select verified at its maximum, a table
+                        # with fewer rows than that size holds every result (a full page would
+                        # have a Next control).
+                        page_size = getattr(self, "results_page_size", None)
+                        if page_size:
+                            table_rows = len(results_table.find_elements(By.XPATH, "./tr | ./tbody/tr"))
+                            if table_rows < page_size:
+                                logger.info("No pager: %d table rows is below the verified page size %d; "
+                                            "treating the page as the full result set.", table_rows, page_size)
+                                return False
                     raise _EVAReadIncomplete("pagination_control_missing", pages_read, rows_read)
                 if visible and all(self._next_control_disabled(button) for button in visible):
                     # Responsive Brightspace views can leave an enabled duplicate
@@ -1514,8 +1525,13 @@ class BrightSpace_Course:
 
         return select_successful
 
+    # Largest results-per-page size the select was verified to hold after the last
+    # click_max_results_select call; None when it was not set to its maximum.
+    results_page_size: int | None = None
+
     def click_max_results_select(self, select_xpath: str, retry: int = 1) -> bool:
         attempts = retry + 1
+        self.results_page_size = None
 
         for attempt in range(attempts):
             try:
@@ -1554,6 +1570,10 @@ class BrightSpace_Course:
                 select_element.send_keys(Keys.TAB)
 
                 wait_for_ajax(self.driver)
+
+                # Prove the select took the maximum before anything relies on it.
+                chosen = (select.first_selected_option.get_attribute("value") or "").strip()
+                self.results_page_size = max_value if chosen == str(max_value) else None
 
                 return True
 

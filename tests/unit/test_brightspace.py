@@ -1047,6 +1047,57 @@ def test_eva_pagination_uses_visible_controls_and_rejects_unreadable_state():
         course._read_activity_rows("//table", 3, 2, "activity-url")
 
 
+def _no_pager_course(table_rows, page_size):
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.results_page_size = page_size
+    table = MagicMock()
+    table.text = "table"
+    table.get_attribute.return_value = None
+    table.find_elements.return_value = [MagicMock() for _ in range(table_rows)]
+    course.driver.find_elements.return_value = [table]
+    course._page_fingerprint = MagicMock(return_value=("page",))
+    course._visible_next_controls = MagicMock(return_value=([], []))
+    return course
+
+
+@pytest.mark.unit
+def test_no_pager_is_the_full_result_set_when_the_verified_page_size_is_not_filled():
+    assert _no_pager_course(49, 200)._advance_activity_page("//table", 1, 22) is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("table_rows,page_size", [(200, 200), (49, 20), (49, None)])
+def test_no_pager_stays_incomplete_when_the_page_may_be_full_or_the_size_is_unverified(table_rows, page_size):
+    with pytest.raises(_EVAReadIncomplete, match="pagination_control_missing"):
+        _no_pager_course(table_rows, page_size)._advance_activity_page("//table", 1, 22)
+
+
+def _select_course(chosen_value):
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.wait = MagicMock()
+    options = [MagicMock(), MagicMock(), MagicMock()]
+    for option, value in zip(options, ("20", "100", "200")):
+        option.get_attribute.return_value = value
+    course.wait.until.side_effect = [options, MagicMock()]
+    select = MagicMock()
+    select.first_selected_option.get_attribute.return_value = chosen_value
+    return course, select
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("chosen,expected", [("200", 200), ("20", None)])
+def test_max_results_select_records_the_page_size_only_when_the_select_took_the_maximum(chosen, expected):
+    course, select = _select_course(chosen)
+    with patch("cqc_cpcc.brightspace.Select", return_value=select), \
+            patch("cqc_cpcc.brightspace.wait_for_ajax"):
+        assert course.click_max_results_select("//select") is True
+
+    select.select_by_value.assert_called_once_with("200")
+    assert course.results_page_size == expected
+
+
 @pytest.mark.unit
 def test_eva_reader_rejects_missing_table_malformed_and_repeated_pages():
     course = BrightSpace_Course.__new__(BrightSpace_Course)
