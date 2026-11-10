@@ -828,6 +828,44 @@ def test_quiz_grid_with_unrecognized_body_header_falls_back_to_fixed_indexes():
     assert course._snapshot_activity_page("//table", 2, 3, 0, 0) == (("Student One", "Nov 9, 2026 10:06 PM"),)
 
 
+class _OwnHeaderTable(_PerUserTable):
+    """A table with direct header cells; `own` is what its ./tr/th cells say (empty for a wrapper)."""
+
+    def __init__(self, rows, own=(), summary=""):
+        super().__init__(rows, None, summary)
+        self.own = own
+
+    def find_elements(self, _by, xpath):
+        if xpath == BrightSpace_Course.RESULT_OWN_HEADER_XPATH:
+            return [_PerUserCell(text, "th") for text in self.own]
+        return super().find_elements(_by, xpath)
+
+
+@pytest.mark.unit
+def test_table_that_owns_the_learner_header_wins_over_an_outer_layout_wrapper():
+    wrapper = _OwnHeaderTable([_PerUserRow([_PerUserCell("layout")])])
+    grid = _OwnHeaderTable(_quiz_attempts_rows(("Student One", "Nov 9, 2026 10:06 PM")),
+                           own=("Attempt", "Learner", "Completed"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [wrapper, grid]
+
+    assert BrightSpace_Course._results_table([wrapper, grid]) is grid
+    assert course._snapshot_activity_page("//table", 2, 3, 0, 0) == (("Student One", "Nov 9, 2026 10:06 PM"),)
+
+
+@pytest.mark.unit
+def test_own_header_choice_is_logged_as_such():
+    grid = _OwnHeaderTable(_quiz_attempts_rows(("Student One", "Nov 9, 2026 10:06 PM")), own=("Learner",))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_OwnHeaderTable([]), grid]
+    with patch("cqc_cpcc.brightspace.logger") as log:
+        course._snapshot_activity_page("//table", 2, 3, 0, 0)
+
+    assert log.info.call_args.args[1:] == (2, 1, "not found (own header)")
+
+
 def _decoy_table():
     """A layout/filter table that the assignment XPath also matches (it has a User header)."""
     return _PerUserTable([_PerUserRow([_PerUserCell("filter")])], ["User"], summary="Filter users")

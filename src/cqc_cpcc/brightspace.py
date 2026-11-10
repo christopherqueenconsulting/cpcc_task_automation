@@ -863,7 +863,26 @@ class BrightSpace_Course:
         for table in tables:
             if cls._is_per_user_table(table):
                 return table
+        # The header XPath also matches every table that merely contains the grid (layout
+        # wrappers). Prefer a table whose own header cells name the learner.
+        for table in tables:
+            if cls._owns_result_header(table):
+                return table
         return tables[0]
+
+    RESULT_OWN_HEADER_XPATH = "./thead/tr/th | ./tr/th | ./tbody/tr/th"
+
+    @classmethod
+    def _owns_result_header(cls, table) -> bool:
+        try:
+            headers = table.find_elements(By.XPATH, cls.RESULT_OWN_HEADER_XPATH)
+        except (AttributeError, TypeError):
+            return False
+        if not isinstance(headers, (list, tuple)):
+            return False
+        return any(any(word in " ".join(str(getattr(cell, "text", "") or "").casefold().split())
+                       for word in ("student", "user", "learner", "name"))
+                   for cell in headers)
 
     @staticmethod
     def _is_header_row(row) -> bool:
@@ -883,9 +902,14 @@ class BrightSpace_Course:
                 results_table = self._results_table(tables)
                 # Counts and a flag only (no row text): shows which table was read and whether the
                 # per-user summary matched, so a repeat failure can be told apart from a bypassed fix.
+                if self._is_per_user_table(results_table):
+                    summary_state = "matched"
+                elif self._owns_result_header(results_table):
+                    summary_state = "not found (own header)"
+                else:
+                    summary_state = "not found (first match)"
                 logger.info("Results table: %d matched, chose index %d, per-user summary %s.",
-                            len(tables), tables.index(results_table),
-                            "matched" if self._is_per_user_table(results_table) else "not found (first match)")
+                            len(tables), tables.index(results_table), summary_state)
                 table_text = (getattr(results_table, "text", "") or "").strip()
                 rows = results_table.find_elements(By.XPATH, "./tr | ./tbody/tr")
                 # Prefer the actual result headers. Brightspace layouts add and
