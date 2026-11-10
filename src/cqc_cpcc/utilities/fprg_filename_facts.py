@@ -10,9 +10,11 @@ model, so the app checks those two things here and sends only the answers.
   keyword of three or more letters followed by a spelled-out number one to twenty-nine
   (``Lab_Three``, ``LabTwentyOne``) or a roman numeral I to XX (``LabII``, ``Lab-IV``,
   ``lab-ix``), or any standalone run of one to three ASCII digits. A roman numeral counts only
-  right after such a keyword: a bare ``I`` or ``V`` word does nothing. ``unknown`` when no
+  right after such a keyword: a bare ``I`` or ``V`` word does nothing, and a bare ``II`` or ``IV``
+  reads ``unknown``, never ``yes``. ``unknown`` when no
   number is recognised but a keyword is present (``Lab_Foo``, ``Smith_Lab``, ``Lab1234567``) or
-  a spelled-out number stands alone (``Mix_ed_Three``): the file may carry a lab number the rule
+  a spelled-out number stands alone (``Mix_ed_Three``) or a roman numeral of two or more letters
+  stands alone with no keyword (``Smith_II``, ``Ada_Example_IV``): the file may carry a lab number the rule
   cannot read, so nothing is deducted. ``no`` only when there is no keyword and no number-like
   token at all (``Sum``, ``Ada Example``); a run of four or more digits is an id or a year, not
   a lab number (``12345678`` reads ``no``). Dates and ``v2``/``(2)`` markers are ignored. The
@@ -139,6 +141,15 @@ def _has_number_word(stem: str) -> bool:
     return any(w in _NUM_WORDS or w in _UNITS for w in re.findall(r"[a-z]+", _split_camel(stem).lower()))
 
 
+def _has_bare_roman(stem: str) -> bool:
+    """A standalone roman numeral of two or more letters (``Smith_II``, ``Ada_Example_IV``).
+
+    Without a lab keyword it cannot be told from a name or a suffix, so it is number-like but
+    not a lab number: the caller reads ``unknown``. One letter (``I``, ``V``, ``X``) is an
+    initial, not a number."""
+    return any(len(w) >= 2 and w in _ROMAN for w in re.findall(r"[a-z]+", _split_camel(stem).lower()))
+
+
 def _lab(stem: str) -> tuple[str, Optional[str]]:
     m = _KEYWORD_RE.search(stem)  # original stem first: a date must not swallow the digits
     if m:
@@ -157,7 +168,7 @@ def _lab(stem: str) -> tuple[str, Optional[str]]:
         return YES, None  # no digits are echoed: they may be cut from an id
     # A keyword with no readable number, or a stray number word: the file may carry a lab number
     # this rule cannot read, so nothing is deducted.
-    if _KEYWORD_WORD_RE.search(_split_camel(stem)) or _has_number_word(stem):
+    if _KEYWORD_WORD_RE.search(_split_camel(stem)) or _has_number_word(stem) or _has_bare_roman(stem):
         return UNKNOWN, None
     return NO, None
 

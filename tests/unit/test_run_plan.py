@@ -445,3 +445,64 @@ class TestFormSelections:
     def test_unknown_course_is_rejected(self):
         with pytest.raises(ValueError):
             RunPlan.from_selections(COURSES, course_urls=["nope"])
+
+
+@pytest.mark.unit
+@freeze_time("2026-10-27 16:00:00")
+class TestAttendanceRecoveryBoundary:
+    def test_explicit_date_widens_window_and_is_inclusive(self):
+        plan = RunPlan.from_selections(
+            COURSES, course_urls=["url-future"], attendance_start=DT.date(2026, 10, 1),
+        )
+        assert plan.attendance_window_start(DT.date(2026, 10, 20), DT.date(2026, 8, 17)) == DT.date(2026, 10, 1)
+
+    def test_later_explicit_date_cannot_skip_unfinished_work(self):
+        plan = RunPlan(attendance_start=DT.date(2026, 10, 25))
+        assert plan.attendance_window_start(DT.date(2026, 10, 20), DT.date(2026, 8, 17)) == DT.date(2026, 10, 20)
+
+    def test_explicit_date_is_clamped_to_course_start(self):
+        plan = RunPlan(attendance_start=DT.date(2026, 8, 1))
+        assert plan.attendance_window_start(DT.date(2026, 10, 20), DT.date(2026, 8, 17)) == DT.date(2026, 8, 17)
+
+    @pytest.mark.parametrize("full_recheck", [False, True])
+    def test_course_context_datetime_is_normalized_before_recovery_comparison(self, full_recheck):
+        plan = RunPlan(full_recheck=full_recheck, attendance_start=DT.date(2026, 8, 1))
+        result = plan.attendance_window_start(DT.date(2026, 10, 20), DT.datetime(2026, 8, 17))
+        assert result == DT.date(2026, 8, 17)
+        assert not isinstance(result, DT.datetime)
+
+    def test_automatic_window_returns_a_date_when_context_uses_datetimes(self):
+        result = RunPlan().attendance_window_start(DT.datetime(2026, 10, 20), DT.datetime(2026, 8, 17))
+        assert result == DT.date(2026, 10, 20)
+        assert not isinstance(result, DT.datetime)
+
+    def test_full_recheck_takes_precedence(self):
+        plan = RunPlan(full_recheck=True, attendance_start=DT.date(2026, 10, 20))
+        assert plan.attendance_window_start(DT.date(2026, 10, 20), DT.date(2026, 8, 17)) == DT.date(2026, 8, 17)
+
+    def test_future_date_is_rejected(self):
+        with pytest.raises(ValueError, match="future"):
+            RunPlan(attendance_start=DT.date(2026, 10, 28))
+
+    def test_non_date_is_rejected(self):
+        with pytest.raises(ValueError, match="must be a date"):
+            RunPlan(attendance_start="2026-10-01")
+
+    def test_explicit_range_is_exact_and_end_is_capped_to_today_and_course_end(self):
+        plan = RunPlan(attendance_start=DT.date(2026, 10, 10), attendance_end=DT.date(2026, 10, 20))
+        assert plan.attendance_window_start(DT.date(2026, 10, 1), DT.date(2026, 8, 17)) == DT.date(2026, 10, 10)
+        assert plan.attendance_window_end(DT.date(2026, 12, 1)) == DT.date(2026, 10, 20)
+        assert plan.attendance_window_end(DT.date(2026, 10, 15)) == DT.date(2026, 10, 15)
+
+    def test_range_end_must_not_precede_start(self):
+        with pytest.raises(ValueError, match="on or before"):
+            RunPlan(attendance_start=DT.date(2026, 10, 20), attendance_end=DT.date(2026, 10, 19))
+
+    def test_range_end_cannot_be_future(self):
+        with pytest.raises(ValueError, match="future"):
+            RunPlan(attendance_end=DT.date(2026, 10, 28))
+
+    def test_full_recheck_cannot_silently_override_a_bounded_range(self):
+        with pytest.raises(ValueError, match="cannot be combined"):
+            RunPlan(full_recheck=True, attendance_start=DT.date(2026, 10, 1),
+                    attendance_end=DT.date(2026, 10, 20))

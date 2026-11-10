@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cpcc-task-automation"
-version = "0.2.0rc8"
+version = "0.2.0rc11"
 description = ""
 authors = ["gitchrisqueen <christopher.queen@gmail.com>"]
 readme = "README.md"
@@ -25,15 +25,16 @@ openrouter = ">=0,<2"
 httpx = "^0"
 ordered-set = "^4"
 python-docx = "^1"
+docx2txt = "^0.9"
 #simplify_docx= { git = "https://github.com/gitchrisqueen/Simplify-Docx.git"}
 chromedriver-autoinstaller = "^0"
 pyvirtualdisplay = "^3"
-streamlit = "^1"
-textract = ">=1,<3"
+streamlit = "^1.66.0"
 mammoth = "^1"
 markdownify = "^1"
 pexels-api = "^1"
 openpyxl = "^3"
+xlrd = "^2"
 pypdf = "^6"
 pymupdf = "^1"
 posthog = {version = "^7", optional = true}
@@ -64,6 +65,7 @@ optional = true
 # Any dependencies that do not meet that criteria will be removed.
 pytest = "^9"
 pytest-cov = "^7"
+pytest-xdist = "^3"
 freezegun = "^1"
 pytest-mock = "^3"
 syrupy = ">=5,<7"
@@ -130,6 +132,7 @@ markers = [
     "requires: mark tests as requiring a specific library",
     "asyncio: mark tests as requiring asyncio",
     "compile: mark placeholder test used to compile integration tests without running them",
+    "compiler: mark exhaustive tests that invoke javac/g++ and run in the parallel compiler CI lane",
     "unit: mark a test as a unit test",
     "integration: mark a test as an integration test",
     "e2e: mark a test as an end-to-end test",

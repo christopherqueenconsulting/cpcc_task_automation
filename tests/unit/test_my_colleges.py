@@ -4,11 +4,15 @@ import datetime as DT
 from unittest.mock import MagicMock, patch
 
 import pytest
+from freezegun import freeze_time
 from selenium.common import NoSuchElementException, TimeoutException
 from selenium.webdriver import Keys
 from selenium.webdriver.common.by import By
 
-from cqc_cpcc.my_colleges import MyColleges
+from cqc_cpcc.attendance_ledger import AttendanceLedger
+from cqc_cpcc.brightspace import BrightSpace_Course, EVACompletionResult
+from cqc_cpcc.my_colleges import AttendanceOutcome, CourseContext, MyColleges
+from cqc_cpcc.run_plan import RunPlan
 
 
 @pytest.mark.unit
@@ -28,6 +32,271 @@ class TestAttendanceDateRouting:
         assert list(pending.keys()) == [DT.date(2026, 1, 10), DT.date(2026, 1, 12)]
         assert pending[DT.date(2026, 1, 10)] == ["Amy Student", "Bob Student"]
         assert pending[DT.date(2026, 1, 12)] == ["Amy Student", "Zed Student"]
+
+
+@pytest.mark.unit
+class TestEvaAttendanceSetup:
+    def _context(self, **overrides):
+        values = dict(
+            course_url="https://brightspace.example/d2l/home?ou=12345",
+            course_name="CSC-151-N801: Test Course",
+            course_start_date=DT.datetime(2026, 1, 5),
+            course_end_date=DT.datetime(2026, 12, 20),
+            eva_date=DT.date(2026, 2, 1),
+            eva_date_source="estimated",
+        )
+        values.update(overrides)
+        return CourseContext(**values)
+
+    def test_confirm_eva_date_persists_date_and_source(self, tmp_path):
+        mc = MyColleges(MagicMock(), MagicMock())
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        context = self._context()
+        mc._eva_setup_response = lambda request: {
+            "request_id": request["request_id"], "date_only": True,
+            "eva_date": "2026-02-03", "eva_date_source": "user_confirmed",
+        }
+
+        confirmed = mc._confirm_eva_date(
+            context, None, "estimated", DT.date(2026, 1, 20), "Spring 2026",
+            "CSC-151-N801", ledger, "12345",
+        )
+
+        assert confirmed == DT.date(2026, 2, 3)
+        saved = ledger.eva_activity("Spring 2026", "CSC-151-N801", "12345")
+        assert saved["eva_date"] == "2026-02-03"
+        assert saved["eva_date_source"] == "estimated"
+        ledger.close()
+
+    def test_authoritative_past_eva_date_can_be_confirmed_for_recovery(self, tmp_path):
+        mc = MyColleges(MagicMock(), MagicMock())
+        mc._eva_setup_response = MagicMock(return_value={
+            "eva_date": "2026-01-10", "eva_date_source": "mycolleges",
+        })
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        context = self._context(eva_date=DT.date(2026, 1, 10), eva_date_source="mycolleges")
+
+        confirmed = mc._confirm_eva_date(
+            context, None, "mycolleges", DT.date(2026, 1, 11), "Spring 2026",
+            "CSC-151-N801", ledger, "12345",
+        )
+
+        assert confirmed == DT.date(2026, 1, 10)
+        mc._eva_setup_response.assert_called_once()
+        assert ledger.eva_activity("Spring 2026", "CSC-151-N801", "12345")["eva_date"] == "2026-01-10"
+        ledger.close()
+
+    @freeze_time("2026-02-02 17:00:00")
+    def test_first_run_after_deadline_discovers_and_confirms_assignment(self, tmp_path):
+        context = self._context(eva_date_source="mycolleges")
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        candidate = {
+            "activity_type": "assignment", "activity_id": "eva-1",
+            "activity_url": "https://brightspace.example/activity/eva-1",
+            "title": "Acceptance agreement", "observed_due_date": "Feb 1, 2026",
+            "observed_due_iso": "2026-02-01", "suggested": False,
+        }
+        mc = MyColleges(MagicMock(), MagicMock(), ledger=ledger)
+        mc._eva_setup_response = MagicMock(side_effect=[
+            {"eva_date": "2026-02-01", "eva_date_source": "mycolleges"},
+            {"activity": candidate, "confirmed_due_date": "2026-02-01", "eva_date": "2026-02-01"},
+        ])
+        discovery = MagicMock(scrape_problems=[], eva_activity_candidates=[candidate])
+        with patch("cqc_cpcc.my_colleges.BrightSpace_Course", return_value=discovery) as discover:
+            result = mc._resolve_eva_activity(
+                context, "Spring 2026", "CSC-151-N801", ledger, DT.date(2026, 2, 2)
+            )
+        assert result["activity_id"] == "eva-1"
+        assert mc._eva_setup_response.call_count == 2
+        assert discover.call_args.kwargs["discover_eva_activities"] is True
+        assert ledger.eva_activity("Spring 2026", "CSC-151-N801", "12345")["activity_id"] == "eva-1"
+        ledger.close()
+
+    @freeze_time("2026-02-02 17:00:00")
+    def test_saved_assignment_is_freshly_discovered_on_every_post_deadline_rerun(self, tmp_path):
+        context = self._context(eva_date_source="mycolleges")
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        config = {
+            "term": "Spring 2026", "course_section": "CSC-151-N801",
+            "brightspace_course_id": "12345", "activity_type": "assignment",
+            "activity_id": "eva-1", "activity_url": "https://brightspace.example/activity/eva-1",
+            "title": "Acceptance agreement", "observed_due_date": "Feb 1, 2026",
+            "confirmed_due_date": "2026-02-01", "eva_date": "2026-02-01",
+            "observed_eva_date": "2026-02-01", "eva_date_source": "mycolleges",
+        }
+        ledger.save_eva_activity(config)
+        candidate = {**config, "observed_due_iso": "2026-02-01"}
+        mc = MyColleges(MagicMock(), MagicMock(), ledger=ledger)
+        mc._eva_setup_response = MagicMock(side_effect=AssertionError("unchanged selection should be reused"))
+        discovery = MagicMock(scrape_problems=[], eva_activity_candidates=[candidate])
+        with patch("cqc_cpcc.my_colleges.BrightSpace_Course", return_value=discovery) as discover:
+            for _ in range(2):
+                result = mc._resolve_eva_activity(
+                    context, "Spring 2026", "CSC-151-N801", ledger, DT.date(2026, 2, 2)
+                )
+                assert result["activity_id"] == "eva-1"
+        assert discover.call_count == 2
+        mc._eva_setup_response.assert_not_called()
+        ledger.close()
+
+    def test_deadline_passing_during_confirmation_does_not_cancel_activity(self, tmp_path):
+        context = self._context(eva_date_source="mycolleges")
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        candidate = {
+            "activity_type": "assignment", "activity_id": "eva-1",
+            "activity_url": "https://brightspace.example/activity/eva-1",
+            "title": "Acceptance agreement", "observed_due_date": "Feb 1, 2026",
+            "observed_due_iso": "2026-02-01",
+        }
+        mc = MyColleges(MagicMock(), MagicMock(), ledger=ledger)
+        discovery = MagicMock(scrape_problems=[], eva_activity_candidates=[candidate])
+        with freeze_time("2026-02-02 04:59:00") as clock:
+            def confirm(request):
+                if request.get("date_only"):
+                    return {"eva_date": "2026-02-01", "eva_date_source": "mycolleges"}
+                clock.move_to("2026-02-02 05:01:00")
+                return {"activity": candidate, "confirmed_due_date": "2026-02-01", "eva_date": "2026-02-01"}
+
+            mc._eva_setup_response = confirm
+            with patch("cqc_cpcc.my_colleges.BrightSpace_Course", return_value=discovery):
+                result = mc._resolve_eva_activity(
+                    context, "Spring 2026", "CSC-151-N801", ledger, DT.date(2026, 2, 1)
+                )
+        assert result["activity_id"] == "eva-1"
+        ledger.close()
+
+    def test_resolve_eva_activity_requires_durable_ledger(self):
+        mc = MyColleges(MagicMock(), MagicMock())
+        mc.ledger = AttendanceLedger(":memory:")
+
+        with pytest.raises(RuntimeError, match="Durable attendance storage is unavailable"):
+            mc._resolve_eva_activity(self._context(), "Spring 2026", "CSC-151-N801",
+                                     mc.ledger, DT.date(2026, 1, 20))
+
+    def test_saved_quiz_attempt_url_repairs_legacy_course_id_without_prompting(self, tmp_path):
+        context = self._context(
+            course_url="https://brightspace.example/d2l/home?ou=12345",
+            eva_date=DT.date(2026, 12, 1), eva_date_source="estimated",
+        )
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        attempt_url = (
+            "https://brightspace.example/d2l/lms/quizzing/admin/"
+            "attemptLogs/12345/888/Logs?ou=12345"
+        )
+        ledger.save_eva_activity({
+            "term": "Spring 2026", "course_section": "CSC-151-N801",
+            "brightspace_course_id": "12345", "activity_type": "quiz",
+            "activity_id": "12345", "activity_url": attempt_url,
+            "title": "EVA quiz", "observed_due_date": "Dec 1, 2026",
+            "confirmed_due_date": "2026-12-01", "eva_date": "2026-12-01",
+            "observed_eva_date": "2026-12-01", "eva_date_source": "estimated",
+        })
+        mc = MyColleges(MagicMock(), MagicMock(), ledger=ledger)
+        mc._eva_setup_response = MagicMock(side_effect=AssertionError("must reuse saved quiz"))
+        candidate = {
+            "activity_type": "quiz", "activity_id": "888", "activity_url": attempt_url,
+            "title": "EVA quiz", "observed_due_date": "Dec 1, 2026",
+            "observed_due_iso": "2026-12-01", "suggested": True,
+        }
+
+        def fake_init(discovery, *_args, **_kwargs):
+            discovery.scrape_problems = []
+            discovery.eva_activity_candidates = [candidate]
+
+        with patch.object(BrightSpace_Course, "__init__", autospec=True, side_effect=fake_init):
+            result = mc._resolve_eva_activity(
+                context, "Spring 2026", "CSC-151-N801", ledger, DT.date(2026, 1, 20)
+            )
+
+        assert result["activity_id"] == "888"
+        assert ledger.eva_activity("Spring 2026", "CSC-151-N801", "12345")["activity_id"] == "888"
+        mc._eva_setup_response.assert_not_called()
+        ledger.close()
+
+    def test_saved_unknown_source_date_is_reused_without_prompt(self, tmp_path):
+        mc = MyColleges(MagicMock(), MagicMock())
+        mc._eva_setup_response = MagicMock(side_effect=AssertionError("must reuse saved date"))
+        ledger = AttendanceLedger(str(tmp_path / "attendance.sqlite3"))
+        context = self._context(eva_date=None, eva_date_source="unknown")
+        saved = {"eva_date": "2099-02-01", "observed_eva_date": None,
+                 "eva_date_source": "unknown"}
+
+        confirmed = mc._confirm_eva_date(
+            context, saved, "unknown", DT.date(2026, 1, 20), "Spring 2026",
+            "CSC-151-N801", ledger, "12345",
+        )
+
+        assert confirmed == DT.date(2099, 2, 1)
+        mc._eva_setup_response.assert_not_called()
+        ledger.close()
+
+    @freeze_time("2026-11-02 17:00:00")
+    def test_incomplete_eva_status_survives_successful_ordinary_attendance(self):
+        context = self._context(eva_date=DT.date(2026, 11, 1))
+        ledger = AttendanceLedger(":memory:")
+        mc = MyColleges(MagicMock(), MagicMock(), ledger=ledger)
+        mc.current_tab = "sis"
+        mc._open_course_context = MagicMock(return_value=context)
+        mc._resolve_eva_activity = MagicMock(return_value={
+            "activity_id": "eva-1", "activity_type": "assignment",
+            "title": "EVA assignment", "eva_date": "2026-11-01",
+        })
+        mc._publish_eva_status = MagicMock()
+        mc._record_course_attendance = MagicMock(return_value=AttendanceOutcome())
+        mc._check_eva_attendance = MagicMock()
+        bsc = MagicMock()
+        bsc.eva_collection_result = EVACompletionResult(
+            "incomplete", {}, pages_read=1, rows_read=2,
+            error_code="pagination_transition_unverified",
+        )
+        bsc.scrape_problems = []
+        with patch("cqc_cpcc.my_colleges.BrightSpace_Course", return_value=bsc):
+            mc._process_single_course(
+                context.course_url, {"name": context.course_name},
+                RunPlan(course_urls=[context.course_url], write_attendance=True),
+                collect_attendance=True, mark_attendance=True,
+                collect_withdrawals=False, force_withdrawals=False,
+            )
+
+        mc._record_course_attendance.assert_called_once()
+        status_call = mc._publish_eva_status.call_args.args
+        assert status_call[2] == "incomplete"
+        assert "pagination_transition_unverified" in status_call[3]
+        ledger.close()
+
+    @freeze_time("2026-11-02 17:00:00")
+    def test_constructor_and_attendance_failures_replace_pending_eva_status(self):
+        for failure_stage in ("collection", "attendance"):
+            context = self._context(eva_date=DT.date(2026, 11, 1))
+            ledger = AttendanceLedger(":memory:")
+            mc = MyColleges(MagicMock(), MagicMock(), ledger=ledger)
+            mc.current_tab = "sis"
+            mc._open_course_context = MagicMock(return_value=context)
+            mc._resolve_eva_activity = MagicMock(return_value={
+                "activity_id": "eva-1", "activity_type": "assignment",
+                "title": "EVA assignment", "eva_date": "2026-11-01",
+            })
+            mc._publish_eva_status = MagicMock()
+            mc._record_course_attendance = MagicMock(side_effect=RuntimeError("ledger failure"))
+            constructor = (TimeoutException("browser session ended")
+                           if failure_stage == "collection" else MagicMock())
+            with patch("cqc_cpcc.my_colleges.BrightSpace_Course", side_effect=constructor):
+                with pytest.raises((TimeoutException, RuntimeError)):
+                    mc._process_single_course(
+                        context.course_url, {"name": context.course_name},
+                        RunPlan(course_urls=[context.course_url], write_attendance=True),
+                        collect_attendance=True, mark_attendance=True,
+                        collect_withdrawals=False, force_withdrawals=False,
+                    )
+
+            assert mc._publish_eva_status.call_args.args[2] == "incomplete"
+            if failure_stage == "collection":
+                mc._record_course_attendance.assert_not_called()
+                assert "before attendance processing" in mc._publish_eva_status.call_args.args[3]
+            else:
+                mc._record_course_attendance.assert_called_once()
+                assert "review the ledger" in mc._publish_eva_status.call_args.args[3]
+            ledger.close()
 
 
 @pytest.mark.unit

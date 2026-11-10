@@ -16,6 +16,7 @@ Used by both legacy and rubric-based exam grading tabs.
 
 import os
 import re
+import struct
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -266,6 +267,57 @@ def should_ignore_file(filepath: str) -> bool:
 
 # Largest nested submissions ZIP that is copied out of a Download All Feedback ZIP.
 MAX_NESTED_ZIP_BYTES = 512 * 1024 * 1024
+
+# Zip-bomb limits for ordinary members. A member is the largest single file a student
+# turns in: source files and documents are KiB to a few MiB; a screen recording or audio
+# file (accepted upload types include mp4, mov, mp3) can reach tens of MiB. Streamlit's
+# own default per-upload limit is 200 MB, so 100 MiB per member leaves headroom for the
+# biggest realistic file while stopping a small ZIP that expands to gigabytes.
+def _on_community_cloud() -> bool:
+    """True on Streamlit Community Cloud (it mounts the app under ``/mount/src``; the same
+    check ``results_store.persistence_enabled`` uses). Its disk and memory are small."""
+    return Path("/mount/src").exists()
+
+
+def _limit_from_env(name: str, default_mib: int) -> int:
+    """A size limit in bytes from env var ``name`` (whole MiB, 1 to 65536).
+
+    An unset, non-numeric or out-of-range value falls back to ``default_mib`` with a
+    warning, so a typo can neither disable the limit nor make every ZIP fail.
+    """
+    raw = os.environ.get(name, "").strip()
+    if raw:
+        try:
+            mib = int(raw)
+        except ValueError:
+            mib = 0
+        if 1 <= mib <= 65536:
+            return mib * 1024 * 1024
+        logger.warning(f"Ignoring {name}={raw!r}: expected a whole number of MiB from 1 to "
+                       f"65536; using {default_mib}")
+    return default_mib * 1024 * 1024
+
+
+_ON_CLOUD = _on_community_cloud()
+# Local defaults 100 MiB / 1 GiB; Community Cloud 25 MiB / 256 MiB.
+# Override with CQC_ZIP_MAX_MEMBER_MB and CQC_ZIP_MAX_TOTAL_MB.
+MAX_MEMBER_BYTES = _limit_from_env("CQC_ZIP_MAX_MEMBER_MB", 25 if _ON_CLOUD else 100)
+# All members of one extraction together, including a nested ZIP's copy and its members.
+MAX_TOTAL_UNCOMPRESSED_BYTES = _limit_from_env("CQC_ZIP_MAX_TOTAL_MB", 256 if _ON_CLOUD else 1024)
+# The uploaded ZIP itself; above Streamlit's default 200 MB per-upload limit.
+MAX_ZIP_BYTES = 250 * 1024 * 1024
+# Entries in one ZIP (files and folders); a real class export is a few hundred.
+MAX_ENTRY_COUNT = 10_000
+# ``ZipFile`` parses the central directory until its declared byte size runs out, not
+# until the entry count is reached, so the declared size is capped too. Each entry takes
+# 46 bytes plus its name, extra field and comment; 512 bytes per allowed entry leaves
+# room for 10,000 entries with long names (about 4.9 MiB) while a directory of 100,000
+# minimal entries (over 5 MiB) is refused before it is parsed.
+MAX_CENTRAL_DIRECTORY_BYTES = MAX_ENTRY_COUNT * 512
+# Members above RATIO_MIN_BYTES that compress better than this are treated as a bomb.
+# Source code and text compress about 5:1 to 20:1; 100:1 is far outside that.
+MAX_COMPRESSION_RATIO = 100
+RATIO_MIN_BYTES = 1024 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
 
 # BrightSpace "Download All" student folder: "{orgId}-{submissionId} - {Name} - {date}".
@@ -301,8 +353,16 @@ def _clean_label(label: str) -> str:
     return cleaned or 'file'
 
 
-def _copy_member_capped(src, dst, limit: int = MAX_NESTED_ZIP_BYTES) -> int:
-    """Copy ``src`` to ``dst`` in 1 MiB chunks; raise ValueError past ``limit`` bytes."""
+def _copy_member_capped(src, dst, limit: Optional[int] = None,
+                        too_big: Optional[str] = None) -> int:
+    """Copy ``src`` to ``dst`` in 1 MiB chunks, counting the bytes actually read.
+
+    Raises ValueError past ``limit`` bytes (``too_big`` is the message; the default is the
+    nested-ZIP one). Counting real bytes means a ZIP header that lies about the size
+    cannot get past the cap.
+    """
+    if limit is None:
+        limit = MAX_NESTED_ZIP_BYTES  # read at call time, not bound at definition
     total = 0
     while True:
         chunk = src.read(_COPY_CHUNK_BYTES)
@@ -310,10 +370,156 @@ def _copy_member_capped(src, dst, limit: int = MAX_NESTED_ZIP_BYTES) -> int:
             return total
         total += len(chunk)
         if total > limit:
-            raise ValueError(
+            raise ValueError(too_big or (
                 f"The ZIP inside the upload is larger than {limit // (1024 * 1024)} MiB; "
-                "upload the inner submissions ZIP directly.")
+                "upload the inner submissions ZIP directly."))
         dst.write(chunk)
+
+
+def _check_zip_stream(fp) -> None:
+    """Refuse an oversized ZIP, or one with too many entries, from its open file.
+
+    Reads only the file size and the end-of-central-directory (EOCD) records, never the
+    central directory itself, mirroring where ``zipfile`` looks (CPython 3.12 and 3.13
+    ``_EndRecData`` / ``_EndRecData64``): the last 64 KiB for the EOCD signature, then a
+    zip64 locator in the 20 bytes before it and a 56-byte zip64 record in the 56 bytes
+    before that. 3.13 also reads the record at the locator's own offset when it carries
+    the signature, so that record is read too. The largest entry count and directory size
+    any of them declares is the one checked, because ``ZipFile`` parses the directory
+    until its declared size runs out, whatever the count field says.
+    """
+    position = fp.tell()
+    fp.seek(0, 2)
+    size = fp.tell()
+    if size > MAX_ZIP_BYTES:
+        fp.seek(position)
+        raise _bomb_error(f"This ZIP file is larger than {_mib(MAX_ZIP_BYTES)}")
+    tail_len = min(size, 65536 + 22 + 20 + 56)
+    fp.seek(size - tail_len)
+    tail = fp.read(tail_len)
+    # EOCD comments are arbitrary bytes and may contain the signature too. Python's
+    # zipfile uses the last signature whose declared comment reaches EOF, so inspect
+    # every such candidate rather than trusting rfind() alone.
+    candidates = []
+    search_from = 0
+    while True:
+        eocd = tail.find(b'PK\x05\x06', search_from)
+        if eocd < 0:
+            break
+        search_from = eocd + 1
+        if len(tail) - eocd < 22:
+            continue
+        comment_size = struct.unpack_from('<H', tail, eocd + 20)[0]
+        if eocd + 22 + comment_size == len(tail):
+            candidates.append(eocd)
+    if not candidates:
+        fp.seek(position)
+        return  # not a ZIP: ZipFile will say so
+    entries = 0
+    cd_size = 0
+    records = []
+    for eocd in candidates:
+        entries = max(entries, struct.unpack_from('<H', tail, eocd + 10)[0])
+        cd_size = max(cd_size, struct.unpack_from('<I', tail, eocd + 12)[0])
+        if eocd >= 20 and tail[eocd - 20:eocd - 16] == b'PK\x06\x07':
+            if eocd >= 76:
+                records.append(tail[eocd - 76:eocd - 20])
+            locator_offset = struct.unpack_from('<Q', tail, eocd - 20 + 8)[0]
+            if 0 <= locator_offset <= size - 56:
+                fp.seek(locator_offset)
+                records.append(fp.read(56))
+    for record in records:
+        if len(record) == 56 and record[:4] == b'PK\x06\x06':
+            entries = max(entries, *struct.unpack_from('<QQ', record, 24))
+            cd_size = max(cd_size, struct.unpack_from('<Q', record, 40)[0])
+    fp.seek(position)
+    if entries > MAX_ENTRY_COUNT:
+        raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
+    if cd_size > MAX_CENTRAL_DIRECTORY_BYTES:
+        raise _bomb_error(
+            f"This ZIP's file list is larger than {_mib(MAX_CENTRAL_DIRECTORY_BYTES)}")
+
+
+class _CheckedZipFile(zipfile.ZipFile):
+    """``ZipFile`` that checks the file size and entry count before parsing the directory.
+
+    The check runs on the file object ``ZipFile`` already opened (one open, no second
+    path-based access), just before ``_RealGetContents`` reads the central directory.
+    It fails closed: if a ``ZipFile`` change ever stops calling the override, opening
+    for reading raises ``RuntimeError`` rather than skipping the check.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self._stream_checked = False
+        super().__init__(*args, **kwargs)
+        if self.mode in ('r', 'a') and not self._stream_checked:
+            self.fp.close()
+            raise RuntimeError("ZIP size and entry-count check did not run")
+
+    def _RealGetContents(self):
+        try:
+            _check_zip_stream(self.fp)
+        except BaseException:
+            self.fp.close()
+            raise
+        self._stream_checked = True
+        super()._RealGetContents()
+
+
+def _mib(n: int) -> str:
+    return f"{n / (1024 * 1024):g} MiB"
+
+
+def _bomb_error(what: str) -> ValueError:
+    return ValueError(f"{what}; it may be damaged or a zip bomb. Re-export it from "
+                      "BrightSpace, or upload the student files without the ZIP.")
+
+
+def _member_limit(name: str, used: int) -> tuple[int, str]:
+    """Byte limit for the next member and the instructor message if it is exceeded."""
+    remaining = MAX_TOTAL_UNCOMPRESSED_BYTES - used
+    limit = min(MAX_MEMBER_BYTES, remaining)
+    if limit == MAX_MEMBER_BYTES:
+        what = f"A file expands to more than {_mib(MAX_MEMBER_BYTES)}"
+    else:
+        what = f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} in total"
+    return limit, str(_bomb_error(what))
+
+
+def rebuild_zip_from_members(src_zip_path: str, out_zip_path: str, keep_arcs) -> None:
+    """Write ``keep_arcs`` from ``src_zip_path`` into a new ZIP, under the same limits.
+
+    Same pre-open size and entry-count check, per-member and total budget and streamed
+    copy as the grader's extraction. Raises ValueError on a breach; the caller removes
+    ``out_zip_path``.
+    """
+    used = 0
+    with _CheckedZipFile(src_zip_path, "r") as src, \
+            zipfile.ZipFile(out_zip_path, "w", zipfile.ZIP_DEFLATED) as dst:
+        if len(src.infolist()) > MAX_ENTRY_COUNT:
+            raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
+        for arc in keep_arcs:
+            info = src.getinfo(arc)
+            _check_member_before_read(info, used)
+            limit, too_big = _member_limit(arc, used)
+            target = zipfile.ZipInfo(arc, date_time=info.date_time)
+            target.compress_type = zipfile.ZIP_DEFLATED
+            with src.open(info) as reader, dst.open(
+                    target, "w", force_zip64=info.file_size >= 2 ** 31) as writer:
+                used += _copy_member_capped(reader, writer, limit, too_big=too_big)
+
+
+def _check_member_before_read(info: zipfile.ZipInfo, used: int) -> None:
+    """Reject a member whose header already says it is too big or suspiciously packed."""
+    if info.file_size > MAX_MEMBER_BYTES:
+        raise _bomb_error(f"A file expands to more than {_mib(MAX_MEMBER_BYTES)}")
+    if used + info.file_size > MAX_TOTAL_UNCOMPRESSED_BYTES:
+        raise _bomb_error(
+            f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} in total")
+    if info.file_size > RATIO_MIN_BYTES and (
+            info.compress_size <= 0 or info.file_size / info.compress_size > MAX_COMPRESSION_RATIO):
+        raise _bomb_error(
+            f"A file is compressed more than {MAX_COMPRESSION_RATIO}:1")
 
 
 def _has_accepted_ext(file_name: str, accepted_file_types: list[str]) -> bool:
@@ -422,6 +628,7 @@ def extract_student_submissions_from_zip(
         accepted_file_types: list[str],
         max_tokens_per_student: int = DEFAULT_MAX_INPUT_TOKENS,
         _nested_depth: int = 0,
+        _bytes_used: Optional[list] = None,
 ) -> dict[str, StudentSubmission]:
     """Extract student submissions from a ZIP file with token estimation.
     
@@ -465,7 +672,12 @@ def extract_student_submissions_from_zip(
     if not zip_path.endswith('.zip'):
         raise ValueError(f"Not a ZIP file: {zip_path}")
 
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    if _bytes_used is None:
+        _bytes_used = [0]  # uncompressed bytes written so far, shared with a nested call
+
+    with _CheckedZipFile(zip_path, 'r') as zip_ref:
+        if len(zip_ref.infolist()) > MAX_ENTRY_COUNT:
+            raise _bomb_error(f"This ZIP has more than {MAX_ENTRY_COUNT:,} entries")
         names = [_normalize_zip_name(i.filename) for i in zip_ref.infolist() if not i.is_dir()]
         nested_candidates = _nested_submissions_zips(names) if _nested_depth < 1 else []
         nested = None
@@ -486,25 +698,62 @@ def extract_student_submissions_from_zip(
                     f"The ZIP inside the upload is larger than "
                     f"{MAX_NESTED_ZIP_BYTES // (1024 * 1024)} MiB; upload the inner "
                     "submissions ZIP directly.")
+            remaining_total = MAX_TOTAL_UNCOMPRESSED_BYTES - _bytes_used[0]
+            if nested.file_size > remaining_total:
+                raise _bomb_error(
+                    f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} "
+                    "in total")
     if nested is not None:
         logger.info("Reading the submissions ZIP nested in a Download All Feedback ZIP")
         inner_path: Optional[str] = None
         try:
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref, zip_ref.open(nested) as src, \
+            with _CheckedZipFile(zip_path, 'r') as zip_ref, zip_ref.open(nested) as src, \
                     tempfile.NamedTemporaryFile(
                         delete=False, prefix='nested_submissions_', suffix='.zip') as inner:
                 inner_path = inner.name
-                _copy_member_capped(src, inner)
+                remaining_total = MAX_TOTAL_UNCOMPRESSED_BYTES - _bytes_used[0]
+                nested_limit = min(MAX_NESTED_ZIP_BYTES, remaining_total)
+                total_error = _bomb_error(
+                    f"This ZIP expands to more than {_mib(MAX_TOTAL_UNCOMPRESSED_BYTES)} "
+                    "in total")
+                copied = _copy_member_capped(
+                    src, inner, nested_limit,
+                    too_big=str(total_error) if nested_limit < MAX_NESTED_ZIP_BYTES else None)
+                _bytes_used[0] += copied
             return extract_student_submissions_from_zip(
                 inner_path, accepted_file_types, max_tokens_per_student,
-                _nested_depth=_nested_depth + 1)
+                _nested_depth=_nested_depth + 1, _bytes_used=_bytes_used)
         finally:
             if inner_path and os.path.exists(inner_path):
                 os.unlink(inner_path)
 
+    created_temps: list[str] = []
+    try:
+        return _extract_plain_zip(zip_path, accepted_file_types, max_tokens_per_student,
+                                  _bytes_used, created_temps)
+    except BaseException:
+        # Any failure (size cap, bomb, bad ZIP, no students): no temp file is left behind.
+        for temp_path in created_temps:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+        raise
+
+
+def _extract_plain_zip(
+        zip_path: str,
+        accepted_file_types: list[str],
+        max_tokens_per_student: int,
+        bytes_used: list,
+        created_temps: list,
+) -> dict[str, StudentSubmission]:
+    """The student-folder extraction of ``extract_student_submissions_from_zip``.
+
+    Every temp file written is appended to ``created_temps`` so the caller can remove them
+    all if anything fails.
+    """
     students_data: dict[str, StudentSubmission] = {}
 
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    with _CheckedZipFile(zip_path, 'r') as zip_ref:
         # First pass: analyze ZIP structure and detect wrapper folders
         # Backslashes become "/" once here; absolute-path entries are dropped.
         all_paths = [_normalize_zip_name(f.filename) for f in zip_ref.infolist()
@@ -633,7 +882,10 @@ def extract_student_submissions_from_zip(
 
             for file_name, zip_file_path in files_list:
                 # Extract to temp file
-                with zip_ref.open(zip_file_path) as file:
+                member = zip_ref.getinfo(zip_file_path)
+                _check_member_before_read(member, bytes_used[0])
+                limit, too_big = _member_limit(zip_file_path, bytes_used[0])
+                with zip_ref.open(member) as file:
                     prefix = f'from_zip_{randint(1000, 100000000)}_'
                     suffix = Path(file_name).suffix
                     temp_file = tempfile.NamedTemporaryFile(
@@ -641,8 +893,10 @@ def extract_student_submissions_from_zip(
                         prefix=prefix,
                         suffix=suffix
                     )
-                    temp_file.write(file.read())
-                    temp_file.flush()
+                    created_temps.append(temp_file.name)
+                    with temp_file:
+                        bytes_used[0] += _copy_member_capped(
+                            file, temp_file, limit, too_big=str(_bomb_error(too_big)))
                     temp_file_path = temp_file.name
 
                 # Read file content and estimate tokens
@@ -702,7 +956,7 @@ def extract_student_submissions_from_zip(
         # Provide helpful error message
         error_msg = f"No student submissions found in ZIP: {zip_path}\n"
         if wrapper_folder:
-            error_msg += f"Detected wrapper folder: '{wrapper_folder}'\n"
+            error_msg += f"Detected wrapper folder: {wrapper_folder!r}\n"
 
         # List what was found (use all_paths already collected in with block)
         if all_paths:
@@ -714,7 +968,7 @@ def extract_student_submissions_from_zip(
             error_msg += f"Accepted file types: {', '.join(accepted_file_types)}\n"
             error_msg += f"First few files found:\n"
             for f in all_paths[:5]:
-                error_msg += f"  - {f}\n"
+                error_msg += f"  - {f!r}\n"
             if len(all_paths) > 5:
                 error_msg += f"  ... and {len(all_paths) - 5} more\n"
         else:

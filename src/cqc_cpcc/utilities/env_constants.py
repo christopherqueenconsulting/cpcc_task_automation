@@ -95,6 +95,7 @@ DOCKER_PROJECT_NAME = get_constant_from_env('COMPOSE_PROJECT_NAME', default_valu
 # that bind the default ports. Override via .env if needed.
 SELENIUM_HOST_PORT = int(get_constant_from_env('SELENIUM_HOST_PORT', default_value='14444'))
 SELENIUM_VNC_PORT = int(get_constant_from_env('SELENIUM_VNC_PORT', default_value='17900'))
+SELENIUM_OPEN_VNC_BROWSER = isTrue(get_constant_from_env('SELENIUM_OPEN_VNC_BROWSER', default_value='False'))
 # Timezone the automated browser runs in. MyColleges compares typed dates with
 # midnight Eastern; a UTC browser reads a typed date 4 hours early and rejects the
 # course's first date as "less than minimum allowed date".

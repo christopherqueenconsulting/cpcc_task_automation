@@ -36,13 +36,15 @@ The `codecov/project` status check:
 - Useful for tracking progress toward 80% repo-wide goal
 
 
-### Component Patch Coverage — two are informational
+### Components: comment table only, no per-component statuses
 
-Every component reports a patch status. Two of them — **Core Automation** and
-**Rubric Grading** — are `informational: true`: they appear on the PR and are worth
-watching as a trend, but they do not block.
+Components (`component_management` in `codecov.yml`) feed the component table in the PR
+comment. They post **no** statuses: the per-component `codecov/project/<Component>` and
+`codecov/patch/<Component>` checks (15 per PR) were removed, leaving only
+`codecov/patch` and `codecov/project`. History: **Core Automation** and **Rubric
+Grading** patch statuses had been `informational: true`.
 
-That is not a lowered bar. The number those two produced was not measuring test
+That was not a lowered bar. The number those two produced was not measuring test
 coverage. Codecov's diff-to-coverage line mapping counts lines that are not
 executable, and it does so specifically where existing files are edited. Measured
 against codecov's own per-line API:
@@ -64,11 +66,9 @@ The consequence, left alone, is that the gate penalises refactoring — the chan
 worth making — and teaches everyone to ignore red coverage checks.
 
 **The repository-wide `codecov/patch` gate at 80% is unaffected and still enforces.**
-So does every other component's patch status.
 
-If codecov's mapping is fixed, or coverage reports stop emitting non-statements,
-revert the two `informational: true` lines and the 80%/90% targets take effect again
-unchanged.
+To bring component statuses back, restore the `statuses:` blocks from git history
+(the commit that removed them).
 
 
 ## Required GitHub Settings
@@ -131,11 +131,6 @@ These are the exact names that will appear in GitHub after running CI:
 |------------|---------|---------|
 | `codecov/patch` | Patch coverage ≥80% across all gated paths | ✅ YES |
 | `codecov/project` | Project coverage trend | ❌ informational |
-| `codecov/patch/<Component>` | Per-component patch coverage | ✅ except the three below |
-| `codecov/patch/Core Automation` | Reported only | ❌ informational — see above |
-| `codecov/patch/Rubric Grading` | Reported only | ❌ informational — see above |
-| `codecov/patch/Browser Automation & MFA` | Reported only | ❌ informational (browser-driven) |
-| `codecov/project/<Component>` | Per-component trend | ✅ except Core Automation / Streamlit UI |
 | `unit-tests` | CI workflow success | ⚠️ Recommended |
 
 > **Note:** "blocks" here means codecov marks the check failed. Whether a failed check

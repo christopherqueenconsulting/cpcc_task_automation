@@ -47,13 +47,20 @@ from cqc_cpcc.model_eval import account_limit, error_detail
 from cqc_cpcc.utilities.AI import llm_progress
 from cqc_cpcc.utilities.logger import logger
 
-#: Most calls in flight per side unless ``--max-concurrency`` / ``CQC_AB_MAX_CONCURRENCY`` says otherwise.
+#: Fallback ceiling for calls in flight per side, used only when the number of calls is not known. A run that knows
+#: its call count defaults to ALL of them (every call of a suite side in flight at once), capped by
+#: ``HARD_MAX_CONCURRENCY`` and the file-descriptor limit (:func:`fd_safe_cap`).
 DEFAULT_MAX_CONCURRENCY = 64
-#: Sanity cap. A value above it is an error, never a silent fallback.
-HARD_MAX_CONCURRENCY = 256
-#: Judge calls (the pairwise judge) get their own, lower, pool.
+#: Sanity cap per process. A value above it is an error, never a silent fallback. 512 because the OpenAI SDK's
+#: default connection pool takes 1000 connections (``openai.DEFAULT_CONNECTION_LIMITS``), so 512 in flight never
+#: waits on the pool, and the descriptor limit is checked at run time by :func:`fd_safe_cap`.
+HARD_MAX_CONCURRENCY = 512
+#: Judge calls (the pairwise judge) get their own pool; this is its ceiling only when the judge call count is unknown.
 DEFAULT_JUDGE_CONCURRENCY = 16
-
+#: Descriptors kept free for files, logs, the budget ledger and the DNS/TLS handshakes of new connections.
+FD_HEADROOM = 256
+#: Soft limit the process asks for when it is lower (each in-flight call holds one socket = one descriptor).
+FD_TARGET = 4096
 ENV_MAX = "CQC_AB_MAX_CONCURRENCY"
 ENV_JUDGE = "CQC_AB_JUDGE_CONCURRENCY"
 ENV_ADAPTIVE = "CQC_AB_ADAPTIVE"
@@ -117,14 +124,93 @@ def _setting(value, env: str, default: int, name: str) -> int:
     return parse_concurrency(raw, name)
 
 
-def ab_max_concurrency(value=None) -> int:
-    """The ceiling for calls in flight per side: ``value``, else ``CQC_AB_MAX_CONCURRENCY``, else 64."""
-    return _setting(value, ENV_MAX, DEFAULT_MAX_CONCURRENCY, "max concurrency")
+_FD_CAP: dict = {}
+#: Smallest ceiling used when the descriptor limit leaves almost nothing (after a failed raise). Not 1: that would
+#: serialise the run silently; 16 keeps it moving and the warning tells the operator how to fix the limit.
+FD_FLOOR = 16
 
 
-def judge_max_concurrency(value=None) -> int:
-    """The ceiling for the judge pool: ``value``, else ``CQC_AB_JUDGE_CONCURRENCY``, else 16."""
-    return _setting(value, ENV_JUDGE, DEFAULT_JUDGE_CONCURRENCY, "judge concurrency")
+def fd_safe_cap() -> int:
+    """Most connections this process can hold open: its descriptor limit minus ``FD_HEADROOM``.
+
+    Each in-flight call is one socket. A soft ``RLIMIT_NOFILE`` below ``FD_TARGET`` is raised toward
+    ``min(hard limit, FD_TARGET)`` first, in this process (children inherit the raised limit; macOS may refuse and
+    then the unraised limit is used). Where the limit cannot be read (Windows, no ``resource`` module) the cap is
+    ``HARD_MAX_CONCURRENCY``. If the limit leaves less than ``FD_FLOOR`` after headroom, a warning names the limit and
+    the cap is ``FD_FLOOR``. Read once per process.
+    """
+    if "n" not in _FD_CAP:
+        n = HARD_MAX_CONCURRENCY
+        try:
+            import resource
+
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            want = FD_TARGET if hard == resource.RLIM_INFINITY else min(hard, FD_TARGET)
+            if soft != resource.RLIM_INFINITY and soft < want:
+                try:
+                    resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+                    soft = want
+                except (ValueError, OSError):
+                    pass
+            if soft == resource.RLIM_INFINITY:
+                n = HARD_MAX_CONCURRENCY
+            else:
+                n = soft - FD_HEADROOM
+                if n < FD_FLOOR:
+                    logger.warning(f"[adaptive] the file-descriptor limit is {soft} (soft) and could not be raised; "
+                                   f"only {max(n, 0)} connections fit after {FD_HEADROOM} descriptors of headroom. "
+                                   f"Using {FD_FLOOR}. Raise it with `ulimit -n 4096` before the run.")
+                    n = FD_FLOOR
+        except (ImportError, ValueError, OSError):
+            pass
+        _FD_CAP["n"] = n
+    return _FD_CAP["n"]
+
+
+def clamp_pool(n: int) -> int:
+    """``n`` limited by the hard cap and the descriptor limit (for a pool widened to fit a whole batch group)."""
+    return max(1, min(int(n), HARD_MAX_CONCURRENCY, fd_safe_cap()))
+
+
+def _explicit(value, env: str) -> bool:
+    return (value if value is not None else os.environ.get(env)) not in (None, "")
+
+
+def _ceiling(value, env: str, calls: Optional[int], fallback: int, name: str) -> int:
+    """An explicit setting wins (and caps lower); else every call of the group (when known); never above the hard
+    cap or the descriptor limit."""
+    if _explicit(value, env):
+        want = _setting(value, env, fallback, name)
+    elif calls is not None:
+        want = min(max(1, int(calls)), HARD_MAX_CONCURRENCY)
+    else:
+        want = fallback
+    safe = fd_safe_cap()
+    if want > safe:
+        logger.warning(f"[adaptive] {name} {want} lowered to {safe}: the file-descriptor limit allows {safe} connections")
+        want = safe
+    return want
+
+
+def ab_max_explicit(value=None) -> Optional[int]:
+    """The ceiling the operator set (``value`` or ``CQC_AB_MAX_CONCURRENCY``), or None when none was set."""
+    return _setting(value, ENV_MAX, 0, "max concurrency") if _explicit(value, ENV_MAX) else None
+
+
+def ab_max_concurrency(value=None, calls: Optional[int] = None) -> int:
+    """The ceiling for calls in flight per side.
+
+    ``value``, else ``CQC_AB_MAX_CONCURRENCY`` (1 to 512; an explicit setting always wins, so it can cap lower),
+    else ``calls`` (every call of the suite side at once, at most ``HARD_MAX_CONCURRENCY``), else 64 when the call
+    count is unknown. Never above :func:`fd_safe_cap`.
+    """
+    return _ceiling(value, ENV_MAX, calls, DEFAULT_MAX_CONCURRENCY, "max concurrency")
+
+
+def judge_max_concurrency(value=None, calls: Optional[int] = None) -> int:
+    """The ceiling for the judge pool: ``value``, else ``CQC_AB_JUDGE_CONCURRENCY``, else ``calls`` (the judge call
+    count, at most ``HARD_MAX_CONCURRENCY``), else 16 when the count is unknown."""
+    return _ceiling(value, ENV_JUDGE, calls, DEFAULT_JUDGE_CONCURRENCY, "judge concurrency")
 
 
 def ab_start_concurrency(value=None) -> Optional[int]:

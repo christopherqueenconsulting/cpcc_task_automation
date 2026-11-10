@@ -175,11 +175,47 @@ def runnable_files(code_files: list[CodeFile], lang: str) -> list[CodeFile]:
 
 
 def build_onecompiler_payload(code_files: list[CodeFile], lang: str) -> dict:
-    """The ``populateCode`` message OneCompiler's embed editor listens for."""
+    """Build the iframe message, normalizing whitespace in submitted file names only.
+
+    The source files remain untouched except for exact quoted C/C++ include paths that
+    must follow a renamed submitted header. No language errors (for example a Java
+    public-class/file mismatch) are repaired here.
+    """
+    files = runnable_files(code_files, lang)
+    names = {}
+    used = {f.name for f in files if not any(ch.isspace() for ch in f.name)}
+    for f in files:
+        if not any(ch.isspace() for ch in f.name):
+            names[f.name] = f.name
+            continue
+        stem, ext = os.path.splitext(f.name)
+        base = "".join("_" if ch.isspace() else ch for ch in f.name)
+        candidate = base
+        i = 2
+        while candidate in used:
+            normalized_stem = "".join("_" if ch.isspace() else ch for ch in stem)
+            candidate = f"{normalized_stem}_{i}{ext}"
+            i += 1
+        names[f.name] = candidate
+        used.add(candidate)
+
+    payload_files = []
+    for f in files:
+        content = f.content
+        if lang in ("c", "cpp"):
+            for original, converted in names.items():
+                if original != converted:
+                    # Only alter quoted include directives that exactly name a file in
+                    # this payload; unrelated strings and system includes stay intact.
+                    content = re.sub(
+                        rf'(?m)^(\s*#\s*include\s*)"{re.escape(original)}"',
+                        lambda m: f'{m.group(1)}"{converted}"', content,
+                    )
+        payload_files.append({"name": names[f.name], "content": content})
     return {
         "eventType": "populateCode",
         "language": lang,
-        "files": [{"name": f.name, "content": f.content} for f in runnable_files(code_files, lang)],
+        "files": payload_files,
     }
 
 

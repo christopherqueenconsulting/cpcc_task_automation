@@ -20,6 +20,12 @@ on:
   schedule:
     - cron: '26 8 * * 2'
 
+concurrency:
+  # Cancel a superseded PR run. Never cancel merge_group or push runs:
+  # cancelling a merge-queue run evicts the PR from the queue.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
@@ -29,6 +35,7 @@ jobs:
     #   - https://gh.io/using-larger-runners (GitHub.com only)
     # Consider using larger runners or machines with greater resources for possible analysis time improvements.
     runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    timeout-minutes: 10
     permissions:
       # required for all workflows
       security-events: write

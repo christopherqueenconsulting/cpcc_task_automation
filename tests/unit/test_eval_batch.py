@@ -324,6 +324,17 @@ class TestScheduleOnly:
 
 # --- Switches ------------------------------------------------------------------------------------
 
+class TestPoolClampAfterWiden:
+    def test_a_widened_pool_never_exceeds_the_descriptor_cap(self, batch_on, fake, monkeypatch):
+        from cqc_cpcc.model_eval import adaptive
+
+        monkeypatch.setitem(adaptive._FD_CAP, "n", 300)
+        stats = []
+        records, _ = go(model_suite(), n=700, pool_stats=stats)
+        assert len(records) == 700
+        assert stats[0]["ceiling"] <= 300
+
+
 class TestSyncFallbackKeepsTheNormalTimeout:
     """CQC_LLM_TIMEOUT is raised for a batch group so a call can wait for its batch; a call sent the ordinary way
     inside the group (here: the fallback after a rejected submit) must keep the normal timeout of its role and effort."""
@@ -1200,7 +1211,7 @@ class TestWorkflows:
     FIVE = {
         ("prompt-eval.yml", "ab", "A/B base vs head prompts"),
         ("prompt-eval.yml", "record", "Run the changed suites on master"),
-        ("prompt-eval.yml", "dispatch", "Run"),
+        ("prompt-eval-dispatch.yml", "dispatch", "Run"),
         ("model-eval.yml", "evaluate", "Run evaluation"),
         ("model-eval.yml", "cross-suite", "Run the winner on the other prompt suites of its roles"),
     }

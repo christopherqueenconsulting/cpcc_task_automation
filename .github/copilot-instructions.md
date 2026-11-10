@@ -208,11 +208,8 @@ poetry run ruff check --fix .        # Auto-fix issues
 ```
 
 ### GitHub Actions Workflows
-- **unit-tests.yml**: Unit tests with coverage (required for PR merge)
-- **integration-coverage.yml**: Integration tests with coverage (required for PR merge)
-- **e2e-coverage.yml**: E2E tests with Playwright (required for PR merge)
+- **unit-tests.yml**: Unit shards, exhaustive compiler checks, integration tests, E2E tests, and Codecov finalization (required checks: `unit-tests`, `integration-tests`, `e2e-tests`; compiler checks are included in the `unit-tests` gate)
 - **codeql.yml** / **codeql-analysis.yml**: Security scanning
-- **gitguardian-scan.yml**: Secret scanning
 - **dependabot-auto-merge.yml**: Auto-approve and merge Dependabot PRs
 - **Selenium_Action.yml**: Manual web scraping workflow (workflow_dispatch)
 - **Cron_Action.yml**: Scheduled automation workflow with secrets/vars
