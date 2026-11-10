@@ -1163,7 +1163,8 @@ class BrightSpace_Course:
                         "Waiting for EVA assignment submissions")
                 table_xpath = (
                     "//table[contains(@summary,'List of users and the submissions')] | "
-                    "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]"
+                    "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') "
+                    "or contains(.,'Learner')]]"
                 )
                 if not self.click_max_results_select(self.select_xpath) and not self._has_elements(table_xpath):
                     raise _EVAReadIncomplete("assignment_results_not_loaded")
@@ -1296,7 +1297,8 @@ class BrightSpace_Course:
         is_assignment = activity_type == "assignment"
         table_xpath = (
             "//table[contains(@summary,'List of users and the submissions')] | "
-            "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]" if is_assignment
+            "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') "
+            "or contains(.,'Learner')]]" if is_assignment
             else "//div[@id='OverviewGrid']//table"
         )
         select_xpath = (
@@ -1345,7 +1347,8 @@ class BrightSpace_Course:
                         source_url, view = attempts_url, "quiz attempts"
                         self.driver.get(source_url)
                         wait_for_ajax(self.driver)
-                        generic_table = "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]"
+                        generic_table = ("//table[.//th[contains(.,'Student') or contains(.,'User') "
+                                         "or contains(.,'Name') or contains(.,'Learner')]]")
                         if not self.click_max_results_select("//select[.//option[contains(.,'per page')]]") \
                                 and not self._has_elements(generic_table):
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
