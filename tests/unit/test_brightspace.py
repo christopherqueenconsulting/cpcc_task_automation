@@ -809,6 +809,18 @@ def test_a_date_row_before_any_learner_row_is_still_missing_a_student():
 
 
 @pytest.mark.unit
+def test_a_pager_row_between_a_learner_row_and_its_date_row_ends_the_learner():
+    rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"))
+    rows.insert(2, _LiveRow(_PerUserCell("Page 1 of 2")))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    with pytest.raises(_EVAReadIncomplete, match="completion_row_missing_student"):
+        course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+
+@pytest.mark.unit
 def test_live_learner_row_without_a_th_name_is_still_malformed():
     rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"))
     rows.insert(1, _LiveRow(_PerUserCell(""), _PerUserCell("", "th")))

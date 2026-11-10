@@ -1018,8 +1018,10 @@ class BrightSpace_Course:
                     if len(cells) == 1 and ((isinstance(colspan, str) and colspan) or
                                             (isinstance(row_class, str) and "pager" in row_class.casefold())
                                             or is_pager_summary):
+                        pending_name = None  # a group or pager row ends the learner above it
                         continue
                     if is_pager_summary:
+                        pending_name = None
                         continue
                     name_col, date_col = header_indexes or (name_cell - 1, date_cell - 1)
                     if len(cells) <= max(name_col, date_col):
