@@ -38,8 +38,19 @@
 # reconciled against poetry.lock rather than trusted), and it keeps this action
 # a pure speed-up that can never change what actually gets installed. A caller may
 # opt out with `skip-install-on-exact-hit: "true"`: the key embeds the poetry.lock
-# hash and the install args, so an exact hit is already the finished environment.
+# hash, the install args and the EXACT python version (major.minor.patch, from
+# setup-python's resolved output), so an exact hit is already the finished environment.
 # A restore-keys (near) hit still installs. Saving is unchanged (rule 1).
+#
+# Why the exact python patch is in the venv key: `.venv/bin/python` is a symlink into
+# the runner's hostedtoolcache (`.../Python/3.12.<patch>/...`). When setup-python
+# resolves a newer patch, a venv saved under the old one dangles, Poetry reports it
+# "broken", silently recreates an EMPTY venv, and an exact-hit skip leaves it empty
+# (`No module named 'psutil'`, `Command not found: pytest`). The save step only runs
+# on a miss, so the stale entry would never be replaced. Keying on the patch makes a
+# new patch release miss and rebuild. As a second guard, "Verify restored virtualenv"
+# checks the venv interpreter runs and matches the runner's python before the install
+# is skipped, and installs anyway if not.
 name: poetry-install-with-caching
 description: Poetry install with support for caching of dependency groups.
 
@@ -170,14 +181,34 @@ runs:
         WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
       with:
         path: ${{ env.WORKDIR }}/.venv
-        key: venv-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-${{ hashFiles(format('{0}/**/poetry.lock', env.WORKDIR)) }}
+        key: venv-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.setup-python.outputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-${{ hashFiles(format('{0}/**/poetry.lock', env.WORKDIR)) }}
         # One rung, dropping only the lockfile hash. Dependabot changes
         # poetry.lock constantly; without this ladder every such PR is a total
         # miss and reinstalls from scratch. With it, the previous venv for the
         # same dependency groups is restored and `poetry install` only has to
         # reconcile the packages that actually changed.
         restore-keys: |
-          venv-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-
+          venv-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.setup-python.outputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-
+
+    # Only runs when the install below would be skipped. If the restored venv is
+    # unusable (dangling interpreter after a python patch bump, wrong version), run
+    # the install anyway so the job never proceeds with an empty venv.
+    - name: Verify restored virtualenv
+      if: ${{ inputs.skip-install-on-exact-hit == 'true' && steps.cache-venv.outputs.cache-hit == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
+      env:
+        EXPECTED_PYTHON: ${{ steps.setup-python.outputs.python-version }}
+        INSTALL_ARGS: ${{ inputs.install-args }}
+      run: |
+        set -u
+        actual="$(.venv/bin/python -c 'import platform; print(platform.python_version())' 2>/dev/null || true)"
+        if [ -n "$actual" ] && [ "$actual" = "$EXPECTED_PYTHON" ]; then
+          echo "Restored venv OK (python ${actual}); skipping poetry install."
+        else
+          echo "::warning::Restored venv unusable (venv python='${actual:-missing}', runner python='${EXPECTED_PYTHON}'); running poetry install anyway."
+          poetry install ${INSTALL_ARGS} --no-interaction --no-ansi
+        fi
 
     - name: Install dependencies
       if: ${{ !(inputs.skip-install-on-exact-hit == 'true' && steps.cache-venv.outputs.cache-hit == 'true') }}
@@ -196,4 +227,4 @@ runs:
         WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
       with:
         path: ${{ env.WORKDIR }}/.venv
-        key: venv-${{ runner.os }}-${{ runner.arch }}-py-${{ inputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-${{ hashFiles(format('{0}/**/poetry.lock', env.WORKDIR)) }}
+        key: venv-${{ runner.os }}-${{ runner.arch }}-py-${{ steps.setup-python.outputs.python-version }}-poetry-${{ inputs.poetry-version }}-${{ steps.scope.outputs.slug }}-${{ hashFiles(format('{0}/**/poetry.lock', env.WORKDIR)) }}
