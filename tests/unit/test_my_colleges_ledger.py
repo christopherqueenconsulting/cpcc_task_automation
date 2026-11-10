@@ -131,6 +131,25 @@ class TestMatchStudentId:
         roster = [{"id": "1", "text": "Lee, Ann 1"}, {"id": "2", "text": "Leeson, Ann 2"}]
         assert MyColleges._match_student_id("Ann Lee", roster) == "1"
 
+    def test_a_substring_of_another_students_row_never_matches(self):
+        # An absent student must not be marked on someone whose words merely contain theirs.
+        roster = [{"id": "2", "text": "Leeson, Joanne 2"}]
+        assert MyColleges._match_student_id("Lee, Ann", roster) is None
+        assert MyColleges._match_student_id("Ann Lee", roster) is None
+
+    def test_the_right_row_wins_over_a_longer_surname_row(self):
+        roster = [{"id": "2", "text": "Leeson, Joanne 2"}, {"id": "1", "text": "Lee, Ann M. 1000001"}]
+        assert MyColleges._match_student_id("Lee, Ann", roster) == "1"
+
+    def test_a_one_word_name_cannot_identify_a_student(self):
+        assert MyColleges._match_student_id("Adams", ROSTER) is None
+        assert MyColleges._match_student_id("Ann, ", ROSTER) is None
+
+    def test_hyphenated_names_match_their_roster_words(self):
+        roster = [{"id": "1", "text": "Smith-Jones, Anne-Marie 1000001"}]
+        assert MyColleges._match_student_id("Anne-Marie Smith-Jones", roster) == "1"
+        assert MyColleges._match_student_id("Anne Smith", roster) == "1"
+
     def test_a_last_comma_first_name_matches_its_roster_row(self):
         roster = [{"id": "1", "text": "Lee, Ann M. 1000001 Ann Lee"}, {"id": "2", "text": "Leeson, Ann 2"}]
         assert MyColleges._match_student_id("Lee, Ann", roster) == "1"
