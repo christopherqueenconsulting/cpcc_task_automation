@@ -147,7 +147,8 @@ def main() -> int:
         iframe.wait_for(timeout=args.start_timeout * 1000)
         frame_el = iframe.element_handle()
         frame = frame_el.content_frame()
-        check("iframe is the view-only noVNC url", "view_only=true" in iframe.get_attribute("src"))
+        check("iframe url asks the noVNC client to be view-only (a client flag, not a lock)",
+              "view_only=true" in iframe.get_attribute("src"))
         check("no login or url typed by the user", page.get_by_label(re.compile("password", re.I)).count() == 0)
 
         # noVNC connects, then draws the container's screen onto its canvas.

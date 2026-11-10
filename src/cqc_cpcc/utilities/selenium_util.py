@@ -672,7 +672,8 @@ def warn_if_browser_timezone_differs(driver, expected: str | None = None) -> str
 
 
 def vnc_viewer_url(base_url: str) -> str:
-    """The noVNC page at ``base_url`` (``scheme://host[:port]``): auto-connect, view only, scaled."""
+    """The noVNC page at ``base_url`` (``scheme://host[:port]``): auto-connect, scaled, and a
+    ``view_only`` client flag (not a lock: the URL carries the VNC password)."""
     query = urlencode([
         ("autoconnect", "1"),
         ("view_only", "true"),
