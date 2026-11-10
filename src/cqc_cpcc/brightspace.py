@@ -843,6 +843,28 @@ class BrightSpace_Course:
         "//a[@aria-label='Next page' or @title='Next Page']"
     )
 
+    PER_USER_TABLE_SUMMARY = "users and the submissions"
+
+    @classmethod
+    def _is_per_user_table(cls, table) -> bool:
+        get_summary = getattr(table, "get_attribute", None)
+        summary = get_summary("summary") if callable(get_summary) else None
+        return isinstance(summary, str) and cls.PER_USER_TABLE_SUMMARY in summary.casefold()
+
+    @classmethod
+    def _results_table(cls, tables):
+        """Pick the results table among the XPath matches.
+
+        The assignment XPath also matches any table with a User/Name/Student header, and the
+        first match in document order may be a layout or filter table. The per-user
+        Submissions table (identified by its summary) wins when present; otherwise the
+        first match, as before.
+        """
+        for table in tables:
+            if cls._is_per_user_table(table):
+                return table
+        return tables[0]
+
     def _snapshot_activity_page(self, table_xpath: str, name_cell: int,
                                 date_cell: int, pages_read: int,
                                 rows_read: int) -> tuple[tuple[str, str], ...]:
@@ -852,12 +874,18 @@ class BrightSpace_Course:
                 tables = self.driver.find_elements(By.XPATH, table_xpath)
                 if not tables:
                     raise _EVAReadIncomplete("results_table_missing", pages_read, rows_read)
-                table_text = (getattr(tables[0], "text", "") or "").strip()
-                rows = tables[0].find_elements(By.XPATH, "./tr | ./tbody/tr")
+                results_table = self._results_table(tables)
+                # Counts and a flag only (no row text): shows which table was read and whether the
+                # per-user summary matched, so a repeat failure can be told apart from a bypassed fix.
+                logger.info("Results table: %d matched, chose index %d, per-user summary %s.",
+                            len(tables), tables.index(results_table),
+                            "matched" if self._is_per_user_table(results_table) else "not found (first match)")
+                table_text = (getattr(results_table, "text", "") or "").strip()
+                rows = results_table.find_elements(By.XPATH, "./tr | ./tbody/tr")
                 # Prefer the actual result headers. Brightspace layouts add and
                 # remove columns by role; fixed indexes can silently read a
                 # status/attempt cell as a student or date.
-                header_rows = tables[0].find_elements(By.XPATH, "./thead/tr[1]")
+                header_rows = results_table.find_elements(By.XPATH, "./thead/tr[1]")
                 header_indexes = None
                 semantic_header = False
                 if header_rows:
@@ -893,10 +921,10 @@ class BrightSpace_Course:
                 completion_rows = 0
                 # The per-user assignment view lists each learner on two rows: the name row
                 # (date cell empty) and, right after it, a date row (name cell empty).
-                get_summary = getattr(tables[0], "get_attribute", None)
+                get_summary = getattr(results_table, "get_attribute", None)
                 table_summary = get_summary("summary") if callable(get_summary) else None
                 two_row_layout = (isinstance(table_summary, str)
-                                  and "users and the submissions" in table_summary.casefold())
+                                  and self.PER_USER_TABLE_SUMMARY in table_summary.casefold())
                 pending_name: str | None = None
                 for row in rows:
                     cells = row.find_elements(By.XPATH, "./td")
@@ -978,7 +1006,7 @@ class BrightSpace_Course:
             tables = self.driver.find_elements(By.XPATH, table_xpath)
             if not tables:
                 return None
-            rows = tables[0].find_elements(By.XPATH, "./tr | ./tbody/tr")
+            rows = self._results_table(tables).find_elements(By.XPATH, "./tr | ./tbody/tr")
             row_text = tuple((row.text or "").strip() for row in rows)
             current_page = self.driver.find_elements(
                 By.XPATH, "//*[@aria-current='page']"
@@ -1008,7 +1036,7 @@ class BrightSpace_Course:
                     tables = (self.driver.find_elements(By.XPATH, table_xpath)
                               if hasattr(self, "driver") else [])
                     if tables:
-                        text = " ".join(str(getattr(tables[0], "text", "") or "").split())
+                        text = " ".join(str(getattr(self._results_table(tables), "text", "") or "").split())
                         if re.search(r"\bpage\s+1\s+of\s+1\b|\b1\s*[-–]\s*(\d+)\s+of\s+\1\b",
                                      text, flags=re.IGNORECASE):
                             return False

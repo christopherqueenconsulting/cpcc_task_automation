@@ -738,6 +738,71 @@ def test_date_header_accepts_submission_date_and_still_rejects_unknown_headers()
         course._snapshot_activity_page("//table", 1, 2, 0, 0)
 
 
+def _decoy_table():
+    """A layout/filter table that the assignment XPath also matches (it has a User header)."""
+    return _PerUserTable([_PerUserRow([_PerUserCell("filter")])], ["User"], summary="Filter users")
+
+
+@pytest.mark.unit
+def test_per_user_table_wins_over_an_earlier_matching_table():
+    rows = _per_user_learner("Student One", "Nov 9, 2026 10:06 PM")
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    per_user = _PerUserTable(rows, ["Learner", "Submission Date", "Delete"])
+    course.driver.find_elements.return_value = [_decoy_table(), per_user]
+
+    # The decoy comes first in document order and has one-cell rows; reading it would raise
+    # completion_row_malformed. The per-user table is chosen by its summary instead.
+    assert course._snapshot_activity_page("//table", 1, 2, 0, 0) == (("Student One", "Nov 9, 2026 10:06 PM"),)
+
+
+@pytest.mark.unit
+def test_table_choice_is_logged_with_counts_only_on_both_paths():
+    rows = _per_user_learner("Student One", "Nov 9, 2026 10:06 PM")
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+
+    with patch("cqc_cpcc.brightspace.logger") as mock_logger:
+        course.driver.find_elements.return_value = [_decoy_table(), _PerUserTable(rows)]
+        course._snapshot_activity_page("//table", 1, 2, 0, 0)
+        found = mock_logger.info.call_args.args
+        mock_logger.reset_mock()
+        # No summary match anywhere: the first match is read and the log says so.
+        course.driver.find_elements.return_value = [_PerUserTable(rows, summary="Some other grid")]
+        try:
+            course._snapshot_activity_page("//table", 1, 2, 0, 0)
+        except _EVAReadIncomplete:
+            pass  # the strict rules apply to a table without the per-user summary
+        fallback = mock_logger.info.call_args.args
+
+    assert found[1:] == (2, 1, "matched")
+    assert fallback[1:] == (1, 0, "not found (first match)")
+    assert "Student" not in " ".join(str(part) for part in found + fallback)
+
+
+@pytest.mark.unit
+def test_results_table_is_the_first_match_when_none_has_the_per_user_summary():
+    first, second = _decoy_table(), _decoy_table()
+
+    assert BrightSpace_Course._results_table([first, second]) is first
+    assert BrightSpace_Course._results_table([first, MagicMock()]) is first
+
+
+@pytest.mark.unit
+def test_page_fingerprint_reads_the_per_user_table_not_the_first_match():
+    rows = _per_user_learner("Student One", "Nov 9, 2026 10:06 PM")
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    tables = [_decoy_table(), _PerUserTable(rows)]
+    course.driver.find_elements.side_effect = lambda _by, xpath: tables if xpath == "//table" else []
+
+    fingerprint = course._page_fingerprint("//table")
+
+    assert fingerprint is not None
+    assert any("Nov 9, 2026" in part for part in fingerprint)
+    assert not any(part == "filter" for part in fingerprint)
+
+
 @pytest.mark.unit
 def test_eva_snapshot_retries_stale_cell_and_exhaustion_is_incomplete():
     attempts = {"value": 0}
