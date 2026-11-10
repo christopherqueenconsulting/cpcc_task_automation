@@ -348,7 +348,51 @@ capture, runs the full paid A/B as before.
   fast path entirely, revert both #407 and the PR that added this switch; reverting only the
   latter leaves #407's fast path running without a switch.
 - **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
-  (issue #406) is the follow-up for that.
+  (issue #406, built but not yet wired into a workflow; see below) is the follow-up for that.
+
+### Record and replay for response-side changes (issue #406, tools only)
+
+For a change whose requests are identical to the base's but whose code handles the model's answer
+differently (parsing, the compile gate, requirement coverage, scoring). Design and step list:
+`docs/plans/prompt-eval-record-replay.md`. **No workflow runs any of this yet**, so the A/B behaves
+as described above; these are opt-in commands for a local run (and for a later CI step).
+
+Worked example (`<S>` is a suite id, `<DIR>` a new, empty directory). The record run **spends money** and
+needs `OPENROUTER_API_KEY`; run it on a checkout of the **base** that contains this feature (an older base
+ignores the variable, and replay then stops with "raw-responses/ is missing"). Replay needs no key.
+
+```
+# 1. record (base checkout)
+CQC_EVAL_RECORD_RAW=<DIR>/raw-responses \
+  poetry run python -m cqc_cpcc.model_eval suite run --suite <S> --repeats <N> --out <DIR>/base --budget <USD>
+# 2. replay (head checkout)
+poetry run python -m cqc_cpcc.model_eval prompt-ab-replay --suites <S> --ab-dir <DIR> --out <DIR>/replay
+echo $?        # 0 identical, 3 different, 4 unusable; also read <DIR>/replay/replay.json
+```
+
+After step 1 there are `<DIR>/raw-responses/*.json` and `<DIR>/base/<S>/raw_outputs.jsonl`. Replay on
+unchanged code must exit 0.
+
+- **Record:** `CQC_EVAL_RECORD_RAW` is read by `suite run` only (unset by default, ignored with
+  `--dry-run`); the run prints `recording raw model answers to <dir>` when it is on. Each raw OpenRouter
+  completion body is saved as `<dir>/<request-key>.json` (`{"format": 1, "key": ..., "responses": [...]}`),
+  where the key is the same request hash the fast path compares and `responses` holds one body per send, in
+  order. Recording refuses unless every suite reads only the synthetic, `pii_guard`-clean datasets under
+  `evals/datasets` (a pattern and denylist scan: guarded, not proven synthetic), refuses in batch mode, and
+  refuses a directory that already holds recorded answers: **use a new, empty directory for every base run,
+  one recorder per directory**.
+- **Replay:** runs the head's suites on the recorded answers (no model call, no API key; it may read the
+  public OpenRouter model list for a model the registry does not know) and compares each case's output
+  with the base's exactly, a case's repeats as a sorted group. It writes `<out>/replay.json` and exits
+  `0` (identical on every case), `3` (a case differs) or `4` (unusable).
+- **Fallback:** `different` and `unusable` both mean the full paid A/B must run. Unusable covers: no store or
+  base output, a request with no recorded answer (the first missing key is in the error), a record of another
+  format, a recorded answer the head never asked for, a head dataset whose cases differ from the base run's,
+  batch mode, a dataset that is not fixtures-only and any other error (replay runs without a spend cap: it makes no paid call). Only `identical`
+  on every suite can pass.
+- **Not covered:** a change that alters any request still needs the paid A/B, and the live model's answer
+  to a changed request is never replayed. When a workflow uses this (step 4) it needs an owner, an artifact
+  retention period and a `pii_guard` scan of the artifact before upload.
 
 **Per suite, not per PR.** The base capture runs the base's own code. A suite the base does not
 know (the PR adds it: #428, #429 and #432 did) used to make the single base command exit
