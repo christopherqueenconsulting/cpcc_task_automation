@@ -514,7 +514,8 @@ class TestReplaySuite:
 
         _fake_run(monkeypatch, [_rec("a", 0, {})])
         monkeypatch.setattr(batch, "is_on", lambda: True)
-        assert "batch mode" in rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")["reason"]
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
+        assert "batch mode" in result["reason"]
 
     def test_a_dataset_that_is_not_fixtures_only_is_unusable(self, tmp_path, monkeypatch):
         _fake_run(monkeypatch, [_rec("a", 0, {})])
