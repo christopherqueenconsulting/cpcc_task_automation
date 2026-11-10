@@ -7,11 +7,13 @@ a request from the store and never reaches the network. A request the store has 
 a miss: it raises ``ReplayMiss`` and is also listed in ``ReplayTransport.misses``, so a caller that
 swallows the error still sees that the replay was incomplete. Design: docs/plans/prompt-eval-record-replay.md.
 
-Nothing imports this module yet. Steps S2 (capture) and S3 (replay) wire it into the A/B runner.
+``RecordingClient`` / ``recording`` (step S2) save the raw answers of a live run into the store. Nothing
+imports this module yet; step S3 (replay) and the A/B base-side install wire it into the runner.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any, Optional
@@ -74,6 +76,81 @@ class RawResponseStore:
 
     def keys(self) -> list:
         return sorted(p.stem for p in self.root.glob("*.json")) if self.root.is_dir() else []
+
+
+class RecordingRefused(Exception):
+    """Recording was not started: a dataset is not a guarded fixture set, or batch mode would bypass the recorder."""
+
+
+def ensure_fixtures_only(suite_ids) -> None:
+    """Refuse unless every suite reads only the synthetic, PII-guarded datasets under ``evals/datasets``.
+
+    A captured request holds the case's prompt text, so this is the check that no real student text reaches
+    a recording: the suites load their cases from that directory only, and ``scripts/pii_guard.py`` must be
+    clean on it (the same checks batch mode runs, ``batch.ensure_eval_dataset``). Fails closed: an unknown
+    suite, a dataset outside the root or a guard that cannot run refuses.
+    """
+    from cqc_cpcc.model_eval import batch
+    from cqc_cpcc.model_eval.suites import get_suite
+
+    for suite_id in suite_ids:
+        try:
+            batch.ensure_eval_dataset(get_suite(suite_id).dataset_dir)
+        except (KeyError, batch.DatasetNotAllowed) as e:
+            raise RecordingRefused(f"suite {suite_id!r} is not a fixtures-only suite: {e}") from e
+
+
+class _RecordingCompletions:
+    def __init__(self, inner, store: RawResponseStore):
+        self._inner = inner
+        self._store = store
+
+    async def create(self, **kwargs):
+        response = await self._inner.create(**kwargs)
+        # Saved before the caller sees it, and whatever the client later makes of it (truncated, empty,
+        # invalid JSON): replay must hand the head the same rejections.
+        self._store.append(request_capture.request_key(kwargs), response.model_dump(mode="json"))
+        return response
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+class RecordingClient:
+    """Forwards to the real client and saves each raw completion by request key (step S2).
+
+    Same shape as the client the runner builds: ``client.chat.completions.create(**request)``. A call that
+    raises (timeout, transport error) returns nothing and saves nothing; the error goes to the caller as is.
+    """
+
+    def __init__(self, inner, store: RawResponseStore):
+        self.chat = type("Chat", (), {"completions": _RecordingCompletions(inner.chat.completions, store)})()
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+@contextlib.contextmanager
+def recording(store: RawResponseStore, suite_ids):
+    """Record the raw answers of every OpenRouter call made in the block (opt-in; nothing calls this yet).
+
+    Refuses before installing unless the suites are fixtures-only (``ensure_fixtures_only``) and batch mode is
+    off (a batched answer never passes through ``create``, so it would be missing from the record). Wraps
+    ``openrouter_client._get_openrouter_client`` and restores it on exit.
+    """
+    from cqc_cpcc.model_eval import batch
+    from cqc_cpcc.utilities.AI import openrouter_client
+
+    ensure_fixtures_only(suite_ids)
+    if batch.is_on():
+        raise RecordingRefused("batch mode is on: batched answers are not recorded; run with it off")
+    original = openrouter_client._get_openrouter_client
+    openrouter_client._get_openrouter_client = lambda *a, **k: RecordingClient(original(*a, **k), store)
+    try:
+        yield store
+    finally:
+        openrouter_client._get_openrouter_client = original
 
 
 class _ReplayCompletions:

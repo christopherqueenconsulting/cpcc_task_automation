@@ -1,6 +1,6 @@
 # Prompt eval: record and replay for response-side changes (issue #406)
 
-Status: step 1 (groundwork) only. Nothing below is wired into the runner or a workflow yet.
+Status: steps 1 (groundwork) and 2 (capture wrapper) only. Nothing below is wired into the runner or a workflow yet.
 
 ## Problem
 
@@ -49,10 +49,14 @@ raw-responses/<request-key>.json
 - Serialization is deterministic (sorted keys, compact separators, UTF-8, trailing newline), so two
   records of equal bodies are equal bytes.
 - Size: one case is a few KB of text, so a suite's directory is small next to the saved outputs.
-  S2 measures this on a real artifact and sets a cap before the workflow uploads it.
+  S4 measures this on a real artifact and sets a cap before the workflow uploads it.
 - Data: bodies hold the model's answer to a synthetic eval case. The eval datasets are synthetic and
   `scripts/pii_guard.py` still runs on the repo, but the artifact is a CI artifact, not a commit.
-  S2 must confirm no real student text can reach a captured request (the suites use fixtures only).
+  S2 confirms no real student text can reach a captured request: `record_replay.recording` calls
+  `ensure_fixtures_only(suite_ids)` before it installs anything. Every suite's cases load from its
+  `dataset_dir` under `evals/datasets`, and that check requires the directory to be inside that root and
+  clean under `scripts/pii_guard.py` (the same `batch.ensure_eval_dataset` that batch mode uses), or it
+  raises `RecordingRefused`. A unit test runs it over every registered suite.
 
 ## Replay transport
 
@@ -98,13 +102,22 @@ the suite falls back to the existing full paid A/B. It never passes.
 
 Each step is sized for one 20-minute run.
 
-- **S1 (this change):** this note, `record_replay.py` (`RawResponseStore`, `ReplayTransport`,
+- [x] **S1:** this note, `record_replay.py` (`RawResponseStore`, `ReplayTransport`,
   `ReplayMiss`), `request_capture.request_key` (the hash extracted from the capturing client so there
   is one source of the key), unit tests, CHANGELOG line. Not wired.
-- **S2, capture in the A/B base side:** a `RecordingClient` wrapper that forwards to the real client and
+- [x] **S2, capture in the A/B base side:** a `RecordingClient` wrapper that forwards to the real client and
   calls `store.append(request_key(kwargs), response.model_dump(mode="json"))`. Install it in the base
   side of `prompt-ab` behind an opt-in flag, off by default. Unit tests use a stub transport (no
   key, no network). Measure the artifact size from a stub run.
+  Done at commit SHA_PLACEHOLDER: `RecordingClient`, the `recording(store, suite_ids)` context manager (wraps
+  `openrouter_client._get_openrouter_client`, restores it on exit, refuses batch mode, which never passes through
+  `create`), `ensure_fixtures_only`, `RecordingRefused`, and fake-client unit tests. The opt-in switch is the
+  environment variable `CQC_EVAL_RECORD_RAW=<directory>`, read by `suite run` (`prompt_eval.cmd_suite`); unset
+  (the default) or with `--dry-run` nothing is wrapped. The A/B base side is `suite run` in a subprocess
+  (`_run_base`), so a base ref that has this change records when the variable is in its environment. This step
+  does not set it in `_run_base`: that is S3/S4, because a base ref without this change ignores it. A stub record
+  with a 2,000 character answer is 2,358 bytes (stub, not a real artifact); the size cap is set from a real
+  artifact in S4.
 - **S3, replay path in the head side:** a `prompt-ab-replay` command (opt-in) that reads
   `raw-responses/`, installs `ReplayTransport`, runs the head's suites, applies the exact-comparison
   rule and the fail-closed rule above, and writes an `ab.json` status. Resolve the concurrency note.
@@ -117,4 +130,4 @@ Each step is sized for one 20-minute run.
   with the artifact layout, the switch and the fallback behaviour. CHANGELOG entry changed from
   "groundwork" to the shipped behaviour.
 
-S2 to S5 are not started. This pull request stays a draft until they land.
+S3 to S5 are not started. This pull request stays a draft until they land.

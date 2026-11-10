@@ -12,8 +12,10 @@ Scorecards contain synthetic case ids and numbers only, never prompt or output t
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as dt
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -365,18 +367,25 @@ def cmd_suite(args) -> int:
         print(f"estimated total ${total:.2f}; budget stops at ${budget.stop_at:.2f}")
         if total > budget.stop_at:
             raise SystemExit("the estimated total exceeds the budget: run fewer suites or models")
-    for suite_id in suite_ids:
-        sc = asyncio.run(run(suite_id, models, args.repeats, args.limit, args.budget, args.out,
-                             args.dry_run, args.label, args.run_id, judges=args.judges,
-                             judge_model=args.judge_model, judge_cache=args.judge_cache,
-                             judge_cache_read_only=args.judge_cache_read_only, budget=budget,
-                             concurrency=args.concurrency, adaptive_mode=True if args.adaptive else None,
-                             max_concurrency=args.max_concurrency))
-        if sc.get("status") == account_limit.STATUS:  # the same limit stops every later suite: do not start them
-            skipped = suite_ids[suite_ids.index(suite_id) + 1:]
-            abort = sc.get("abort") or {}
-            print(account_limit.banner(abort, abort.get("completed_calls"), sc.get("spent_usd")))
-            if skipped:
-                print("Not started: " + ", ".join(skipped))
-            return account_limit.EXIT_CODE
+    # Opt-in record-and-replay capture (#406 S2): off unless CQC_EVAL_RECORD_RAW names a directory.
+    record_dir = os.environ.get("CQC_EVAL_RECORD_RAW", "").strip()
+    with contextlib.ExitStack() as stack:
+        if record_dir and not args.dry_run:
+            from cqc_cpcc.model_eval import record_replay
+
+            stack.enter_context(record_replay.recording(record_replay.RawResponseStore(record_dir), suite_ids))
+        for suite_id in suite_ids:
+            sc = asyncio.run(run(suite_id, models, args.repeats, args.limit, args.budget, args.out,
+                                 args.dry_run, args.label, args.run_id, judges=args.judges,
+                                 judge_model=args.judge_model, judge_cache=args.judge_cache,
+                                 judge_cache_read_only=args.judge_cache_read_only, budget=budget,
+                                 concurrency=args.concurrency, adaptive_mode=True if args.adaptive else None,
+                                 max_concurrency=args.max_concurrency))
+            if sc.get("status") == account_limit.STATUS:  # the same limit stops every later suite: do not start them
+                skipped = suite_ids[suite_ids.index(suite_id) + 1:]
+                abort = sc.get("abort") or {}
+                print(account_limit.banner(abort, abort.get("completed_calls"), sc.get("spent_usd")))
+                if skipped:
+                    print("Not started: " + ", ".join(skipped))
+                return account_limit.EXIT_CODE
     return 0

@@ -150,19 +150,142 @@ class TestReplayTransport:
         assert reply.choices[0].message.content == "hello"
 
 
-class _Recorder:
-    """What step S2 will be: a stand-in client that hands out canned bodies and stores each one."""
+class _Canned:
+    """A fake client (no network, no key): hands out canned bodies as the SDK's ChatCompletion, or raises."""
 
-    def __init__(self, store, bodies):
+    def __init__(self, bodies):
         self.chat = type("Chat", (), {"completions": self})()
-        self._store, self._bodies = store, list(bodies)
+        self.bodies, self.sent = list(bodies), []
 
     async def create(self, **kwargs):
         from openai.types.chat import ChatCompletion
 
-        body = self._bodies.pop(0)
-        self._store.append(rc.request_key(kwargs), body)
+        self.sent.append(kwargs)
+        body = self.bodies.pop(0)
+        if isinstance(body, Exception):
+            raise body
         return ChatCompletion.model_validate(body)
+
+
+def _Recorder(store, bodies):
+    return rr.RecordingClient(_Canned(bodies), store)
+
+
+class TestRecordingClient:
+    def test_forwards_and_saves_the_raw_body_by_request_key(self, tmp_path, no_network):
+        store = rr.RawResponseStore(tmp_path)
+        inner = _Canned([_body("hello", provider="SyntheticHost")])
+        reply = _run(rr.RecordingClient(inner, store).chat.completions.create(**REQUEST))
+        assert reply.choices[0].message.content == "hello"  # the caller gets the real answer
+        assert inner.sent == [REQUEST]  # and the request goes through unchanged
+        assert store.read(rc.request_key(REQUEST)) == [reply.model_dump(mode="json")]
+        assert rr.dumps(store.get(rc.request_key(REQUEST))["provider"]) == '"SyntheticHost"'
+
+    def test_every_send_is_saved_in_order_including_rejected_answers(self, tmp_path, no_network):
+        store = rr.RawResponseStore(tmp_path)
+        truncated = _body("{\"score\":", )
+        truncated["choices"][0]["finish_reason"] = "length"  # a client would reject this; it is still saved
+        client = rr.RecordingClient(_Canned([truncated, _body("")]), store)
+
+        async def two():
+            for _ in range(2):
+                await client.chat.completions.create(**REQUEST)
+
+        _run(two())
+        saved = store.read(rc.request_key(REQUEST))
+        assert [b["choices"][0]["finish_reason"] for b in saved] == ["length", "stop"]
+
+    def test_the_session_id_does_not_split_the_record(self, tmp_path, no_network):
+        store = rr.RawResponseStore(tmp_path)
+        client = rr.RecordingClient(_Canned([_body("a"), _body("b")]), store)
+        with_session = {**REQUEST, "extra_body": {"seed": 7, "session_id": "run-1"}}
+
+        async def two():
+            await client.chat.completions.create(**REQUEST)
+            await client.chat.completions.create(**with_session)
+
+        _run(two())
+        assert store.keys() == [rc.request_key(REQUEST)] and len(store.read(rc.request_key(REQUEST))) == 2
+
+    def test_a_call_that_raises_saves_nothing(self, tmp_path, no_network):
+        store = rr.RawResponseStore(tmp_path)
+        client = rr.RecordingClient(_Canned([TimeoutError("synthetic timeout")]), store)
+        with pytest.raises(TimeoutError):
+            _run(client.chat.completions.create(**REQUEST))
+        assert store.keys() == []
+
+    def test_recorded_then_replayed_gives_equal_bytes(self, tmp_path, no_network):
+        store = rr.RawResponseStore(tmp_path)
+        live = _run(rr.RecordingClient(_Canned([_body("same", provider="SyntheticHost")]), store)
+                    .chat.completions.create(**REQUEST))
+        replay = _run(rr.ReplayTransport(store).chat.completions.create(**REQUEST))
+        assert rr.dumps(replay.model_dump(mode="json")) == rr.dumps(live.model_dump(mode="json"))
+
+
+class TestRecordingInstall:
+    """``recording`` wraps the OpenRouter client factory, only for fixture-only suites, and restores it."""
+
+    @pytest.fixture
+    def guarded_root(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import batch
+
+        root = tmp_path / "datasets"
+        (root / "clean").mkdir(parents=True)
+        (root / "clean" / "cases.jsonl").write_text('{"student": "Ada Example"}\n', encoding="utf-8")
+        monkeypatch.setattr(batch, "DATASETS_ROOT", root)
+        monkeypatch.setattr(batch, "is_on", lambda: False)
+        return root
+
+    def _suite(self, monkeypatch, directory):
+        from cqc_cpcc.model_eval import suites
+
+        monkeypatch.setattr(suites, "get_suite", lambda suite_id: type("S", (), {"dataset_dir": directory})())
+
+    def test_installs_records_and_restores(self, guarded_root, tmp_path, monkeypatch, no_network):
+        self._suite(monkeypatch, guarded_root / "clean")
+        inner = _Canned([_body("hello")])
+        monkeypatch.setattr(openrouter_client, "_get_openrouter_client", lambda *a, **k: inner)
+        factory_before = openrouter_client._get_openrouter_client
+        store = rr.RawResponseStore(tmp_path / "raw-responses")
+        with rr.recording(store, ["digest"]):
+            client = openrouter_client._get_openrouter_client()
+            _run(client.chat.completions.create(**REQUEST))
+        assert openrouter_client._get_openrouter_client is factory_before
+        assert len(store.read(rc.request_key(REQUEST))) == 1
+
+    def test_a_dataset_outside_the_eval_root_is_refused(self, guarded_root, tmp_path, monkeypatch):
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        self._suite(monkeypatch, outside)
+        factory_before = openrouter_client._get_openrouter_client
+        with pytest.raises(rr.RecordingRefused, match="fixtures-only"):
+            with rr.recording(rr.RawResponseStore(tmp_path / "raw"), ["digest"]):
+                pytest.fail("must not start")
+        assert openrouter_client._get_openrouter_client is factory_before
+
+    def test_a_student_data_finding_is_refused(self, guarded_root, tmp_path, monkeypatch):
+        (guarded_root / "clean" / "cases.jsonl").write_text('{"email": "real.person@cpcc.edu"}\n', encoding="utf-8")
+        self._suite(monkeypatch, guarded_root / "clean")
+        with pytest.raises(rr.RecordingRefused, match="student-data"):
+            rr.ensure_fixtures_only(["digest"])
+
+    def test_an_unknown_suite_is_refused(self):
+        with pytest.raises(rr.RecordingRefused):
+            rr.ensure_fixtures_only(["no-such-suite"])
+
+    def test_every_registered_suite_reads_only_guarded_datasets(self):
+        from cqc_cpcc.model_eval.suites import SUITE_MODULES
+
+        rr.ensure_fixtures_only(sorted(SUITE_MODULES))  # the real datasets are synthetic and pii_guard-clean
+
+    def test_batch_mode_is_refused(self, guarded_root, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import batch
+
+        self._suite(monkeypatch, guarded_root / "clean")
+        monkeypatch.setattr(batch, "is_on", lambda: True)
+        with pytest.raises(rr.RecordingRefused, match="batch"):
+            with rr.recording(rr.RawResponseStore(tmp_path / "raw"), ["digest"]):
+                pytest.fail("must not start")
 
 
 class TestThroughTheRealClientCode:
@@ -191,3 +314,48 @@ class TestThroughTheRealClientCode:
         with pytest.raises(Exception):
             _run(self._call())
         assert transport.misses  # even if the client wrapped the error, the miss is on record
+
+
+class TestSuiteRunSwitch:
+    """``suite run`` records only when CQC_EVAL_RECORD_RAW names a directory; the default path is unchanged."""
+
+    def _args(self):
+        import argparse
+
+        return argparse.Namespace(
+            action="run", suite="digest", model=None, repeats=1, limit=1, budget=1.0, concurrency=None,
+            adaptive=False, max_concurrency=None, out="unused", label=None, run_id=None, dry_run=False,
+            judges=False, judge_model=None, judge_cache=None, judge_cache_read_only=False)
+
+    def _go(self, monkeypatch, record_dir):
+        import contextlib
+
+        from cqc_cpcc.model_eval import prompt_eval
+
+        runs, entered = [], []
+
+        async def fake_run(*args, **kwargs):
+            runs.append(args[0])
+            return {"status": "ok"}
+
+        @contextlib.contextmanager
+        def fake_recording(store, suite_ids):
+            entered.append((store.root, list(suite_ids)))
+            yield store
+
+        monkeypatch.setattr(prompt_eval, "run", fake_run)
+        monkeypatch.setattr(rr, "recording", fake_recording)
+        if record_dir is None:
+            monkeypatch.delenv("CQC_EVAL_RECORD_RAW", raising=False)
+        else:
+            monkeypatch.setenv("CQC_EVAL_RECORD_RAW", str(record_dir))
+        assert prompt_eval.cmd_suite(self._args()) == 0
+        return entered, runs
+
+    def test_off_by_default(self, monkeypatch):
+        entered, runs = self._go(monkeypatch, None)
+        assert entered == [] and runs == ["digest"]
+
+    def test_on_when_the_directory_is_named(self, tmp_path, monkeypatch):
+        entered, runs = self._go(monkeypatch, tmp_path / "raw-responses")
+        assert entered == [(tmp_path / "raw-responses", ["digest"])] and runs == ["digest"]
