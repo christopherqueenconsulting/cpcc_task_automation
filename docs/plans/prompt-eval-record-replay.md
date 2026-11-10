@@ -109,7 +109,7 @@ Each step is sized for one 20-minute run.
   calls `store.append(request_key(kwargs), response.model_dump(mode="json"))`. Install it in the base
   side of `prompt-ab` behind an opt-in flag, off by default. Unit tests use a stub transport (no
   key, no network). Measure the artifact size from a stub run.
-  Done at commit SHA_PLACEHOLDER: `RecordingClient`, the `recording(store, suite_ids)` context manager (wraps
+  Done at commit 89a5bff: `RecordingClient`, the `recording(store, suite_ids)` context manager (wraps
   `openrouter_client._get_openrouter_client`, restores it on exit, refuses batch mode, which never passes through
   `create`), `ensure_fixtures_only`, `RecordingRefused`, and fake-client unit tests. The opt-in switch is the
   environment variable `CQC_EVAL_RECORD_RAW=<directory>`, read by `suite run` (`prompt_eval.cmd_suite`); unset
