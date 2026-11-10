@@ -3,6 +3,7 @@
 
 import datetime as DT
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -21,7 +22,10 @@ PAGE = str(
     Path(__file__).resolve().parents[2] / "src" / "cqc_streamlit_app" / "app_pages" / "take_attendance.py"
 )
 
-TODAY = DT.datetime.now()
+# The course timezone is America/New_York; a UTC runner's date is a day ahead of it
+# from 00:00 UTC until 04:00 UTC (daylight time) or 05:00 UTC (standard time), i.e. the
+# evening in Eastern time, so anchor on Eastern time like the code under test.
+TODAY = DT.datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
 COURSES = {
     "url-now": {"name": "CSC-151-N855: JAVA", "start_date": TODAY - DT.timedelta(days=10),
                 "end_date": TODAY + DT.timedelta(days=60)},
