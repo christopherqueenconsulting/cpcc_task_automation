@@ -99,6 +99,16 @@ minutes 33 seconds to setup. Removing it reduced the browser install step to 5 s
 tests then passed in 53 seconds. `--only-shell` is appropriate because these tests use
 Playwright's headless Chromium mode.
 
+### Stale venv after a Python patch bump (2026-11-09)
+
+The venv cache key once held only `python-version: 3.12`. A `.venv` saved under 3.12.15
+has a `bin/python` symlink into `hostedtoolcache/Python/3.12.15`; when setup-python later
+resolved 3.12.16 the symlink dangled, Poetry recreated an empty venv, and the exact-hit
+skip left it empty (`No module named 'psutil'`, `Command not found: pytest`; runs
+42645269762 and 42645278435). The key now carries the resolved patch version, and the
+"Verify restored virtualenv" step runs `poetry install` anyway when the restored venv's
+interpreter fails or differs from the runner's. A healthy hit still skips the install.
+
 ### Codecov notification ordering
 
 `codecov.yml` sets `notify.manual_trigger: yes` and `notify.wait_for_ci: yes`. The finalizer
