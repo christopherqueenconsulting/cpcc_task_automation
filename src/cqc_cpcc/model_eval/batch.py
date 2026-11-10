@@ -51,7 +51,7 @@ the plain model id, ``max_completion_tokens`` and ``session_id`` are accepted, a
 honoured, per-item usage carries ``cached_tokens`` and ``reasoning_tokens`` but **no cost**, and the batch-level
 ``usage.cost`` is reported. That probe could not show whether the reasoning effort is honoured, so reports flag it
 (``effort_not_proven_honoured``). Because per-item cost is absent, each item is priced from its own usage tokens
-(:func:`token_cost`) and cross-checked against the batch-level cost. The constants below hold the verified values.
+(:func:`token_cost`) and cross-checked against the batch-level cost. The constants below hold the values reported from the owner's probe (no repo artifact).
 """
 
 from __future__ import annotations

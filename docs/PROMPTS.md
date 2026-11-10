@@ -967,9 +967,9 @@ also runs `scripts/pii_guard.py` over the dataset, failing closed), and the code
   batch mode was on, so old rows and runs with batch off are byte-identical. `run_stats` gains the batch share of
   calls, batch vs sync cost, wall clock per mode, fall-backs and deadline fall-backs, the double-charge bound, the
   number of per-item errors and `batch_fallback_reason`; the model-eval scorecard gains a `batch` block with the same.
-- **Reported from a live probe, 2026-10-25** (the owner's run; figures as reported, no repo artifact on the eval workspace with Zero Data Retention off: HTTP 202
-  accepted, 1310 s, 5 of 5 items ok, batch-level usage cost $0.0000977). The constants in `batch.py` hold the verified
-  values:
+- **Reported from a live probe, 2026-10-25** (the owner's run on the eval workspace with Zero Data Retention off; figures as
+  reported, no repo artifact: HTTP 202 accepted, 1310 s, 5 of 5 items ok, batch-level usage cost $0.0000977). The constants
+  in `batch.py` hold the values reported from that probe:
 
   | Constant | Value | Probe result |
   |---|---|---|
