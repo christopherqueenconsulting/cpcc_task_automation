@@ -5,6 +5,8 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Attendance: the assignment results reader now picks the per-user Submissions table by its summary (`List of users and the submissions...`) instead of the first table the XPath matches. The XPath also matches any table with a User, Name or Student header, so a layout or filter table earlier on the page was read instead, and its one-cell rows raised `completion_row_malformed` for every assignment. Other pages keep the first match.
+
 - Eval batch mode: the owner's 2026-10-25 live probe (reported; no repo artifact) accepted the plain model id, `max_completion_tokens`, `session_id` and
   `json_schema`; the batch API reports no per-item cost, so each batched row is now priced from its own usage tokens
   (batch price when published, else the sync price times 0.5, labelled estimated; `cost_method` per row) and
