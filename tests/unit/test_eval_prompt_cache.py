@@ -387,9 +387,10 @@ class TestLayoutOfTheRealSuites:
                      "test-case-generation", "digest", "project-feedback", "flowgorithm-grade")
     CASES_PER_SUITE = 12
 
-    @classmethod
     @pytest.fixture(scope="class")
-    def rendered(cls):
+    def rendered(self):
+        # A plain class-scoped fixture: pytest 9.2 no longer discovers @classmethod-wrapped fixtures.
+        cls = type(self)
         from cqc_cpcc.model_eval import prompt_eval
         from cqc_cpcc.model_eval.runner import DEFAULT_MAX_OUTPUT_TOKENS, pinned_registry
         from cqc_cpcc.model_eval.suites import get_suite
