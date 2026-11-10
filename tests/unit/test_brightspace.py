@@ -641,6 +641,103 @@ def test_eva_completion_reader_collects_all_supported_pages():
     assert pages_read == 2
 
 
+class _PerUserCell:
+    def __init__(self, text="", tag="td", label=None):
+        self.text, self.tag_name, self._label = text, tag, label
+
+    def find_elements(self, *_args):
+        return [self._label] if self._label is not None else []
+
+    def get_attribute(self, _name):
+        return None
+
+
+class _PerUserRow:
+    def __init__(self, cells):
+        self.cells = cells
+        self.text = " ".join(cell.text for cell in cells)
+
+    def find_elements(self, _by, xpath):
+        return self.cells if xpath in ("./td", "./th | ./td") else []
+
+
+class _PerUserTable:
+    """The per-user assignment view: one learner takes a name row and a date row."""
+
+    SUMMARY = "List of users and the submissions they have uploaded to this assignment."
+
+    def __init__(self, rows, headers=None, summary=SUMMARY):
+        self.rows, self.headers, self.summary = rows, headers, summary
+        self.text = "table"
+
+    def get_attribute(self, name):
+        return self.summary if name == "summary" else None
+
+    def find_elements(self, _by, xpath):
+        if xpath == "./thead/tr[1]":
+            return [_PerUserRow([_PerUserCell(h, "th") for h in self.headers])] if self.headers else []
+        return self.rows if xpath == "./tr | ./tbody/tr" else []
+
+
+def _per_user_learner(name, date):
+    """The name row (date cell empty) and the date row (name cell empty) of one learner."""
+    return [
+        _PerUserRow([_PerUserCell(name), _PerUserCell(""), _PerUserCell("nested submission details")]),
+        _PerUserRow([_PerUserCell(""), _PerUserCell(date, label=_PerUserCell(date)), _PerUserCell("Delete")]),
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("headers", [["Learner", "Submission Date", "Delete"], None])
+def test_assignment_per_user_view_pairs_each_name_row_with_its_date_row(headers):
+    rows = (_per_user_learner("Student One", "Nov 9, 2026 10:06 PM")
+            + _per_user_learner("Student Two", "Aug 20, 2026 11:29 AM"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows, headers)]
+
+    # name_cell=1 and date_cell=2 are the fallback when the table has no usable header row.
+    page = course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+    assert page == (("Student One", "Nov 9, 2026 10:06 PM"), ("Student Two", "Aug 20, 2026 11:29 AM"))
+
+
+@pytest.mark.unit
+def test_assignment_per_user_view_name_row_without_a_date_row_records_nothing():
+    rows = (_per_user_learner("Student One", "Nov 9, 2026 10:06 PM")[:1]
+            + _per_user_learner("Student Two", "Aug 20, 2026 11:29 AM"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows, ["Learner", "Submission Date", "Delete"])]
+
+    assert course._snapshot_activity_page("//table", 1, 2, 0, 0) == (("Student Two", "Aug 20, 2026 11:29 AM"),)
+
+
+@pytest.mark.unit
+def test_two_row_pairing_is_limited_to_the_per_user_table():
+    rows = _per_user_learner("Student One", "Nov 9, 2026 10:06 PM")
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [
+        _PerUserTable(rows, ["Learner", "Submission Date", "Delete"], summary="Some other grid")
+    ]
+
+    # Any other table keeps the strict rule: a row with a date but no student stays incomplete.
+    with pytest.raises(_EVAReadIncomplete, match="completion_row_missing_student"):
+        course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+
+@pytest.mark.unit
+def test_date_header_accepts_submission_date_and_still_rejects_unknown_headers():
+    rows = _per_user_learner("Student One", "Nov 9, 2026 10:06 PM")
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows, ["Learner", "Status", "Delete"])]
+
+    with pytest.raises(_EVAReadIncomplete, match="completion_headers_unrecognized"):
+        course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+
 @pytest.mark.unit
 def test_eva_snapshot_retries_stale_cell_and_exhaustion_is_incomplete():
     attempts = {"value": 0}
