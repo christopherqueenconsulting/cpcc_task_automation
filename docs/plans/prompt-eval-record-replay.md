@@ -108,7 +108,7 @@ Each step is sized for one 20-minute run.
 - [x] **S2, capture in the A/B base side:** a `RecordingClient` wrapper that forwards to the real client and
   calls `store.append(request_key(kwargs), response.model_dump(mode="json"))`. Install it in the base
   side of `prompt-ab` behind an opt-in flag, off by default. Unit tests use a stub transport (no
-  key, no network). Measure the artifact size from a stub run.
+  key, no network).
   Done at commit 89a5bff: `RecordingClient`, the `recording(store, suite_ids)` context manager (wraps
   `openrouter_client._get_openrouter_client`, restores it on exit, refuses batch mode, which never passes through
   `create`), `ensure_fixtures_only`, `RecordingRefused`, and fake-client unit tests. The opt-in switch is the
@@ -127,7 +127,7 @@ Each step is sized for one 20-minute run.
   repeats hold the same multiset of answers whatever order concurrent calls took). `different` and `unusable`
   both mean "run the full paid A/B"; only `identical` on every suite can pass. Batch mode, a dataset that is not
   fixtures-only, an empty store, a miss, a recorded answer the head never asked for, a head dataset whose cases
-  differ from the base run's, a budget refusal and any other error are `unusable`. Recording refuses a store
+  differ from the base run's and any other error are `unusable`; replay runs without a spend cap (it makes no paid call). Recording refuses a store
   that already holds answers, so a store only ever holds one run. Unit tests use synthetic stores and a
   fake `prompt_eval.run`; nothing calls a model or reads a key.
 - **S4, workflow wiring (the owner's merge):** `.github/workflows` changes: upload and download

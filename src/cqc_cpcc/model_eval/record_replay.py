@@ -260,6 +260,7 @@ def replay_suite(suite_id: str, ab_dir, out_dir) -> dict:
     import asyncio
 
     from cqc_cpcc.model_eval import batch, prompt_eval
+    from cqc_cpcc.model_eval.budget import Budget
     from cqc_cpcc.model_eval.suites import get_suite
 
     ab_dir, out_dir = Path(ab_dir), Path(out_dir)
@@ -290,9 +291,11 @@ def replay_suite(suite_id: str, ab_dir, out_dir) -> dict:
             # A case the base never ran (or one the head dropped) is not covered by the recorded answers.
             return unusable(f"the head's dataset and the base run differ in {len(head_cases ^ case_ids)} case(s)")
         repeats = len({r.repeat for records in base.values() for r in records})
+        # A replay makes no paid call, so the spend cap must not be able to refuse it (the estimate is for a live run).
+        no_cap = Budget(limit=1e9, stop_at=1e9)
         with replaying(store) as transport:
             asyncio.run(prompt_eval.run(suite_id, models, repeats=repeats, out=str(out_dir),
-                                        case_ids=case_ids))
+                                        case_ids=case_ids, budget=no_cap))
         if transport.misses:
             return unusable(f"{len(transport.misses)} request(s) had no recorded answer")
         if transport.unused():

@@ -469,7 +469,7 @@ def _fake_run(monkeypatch, head_records, calls=1, request=REQUEST, cases=None):
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "raw_outputs.jsonl").write_text(
             "".join(r.to_json() + "\n" for r in head_records), encoding="utf-8")
-        run.seen = {"models": models, "repeats": repeats, "case_ids": case_ids}
+        run.seen = {"models": models, "repeats": repeats, "case_ids": case_ids, "budget": kwargs.get("budget")}
         return {}
 
     monkeypatch.setattr(prompt_eval, "run", run)
@@ -494,7 +494,10 @@ class TestReplaySuite:
         run = _fake_run(monkeypatch, [_rec("a", 0, {"s": 2}), _rec("a", 1, {"s": 1})])
         result = rr.replay_suite("synthetic", _ab_dir(tmp_path, base), tmp_path / "out")
         assert result["status"] == "identical" and result["different_count"] == 0
-        assert run.seen == {"models": [("vendor/model-x", None)], "repeats": 2, "case_ids": {"a"}}
+        seen = dict(run.seen)
+        budget = seen.pop("budget")
+        assert seen == {"models": [("vendor/model-x", None)], "repeats": 2, "case_ids": {"a"}}
+        assert budget.stop_at >= 1e9  # a replay is never refused for its estimated cost
 
     def test_a_response_side_difference_is_different_never_a_pass(self, tmp_path, monkeypatch, no_network):
         _fake_run(monkeypatch, [_rec("a", 0, {"s": 9})])

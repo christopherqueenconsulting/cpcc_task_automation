@@ -364,9 +364,9 @@ ignores the variable, and replay then stops with "raw-responses/ is missing"). R
 ```
 # 1. record (base checkout)
 CQC_EVAL_RECORD_RAW=<DIR>/raw-responses \
-  python -m cqc_cpcc.model_eval suite run --suite <S> --repeats <N> --out <DIR>/base --budget <USD>
+  poetry run python -m cqc_cpcc.model_eval suite run --suite <S> --repeats <N> --out <DIR>/base --budget <USD>
 # 2. replay (head checkout)
-python -m cqc_cpcc.model_eval prompt-ab-replay --suites <S> --ab-dir <DIR> --out <DIR>/replay
+poetry run python -m cqc_cpcc.model_eval prompt-ab-replay --suites <S> --ab-dir <DIR> --out <DIR>/replay
 echo $?        # 0 identical, 3 different, 4 unusable; also read <DIR>/replay/replay.json
 ```
 
@@ -388,7 +388,7 @@ unchanged code must exit 0.
 - **Fallback:** `different` and `unusable` both mean the full paid A/B must run. Unusable covers: no store or
   base output, a request with no recorded answer (the first missing key is in the error), a record of another
   format, a recorded answer the head never asked for, a head dataset whose cases differ from the base run's,
-  batch mode, a dataset that is not fixtures-only, a budget refusal and any other error. Only `identical`
+  batch mode, a dataset that is not fixtures-only and any other error (replay runs without a spend cap: it makes no paid call). Only `identical`
   on every suite can pass.
 - **Not covered:** a change that alters any request still needs the paid A/B, and the live model's answer
   to a changed request is never replayed. When a workflow uses this (step 4) it needs an owner, an artifact
