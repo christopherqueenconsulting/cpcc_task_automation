@@ -4,3 +4,4 @@
 {"canonical_slug": "openai/gpt-6.1-terra-pro-20261026", "date": "2026-11-02", "label": "openai/gpt-6.1-terra-pro", "run_id": "41449862304", "status": "attempted"}
 {"canonical_slug": "openai/gpt-6-luna", "composite": 0.19046391752577319, "cost_per_submission": 0.013461702182130584, "label": "openai/gpt-6-luna@high", "run_id": "42622171909", "status": "complete"}
 {"canonical_slug": "openai/gpt-6.1-terra-20261026", "date": "2026-11-09", "label": "openai/gpt-6.1-terra", "run_id": "42622171909", "status": "attempted"}
+{"canonical_slug": "openai/gpt-6-luna", "composite": 0.8831983308787432, "cost_per_submission": 0.0013320279896907217, "label": "openai/gpt-6-luna@high", "run_id": "42755698267", "status": "complete"}

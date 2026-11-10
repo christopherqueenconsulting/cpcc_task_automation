@@ -20,6 +20,20 @@
     "expiration_date": null,
     "prompt": "0.000005"
   },
+  "anthropic/claude-fable-5.2": {
+    "canonical_slug": "anthropic/claude-fable-5.2-20261109",
+    "completion": "0.00004",
+    "created": 1794253781,
+    "expiration_date": null,
+    "prompt": "0.000008"
+  },
+  "anthropic/claude-fable-5.2:batch": {
+    "canonical_slug": "anthropic/claude-fable-5.2-20261109",
+    "completion": "0.00002",
+    "created": 1794253781,
+    "expiration_date": null,
+    "prompt": "0.000004"
+  },
   "anthropic/claude-fable-5:batch": {
     "canonical_slug": "anthropic/claude-5-fable-20260609",
     "completion": "0.000025",
@@ -470,10 +484,10 @@
   },
   "google/gemma-4-26b-a4b-it": {
     "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
-    "completion": "0.0000003",
+    "completion": "0.0000001",
     "created": 1775227989,
     "expiration_date": null,
-    "prompt": "0.00000009"
+    "prompt": "0.00000008"
   },
   "google/gemma-4-26b-a4b-it:free": {
     "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
@@ -1142,10 +1156,10 @@
   },
   "openai/gpt-oss-20b": {
     "canonical_slug": "openai/gpt-oss-20b",
-    "completion": "0.00000009",
+    "completion": "0.00000013",
     "created": 1754414229,
     "expiration_date": null,
-    "prompt": "0.000000018"
+    "prompt": "0.00000003"
   },
   "openai/gpt-oss-20b:batch": {
     "canonical_slug": "openai/gpt-oss-20b",
