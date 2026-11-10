@@ -145,10 +145,22 @@ class TestMatchStudentId:
         assert MyColleges._match_student_id("Adams", ROSTER) is None
         assert MyColleges._match_student_id("Ann, ", ROSTER) is None
 
-    def test_hyphenated_names_match_their_roster_words(self):
+    def test_a_hyphenated_name_is_one_word_and_never_matches_a_part_of_it(self):
         roster = [{"id": "1", "text": "Smith-Jones, Anne-Marie 1000001"}]
         assert MyColleges._match_student_id("Anne-Marie Smith-Jones", roster) == "1"
-        assert MyColleges._match_student_id("Anne Smith", roster) == "1"
+        assert MyColleges._match_student_id("Smith-Jones, Anne-Marie", roster) == "1"
+        # A different student whose words are parts of the hyphenated ones must not match.
+        assert MyColleges._match_student_id("Anne Smith", roster) is None
+        assert MyColleges._match_student_id("Marie Jones", roster) is None
+
+    def test_a_lone_initial_is_not_enough_to_match(self):
+        roster = [{"id": "1", "text": "Smith, Jane J. 123"}]
+        assert MyColleges._match_student_id("J Smith", roster) is None
+        assert MyColleges._match_student_id("Jane Smith", roster) == "1"
+
+    def test_a_curly_apostrophe_matches_a_straight_one(self):
+        roster = [{"id": "1", "text": "O'Brien, Pat 1000001"}]
+        assert MyColleges._match_student_id("Pat O\u2019Brien", roster) == "1"
 
     def test_a_last_comma_first_name_matches_its_roster_row(self):
         roster = [{"id": "1", "text": "Lee, Ann M. 1000001 Ann Lee"}, {"id": "2", "text": "Leeson, Ann 2"}]

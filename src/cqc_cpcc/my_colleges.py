@@ -1084,16 +1084,17 @@ class MyColleges:
         """The roster id whose row holds every word of ``full_name`` as a whole word, if unique.
 
         Whole words only: a substring hit ("Lee" inside "Leeson", "Ann" inside "Joanne") must never pick
-        a student, or an absent student's activity would be marked on a different one. Words split on
-        punctuation and hyphens, so "Last, First" and "Anne-Marie" match their roster text. A name with
-        fewer than two words cannot identify a student, and anything still ambiguous is left unmatched
-        rather than marking the wrong student.
+        a student, or an absent student's activity would be marked on a different one. A hyphenated name
+        stays one word ("Anne-Marie"), so "Anne Smith" never matches "Smith-Jones, Anne-Marie". Punctuation
+        such as the comma in "Last, First" is ignored. A name needs at least two words of two or more
+        letters (a lone initial or a one-word name cannot identify a student), and anything still
+        ambiguous is left unmatched rather than marking the wrong student.
         """
         def words(text: str) -> list[str]:
-            return re.findall(r"[\w']+", (text or "").lower())
+            return re.findall(r"[\w'\-]+", (text or "").lower().replace("\u2019", "'"))
 
         parts = set(words(full_name))
-        if len(parts) < 2:
+        if sum(len(part) >= 2 for part in parts) < 2:
             return None
         ids = {row["id"] for row in roster if parts <= set(words(row["text"]))}
         return ids.pop() if len(ids) == 1 else None
