@@ -115,9 +115,7 @@ Each step is sized for one 20-minute run.
   environment variable `CQC_EVAL_RECORD_RAW=<directory>`, read by `suite run` (`prompt_eval.cmd_suite`); unset
   (the default) or with `--dry-run` nothing is wrapped. The A/B base side is `suite run` in a subprocess
   (`_run_base`), so a base ref that has this change records when the variable is in its environment. This step
-  does not set it in `_run_base`: that is S3/S4, because a base ref without this change ignores it. A stub record
-  with a 2,000 character answer is 2,358 bytes (stub, not a real artifact); the size cap is set from a real
-  artifact in S4.
+  does not set it in `_run_base`: that is S3/S4, because a base ref without this change ignores it. The size cap is set from a real artifact in S4.
 - [x] **S3, replay path in the head side:** `record_replay.replaying(store)` installs `ReplayTransport` where the
   recorder installs its client, `compare_records` applies the exact-comparison rule, `replay_suite` /
   `replay_suites` run the head's suite on the recorded answers and apply the fail-closed rule, and the opt-in
@@ -128,7 +126,9 @@ Each step is sized for one 20-minute run.
   Concurrency is resolved by comparing a case's repeats as a sorted group (the base's repeats and the head's replayed
   repeats hold the same multiset of answers whatever order concurrent calls took). `different` and `unusable`
   both mean "run the full paid A/B"; only `identical` on every suite can pass. Batch mode, a dataset that is not
-  fixtures-only, an empty store, a miss and any error are `unusable`. Unit tests use synthetic stores and a
+  fixtures-only, an empty store, a miss, a recorded answer the head never asked for, a head dataset whose cases
+  differ from the base run's, a budget refusal and any other error are `unusable`. Recording refuses a store
+  that already holds answers, so a store only ever holds one run. Unit tests use synthetic stores and a
   fake `prompt_eval.run`; nothing calls a model or reads a key.
 - **S4, workflow wiring (the owner's merge):** `.github/workflows` changes: upload and download
   `raw-responses/`, run the replay step after the request-identical check, and a repository variable

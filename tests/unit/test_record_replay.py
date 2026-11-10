@@ -271,6 +271,16 @@ class TestRecordingInstall:
         with pytest.raises(rr.RecordingRefused, match="student-data"):
             rr.ensure_fixtures_only(["digest"])
 
+    def test_a_store_that_already_holds_answers_is_refused(self, guarded_root, tmp_path, monkeypatch):
+        self._suite(monkeypatch, guarded_root / "clean")
+        store = rr.RawResponseStore(tmp_path / "raw")
+        store.append(rc.request_key(REQUEST), _body("{}"))
+        factory_before = openrouter_client._get_openrouter_client
+        with pytest.raises(rr.RecordingRefused, match="new, empty directory"):
+            with rr.recording(store, ["digest"]):
+                pytest.fail("must not start")
+        assert openrouter_client._get_openrouter_client is factory_before
+
     def test_an_unknown_suite_is_refused(self):
         with pytest.raises(rr.RecordingRefused):
             rr.ensure_fixtures_only(["no-such-suite"])
@@ -374,9 +384,10 @@ class TestSuiteRunSwitch:
         assert prompt_eval.cmd_suite(args) == account_limit.EXIT_CODE
         assert runs == ["digest"] and "Not started: feedback" in capsys.readouterr().out
 
-    def test_on_when_the_directory_is_named(self, tmp_path, monkeypatch):
+    def test_on_when_the_directory_is_named(self, tmp_path, monkeypatch, capsys):
         entered, runs = self._go(monkeypatch, tmp_path / "raw-responses")
         assert entered == [(tmp_path / "raw-responses", ["digest"])] and runs == ["digest"]
+        assert "recording raw model answers to" in capsys.readouterr().out  # a stray variable is visible in the log
 
 
 # ---- S3: replay in the head side -------------------------------------------------------------------
@@ -448,7 +459,7 @@ def _ab_dir(tmp_path, base_records, answers=({},)):
     return ab
 
 
-def _fake_run(monkeypatch, head_records, calls=1, request=REQUEST):
+def _fake_run(monkeypatch, head_records, calls=1, request=REQUEST, cases=None):
     """Stands in for ``prompt_eval.run``: asks the installed client ``calls`` times, then saves ``head_records``."""
     async def run(suite_id, models, repeats=None, out="x", case_ids=None, **kwargs):
         client = openrouter_client._get_openrouter_client()
@@ -463,7 +474,18 @@ def _fake_run(monkeypatch, head_records, calls=1, request=REQUEST):
 
     monkeypatch.setattr(prompt_eval, "run", run)
     monkeypatch.setattr(rr, "ensure_fixtures_only", lambda ids: None)
+    _head_dataset(monkeypatch, cases if cases is not None else {r.case_id for r in head_records} or {"a"})
     return run
+
+
+def _head_dataset(monkeypatch, case_ids):
+    """The head's suite has exactly these cases."""
+    from types import SimpleNamespace
+
+    from cqc_cpcc.model_eval import suites
+
+    suite = SimpleNamespace(cases=lambda: [SimpleNamespace(case_id=c) for c in sorted(case_ids)])
+    monkeypatch.setattr(suites, "get_suite", lambda suite_id: suite)
 
 
 class TestReplaySuite:
@@ -549,6 +571,7 @@ class TestReplaySuite:
 
         monkeypatch.setattr(prompt_eval, "run", boom)
         monkeypatch.setattr(rr, "ensure_fixtures_only", lambda ids: None)
+        _head_dataset(monkeypatch, {"a"})
         original = openrouter_client._get_openrouter_client
         result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
         assert result["status"] == "unusable" and "RuntimeError" in result["reason"]
@@ -571,8 +594,57 @@ class TestReplayLeftovers:
 
         monkeypatch.setattr(prompt_eval, "run", run)
         monkeypatch.setattr(rr, "ensure_fixtures_only", lambda ids: None)
+        _head_dataset(monkeypatch, {"a"})
         result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
         assert result == {"status": "unusable", "reason": "1 request(s) had no recorded answer"}
+
+    def test_a_case_the_base_never_ran_is_unusable(self, tmp_path, monkeypatch, no_network):
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 1})], cases={"a", "new-case"})
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {"s": 1})]), tmp_path / "out")
+        assert result["status"] == "unusable" and "differ in 1 case" in result["reason"]
+
+    def test_a_case_the_head_dropped_is_unusable(self, tmp_path, monkeypatch, no_network):
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 1})], cases={"a"})
+        base = [_rec("a", 0, {"s": 1}), _rec("b", 0, {"s": 1})]
+        assert rr.replay_suite("synthetic", _ab_dir(tmp_path, base), tmp_path / "out")["status"] == "unusable"
+
+    def test_a_recorded_answer_the_head_never_asked_for_is_unusable(self, tmp_path, monkeypatch, no_network):
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 1})])  # one call
+        ab = _ab_dir(tmp_path, [_rec("a", 0, {"s": 1})], answers=({"x": 1}, {"x": 2}))  # two recorded answers
+        result = rr.replay_suite("synthetic", ab, tmp_path / "out")
+        assert result["status"] == "unusable" and "never asked for" in result["reason"]
+
+    def test_a_budget_refusal_that_exits_is_unusable(self, tmp_path, monkeypatch):
+        async def refuse(*args, **kwargs):
+            raise SystemExit("estimated $9.00 exceeds the budget")
+
+        monkeypatch.setattr(prompt_eval, "run", refuse)
+        monkeypatch.setattr(rr, "ensure_fixtures_only", lambda ids: None)
+        _head_dataset(monkeypatch, {"a"})
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
+        assert result["status"] == "unusable" and "SystemExit" in result["reason"]
+
+    def test_a_batch_setting_error_is_unusable(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import batch
+
+        def broken():
+            raise ValueError("batch mode is on but not allowed")
+
+        monkeypatch.setattr(batch, "is_on", broken)
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
+        assert result["status"] == "unusable" and "ValueError" in result["reason"]
+
+    def test_a_corrupt_record_is_never_served_and_counts_as_a_miss(self, tmp_path, no_network):
+        store = rr.RawResponseStore(tmp_path / "raw")
+        store.append(rc.request_key(REQUEST), _body("{}"))
+        path = tmp_path / "raw" / f"{rc.request_key(REQUEST)}.json"
+        record = json.loads(path.read_text())
+        record["format"] = 99
+        path.write_text(json.dumps(record))
+        transport = rr.ReplayTransport(store)
+        with pytest.raises(ValueError):
+            _run(transport.chat.completions.create(**REQUEST))
+        assert transport.misses == [rc.request_key(REQUEST)]
 
     def test_the_recording_client_forwards_other_attributes(self, tmp_path):
         class Inner:

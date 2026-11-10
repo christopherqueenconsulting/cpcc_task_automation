@@ -148,6 +148,10 @@ def recording(store: RawResponseStore, suite_ids):
     ensure_fixtures_only(suite_ids)
     if batch.is_on():
         raise RecordingRefused("batch mode is on: batched answers are not recorded; run with it off")
+    if store.keys():
+        # Answers append per key: a second run into the same directory would leave the first run's answers
+        # ahead of its own and replay would pair them with the wrong outputs.
+        raise RecordingRefused(f"{store.root} already holds recorded answers: record into a new, empty directory")
     original = openrouter_client._get_openrouter_client
     openrouter_client._get_openrouter_client = lambda *a, **k: RecordingClient(original(*a, **k), store)
     try:
@@ -167,12 +171,20 @@ class _ReplayCompletions:
 
         key = request_capture.request_key(kwargs)
         index = self._served.get(key, 0)
-        body = self._store.get(key, index)
+        try:
+            body = self._store.get(key, index)
+        except ValueError:  # a record of another format or key: untrusted, never served
+            self._misses.append(key)
+            raise
         if body is None:
             self._misses.append(key)
             raise ReplayMiss(f"no recorded answer #{index} for request {key[:12]}: replay does not call the model")
         self._served[key] = index + 1
         return ChatCompletion.model_validate(body)
+
+    def unused(self) -> int:
+        """Recorded answers the replay never asked for (the head made fewer calls than the base)."""
+        return sum(max(len(self._store.read(key)) - self._served.get(key, 0), 0) for key in self._store.keys())
 
 
 class ReplayTransport:
@@ -184,7 +196,11 @@ class ReplayTransport:
 
     def __init__(self, store: RawResponseStore):
         self.misses: list = []
-        self.chat = type("Chat", (), {"completions": _ReplayCompletions(store, self.misses)})()
+        self._completions = _ReplayCompletions(store, self.misses)
+        self.chat = type("Chat", (), {"completions": self._completions})()
+
+    def unused(self) -> int:
+        return self._completions.unused()
 
 
 @contextlib.contextmanager
@@ -244,6 +260,7 @@ def replay_suite(suite_id: str, ab_dir, out_dir) -> dict:
     import asyncio
 
     from cqc_cpcc.model_eval import batch, prompt_eval
+    from cqc_cpcc.model_eval.suites import get_suite
 
     ab_dir, out_dir = Path(ab_dir), Path(out_dir)
     store_dir, raw = ab_dir / "raw-responses", ab_dir / "base" / suite_id / "raw_outputs.jsonl"
@@ -255,10 +272,10 @@ def replay_suite(suite_id: str, ab_dir, out_dir) -> dict:
         return unusable("raw-responses/ is missing")
     if not raw.is_file():
         return unusable("the base's raw_outputs.jsonl is missing")
-    if batch.is_on():
-        return unusable("batch mode is on: a batched call would bypass the replay")
     store = RawResponseStore(store_dir)
     try:
+        if batch.is_on():
+            return unusable("batch mode is on: a batched call would bypass the replay")
         ensure_fixtures_only([suite_id])
         if not store.keys():
             return unusable("raw-responses/ holds no recorded answer")
@@ -268,14 +285,20 @@ def replay_suite(suite_id: str, ab_dir, out_dir) -> dict:
         models = sorted({(r.model, r.effort) for records in base.values() for r in records},
                         key=lambda m: (m[0], m[1] or ""))
         case_ids = {r.case_id for records in base.values() for r in records}
+        head_cases = {c.case_id for c in get_suite(suite_id).cases()}
+        if head_cases != case_ids:
+            # A case the base never ran (or one the head dropped) is not covered by the recorded answers.
+            return unusable(f"the head's dataset and the base run differ in {len(head_cases ^ case_ids)} case(s)")
         repeats = len({r.repeat for records in base.values() for r in records})
         with replaying(store) as transport:
             asyncio.run(prompt_eval.run(suite_id, models, repeats=repeats, out=str(out_dir),
                                         case_ids=case_ids))
         if transport.misses:
             return unusable(f"{len(transport.misses)} request(s) had no recorded answer")
+        if transport.unused():
+            return unusable(f"{transport.unused()} recorded answer(s) were never asked for")
         head = prompt_eval.read_records(out_dir / suite_id / "raw_outputs.jsonl")
-    except Exception as e:  # noqa: BLE001 - every failure means "replay not usable", never a pass
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - every failure (a budget refusal exits) is "unusable"
         return unusable(f"{type(e).__name__}: {str(e)[:200]}")
     result = compare_records(base, head)
     different = result.pop("different_cases")

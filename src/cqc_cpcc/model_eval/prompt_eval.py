@@ -374,6 +374,7 @@ def cmd_suite(args) -> int:
             from cqc_cpcc.model_eval import record_replay
 
             stack.enter_context(record_replay.recording(record_replay.RawResponseStore(record_dir), suite_ids))
+            print(f"recording raw model answers to {record_dir} (CQC_EVAL_RECORD_RAW)")
         for suite_id in suite_ids:
             sc = asyncio.run(run(suite_id, models, args.repeats, args.limit, args.budget, args.out,
                                  args.dry_run, args.label, args.run_id, judges=args.judges,
