@@ -1,6 +1,6 @@
 # Prompt eval: record and replay for response-side changes (issue #406)
 
-Status: steps 1 (groundwork), 2 (capture wrapper) and 3 (replay path) are in. No workflow calls any of it yet (S4).
+Status: steps 1 to 3 and 5 are in (tools and docs). No workflow calls any of it yet (S4, the owner's merge).
 
 ## Problem
 
@@ -134,8 +134,10 @@ Each step is sized for one 20-minute run.
   `raw-responses/`, run the replay step after the request-identical check, and a repository variable
   switch like `PROMPT_EVAL_FAST_PATH`. Follows `GitHub-Actions-Standard` (timeouts, no path filter on a
   required check). Christopher merges.
-- **S5, docs:** `docs/PROMPTS.md` section replacing the "Not covered: record-and-replay (#406)" line,
-  with the artifact layout, the switch and the fallback behaviour. CHANGELOG entry changed from
-  "groundwork" to the shipped behaviour.
+- [x] **S5, docs:** `docs/PROMPTS.md` section "Record and replay for response-side changes" replaces the "Not
+  covered: record-and-replay" line with the artifact layout, the commands, the exit codes and the fallback
+  behaviour, and says plainly that no workflow runs it yet. The CHANGELOG entry describes the tools as built
+  and not wired.
 
-S4 and S5 are not started. This pull request stays a draft until they land.
+S4 is not started: it changes `.github/workflows` (a protected path) and is the owner's merge. S1 to S3 and S5 are in
+the tools-only pull request; issue #406 stays open until S4 lands.

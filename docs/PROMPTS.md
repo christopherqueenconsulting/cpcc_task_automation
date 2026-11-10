@@ -348,7 +348,31 @@ capture, runs the full paid A/B as before.
   fast path entirely, revert both #407 and the PR that added this switch; reverting only the
   latter leaves #407's fast path running without a switch.
 - **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
-  (issue #406) is the follow-up for that.
+  (issue #406, built but not yet wired into a workflow; see below) is the follow-up for that.
+
+### Record and replay for response-side changes (issue #406, tools only)
+
+For a change whose requests are identical to the base's but whose code handles the model's answer
+differently (parsing, the compile gate, requirement coverage, scoring). Design and step list:
+`docs/plans/prompt-eval-record-replay.md`. **No workflow runs any of this yet**, so the A/B behaves
+as described above; these are opt-in commands for a local or later CI run.
+
+- **Record (base side):** set `CQC_EVAL_RECORD_RAW=<directory>` when running `suite run` (unset by
+  default, and ignored with `--dry-run`). Each raw OpenRouter completion body is saved as
+  `<directory>/<request-key>.json` (`{"format": 1, "key": ..., "responses": [...]}`), where the key is
+  the same request hash the fast path compares and `responses` holds one body per send, in order.
+  Recording refuses unless every suite reads only the synthetic, `pii_guard`-clean datasets under
+  `evals/datasets`, and refuses when batch mode is on. Keep the directory as `raw-responses/` next to
+  the base's `base/<suite>/raw_outputs.jsonl`.
+- **Replay (head side):** `python -m cqc_cpcc.model_eval prompt-ab-replay --suites S --ab-dir DIR --out OUT`
+  runs the head's suites on the recorded answers (no network, no API key) and compares each case's
+  output with the base's exactly, a case's repeats as a sorted group. It writes `OUT/replay.json` and
+  exits `0` (identical on every case), `3` (a case differs) or `4` (unusable).
+- **Fallback:** `different` and `unusable` (no store or base output, a request with no recorded answer,
+  a record of another format, batch mode, a dataset that is not fixtures-only, any error) both mean the
+  full paid A/B must run. Only `identical` on every suite can pass. Replay never calls the model.
+- **Not covered:** a change that alters any request still needs the paid A/B, and the live model's
+  answer to a changed request is never replayed.
 
 **Per suite, not per PR.** The base capture runs the base's own code. A suite the base does not
 know (the PR adds it: #428, #429 and #432 did) used to make the single base command exit
