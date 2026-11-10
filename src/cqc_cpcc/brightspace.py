@@ -874,12 +874,7 @@ class BrightSpace_Course:
 
     @classmethod
     def _owns_result_header(cls, table) -> bool:
-        try:
-            headers = table.find_elements(By.XPATH, cls.RESULT_OWN_HEADER_XPATH)
-        except (AttributeError, TypeError):
-            return False
-        if not isinstance(headers, (list, tuple)):
-            return False
+        headers = table.find_elements(By.XPATH, cls.RESULT_OWN_HEADER_XPATH)
         return any(any(word in " ".join(str(getattr(cell, "text", "") or "").casefold().split())
                        for word in ("student", "user", "learner", "name"))
                    for cell in headers)
