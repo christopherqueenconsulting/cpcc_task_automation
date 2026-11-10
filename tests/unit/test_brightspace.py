@@ -1841,3 +1841,19 @@ class TestXpathTextContains:
         xpath = ("//tr[.//span[contains(@class,'ds_b') and %s]]//a[contains(@href,'qi=')]"
                  % _xpath_text_contains(".", "Aug 28, 2026 11:59 PM"))
         assert len(doc.xpath(xpath)) == 1
+
+
+@pytest.mark.unit
+def test_quiz_select_xpath_falls_back_to_any_per_page_select_and_options_follow_the_whole_union():
+    xpath = BrightSpace_Course.QUIZ_SELECT_XPATH
+    assert "OverviewGrid" in xpath and "per page" in xpath
+
+    course, select = _select_course("200")
+    with patch("cqc_cpcc.brightspace.Select", return_value=select), \
+            patch("cqc_cpcc.brightspace.wait_for_ajax"), \
+            patch("cqc_cpcc.brightspace.EC") as ec:
+        assert course.click_max_results_select(xpath) is True
+
+    options_locator = ec.presence_of_all_elements_located.call_args.args[0]
+    assert options_locator[1] == f"({xpath})//option"
+    assert course.results_page_size == 200

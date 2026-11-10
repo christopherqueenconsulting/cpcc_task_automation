@@ -1183,7 +1183,7 @@ class BrightSpace_Course:
                         final_view = view
                         table_xpath = ("//div[@id='OverviewGrid']//table | //table[.//th[contains(.,'Student') "
                                        "or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]")
-                        select_xpath = "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
+                        select_xpath = self.QUIZ_SELECT_XPATH
                         if not self.click_max_results_select(select_xpath) and not self._has_elements(table_xpath):
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
                         rows, pages_read = self._read_activity_rows(table_xpath, 2, 3, route_url)
@@ -1301,7 +1301,7 @@ class BrightSpace_Course:
         )
         select_xpath = (
             self.select_xpath if is_assignment
-            else "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
+            else self.QUIZ_SELECT_XPATH
         )
         # Assignment per-user view cells: 1 = learner name, 2 = submission date (read live 2026-11-09).
         name_cell, date_cell = (1, 2) if is_assignment else (2, 3)
@@ -1527,6 +1527,12 @@ class BrightSpace_Course:
 
     # Largest results-per-page size the select was verified to hold after the last
     # click_max_results_select call; None when it was not set to its maximum.
+    # The attempts grid (quiz_mark_attempts.d2l) has no OverviewGrid wrapper, so fall back to any
+    # per-page select (read live 2026-11-10).
+    QUIZ_SELECT_XPATH = (
+        "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')] | "
+        "//select[.//option[contains(.,'per page')]]"
+    )
     results_page_size: int | None = None
 
     def click_max_results_select(self, select_xpath: str, retry: int = 1) -> bool:
@@ -1535,7 +1541,7 @@ class BrightSpace_Course:
 
         for attempt in range(attempts):
             try:
-                select_option_xpath = f"{select_xpath}//option"
+                select_option_xpath = f"({select_xpath})//option"
 
                 # Wait until options are present
                 select_options = self.wait.until(
