@@ -1047,7 +1047,7 @@ def test_eva_pagination_uses_visible_controls_and_rejects_unreadable_state():
         course._read_activity_rows("//table", 3, 2, "activity-url")
 
 
-def _no_pager_course(table_rows, page_size, pager_hints=None):
+def _no_pager_course(table_rows, page_size, pager_hints=None, body_text=""):
     course = BrightSpace_Course.__new__(BrightSpace_Course)
     course.driver = MagicMock()
     course.results_page_size = page_size
@@ -1056,8 +1056,15 @@ def _no_pager_course(table_rows, page_size, pager_hints=None):
     table.get_attribute.return_value = None
     table.find_elements.return_value = [MagicMock() for _ in range(table_rows)]
     hints = [] if pager_hints is None else pager_hints
-    course.driver.find_elements.side_effect = lambda by, xpath: (
-        hints if xpath == BrightSpace_Course.PAGER_HINT_XPATH else [table])
+    body = MagicMock()
+    body.text = body_text
+
+    def _find(by, xpath):
+        if xpath == BrightSpace_Course.PAGER_HINT_XPATH:
+            return hints
+        return [body] if xpath == "//body" else [table]
+
+    course.driver.find_elements.side_effect = _find
     course._page_fingerprint = MagicMock(return_value=("page",))
     course._visible_next_controls = MagicMock(return_value=([], []))
     return course
@@ -1073,6 +1080,39 @@ def test_no_pager_is_the_full_result_set_when_the_verified_page_size_is_not_fill
 def test_no_pager_stays_incomplete_when_the_page_may_be_full_or_the_size_is_unverified(table_rows, page_size):
     with pytest.raises(_EVAReadIncomplete, match="pagination_control_missing"):
         _no_pager_course(table_rows, page_size)._advance_activity_page("//table", 1, 22)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body_text", ["Page 1 of 3", "Showing 1 - 20 of 49", "page 2 of 5"])
+def test_no_pager_page_whose_text_says_more_results_exist_stays_incomplete(body_text):
+    with pytest.raises(_EVAReadIncomplete, match="pagination_control_missing"):
+        _no_pager_course(21, 200, body_text=body_text)._advance_activity_page("//table", 1, 22)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body_text", ["", "Page 1 of 1", "Showing 1 - 22 of 22", "2 of 5 attachments"])
+def test_no_pager_page_whose_text_says_everything_is_shown_is_complete(body_text):
+    assert _no_pager_course(22, 200, body_text=body_text)._advance_activity_page("//table", 1, 22) is False
+
+
+@pytest.mark.unit
+def test_page_size_is_recorded_even_when_the_select_is_not_tied_to_the_table_container():
+    # Accepted risk, pinned: a per-page select elsewhere on the page can set the size. The table's own
+    # select must hold the maximum too, and a pager or count text still keeps the page incomplete.
+    course, selects = _select_course("200")
+    assert _click_max(course, selects) is True
+    assert course.results_page_size == 200
+
+
+@pytest.mark.unit
+def test_pager_class_hint_skips_the_results_table_and_its_wrapper():
+    from lxml import html
+    page = html.fromstring('<div><div class="d2l-pagination">x</div>'
+                           '<div class="wrap-pager"><table><tr class="d2l-pager-row"><td>x</td></tr></table></div></div>')
+    xpath = (BrightSpace_Course.PAGER_HINT_XPATH.replace("//*", "descendant::*")
+             .replace("| //d2l-pager", "| descendant::d2l-pager"))
+    found = page.xpath(xpath)
+    assert [element.get("class") for element in found] == ["d2l-pagination"]
 
 
 def _hint(displayed):
@@ -1098,7 +1138,8 @@ def test_no_pager_page_ignores_hidden_pager_like_controls():
 def test_pager_hint_xpath_matches_next_labels_and_the_d2l_pager_tag(label):
     from lxml import html
     page = html.fromstring(f'<div><button>{label}</button><a aria-label="{label}">x</a>'
-                           '<d2l-pager></d2l-pager><button>Context</button><tr class="d2l-pager-row"></tr></div>')
+                           '<d2l-pager></d2l-pager><button>Context</button>'
+                           '<table><tr class="d2l-pager-row"><td>x</td></tr></table></div>')
     found = page.xpath(BrightSpace_Course.PAGER_HINT_XPATH.replace("//*", "descendant::*")
                        .replace("| //d2l-pager", "| descendant::d2l-pager"))
     assert len(found) == 3

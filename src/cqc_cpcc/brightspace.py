@@ -847,16 +847,35 @@ class BrightSpace_Course:
     )
 
     # Any visible control that looks like a pager although EVA_NEXT_XPATH did not match it (a label such
-    # as "Next" or "Next >", or a d2l-pager element). The rule "no pager, fewer rows than the page size,
-    # so complete" must not fire on a page that has one. A bare class match is left out on purpose: the
-    # results table itself carries pager-classed summary rows.
+    # as "Next" or "Next >", a d2l-pager element, or a pager/pagination-classed element). The rule "no
+    # pager, fewer rows than the page size, so complete" must not fire on a page that has one. Class
+    # matches skip anything inside the results table (it carries pager-classed summary rows) or wrapping it.
     PAGER_HINT_XPATH = (
         "//*[self::button or self::a][contains(translate(@aria-label,'NEXT','next'),'next') "
         "or contains(translate(@title,'NEXT','next'),'next') "
-        "or contains(translate(normalize-space(.),'NEXT','next'),'next')] | //d2l-pager"
+        "or contains(translate(normalize-space(.),'NEXT','next'),'next')] | //d2l-pager | "
+        "//*[contains(@class,'pager') or contains(@class,'pagination')]"
+        "[not(ancestor::table)][not(.//table)]"
     )
+    # "Page 2 of 5" or "1 - 20 of 49" anywhere on the page: the results continue on another page.
+    PAGE_COUNT_RE = re.compile(
+        r"\bpage\s+(\d+)\s+of\s+(\d+)\b|\b(\d+)\s*[-–]\s*(\d+)\s+of\s+(\d+)\b", re.IGNORECASE)
 
     PER_USER_TABLE_SUMMARY = "users and the submissions"
+
+    @classmethod
+    def _count_text_shows_more(cls, text: str) -> bool:
+        for match in cls.PAGE_COUNT_RE.finditer(text or ""):
+            if match.group(1) and int(match.group(2)) > 1:
+                return True
+            if match.group(3) and int(match.group(4)) < int(match.group(5)):
+                return True
+        return False
+
+    def _page_text_shows_more(self) -> bool:
+        bodies = self.driver.find_elements(By.XPATH, "//body")
+        text = " ".join(str(getattr(body, "text", "") or "") for body in bodies)
+        return self._count_text_shows_more(text)
 
     def _visible_pager_hint(self) -> bool:
         for element in self.driver.find_elements(By.XPATH, self.PAGER_HINT_XPATH):
@@ -1111,9 +1130,11 @@ class BrightSpace_Course:
                         page_size = getattr(self, "results_page_size", None)
                         if page_size:
                             table_rows = len(results_table.find_elements(By.XPATH, "./tr | ./tbody/tr"))
-                            if table_rows < page_size and self._visible_pager_hint():
-                                logger.info("No pager matched, but a visible pager-like control is on the "
-                                            "page; not treating %d rows as the full result set.", table_rows)
+                            if table_rows < page_size and (
+                                    self._visible_pager_hint() or self._count_text_shows_more(text)
+                                    or self._page_text_shows_more()):
+                                logger.info("No pager matched, but the page shows a pager-like control or more "
+                                            "results; not treating %d rows as the full result set.", table_rows)
                             elif table_rows < page_size:
                                 logger.info("No pager: %d table rows is below the verified page size %d; "
                                             "treating the page as the full result set.", table_rows, page_size)
@@ -1608,6 +1629,10 @@ class BrightSpace_Course:
                 # Prove the select took the maximum before anything relies on it: re-find every
                 # visible select the XPath matches (the clicked node can be replaced by a reload)
                 # and require all of them to hold it.
+                # Accepted risk (reviewer H): the select is not tied to the results table's container. The
+                # table's own per-page select is among the matches and must hold the maximum too, so a stray
+                # select only matters when the real table has none. A pager or count text keeps the page
+                # incomplete regardless (see _advance_activity_page).
                 # Hidden duplicates are ignored on purpose: the attempt-logs page carries a second,
                 # hidden per-page select that stays at 10 (read live 2026-11-10).
                 fresh = [item for item in self.driver.find_elements(By.XPATH, select_xpath)
