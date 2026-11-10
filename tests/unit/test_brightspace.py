@@ -1073,7 +1073,9 @@ def test_no_pager_stays_incomplete_when_the_page_may_be_full_or_the_size_is_unve
         _no_pager_course(table_rows, page_size)._advance_activity_page("//table", 1, 22)
 
 
-def _select_course(chosen_value):
+def _select_course(*fresh_values):
+    """A course whose per-page select was clicked; `fresh_values` are the values the visible selects
+    hold when they are found again after the change (a value of None marks a hidden select)."""
     course = BrightSpace_Course.__new__(BrightSpace_Course)
     course.driver = MagicMock()
     course.wait = MagicMock()
@@ -1081,20 +1083,37 @@ def _select_course(chosen_value):
     for option, value in zip(options, ("20", "100", "200")):
         option.get_attribute.return_value = value
     course.wait.until.side_effect = [options, MagicMock()]
-    select = MagicMock()
-    select.first_selected_option.get_attribute.return_value = chosen_value
-    return course, select
+    selects, elements = [MagicMock()], []
+    for value in fresh_values:
+        element = MagicMock()
+        element.is_displayed.return_value = value is not None
+        elements.append(element)
+        item = MagicMock()
+        item.first_selected_option.get_attribute.return_value = value or "10"
+        selects.append(item)
+    course.driver.find_elements.return_value = elements
+    return course, selects
+
+
+def _click_max(course, selects):
+    with patch("cqc_cpcc.brightspace.Select", side_effect=selects), \
+            patch("cqc_cpcc.brightspace.wait_for_ajax"):
+        return course.click_max_results_select("//select")
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("chosen,expected", [("200", 200), ("20", None)])
-def test_max_results_select_records_the_page_size_only_when_the_select_took_the_maximum(chosen, expected):
-    course, select = _select_course(chosen)
-    with patch("cqc_cpcc.brightspace.Select", return_value=select), \
-            patch("cqc_cpcc.brightspace.wait_for_ajax"):
-        assert course.click_max_results_select("//select") is True
-
-    select.select_by_value.assert_called_once_with("200")
+@pytest.mark.parametrize("fresh,expected", [
+    (("200",), 200),
+    (("20",), None),
+    (("200", "20"), None),
+    (("200", None), 200),
+    ((), None),
+])
+def test_max_results_select_records_the_page_size_only_when_every_visible_select_holds_the_maximum(
+        fresh, expected):
+    course, selects = _select_course(*fresh)
+    assert _click_max(course, selects) is True
+    selects[0].select_by_value.assert_called_once_with("200")
     assert course.results_page_size == expected
 
 
@@ -1848,8 +1867,8 @@ def test_quiz_select_xpath_falls_back_to_any_per_page_select_and_options_follow_
     xpath = BrightSpace_Course.QUIZ_SELECT_XPATH
     assert "OverviewGrid" in xpath and "per page" in xpath
 
-    course, select = _select_course("200")
-    with patch("cqc_cpcc.brightspace.Select", return_value=select), \
+    course, selects = _select_course("200")
+    with patch("cqc_cpcc.brightspace.Select", side_effect=selects), \
             patch("cqc_cpcc.brightspace.wait_for_ajax"), \
             patch("cqc_cpcc.brightspace.EC") as ec:
         assert course.click_max_results_select(xpath) is True
@@ -1857,3 +1876,13 @@ def test_quiz_select_xpath_falls_back_to_any_per_page_select_and_options_follow_
     options_locator = ec.presence_of_all_elements_located.call_args.args[0]
     assert options_locator[1] == f"({xpath})//option"
     assert course.results_page_size == 200
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("label", ["Next page", "NEXT PAGE", "next Page"])
+def test_next_control_xpath_matches_any_casing_of_the_label(label):
+    from lxml import html
+    page = html.fromstring(f'<div><button aria-label="{label}">&gt;</button><a title="{label}">&gt;</a>'
+                           f'<button aria-label="Previous page">&lt;</button></div>')
+    # lxml has no namespace here; the XPath is plain XPath 1.0.
+    assert len(page.xpath(BrightSpace_Course.EVA_NEXT_XPATH.replace("//", "descendant-or-self::"))) == 2

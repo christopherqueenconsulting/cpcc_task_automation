@@ -838,9 +838,12 @@ class BrightSpace_Course:
 
     EVA_PAGE_RETRIES = 3
     EVA_MAX_PAGES = 100
+    # Case-insensitive: a differently cased pager label must not look like "no pager".
     EVA_NEXT_XPATH = (
-        "//button[@aria-label='Next page' or @title='Next Page'] | "
-        "//a[@aria-label='Next page' or @title='Next Page']"
+        "//button[translate(@aria-label,'NEXTPAGE','nextpage')='next page' "
+        "or translate(@title,'NEXTPAGE','nextpage')='next page'] | "
+        "//a[translate(@aria-label,'NEXTPAGE','nextpage')='next page' "
+        "or translate(@title,'NEXTPAGE','nextpage')='next page']"
     )
 
     PER_USER_TABLE_SUMMARY = "users and the submissions"
@@ -1580,9 +1583,17 @@ class BrightSpace_Course:
 
                 wait_for_ajax(self.driver)
 
-                # Prove the select took the maximum before anything relies on it.
-                chosen = (select.first_selected_option.get_attribute("value") or "").strip()
-                self.results_page_size = max_value if chosen == str(max_value) else None
+                # Prove the select took the maximum before anything relies on it: re-find every
+                # visible select the XPath matches (the clicked node can be replaced by a reload)
+                # and require all of them to hold it.
+                fresh = [item for item in self.driver.find_elements(By.XPATH, select_xpath)
+                         if item.is_displayed()]
+                held = bool(fresh) and all(
+                    (Select(item).first_selected_option.get_attribute("value") or "").strip()
+                    == str(max_value)
+                    for item in fresh
+                )
+                self.results_page_size = max_value if held else None
 
                 return True
 
