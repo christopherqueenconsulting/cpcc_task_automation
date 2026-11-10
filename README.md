@@ -190,6 +190,10 @@ Calculates student attendance by analyzing activity completion in BrightSpace an
 4. Records attendance in MyColleges
 5. Optionally processes withdrawals and syncs them to the tracker workbook (dry-run by default)
 
+Attendance collects through today, leaves today open for the next run, and supports
+historical EVA re-runs, assignment changes, and resets. See
+[Attendance and EVA recovery](docs/attendance-eva-recovery.md) for the recovery workflow.
+
 ### 2. Give Feedback
 
 Generates feedback on student programming projects with an LLM.
@@ -228,7 +232,7 @@ For detailed technical documentation, see:
 ### BrightSpace Integration
 - Uses Selenium web scraping (not BrightSpace API)
 - Attendance is inferred from activity completion dates
-- Default date range: last 7 days, ending 2 days ago
+- Date range: ledger-driven recovery through today; today stays open and is revisited on the next run
 - Scraping is slow; it walks the BrightSpace pages for each course
 
 ### MyColleges Integration
@@ -279,19 +283,15 @@ poetry run pytest
 
 The project uses GitHub Actions for automated testing:
 
-- **unit-tests.yml**: Runs unit tests on every pull request and push to `master`
-  - Uploads coverage and test results to Codecov
-  - Blocks merge if tests fail (when branch protection is enabled)
-  - The 2026-09-04 run on `master` reported 1756 passed ([run 33890300261](https://github.com/christopherqueenconsulting/cpcc_task_automation/actions/runs/33890300261))
-- **integration-coverage.yml** and **e2e-coverage.yml**: Integration and Playwright end-to-end tests on the same triggers
+- **unit-tests.yml**: Runs unit shards, exhaustive compiler checks, integration tests, and Playwright E2E tests in parallel on pull requests, merge queues, and pushes to `master`; uploads each coverage report and sends one Codecov completion signal after all test lanes pass
 
 To enable required status checks for pull requests, see **[docs/ci-branch-protection.md](docs/ci-branch-protection.md)** for detailed setup instructions.
 
 ## GitHub Actions
 
 Workflows in `.github/workflows/`:
-- **unit-tests.yml**, **integration-coverage.yml**, **e2e-coverage.yml**: Test CI (PRs and pushes to `master`)
-- **codeql.yml**, **gitguardian-scan.yml**, **pii-guard.yml**: Code scanning, secret scanning, and student-PII guard
+- **unit-tests.yml**: Unit shards, exhaustive compiler checks, integration/E2E tests, and Codecov finalization (PRs, merge queue, and pushes to `master`)
+- **codeql.yml**, **pii-guard.yml**: Code scanning and student-PII guard (secret scanning is the GitGuardian GitHub app, not a workflow)
 - **dependabot-auto-merge.yml**, **dependabot-ci-autofix.yml**: Dependabot housekeeping
 - **Cron_Action.yml**: Manual dispatch only (the schedule is commented out); `cron.py` currently prints a placeholder and does not take attendance
 - **release.yml**: A pushed tag `vX.Y.Z` or `vX.Y.Z-rcN` creates a GitHub release (see `docs/RELEASING.md`)

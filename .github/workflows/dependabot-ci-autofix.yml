@@ -3,9 +3,7 @@ name: Dependabot CI Auto-Fix Trigger
 on:
   workflow_run:
     workflows:
-      - CI / Unit Tests
-      - CI / Integration Test w/ Coverage
-      - CI / E2E Test w/ Coverage
+      - CI / Test Suite
       - CodeQL Advanced
     types:
       - completed
@@ -21,6 +19,7 @@ jobs:
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Request Copilot fix for failed Dependabot chore(deps) PR
         uses: actions/github-script@v9

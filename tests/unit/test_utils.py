@@ -1,5 +1,6 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
 
+import glob
 import os
 import pytest
 import tempfile
@@ -86,6 +87,31 @@ class TestReadFileMarkdownDecoding:
         finally:
             os.remove(path)
         assert "plain doc body text" in out
+
+
+@pytest.mark.unit
+def test_read_file_docx_preserves_paragraphs_then_json_tables():
+    import docx
+
+    document = docx.Document()
+    document.add_paragraph("Before table")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Name"
+    table.cell(0, 1).text = "Value"
+    table.cell(1, 0).text = "Ada"
+    table.cell(1, 1).text = "42"
+    document.add_paragraph("After table")
+    path = _write_tmp(b"", ".docx", binary=True)
+    document.save(path)
+    try:
+        content = read_file(path)
+    finally:
+        os.remove(path)
+
+    assert content == (
+        "Before table\n\nAfter table\n\n"
+        '[{"0":"Name","1":"Value"},{"0":"Ada","1":"42"}]'
+    )
 
 
 @pytest.mark.unit
@@ -650,9 +676,25 @@ class TestBrightSpaceZipPicker:
         src = self._make_zip(tmp_path)
         keep = {"Alice_123/sol.cpp", "Bob_456/sol.cpp"}
         out = _rebuild_zip_from_kept(src, keep)
+        before = set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*")))
         ok, detail = _validate_submissions_zip(out, keep)
         assert ok is True
         assert detail == "2"  # two student folders survive
+        assert set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*"))) == before
+
+    def test_failed_rebuilt_zip_validation_removes_student_archive(self, tmp_path):
+        from cqc_streamlit_app.utils import _validate_submissions_zip
+
+        out = tmp_path / "invalid-rebuilt.zip"
+        out.write_bytes(b"not a valid zip")
+        before = set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*")))
+
+        ok, detail = _validate_submissions_zip(str(out), {"Alice_123/sol.cpp"})
+
+        assert ok is False
+        assert detail
+        assert not out.exists()
+        assert set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*"))) == before
 
     def test_deselecting_a_student_drops_their_folder(self, tmp_path):
         import zipfile
@@ -1446,7 +1488,9 @@ class TestReadablePathConfinement:
         """The classic crafted-filename case: ../../.. out of the temp directory."""
         from cqc_cpcc.utilities.utils import read_file
 
-        escape = os.path.join(str(tmp_path), "..", "..", "..", "..", "etc", "passwd")
+        # Enough ".." to reach the filesystem root however deep tmp_path is (pytest-xdist
+        # nests it one level deeper); extra ".." at the root stay at the root.
+        escape = os.path.join(str(tmp_path), *([".."] * 16), "etc", "passwd")
 
         with pytest.raises(ValueError, match="Refusing to read"):
             read_file(escape)

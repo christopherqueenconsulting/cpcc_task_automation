@@ -381,7 +381,10 @@ class TestRecords:
         assert result["healthy"] == []
         assert len(history.read_text().splitlines()) == 1
         text = status.read_text()
-        assert f"| `exam-grading` | {_registry_version('exam-grading')} | `exam-grading` | `openai/x@high` |" in text and "needs work" in text
+        assert (
+            f"| `exam-grading` | {_registry_version('exam-grading')} | `exam-grading` | `openai/x@high` |" in text
+            and "needs work" in text
+        )
         assert "Never evaluated on master yet" in text
 
     def test_a_passing_run_marks_the_prompt_healthy(self, tmp_path):
@@ -436,21 +439,33 @@ async def test_prompt_ab_end_to_end_in_test_mode(tmp_path, monkeypatch):
 
 
 async def test_suite_gate_runs_the_other_suites_of_the_roles(tmp_path, monkeypatch, uncalibrated_policy):
-    from cqc_cpcc.utilities.AI import llm_gateway
+    from cqc_cpcc.model_eval.__main__ import parse_model
 
-    monkeypatch.setattr(llm_gateway, "_is_test_mode", lambda: True)
     ran = []
-    real_run = prompt_eval.run
+    models = [parse_model("openai/gpt-6-luna@high"), parse_model("openai/gpt-5-mini")]
+    labels = [prompt_eval.label_of(*model) for model in models]
 
-    async def small_run(suite_id, models, **kw):
+    async def small_run(suite_id, run_models, **kw):
+        assert [prompt_eval.label_of(*model) for model in run_models] == labels
         ran.append(suite_id)
-        return await real_run(suite_id, models, repeats=2, out=kw["out"])
+        return {"status": "complete", "models": {
+            label: {"health": {"failures": [], "calibrated": False}} for label in labels
+        }}
 
     monkeypatch.setattr(prompt_eval, "run", small_run)
+    monkeypatch.setattr(prompt_eval, "estimate_suites", lambda *args: 0)
+    monkeypatch.setattr(pa, "_aggregates", lambda suite, raw_path: {
+        labels[0]: {"composite": 0.8}, labels[1]: {"composite": 0.8}
+    })
+    monkeypatch.setattr(pa.base, "compare", lambda *args, **kwargs: {
+        "comparative": False, "noninferior": True
+    })
     report = await pa.suite_gate("openai/gpt-6-luna@high", "openai/gpt-5-mini", ["grading"], tmp_path)
-    assert set(ran) == {"grading-levelband", "grading-solution", "requirement-extraction", "exam-grading",
-                       "effort-recommendation", "requirement-solution-check", "test-case-generation"}
-    assert report["status"] == "pass"  # same canned answers for both models
+    expected = [suite_id for suite_id in SUITE_MODULES
+                if get_suite(suite_id).role == "grading" and suite_id != "grading"]
+    assert ran == expected
+    assert set(report["suites"]) == set(expected)
+    assert report["status"] == "pass"  # controlled equal aggregates for both models
     assert json.loads((tmp_path / "cross_suite.json").read_text())["candidate"] == "openai/gpt-5-mini"
 
 
@@ -596,6 +611,7 @@ class TestCli:
 
 
 def test_power_script_exits_1_when_no_case_has_matching_runs(tmp_path, monkeypatch, capsys):
+    import logging
     import runpy
     import sys
 
@@ -606,8 +622,14 @@ def test_power_script_exits_1_when_no_case_has_matching_runs(tmp_path, monkeypat
         (out / "raw_outputs.jsonl").write_text(rec.to_json() + "\n", encoding="utf-8")
     script = Path(__file__).resolve().parents[2] / "scripts" / "prompt_ab_power.py"
     monkeypatch.setattr(sys, "argv", ["prompt_ab_power.py", str(tmp_path), "digest", "--sims", "1"])
-    with pytest.raises(SystemExit) as exit_info:
-        runpy.run_path(str(script), run_name="__main__")
+    # The CLI disables logging for its process. Running it in pytest's process
+    # must restore that state so later redaction/SDK logging tests still run.
+    previous_disable = logging.root.manager.disable
+    try:
+        with pytest.raises(SystemExit) as exit_info:
+            runpy.run_path(str(script), run_name="__main__")
+    finally:
+        logging.disable(previous_disable)
     assert exit_info.value.code == 1
     assert "too few for a paired test" in capsys.readouterr().err
 
@@ -871,8 +893,12 @@ class TestWorkflowWiring:
     def jobs(cls):
         import yaml
 
-        path = pa.REPO_ROOT / ".github" / "workflows" / "prompt-eval.yml"
-        return yaml.safe_load(path.read_text())["jobs"]
+        # The workflow is split over files (dispatch jobs and the merge-queue job have their own); the
+        # rules below hold for the jobs as a whole.
+        jobs = {}
+        for name in ("prompt-eval.yml", "prompt-eval-dispatch.yml", "prompt-eval-merge-queue.yml"):
+            jobs.update(yaml.safe_load((pa.REPO_ROOT / ".github" / "workflows" / name).read_text())["jobs"])
+        return jobs
 
     def test_the_report_uses_the_base_branch_verdict(self, jobs):
         assert "ab-base-rule" in jobs["report"]["needs"]

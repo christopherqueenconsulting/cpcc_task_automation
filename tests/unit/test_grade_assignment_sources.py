@@ -65,3 +65,26 @@ def test_submissions_url_prefilled_from_instructions_url() -> None:
     at.run()
     assert not at.exception
     assert at.text_input(key="rubric_exam_bs_subs_url").value == "https://brightspace.cpcc.edu/d2l/x?ou=1"
+
+
+@pytest.mark.unit
+def test_batch_preview_removes_extracted_submission_files(tmp_path) -> None:
+    import glob
+    import os
+    import tempfile
+    import zipfile
+
+    from cqc_streamlit_app.grade_assignment import batch_preview
+
+    archive = tmp_path / "submissions.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Student A/Main.java", "public class Main { int value = 1; }")
+    before = set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*")))
+    batch_preview.clear()
+    try:
+        rows = batch_preview(((str(archive), str(archive)),), "java")
+    finally:
+        batch_preview.clear()
+
+    assert rows and rows[0]["Student"] == "Student A"
+    assert set(glob.glob(os.path.join(tempfile.gettempdir(), "from_zip_*"))) == before

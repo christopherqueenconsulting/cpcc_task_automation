@@ -197,7 +197,10 @@ def test_model_events_update_the_row(tmp_path):
 
     job = _job(tmp_path, ["Student A"], behave)
     job.start()
-    assert _wait_for(lambda: _state(job, "Student A") == grading_job.RETRYING)
+    assert _wait_for(
+        lambda: _state(job, "Student A") == grading_job.RETRYING
+        and job.snapshot().rows[0].attempt == "2/3"
+    )
     row = job.snapshot().rows[0]
     assert row.model == "vendor/model-one" and row.attempt == "2/3"
     assert "Try 1 did not work. Trying again." == row.last_issue

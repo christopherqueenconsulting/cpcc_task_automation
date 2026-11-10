@@ -27,7 +27,7 @@ from cqc_cpcc.utilities.AI.openai_exceptions import (
 
 
 # Test Pydantic model
-class TestGradingResult(BaseModel):
+class SampleGradingResult(BaseModel):
     """Test model for smart retry tests."""
     summary: str = Field(description="Brief summary")
     score: int = Field(description="Score 0-100")
@@ -67,11 +67,11 @@ class TestSmartRetry:
         result = await get_structured_completion(
             prompt="Grade this submission",
             model_name="gpt-5-mini",
-            schema_model=TestGradingResult,
+            schema_model=SampleGradingResult,
         )
         
         # Should succeed on second attempt (smart retry)
-        assert isinstance(result, TestGradingResult)
+        assert isinstance(result, SampleGradingResult)
         assert result.summary == "Test successful"
         assert result.score == 95
         
@@ -112,7 +112,7 @@ class TestSmartRetry:
         
         result = await get_structured_completion(
             prompt="Grade this",
-            schema_model=TestGradingResult,
+            schema_model=SampleGradingResult,
         )
         
         # Should succeed after smart retry
@@ -139,7 +139,7 @@ class TestSmartRetry:
         with pytest.raises(OpenAISchemaValidationError) as exc_info:
             await get_structured_completion(
                 prompt="Test",
-                schema_model=TestGradingResult,
+                schema_model=SampleGradingResult,
             )
         
         error = exc_info.value
@@ -172,7 +172,7 @@ class TestSmartRetry:
         with pytest.raises(OpenAITransportError) as exc_info:
             await get_structured_completion(
                 prompt="Test",
-                schema_model=TestGradingResult,
+                schema_model=SampleGradingResult,
             )
         
         error = exc_info.value
@@ -196,7 +196,7 @@ class TestSmartRetry:
         with pytest.raises(OpenAISchemaValidationError) as exc_info:
             await get_structured_completion(
                 prompt="Test",
-                schema_model=TestGradingResult,
+                schema_model=SampleGradingResult,
             )
         
         error = exc_info.value

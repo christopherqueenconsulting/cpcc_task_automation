@@ -200,8 +200,12 @@ def run_async_in_streamlit(coro):
 
 
 FLOWGORITHM_FILE_NAME_CAPTION = (
-    "File-name criteria are checked by a lenient local test: any word counts as a name, any number "
-    "as the lab number; unknown is never deducted. The file name itself is not sent to the model.")
+    "File-name criteria use a lenient local test: any word counts as a name, and a number in digits counts as "
+    "the lab number anywhere, but a roman numeral or spelled-out number counts only next to the lab word "
+    "(Lab 3, Lab_III, lab-iii). A lab word with no number (Lab_Foo), a roman numeral of two or more letters on "
+    "its own (Smith_II) or a spelled-out number on its own (Smith_Three) reads as unknown, and unknown is never "
+    "deducted; a single letter such as V or X alone reads as no number. "
+    "The file name itself is not sent to the model.")
 
 
 def define_grading_rubric():
@@ -3018,6 +3022,7 @@ def batch_preview(file_paths: tuple, expected_language: Optional[str]) -> list[d
     from cqc_cpcc.utilities.submission_validity import check_validity
     rows = []
     for orig_path, temp_path in file_paths:
+        students = {}
         if str(orig_path).endswith(".zip"):
             try:
                 students = extract_student_submissions_from_zip(temp_path, SUBMISSION_FILE_TYPES)
@@ -3029,20 +3034,29 @@ def batch_preview(file_paths: tuple, expected_language: Optional[str]) -> list[d
         else:
             base = os.path.basename(orig_path)
             items = [(os.path.splitext(base)[0], {base: temp_path}, [])]
-        for sid, files, rejected in items:
-            v = check_validity(files, expected_language, rejected_files=rejected)
-            chars = 0
-            for path in files.values():
-                try:
-                    chars += os.path.getsize(path)
-                except OSError:
-                    pass
-            rows.append({
-                "Student": sid,
-                "Files": ", ".join(list(files) + [f"{r} (not accepted)" for r in rejected]),
-                "Chars": chars,
-                "Check": "Ready" if v.ok else f"Needs review: {_VALIDITY_LABELS.get(v.status, v.status)}",
-            })
+        try:
+            for sid, files, rejected in items:
+                v = check_validity(files, expected_language, rejected_files=rejected)
+                chars = 0
+                for path in files.values():
+                    try:
+                        chars += os.path.getsize(path)
+                    except OSError:
+                        pass
+                rows.append({
+                    "Student": sid,
+                    "Files": ", ".join(list(files) + [f"{r} (not accepted)" for r in rejected]),
+                    "Chars": chars,
+                    "Check": "Ready" if v.ok else f"Needs review: {_VALIDITY_LABELS.get(v.status, v.status)}",
+                })
+        finally:
+            # The cached preview stores row data, not extracted student-file copies.
+            for submission in students.values():
+                for temp_path in submission.files.values():
+                    try:
+                        os.unlink(temp_path)
+                    except FileNotFoundError:
+                        pass
     return rows
 
 

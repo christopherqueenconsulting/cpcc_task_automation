@@ -4,9 +4,13 @@ import csv
 import datetime as DT
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import List
+from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from selenium.common import (
     NoSuchElementException,
@@ -29,6 +33,8 @@ from cqc_cpcc.attendance_ledger import (
     RUN_INCOMPLETE,
     STATUS_CARRIED,
     STATUS_FAILED,
+    STATUS_INVALIDATED,
+    STATUS_PENDING,
     STATUS_RECORDED,
     STATUS_UNRECORDABLE,
     STATUS_VERIFIED,
@@ -36,37 +42,42 @@ from cqc_cpcc.attendance_ledger import (
     open_default_ledger,
 )
 from cqc_cpcc.brightspace import BrightSpace_Course
-from cqc_cpcc.eva_check import EvaFlag, flag_no_attendance, notify_eva_flags, print_eva_block
+from cqc_cpcc.eva_check import (
+    EvaFlag,
+    flag_no_attendance,
+    notify_eva_flags,
+    print_eva_block,
+)
 from cqc_cpcc.run_plan import RunPlan
+from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.date import (
     calculate_census_date,
     convert_date_to_datetime,
     get_datetime,
     is_date_in_range,
+    looks_like_a_scraped_date,
 )
 from cqc_cpcc.utilities.env_constants import (
     EVA_DATE_DRIFT_WARNING_DAYS,
     EVA_DATE_PERCENT,
     MYCOLLEGE_URL,
 )
-from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
 from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.pii_redaction import alias
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
     close_tab,
+    current_browser_observer,
     describe_page,
     get_driver_wait,
     get_element_wait_retry,
     get_elements_text_as_list_wait_stale,
     getText,
-    current_browser_observer,
     notify_progress,
     notify_warning,
     wait_for_ajax,
     wait_for_element_to_hide,
 )
-from cqc_cpcc.utilities.date import looks_like_a_scraped_date
 from cqc_cpcc.utilities.utils import login_if_needed
 
 
@@ -85,6 +96,7 @@ class CourseContext:
     last_day_to_add: DT.datetime = None
     last_day_to_drop_without_grade: DT.datetime = None
     eva_date: DT.date = None
+    eva_date_source: str = "unknown"
     last_attendance_record_date: DT.datetime = None
     last_selectable_attendance_date: DT.date = None
     selectable_attendance_dates: list = None
@@ -102,10 +114,13 @@ class AttendanceOutcome:
     unmatched: list = field(default_factory=list)
     # (date, student id) pairs a dry run found not marked Present.
     missing: list = field(default_factory=list)
+    # EVA completions that did not map to exactly one roster row.
+    eva_unmatched: int = 0
     # Writes MyColleges refused with "Unable to update student attendance".
     update_errors: int = 0
     # True when refusals reached UPDATE_ERRORS_TO_SKIP_COURSE and the rest was skipped.
     updates_down: bool = False
+    run_status: str = RUN_INCOMPLETE
 
 
 def default_report_dir() -> str:
@@ -152,6 +167,205 @@ class MyColleges:
             self.ledger = open_default_ledger() or AttendanceLedger(":memory:")
         return self.ledger
 
+    @staticmethod
+    def _brightspace_course_id(course_url: str) -> str:
+        params = parse_qs(urlparse(course_url).query)
+        return (params.get("ou") or [course_url])[0]
+
+    @staticmethod
+    def _date_source(context: CourseContext) -> str:
+        return context.eva_date_source
+
+    def _eva_setup_response(self, request: dict) -> dict | None:
+        """Use the Streamlit main-thread handshake, or an interactive console."""
+        callback = getattr(current_browser_observer(), "request_eva_setup", None)
+        if callback is not None:
+            response = callback(request)
+            if response.get("request_id") != request["request_id"]:
+                raise RuntimeError("EVA confirmation response did not match its request.")
+            return response
+        if not sys.stdin.isatty():
+            return None
+
+        logger.warning("EVA attendance setup for %s.", request.get("course_name"))
+        if request.get("date_only"):
+            estimate = request.get("eva_date") or ""
+            answer = input("Course EVA/census date YYYY-MM-DD%s: " %
+                           (" [%s]" % estimate if estimate else "")).strip() or estimate
+            try:
+                parsed = DT.date.fromisoformat(answer)
+            except ValueError:
+                logger.warning("Invalid EVA date; skipping EVA attendance this run.")
+                return {"skip": True}
+            return {"request_id": request["request_id"], "date_only": True,
+                    "eva_date": parsed.isoformat(), "eva_date_source": "user_confirmed"}
+
+        candidates = request.get("candidates", [])
+        if not candidates:
+            return {"request_id": request["request_id"], "skip": True}
+        for index, item in enumerate(candidates, start=1):
+            logger.info("%d: %s · %s · due %s", index, item["activity_type"],
+                        item["title"], item.get("observed_due_date") or "unknown")
+        answer = input("Choose EVA activity number (or 0 to skip): ").strip()
+        try:
+            index = int(answer) - 1
+            activity = candidates[index]
+        except (ValueError, IndexError):
+            return {"request_id": request["request_id"], "skip": True}
+        due = input("Confirm activity due date YYYY-MM-DD: ").strip()
+        eva_date = request.get("eva_date") or ""
+        if not eva_date:
+            eva_date = input("Confirm course EVA/census date YYYY-MM-DD: ").strip()
+        try:
+            due_date = DT.date.fromisoformat(due)
+            confirmed_eva = DT.date.fromisoformat(eva_date)
+        except ValueError:
+            return {"request_id": request["request_id"], "skip": True}
+        return {"request_id": request["request_id"], "activity": activity,
+                "confirmed_due_date": due_date.isoformat(), "eva_date": confirmed_eva.isoformat(),
+                "eva_date_source": "user_confirmed"}
+
+    def _confirm_eva_date(self, context: CourseContext, saved: dict | None,
+                          source: str, today: DT.date, term: str, section: str,
+                          ledger: AttendanceLedger, course_id: str) -> DT.date | None:
+        observed = context.eva_date.isoformat() if context.eva_date else None
+        saved_date = saved.get("eva_date") if saved else None
+        if saved and saved_date and (
+            source == "unknown" or
+            (observed == saved.get("observed_eva_date") and source == saved.get("eva_date_source"))
+        ):
+            return DT.date.fromisoformat(saved_date)
+        response = self._eva_setup_response({
+            "request_id": uuid4().hex, "course_name": context.course_name,
+            "date_only": True, "eva_date": observed,
+            "eva_date_source": source,
+        })
+        if not response or response.get("skip"):
+            notify_warning("EVA coverage skipped for %s; regular attendance continues." %
+                           context.course_name)
+            self._publish_eva_status(context, saved, "skipped", "EVA date was not confirmed")
+            return None
+        confirmed = DT.date.fromisoformat(response["eva_date"])
+        ledger.save_eva_course_date(
+            term=term, course_section=section, brightspace_course_id=course_id,
+            eva_date=confirmed, observed_eva_date=observed,
+            eva_date_source=source,
+        )
+        self._publish_eva_status(context, {**(saved or {}), "eva_date": confirmed.isoformat()},
+                                 "pending", "Course EVA date confirmed")
+        return confirmed
+
+    @staticmethod
+    def _publish_eva_status(context: CourseContext, config: dict | None,
+                            result: str, detail: str = "") -> None:
+        callback = getattr(current_browser_observer(), "on_eva_status", None)
+        if callback is None:
+            return
+        callback({
+            "course_section": context.course_name.split(":")[0].strip(),
+            "activity": (config or {}).get("title", "Not selected"),
+            "activity_type": (config or {}).get("activity_type", ""),
+            "activity_url": BrightSpace_Course._diagnostic_url((config or {}).get("activity_url")),
+            "due_date": (config or {}).get("confirmed_due_date", ""),
+            "eva_cutoff": (config or {}).get("eva_date", ""),
+            "result": result,
+            "detail": detail,
+        })
+
+    def _resolve_eva_activity(self, context: CourseContext, term: str, section: str,
+                              ledger: AttendanceLedger, today: DT.date) -> dict | None:
+        course_id = self._brightspace_course_id(context.course_url)
+        saved = ledger.eva_activity(term, section, course_id)
+        source = self._date_source(context)
+        if ledger.path == ":memory:":
+            raise RuntimeError(
+                "Durable attendance storage is unavailable; refusing attendance writes "
+                "for this course because EVA dates cannot be protected across retries."
+            )
+        eva_date = self._confirm_eva_date(context, saved, source, today,
+                                           term, section, ledger, course_id)
+        if eva_date is None:
+            return None
+        today = DT.datetime.now(ZoneInfo("America/New_York")).date()
+        if today < convert_date_to_datetime(context.course_start_date).date():
+            self._publish_eva_status(context, saved, "pending", "Course has not started")
+            return None
+
+        # Discovery is limited to the confirmed eligible window.
+        discovery = BrightSpace_Course(
+            context.course_name, context.term_semester, context.term_year,
+            context.first_day_to_drop, context.final_day_to_drop,
+            context.course_start_date, context.course_end_date,
+            self.driver, self.wait, collect_attendance=False, collect_withdrawals=False,
+            eva_date=eva_date, discover_eva_activities=True,
+        )
+        candidates = discovery.eva_activity_candidates
+        if discovery.scrape_problems:
+            notify_warning("EVA activity discovery was incomplete for %s; no EVA marks will be made." %
+                           context.course_name)
+            self._publish_eva_status(context, saved, "incomplete", "Activity discovery was incomplete")
+            return None
+        saved_activity_id = saved.get("activity_id") if saved else None
+        if saved and saved.get("activity_type") == "quiz" and saved.get("activity_url"):
+            # Older confirmations stored the course ``ou`` as the quiz ID because
+            # attempt-log URLs no longer carry ``qi`` in their query string.
+            saved_activity_id = BrightSpace_Course._activity_id(
+                "quiz", saved["activity_url"]
+            )
+        found = next((item for item in candidates
+                      if saved and item["activity_id"] == saved_activity_id
+                      and item["activity_type"] == saved["activity_type"]), None)
+        current_due = found.get("observed_due_iso") if found else None
+        saved_due = saved.get("confirmed_due_date") if saved else None
+        needs_activity_confirmation = found is None or saved is None or not saved.get("activity_id") or (
+            current_due != saved_due and found.get("observed_due_date") != saved.get("observed_due_date")
+        ) or (saved and DT.date.fromisoformat(saved["eva_date"]) != eva_date)
+        if found and not needs_activity_confirmation:
+            if saved.get("activity_id") != found["activity_id"]:
+                ledger.save_eva_activity({
+                    **saved, **found,
+                    "term": term, "course_section": section,
+                    "brightspace_course_id": course_id,
+                    "confirmed_due_date": saved_due,
+                    "eva_date": eva_date.isoformat(),
+                    "observed_eva_date": saved.get("observed_eva_date"),
+                    "eva_date_source": saved.get("eva_date_source", source),
+                })
+            else:
+                ledger.update_eva_activity_title(
+                    term, section, course_id, found["title"],
+                    found.get("observed_due_date"),
+                )
+            config = {**saved, **found, "confirmed_due_date": saved_due, "eva_date": eva_date.isoformat()}
+            self._publish_eva_status(context, config, "pending", "Saved activity reused")
+            return config
+
+        request = {
+            "request_id": uuid4().hex, "course_name": context.course_name,
+            "candidates": candidates, "saved_activity_id": saved.get("activity_id") if saved else None,
+            "eva_date": eva_date.isoformat(), "eva_date_source": source,
+        }
+        response = self._eva_setup_response(request)
+        if not response or response.get("skip"):
+            notify_warning("EVA activity setup skipped for %s; regular attendance continues." %
+                           context.course_name)
+            self._publish_eva_status(context, saved, "skipped", "Activity setup was skipped")
+            return None
+        activity = response["activity"]
+        config = {
+            "term": term, "course_section": section,
+            "brightspace_course_id": course_id,
+            **activity,
+            "confirmed_due_date": response["confirmed_due_date"],
+            "eva_date": response["eva_date"],
+            "observed_eva_date": context.eva_date.isoformat() if context.eva_date else None,
+            "eva_date_source": source,
+        }
+        ledger.save_eva_activity(config)
+        config["confirmed_due_date"] = response["confirmed_due_date"]
+        self._publish_eva_status(context, config, "pending", "Activity confirmed")
+        return config
+
     def open_faculty_page(self):
         faculty_url = MYCOLLEGE_URL + "/Student/Student/Faculty"
 
@@ -175,7 +389,8 @@ class MyColleges:
         # Get the course dates
         course_section_dates = self.wait.until(
             lambda d: d.find_elements(By.XPATH,
-                                      "//a[starts-with(@id, 'section') and contains(@id, 'link')]/ancestor::td[1]/following-sibling::td[1]/div/div[3]/span"),
+                                      "//a[starts-with(@id, 'section') and contains(@id, 'link')]"
+                                      "/ancestor::td[1]/following-sibling::td[1]/div/div[3]/span"),
             "Waiting for course dates")
 
         # TODO: Get or calculate the EVA date and store with course info
@@ -633,6 +848,7 @@ class MyColleges:
             "eva_date": self._resolve_eva_date(
                 raw_drop_without_grade, course_start_date, course_end_date
             ),
+            "eva_date_source": "mycolleges" if raw_drop_without_grade else "estimated",
         }
 
         if course_url in self.course_information:
@@ -658,6 +874,7 @@ class MyColleges:
             "last_day_to_drop_without_grade": course_end_date,
             "last_day_to_drop_with_grade": course_end_date,
             "eva_date": self._resolve_eva_date(None, course_start_date, course_end_date),
+            "eva_date_source": "estimated",
         }
 
     def _read_term(self, course_name: str) -> tuple[str, str]:
@@ -741,6 +958,7 @@ class MyColleges:
             last_day_to_add=deadlines["last_day_to_add"],
             last_day_to_drop_without_grade=deadlines["last_day_to_drop_without_grade"],
             eva_date=deadlines["eva_date"],
+            eva_date_source=deadlines["eva_date_source"],
             last_attendance_record_date=course_start_date,
             selectable_attendance_dates=[],
         )
@@ -1014,14 +1232,69 @@ class MyColleges:
         in MyColleges, and anything not already Present is reported as missing.
         """
         outcome = AttendanceOutcome()
-        pending_by_name = self._build_pending_attendance_records(bsc.attendance_records)
+        bounded_start = getattr(bsc, "attendance_start_bound", None)
+        bounded_range = isinstance(bounded_start, DT.date)
+        window_start = bounded_start if bounded_range else convert_date_to_datetime(context.course_start_date).date()
+        window_end = getattr(bsc, "date_range_end", None)
+        if not isinstance(window_end, DT.date):
+            window_end = DT.datetime.now(ZoneInfo("America/New_York")).date()
+        def in_window(day: DT.date) -> bool:
+            return day <= window_end and (not bounded_range or day >= window_start)
+        pending_by_name = {
+            day: names for day, names in self._build_pending_attendance_records(bsc.attendance_records).items()
+            if in_window(day)
+        }
+        eva_activity_id = getattr(bsc, "eva_activity_id", None)
+        eva_config = getattr(bsc, "eva_activity", None)
+        if isinstance(eva_config, dict) and eva_config.get("brightspace_course_id"):
+            eva_activity_id = ledger.eva_source_id(eva_config)
+        eva_result = getattr(bsc, "eva_collection_result", None)
+        eva_records = (getattr(bsc, "eva_attendance_records", {})
+                       if eva_result is not None and eva_result.complete is True else {})
+        eva_all_by_date = self._build_pending_attendance_records(eva_records)
+        roster = self._read_attendance_roster() if pending_by_name or eva_all_by_date else []
 
-        roster = self._read_attendance_roster() if pending_by_name else []
+        # Match every EVA completion before committing any evidence. The ledger
+        # batch is atomic and completes before the SIS write loop begins.
+        eva_rows: list[tuple[str, DT.date, str]] = []
+        eva_unmatched: list[tuple[DT.date, str]] = []
+        # Persist the complete historical snapshot even for a bounded SIS run;
+        # only selected dates below become SIS work in this run.
+        for record_date, names in eva_all_by_date.items():
+            for name in names:
+                student_id = self._match_student_id(name, roster)
+                if student_id is None:
+                    eva_unmatched.append((record_date, alias(name)))
+                else:
+                    eva_rows.append((student_id, record_date, eva_activity_id))
+
+        if eva_unmatched:
+            outcome.eva_unmatched = len(eva_unmatched)
+            outcome.unmatched.extend(eva_unmatched)
+        elif eva_result is not None and eva_result.complete is True:
+            if not eva_activity_id:
+                raise RuntimeError("Complete EVA evidence has no confirmed activity identity.")
+            try:
+                if write:
+                    if isinstance(eva_config, dict) and eva_config.get("brightspace_course_id"):
+                        ledger.migrate_eva_evidence(eva_config)
+                    ledger.reconcile_eva_expected_batch(term, section, eva_rows, eva_activity_id)
+                else:
+                    ledger.record_eva_expected_batch(term, section, eva_rows)
+            except Exception as error:
+                raise RuntimeError(
+                    "Could not persist complete EVA attendance evidence; refusing SIS writes."
+                ) from error
+            # EVA rows are already pending in the ledger. Do not merge them into
+            # ordinary activity: that would invent independent support on reset.
+
         for record_date, names in pending_by_name.items():
             for name in names:
                 student_id = self._match_student_id(name, roster)
                 if student_id is None:
-                    outcome.unmatched.append((record_date, alias(name)))
+                    unmatched = (record_date, alias(name))
+                    if unmatched not in outcome.unmatched:
+                        outcome.unmatched.append(unmatched)
                     continue
                 ledger.upsert_expected(term, section, student_id, record_date)
 
@@ -1032,9 +1305,29 @@ class MyColleges:
                 ", ".join("%s %s" % (d.isoformat(), n) for d, n in outcome.unmatched),
             )
 
+        # A user may have corrected unsupported attendance in MyColleges after
+        # changing EVA setup. Only a definite read-back of absence resolves it;
+        # the automation never silently removes a Present mark.
+        for row in ledger.eva_reconciliation(term, section):
+            row_date = DT.date.fromisoformat(row["attend_date"])
+            if not in_window(row_date):
+                continue
+            try:
+                self._select_attendance_date(row_date, True)
+                if self._read_present_by_id(row["student_id"]) is False:
+                    ledger.set_status(term, section, row["student_id"], row["attend_date"],
+                                      STATUS_INVALIDATED, "Confirmed corrected in MyColleges")
+            except (NoSuchElementException, TimeoutException):
+                logger.warning("Could not verify an EVA reconciliation date in %s.", section)
+
         outstanding: dict[DT.date, list[str]] = {}
+        exact_dates: set[tuple[DT.date, str]] = set()
         for entry in ledger.outstanding(term, section):
+            if not in_window(entry.attend_date):
+                continue
             outstanding.setdefault(entry.attend_date, []).append(entry.student_id)
+            if entry.exact_date:
+                exact_dates.add((entry.attend_date, entry.student_id))
         outcome.expected = sum(len(ids) for ids in outstanding.values())
 
         datepicker_avail = True
@@ -1053,23 +1346,52 @@ class MyColleges:
                     record_date, context.last_selectable_attendance_date,
                     context.selectable_attendance_dates,
                 )
+                carry_within_window = next_date is not None and next_date <= window_end
                 for student_id in student_ids:
-                    if next_date is None:
+                    if (record_date, student_id) in exact_dates:
+                        ledger.set_status(
+                            term, section, student_id, record_date, STATUS_PENDING,
+                            "EVA completion date is not selectable; exact date retained",
+                        )
+                    elif bounded_range and not carry_within_window:
+                        ledger.set_status(
+                            term, section, student_id, record_date, STATUS_PENDING,
+                            "date not selectable within the selected attendance range",
+                        )
+                    elif next_date is None:
                         ledger.set_status(term, section, student_id, record_date,
                                           STATUS_UNRECORDABLE, "date not selectable")
+                    elif not carry_within_window:
+                        ledger.set_status(
+                            term, section, student_id, record_date, STATUS_PENDING,
+                            "next selectable date is outside the current attendance window",
+                        )
                     else:
                         ledger.set_status(term, section, student_id, record_date,
                                           STATUS_CARRIED, "carried to %s" % next_date.isoformat())
                         ledger.upsert_expected(term, section, student_id, next_date)
                 outcome.not_selectable += len(student_ids)
-                if next_date is None:
+                carry_ids = [sid for sid in student_ids if (record_date, sid) not in exact_dates]
+                if not carry_ids:
+                    logger.warning("Cannot select %s; %s EVA entr(ies) remain pending on "
+                                   "their actual date.", formatted_date, len(student_ids))
+                elif not carry_within_window:
+                    logger.warning("Cannot select %s within the current attendance window; "
+                                   "%s entr(ies) remain pending.",
+                                   formatted_date, len(carry_ids))
+                elif next_date is None:
                     logger.warning("Cannot select %s and no later date is available; "
-                                   "%s entr(ies) not recordable.", formatted_date, len(student_ids))
+                                   "%s entr(ies) not recordable.", formatted_date, len(carry_ids))
                 else:
                     logger.info("Cannot select %s; carrying %s student(s) to %s.",
-                                formatted_date, len(student_ids),
+                                formatted_date, len(carry_ids),
                                 next_date.strftime("%-m/%-d/%Y (%A)"))
-                    outstanding.setdefault(next_date, []).extend(student_ids)
+                    if len(carry_ids) != len(student_ids):
+                        logger.warning("%s EVA entr(ies) remain pending on their actual date.",
+                                       len(student_ids) - len(carry_ids))
+                    outstanding.setdefault(next_date, []).extend(
+                        carry_ids
+                    )
                 continue
 
             for student_id in student_ids:
@@ -1245,15 +1567,24 @@ class MyColleges:
     ) -> AttendanceOutcome:
         """Mark, verify, cross-check, and record the run outcome for one course."""
         write = plan.write_attendance
+        selected_end = getattr(bsc, "date_range_end", None)
+        if not isinstance(selected_end, DT.date):
+            selected_end = DT.datetime.now(ZoneInfo("America/New_York")).date()
         run_id = ledger.start_run(
-            term, section, window_start, bsc.date_range_end,
+            term, section, window_start, selected_end,
             full_recheck=plan.full_recheck, dry_run=not write,
         )
         outcome = AttendanceOutcome()
         run_status = RUN_INCOMPLETE
         counts_lower = None
+        bounded_range = isinstance(getattr(bsc, "attendance_start_bound", None), DT.date)
+        preserve_full_recheck = False
         notes: list[str] = []
         try:
+            state = ledger._course_state(term, section)
+            preserve_full_recheck = bool(bounded_range and state is not None and state["needs_full_recheck"])
+            if plan.full_recheck or (state is not None and state["needs_full_recheck"]):
+                ledger.recheck_verified(term, section, window_start, selected_end)
             outcome = self._mark_attendance_for_course(
                 context, bsc, ledger=ledger, term=term, section=section, write=write,
             )
@@ -1267,19 +1598,34 @@ class MyColleges:
                 counts_lower = self._cross_check_counts(ledger, run_id, term, section)
                 scrape_problems = list(getattr(bsc, "scrape_problems", []) or [])
                 notes.extend(scrape_problems)
-                if counts_lower:
+                if counts_lower is not False:
                     notes.append("count mismatch")
                 if outcome.update_errors:
                     notes.append("MyColleges refused %d update(s)%s" % (
                         outcome.update_errors,
                         "; rest of course skipped" if outcome.updates_down else ""))
-                if not scrape_problems and not counts_lower and not outcome.update_errors \
+                if outcome.unmatched:
+                    notes.append("unmatched activity")
+                reconciliation = ledger.eva_reconciliation(term, section)
+                if reconciliation:
+                    notes.append("prior EVA attendance requires reconciliation")
+                eva_result = getattr(bsc, "eva_collection_result", None)
+                eva_incomplete = eva_result is not None and not eva_result.complete
+                if eva_incomplete:
+                    notes.append("EVA collection incomplete")
+                if not scrape_problems and counts_lower is False and not outcome.update_errors \
+                        and not outcome.unmatched and not eva_incomplete \
+                        and not reconciliation \
                         and not ledger.outstanding(term, section):
                     run_status = RUN_COMPLETE
         finally:
             ledger.update_course_state(
-                term, section, run_status=run_status, window_end=bsc.date_range_end,
-                needs_full_recheck=bool(counts_lower) if write else None,
+                term, section, run_status=run_status, window_end=selected_end,
+                needs_full_recheck=(True if preserve_full_recheck else bool(counts_lower)) if write else None,
+                window_start=window_start,
+                collection_date=(bsc.collection_date if isinstance(getattr(bsc, "collection_date", None), DT.date)
+                                 else DT.datetime.now(ZoneInfo("America/New_York")).date()),
+                course_start=convert_date_to_datetime(context.course_start_date).date(),
             )
             ledger.finish_run(
                 run_id, status=run_status, expected=outcome.expected,
@@ -1291,6 +1637,7 @@ class MyColleges:
                 "Attendance for %s is incomplete (%s); the next run re-checks from the "
                 "course start.", section, "; ".join(notes) or "entries still outstanding",
             )
+        outcome.run_status = run_status
         return outcome
 
     # Verified live 2026-09-01: the roster keeps a row for students who stop early,
@@ -1313,36 +1660,90 @@ class MyColleges:
         return out;
     """
 
+    def _revalidate_census_dates(self, ledger: AttendanceLedger, term: str,
+                                 section: str, eva_date: DT.date,
+                                 start: DT.date | None = None, end: DT.date | None = None) -> bool:
+        """Read historical SIS dates before a run commits its checkpoint."""
+        verified = True
+        current_date = None
+        for entry in ledger.verified_entries_through(term, section, eva_date):
+            day = DT.date.fromisoformat(entry["attend_date"])
+            if (start is not None and day < start) or (end is not None and day > end):
+                continue
+            try:
+                if day != current_date:
+                    self._select_attendance_date(day, True)
+                    current_date = day
+                present = self._read_present_by_id(entry["student_id"])
+            except (NoSuchElementException, TimeoutException):
+                present = None
+            if present is not True:
+                verified = False
+                ledger.set_status(term, section, entry["student_id"], day, STATUS_PENDING,
+                                  "Census attendance requires fresh verification in MyColleges")
+        return verified
+
     def _check_eva_attendance(
             self, context: CourseContext, ledger: AttendanceLedger, term: str, section: str,
             today: DT.date | None = None,
+            *, coverage_complete: bool = True, verify_sis_dates: bool = False,
     ) -> list[EvaFlag]:
-        """Flag students with no Present mark in the course (before and after EVA).
+        """Flag missing census attendance only after dated evidence is verified.
 
-        Reads MyColleges' cumulative per-student Present totals, so the date the
-        roster shows does not matter. Must run on the course's attendance tab.
+        Cumulative totals detect missing or unexplained history; dated ledger
+        evidence establishes qualification. Must run on the attendance tab.
         """
-        today = today or DT.date.today()
+        today = today or DT.datetime.now(ZoneInfo("America/New_York")).date()
+        # Replace stale flags even when this run cannot make a census decision.
+        self.eva_flags = [flag for flag in self.eva_flags if flag.course_section != section]
+        if not coverage_complete or ledger.eva_reconciliation(term, section):
+            ledger.record_eva_check(term, section, [], status="incomplete")
+            notify_eva_flags(section, [])
+            return []
         eva_date = context.eva_date
         if eva_date is None:
+            ledger.record_eva_check(term, section, [], status="setup_required")
             logger.info("No EVA date for %s; skipping the no-attendance check.", section)
             return []
         start = convert_date_to_datetime(context.course_start_date).date()
         if today < start:
             return []
+        if verify_sis_dates:
+            verified = self._revalidate_census_dates(ledger, term, section, eva_date)
+            if not verified:
+                ledger.record_eva_check(term, section, [], status="incomplete")
+                notify_eva_flags(section, [])
+                return []
         totals = self._read_attendance_totals()
         if not totals:
+            ledger.record_eva_check(term, section, [], status="incomplete")
             logger.warning("No-attendance check skipped for %s: the Present totals could "
                            "not be read from the roster.", section)
             return []
+        qualifying = ledger.qualifying_attendance_by_student(term, section, eva_date)
+        known = ledger.verified_count_by_student(term, section)
+        roster = self._read_attendance_roster()
+        if any(str(row.get("id", "")) not in totals for row in roster) or any(
+            count < known.get(student_id, 0) or
+            (not qualifying.get(student_id) and count > known.get(student_id, 0))
+            for student_id, count in totals.items()
+        ):
+            # A cumulative total cannot date unexplained manual attendance, and
+            # a lower total means the local verification is stale.
+            ledger.record_eva_check(term, section, [], status="incomplete")
+            notify_eva_flags(section, [])
+            return []
+        # Totals establish which roster rows are readable, but attendance after
+        # census must never mask missing qualifying attendance before census.
+        cutoff_totals = {student_id: qualifying.get(student_id, 0) for student_id in totals}
         flags = flag_no_attendance(
-            section, totals, self._read_attendance_roster(), eva_date, today,
+            section, cutoff_totals, roster, eva_date, today,
             ledger.owed_by_student(term, section, through=eva_date),
         )
         ledger.record_eva_check(term, section, flags)
+        notify_eva_flags(section, flags)
         if flags:
             self.eva_flags.extend(flags)
-            notify_eva_flags(section, flags)
         else:
             logger.info("Every student in %s has at least one Present mark.", section)
         return flags
@@ -1397,13 +1798,32 @@ class MyColleges:
         term = ("%s %s" % (context.term_semester, context.term_year)).strip()
         section = context.course_name.split(":")[0].strip()
         ledger = None
+        eva_activity = None
         window_start = convert_date_to_datetime(context.course_start_date).date()
         if collect_attendance or mark_attendance:
             ledger = self._get_ledger()
+            if collect_attendance and mark_attendance:
+                today = DT.datetime.now(ZoneInfo("America/New_York")).date()
+                eva_activity = self._resolve_eva_activity(
+                    context, term, section, ledger, today
+                )
+                if eva_activity:
+                    context.eva_date = DT.date.fromisoformat(eva_activity["eva_date"])
+                else:
+                    saved = ledger.eva_activity(term, section, self._brightspace_course_id(context.course_url))
+                    if saved and saved.get("eva_date"):
+                        context.eva_date = DT.date.fromisoformat(saved["eva_date"])
             window_start, reason = ledger.lookback_start(
                 term, section, context.course_start_date,
                 force_full_recheck=plan.full_recheck,
             )
+            window_start = plan.attendance_window_start(window_start, context.course_start_date)
+            window_start = max(window_start, convert_date_to_datetime(context.course_start_date).date())
+            selected_end = plan.attendance_window_end(context.course_end_date)
+            if plan.attendance_end is not None and window_start > selected_end:
+                logger.info("Attendance date range does not overlap %s; skipping its attendance work.", section)
+                collect_attendance = False
+                mark_attendance = False
             logger.info("Attendance look-back for %s starts %s (%s).",
                         section, window_start.isoformat(), reason)
             # BrightSpace treats the date it is given as already done (exclusive).
@@ -1411,27 +1831,112 @@ class MyColleges:
                 window_start - DT.timedelta(days=1)
             )
 
-        bsc = BrightSpace_Course(
-            context.course_name, context.term_semester, context.term_year,
-            context.first_day_to_drop, context.final_day_to_drop,
-            context.course_start_date, context.course_end_date,
-            self.driver, self.wait, context.last_attendance_record_date,
-            collect_attendance=collect_attendance,
-            collect_withdrawals=collect_withdrawals,
-            force_withdrawals=force_withdrawals,
-            eva_date=context.eva_date,
-        )
+        try:
+            bsc = BrightSpace_Course(
+                context.course_name, context.term_semester, context.term_year,
+                context.first_day_to_drop, context.final_day_to_drop,
+                context.course_start_date, context.course_end_date,
+                self.driver, self.wait, context.last_attendance_record_date,
+                collect_attendance=collect_attendance,
+                collect_withdrawals=collect_withdrawals,
+                force_withdrawals=force_withdrawals,
+                eva_date=context.eva_date,
+                eva_activity=eva_activity,
+                attendance_start_bound=window_start if plan.attendance_end is not None else None,
+                attendance_end=plan.attendance_end,
+            )
+        except Exception:
+            if eva_activity:
+                self._publish_eva_status(
+                    context, eva_activity, "incomplete",
+                    "EVA collection failed before attendance processing; no EVA marks were made",
+                )
+            raise
 
         if mark_attendance:
             # Switch back to the MyColleges course tab; BrightSpace used its own.
             self.driver.switch_to.window(self.current_tab)
-            self._record_course_attendance(
-                context, bsc, plan, ledger, term, section, window_start
-            )
             try:
-                self._check_eva_attendance(context, ledger, term, section)
+                if eva_activity and context.eva_date:
+                    # Reopen absent or unreadable historical rows before marking
+                    # and checkpoint finalization, so they are repaired this run
+                    # or keep it incomplete.
+                    self._revalidate_census_dates(
+                        ledger, term, section, context.eva_date,
+                        (bsc.attendance_start_bound
+                         if isinstance(getattr(bsc, "attendance_start_bound", None), DT.date) else None),
+                        (bsc.date_range_end
+                         if isinstance(getattr(bsc, "attendance_start_bound", None), DT.date) else None),
+                    )
+                attendance_outcome = self._record_course_attendance(
+                    context, bsc, plan, ledger, term, section, window_start
+                )
+            except Exception:
+                if eva_activity:
+                    self._publish_eva_status(
+                        context, eva_activity, "incomplete",
+                        "Attendance processing stopped before the EVA result was finalized; "
+                        "review the ledger and SIS before retrying",
+                    )
+                raise
+            coverage_complete = False
+            if eva_activity:
+                eva_result = getattr(bsc, "eva_collection_result", None)
+                if eva_result is None or not eva_result.complete:
+                    code = (eva_result.error_code if eva_result is not None else None) or "reader_error"
+                    result = "incomplete"
+                    detail = (
+                        "EVA scan incomplete (%s; %s page(s), %s row(s)); ordinary attendance was processed"
+                        % (code, eva_result.pages_read if eva_result else 0, eva_result.rows_read if eva_result else 0)
+                    )
+                elif bsc.scrape_problems:
+                    result, detail = "incomplete", (
+                        "EVA scan completed, but ordinary activity collection was incomplete: "
+                        + "; ".join(bsc.scrape_problems)
+                    )
+                elif not plan.write_attendance:
+                    result, detail = "pending", "Dry run; SIS was not changed"
+                elif attendance_outcome.unmatched:
+                    result, detail = "incomplete", "Some completion names did not match the roster"
+                elif ledger.eva_reconciliation(term, section):
+                    result, detail = "incomplete", "Prior EVA attendance requires reconciliation in MyColleges"
+                elif attendance_outcome.failed or attendance_outcome.update_errors:
+                    result, detail = "incomplete", "Some attendance dates could not be written or verified"
+                elif ledger.outstanding(term, section):
+                    result, detail = "pending", "EVA-backed attendance remains outstanding"
+                elif attendance_outcome.run_status != RUN_COMPLETE:
+                    result, detail = "incomplete", "Attendance verification or count cross-check is incomplete"
+                else:
+                    result, detail = "verified", "EVA collection and attendance write completed"
+                    course_start = convert_date_to_datetime(context.course_start_date).date()
+                    collection_date = getattr(bsc, "collection_date", None)
+                    if not isinstance(collection_date, DT.date):
+                        collection_date = DT.datetime.now(ZoneInfo("America/New_York")).date()
+                    eva_cutoff = min(context.eva_date, collection_date)
+                    bounded_range = isinstance(getattr(bsc, "attendance_start_bound", None), DT.date)
+                    coverage_complete = not bounded_range or (
+                        bsc.attendance_start_bound <= course_start and bsc.date_range_end >= eva_cutoff
+                    )
+                    if not coverage_complete:
+                        result, detail = "pending", (
+                            "Selected attendance range completed; course-wide EVA missing check is "
+                            "pending until SIS dates outside the selected range are verified"
+                        )
+            try:
+                self._check_eva_attendance(context, ledger, term, section,
+                                           coverage_complete=coverage_complete)
+                if eva_activity:
+                    if coverage_complete and ledger.latest_eva_check_status(term, section) != "verified":
+                        result, detail = "incomplete", "Historical attendance could not be fully verified; review MyColleges"
+                    self._publish_eva_status(context, eva_activity, result, detail)
             except Exception:  # noqa: BLE001 - the check must not fail the course
                 logger.warning("No-attendance check failed for %s.", section, exc_info=True)
+                self.eva_flags = [flag for flag in self.eva_flags if flag.course_section != section]
+                notify_eva_flags(section, [])
+                ledger.record_eva_check(term, section, [], status="incomplete")
+                if eva_activity:
+                    self._publish_eva_status(context, eva_activity, "incomplete",
+                                             "EVA verification failed; retry before using the student results")
 
         if collect_withdrawals and bsc.get_withdrawal_records():
             # Read AFTER marking, so the dates reflect what this run just recorded.

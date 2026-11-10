@@ -11,10 +11,17 @@ on:
     branches:
       - master
 
+concurrency:
+  # Cancel a superseded PR run. Never cancel merge_group or push runs:
+  # cancelling a merge-queue run evicts the PR from the queue.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   pii-guard:
     name: Student PII guard
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

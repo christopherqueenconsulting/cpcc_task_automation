@@ -103,7 +103,10 @@ attendance MyColleges is owed and whether it has been verified.
 
 - SQLite file at `~/.cqc_cpcc/attendance.sqlite3` (override `CQC_ATTENDANCE_DB`),
   created `0600`, outside the repo. Stores ids, sections, terms, dates, statuses — no
-  names or emails.
+  names or emails. EVA activity confirmations and student/date evidence also live in
+  this database. Deployments must mount persistent storage at this path or set
+  `CQC_ATTENDANCE_DB` to a persistent volume; an ephemeral app filesystem loses the
+  saved EVA selection and pending evidence on restart.
 - Statuses: `pending` → `recorded` (written, read back on the open page) →
   `verified` (read back after the date is reloaded); `failed` is retried next run;
   `carried` / `unrecordable` when MyColleges will not offer the date.

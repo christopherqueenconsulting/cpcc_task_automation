@@ -2,29 +2,16 @@
 
 ## Overview
 
-This project uses GitHub Actions to automatically run unit tests on every pull request and push to the `master` branch. The workflow ensures code quality by catching issues before they are merged.
+This project uses one GitHub Actions test workflow to run unit, compiler, integration, and E2E tests on every pull request, merge queue group, and push to `master`. The shared workflow lets Codecov publish one complete report after all coverage-producing jobs finish.
 
 ## Workflow Details
 
-### Unit Tests Workflow
+### Test Suite Workflow
 - **Workflow File**: `.github/workflows/unit-tests.yml`
-- **Workflow Name**: `CI / Unit Tests`
+- **Workflow Name**: `CI / Test Suite`
 - **Triggers**:
   - Pull requests targeting `master` branch
-  - Direct pushes to `master` branch
-
-### Integration Tests Workflow
-- **Workflow File**: `.github/workflows/integration-coverage.yml`
-- **Workflow Name**: `CI / Integration Test w/ Coverage`
-- **Triggers**:
-  - Pull requests targeting `master` branch
-  - Direct pushes to `master` branch
-
-### E2E Tests Workflow
-- **Workflow File**: `.github/workflows/e2e-coverage.yml`
-- **Workflow Name**: `CI / E2E Test w/ Coverage`
-- **Triggers**:
-  - Pull requests targeting `master` branch
+  - Merge queue groups targeting `master`
   - Direct pushes to `master` branch
 
 ### What the Workflows Do
@@ -33,8 +20,13 @@ This project uses GitHub Actions to automatically run unit tests on every pull r
 1. **Checkout**: Clones the repository code
 2. **Setup Python & Poetry**: Installs Python 3.12 and Poetry 1.7.1 using the reusable `.github/actions/poetry_setup` action
 3. **Install Dependencies**: Installs project dependencies with `poetry install --with test`
-4. **Run Unit Tests**: Executes `poetry run pytest -m unit --ignore=tests/e2e` with coverage reporting
+4. **Run Unit Tests**: Executes `poetry run pytest -m "unit and not compiler" --ignore=tests/e2e` across the two shards with coverage reporting
 5. **Upload Coverage**: Uploads coverage to Codecov with `unit` flag
+
+**Compiler Checks:** The separate `compiler-tests` job runs the exhaustive real-compiler checks
+for the grading datasets in parallel with the unit shards. The required `unit-tests` gate waits
+for both the shard matrix and compiler job, so these checks remain merge-blocking. Their coverage
+and test results upload under the `unit` flag.
 
 **Integration Tests:**
 1. **Checkout**: Clones the repository code
@@ -51,9 +43,25 @@ This project uses GitHub Actions to automatically run unit tests on every pull r
 5. **Run E2E Tests**: Executes `poetry run pytest -m e2e` with coverage reporting
 6. **Upload Coverage**: Uploads coverage to Codecov with `e2e` flag
 
+**Codecov Finalization:** The `codecov-finalize` job waits for the `unit-tests`,
+`compiler-tests`,
+`integration-tests`, and `e2e-tests` jobs to pass, then runs `send-notifications`. This is the
+single completion signal for coverage uploads on that commit. If any test lane fails, the
+finalizer is skipped.
+
+This ordering depends on `codecov.yml` setting `codecov.notify.manual_trigger: yes`. Each test
+lane uploads its coverage as soon as it finishes; Codecov holds coverage statuses and PR
+notifications until `send-notifications` signals that uploads are complete. Keep every job that
+uploads coverage in the finalizer's `needs` list. Do not replace this completion signal with a
+fixed `after_n_builds` count, since retries or skipped uploads can make the expected count wrong.
+See [Codecov's notification documentation](https://docs.codecov.com/docs/notifications) for the
+manual trigger behavior.
+
 ### Test Execution
 
-The workflow runs all tests marked with `@pytest.mark.unit` while excluding the `tests/e2e` directory (which requires playwright and is not part of unit tests).
+The unit shards run tests marked `unit` except those marked `compiler`; the parallel compiler job
+runs the exhaustive compiler checks. Both lanes are required through `unit-tests` and upload
+coverage under the `unit` flag. The `tests/e2e` directory is excluded from unit selection.
 
 Coverage reports are generated in both terminal and XML format for easy review.
 
@@ -85,9 +93,9 @@ To enforce that pull requests must pass the unit tests before merging into `mast
      a GitHub App cannot approve its own pull request.
    
    **Note**: The PR check labels will appear as:
-   - `CI / Unit Tests`
-   - `CI / Integration Test w/ Coverage`
-   - `CI / E2E Test w/ Coverage`
+   - `unit-tests`
+   - `integration-tests`
+   - `e2e-tests`
 
 4. **Additional Recommended Settings** (optional but recommended)
    - ☑️ **Require a pull request before merging**
@@ -104,9 +112,9 @@ After enabling branch protection:
 
 1. Create a test pull request to `master`
 2. You should see the CI checks appear in the PR:
-   - "CI / Unit Tests"
-   - "CI / Integration Test w/ Coverage"
-   - "CI / E2E Test w/ Coverage"
+   - `unit-tests`
+   - `integration-tests`
+   - `e2e-tests`
 3. If any tests fail, the "Merge" button will be blocked
 4. Once all tests pass, the "Merge" button will become available
 
@@ -175,8 +183,7 @@ poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-report=term-missing
 
 - Ensure the workflow files exist at:
   - `.github/workflows/unit-tests.yml`
-  - `.github/workflows/integration-coverage.yml`
-  - `.github/workflows/e2e-coverage.yml`
+  - `.github/workflows/unit-tests.yml` (contains unit shards, compiler checks, integration/E2E lanes, and Codecov finalization)
 - Check that the branch name is exactly `master` (not `main`)
 - Verify Actions are enabled in repository settings
 
@@ -189,7 +196,7 @@ poetry run pytest -m unit --ignore=tests/e2e --cov=src --cov-report=term-missing
 ### Status Check Not Appearing
 
 - Ensure the workflows have run at least once on the target branch
-- Check that the job names match exactly: `unit-tests`, `integration-tests`, `e2e-tests`
+- Check that the required job names match exactly: `unit-tests`, `integration-tests`, `e2e-tests`; `unit-tests` also waits for the `compiler-tests` job
 - Wait a few minutes after creating the branch protection rule
 
 ## Monitoring and Maintenance

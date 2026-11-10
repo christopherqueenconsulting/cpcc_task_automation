@@ -20,6 +20,7 @@ from cqc_cpcc.attendance_ledger import (
     STATUS_VERIFIED,
     AttendanceLedger,
 )
+from cqc_cpcc.brightspace import EVACompletionResult
 from cqc_cpcc.my_colleges import CourseContext, MyColleges
 from cqc_cpcc.run_plan import RunPlan
 
@@ -88,8 +89,12 @@ def _context(**kwargs):
 def _course(records, problems=(), window_end=DT.date(2026, 8, 30)):
     course = MagicMock()
     course.attendance_records = records
+    course.eva_activity = None
+    course.eva_activity_id = None
+    course.eva_collection_result = None
     course.scrape_problems = list(problems)
     course.date_range_end = window_end
+    course.collection_date = window_end + DT.timedelta(days=1)
     return course
 
 
@@ -108,7 +113,9 @@ def _my_colleges(page, ledger, totals=None):
     mc._read_present_by_id = page.read
     mc._update_error_shown = page.take_alert
     mc._read_attendance_roster = lambda: ROSTER
-    mc._read_attendance_totals = lambda: dict(totals or {})
+    mc._read_attendance_totals = lambda: (dict(totals) if totals is not None else {
+        row["id"]: sum(sid == row["id"] for _day, sid in page.saved) for row in ROSTER
+    })
     return mc
 
 
@@ -144,6 +151,155 @@ class TestMarkAttendanceForCourse:
             "08-19-2026": ["Ann Adams", "Bob Brown"], "08-20-2026": ["Cid Clark"],
         })
         assert (outcome.expected, outcome.verified, outcome.failed) == (3, 3, 0)
+        assert ledger.outstanding(TERM, SECTION) == []
+
+    def test_bounded_range_leaves_outside_records_and_ledger_debt_untouched(self, ledger):
+        old_day, selected_day = DT.date(2026, 10, 19), DT.date(2026, 10, 25)
+        ledger.upsert_expected(TERM, SECTION, "1000001", old_day)
+        course = _course({"10-19-2026": ["Ann Adams"], "10-25-2026": ["Bob Brown"]},
+                         window_end=DT.date(2026, 10, 27))
+        course.attendance_start_bound = DT.date(2026, 10, 20)
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+
+        outcome = mc._mark_attendance_for_course(
+            _context(), course, ledger=ledger, term=TERM, section=SECTION,
+        )
+
+        assert page.writes == [(selected_day, "1000002")]
+        assert ledger.get_status(TERM, SECTION, "1000001", old_day) == STATUS_PENDING
+        assert outcome.expected == 1
+
+    def test_bounded_range_does_not_carry_unselectable_date_past_its_end(self, ledger):
+        day, outside_day = DT.date(2026, 10, 25), DT.date(2026, 10, 26)
+        course = _course({"10-25-2026": ["Ann Adams"]}, window_end=day)
+        course.attendance_start_bound = DT.date(2026, 10, 20)
+        page = FakeAttendancePage(unselectable={day})
+        mc = _my_colleges(page, ledger)
+
+        mc._mark_attendance_for_course(
+            _context(last_selectable_attendance_date=outside_day), course,
+            ledger=ledger, term=TERM, section=SECTION,
+        )
+
+        assert page.writes == []
+        assert ledger.get_status(TERM, SECTION, "1000001", day) == STATUS_PENDING
+        assert ledger.get_status(TERM, SECTION, "1000001", outside_day) is None
+
+    def test_automatic_run_does_not_carry_attendance_past_course_collection_end(self, ledger):
+        day, outside_day = DT.date(2026, 10, 25), DT.date(2026, 10, 26)
+        course = _course({"10-25-2026": ["Ann Adams"]}, window_end=day)
+        page = FakeAttendancePage(unselectable={day})
+        mc = _my_colleges(page, ledger)
+
+        mc._mark_attendance_for_course(
+            _context(last_selectable_attendance_date=outside_day), course,
+            ledger=ledger, term=TERM, section=SECTION,
+        )
+
+        assert page.writes == []
+        assert ledger.get_status(TERM, SECTION, "1000001", day) == STATUS_PENDING
+        assert ledger.get_status(TERM, SECTION, "1000001", outside_day) is None
+
+    def test_automatic_run_leaves_existing_future_ledger_debt_pending(self, ledger):
+        collection_end = DT.date(2026, 10, 25)
+        future_day = collection_end + DT.timedelta(days=1)
+        ledger.upsert_expected(TERM, SECTION, "1000001", future_day)
+        course = _course({}, window_end=collection_end)
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+
+        mc._mark_attendance_for_course(
+            _context(last_selectable_attendance_date=future_day), course,
+            ledger=ledger, term=TERM, section=SECTION,
+        )
+
+        assert page.writes == []
+        assert ledger.get_status(TERM, SECTION, "1000001", future_day) == STATUS_PENDING
+
+    def test_complete_eva_batch_is_exact_date_and_unmatched_scan_writes_no_eva(self, ledger):
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+        course = _course({"08-20-2026": ["Ann Adams"]})
+        course.eva_activity_id = "eva-1"
+        course.eva_collection_result = EVACompletionResult(
+            "complete", {"08-19-2026": ["Ann Adams"]}, pages_read=2, rows_read=1,
+        )
+        course.eva_attendance_records = course.eva_collection_result.records
+        outcome = mc._mark_attendance_for_course(
+            _context(), course, ledger=ledger, term=TERM, section=SECTION, write=False,
+        )
+        exact = next(entry for entry in ledger.outstanding(TERM, SECTION)
+                     if entry.attend_date == DT.date(2026, 8, 19))
+        assert exact.exact_date is True
+        assert outcome.eva_unmatched == 0
+
+        unmatched = _course({"08-21-2026": ["Bob Brown"]})
+        unmatched.eva_activity_id = "eva-1"
+        unmatched.eva_collection_result = EVACompletionResult(
+            "complete", {"08-18-2026": ["Ann Adams", "No Match"]}, pages_read=1, rows_read=2,
+        )
+        unmatched.eva_attendance_records = unmatched.eva_collection_result.records
+        outcome = mc._mark_attendance_for_course(
+            _context(), unmatched, ledger=ledger, term=TERM, section=SECTION, write=False,
+        )
+        assert outcome.eva_unmatched == 1
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM attendance_evidence WHERE attend_date='2026-08-18'"
+        ).fetchone()[0] == 0
+        assert ledger.get_status(TERM, SECTION, "1000002", DT.date(2026, 8, 21)) == STATUS_PENDING
+
+    def test_incomplete_eva_is_ignored_while_regular_attendance_continues(self, ledger):
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+        course = _course({"08-20-2026": ["Ann Adams"]})
+        course.eva_activity_id = "eva-1"
+        course.eva_collection_result = EVACompletionResult(
+            "incomplete", {}, pages_read=1, rows_read=2, error_code="pagination_transition_unverified",
+        )
+        # Guard against a future reader accidentally exposing staged partial rows.
+        course.eva_attendance_records = {"08-19-2026": ["Bob Brown"]}
+        outcome = mc._mark_attendance_for_course(
+            _context(), course, ledger=ledger, term=TERM, section=SECTION, write=True,
+        )
+        assert outcome.verified == 1
+        assert page.writes == [(DT.date(2026, 8, 20), "1000001")]
+        assert ledger._conn.execute(
+            "SELECT COUNT(*) FROM attendance_evidence WHERE source_type='eva'"
+        ).fetchone()[0] == 0
+
+    def test_eva_persistence_failure_stops_before_any_sis_write(self, ledger):
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+        course = _course({})
+        course.eva_activity_id = "eva-1"
+        course.eva_collection_result = EVACompletionResult(
+            "complete", {"08-19-2026": ["Ann Adams"]}, pages_read=1, rows_read=1,
+        )
+        course.eva_attendance_records = course.eva_collection_result.records
+        ledger.record_eva_expected_batch = MagicMock(side_effect=OSError("disk full"))
+        with pytest.raises(RuntimeError, match="refusing SIS writes"):
+            mc._mark_attendance_for_course(
+                _context(), course, ledger=ledger, term=TERM, section=SECTION, write=True,
+            )
+        assert page.writes == []
+
+    def test_complete_eva_rows_without_activity_identity_stop_before_sis_write(self, ledger):
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+        course = _course({})
+        course.eva_activity_id = None
+        course.eva_collection_result = EVACompletionResult(
+            "complete", {"08-19-2026": ["Ann Adams"]}, pages_read=1, rows_read=1,
+        )
+        course.eva_attendance_records = course.eva_collection_result.records
+
+        with pytest.raises(RuntimeError, match="no confirmed activity identity"):
+            mc._mark_attendance_for_course(
+                _context(), course, ledger=ledger, term=TERM, section=SECTION, write=True,
+            )
+
+        assert page.writes == []
         assert ledger.outstanding(TERM, SECTION) == []
 
     def test_a_write_that_does_not_survive_reload_is_failed(self, ledger):
@@ -224,6 +380,21 @@ class TestRecordCourseAttendance:
         assert state["last_run_status"] == RUN_COMPLETE
         assert state["verified_through"] == "2026-08-30"
         assert ledger.lookback_start(TERM, SECTION, COURSE_START)[0] == DT.date(2026, 8, 24)
+
+    def test_bounded_run_does_not_clear_an_existing_full_recheck_requirement(self, ledger):
+        ledger.update_course_state(TERM, SECTION, run_status=RUN_INCOMPLETE,
+                                   needs_full_recheck=True)
+        course = _course(self.RECORDS)
+        course.attendance_start_bound = DT.date(2026, 8, 19)
+        mc = _my_colleges(FakeAttendancePage(), ledger, totals={"1000001": 2, "1000002": 1})
+
+        mc._record_course_attendance(
+            _context(), course, RunPlan(attendance_start=DT.date(2026, 8, 19),
+                                       attendance_end=DT.date(2026, 8, 27)),
+            ledger, TERM, SECTION, DT.date(2026, 8, 19),
+        )
+
+        assert ledger.course_states()[0]["needs_full_recheck"] == 1
 
     def test_scrape_problem_keeps_the_run_incomplete(self, ledger):
         mc = _my_colleges(FakeAttendancePage(), ledger)

@@ -704,8 +704,7 @@ class TestInputValidation:
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
-class TestAudioTranscription:
+class TestAudioTranscription:  # asyncio_mode=auto runs the async tests; a class mark warns on the sync one
     """Test audio transcription functionality."""
     
     async def test_transcribe_audio_success(self, mocker, tmp_path):
