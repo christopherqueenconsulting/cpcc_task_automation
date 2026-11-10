@@ -738,6 +738,96 @@ def test_date_header_accepts_submission_date_and_still_rejects_unknown_headers()
         course._snapshot_activity_page("//table", 1, 2, 0, 0)
 
 
+class _LiveRow:
+    """A row with ordered td and th cells, as the live probe reported them."""
+
+    def __init__(self, *cells):
+        self.cells = list(cells)
+        self.text = " ".join(cell.text for cell in cells)
+
+    def find_elements(self, _by, xpath):
+        if xpath == "./td":
+            return [c for c in self.cells if c.tag_name == "td"]
+        if xpath == "./th":
+            return [c for c in self.cells if c.tag_name == "th"]
+        return self.cells if xpath == "./th | ./td" else []
+
+
+def _live_per_user_rows(*learners):
+    """Live per-user layout: header row, then per learner a name row and (if submitted) a date row."""
+    rows = [_LiveRow(_PerUserCell(""), _PerUserCell("Learner", "th"),
+                     _PerUserCell("Submission Date", "th"), _PerUserCell("Delete", "th"))]
+    for name, date in learners:
+        rows.append(_LiveRow(_PerUserCell(""), _PerUserCell(name, "th")))
+        if date:
+            rows.append(_LiveRow(_PerUserCell(""), _PerUserCell(date, label=_PerUserCell(date)),
+                                 _PerUserCell("Delete")))
+    return rows
+
+
+@pytest.mark.unit
+def test_live_per_user_layout_reads_the_name_from_the_learner_row_th():
+    rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"),
+                               ("Student Two", None),
+                               ("Student Three", "Aug 20, 2026 11:29 AM"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    page = course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+    # A learner with no date row (nothing submitted) records nothing and never borrows a neighbour's date.
+    assert page == (("Student One", "Nov 9, 2026 10:06 PM"), ("Student Three", "Aug 20, 2026 11:29 AM"))
+
+
+@pytest.mark.unit
+def test_live_learner_row_without_a_th_name_is_still_malformed():
+    rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"))
+    rows.insert(1, _LiveRow(_PerUserCell(""), _PerUserCell("", "th")))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    with pytest.raises(_EVAReadIncomplete, match="completion_row_malformed"):
+        course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+
+def _quiz_attempts_rows(*attempts):
+    """quiz_mark_attempts.d2l: a body header (checkbox td + 6 th), then 7-td attempt rows."""
+    rows = [_LiveRow(_PerUserCell(""), *[_PerUserCell(h, "th") for h in
+                     ("Attempt", "Learner", "Completed", "Score", "Grade", "Status")])]
+    for name, completed in attempts:
+        rows.append(_LiveRow(*[_PerUserCell(t) for t in
+                               ("", "1", name, completed, "10", "A", "Graded")]))
+    return rows
+
+
+@pytest.mark.unit
+def test_quiz_attempts_grid_reads_learner_and_completed_from_the_body_header():
+    rows = _quiz_attempts_rows(("Student One", "Nov 9, 2026 10:06 PM"),
+                               ("Student Two", "Nov 8, 2026 9:00 AM"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows, summary="")]
+
+    # name_cell=2 and date_cell=3 are the fixed fallback; the header row must win over them.
+    page = course._snapshot_activity_page("//table", 2, 3, 0, 0)
+
+    assert page == (("Student One", "Nov 9, 2026 10:06 PM"), ("Student Two", "Nov 8, 2026 9:00 AM"))
+
+
+@pytest.mark.unit
+def test_quiz_grid_with_unrecognized_body_header_falls_back_to_fixed_indexes():
+    rows = _quiz_attempts_rows(("Student One", "Nov 9, 2026 10:06 PM"))
+    rows[0] = _LiveRow(_PerUserCell(""), *[_PerUserCell(h, "th") for h in ("A", "B", "C")])
+    rows[1] = _LiveRow(*[_PerUserCell(t) for t in ("", "Student One", "Nov 9, 2026 10:06 PM")])
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows, summary="")]
+
+    assert course._snapshot_activity_page("//table", 2, 3, 0, 0) == (("Student One", "Nov 9, 2026 10:06 PM"),)
+
+
 def _decoy_table():
     """A layout/filter table that the assignment XPath also matches (it has a User header)."""
     return _PerUserTable([_PerUserRow([_PerUserCell("filter")])], ["User"], summary="Filter users")

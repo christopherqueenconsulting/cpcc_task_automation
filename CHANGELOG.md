@@ -5,6 +5,8 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
 
 ## Unreleased
 
+- Attendance: the per-user Submissions table still raised `completion_row_malformed` on the live page after the table-choice fix, because its learner row has one `td` (a checkbox) and the learner name sits in the row's `th`, and the reader only looked at `td` cells. For that table the name is now read from the learner row's single `th`. Header rows with several `th` (body headers) are skipped, and a grid with no `thead` now takes its column positions from a body header row, so the quiz attempts grid (`Attempt | Learner | Completed | ...`) is read. The table XPaths also accept a `Learner` header; without it the quiz attempts table was never found (`results_table_missing`). The row shapes come from a read-only probe on the live page reported by the owner's Mac worker (no repo artifact); the fix is covered by unit tests built on those shapes, and is not yet confirmed by a live run.
+
 - Attendance: the assignment results reader now picks the per-user Submissions table by its summary (`List of users and the submissions...`) instead of the first table the XPath matches. The XPath also matches any table with a User, Name or Student header, so a layout or filter table earlier on the page could be read instead. That is the suspected cause of `completion_row_malformed` on every assignment in a live run; it is not yet confirmed on the live page. When no table has that summary the first match is used, as before.
 
 - Eval batch mode: the owner's 2026-10-25 live probe (reported; no repo artifact) accepted the plain model id, `max_completion_tokens`, `session_id` and

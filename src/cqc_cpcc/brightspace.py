@@ -865,6 +865,12 @@ class BrightSpace_Course:
                 return table
         return tables[0]
 
+    @staticmethod
+    def _is_header_row(row) -> bool:
+        """A body header row: more than one th and at most one td (the select-all checkbox)."""
+        return (len(row.find_elements(By.XPATH, "./th")) > 1
+                and len(row.find_elements(By.XPATH, "./td")) <= 1)
+
     def _snapshot_activity_page(self, table_xpath: str, name_cell: int,
                                 date_cell: int, pages_read: int,
                                 rows_read: int) -> tuple[tuple[str, str], ...]:
@@ -885,7 +891,18 @@ class BrightSpace_Course:
                 # Prefer the actual result headers. Brightspace layouts add and
                 # remove columns by role; fixed indexes can silently read a
                 # status/attempt cell as a student or date.
+                get_summary = getattr(results_table, "get_attribute", None)
+                table_summary = get_summary("summary") if callable(get_summary) else None
+                two_row_layout = (isinstance(table_summary, str)
+                                  and self.PER_USER_TABLE_SUMMARY in table_summary.casefold())
                 header_rows = results_table.find_elements(By.XPATH, "./thead/tr[1]")
+                header_from_body = False
+                if not header_rows and not two_row_layout:
+                    # Some grids (quiz attempts) put the header row in the body, with several th.
+                    body_header = next((row for row in rows if self._is_header_row(row)), None)
+                    if body_header is not None:
+                        header_rows = [body_header]
+                        header_from_body = True
                 header_indexes = None
                 semantic_header = False
                 if header_rows:
@@ -910,7 +927,7 @@ class BrightSpace_Course:
                                        or value in ("submitted", "completed")), None)
                     if name_index is not None and date_index is not None:
                         header_indexes = (name_index, date_index)
-                    elif semantic_header:
+                    elif semantic_header and not header_from_body:
                         raise _EVAReadIncomplete("completion_headers_unrecognized", pages_read, rows_read)
                 data_rows = [row for row in rows if row.find_elements(By.XPATH, "./td")]
                 if not data_rows and self._has_explicit_empty_results(table_text):
@@ -920,15 +937,14 @@ class BrightSpace_Course:
                 page: list[tuple[str, str]] = []
                 completion_rows = 0
                 # The per-user assignment view lists each learner on two rows: the name row
-                # (date cell empty) and, right after it, a date row (name cell empty).
-                get_summary = getattr(results_table, "get_attribute", None)
-                table_summary = get_summary("summary") if callable(get_summary) else None
-                two_row_layout = (isinstance(table_summary, str)
-                                  and self.PER_USER_TABLE_SUMMARY in table_summary.casefold())
+                # (a checkbox td, the learner name in its th) and, right after it, a date row
+                # (3 tds: empty, date, delete).
                 pending_name: str | None = None
                 for row in rows:
                     cells = row.find_elements(By.XPATH, "./td")
                     if not cells:  # Header rows use th and carry no completion data.
+                        continue
+                    if self._is_header_row(row):  # Header row: several th beside one checkbox td.
                         continue
                     # Pager and group rows often use one spanning cell. They
                     # carry no student completion and must not poison the page.
@@ -947,6 +963,13 @@ class BrightSpace_Course:
                         continue
                     name_col, date_col = header_indexes or (name_cell - 1, date_cell - 1)
                     if len(cells) <= max(name_col, date_col):
+                        # Per-user view: the learner row has one td and the name in its single th.
+                        th_cells = row.find_elements(By.XPATH, "./th") if two_row_layout else []
+                        th_name = (th_cells[0].text or "").strip() if len(th_cells) == 1 else ""
+                        if th_name:
+                            completion_rows += 1
+                            pending_name = th_name
+                            continue
                         raise _EVAReadIncomplete("completion_row_malformed", pages_read, rows_read)
                     if header_indexes and "first name" in headers and "last name" in headers:
                         first = (cells[headers.index("first name")].text or "").strip()
@@ -1110,7 +1133,7 @@ class BrightSpace_Course:
                         "Waiting for EVA assignment submissions")
                 table_xpath = (
                     "//table[contains(@summary,'List of users and the submissions')] | "
-                    "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]"
+                    "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]"
                 )
                 if not self.click_max_results_select(self.select_xpath) and not self._has_elements(table_xpath):
                     raise _EVAReadIncomplete("assignment_results_not_loaded")
@@ -1129,7 +1152,7 @@ class BrightSpace_Course:
                         wait_for_ajax(self.driver)
                         final_view = view
                         table_xpath = ("//div[@id='OverviewGrid']//table | //table[.//th[contains(.,'Student') "
-                                       "or contains(.,'User') or contains(.,'Name')]]")
+                                       "or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]")
                         select_xpath = "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
                         if not self.click_max_results_select(select_xpath) and not self._has_elements(table_xpath):
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
@@ -1243,7 +1266,7 @@ class BrightSpace_Course:
         is_assignment = activity_type == "assignment"
         table_xpath = (
             "//table[contains(@summary,'List of users and the submissions')] | "
-            "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]" if is_assignment
+            "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]" if is_assignment
             else "//div[@id='OverviewGrid']//table"
         )
         select_xpath = (
@@ -1292,7 +1315,7 @@ class BrightSpace_Course:
                         source_url, view = attempts_url, "quiz attempts"
                         self.driver.get(source_url)
                         wait_for_ajax(self.driver)
-                        generic_table = "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name')]]"
+                        generic_table = "//table[.//th[contains(.,'Student') or contains(.,'User') or contains(.,'Name') or contains(.,'Learner')]]"
                         if not self.click_max_results_select("//select[.//option[contains(.,'per page')]]") \
                                 and not self._has_elements(generic_table):
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
