@@ -264,7 +264,9 @@ class TestRecordingInstall:
         assert openrouter_client._get_openrouter_client is factory_before
 
     def test_a_student_data_finding_is_refused(self, guarded_root, tmp_path, monkeypatch):
-        (guarded_root / "clean" / "cases.jsonl").write_text('{"email": "real.person@cpcc.edu"}\n', encoding="utf-8")
+        # A deliberately non-allowlisted address: the test proves the guard refuses it.
+        planted = '{"email": "real.person@cpcc.edu"}\n'  # pii-guard:allow
+        (guarded_root / "clean" / "cases.jsonl").write_text(planted, encoding="utf-8")
         self._suite(monkeypatch, guarded_root / "clean")
         with pytest.raises(rr.RecordingRefused, match="student-data"):
             rr.ensure_fixtures_only(["digest"])
