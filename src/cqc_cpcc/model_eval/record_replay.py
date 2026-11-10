@@ -7,8 +7,11 @@ a request from the store and never reaches the network. A request the store has 
 a miss: it raises ``ReplayMiss`` and is also listed in ``ReplayTransport.misses``, so a caller that
 swallows the error still sees that the replay was incomplete. Design: docs/plans/prompt-eval-record-replay.md.
 
-``RecordingClient`` / ``recording`` (step S2) save the raw answers of a live run into the store. Nothing
-imports this module yet; step S3 (replay) and the A/B base-side install wire it into the runner.
+``RecordingClient`` / ``recording`` (step S2) save the raw answers of a live run into the store. Step S3
+adds ``replaying`` / ``compare_records`` / ``replay_suite`` (the ``prompt-ab-replay`` command): the head's code
+runs on the recorded answers and its output is compared exactly with the base's. A replay that cannot be
+trusted is ``unusable`` (the full paid A/B runs); a difference is ``different`` (the full paid A/B runs);
+only an exact match on every case is ``identical``. The workflow wiring is step S4.
 """
 
 from __future__ import annotations
@@ -182,3 +185,108 @@ class ReplayTransport:
     def __init__(self, store: RawResponseStore):
         self.misses: list = []
         self.chat = type("Chat", (), {"completions": _ReplayCompletions(store, self.misses)})()
+
+
+@contextlib.contextmanager
+def replaying(store: RawResponseStore):
+    """Answer every OpenRouter call made in the block from ``store`` (no network, no API key)."""
+    from cqc_cpcc.utilities.AI import openrouter_client
+
+    transport = ReplayTransport(store)
+    original = openrouter_client._get_openrouter_client
+    openrouter_client._get_openrouter_client = lambda *a, **k: transport
+    try:
+        yield transport
+    finally:
+        openrouter_client._get_openrouter_client = original
+
+
+def _signature(record) -> tuple:
+    return (bool(record.ok), record.error_kind, dumps(record.payload))
+
+
+def compare_records(base: dict, head: dict) -> dict:
+    """Exact comparison of the head's replayed records with the base's live ones (``{label: [SuiteRecord]}``).
+
+    Per model label and case the repeats are compared as a sorted group: calls with the same request key may
+    run concurrently, so the n-th replay of a key can go to a different repeat than in the base run, but the
+    group of answers a case's repeats receive is the same. A record is its success flag, error kind and
+    payload serialized with ``dumps``: byte-for-byte, no tolerance. Returns the case count and the ids of
+    the cases that differ (also a case or label the head did not produce).
+    """
+    different: list = []
+    cases = records = 0
+    for label, base_records in sorted(base.items()):
+        head_records = head.get(label, [])
+        case_ids = sorted({r.case_id for r in base_records} | {r.case_id for r in head_records})
+        for case_id in case_ids:
+            cases += 1
+            wanted = sorted(_signature(r) for r in base_records if r.case_id == case_id)
+            got = sorted(_signature(r) for r in head_records if r.case_id == case_id)
+            records += len(wanted)
+            if wanted != got:
+                different.append(f"{label}:{case_id}")
+    for label in sorted(set(head) - set(base)):
+        different.append(f"{label}:(model not in the base run)")
+    return {"cases": cases, "records": records, "different_cases": different}
+
+
+def replay_suite(suite_id: str, ab_dir, out_dir) -> dict:
+    """Run the head's ``suite_id`` on the base's recorded answers and compare it with the base's output (S3).
+
+    ``ab_dir`` is an A/B artifact: ``raw-responses/`` (the store) and ``base/<suite>/raw_outputs.jsonl`` (the
+    base's output of the live run that produced the answers). Returns ``{"status": ...}`` where status is
+    ``identical`` (exact match on every case, no miss), ``different`` (a case differs: run the full A/B) or
+    ``unusable`` (anything that makes the replay untrustworthy: no store or base output, an unreadable or
+    mismatched record, a miss, batch mode, a dataset that is not fixtures-only, any error). Never a pass
+    unless ``identical``; never a live model call.
+    """
+    import asyncio
+
+    from cqc_cpcc.model_eval import batch, prompt_eval
+
+    ab_dir, out_dir = Path(ab_dir), Path(out_dir)
+    store_dir, raw = ab_dir / "raw-responses", ab_dir / "base" / suite_id / "raw_outputs.jsonl"
+
+    def unusable(reason: str) -> dict:
+        return {"status": "unusable", "reason": reason}
+
+    if not store_dir.is_dir():
+        return unusable("raw-responses/ is missing")
+    if not raw.is_file():
+        return unusable("the base's raw_outputs.jsonl is missing")
+    if batch.is_on():
+        return unusable("batch mode is on: a batched call would bypass the replay")
+    store = RawResponseStore(store_dir)
+    try:
+        ensure_fixtures_only([suite_id])
+        if not store.keys():
+            return unusable("raw-responses/ holds no recorded answer")
+        base = prompt_eval.read_records(raw)
+        if not base:
+            return unusable("the base's raw_outputs.jsonl holds no record")
+        models = sorted({(r.model, r.effort) for records in base.values() for r in records},
+                        key=lambda m: (m[0], m[1] or ""))
+        case_ids = {r.case_id for records in base.values() for r in records}
+        repeats = len({r.repeat for records in base.values() for r in records})
+        with replaying(store) as transport:
+            asyncio.run(prompt_eval.run(suite_id, models, repeats=repeats, out=str(out_dir),
+                                        case_ids=case_ids))
+        if transport.misses:
+            return unusable(f"{len(transport.misses)} request(s) had no recorded answer")
+        head = prompt_eval.read_records(out_dir / suite_id / "raw_outputs.jsonl")
+    except Exception as e:  # noqa: BLE001 - every failure means "replay not usable", never a pass
+        return unusable(f"{type(e).__name__}: {str(e)[:200]}")
+    result = compare_records(base, head)
+    different = result.pop("different_cases")
+    return {"status": "different" if different else "identical", **result,
+            "different_cases": different[:50], "different_count": len(different)}
+
+
+def replay_suites(suite_ids, ab_dir, out_dir) -> dict:
+    """``replay_suite`` for each suite; the overall status is the worst one (unusable > different > identical)."""
+    suites = {s: replay_suite(s, ab_dir, Path(out_dir) / "head") for s in suite_ids}
+    statuses = {r["status"] for r in suites.values()}
+    overall = ("unusable" if "unusable" in statuses or not suites
+               else "different" if "different" in statuses else "identical")
+    return {"format": FORMAT, "status": overall, "suites": suites}

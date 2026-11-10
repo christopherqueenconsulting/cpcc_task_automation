@@ -361,3 +361,212 @@ class TestSuiteRunSwitch:
     def test_on_when_the_directory_is_named(self, tmp_path, monkeypatch):
         entered, runs = self._go(monkeypatch, tmp_path / "raw-responses")
         assert entered == [(tmp_path / "raw-responses", ["digest"])] and runs == ["digest"]
+
+
+# ---- S3: replay in the head side -------------------------------------------------------------------
+
+from cqc_cpcc.model_eval import prompt_automation as pa  # noqa: E402
+from cqc_cpcc.model_eval import prompt_eval  # noqa: E402
+from cqc_cpcc.model_eval.suites.base import SuiteRecord  # noqa: E402
+
+
+def _rec(case_id, repeat, payload, ok=True, error_kind=None, model="vendor/model-x"):
+    return SuiteRecord(suite="synthetic", case_id=case_id, model=model, effort=None, repeat=repeat,
+                       ok=ok, error_kind=error_kind, payload=payload)
+
+
+def _by_label(*records):
+    out: dict = {}
+    for r in records:
+        out.setdefault(prompt_eval.label_of(r.model, r.effort), []).append(r)
+    return out
+
+
+class TestCompareRecords:
+    def test_equal_output_is_identical(self):
+        base = _by_label(_rec("a", 0, {"score": 3}), _rec("b", 0, {"score": 5}))
+        head = _by_label(_rec("a", 0, {"score": 3}), _rec("b", 0, {"score": 5}))
+        result = rr.compare_records(base, head)
+        assert result == {"cases": 2, "records": 2, "different_cases": []}
+
+    def test_key_order_does_not_matter_but_any_value_does(self):
+        base = _by_label(_rec("a", 0, {"x": 1, "y": [1, 2]}))
+        assert rr.compare_records(base, _by_label(_rec("a", 0, {"y": [1, 2], "x": 1})))["different_cases"] == []
+        assert rr.compare_records(base, _by_label(_rec("a", 0, {"x": 1, "y": [2, 1]})))["different_cases"]
+        assert rr.compare_records(base, _by_label(_rec("a", 0, {"x": 1.0000001, "y": [1, 2]})))["different_cases"]
+
+    def test_repeats_are_compared_as_a_sorted_group(self):
+        # The n-th replay of a key can go to another repeat of the same case (concurrent calls).
+        base = _by_label(_rec("a", 0, {"score": 1}), _rec("a", 1, {"score": 2}))
+        head = _by_label(_rec("a", 0, {"score": 2}), _rec("a", 1, {"score": 1}))
+        assert rr.compare_records(base, head)["different_cases"] == []
+
+    def test_a_group_with_a_different_member_differs(self):
+        base = _by_label(_rec("a", 0, {"score": 1}), _rec("a", 1, {"score": 2}))
+        head = _by_label(_rec("a", 0, {"score": 1}), _rec("a", 1, {"score": 3}))
+        assert len(rr.compare_records(base, head)["different_cases"]) == 1
+
+    def test_a_changed_success_flag_or_error_kind_differs(self):
+        base = _by_label(_rec("a", 0, {}))
+        assert rr.compare_records(base, _by_label(_rec("a", 0, {}, ok=False, error_kind="schema")))["different_cases"]
+
+    def test_a_case_the_head_did_not_produce_differs(self):
+        base = _by_label(_rec("a", 0, {"s": 1}), _rec("b", 0, {"s": 1}))
+        head = _by_label(_rec("a", 0, {"s": 1}))
+        assert rr.compare_records(base, head)["different_cases"] == ["vendor/model-x:b"]
+
+    def test_a_model_only_in_the_head_differs(self):
+        base = _by_label(_rec("a", 0, {"s": 1}))
+        head = _by_label(_rec("a", 0, {"s": 1}), _rec("a", 0, {"s": 1}, model="vendor/other"))
+        assert rr.compare_records(base, head)["different_cases"] == ["vendor/other:(model not in the base run)"]
+
+
+def _ab_dir(tmp_path, base_records, answers=({},)):
+    ab = tmp_path / "ab"
+    (ab / "base" / "synthetic").mkdir(parents=True)
+    (ab / "base" / "synthetic" / "raw_outputs.jsonl").write_text(
+        "".join(r.to_json() + "\n" for r in base_records), encoding="utf-8")
+    store = rr.RawResponseStore(ab / "raw-responses")
+    for answer in answers:
+        store.append(rc.request_key(REQUEST), _body(json.dumps(answer)))
+    return ab
+
+
+def _fake_run(monkeypatch, head_records, calls=1, request=REQUEST):
+    """Stands in for ``prompt_eval.run``: asks the installed client ``calls`` times, then saves ``head_records``."""
+    async def run(suite_id, models, repeats=None, out="x", case_ids=None, **kwargs):
+        client = openrouter_client._get_openrouter_client()
+        for _ in range(calls):
+            await client.chat.completions.create(**request)
+        out_dir = rr.Path(out) / suite_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "raw_outputs.jsonl").write_text(
+            "".join(r.to_json() + "\n" for r in head_records), encoding="utf-8")
+        run.seen = {"models": models, "repeats": repeats, "case_ids": case_ids}
+        return {}
+
+    monkeypatch.setattr(prompt_eval, "run", run)
+    monkeypatch.setattr(rr, "ensure_fixtures_only", lambda ids: None)
+    return run
+
+
+class TestReplaySuite:
+    def test_identical_output_is_identical_and_never_calls_the_network(self, tmp_path, monkeypatch, no_network):
+        base = [_rec("a", 0, {"s": 1}), _rec("a", 1, {"s": 2})]
+        run = _fake_run(monkeypatch, [_rec("a", 0, {"s": 2}), _rec("a", 1, {"s": 1})])
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, base), tmp_path / "out")
+        assert result["status"] == "identical" and result["different_count"] == 0
+        assert run.seen == {"models": [("vendor/model-x", None)], "repeats": 2, "case_ids": {"a"}}
+
+    def test_a_response_side_difference_is_different_never_a_pass(self, tmp_path, monkeypatch, no_network):
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 9})])
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {"s": 1})]), tmp_path / "out")
+        assert result["status"] == "different" and result["different_cases"] == ["vendor/model-x:a"]
+
+    def test_a_cache_miss_is_unusable(self, tmp_path, monkeypatch, no_network):
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 1})], calls=2)  # the store holds one answer, the head asks twice
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {"s": 1})]), tmp_path / "out")
+        assert result["status"] == "unusable" and "no recorded answer" in result["reason"]
+
+    def test_a_changed_request_is_unusable(self, tmp_path, monkeypatch, no_network):
+        changed = {**REQUEST, "messages": [{"role": "user", "content": "other"}]}
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 1})], request=changed)
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {"s": 1})]), tmp_path / "out")
+        assert result["status"] == "unusable"
+
+    def test_a_missing_store_is_unusable(self, tmp_path, monkeypatch):
+        _fake_run(monkeypatch, [])
+        ab = _ab_dir(tmp_path, [_rec("a", 0, {})])
+        for p in (ab / "raw-responses").iterdir():
+            p.unlink()
+        (ab / "raw-responses").rmdir()
+        assert rr.replay_suite("synthetic", ab, tmp_path / "out")["status"] == "unusable"
+
+    def test_an_empty_store_is_unusable(self, tmp_path, monkeypatch):
+        _fake_run(monkeypatch, [])
+        ab = _ab_dir(tmp_path, [_rec("a", 0, {})], answers=())
+        (ab / "raw-responses").mkdir()
+        result = rr.replay_suite("synthetic", ab, tmp_path / "out")
+        assert result["status"] == "unusable" and "holds no recorded answer" in result["reason"]
+
+    def test_missing_base_output_is_unusable(self, tmp_path, monkeypatch):
+        _fake_run(monkeypatch, [])
+        ab = _ab_dir(tmp_path, [_rec("a", 0, {})])
+        (ab / "base" / "synthetic" / "raw_outputs.jsonl").unlink()
+        assert "raw_outputs.jsonl is missing" in rr.replay_suite("synthetic", ab, tmp_path / "out")["reason"]
+
+    def test_an_empty_base_output_is_unusable(self, tmp_path, monkeypatch):
+        _fake_run(monkeypatch, [])
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, []), tmp_path / "out")
+        assert result["status"] == "unusable" and "no record" in result["reason"]
+
+    def test_a_record_of_another_format_is_unusable(self, tmp_path, monkeypatch):
+        _fake_run(monkeypatch, [])
+        ab = _ab_dir(tmp_path, [_rec("a", 0, {})])
+        path = ab / "raw-responses" / f"{rc.request_key(REQUEST)}.json"
+        record = json.loads(path.read_text())
+        record["format"] = 99
+        path.write_text(json.dumps(record))
+        assert rr.replay_suite("synthetic", ab, tmp_path / "out")["status"] == "unusable"
+
+    def test_batch_mode_is_unusable(self, tmp_path, monkeypatch):
+        from cqc_cpcc.model_eval import batch
+
+        _fake_run(monkeypatch, [_rec("a", 0, {})])
+        monkeypatch.setattr(batch, "is_on", lambda: True)
+        assert "batch mode" in rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")["reason"]
+
+    def test_a_dataset_that_is_not_fixtures_only_is_unusable(self, tmp_path, monkeypatch):
+        _fake_run(monkeypatch, [_rec("a", 0, {})])
+
+        def refuse(ids):
+            raise rr.RecordingRefused("outside the eval root")
+
+        monkeypatch.setattr(rr, "ensure_fixtures_only", refuse)
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
+        assert result["status"] == "unusable" and "RecordingRefused" in result["reason"]
+
+    def test_an_error_in_the_run_is_unusable_and_the_client_is_restored(self, tmp_path, monkeypatch):
+        async def boom(*args, **kwargs):
+            raise RuntimeError("head code failed")
+
+        monkeypatch.setattr(prompt_eval, "run", boom)
+        monkeypatch.setattr(rr, "ensure_fixtures_only", lambda ids: None)
+        original = openrouter_client._get_openrouter_client
+        result = rr.replay_suite("synthetic", _ab_dir(tmp_path, [_rec("a", 0, {})]), tmp_path / "out")
+        assert result["status"] == "unusable" and "RuntimeError" in result["reason"]
+        assert openrouter_client._get_openrouter_client is original
+
+
+class TestReplayCommand:
+    def _args(self, tmp_path, suites="synthetic"):
+        import argparse
+
+        return argparse.Namespace(suites=suites, ab_dir=str(tmp_path / "ab"), out=str(tmp_path / "out"))
+
+    def test_identical_exits_zero_and_writes_the_status_file(self, tmp_path, monkeypatch, no_network):
+        _ab_dir(tmp_path, [_rec("a", 0, {"s": 1})])
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 1})])
+        assert pa.cmd_prompt_ab_replay(self._args(tmp_path)) == 0
+        report = json.loads((tmp_path / "out" / "replay.json").read_text())
+        assert report["status"] == "identical" and report["suites"]["synthetic"]["cases"] == 1
+
+    def test_different_exits_three(self, tmp_path, monkeypatch, no_network):
+        _ab_dir(tmp_path, [_rec("a", 0, {"s": 1})])
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 2})])
+        assert pa.cmd_prompt_ab_replay(self._args(tmp_path)) == 3
+
+    def test_one_unusable_suite_makes_the_whole_replay_unusable_and_exits_four(self, tmp_path, monkeypatch, no_network):
+        _ab_dir(tmp_path, [_rec("a", 0, {"s": 1})])
+        _fake_run(monkeypatch, [_rec("a", 0, {"s": 1})])
+        assert pa.cmd_prompt_ab_replay(self._args(tmp_path, "synthetic,missing-suite")) == 4
+        report = json.loads((tmp_path / "out" / "replay.json").read_text())
+        assert report["status"] == "unusable" and report["suites"]["synthetic"]["status"] == "identical"
+
+    def test_the_parser_knows_the_command(self):
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        pa.add_parsers(parser.add_subparsers())
+        args = parser.parse_args(["prompt-ab-replay", "--suites", "digest", "--ab-dir", "ab", "--out", "out"])
+        assert args.func is pa.cmd_prompt_ab_replay and args.suites == "digest"

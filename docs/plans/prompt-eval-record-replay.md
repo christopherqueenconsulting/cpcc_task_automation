@@ -1,6 +1,6 @@
 # Prompt eval: record and replay for response-side changes (issue #406)
 
-Status: steps 1 (groundwork) and 2 (capture wrapper) only. Nothing below is wired into the runner or a workflow yet.
+Status: steps 1 (groundwork), 2 (capture wrapper) and 3 (replay path) are in. No workflow calls any of it yet (S4).
 
 ## Problem
 
@@ -85,7 +85,7 @@ Equal output on every case of every required suite is the pass condition for the
 A request with no recorded answer (a changed request, an extra call, a retry the base never made, or
 more sends than were recorded) raises `ReplayMiss`. The transport never falls back to a live call. The
 miss is also appended to `ReplayTransport.misses`, so a caller that catches or wraps the error (the
-client turns most errors into its own exceptions) still sees it. S3 treats a non-empty `misses` list,
+client turns most errors into its own exceptions) still sees it. `replay_suite` treats a non-empty `misses` list,
 a missing `raw-responses/` directory, an unreadable record or a format mismatch as "replay not usable":
 the suite falls back to the existing full paid A/B. It never passes.
 
@@ -95,8 +95,8 @@ the suite falls back to the existing full paid A/B. It never passes.
   the paid A/B. Replay covers only prompt-identical, response-side changes.
 - Concurrency: if calls with the same key run concurrently, the n-th replay of a key may pair with a
   different case than in the base run. Requests with equal keys are interchangeable inputs, but the
-  per-case comparison would then differ spuriously. S3 either runs the replayed suite with the same
-  ordering as the base run or compares repeats of a case as a sorted group. S3 picks one and tests it.
+  per-case comparison would then differ spuriously. `replay_suite` compares the repeats of a case as a sorted
+  group (tested), so the pairing of a key's n-th answer with a repeat does not matter.
 
 ## Steps
 
@@ -118,10 +118,18 @@ Each step is sized for one 20-minute run.
   does not set it in `_run_base`: that is S3/S4, because a base ref without this change ignores it. A stub record
   with a 2,000 character answer is 2,358 bytes (stub, not a real artifact); the size cap is set from a real
   artifact in S4.
-- **S3, replay path in the head side:** a `prompt-ab-replay` command (opt-in) that reads
-  `raw-responses/`, installs `ReplayTransport`, runs the head's suites, applies the exact-comparison
-  rule and the fail-closed rule above, and writes an `ab.json` status. Resolve the concurrency note.
-  Unit tests with synthetic stores.
+- [x] **S3, replay path in the head side:** `record_replay.replaying(store)` installs `ReplayTransport` where the
+  recorder installs its client, `compare_records` applies the exact-comparison rule, `replay_suite` /
+  `replay_suites` run the head's suite on the recorded answers and apply the fail-closed rule, and the opt-in
+  command `prompt-ab-replay --suites S --ab-dir DIR --out OUT` writes `OUT/replay.json`
+  (`{"status": "identical" | "different" | "unusable", "suites": {...}}`) and exits 0, 3 or 4 respectively. `DIR` is
+  the base's A/B artifact: `raw-responses/` and `base/<suite>/raw_outputs.jsonl`. The status file is `replay.json`,
+  not `ab.json`: the real A/B artifact keeps its name, and S4 decides how `prompt-ab-decide` reads the replay.
+  Concurrency is resolved by comparing a case's repeats as a sorted group (the base's repeats and the head's replayed
+  repeats hold the same multiset of answers whatever order concurrent calls took). `different` and `unusable`
+  both mean "run the full paid A/B"; only `identical` on every suite can pass. Batch mode, a dataset that is not
+  fixtures-only, an empty store, a miss and any error are `unusable`. Unit tests use synthetic stores and a
+  fake `prompt_eval.run`; nothing calls a model or reads a key.
 - **S4, workflow wiring (the owner's merge):** `.github/workflows` changes: upload and download
   `raw-responses/`, run the replay step after the request-identical check, and a repository variable
   switch like `PROMPT_EVAL_FAST_PATH`. Follows `GitHub-Actions-Standard` (timeouts, no path filter on a
@@ -130,4 +138,4 @@ Each step is sized for one 20-minute run.
   with the artifact layout, the switch and the fallback behaviour. CHANGELOG entry changed from
   "groundwork" to the shipped behaviour.
 
-S3 to S5 are not started. This pull request stays a draft until they land.
+S4 and S5 are not started. This pull request stays a draft until they land.

@@ -1906,6 +1906,23 @@ def cmd_prompt_requests_identical(args) -> int:
     return 0
 
 
+def cmd_prompt_ab_replay(args) -> int:
+    """Opt-in ($0) replay of the head's suites on the base's recorded answers (#406 S3)."""
+    from cqc_cpcc.model_eval import record_replay
+
+    suites = [s for s in args.suites.split(",") if s]
+    report = record_replay.replay_suites(suites, Path(args.ab_dir), Path(args.out))
+    Path(args.out).mkdir(parents=True, exist_ok=True)
+    Path(args.out, "replay.json").write_text(json.dumps(report, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+    for suite_id, result in report["suites"].items():
+        detail = result.get("reason") or f"{result.get('different_count', 0)} case(s) differ"
+        print(f"{suite_id}: {result['status']}" + ("" if result["status"] == "identical" else f" ({detail})"))
+    print(f"replay: {report['status']}" + ("" if report["status"] == "identical"
+                                           else " (run the full A/B; replay is never a pass)"))
+    github_output(replay_status=report["status"])
+    return {"identical": 0, "different": 3}.get(report["status"], 4)
+
+
 def cmd_prompt_ab_decide(args) -> int:
     import cqc_cpcc
 
@@ -2003,6 +2020,15 @@ def add_parsers(sub) -> None:
     ri.add_argument("--base-ref", required=True)
     ri.add_argument("--out", required=True, help="directory for requests.json")
     ri.set_defaults(func=cmd_prompt_requests_identical)
+
+    rp = sub.add_parser("prompt-ab-replay",
+                        help="replay the base's recorded answers through the head's code and compare exactly "
+                             "($0, opt-in; exit 0 identical, 3 different, 4 unusable; writes replay.json)")
+    rp.add_argument("--suites", required=True)
+    rp.add_argument("--ab-dir", required=True,
+                    help="the base's A/B artifact: raw-responses/ and base/<suite>/raw_outputs.jsonl")
+    rp.add_argument("--out", required=True, help="directory for replay.json and the head's replayed outputs")
+    rp.set_defaults(func=cmd_prompt_ab_replay)
 
     dec = sub.add_parser("prompt-ab-decide",
                          help="re-decide a finished A/B with this checkout's graders and rule ($0)")
