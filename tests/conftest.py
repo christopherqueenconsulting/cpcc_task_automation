@@ -53,6 +53,33 @@ def _no_docker_sandbox_unless_asked(monkeypatch):
     program_runner.reset_runner_status_cache()
 
 
+_SDK_LOGGER_NAMES = ("openai", "openai._base_client", "httpx", "httpcore")
+
+
+@pytest.fixture(autouse=True)
+def _restore_sdk_logger_state():
+    """Leave the SDK loggers as each test found them. The app log guard test
+    (test_sdk_debug_records_never_reach_the_app_log) needs the ``openai`` logger's WARNING level,
+    and propagation intact; a test that changes these must not leak the change to whichever test the
+    worker runs next (order-dependent under xdist). The ``openai`` handler list is left alone: a
+    reload of the logger module legitimately swaps its guard handler (see test_logger.py), and
+    restoring the old one would bring back a stale duplicate."""
+    import logging
+
+    saved = {}
+    for name in _SDK_LOGGER_NAMES:
+        lg = logging.getLogger(name)
+        saved[name] = (list(lg.handlers), lg.level, lg.propagate, lg.disabled)
+    yield
+    for name, (handlers, level, propagate, disabled) in saved.items():
+        lg = logging.getLogger(name)
+        if name != "openai":
+            lg.handlers[:] = handlers
+        lg.setLevel(level)
+        lg.propagate = propagate
+        lg.disabled = disabled
+
+
 @pytest.fixture(autouse=True)
 def _block_real_openrouter_in_unit_tests(request, monkeypatch):
     """A unit test that forgets to mock the LLM must fail fast, not spend real money
@@ -83,3 +110,8 @@ def _isolate_app_settings(tmp_path, monkeypatch):
 def _isolate_grading_results(tmp_path, monkeypatch):
     """Never read or write the real ~/.cqc_cpcc/grading_results (student data)."""
     monkeypatch.setenv("CQC_GRADING_RESULTS_DIR", str(tmp_path / "grading_results"))
+
+
+def pytest_addoption(parser):
+    parser.addoption("--update-golden", action="store_true", default=False,
+                     help="rewrite tests/golden/student_feedback/*.md from the builder current output")
