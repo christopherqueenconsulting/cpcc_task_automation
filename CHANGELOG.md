@@ -9,6 +9,7 @@ summarised from `git log` and merged pull request titles on `master`; nothing el
   `json_schema`; the batch API reports no per-item cost, so each batched row is now priced from its own usage tokens
   (batch price when published, else the sync price times 0.5, labelled estimated; `cost_method` per row) and
   cross-checked against the batch-level cost. Reports flag "effort not proven honoured in batch". Deadlines unchanged.
+- Attendance: assignment results are read correctly from the per-user Submissions view. Its table has the headers `Learner | Submission Date | Delete` and lists each learner on two rows (a name row, then a date row), so the collector reported the assignment as incomplete (`completion_headers_unrecognized`, or `completion_row_missing_student`) and found no student results. `Submission Date` is now a recognized date header, a name row is paired with the date row right after it (only for that table, identified by its `summary`), and the fallback cells are name 1 and date 2. Other tables keep the strict rules.
 
 ## 0.2.0-rc11 - 2026-10-28
 

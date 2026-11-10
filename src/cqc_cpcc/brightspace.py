@@ -874,9 +874,11 @@ class BrightSpace_Course:
                         name_index = next((i for i, value in enumerate(headers) if value == "name"), None)
                     if name_index is None and "first name" in headers and "last name" in headers:
                         name_index = headers.index("first name")
+                    # "Submission Date" is the per-user assignment view's date column.
                     date_index = next((i for i, value in enumerate(headers)
                                        if ("date" in value and any(word in value for word in
-                                                                   ("completion", "submitted", "attempt", "completed")))
+                                                                   ("completion", "submitted", "attempt", "completed",
+                                                                    "submission")))
                                        or value in ("submitted", "completed")), None)
                     if name_index is not None and date_index is not None:
                         header_indexes = (name_index, date_index)
@@ -889,6 +891,13 @@ class BrightSpace_Course:
                     raise _EVAReadIncomplete("results_empty_state_unconfirmed", pages_read, rows_read)
                 page: list[tuple[str, str]] = []
                 completion_rows = 0
+                # The per-user assignment view lists each learner on two rows: the name row
+                # (date cell empty) and, right after it, a date row (name cell empty).
+                get_summary = getattr(tables[0], "get_attribute", None)
+                table_summary = get_summary("summary") if callable(get_summary) else None
+                two_row_layout = (isinstance(table_summary, str)
+                                  and "users and the submissions" in table_summary.casefold())
+                pending_name: str | None = None
                 for row in rows:
                     cells = row.find_elements(By.XPATH, "./td")
                     if not cells:  # Header rows use th and carry no completion data.
@@ -922,9 +931,14 @@ class BrightSpace_Course:
                     completion_text = (
                         date_nodes[0].text if date_nodes else date_cell_el.text or ""
                     ).strip()
+                    if two_row_layout and not name and completion_text and pending_name:
+                        # The date row of a two-row learner: it belongs to the name row just above.
+                        name = pending_name
                     if not name:
                         raise _EVAReadIncomplete("completion_row_missing_student", pages_read, rows_read)
                     completion_rows += 1
+                    # Only a name row with no date can be completed by the very next row.
+                    pending_name = name if two_row_layout and not completion_text else None
                     # Blank dates represent rows without a submitted/completed event.
                     if completion_text:
                         page.append((name, completion_text))
@@ -1072,7 +1086,8 @@ class BrightSpace_Course:
                 )
                 if not self.click_max_results_select(self.select_xpath) and not self._has_elements(table_xpath):
                     raise _EVAReadIncomplete("assignment_results_not_loaded")
-                rows, pages_read = self._read_activity_rows(table_xpath, 3, 2, source_url)
+                # Per-user view cells: 1 = learner name, 2 = submission date (read live 2026-11-09).
+                rows, pages_read = self._read_activity_rows(table_xpath, 1, 2, source_url)
             else:
                 attempts_url = self._quiz_attempts_url(activity["activity_url"])
                 routes = [(activity["activity_url"], "quiz attempt logs"),
@@ -1207,7 +1222,8 @@ class BrightSpace_Course:
             self.select_xpath if is_assignment
             else "//div[@id='OverviewGrid']//select[contains(@class,'d2l-select')]"
         )
-        name_cell, date_cell = (3, 2) if is_assignment else (2, 3)
+        # Assignment per-user view cells: 1 = learner name, 2 = submission date (read live 2026-11-09).
+        name_cell, date_cell = (1, 2) if is_assignment else (2, 3)
         course_start = convert_date_to_datetime(self.course_start_date).date()
         course_start = max(course_start, getattr(self, "attendance_start_bound", None) or course_start)
         course_end = min(self.date_range_end, convert_date_to_datetime(self.course_end_date).date())

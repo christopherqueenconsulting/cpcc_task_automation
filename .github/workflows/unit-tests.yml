@@ -65,7 +65,7 @@ jobs:
       # possible. Keep the generated deployment manifest in sync with Poetry's lock.
       - name: Set up uv for dependency export
         if: matrix.shard == 1
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.3.3
       - name: Verify Streamlit requirements export
         if: matrix.shard == 1
         shell: bash
@@ -281,10 +281,10 @@ jobs:
           skip-install-on-exact-hit: "true"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build the exec-runner sandbox image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker/exec-runner
           tags: cpcc_task_automation/exec-runner:2
