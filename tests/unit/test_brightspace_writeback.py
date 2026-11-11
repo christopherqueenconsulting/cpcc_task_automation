@@ -1109,6 +1109,27 @@ def test_push_attach_names_zip_folders_from_user_id_and_dropbox_id(mocker, tmp_p
 
 
 @pytest.mark.unit
+def test_push_attach_skips_a_learner_whose_folder_cannot_be_built(mocker, tmp_path):
+    """No usable user id: never send the id-only/bare shape BrightSpace cannot match."""
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._set_max_results_per_page")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax")
+    mocker.patch.object(wb, "_gather_assignment_learners",
+                        return_value=[{"name": "Doe, Jane", "userId": ""}])   # no user id scraped
+    mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+    mocker.patch.object(wb, "_write_one_student")
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs",
+                               return_value=wb.GradeWriteReport("assignment", False))
+    item = wb.GradeWriteItem("Jane Doe", "Jane Doe", 80, 90, 100, "<p/>",
+                             feedback_doc_path=str(doc))
+    report = wb._push_assignment_grades(MagicMock(), MagicMock(), DB_URL, [item], lambda *_: None,
+                                        None, dry_run=False, feedback_mode="attach")
+    assert not bulk.called or bulk.call_args.kwargs["folder_names"] == {}
+    assert any("no usable user id or name" in w for w in report.warnings)
+
+
+@pytest.mark.unit
 def test_push_attach_does_not_import_without_a_dropbox_id(mocker, tmp_path):
     doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
     mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")

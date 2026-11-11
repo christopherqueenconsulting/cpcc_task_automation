@@ -791,10 +791,19 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
                 "The assignment URL has no db=<dropbox id>, so the feedback ZIP folders cannot "
                 "be named the way BrightSpace expects; no feedback docs were imported.")
             import_items = []
-        folder_names = {
-            it.student_key: bulk_feedback_folder_name(
-                match_by_key[it.student_key].learner.get("userId"), dropbox, it.display_name)
-            for it in import_items}
+        folder_names: dict = {}
+        unbuildable: list = []
+        for it in import_items:
+            try:
+                folder_names[it.student_key] = bulk_feedback_folder_name(
+                    match_by_key[it.student_key].learner.get("userId"), dropbox, it.display_name)
+            except ValueError:
+                unbuildable.append(it)
+        if unbuildable:
+            report.warnings.append(
+                f"{len(unbuildable)} learner(s) have no usable user id or name, so their "
+                "feedback doc was not imported; attach it by hand.")
+            import_items = [it for it in import_items if it.student_key in folder_names]
         bulk_by_key: dict = {}
         if import_items:
             try:
@@ -2061,9 +2070,14 @@ def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None,
                             file_name: Optional[str] = None) -> Optional[str]:
     """Bundle per-student feedback ``.docx`` files into a ZIP for bulk import.
 
-    Each doc is placed under ``{student_key}/{basename}`` where ``student_key`` is the
-    ID-bearing submission folder name (so BrightSpace's leading-ID match finds it). The
-    feedback filename itself may be anything.
+    BrightSpace's "Add Feedback Files" only attaches a file whose ZIP folder is named like
+    the download's own folder: ``<userId>-<dropboxId> - <name>``. The grader's
+    ``student_key`` is a bare name (``zip_grading_utils._parse_student_folder_name`` strips
+    the id and date), so the real call passes ``folder_names`` built by
+    :func:`bulk_feedback_folder_name` and ``file_name=BULK_FEEDBACK_FILE_NAME``. Without
+    ``folder_names`` the key itself is the folder, which BrightSpace cannot match. The full
+    spec, with the live evidence, is in docs/BRIGHTSPACE_AUTOMATION_HANDOFF.md
+    ("Bulk feedback ZIP format").
 
     Args:
         feedback_docs: ``{student_key: docx_path}``. Entries whose path is falsy or does
@@ -2093,15 +2107,31 @@ def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None,
     return out_path
 
 
-# The ZIP folder name BrightSpace's "Add Feedback Files" matches on. VERIFIED LIVE 2026-11-11
-# (one learner, throwaway file, drafts only), the download's own folder being
-# "<userId>-<dropboxId> - <name> - <date time>":
-#   "<userId>-<dropboxId> - <name> - <date time>/"  attached
-#   "<userId>-<dropboxId> - <name>/"                attached   (no date needed)
-#   "<userId>-<dropboxId>/"                         NOT attached: "Distribute Feedback ...
-#                                                   Identifiers were not found on these files"
-# The grader strips the id and date from its student key (zip_grading_utils), so the folder
-# is rebuilt here from the learner's page user id, the dropbox id in the URL and the name.
+# BULK FEEDBACK ZIP FORMAT (the contract; pinned by tests/unit/test_bulk_feedback_zip_format.py)
+#
+# BrightSpace's dropbox "Add Feedback Files" says "Upload compressed zip file in the same
+# format that it was downloaded". The download is: a top-level index.html plus one folder per
+# submission named "<userId>-<dropboxId> - <name> - <date time>/" holding the student's files.
+# VERIFIED LIVE 2026-11-11 (one learner, a throwaway .docx per variant, DRAFT feedback only):
+#
+#   ZIP folder                                          result
+#   "<userId>-<dropboxId> - <name> - <date time>/"      attached  (the download's own name)
+#   "<userId>-<dropboxId> - <name>/"                    attached  (no date needed)
+#   "<userId>-<dropboxId>/"                             NOT attached: BrightSpace opens a
+#       "Distribute Feedback" prompt: "Feedback requiring distribution: 1. Identifiers were not
+#       found on these files. Attach each file to a submission." (the import is NOT done)
+#   "<name>/" (the grader's bare key, what we sent before)   attached nothing, no error shown
+#
+# So: folders at the ZIP root, named "<userId>-<dropboxId> - <name>"; <userId> is the
+# `feedback,<userId>` token of the learner's link on the submissions page, <dropboxId> is the
+# `db=` of the assignment URL (it is the second number in the download's folder names), and
+# the name part must be present. The file inside may be named anything (index.html and an id
+# prefix on the file name are NOT needed). The grader strips the id and date from its
+# student key (zip_grading_utils), so the folder is rebuilt here, never taken from the key.
+# After "Add" BrightSpace shows "Processing Extracted Files... Loading..." while it unpacks;
+# leaving early may cancel the import (suspected, not proven), so wait it out (_wait_import_done) and treat an error
+# or the Distribute Feedback prompt as a failed import (_IMPORT_ERROR_RE). The dialog's own
+# success proves nothing: verify the file on each learner's page (_verify_imported_attachments).
 BULK_FEEDBACK_FILE_NAME = "Feedback.docx"
 
 
@@ -2112,10 +2142,17 @@ def _dropbox_id(url: str) -> str:
 
 
 def bulk_feedback_folder_name(user_id, dropbox_id, name: str) -> str:
-    """``"<userId>-<dropboxId> - <name>"``, with characters a ZIP folder can't hold removed."""
+    """``"<userId>-<dropboxId> - <name>"``, with characters a ZIP folder can't hold removed.
+
+    Raises ``ValueError`` for a missing id or a name that is empty once cleaned: the
+    id-only shape is the one BrightSpace refuses ("Identifiers were not found").
+    """
     clean = re.sub(r'[\\/:*?"<>|]+', " ", name or "")
     clean = re.sub(r"\s+", " ", clean).strip()
-    return f"{user_id}-{dropbox_id} - {clean}"
+    uid, db = str(user_id or "").strip(), str(dropbox_id or "").strip()
+    if not (uid.isdigit() and db.isdigit() and clean):
+        raise ValueError("a bulk feedback folder needs a numeric user id, a dropbox id and a name")
+    return f"{uid}-{db} - {clean}"
 
 
 # Deep-scan (crossing shadow roots) for the submissions-page "Add Feedback Files"
@@ -2327,7 +2364,7 @@ def import_feedback_zip(driver, zip_path: str, progress=_noop) -> bool:
             progress("bulk import: 'Add' button not found in the dialog")
             return False
         # BrightSpace unpacks the ZIP server-side ("Processing Extracted Files... Loading...",
-        # seen live 2026-11-11); leaving before it finishes can cancel the import.
+        # seen live 2026-11-11); leaving before it finishes may cancel the import.
         said = _wait_import_done(driver)
         # Record what the dialog says after Add (diagnostic) and refuse an error message.
         if isinstance(said, str) and said.strip():
