@@ -58,6 +58,11 @@ def _app(job=None):
     return app
 
 
+def _open_live(app):
+    """Choose the Live browser view (the page opens on Tab snapshots)."""
+    app.segmented_control(key="attendance_view").set_value("Live browser").run()
+
+
 def _button(app, label):
     return next(button for button in app.button if button.label == label)
 
@@ -70,7 +75,7 @@ class TestTakeAttendancePage:
         assert not app.exception, app.exception
         picker = app.segmented_control(key="attendance_view")
         assert picker.options == ["Live browser", "Tab snapshots", "Log"]
-        assert picker.value == "Live browser"
+        assert picker.value == "Tab snapshots"  # the live view is the instructor's choice
         assert not app.tabs
         assert not app.text_area
         assert not app.code  # the log shows only in its own view
@@ -300,6 +305,7 @@ class TestScreenshotSection:
         monkeypatch.setattr(pexels_helper, "get_photo", lambda query: photo)
         app = _app()
         app.run()
+        _open_live(app)
         assert not app.exception, app.exception
         assert app.get("image")[0].proto.imgs[0].url == photo.original
 
@@ -317,6 +323,7 @@ class TestScreenshotSection:
         job._store_screenshot(base64.b64encode(png).decode())
         app = _app(job)
         app.run()
+        _open_live(app)
         assert not app.exception, app.exception
         url = app.get("image")[0].proto.imgs[0].url
         assert "landscape" not in url
@@ -359,6 +366,7 @@ class TestScreenshotSection:
         monkeypatch.setattr(pexels_helper, "_api", None)
         app = _app()
         app.run()
+        _open_live(app)
         assert not app.exception, app.exception
         assert any("Screenshots of the browser appear here" in c.value for c in app.caption)
 
@@ -652,6 +660,8 @@ class TestViews:
         job.viewer_url = url
         app = _app(job)
         app.run()
+        assert not app.get("iframe"), "the live view opens only when the instructor asks for it"
+        _open_live(app)
         assert not app.exception, app.exception
         frames = app.get("iframe")
         assert len(frames) == 1
@@ -666,6 +676,7 @@ class TestViews:
         job._store_screenshot(self.PNG)
         app = _app(job)
         app.run()
+        _open_live(app)
         assert not app.exception, app.exception
         assert not app.get("iframe")
         assert len(app.get("image")) == 1
@@ -684,9 +695,55 @@ class TestViews:
         job = FakeJob(PHASE_RUNNING)
         app = _app(job)
         app.run()
+        _open_live(app)
         assert app.session_state["attendance_rendered_viewer"] is None
         job.viewer_url = "http://localhost:17900/?view_only=true"
         app.run()
         assert not app.exception, app.exception
         assert app.session_state["attendance_rendered_viewer"] == job.viewer_url
         assert len(app.get("iframe")) == 1
+
+
+@pytest.mark.unit
+class TestLiveViewOpenFlag:
+    """The page tells the run whether the live viewer is on screen, so screenshots narrow
+    to tab changes only then and keep the Tab snapshots view fresh otherwise."""
+
+    URL = "http://localhost:17900/?view_only=true"
+
+    def test_default_view_leaves_the_flag_off_even_with_a_viewer(self):
+        job = FakeJob(PHASE_RUNNING)
+        job.viewer_url = self.URL
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        assert job.live_view_open is False
+
+    def test_opening_the_live_view_turns_the_flag_on_and_leaving_turns_it_off(self):
+        job = FakeJob(PHASE_RUNNING)
+        job.viewer_url = self.URL
+        app = _app(job)
+        app.run()
+
+        _open_live(app)
+        assert job.live_view_open is True
+
+        app.segmented_control(key="attendance_view").set_value("Log").run()
+        assert job.live_view_open is False
+
+        app.segmented_control(key="attendance_view").set_value("Tab snapshots").run()
+        assert job.live_view_open is False
+
+    def test_without_a_viewer_the_flag_stays_off_in_the_live_view(self):
+        job = FakeJob(PHASE_RUNNING)
+        app = _app(job)
+        app.run()
+        _open_live(app)
+        assert job.live_view_open is False
+
+    def test_clearing_the_view_falls_back_to_tab_snapshots(self):
+        app = _app()
+        app.run()
+        _open_live(app)
+        app.segmented_control(key="attendance_view").set_value(None).run()
+        assert not app.exception, app.exception

@@ -21,7 +21,7 @@ class ScreenshotListener(AbstractEventListener):
                  on_tab_closed: Callable[[], None] | None = None,
                  min_interval: float = 0.0,
                  pause_gate: "PauseGate | None" = None,
-                 tab_change_only: bool = False):
+                 tab_change_only: "bool | Callable[[], bool]" = False):
         self.screenshot_holder = screenshot_holder
         self.on_tab_closed = on_tab_closed
         # Every click and script fires an event; a screenshot each time slows the
@@ -29,7 +29,8 @@ class ScreenshotListener(AbstractEventListener):
         self.min_interval = min_interval
         # While the page shows the live browser (VNC), screenshots only keep the
         # per-tab snapshots current: take one when the set of tabs or the tab in
-        # use changes, not after every event.
+        # use changes, not after every event. A callable is asked at each event, so
+        # the page can switch the mode on and off as the instructor changes views.
         self.tab_change_only = tab_change_only
         self._tab_signature: tuple | None = None
         self._last_shot = 0.0
@@ -105,6 +106,10 @@ class ScreenshotListener(AbstractEventListener):
         t = Thread(target=self.take_screenshot, args=[driver])  # Start a thread for processing attendance
         t.start()
 
+    def _tab_change_only(self) -> bool:
+        mode = self.tab_change_only
+        return bool(mode() if callable(mode) else mode)
+
     def _tabs_changed(self, driver: WebDriver) -> bool:
         """True when the tabs open, or the tab in use, differ from the last look."""
         try:
@@ -121,7 +126,7 @@ class ScreenshotListener(AbstractEventListener):
         now = time.monotonic()
         if self.min_interval and now - self._last_shot < self.min_interval:
             return
-        if self.tab_change_only and not force and not self._tabs_changed(driver):
+        if self._tab_change_only() and not force and not self._tabs_changed(driver):
             return
         self._last_shot = now
         try:

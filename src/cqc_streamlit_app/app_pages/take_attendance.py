@@ -49,6 +49,7 @@ VIEW_LIVE = "Live browser"
 VIEW_TABS = "Tab snapshots"
 VIEW_LOG = "Log"
 VIEWS = [VIEW_LIVE, VIEW_TABS, VIEW_LOG]
+DEFAULT_VIEW = VIEW_TABS
 VIEWER_HEIGHT = 640
 # MyColleges may end an idle session; warn the instructor after this long paused.
 PAUSE_WARN_SECONDS = 15 * 60
@@ -311,11 +312,15 @@ def _screenshot_src(screenshot_b64: str) -> str:
 
 def view_picker() -> str:
     """Which view of the run to show. Drawn on the full page (not in a polled fragment),
-    so the choice is a keyed widget the timer never redraws; it survives every refresh."""
-    st.segmented_control("Browser view", VIEWS, key=VIEW_KEY, default=VIEW_LIVE,
+    so the choice is a keyed widget the timer never redraws; it survives every refresh.
+
+    Tab snapshots is the default: the live view costs the browser and the Docker
+    container extra work, so the instructor opens it when they want it.
+    """
+    st.segmented_control("Browser view", VIEWS, key=VIEW_KEY, default=DEFAULT_VIEW,
                          label_visibility="collapsed")
-    # Clicking the selected option again clears it; keep showing the live view then.
-    return st.session_state.get(VIEW_KEY) or VIEW_LIVE
+    # Clicking the selected option again clears it; fall back to the default then.
+    return st.session_state.get(VIEW_KEY) or DEFAULT_VIEW
 
 
 def viewer_frame(viewer_url: str) -> None:
@@ -330,7 +335,7 @@ def viewer_frame(viewer_url: str) -> None:
                "snapshots for the others. Do not share this page or its link: it shows student records.")
     iframe = getattr(st, "iframe", None)
     if iframe is not None:
-        iframe(viewer_url, height=VIEWER_HEIGHT)
+        iframe(viewer_url, height=VIEWER_HEIGHT, alt="Live view of the Docker browser the run is using")
     else:  # Streamlit before st.iframe
         from streamlit.components.v1 import iframe as components_iframe
 
@@ -864,6 +869,10 @@ def main():
     # The picker and the live viewer sit on the full page, between the two polled
     # fragments, so the timer never redraws or reloads them.
     view = view_picker()
+    if job is not None:
+        # While the live view is open the run only snapshots on tab changes (it is cheaper);
+        # in any other view every event keeps the screenshots fresh.
+        job.live_view_open = view == VIEW_LIVE and bool(viewer_url)
     if view == VIEW_LIVE and viewer_url:
         viewer_frame(viewer_url)
     else:

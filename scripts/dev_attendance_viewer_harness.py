@@ -67,8 +67,10 @@ if not hasattr(attendance_job, "_HARNESS_JOB"):
                 self._set_phase(attendance_job.PHASE_RUNNING, "Harness: starting on a synthetic page.")
                 driver.get(_data_url(FIRST_PAGE))
                 first = driver.current_window_handle
+                time.sleep(1.0)  # past the screenshot throttle (0.75 s), so each tab gets a snapshot
                 driver.switch_to.new_window("tab")
                 driver.get(_data_url(SECOND_PAGE))
+                time.sleep(1.0)
                 driver.switch_to.window(first)
 
                 clicks = 0

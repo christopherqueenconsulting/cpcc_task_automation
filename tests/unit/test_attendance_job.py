@@ -447,17 +447,22 @@ class TestLiveViewerWiring:
             job._open_browser()
         return job, raw_driver, efd.call_args.args[1]
 
-    def test_viewer_url_is_kept_and_screenshots_narrow_to_tab_changes(self, monkeypatch):
+    def test_viewer_url_is_kept_and_screenshots_narrow_only_while_the_live_view_is_open(self, monkeypatch):
         job, _raw, listener = self._open(monkeypatch, "http://localhost:17900/?x=1")
 
         assert job.viewer_url == "http://localhost:17900/?x=1"
-        assert listener.tab_change_only is True
+        assert listener._tab_change_only() is False  # the page opens on Tab snapshots
+        job.live_view_open = True
+        assert listener._tab_change_only() is True
+        job.live_view_open = False  # the instructor went back to snapshots: events refresh them again
+        assert listener._tab_change_only() is False
 
     def test_without_a_viewer_every_event_screenshots(self, monkeypatch):
         job, _raw, listener = self._open(monkeypatch, None)
 
         assert job.viewer_url is None
-        assert listener.tab_change_only is False
+        job.live_view_open = True  # no viewer, nothing to narrow for
+        assert listener._tab_change_only() is False
 
     def test_listener_and_keepalive_are_wired_to_the_jobs_gate(self, monkeypatch):
         job, raw_driver, listener = self._open(monkeypatch, None)

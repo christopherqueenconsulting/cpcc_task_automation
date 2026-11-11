@@ -90,6 +90,9 @@ class AttendanceJob:
         # Live noVNC URL of the Docker browser, set by the worker once the browser is
         # open; ``None`` means the page shows screenshots instead.
         self.viewer_url: str | None = None
+        # Set by the page: the live viewer is on screen. Only then do screenshots narrow
+        # to tab changes; otherwise they keep the Tab snapshots view fresh.
+        self.live_view_open = False
         self._thread = threading.Thread(target=self._run, daemon=True, name="attendance-job")
 
     # -- UI side ----------------------------------------------------------------
@@ -342,7 +345,7 @@ class AttendanceJob:
             on_tab_closed=lambda: self._forget_closed_tabs(raw_driver),
             min_interval=SCREENSHOT_MIN_INTERVAL,
             pause_gate=self._gate,
-            tab_change_only=self.viewer_url is not None,
+            tab_change_only=lambda: self.viewer_url is not None and self.live_view_open,
         )
         driver = EventFiringWebDriver(raw_driver, listener)
         return driver, wait, MyColleges(driver, wait)

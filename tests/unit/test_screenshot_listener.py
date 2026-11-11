@@ -375,6 +375,26 @@ class TestTabChangeOnly:
         assert holder.call_count == 2
 
     @patch('cqc_cpcc.screenshot_listener.WebDriverWait')
+    def test_the_mode_can_be_switched_on_and_off_while_running(self, _wait):
+        holder = MagicMock()
+        narrow = {"on": False}
+        listener = ScreenshotListener(holder, tab_change_only=lambda: narrow["on"])
+        driver = self._driver("a", ["a"])
+
+        listener.take_screenshot(driver)
+        listener.take_screenshot(driver)
+        assert holder.call_count == 2, "off: every event takes one"
+
+        narrow["on"] = True
+        listener.take_screenshot(driver)   # first look at the tab set
+        listener.take_screenshot(driver)   # unchanged
+        assert holder.call_count == 3
+
+        narrow["on"] = False
+        listener.take_screenshot(driver)
+        assert holder.call_count == 4, "back to every event"
+
+    @patch('cqc_cpcc.screenshot_listener.WebDriverWait')
     def test_default_mode_still_takes_every_screenshot(self, _wait):
         holder = MagicMock()
         listener = ScreenshotListener(holder)

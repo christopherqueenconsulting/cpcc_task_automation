@@ -132,10 +132,23 @@ def main() -> int:
         button(page, "Start attendance").first.click()
         log("started the run; waiting for the browser to open")
 
+        page.wait_for_function("document.body.innerText.includes('Harness: clicked')",
+                               timeout=args.start_timeout * 1000)
+        page.wait_for_timeout(5000)
+        # The page opens on Tab snapshots; the live viewer is the instructor's choice.
+        check("opens on Tab snapshots", active_view_labels(page)[:1] == ["Tab snapshots"],
+              str(active_view_labels(page)))
+        check("no viewer is loaded until asked for", page.locator("iframe").count() == 0)
+        if args.mode == "viewer":
+            first = page.locator('[data-testid="stImage"] img').first.get_attribute("src")
+            page.wait_for_timeout(4000)
+            later = page.locator('[data-testid="stImage"] img').first.get_attribute("src")
+            check("Tab snapshots stay fresh in the default view", first != later)
+            page.screenshot(path=str(args.out / "00-default-tab-snapshots.png"), full_page=True)
+        pick(page, "Live browser")
+
         if args.mode == "screenshots":
-            page.wait_for_function("document.body.innerText.includes('Harness: clicked')",
-                                   timeout=args.start_timeout * 1000)
-            page.wait_for_timeout(8000)
+            page.wait_for_timeout(4000)
             check("no live iframe without a reachable viewer", page.locator("iframe").count() == 0)
             check("screenshot shown instead", page.locator('[data-testid="stImage"]').count() >= 1)
             page.screenshot(path=str(args.out / "screenshots-mode.png"))
@@ -153,7 +166,6 @@ def main() -> int:
 
         # noVNC connects, then draws the container's screen onto its canvas.
         frame.wait_for_selector("canvas", timeout=60000)
-        page.wait_for_function("document.body.innerText.includes('Harness: clicked')", timeout=60000)
         page.wait_for_timeout(6000)
         canvas = frame.evaluate("""() => { const c = document.querySelector('canvas');
             if (!c || !c.width) return null;
