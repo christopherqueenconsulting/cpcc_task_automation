@@ -1,6 +1,6 @@
 # Prompt eval: record and replay for response-side changes (issue #406)
 
-Status: steps 1 to 3 and 5 are in (tools and docs). No workflow calls any of it yet (S4, the owner's merge).
+Status: steps 1 to 3 and 5 are in (tools and docs). S4 (workflow wiring, the owner's merge) is drafted in a pull request and off by default.
 
 ## Problem
 
@@ -130,14 +130,19 @@ Each step is sized for one 20-minute run.
   differ from the base run's and any other error are `unusable`; replay runs without a spend cap (it makes no paid call). Recording refuses a store
   that already holds answers, so a store only ever holds one run. Unit tests use synthetic stores and a
   fake `prompt_eval.run`; nothing calls a model or reads a key.
-- **S4, workflow wiring (the owner's merge):** `.github/workflows` changes: upload and download
-  `raw-responses/`, run the replay step after the request-identical check, and a repository variable
-  switch like `PROMPT_EVAL_FAST_PATH`. Follows `GitHub-Actions-Standard` (timeouts, no path filter on a
-  required check). Christopher merges.
+- [ ] **S4, workflow wiring (the owner's merge):** `.github/workflows/prompt-eval.yml`, behind the repository
+  variable `PROMPT_EVAL_REPLAY` (unset = off, `report`, `on`). Drafted, not merged. A `record-raw` job on master pushes
+  records each suite the push runs once more (no judges, one store per suite, `pii_guard` scan, size cap, artifact
+  `prompt-eval-raw-<run id>`); `detect` replays a request-identical PR on the newest record that is in the base's
+  history; the `report` job prints fixed words from `replay-summary.json`; with `on` anything but `identical` on
+  every suite turns the fast path off. It follows `GitHub-Actions-Standard` (a timeout on every job and step, cancel
+  not needed for the master job, no path filter). Open for the owner: the second paid run it adds on master (the
+  recording cannot reuse the history run, which uses judges), the size cap (placeholder, unmeasured),
+  and `report` first, `on` later. Christopher merges.
 - [x] **S5, docs:** `docs/PROMPTS.md` section "Record and replay for response-side changes" replaces the "Not
   covered: record-and-replay" line with the artifact layout, the commands, the exit codes and the fallback
   behaviour, and says plainly that no workflow runs it yet. The CHANGELOG entry describes the tools as built
   and not wired.
 
-S4 is not started: it changes `.github/workflows` (a protected path) and is the owner's merge. S1 to S3 and S5 are in
+S4 changes `.github/workflows` (a protected path) and is the owner's merge. S1 to S3 and S5 are in
 the tools-only pull request; issue #406 stays open until S4 lands.

@@ -41,6 +41,14 @@ name: Prompt Evaluation
 #   model call and no maintainer step. Its capture runs in the detect job (PR code, no key).
 #   ab-base-rule re-captures only the base side with base code and compares, so this guards
 #   against honest mistakes, not a hostile author. Off switch: vars.PROMPT_EVAL_FAST_PATH=off.
+# - Record and replay (#406, docs/PROMPTS.md "Record and replay for response-side changes"), off
+#   unless vars.PROMPT_EVAL_REPLAY is `report` or `on`. A master push that runs suites also runs
+#   them once more, without judges, in `record-raw`, saving the model's raw answers (one store per
+#   suite, scanned by pii_guard, size-capped) in the artifact prompt-eval-raw-<run id>. A
+#   request-identical PR then runs its own code on the newest such record in `detect` (no key, no
+#   network). `report` only prints the result in the PR comment; `on` also turns the fast path off
+#   unless every suite replays identically, so the paid A/B runs instead. Replay can only make
+#   the check stricter: it never turns a failing PR into a passing one.
 
 on:
   pull_request:
@@ -63,13 +71,18 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # actions: read lets the replay step list and download master's raw-answer artifacts.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       run: ${{ steps.affected.outputs.run }}
       rescore: ${{ steps.affected.outputs.rescore }}
       any: ${{ steps.affected.outputs.any }}
       judges_changed: ${{ steps.affected.outputs.judges_changed }}
       dependency_only: ${{ steps.affected.outputs.dependency_only }}
-      request_identical: ${{ steps.requests.outputs.request_identical }}
+      # The fast-path decision: the capture's result, unless PROMPT_EVAL_REPLAY=on and the replay disagrees.
+      request_identical: ${{ steps.fastpath.outputs.request_identical }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -131,6 +144,114 @@ jobs:
           env -u OPENROUTER_API_KEY -u OPENAI_API_KEY poetry run python -m cqc_cpcc.model_eval prompt-requests-identical \
             --suites "${suites}" --base-ref "origin/${BASE_BRANCH}" --out evals/runs/requests | tee requests.log
           { echo "### Request-identical fast path"; echo '```'; cat requests.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # Record and replay (#406; off unless the repository variable PROMPT_EVAL_REPLAY is `report` or
+      # `on`). Requests identical says the model would be asked the same thing; it cannot say that this
+      # PR's code makes the same thing of the answers. Here the PR's code runs on the raw answers master
+      # recorded (`record-raw`), with no key and no network, and its output is compared with master's,
+      # case by case, exactly. A suite with no usable record, a miss or any difference is not a pass.
+      - name: Set up Java (compile gate, replay only)
+        if: >-
+          github.event_name == 'pull_request' && steps.requests.outputs.request_identical == 'true' &&
+          (vars.PROMPT_EVAL_REPLAY == 'report' || vars.PROMPT_EVAL_REPLAY == 'on')
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Does this PR's code give master's output on master's recorded answers? ($0)
+        id: replay
+        if: >-
+          github.event_name == 'pull_request' && steps.requests.outputs.request_identical == 'true' &&
+          (vars.PROMPT_EVAL_REPLAY == 'report' || vars.PROMPT_EVAL_REPLAY == 'on')
+        continue-on-error: true
+        timeout-minutes: 20
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          suites="$(python3 -c 'import json; print(",".join(json.load(open("affected.json"))["run"]))')"
+          mkdir -p evals/runs/replay replay-in
+          runs="$(gh run list --repo "${REPO}" --workflow prompt-eval.yml --branch master --event push \
+            --status success --limit 30 --json databaseId,headSha --jq '.[] | "\(.databaseId) \(.headSha)"')"
+          : > replay.log
+          : > replay-status.tsv
+          overall=identical
+          for s in ${suites//,/ }; do
+            # The newest master run that recorded this suite (a push records only the suites it ran).
+            dir=""; sha=""
+            while read -r id head; do
+              [ -n "${id}" ] || continue
+              if [ ! -d "replay-in/${id}" ]; then
+                mkdir -p "replay-in/${id}"
+                gh run download "${id}" --repo "${REPO}" -n "prompt-eval-raw-${id}" -D "replay-in/${id}" 2>/dev/null || true
+              fi
+              if [ -d "replay-in/${id}/${s}/raw-responses" ]; then dir="replay-in/${id}/${s}"; sha="${head}"; break; fi
+            done <<< "${runs}"
+            if [ -z "${dir}" ]; then
+              echo "${s}: no recorded answers on master yet (unusable)" | tee -a replay.log
+              st=unusable; sha=""
+            elif ! git merge-base --is-ancestor "${sha}" "${BASE_SHA}"; then
+              echo "${s}: the record is from ${sha::7}, which is not in the base's history (unusable)" | tee -a replay.log
+              st=unusable
+            else
+              echo "${s}: record from master ${sha::7}" | tee -a replay.log
+              rc=0
+              env -u OPENROUTER_API_KEY -u OPENAI_API_KEY -u CQC_EVAL_BATCH poetry run python -m cqc_cpcc.model_eval \
+                prompt-ab-replay --suites "${s}" --ab-dir "${dir}" --out "evals/runs/replay/${s}" >> replay.log 2>&1 || rc=$?
+              case "${rc}" in 0) st=identical;; 3) st=different;; *) st=unusable;; esac
+            fi
+            printf '%s\t%s\t%s\n' "${s}" "${st}" "${sha::7}" >> replay-status.tsv
+            if [ "${st}" = unusable ]; then overall=unusable
+            elif [ "${st}" = different ] && [ "${overall}" = identical ]; then overall=different; fi
+          done
+          python3 - <<'PY'
+          import json, pathlib
+          out = {"suites": {}}
+          for line in pathlib.Path("replay-status.tsv").read_text().splitlines():
+              suite, status, sha = line.split("\t")
+              count = 0
+              path = pathlib.Path("evals/runs/replay") / suite / "replay.json"
+              if path.is_file():
+                  count = int(json.loads(path.read_text())["suites"].get(suite, {}).get("different_count", 0))
+              out["suites"][suite] = {"status": status, "different_count": count, "record": sha}
+          pathlib.Path("replay-summary.json").write_text(json.dumps(out, sort_keys=True, indent=1) + "\n")
+          PY
+          { echo "### Replay on master's recorded answers"; echo '```'; cat replay.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "replay_status=${overall}" >> "$GITHUB_OUTPUT"
+
+      # The one place the fast-path decision is made. With PROMPT_EVAL_REPLAY unset or `report` it is the
+      # capture's result, as before. With `on`, anything but a clean replay of every suite (no record, a
+      # miss, a difference, a timeout, a crash) turns the fast path off so the paid A/B runs.
+      - name: Decide the fast path
+        id: fastpath
+        if: github.event_name == 'pull_request' && !cancelled()
+        shell: bash
+        env:
+          CAPTURE: ${{ steps.requests.outputs.request_identical }}
+          MODE: ${{ vars.PROMPT_EVAL_REPLAY }}
+          REPLAY: ${{ steps.replay.outputs.replay_status }}
+        run: |
+          set -euo pipefail
+          out="${CAPTURE}"
+          if [ "${out}" = "true" ] && [ "${MODE,,}" = "on" ] && [ "${REPLAY}" != "identical" ]; then
+            out=""
+            echo "Replay (PROMPT_EVAL_REPLAY=on) was ${REPLAY:-not completed}: the fast path is off and the paid A/B runs." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "request_identical=${out}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the replay result
+        if: always() && steps.replay.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-replay-${{ github.run_id }}
+          path: replay-summary.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Upload detection
         uses: actions/upload-artifact@v7
@@ -524,6 +645,7 @@ jobs:
           AB_STATUS: ${{ needs.ab.outputs.ab_status }}
           RESCORE_RESULT: ${{ needs.rescore.result }}
           REQUEST_IDENTICAL: ${{ needs.detect.outputs.request_identical }}
+          REPLAY_MODE: ${{ vars.PROMPT_EVAL_REPLAY }}
           AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           BASE_RESULT: ${{ needs.ab-base-rule.result }}
           BASE_STATUS: ${{ needs.ab-base-rule.outputs.ab_status }}
@@ -577,6 +699,11 @@ jobs:
               if ls results/prompt-eval-requests-*/requests.json >/dev/null 2>&1; then
                 echo; echo "Request-identical fast path ($([ "${REQUEST_IDENTICAL}" = "true" ] && echo taken || echo "not taken")):"
                 python3 -c 'import glob, json; r = json.load(open(glob.glob("results/prompt-eval-requests-*/requests.json")[0])); [print("- `" + s + "`: " + (v or "identical")) for s, v in sorted(r["suites"].items())]'
+              fi
+              if ls results/prompt-eval-replay-*/replay-summary.json >/dev/null 2>&1; then
+                # Untrusted data: only fixed words and an integer are printed, never a reason or a path.
+                echo; echo "Replay on master's recorded answers (\$0; mode \`${REPLAY_MODE:-off}\`, \`report\` never changes the verdict):"
+                python3 -c 'import glob, json, re; r = json.load(open(glob.glob("results/prompt-eval-replay-*/replay-summary.json")[0])); [print("- `" + s + "`: " + (v.get("status") if v.get("status") in ("identical", "different", "unusable") else "unusable") + (" (" + str(int(v.get("different_count") or 0)) + " case(s) differ)" if v.get("status") == "different" else "") + (", record from master " + v["record"] + "" if re.fullmatch("[0-9a-f]{7}", str(v.get("record"))) else "")) for s, v in sorted(r["suites"].items()) if re.fullmatch("[a-z0-9_-]+", s)]'
               fi
               if [ "${BASE_STATUS}" = "request-identical" ]; then
                 # The base re-captured its own side and it matches the PR's capture exactly.
@@ -657,6 +784,96 @@ jobs:
           fi
           gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="${state}" -f context="prompt-eval/ab" \
             -f description="${description}" -f target_url="${RUN_URL}" >/dev/null
+
+  record-raw:
+    # Off unless vars.PROMPT_EVAL_REPLAY is `report` or `on` (#406). Runs each suite the push needs one
+    # more time, without judges, recording the model's raw answers for `detect`'s replay on later PRs.
+    # This is a second paid run of those suites on master: the cost of the switch. One store per suite,
+    # because a store holding another suite's answers reads as "never asked for" and spoils the replay.
+    # A failure here never touches the history record: it is its own job.
+    needs: detect
+    if: >-
+      github.event_name == 'push' && needs.detect.outputs.run != '' &&
+      (vars.PROMPT_EVAL_REPLAY == 'report' || vars.PROMPT_EVAL_REPLAY == 'on')
+    runs-on: ubuntu-latest
+    environment: model-eval
+    timeout-minutes: 150
+    concurrency:
+      group: prompt-eval-record-raw
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Java (compile gate)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Python + Poetry ${{ env.POETRY_VERSION }}
+        uses: "./.github/actions/poetry_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          poetry-version: ${{ env.POETRY_VERSION }}
+          working-directory: "."
+          install-args: "--with test"
+
+      - name: Run the suites once more and record the raw answers
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_EVAL_API_KEY }}
+          RUN_SUITES: ${{ needs.detect.outputs.run }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p replay-store
+          for s in ${RUN_SUITES//,/ }; do
+            # Recording refuses a non-empty directory and batch mode; this step sets neither (and batch
+            # is for scheduled runs only). A suite that cannot be recorded is dropped, not retried.
+            if CQC_EVAL_RECORD_RAW="replay-store/${s}/raw-responses" poetry run python -m cqc_cpcc.model_eval suite run \
+                --suite "${s}" --out "raw-run" --label "raw-${GITHUB_SHA::7}" --run-id "${RUN_ID}-raw" > "run-${s}.log" 2>&1 \
+              && [ -s "raw-run/${s}/raw_outputs.jsonl" ] && [ -d "replay-store/${s}/raw-responses" ]; then
+              mkdir -p "replay-store/${s}/base/${s}"
+              cp "raw-run/${s}/raw_outputs.jsonl" "replay-store/${s}/base/${s}/"
+              tail -n 5 "run-${s}.log"
+            else
+              tail -n 40 "run-${s}.log"
+              echo "::warning::could not record ${s}; replay will report no record for it"
+              rm -rf "replay-store/${s}"
+            fi
+          done
+
+      # The answers are to synthetic eval cases, but the artifact is read by later runs: it must pass the
+      # same student-data scan as the repository, and it must stay small. A hit fails the job (a leak
+      # would be an incident); an oversize store is dropped with a warning.
+      - name: Scan and size-check the record
+        shell: bash
+        env:
+          # A placeholder, not measured: set it from the first real artifact (docs/plans/prompt-eval-record-replay.md, S4).
+          MAX_KB: "20480"
+        run: |
+          set -euo pipefail
+          if [ -z "$(find replay-store -type f 2>/dev/null | head -n 1)" ]; then echo "nothing recorded"; exit 0; fi
+          find replay-store -type f -print0 | xargs -0 poetry run python scripts/pii_guard.py
+          kb="$(du -sk replay-store | cut -f1)"
+          echo "record size: ${kb} KB (cap ${MAX_KB} KB)"
+          if [ "${kb}" -gt "${MAX_KB}" ]; then
+            echo "::warning::the record is ${kb} KB, over the ${MAX_KB} KB cap: not uploaded"
+            rm -rf replay-store
+          fi
+
+      - name: Upload the raw-answer record
+        uses: actions/upload-artifact@v7
+        with:
+          name: prompt-eval-raw-${{ github.run_id }}
+          path: replay-store/
+          if-no-files-found: ignore
+          retention-days: 90
 
   record:
     # Master is the record: re-run what changed, append history, refresh the status page

@@ -348,14 +348,15 @@ capture, runs the full paid A/B as before.
   fast path entirely, revert both #407 and the PR that added this switch; reverting only the
   latter leaves #407's fast path running without a switch.
 - **Not covered:** how the code handles the model's real, varied answers. Record-and-replay
-  (issue #406, built but not yet wired into a workflow; see below) is the follow-up for that.
+  (issue #406; an opt-in workflow switch, see below) is the follow-up for that.
 
-### Record and replay for response-side changes (issue #406, tools only)
+### Record and replay for response-side changes (issue #406)
 
 For a change whose requests are identical to the base's but whose code handles the model's answer
 differently (parsing, the compile gate, requirement coverage, scoring). Design and step list:
-`docs/plans/prompt-eval-record-replay.md`. **No workflow runs any of this yet**, so the A/B behaves
-as described above; these are opt-in commands for a local run (and for a later CI step).
+`docs/plans/prompt-eval-record-replay.md`. The commands below are for a local run. The workflow runs
+them only when the repository variable `PROMPT_EVAL_REPLAY` is `report` or `on` (section "In CI" below);
+unset, the A/B behaves as described above.
 
 Worked example (`<S>` is a suite id, `<DIR>` a new, empty directory). The record run **spends money** and
 needs `OPENROUTER_API_KEY`; run it on a checkout of the **base** that contains this feature (an older base
@@ -391,8 +392,36 @@ unchanged code must exit 0.
   batch mode, a dataset that is not fixtures-only and any other error (replay runs without a spend cap: it makes no paid call). Only `identical`
   on every suite can pass.
 - **Not covered:** a change that alters any request still needs the paid A/B, and the live model's answer
-  to a changed request is never replayed. When a workflow uses this (step 4) it needs an owner, an artifact
-  retention period and a `pii_guard` scan of the artifact before upload.
+  to a changed request is never replayed.
+
+**In CI (step 4, off by default).** The repository variable `PROMPT_EVAL_REPLAY` is unset, `report` or `on`
+(any case). Unset, the workflow is unchanged.
+
+- **Record, on master (`record-raw`).** When a push runs suites, this separate job runs each one **once more**,
+  without judges, with `CQC_EVAL_RECORD_RAW` set to a store of its own, and uploads the stores as the artifact
+  `prompt-eval-raw-<run id>` (`<suite>/raw-responses/` and `<suite>/base/<suite>/raw_outputs.jsonl`, 90 days).
+  **Cost: a second paid run of those suites on every master push that runs any**, with the `model-eval` key. One store
+  per suite, because answers for another suite would read as "never asked for" and spoil the replay. The job runs
+  `scripts/pii_guard.py` over the store (a hit fails the job and nothing is uploaded) and drops a store larger than
+  `MAX_KB` (20480 KB, a placeholder: **not measured**, set it from the first real artifact). It is separate from the
+  history `record` job, so a failure here never loses a history row.
+- **Replay, on a request-identical PR (`detect`).** For each suite that needs a run, the newest master run
+  that recorded it is found among the last 30 successful pushes. The record is used only when its commit is an
+  ancestor of the PR's base. The PR's own code then runs on it (no key, no network; the key variables are unset)
+  through `prompt-ab-replay`, and `replay-summary.json` is uploaded.
+- **`report`:** the PR comment lists each suite as `identical`, `different (N case(s) differ)` or `unusable`, with
+  the master commit the record came from. It never changes the fast-path decision or the verdict.
+- **`on`:** as `report`, and the fast path stays on only when **every** suite is `identical`. A missing record,
+  an unusable replay, a difference, a timeout or a crash turns it off, so the paid A/B runs. This can cost
+  money that the fast path alone would not: until master has recorded a suite, `on` runs the paid A/B for it.
+- **Replay only tightens.** The decision step can clear the capture's `true`; nothing sets it. A PR the capture
+  already sends to the paid A/B stays there.
+- **Residual gap.** The record is from the newest master run of that suite, not necessarily the PR's base commit.
+  Response-side code that changed on master after the record makes the replay `different`, which is the safe
+  direction; it is not re-checked with the base's code the way `ab-base-rule` re-checks the capture, so like the
+  capture it guards against honest mistakes, not a hostile author.
+- **Rollback:** delete the `PROMPT_EVAL_REPLAY` variable (or set it to `off`). Both jobs and all steps skip,
+  and the fast path is the capture's result as before. Existing `prompt-eval-raw-*` artifacts expire on their own.
 
 **Per suite, not per PR.** The base capture runs the base's own code. A suite the base does not
 know (the PR adds it: #428, #429 and #432 did) used to make the single base command exit

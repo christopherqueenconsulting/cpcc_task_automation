@@ -974,6 +974,111 @@ class TestWorkflowWiring:
         assert saves and action.count("github.event_name == 'push' && github.ref == 'refs/heads/master'") == saves
 
 
+class TestReplayWiring:
+    """The record-and-replay steps of prompt-eval.yml (#406 S4): opt-in, key-free on the PR side, fail closed."""
+
+    SWITCH = ("vars.PROMPT_EVAL_REPLAY == 'report'", "vars.PROMPT_EVAL_REPLAY == 'on'")
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def jobs(cls):
+        import yaml
+
+        return yaml.safe_load((pa.REPO_ROOT / ".github" / "workflows" / "prompt-eval.yml").read_text())["jobs"]
+
+    def _step(self, jobs, job, **match):
+        return next(s for s in jobs[job]["steps"] if all(s.get(k) == v for k, v in match.items()))
+
+    def test_every_replay_piece_is_off_unless_the_variable_is_report_or_on(self, jobs):
+        pieces = [jobs["record-raw"]["if"], self._step(jobs, "detect", id="replay")["if"],
+                  self._step(jobs, "detect", name="Set up Java (compile gate, replay only)")["if"]]
+        for condition in pieces:
+            assert all(s in condition for s in self.SWITCH)
+
+    def test_the_pr_side_replay_holds_no_key_and_cannot_stall_or_fail_the_job(self, jobs):
+        import json as _json
+
+        step = self._step(jobs, "detect", id="replay")
+        assert step["continue-on-error"] is True and step["timeout-minutes"] and jobs["detect"]["timeout-minutes"]
+        assert "secrets." not in _json.dumps(jobs["detect"]) and "OPENROUTER" not in _json.dumps(step["env"])
+        assert "env -u OPENROUTER_API_KEY -u OPENAI_API_KEY -u CQC_EVAL_BATCH" in step["run"]
+        assert "--is-ancestor" in step["run"]
+        assert jobs["detect"]["permissions"] == {"contents": "read", "actions": "read"}
+
+    def test_the_record_job_is_bounded_scanned_and_apart_from_the_history_record(self, jobs):
+        import json as _json
+
+        job = jobs["record-raw"]
+        text = _json.dumps(job)
+        assert job["timeout-minutes"] and job["concurrency"]["cancel-in-progress"] is False
+        assert job["environment"] == "model-eval" and "record" not in (job.get("needs") or [])
+        assert "CQC_EVAL_BATCH" not in text and "--judges" not in text
+        assert text.count("secrets.") == 1 and "OPENROUTER_EVAL_API_KEY" in text
+        scan = self._step(jobs, "record-raw", name="Scan and size-check the record")
+        assert "scripts/pii_guard.py" in scan["run"] and scan["env"]["MAX_KB"] and "-gt" in scan["run"]
+        assert jobs["record-raw"]["permissions"] == {"contents": "read"}
+
+    def test_the_fast_path_output_comes_from_the_one_decision_step(self, jobs):
+        assert jobs["detect"]["outputs"]["request_identical"] == "${{ steps.fastpath.outputs.request_identical }}"
+
+    @pytest.mark.parametrize("capture, mode, replay, expected", [
+        ("true", "", "", "true"), ("true", "report", "different", "true"), ("true", "on", "identical", "true"),
+        ("true", "on", "different", ""), ("true", "on", "unusable", ""), ("true", "on", "", ""),
+        ("true", "ON", "different", ""), ("", "on", "identical", ""), ("", "", "", "")])
+    def test_only_mode_on_lets_the_replay_turn_the_fast_path_off(self, jobs, tmp_path, capture, mode, replay, expected):
+        import os
+        import subprocess
+
+        script = self._step(jobs, "detect", id="fastpath")["run"]
+        out, summary = tmp_path / "out", tmp_path / "summary"
+        env = {**os.environ, "CAPTURE": capture, "MODE": mode, "REPLAY": replay,
+               "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}
+        run = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+        assert run.returncode == 0, run.stderr[-1000:]
+        assert out.read_text() == f"request_identical={expected}\n"
+
+    @pytest.mark.parametrize("recorded, ancestor, rc, expected", [
+        (True, True, 0, "identical"), (True, True, 3, "different"), (True, True, 4, "unusable"),
+        (True, False, 0, "unusable"), (False, True, 0, "unusable")])
+    def test_the_replay_step_reports_the_worst_suite_and_never_a_pass_without_a_record(
+            self, jobs, tmp_path, recorded, ancestor, rc, expected):
+        import os
+        import stat
+        import subprocess
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        stubs = {
+            # gh run list -> one master run; gh run download -> that run's artifact (only when recorded)
+            "gh": ('#!/bin/sh\ncase "$2" in list) echo "11 abcdef0123456789";; download) '
+                   + ('mkdir -p "$9/digest/raw-responses";;' if recorded else ';;') + ' esac\n'),
+            "git": f"#!/bin/sh\nexit {0 if ancestor else 1}\n",
+            "poetry": f"#!/bin/sh\necho stub-replay\nexit {rc}\n",
+        }
+        for name, body in stubs.items():
+            (bin_dir / name).write_text(body)
+            (bin_dir / name).chmod((bin_dir / name).stat().st_mode | stat.S_IEXEC)
+        (tmp_path / "affected.json").write_text(json.dumps({"run": ["digest"]}))
+        out, summary = tmp_path / "out", tmp_path / "summary"
+        env = {**os.environ, "GH_TOKEN": "x", "REPO": "o/r", "BASE_SHA": "1" * 40, "GITHUB_OUTPUT": str(out),
+               "GITHUB_STEP_SUMMARY": str(summary), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+        run = subprocess.run(["bash", "-c", self._step(jobs, "detect", id="replay")["run"]], cwd=tmp_path, env=env,
+                             capture_output=True, text=True)
+        assert run.returncode == 0, run.stderr[-1500:]
+        assert out.read_text() == f"replay_status={expected}\n"
+        digest = json.loads((tmp_path / "replay-summary.json").read_text())["suites"]["digest"]
+        assert digest["status"] == expected and digest["record"] == ("abcdef0" if recorded else "")
+
+    def test_the_fast_path_step_runs_on_pull_requests_only(self, jobs):
+        condition = self._step(jobs, "detect", id="fastpath")["if"]
+        assert "pull_request" in condition and "!cancelled()" in condition
+
+    def test_replay_never_adds_a_pass_path(self, jobs):
+        # The fast-path step can only clear the capture's "true": it never sets it.
+        script = self._step(jobs, "detect", id="fastpath")["run"]
+        assert script.count("out=") == 2 and 'out=""' in script and 'out="${CAPTURE}"' in script
+
+
 class TestReportStateMachine:
     """Run the report job's script with a stub `gh` and read the status it posts."""
 
@@ -1060,6 +1165,18 @@ class TestReportStateMachine:
                                     AB_RESULT="skipped", BASE_STATUS="request-identical", RESCORE_RESULT="success",
                                     REQUEST_IDENTICAL="true")
         assert state == "success" and "RESCORE-TABLE" in comment and "`digest`: identical" in comment
+
+    def test_the_comment_shows_only_fixed_words_from_the_replay_summary(self, script, tmp_path):
+        (tmp_path / "results" / "prompt-eval-replay-1").mkdir(parents=True)
+        (tmp_path / "results" / "prompt-eval-replay-1" / "replay-summary.json").write_text(json.dumps({"suites": {
+            "digest": {"status": "different", "different_count": 3, "record": "abc1234"},
+            "grading": {"status": "@everyone [x](http://evil)", "different_count": "9", "record": "bad"},
+            "Bad Name": {"status": "identical", "different_count": 0, "record": ""}}}))
+        _, comment = self._post(script, tmp_path, RUN_SUITES="digest", BASE_REQUIRED="digest", AB_RESULT="skipped",
+                                BASE_STATUS="not-run", REQUEST_IDENTICAL="", REPLAY_MODE="report")
+        assert "- `digest`: different (3 case(s) differ), record from master abc1234" in comment
+        assert "- `grading`: unusable" in comment and "evil" not in comment and "everyone" not in comment
+        assert "Bad Name" not in comment and "mode `report`" in comment
 
     def test_an_a_b_that_did_not_finish_fails_and_says_so(self, script, tmp_path):
         state, comment = self._post(script, tmp_path, RUN_SUITES="x", AB_RESULT="cancelled", BASE_STATUS="pass")
