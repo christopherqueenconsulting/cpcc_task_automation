@@ -184,6 +184,137 @@ def test_normalize_name_flips_last_comma_first():
 
 
 @pytest.mark.unit
+def test_score_matches_is_numeric_and_none_safe():
+    assert wb._score_matches("30", "30") and wb._score_matches("30.0", "30")
+    assert wb._score_matches("10.50", "10.5") and not wb._score_matches("10.5", "30")
+    assert not wb._score_matches(None, "30") and not wb._score_matches("", "30")
+    assert wb._score_matches("n/a", "n/a") and not wb._score_matches("n/a", "30")
+
+
+@pytest.mark.unit
+def test_fill_and_save_score_holds_first_time(mocker):
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", return_value="10.5")
+    commit = MagicMock(return_value=True)
+    assert wb._fill_and_save_score(MagicMock(), 10.5, commit) == (True, True)
+    commit.assert_called_once()
+
+
+@pytest.mark.unit
+def test_fill_and_save_score_retypes_when_a_late_rubric_recompute_overwrites_it(mocker):
+    """The class bug: score typed, saved, then the field shows the rubric-derived value."""
+    mocker.patch("time.sleep")
+    fill = mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", side_effect=["4.5", "10.5"])  # drift, then held
+    commit = MagicMock(return_value=True)
+    assert wb._fill_and_save_score(MagicMock(), 10.5, commit) == (True, True)
+    assert fill.call_count == 2 and commit.call_count == 2
+
+
+@pytest.mark.unit
+def test_fill_and_save_score_reports_a_score_that_never_sticks(mocker):
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", return_value="")     # blank after every save
+    commit = MagicMock(return_value=True)
+    assert wb._fill_and_save_score(MagicMock(), 10.5, commit, rechecks=2) == (False, True)
+    assert commit.call_count == 3                                       # 1 + 2 rechecks, then stop
+
+
+@pytest.mark.unit
+def test_fill_and_save_score_stops_when_the_save_click_fails(mocker):
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    commit = MagicMock(return_value=False)
+    assert wb._fill_and_save_score(MagicMock(), 10.5, commit) == (True, False)
+    commit.assert_called_once()
+
+
+@pytest.mark.unit
+def test_write_one_student_does_not_call_a_missing_score_a_clean_draft(mocker):
+    """Saved but the typed score did not stick: not score_written, and the note says so."""
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
+    mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
+    mocker.patch.object(wb, "_fill_and_save_score", return_value=(False, True))
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None, dry_run=False,
+                          feedback_mode="none")
+    assert o.saved and o.score_written is None
+    assert "did NOT stick" in o.note and o.note != "saved as draft"
+
+
+@pytest.mark.unit
+def test_write_one_student_waits_for_the_rubric_recompute_before_typing(mocker):
+    mocker.patch("time.sleep")
+    order: list = []
+    mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
+    mocker.patch.object(wb, "_select_rubric_levels", side_effect=lambda *a, **k: (
+        order.append("rubric"), {"selected": [{"criterion": "C", "level": "L"}], "missing": []})[1])
+    mocker.patch.object(wb, "_wait_score_settled", side_effect=lambda *a, **k: order.append("settle"))
+    mocker.patch.object(wb, "_fill_and_save_score",
+                        side_effect=lambda *a, **k: (order.append("type+save"), (True, True))[1])
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 24, 30, 30, "", rubric_selections=[
+        wb.RubricLevelSelection("C", "L")])
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None, dry_run=False,
+                          feedback_mode="none")
+    # the dry-run match comes first; the real click, then the wait, then the score
+    assert order[-3:] == ["rubric", "settle", "type+save"]
+
+
+def _gi(key, name):
+    return wb.GradeWriteItem(key, name, 0, 0, 30, "")
+
+
+@pytest.mark.unit
+def test_match_by_user_id_when_names_differ():
+    """A nickname/middle name must not leave a student without a draft."""
+    items = [_gi("500-9 - Robert Smith - Nov 1, 2026", "Robert Smith")]
+    learners = [{"name": "Smith, Bob Allen", "userId": "500"}]
+    matches, unmatched_items, unmatched_learners = wb.match_items_to_learners(items, learners)
+    assert [(m.learner["userId"], m.by_id) for m in matches] == [("500", True)]
+    assert unmatched_items == [] and unmatched_learners == []
+
+
+@pytest.mark.unit
+def test_match_user_id_beats_a_colliding_name():
+    """The id decides who is who: a name that equals ANOTHER learner's must not win."""
+    items = [_gi("500-9 - Pat Lee", "Pat Lee")]
+    learners = [{"name": "Lee, Pat", "userId": "777"},        # same name, different person
+                {"name": "Lee, Patricia", "userId": "500"}]   # the folder's real owner
+    matches, unmatched_items, unmatched_learners = wb.match_items_to_learners(items, learners)
+    assert matches[0].learner["userId"] == "500" and matches[0].by_id
+    assert [lr["userId"] for lr in unmatched_learners] == ["777"]
+
+
+@pytest.mark.unit
+def test_match_falls_back_to_name_without_a_usable_id():
+    """Free-form folder names (no leading id) and unknown ids still match by name."""
+    items = [_gi("Jane Doe", "Jane Doe"), _gi("999-9 - Ann Roe", "Ann Roe")]
+    learners = [{"name": "Doe, Jane", "userId": "1"}, {"name": "Roe, Ann", "userId": "2"}]
+    matches, unmatched_items, _ = wb.match_items_to_learners(items, learners)
+    assert sorted((m.learner["userId"], m.by_id) for m in matches) == [("1", False), ("2", False)]
+    assert unmatched_items == []
+
+
+@pytest.mark.unit
+def test_match_never_gives_one_learner_to_two_items():
+    items = [_gi("500-9 - Jane Doe", "Jane Doe"), _gi("500-9 - Jane Doe (copy)", "Jane Doe")]
+    learners = [{"name": "Doe, Jane", "userId": "500"}]
+    matches, unmatched_items, _ = wb.match_items_to_learners(items, learners)
+    assert len(matches) == 1 and len(unmatched_items) == 1
+
+
+@pytest.mark.unit
 def test_match_items_to_learners_exact_and_unmatched():
     items = [
         wb.GradeWriteItem("k1", "Jane Doe", 80, 90, 100, "<p>x</p>"),
@@ -388,6 +519,7 @@ def test_write_one_student_real_fills_and_saves_draft(mocker):
     mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     mocker.patch.object(wb, "_fill_score", return_value=True)
     mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", return_value="90")  # post-save read-back
     save = mocker.patch.object(wb, "_save_draft", return_value=True)
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
@@ -506,6 +638,7 @@ def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
     mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     mocker.patch.object(wb, "_fill_score", return_value=True)
     mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", return_value="27")  # post-save read-back
     rub = mocker.patch.object(wb, "_select_rubric_levels", return_value={
         "selected": [{"criterion": "Program Performance", "level": "Above Average"}], "missing": []})
     mocker.patch.object(wb, "_save_draft", return_value=True)
@@ -707,6 +840,7 @@ def test_write_one_student_attach_mode_uploads_doc(mocker, tmp_path):
     mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
     mocker.patch.object(wb, "_fill_score", return_value=True)
     mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", return_value="90")  # post-save read-back
     save = mocker.patch.object(wb, "_save_draft", return_value=True)
     inline = mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     attach = mocker.patch.object(wb, "_attach_feedback_file", return_value=True)
@@ -1236,6 +1370,7 @@ def test_write_one_student_score_only_mode_skips_feedback(mocker):
     mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
     mocker.patch.object(wb, "_fill_score", return_value=True)
     mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", return_value="90")  # post-save read-back
     save = mocker.patch.object(wb, "_save_draft", return_value=True)
     inline = mocker.patch.object(wb, "_write_feedback_via_editor")
     attach = mocker.patch.object(wb, "_attach_feedback_file")

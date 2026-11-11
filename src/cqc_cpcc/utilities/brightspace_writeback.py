@@ -358,22 +358,38 @@ class WriteMatch:
     """A write-item paired with the learner descriptor it matched on the page."""
     item: GradeWriteItem
     learner: dict              # e.g. {"name", "userId", "attemptId"} from the grid
+    by_id: bool = False        # matched on the BrightSpace user id (not the name)
+
+
+# Submission folders are "<userId>-<dropboxId> - Name ..." and the userId equals the
+# `feedback,<userId>` token on the learner's name link. VERIFIED LIVE 2026-07-10 and again
+# 2026-11-11: 20 of 20 folders carried a userId present on the page, and a name match
+# pointed at the same learner in all 20 (0 conflicts). Same join the attendance code uses
+# (student_identity): the user id, never the name, decides who is who.
+_LEADING_USER_ID_RE = re.compile(r"^\s*(\d+)\s*-")
 
 
 def match_items_to_learners(
         items: list[GradeWriteItem],
         learners: list[dict],
 ) -> tuple[list[WriteMatch], list[GradeWriteItem], list[dict]]:
-    """Match write-items to scraped learners by normalized name.
+    """Match write-items to scraped learners: by BrightSpace user id first, then by name.
+
+    An item whose ``student_key`` starts with ``<userId>-`` is matched to the learner with
+    that user id, whatever the two names look like (nickname, middle name, accent,
+    punctuation). Only items without a usable id (e.g. an uploaded ZIP with free-form
+    folder names) fall back to the exact normalized name, and a learner is never given
+    to two items.
 
     Args:
         items: The grades to write.
-        learners: Scraped learner descriptors, each a dict with at least ``name``.
+        learners: Scraped learner descriptors, each with ``name`` and (normally) ``userId``.
 
     Returns:
-        ``(matches, unmatched_items, unmatched_learners)``. Matching is by exact
-        normalized name; the caller surfaces unmatched students for manual handling.
+        ``(matches, unmatched_items, unmatched_learners)``; the caller surfaces unmatched
+        students for manual handling.
     """
+    by_id = {str(lr.get("userId")): lr for lr in learners if lr.get("userId")}
     by_norm: dict[str, dict] = {}
     for lr in learners:
         norm = _normalize_name(lr.get("name", ""))
@@ -381,18 +397,37 @@ def match_items_to_learners(
             by_norm[norm] = lr
 
     matches: list[WriteMatch] = []
-    unmatched_items: list[GradeWriteItem] = []
-    used: set[str] = set()
+    pending: list[GradeWriteItem] = []
+    used_ids: set[str] = set()
+    used_norms: set[str] = set()
+
+    def take(it: GradeWriteItem, lr: dict, by_user_id: bool) -> None:
+        matches.append(WriteMatch(item=it, learner=lr, by_id=by_user_id))
+        if lr.get("userId"):
+            used_ids.add(str(lr.get("userId")))
+        used_norms.add(_normalize_name(lr.get("name", "")))
+
+    # Pass 1: the user id in the submission folder name.
     for it in items:
-        norm = _normalize_name(it.display_name)
-        lr = by_norm.get(norm)
-        if lr is not None:
-            matches.append(WriteMatch(item=it, learner=lr))
-            used.add(norm)
+        found = _LEADING_USER_ID_RE.match(it.student_key or "")
+        uid = found.group(1) if found else ""
+        lr = by_id.get(uid)
+        if lr is not None and uid not in used_ids:
+            take(it, lr, True)
+        else:
+            pending.append(it)
+
+    # Pass 2: exact normalized name, only for items pass 1 could not place.
+    unmatched_items: list[GradeWriteItem] = []
+    for it in pending:
+        lr = by_norm.get(_normalize_name(it.display_name))
+        uid = str(lr.get("userId")) if lr is not None and lr.get("userId") else ""
+        if lr is not None and uid not in used_ids and _normalize_name(lr.get("name", "")) not in used_norms:
+            take(it, lr, False)
         else:
             unmatched_items.append(it)
 
-    unmatched_learners = [lr for n, lr in by_norm.items() if n not in used]
+    unmatched_learners = [lr for n, lr in by_norm.items() if n not in used_norms]
     return matches, unmatched_items, unmatched_learners
 
 
@@ -1160,6 +1195,58 @@ def _use_attach(feedback_mode: str, item: GradeWriteItem) -> bool:
     return feedback_mode == "attach" and bool(item.feedback_doc_path)
 
 
+def _score_matches(current, want) -> bool:
+    """True when the score field's text equals ``want`` (numerically when both parse)."""
+    if current is None:
+        return False
+    cur = str(current).strip()
+    try:
+        return abs(float(cur) - float(want)) < 0.005
+    except (TypeError, ValueError):
+        return cur == str(want).strip()
+
+
+def _wait_score_settled(driver, timeout: float = 6.0) -> None:
+    """Wait until the overall-score field stops changing.
+
+    Every rubric level click makes D2L recompute the overall grade asynchronously. A score
+    typed before that lands is overwritten with the rubric-derived value (seen live
+    2026-11-11: a class where some learners kept the rubric grade, not the buffered one).
+    """
+    import time as _t
+    last: object = object()
+    stable = 0
+    for _ in range(max(int(timeout / 0.4), 1)):
+        cur = _read_score_value(driver)
+        stable = stable + 1 if cur == last else 0
+        last = cur
+        if stable >= 3:
+            return
+        _t.sleep(0.4)
+
+
+def _fill_and_save_score(driver, score, commit, rechecks: int = 2) -> tuple[bool, bool]:
+    """Type ``score``, save, then re-read the field; retype and save again if it drifted.
+
+    A late rubric recompute can overwrite the typed score AFTER ``_ensure_score_committed``
+    verified it and before the save, so the post-save value is the only proof. Returns
+    ``(score_held, saved)``; ``score_held`` is True only when the field shows ``score``
+    after a successful save.
+    """
+    import time as _t
+    want = _fmt_num(score)
+    field_ok = False
+    for _ in range(1 + max(rechecks, 0)):
+        _fill_score(driver, score)
+        field_ok = _ensure_score_committed(driver, score)
+        if not commit():
+            return field_ok, False
+        _t.sleep(1.0)
+        if _score_matches(_read_score_value(driver), want):
+            return True, True
+    return False, True
+
+
 def _ensure_score_committed(driver, score, attempts: int = 4) -> bool:
     """Blur + verify the overall-score field actually holds ``score`` before saving.
 
@@ -1183,7 +1270,7 @@ def _ensure_score_committed(driver, score, attempts: int = 4) -> bool:
                 pass
             _t.sleep(0.4)
             try:
-                if (el.get_attribute("value") or "").strip() == want:
+                if _score_matches(el.get_attribute("value"), want):
                     return True
             except Exception:  # noqa: BLE001
                 pass
@@ -1296,6 +1383,8 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         rres = _select_rubric_levels(driver, item.rubric_selections, dry_run=False)
         outcome.rubric_selected = len(rres.get("selected") or [])
         outcome.rubric_missing = rres.get("missing") or []
+        if outcome.rubric_selected:
+            _wait_score_settled(driver)   # let D2L finish recomputing before the score is typed
 
         # TWO-PHASE SAVE (inline). VERIFIED LIVE 2026-07-10: writing feedback then the
         # score then ONE save persists an EMPTY score whenever the feedback body is more
@@ -1330,10 +1419,9 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
             if attach:
                 outcome.feedback_attached = _attach_feedback_file(
                     driver, item.feedback_doc_path, progress)
-            _fill_score(driver, item.score)
-            if _ensure_score_committed(driver, item.score):
+            held, outcome.saved = _fill_and_save_score(driver, item.score, commit)
+            if held:
                 outcome.score_written = item.score
-            outcome.saved = commit()
         else:
             # PHASE A: feedback (+ rubric) -> Save Draft.
             outcome.feedback_written = _write_feedback_via_editor(driver, wait, item.feedback_html)
@@ -1341,10 +1429,9 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
             commit()
             _t.sleep(1.5)  # let the feedback commit settle before the score save cycle
             # PHASE B: score LAST, in its own save cycle (no editor commit in flight).
-            _fill_score(driver, item.score)
-            if _ensure_score_committed(driver, item.score):
+            held, outcome.saved = _fill_and_save_score(driver, item.score, commit)
+            if held:
                 outcome.score_written = item.score
-            outcome.saved = commit()
 
         if published:
             was = f"; previous score {outcome.previous_score or '(blank)'}"
@@ -1353,6 +1440,9 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
             else:
                 outcome.note = ("updated (republished to student)" if outcome.saved
                                 else "filled but Update click failed — NOT saved") + was
+        elif outcome.saved and outcome.score_written is None:
+            outcome.note = ("saved as draft but the typed score did NOT stick — BrightSpace "
+                            "kept the rubric-derived grade; fix this learner's grade manually")
         else:
             outcome.note = ("saved as draft" if outcome.saved
                             else "filled but Save Draft not found — NOT saved")
