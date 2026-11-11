@@ -197,3 +197,6 @@ withdrawals_*.csv
 
 # Local model-eval run output (scorecards and raw outputs)
 evals/runs/
+
+# Generated at deploy time onto the `release` branch only (deploy-release.yml).
+/requirements.txt

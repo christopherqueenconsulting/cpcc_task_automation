@@ -1,0 +1,63 @@
+name: Dependabot Triage
+
+# After CI or CodeQL finishes on a Dependabot PR: post or update one recommendation comment
+# (MERGE / MERGE AFTER SMOKE / HOLD / WAIT) for major bumps and red PRs, and label a red PR
+# `agent-ready` so an agent fixes it (Repo-Triage SOP). Patch/minor bumps that pass merge
+# themselves through dependabot-auto-merge.yml and get no comment.
+#
+# Replaces dependabot-ci-autofix.yml: its `@copilot` comments were posted by github-actions[bot],
+# and Copilot only responds to people with write access, so they never started a fix.
+#
+# workflow_run runs the default-branch copy of this file and script, never PR code. It needs
+# no secret: GITHUB_TOKEN with the permissions below.
+
+on:
+  workflow_run:
+    workflows:
+      - CI / Test Suite
+      - CodeQL Advanced
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-triage-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  recommend:
+    if: |
+      github.event.workflow_run.event == 'pull_request' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: write
+      issues: write            # labels and comments
+      security-events: read    # open Dependabot alerts the bump fixes (best effort)
+    steps:
+      - name: Checkout default branch (script only, no PR code)
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Post or update the recommendation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # workflow_run.pull_requests is empty for some events; look the PR up by its head branch.
+          pr=$(gh api "repos/$REPO/pulls?state=open&head=${REPO%%/*}:$HEAD_BRANCH" --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No open PR for $HEAD_BRANCH; nothing to do."
+            exit 0
+          fi
+          python3 scripts/dependabot_recommendation.py --repo "$REPO" --pr "$pr" \
+            --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --self-check recommend

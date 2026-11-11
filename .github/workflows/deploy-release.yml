@@ -1,0 +1,119 @@
+name: Deploy release
+
+# Moves the `release` branch, which Streamlit Community Cloud builds, to a release tag plus ONE
+# commit that adds requirements.txt generated from that tag's poetry.lock.
+#
+# Why: Community Cloud installs requirements.txt (with uv) faster than pyproject.toml, but a
+# tracked requirements.txt on master is a second dependency file that Dependabot bumps on its
+# own, out of step with poetry.lock (PRs #524, #543, #555). So master tracks poetry.lock only
+# and requirements.txt exists only on `release`. Runbook: docs/RELEASING.md.
+#
+# Deploy:   gh workflow run deploy-release.yml -f tag=v0.2.0
+# Dry run:  gh workflow run deploy-release.yml -f tag=v0.2.0 -f dry_run=true
+# Rollback: run it again with the last good tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy (vX.Y.Z or vX.Y.Z-rcN). Its Release run must be green."
+        required: true
+        type: string
+      dry_run:
+        description: "Build the release commit and show the diff, but do not move `release`."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A deploy is a write: never cancel one half way, and never run two at once.
+concurrency:
+  group: deploy-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy tag to the release branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # force-push `release`
+      actions: read     # confirm the tag's Release run passed
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Check the tag
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Validate the format before the value reaches git (it is user input).
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] \
+            || { echo "::error::'$TAG' is not vX.Y.Z or vX.Y.Z-rcN"; exit 1; }
+          git rev-parse --verify --quiet "refs/tags/$TAG^{commit}" >/dev/null \
+            || { echo "::error::tag $TAG does not exist"; exit 1; }
+          git merge-base --is-ancestor "refs/tags/$TAG^{commit}" origin/master \
+            || { echo "::error::$TAG is not on master"; exit 1; }
+          conclusion=$(gh run list --workflow release.yml --branch "$TAG" --event push \
+            --limit 1 --json conclusion --jq '.[0].conclusion // "none"')
+          [ "$conclusion" = "success" ] \
+            || { echo "::error::the Release run for $TAG is '$conclusion', not success"; exit 1; }
+
+      - name: Check out the tagged commit
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          git checkout --quiet --detach "refs/tags/$TAG^{commit}"
+          # The tag must also match pyproject.toml at that commit (same rule as release.yml).
+          python3 scripts/check_release_tag.py "$TAG"
+
+      - name: Set up uv for dependency export
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Generate requirements.txt and commit it on top of the tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          ./export_requirements.sh requirements.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # requirements.txt is gitignored on master; -f adds it to the release commit only.
+          git add -f requirements.txt
+          # --allow-empty: an older tag may already track an identical file; release stays tag + 1.
+          git commit --quiet --allow-empty -m "deploy: requirements.txt for $TAG" \
+            -m "Generated from poetry.lock at $TAG by deploy-release.yml (run $GITHUB_RUN_ID)."
+          echo "Release commit: $(git rev-parse HEAD) (parent $(git rev-parse HEAD^))"
+
+      - name: Show the change against the current release branch
+        run: |
+          if git rev-parse --verify --quiet origin/release >/dev/null; then
+            echo "Current release: $(git rev-parse origin/release)"
+            git diff --stat origin/release HEAD
+            git diff origin/release HEAD -- requirements.txt || true
+          else
+            echo "No release branch yet."
+          fi
+
+      - name: Move the release branch
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Same header actions/checkout uses; persist-credentials is off so only this step holds it.
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push --force origin HEAD:refs/heads/release
+          {
+            echo "### Deployed $TAG"
+            echo "release -> \`$(git rev-parse HEAD)\` (tag \`$TAG\` + requirements.txt)."
+            echo "Streamlit Community Cloud redeploys when \`release\` moves. Check the app."
+          } >> "$GITHUB_STEP_SUMMARY"
