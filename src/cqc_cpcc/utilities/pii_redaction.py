@@ -71,6 +71,7 @@ _URL_NUMERIC_SEGMENT_RE = re.compile(r"/\d{3,}(?=/|$)")
 _lock = threading.RLock()
 _known_names: dict[str, str] = {}  # compact variant -> alias
 _known_patterns: list[str] = []  # regex for each variant, whitespace-tolerant
+_pattern_key: dict[str, str] = {}  # pattern -> its registry key (so one student can be forgotten)
 _known_tokens: dict[str, str] = {}  # exact id/email tokens -> alias
 _names_re: re.Pattern | None = None
 _alias_key: bytes | None = None
@@ -194,9 +195,9 @@ def register_student(
                 if key not in _known_names:
                     _known_names[key] = student_alias
                     # Tolerate the separators filenames use: "AdaExample", "Ada_Example".
-                    _known_patterns.append(
-                        r"[\s_.\-]*".join(re.escape(part) for part in variant.split())
-                    )
+                    pattern = r"[\s_.\-]*".join(re.escape(part) for part in variant.split())
+                    _known_patterns.append(pattern)
+                    _pattern_key[pattern] = key
                     changed = True
             if changed:
                 _names_re = None
@@ -218,8 +219,31 @@ def clear_registry() -> None:
     with _lock:
         _known_names.clear()
         _known_patterns.clear()
+        _pattern_key.clear()
         _known_tokens.clear()
         _names_re = None
+
+
+def forget_students(alias_keys: Iterable[Any]) -> int:
+    """Remove these students' registered spellings, ids and tokens from the registry; returns how many.
+
+    ``alias_keys`` are the values given as ``alias_key`` to :func:`register_student` (the Org Defined IDs).
+    Aliases stay stable (they are an HMAC of the key), but the process stops holding the name-to-id link.
+    """
+    global _names_re
+    aliases = {alias(key) for key in alias_keys}
+    removed = 0
+    with _lock:
+        for key in [k for k, v in _known_names.items() if v in aliases]:
+            del _known_names[key]
+        for token in [t for t, v in _known_tokens.items() if v in aliases]:
+            del _known_tokens[token]
+            removed += 1
+        _known_patterns[:] = [p for p in _known_patterns if _pattern_key.get(p) in _known_names]
+        for pattern in [p for p in _pattern_key if _pattern_key[p] not in _known_names]:
+            del _pattern_key[pattern]
+        _names_re = None
+    return removed
 
 
 def _reset_alias_key_for_tests() -> None:

@@ -21,12 +21,15 @@ import binascii
 import re
 from typing import Iterable, Optional
 
-from cqc_cpcc.utilities.pii_redaction import register_student
+from urllib.parse import unquote
+
+from cqc_cpcc.utilities.pii_redaction import forget_students, register_student
 
 _WORD_RE = re.compile(r"[\w'\-]+")
 _FEEDBACK_RE = re.compile(r"\bfeedback,(\d+)")
-_ACTOR_USER_RE = re.compile(r"user_(\d+)")
-_ORG_ID_RE = re.compile(r"^\d{5,12}$")
+_ACTOR_USER_RE = re.compile(r"\.user_(\d+)\Z")
+# MyColleges roster ids are 6-9 digits (the roster script reads them with \b\d{6,9}\b).
+ORG_ID_RE = re.compile(r"^\d{6,9}$")
 
 
 def name_key(text: str | None) -> frozenset[str]:
@@ -48,16 +51,16 @@ def user_id_from_actor_href(href: object) -> Optional[str]:
 
     The last path segment is base64; decoded once it holds ``<token>.user_<id>``. That is D2L's own link
     encoding and can change without notice, so every step is defensive and a miss is simply None (the
-    caller then falls back to the exact name match).
+    row is then unresolved and never recorded).
     """
     if not isinstance(href, str) or "/actor/" not in href:
         return None
-    segment = href.split("/actor/", 1)[1].split("?", 1)[0].split("/", 1)[0]
+    segment = unquote(href.split("/actor/", 1)[1].split("?", 1)[0].split("/", 1)[0])
     if not segment:
         return None
     try:
         padded = segment + "=" * (-len(segment) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8", "ignore")
+        decoded = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True).decode("utf-8")
     except (binascii.Error, ValueError, UnicodeError):
         return None
     match = _ACTOR_USER_RE.search(decoded)
@@ -85,19 +88,22 @@ class Classlist:
 
     def __init__(self) -> None:
         self._org_by_user: dict[str, str] = {}
+        self._user_by_org: dict[str, str] = {}
         self._key_by_user: dict[str, frozenset[str]] = {}
-        self._users_by_key: dict[frozenset[str], set[str]] = {}
 
     def add(self, user_id: str, org_defined_id: str, name: str) -> None:
         """Add one learner. Registers them with the log redactor under an alias keyed by their Org Defined ID."""
         user_id, org_defined_id = str(user_id).strip(), str(org_defined_id).strip()
-        if not user_id or not _ORG_ID_RE.match(org_defined_id):
+        if not user_id or not ORG_ID_RE.match(org_defined_id):
             raise ValueError("a classlist row needs a user id and a numeric Org Defined ID")
+        if user_id in self._org_by_user and self._org_by_user[user_id] != org_defined_id:
+            raise ValueError("a BrightSpace user id appears twice with different Org Defined IDs")
+        if org_defined_id in self._user_by_org and self._user_by_org[org_defined_id] != user_id:
+            raise ValueError("an Org Defined ID belongs to two BrightSpace user ids")
         key = name_key(name)
+        self._user_by_org[org_defined_id] = user_id
         self._org_by_user[user_id] = org_defined_id
         self._key_by_user[user_id] = key
-        if key:
-            self._users_by_key.setdefault(key, set()).add(user_id)
         register_student(name, student_id=org_defined_id, tokens=[user_id], alias_key=org_defined_id)
 
     def __len__(self) -> int:
@@ -112,29 +118,28 @@ class Classlist:
     def resolve(self, name: str | None, user_id: str | None) -> Optional[str]:
         """The Org Defined ID for one activity row, or None when it cannot be tied to exactly one learner.
 
-        With a user id: the classlist must know it, and when the row also shows a name that name must be the
-        classlist's name for that learner (a mismatch means a mis-read link, never a guess). With no user id:
-        the whole-word name must belong to exactly one learner.
+        The row must carry its BrightSpace user id and the classlist must know it. When the row also shows a
+        name, that name must be the classlist's name for that learner: a mismatch means a mis-read link and is
+        never resolved. There is no name-only fallback (a missing or unreadable user id leaves the row unresolved),
+        so a student who is not on the classlist can never be mistaken for one who is.
         """
-        if user_id:
-            org = self._org_by_user.get(str(user_id))
-            if org is None:
-                return None
-            row_key = name_key(name)
-            if row_key and row_key != self._key_by_user.get(str(user_id)):
-                return None
-            return org
-        key = name_key(name)
-        users = self._users_by_key.get(key) if len(key) >= 2 else None
-        if users and len(users) == 1:
-            return self._org_by_user[next(iter(users))]
-        return None
+        if not user_id:
+            return None
+        org = self._org_by_user.get(str(user_id))
+        if org is None:
+            return None
+        row_key = name_key(name)
+        if row_key and row_key != self._key_by_user.get(str(user_id)):
+            return None
+        return org
 
     def clear(self) -> None:
-        """Drop the name/id table (collection is over; MyColleges only needs the ids already resolved)."""
+        """Drop the name/id table and the log redactor's copy of it (collection is over; MyColleges only needs the
+        Org Defined IDs already resolved, and logs use aliases keyed by them)."""
+        forget_students(self._org_by_user.values())
         self._org_by_user.clear()
+        self._user_by_org.clear()
         self._key_by_user.clear()
-        self._users_by_key.clear()
 
     def __repr__(self) -> str:  # counts only: never a name or an id
         return "<Classlist %d learner(s)>" % len(self)

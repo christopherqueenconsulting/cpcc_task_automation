@@ -1087,7 +1087,7 @@ class MyColleges:
         so the MyColleges row is found by the same Org Defined ID. A student not on the roster is unmatched.
         """
         wanted = str(student_id or "").strip()
-        if not re.fullmatch(r"\d{5,12}", wanted):
+        if not re.fullmatch(r"\d{6,9}", wanted):
             return None
         return wanted if any(row["id"] == wanted for row in roster) else None
 

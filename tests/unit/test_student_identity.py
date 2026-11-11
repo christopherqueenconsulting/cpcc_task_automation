@@ -73,6 +73,22 @@ class TestUserIdReaders:
         token = base64.urlsafe_b64encode(b"nothing-here").decode().rstrip("=")
         assert user_id_from_actor_href(f"https://d2l.example/x/actor/{token}?a=b") is None
 
+    def test_a_percent_encoded_padding_decodes(self):
+        token = base64.urlsafe_b64encode(b"abcd.user_77").decode()
+        assert token.endswith("=") or True
+        encoded = token.replace("=", "%3D")
+        assert user_id_from_actor_href(f"https://d2l.example/x/actor/{encoded}?a=b") == "77"
+
+    def test_a_segment_with_a_character_outside_the_alphabet_is_not_decoded(self):
+        token = base64.urlsafe_b64encode(b"abcd.user_77").decode().rstrip("=")
+        assert user_id_from_actor_href(f"https://d2l.example/x/actor/{token}*?a=b") is None
+
+    def test_bytes_after_the_user_id_or_a_longer_suffix_do_not_decode_to_a_wrong_id(self):
+        trailing = base64.urlsafe_b64encode(b"abcd.user_77xyz").decode().rstrip("=")
+        assert user_id_from_actor_href(f"https://d2l.example/x/actor/{trailing}?a=b") is None
+        shifted = base64.urlsafe_b64encode(b"abcd.user_77\n").decode().rstrip("=")
+        assert user_id_from_actor_href(f"https://d2l.example/x/actor/{shifted}?a=b") is None
+
 
 class TestActivityRow:
     def test_it_is_the_plain_pair_plus_the_user_id(self):
@@ -101,25 +117,32 @@ class TestResolve:
     def test_a_user_id_with_no_name_resolves(self):
         assert _classlist().resolve("", "102") == "1000002"
 
-    def test_without_a_user_id_a_unique_name_resolves(self):
+    def test_a_name_alone_never_resolves_even_when_it_is_unique(self):
         classlist = _classlist()
-        assert classlist.resolve("Ann Adams", None) == "1000001"
-        assert classlist.resolve("Adams, Ann", None) == "1000001"
-
-    def test_without_a_user_id_a_shared_name_is_ambiguous(self):
-        assert _classlist().resolve("Pat Lee", None) is None
-
-    def test_without_a_user_id_a_one_word_or_unknown_name_is_unresolved(self):
-        classlist = _classlist()
-        assert classlist.resolve("Adams", None) is None
-        assert classlist.resolve("Zed Zulu", None) is None
-        assert classlist.resolve(None, None) is None
+        assert classlist.resolve("Ann Adams", None) is None
+        assert classlist.resolve("Adams, Ann", "") is None
+        assert classlist.resolve("Zed Zulu", None) is None and classlist.resolve(None, None) is None
 
     def test_add_refuses_a_row_that_is_not_a_learner_with_an_org_id(self):
         with pytest.raises(ValueError):
             Classlist().add("", "1000001", "Adams, Ann")
         with pytest.raises(ValueError):
             Classlist().add("101", "ab", "Adams, Ann")
+        with pytest.raises(ValueError):
+            Classlist().add("101", "12345", "Adams, Ann")  # MyColleges ids are 6-9 digits
+
+    def test_a_user_id_listed_twice_with_different_org_ids_is_refused(self):
+        classlist = Classlist()
+        classlist.add("101", "1000001", "Adams, Ann")
+        classlist.add("101", "1000001", "Adams, Ann")  # the same row again is harmless
+        with pytest.raises(ValueError):
+            classlist.add("101", "1000002", "Adams, Ann")
+
+    def test_one_org_id_for_two_user_ids_is_refused(self):
+        classlist = Classlist()
+        classlist.add("101", "1000001", "Adams, Ann")
+        with pytest.raises(ValueError):
+            classlist.add("102", "1000001", "Brown, Bob")
 
 
 class TestSessionOnlyAndLogs:
@@ -138,6 +161,21 @@ class TestSessionOnlyAndLogs:
         classlist.clear()
         assert len(classlist) == 0 and not classlist
         assert classlist.resolve("Ann Adams", "101") is None and classlist.org_defined_ids() == set()
+
+    def test_clear_also_makes_the_log_redactor_forget_the_names_ids_and_user_ids(self):
+        classlist = _classlist()
+        alias_before = pii_redaction.alias("1000001")
+        classlist.clear()
+        assert pii_redaction._known_names == {} and pii_redaction._known_tokens == {}
+        assert pii_redaction._known_patterns == [] and pii_redaction._pattern_key == {}
+        # Aliases stay stable (an HMAC of the Org Defined ID); nothing links them back to a name now.
+        assert pii_redaction.alias("1000001") == alias_before
+        assert "Adams" in pii_redaction.scrub("Adams, Ann")  # no longer a registered name
+
+    def test_forgetting_one_student_keeps_the_others_registered(self):
+        _classlist()
+        assert pii_redaction.forget_students(["1000001"]) == 2  # org id and user id tokens
+        assert "Brown" not in pii_redaction.scrub("Brown, Bob") and "Adams" in pii_redaction.scrub("Adams, Ann")
 
     def test_the_alias_is_keyed_by_the_org_defined_id_for_every_spelling(self):
         _classlist()

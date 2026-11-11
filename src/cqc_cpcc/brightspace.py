@@ -36,8 +36,8 @@ from cqc_cpcc.utilities.date import (
 )
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
-from cqc_cpcc.student_identity import (ActivityRow, Classlist, build_classlist, user_id_from_actor_href,
-                                        user_id_from_onclick)
+from cqc_cpcc.student_identity import (ORG_ID_RE, ActivityRow, Classlist, build_classlist,
+                                        user_id_from_actor_href, user_id_from_onclick)
 from cqc_cpcc.utilities.pii_redaction import alias, register_student, register_students
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
@@ -176,24 +176,30 @@ class BrightSpace_Course:
 
             if collect_attendance:
                 self.classlist = self._read_classlist()
-                self.get_attendance_from_assignments()
-                self.get_attendance_from_quizzes()
+                try:
+                    self.get_attendance_from_assignments()
+                    self.get_attendance_from_quizzes()
 
-                if eva_activity:
-                    try:
-                        self.eva_collection_result = self.get_eva_activity_completions(eva_activity)
-                    except Exception as error:  # EVA failures are isolated from ordinary attendance.
-                        if not self._browser_session_healthy():
-                            raise
-                        self.eva_collection_result = EVACompletionResult(
-                            status="incomplete", error_code=type(error).__name__,
-                        )
-                        logger.warning(
-                            "EVA completion collection failed for %s (%s); ordinary attendance continues.",
-                            self.get_course_and_section(), type(error).__name__,
-                        )
-                    if self.eva_collection_result.complete:
-                        self.eva_attendance_records = self.eva_collection_result.records
+                    if eva_activity:
+                        try:
+                            self.eva_collection_result = self.get_eva_activity_completions(eva_activity)
+                        except Exception as error:  # EVA failures are isolated from ordinary attendance.
+                            if not self._browser_session_healthy():
+                                raise
+                            self.eva_collection_result = EVACompletionResult(
+                                status="incomplete", error_code=type(error).__name__,
+                            )
+                            logger.warning(
+                                "EVA completion collection failed for %s (%s); ordinary attendance continues.",
+                                self.get_course_and_section(), type(error).__name__,
+                            )
+                        if self.eva_collection_result.complete:
+                            self.eva_attendance_records = self.eva_collection_result.records
+                finally:
+                    # Records now hold Org Defined IDs only: drop the name/id table (and the log redactor's copy)
+                    # whether or not collection finished.
+                    if self.classlist is not None:
+                        self.classlist.clear()
 
             if discover_eva_activities:
                 self.eva_activity_candidates = self.discover_eva_activities()
@@ -206,8 +212,6 @@ class BrightSpace_Course:
                 self._collect_withdrawals_if_applicable(force_withdrawals)
 
             self.close_course_tab()
-            if self.classlist is not None:
-                self.classlist.clear()  # records now hold Org Defined IDs only; drop the name/id table
             self.normalize_attendance_records()
             logger.info("Attendance records collected for %s date(s).", len(self.attendance_records))
         else:
@@ -1315,10 +1319,11 @@ class BrightSpace_Course:
                 name = next((line.strip() for line in str(entry.get("name") or "").splitlines() if line.strip()), "")
                 org = str(entry.get("org") or "").strip()
                 role = str(entry.get("role") or "").casefold()
-                row_ok = bool(user and name and re.fullmatch(r"\d{5,12}", org) and (not mail or mail == user))
+                row_ok = bool(user and name and ORG_ID_RE.fullmatch(org) and (not mail or mail == user))
                 if row_ok:
                     good.append({"user": user, "org": org, "name": name})
-                elif "learner" in role or "student" in role:
+                elif not re.search(r"instructor|assistant|designer|observer|guest", role):
+                    # Any row that is not explicitly a staff role and cannot be read could be a learner.
                     bad_learners += 1
             if bad_learners or not good:
                 raise _EVAReadIncomplete("classlist_rows_unreadable")
@@ -1326,8 +1331,7 @@ class BrightSpace_Course:
             logger.info("Classlist read for %s: %d learner(s) with an Org Defined ID.",
                         self.get_course_and_section(), len(classlist))
             return classlist
-        except (_EVAReadIncomplete, NoSuchElementException, TimeoutException,
-                StaleElementReferenceException, ValueError) as error:
+        except (_EVAReadIncomplete, WebDriverException, ValueError, TypeError, AttributeError) as error:
             code = error.code if isinstance(error, _EVAReadIncomplete) else type(error).__name__
             self._scrape_problem("classlist not read (%s): activity cannot be tied to students" % code)
             return None

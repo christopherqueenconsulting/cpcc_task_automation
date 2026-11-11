@@ -61,6 +61,13 @@ def _classlist(*names):
                             for n in chosen])
 
 
+def _r(name, date_text):
+    """An activity row as the reader returns it: the pair plus the learner's BrightSpace user id."""
+    from cqc_cpcc.student_identity import ActivityRow
+
+    return ActivityRow(name, date_text, {"Student One": "101", "Student Two": "102", "Student Three": "103"}[name])
+
+
 @pytest.fixture(autouse=True)
 def _clear_pii_registry():
     yield
@@ -134,8 +141,8 @@ def test_ordinary_completion_collects_all_pages_and_keeps_actual_completion_date
         ordinary_completion_course, activity_type):
     course = ordinary_completion_course
     course._snapshot_activity_page = MagicMock(side_effect=[
-        (("Student One", "10/19/2026"),),
-        (("Student Two", "10/27/2026"), ("Student One", "10/27/2026")),
+        (_r("Student One", "10/19/2026"),),
+        (_r("Student Two", "10/27/2026"), _r("Student One", "10/27/2026")),
     ])
     course._advance_activity_page = MagicMock(side_effect=[True, False])
     # The due date already made the activity eligible; an earlier completion
@@ -169,11 +176,11 @@ def test_ordinary_completion_enforces_course_bounds_but_keeps_prior_lookback_act
     course = ordinary_completion_course
     course.course_end_date = DT.datetime(2026, 10, 26)
     course._read_activity_rows = MagicMock(return_value=([
-        ("Student One", "08/16/2026"),
-        ("Student One", "08/17/2026"),
-        ("Student One", "10/19/2026"),
-        ("Student One", "10/26/2026"),
-        ("Student One", "10/27/2026"),
+        _r("Student One", "08/16/2026"),
+        _r("Student One", "08/17/2026"),
+        _r("Student One", "10/19/2026"),
+        _r("Student One", "10/26/2026"),
+        _r("Student One", "10/27/2026"),
     ], 1))
     course._collect_ordinary_activity_completions(["https://example.invalid/activity"], activity_type)
     assert course.attendance_records == {
@@ -581,7 +588,7 @@ def test_eva_quiz_reader_falls_back_from_attempt_logs_to_attempts(monkeypatch):
     course.date_range_start = DT.date(2026, 1, 1)
     course.date_range_end = DT.date(2026, 1, 31)
     errors = [_EVAReadIncomplete("completion_headers_unrecognized", 1, 0),
-              ([('Student One', '01/10/2026')], 1)]
+              ([_r("Student One", "01/10/2026")], 1)]
     course._read_activity_rows = MagicMock(side_effect=errors)
     course.click_max_results_select = MagicMock(return_value=True)
     monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
@@ -1485,9 +1492,9 @@ def test_eva_completion_returns_all_valid_distinct_days(activity_type, monkeypat
     course.eva_date = DT.date(2026, 10, 31)
     course.click_max_results_select = lambda _xpath: True
     rows = [
-        ("Student One", "10/31/2026"),
-        ("Student One", "10/31/2026"),
-        ("Student One", "10/30/2026"),
+        _r("Student One", "10/31/2026"),
+        _r("Student One", "10/31/2026"),
+        _r("Student One", "10/30/2026"),
     ]
     monkeypatch.setattr(course, "_read_activity_rows", lambda *_args: (rows, 2))
     monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
@@ -2294,3 +2301,68 @@ def test_an_eva_row_that_cannot_be_tied_to_a_student_makes_the_eva_read_incomple
 
     assert result.status == "incomplete" and result.records == {}
     assert result.error_code == "student_not_in_classlist"
+
+
+@pytest.mark.unit
+def test_a_classlist_row_that_cannot_be_read_counts_unless_its_role_is_explicitly_staff(monkeypatch):
+    # No usable Role column: an unreadable row could be a learner, so the classlist is rejected.
+    course = _classlist_course(monkeypatch, _classlist_data(
+        _row("101", "1000001", "Adams, Ann", role=""), _row("102", "", "Brown, Bob", role="")))
+    assert course._read_classlist() is None
+    assert "classlist_rows_unreadable" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("rows", [
+    [_row("101", "1000001", "Adams, Ann"), _row("101", "1000002", "Brown, Bob")],   # one user id, two org ids
+    [_row("101", "1000001", "Adams, Ann"), _row("102", "1000001", "Brown, Bob")],   # one org id, two user ids
+])
+def test_an_internally_inconsistent_classlist_is_rejected(monkeypatch, rows):
+    course = _classlist_course(monkeypatch, _classlist_data(*rows))
+    assert course._read_classlist() is None
+    assert "ValueError" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+def test_a_browser_script_error_while_reading_the_classlist_is_a_scrape_problem(monkeypatch):
+    from selenium.common.exceptions import JavascriptException
+
+    course = _classlist_course(monkeypatch, None)
+    course.driver.execute_script.side_effect = JavascriptException("synthetic script failure")
+    assert course._read_classlist() is None
+    assert "JavascriptException" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+def test_a_row_with_conflicting_user_ids_is_never_recorded(ordinary_completion_course):
+    from cqc_cpcc.student_identity import ActivityRow
+
+    course = ordinary_completion_course
+    # _row_user_id returns None for a row whose links hold two different ids; the name alone never resolves.
+    course._read_activity_rows = MagicMock(return_value=([ActivityRow("Student One", "10/20/2026", None)], 1))
+    course._collect_ordinary_activity_completions(["https://example.invalid/activity"], "assignment")
+    assert course.attendance_records == {}
+    assert len(course.scrape_problems) == 1
+
+
+@pytest.mark.unit
+def test_the_classlist_is_dropped_even_when_collection_raises():
+    args = (
+        "CSC-134-N851: C++ Programming", "Fall", "2026",
+        DT.datetime(2026, 8, 1), DT.datetime(2026, 8, 31),
+        DT.datetime(2026, 8, 1), DT.datetime(2026, 12, 1), MagicMock(), MagicMock(),
+    )
+    built = _classlist()
+    with patch("cqc_cpcc.brightspace.get_driver_wait", return_value=MagicMock()), \
+            patch.object(BrightSpace_Course, "open_course_tab", return_value=True), \
+            patch.object(BrightSpace_Course, "close_course_tab"), \
+            patch.object(BrightSpace_Course, "_read_classlist", return_value=built), \
+            patch.object(BrightSpace_Course, "get_attendance_from_assignments",
+                         side_effect=TimeoutException("synthetic")), \
+            patch.object(BrightSpace_Course, "get_attendance_from_quizzes"):
+        with pytest.raises(TimeoutException):
+            BrightSpace_Course(*args)
+    assert len(built) == 0  # cleared in the finally, and the redactor forgot them too
+    from cqc_cpcc.utilities import pii_redaction
+
+    assert pii_redaction._known_names == {} and pii_redaction._known_tokens == {}
