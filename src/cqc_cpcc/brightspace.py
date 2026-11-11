@@ -1027,7 +1027,10 @@ class BrightSpace_Course:
                     if len(cells) <= max(name_col, date_col):
                         # Per-user view: the learner row has one td and the name in its single th.
                         th_cells = row.find_elements(By.XPATH, "./th") if two_row_layout else []
-                        th_name = (th_cells[0].text or "").strip() if len(th_cells) == 1 else ""
+                        # The learner cell also holds extra lines after the name (read live 2026-11-10); only the
+                        # first line is the name, and a roster match needs every word of it.
+                        th_lines = (th_cells[0].text or "").splitlines() if len(th_cells) == 1 else []
+                        th_name = next((line.strip() for line in th_lines if line.strip()), "")
                         if th_name:
                             completion_rows += 1
                             pending_name = th_name

@@ -797,6 +797,20 @@ def test_every_date_row_under_a_learner_is_read_for_that_learner():
 
 
 @pytest.mark.unit
+def test_only_the_first_line_of_the_learner_cell_is_the_name():
+    # Live (2026-11-10): the learner th holds the name, then extra lines; a roster match needs every word.
+    rows = _live_per_user_rows(("Student, One\nSome extra line\nAnother extra - line", "Nov 9, 2026 10:06 PM"),
+                               ("\nStudent, Two\nextra", "Nov 8, 2026 9:00 AM"))
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+
+    page = course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+    assert page == (("Student, One", "Nov 9, 2026 10:06 PM"), ("Student, Two", "Nov 8, 2026 9:00 AM"))
+
+
+@pytest.mark.unit
 def test_a_date_row_before_any_learner_row_is_still_missing_a_student():
     rows = _live_per_user_rows(("Student One", "Nov 9, 2026 10:06 PM"))
     rows.insert(1, rows.pop(2))  # the date row now sits above its learner row

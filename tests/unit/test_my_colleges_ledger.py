@@ -131,6 +131,44 @@ class TestMatchStudentId:
         roster = [{"id": "1", "text": "Lee, Ann 1"}, {"id": "2", "text": "Leeson, Ann 2"}]
         assert MyColleges._match_student_id("Ann Lee", roster) == "1"
 
+    def test_a_substring_of_another_students_row_never_matches(self):
+        # An absent student must not be marked on someone whose words merely contain theirs.
+        roster = [{"id": "2", "text": "Leeson, Joanne 2"}]
+        assert MyColleges._match_student_id("Lee, Ann", roster) is None
+        assert MyColleges._match_student_id("Ann Lee", roster) is None
+
+    def test_the_right_row_wins_over_a_longer_surname_row(self):
+        roster = [{"id": "2", "text": "Leeson, Joanne 2"}, {"id": "1", "text": "Lee, Ann M. 1000001"}]
+        assert MyColleges._match_student_id("Lee, Ann", roster) == "1"
+
+    def test_a_one_word_name_cannot_identify_a_student(self):
+        assert MyColleges._match_student_id("Adams", ROSTER) is None
+        assert MyColleges._match_student_id("Ann, ", ROSTER) is None
+
+    def test_a_hyphenated_name_is_one_word_and_never_matches_a_part_of_it(self):
+        roster = [{"id": "1", "text": "Smith-Jones, Anne-Marie 1000001"}]
+        assert MyColleges._match_student_id("Anne-Marie Smith-Jones", roster) == "1"
+        assert MyColleges._match_student_id("Smith-Jones, Anne-Marie", roster) == "1"
+        # A different student whose words are parts of the hyphenated ones must not match.
+        assert MyColleges._match_student_id("Anne Smith", roster) is None
+        assert MyColleges._match_student_id("Marie Jones", roster) is None
+
+    def test_a_lone_initial_is_not_enough_to_match(self):
+        roster = [{"id": "1", "text": "Smith, Jane J. 123"}]
+        assert MyColleges._match_student_id("J Smith", roster) is None
+        assert MyColleges._match_student_id("Jane Smith", roster) == "1"
+
+    def test_a_curly_apostrophe_matches_a_straight_one(self):
+        roster = [{"id": "1", "text": "O'Brien, Pat 1000001"}]
+        assert MyColleges._match_student_id("Pat O\u2019Brien", roster) == "1"
+
+    def test_a_last_comma_first_name_matches_its_roster_row(self):
+        roster = [{"id": "1", "text": "Lee, Ann M. 1000001 Ann Lee"}, {"id": "2", "text": "Leeson, Ann 2"}]
+        assert MyColleges._match_student_id("Lee, Ann", roster) == "1"
+
+    def test_a_name_that_is_only_punctuation_matches_nothing(self):
+        assert MyColleges._match_student_id(" , ", ROSTER) is None
+
     def test_true_ambiguity_is_left_unmatched(self):
         roster = [{"id": "1", "text": "Lee, Ann 1"}, {"id": "2", "text": "Lee, Ann 2"}]
         assert MyColleges._match_student_id("Ann Lee", roster) is None

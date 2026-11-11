@@ -1081,28 +1081,22 @@ class MyColleges:
 
     @staticmethod
     def _match_student_id(full_name: str, roster: list[dict]) -> str | None:
-        """The roster id whose row holds every part of ``full_name``, if unique.
+        """The roster id whose row holds every word of ``full_name`` as a whole word, if unique.
 
-        Substring matching first (the old behaviour); when that is ambiguous --
-        "Ann Lee" vs "Ann Leeson" -- whole-word matching breaks the tie. Anything
-        still ambiguous is left unmatched rather than marking the wrong student.
+        Whole words only: a substring hit ("Lee" inside "Leeson", "Ann" inside "Joanne") must never pick
+        a student, or an absent student's activity would be marked on a different one. A hyphenated name
+        stays one word ("Anne-Marie"), so "Anne Smith" never matches "Smith-Jones, Anne-Marie". Punctuation
+        such as the comma in "Last, First" is ignored. A name needs at least two words of two or more
+        letters (a lone initial or a one-word name cannot identify a student), and anything still
+        ambiguous is left unmatched rather than marking the wrong student.
         """
-        parts = [part.lower() for part in (full_name or "").split() if part]
-        if not parts:
-            return None
+        def words(text: str) -> list[str]:
+            return re.findall(r"[\w'\-]+", (text or "").lower().replace("\u2019", "'"))
 
-        candidates = [
-            row for row in roster if all(part in row["text"].lower() for part in parts)
-        ]
-        if len(candidates) > 1:
-            candidates = [
-                row for row in candidates
-                if all(
-                    part in set(re.findall(r"[\w'\-]+", row["text"].lower()))
-                    for part in parts
-                )
-            ]
-        ids = {row["id"] for row in candidates}
+        parts = set(words(full_name))
+        if sum(len(part) >= 2 for part in parts) < 2:
+            return None
+        ids = {row["id"] for row in roster if parts <= set(words(row["text"]))}
         return ids.pop() if len(ids) == 1 else None
 
     def _student_selects(self, student_id: str) -> list:
