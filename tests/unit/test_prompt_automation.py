@@ -1003,6 +1003,9 @@ class TestReplayWiring:
         assert step["continue-on-error"] is True and step["timeout-minutes"] and jobs["detect"]["timeout-minutes"]
         assert "secrets." not in _json.dumps(jobs["detect"]) and "OPENROUTER" not in _json.dumps(step["env"])
         assert "env -u OPENROUTER_API_KEY -u OPENAI_API_KEY -u CQC_EVAL_BATCH" in step["run"]
+        upload = self._step(jobs, "detect", name="Upload the replay result")
+        # an upload failure would fail detect and leave prompt-eval/ab pending
+        assert upload["continue-on-error"] is True
         java = self._step(jobs, "detect", name="Set up Java (compile gate, replay only)")
         assert java["continue-on-error"] is True and java["timeout-minutes"]
         # The job limit holds the capture, the replay and their setup: a job timeout would leave prompt-eval/ab pending.
@@ -1025,7 +1028,8 @@ class TestReplayWiring:
         names = [s.get("name") for s in job["steps"]]
         # The run logs are printed only after the scan has passed over them, and never before the upload gate.
         assert names.index("Show the run logs (after the scan)") == names.index(scan["name"]) + 1
-        assert "pii_guard.py run-*.log" in scan["run"] and "tail" not in self._step(jobs, "record-raw", name="Run the suites once more and record the raw answers")["run"]
+        record = self._step(jobs, "record-raw", name="Run the suites once more and record the raw answers")
+        assert "pii_guard.py run-*.log" in scan["run"] and "tail" not in record["run"]
         assert "scripts/pii_guard.py" in scan["run"] and scan["env"]["MAX_KB"] and "-gt" in scan["run"]
         assert jobs["record-raw"]["permissions"] == {"contents": "read"}
 
@@ -1216,7 +1220,8 @@ class TestReportStateMachine:
                                     AB_RESULT="skipped", BASE_STATUS="not-run", REPLAY_MODE="on")
         assert state == "pending" and "could not be read" in comment
 
-    @pytest.mark.parametrize("cleared, shown", [("different", True), ("incomplete", True), ("@all", False), ("", False)])
+    @pytest.mark.parametrize("cleared, shown", [
+        ("different", True), ("incomplete", True), ("@all", False), ("", False)])
     def test_the_comment_says_when_replay_turned_the_fast_path_off(self, script, tmp_path, cleared, shown):
         _, comment = self._post(script, tmp_path, RUN_SUITES="x", BASE_REQUIRED="x", AB_RESULT="skipped",
                                 BASE_STATUS="not-run", REPLAY_CLEARED=cleared)

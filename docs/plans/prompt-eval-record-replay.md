@@ -49,7 +49,7 @@ raw-responses/<request-key>.json
 - Serialization is deterministic (sorted keys, compact separators, UTF-8, trailing newline), so two
   records of equal bodies are equal bytes.
 - Size: one case is a few KB of text, so a suite's directory is small next to the saved outputs.
-  S4 measures this on a real artifact and sets a cap before the workflow uploads it.
+  S4 ships a placeholder cap (`MAX_KB` 20480, not measured); set it from the first real artifact.
 - Data: bodies hold the model's answer to a synthetic eval case. The eval datasets are synthetic and
   `scripts/pii_guard.py` still runs on the repo, but the artifact is a CI artifact, not a commit.
   S2 confirms no real student text can reach a captured request: `record_replay.recording` calls
@@ -122,7 +122,7 @@ Each step is sized for one 20-minute run.
   command `prompt-ab-replay --suites S --ab-dir DIR --out OUT` writes `OUT/replay.json`
   (`{"status": "identical" | "different" | "unusable", "suites": {...}}`) and exits 0, 3 or 4 respectively. `DIR` is
   the base's A/B artifact: `raw-responses/` and `base/<suite>/raw_outputs.jsonl`. The status file is `replay.json`,
-  not `ab.json`: the real A/B artifact keeps its name, and S4 decides how `prompt-ab-decide` reads the replay.
+  not `ab.json`: the real A/B artifact keeps its name, and S4 does not feed it to `prompt-ab-decide`: the decision lives only in the `detect` job's fast-path step, which can only clear the capture's result.
   Concurrency is resolved by comparing a case's repeats as a sorted group (the base's repeats and the head's replayed
   repeats hold the same multiset of answers whatever order concurrent calls took). `different` and `unusable`
   both mean "run the full paid A/B"; only `identical` on every suite can pass. Batch mode, a dataset that is not
@@ -135,7 +135,7 @@ Each step is sized for one 20-minute run.
   records each suite the push runs once more (no judges, one store per suite, `pii_guard` scan, size cap, artifact
   `prompt-eval-raw-<run id>`); `detect` replays a request-identical PR on the newest record that is in the base's
   history; the `report` job prints fixed words from `replay-summary.json`; with `on` anything but `identical` on
-  every suite turns the fast path off. It follows `GitHub-Actions-Standard` (a timeout on every job, a step timeout on the replay and Java steps, no path filter on a required check). Open for the owner: the second paid run it adds on master (the
+  every suite turns the fast path off. It follows `GitHub-Actions-Standard` (a timeout on every job, a step timeout on the replay and Java steps of `detect`, no path filter on a required check). Open for the owner: the second paid run it adds on master (the
   recording cannot reuse the history run, which uses judges), the size cap (placeholder, unmeasured),
   and `report` first, `on` later. Christopher merges.
 - [x] **S5, docs:** `docs/PROMPTS.md` section "Record and replay for response-side changes" replaces the "Not

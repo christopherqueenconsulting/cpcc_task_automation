@@ -195,7 +195,7 @@ jobs:
               [ -n "${id}" ] || continue
               if [ ! -d "replay-in/${id}" ]; then
                 mkdir -p "replay-in/${id}"
-                gh run download "${id}" --repo "${REPO}" -n "prompt-eval-raw-${id}" -D "replay-in/${id}" 2>/dev/null || true
+                gh run download "${id}" --repo "${REPO}" -n "prompt-eval-raw-${id}" -D "replay-in/${id}" 2>/dev/null </dev/null || true
               fi
               if [ -d "replay-in/${id}/${s}/raw-responses" ]; then dir="replay-in/${id}/${s}"; sha="${head}"; break; fi
             done <<< "${runs}"
@@ -257,6 +257,8 @@ jobs:
 
       - name: Upload the replay result
         if: always() && steps.replay.outcome != 'skipped'
+        # Informational: an upload failure must not fail `detect` and leave prompt-eval/ab pending.
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: prompt-eval-replay-${{ github.run_id }}
