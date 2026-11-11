@@ -44,7 +44,7 @@ function host(el){const r=el.getRootNode&&el.getRootNode();return (r&&r.host)?(r
 function vis(el){try{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;}catch(e){return false;}}
 function a(el,n){return (el.getAttribute&&el.getAttribute(n))||'';}
 function short(t){return (t||'').replace(/\s+/g,' ').trim().slice(0,80);}
-const out={inputs:[],editors:[],buttons:[],rubric:[],selects:[],attach:[],dialogs:[]};
+const out={inputs:[],editors:[],buttons:[],rubric:[],rubric_tags:{},selects:[],attach:[],dialogs:[]};
 for(const el of deep(document)){
   const t=(el.tagName||'').toLowerCase();
   if(t==='input'||t==='d2l-input-number'||t==='d2l-input-text'||t==='textarea'){
@@ -66,6 +66,7 @@ for(const el of deep(document)){
   } else if(t==='select'){
     out.selects.push({aria_label:a(el,'aria-label'),options:[...el.querySelectorAll('option')].map(o=>short(o.textContent)).slice(0,10)});
   }
+  if(/rubric/.test(t)){const k=t+(vis(el)?':visible':':hidden');out.rubric_tags[k]=(out.rubric_tags[k]||0)+1;}
   if(/^attach$/i.test(a(el,'aria-label').trim()))out.attach.push({tag:t,visible:vis(el)});
   if(t==='d2l-dialog'||t==='d2l-dialog-confirm'||a(el,'role')==='dialog')
     out.dialogs.push({tag:t,title:a(el,'title'),opened:el.hasAttribute&&el.hasAttribute('opened')});
@@ -94,8 +95,44 @@ def _scrub(obj, names: list[str]):
     return walk(obj)
 
 
+def _poll(fn, timeout: float = 15.0, every: float = 0.5) -> bool:
+    """Poll ``fn`` until it returns truthy or ``timeout`` elapses (lazy-loaded Lit UI)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            if fn():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(every)
+    return False
+
+
+_HAS_RUBRIC_JS = r"""
+function* deep(root){
+  const s=[root.documentElement||root];
+  while(s.length){
+    const n=s.pop(); if(!n)continue; yield n;
+    if(n.shadowRoot)s.push(n.shadowRoot);
+    for(const c of (n.children||[]))s.push(c);
+  }
+}
+for(const el of deep(document)){
+  if(el.getAttribute&&el.getAttribute('role')==='radiogroup')return true;
+}
+return false;
+"""
+
+
 def _product_checks(driver) -> dict:
-    """What the shipping locators decide on the current page (read-only)."""
+    """What the shipping locators decide on the current page (read-only).
+
+    Waits for each lazy-loaded control (write targets, Attach, rubric) before the
+    locators run, so a miss means "not on the page", not "not rendered yet".
+    """
+    targets = wb._wait_for_write_targets(driver, timeout=20, require_feedback=True)
+    _poll(lambda: wb._locate_attach_control(driver), timeout=10)
+    rubric_seen = _poll(lambda: driver.execute_script(_HAS_RUBRIC_JS), timeout=15)
     chosen = None
     try:
         el = driver.execute_script(wb._FIND_SCORE_INPUT_JS, list(wb.SCORE_INPUT_SELECTORS))
@@ -104,7 +141,8 @@ def _product_checks(driver) -> dict:
     except Exception as e:  # noqa: BLE001
         chosen = f"error: {e}"
     return {
-        "targets_after_wait": wb._wait_for_write_targets(driver, timeout=20, require_feedback=True),
+        "targets_after_wait": targets,
+        "rubric_radiogroups_seen": rubric_seen,
         "score_input_chosen_aria_label": chosen,
         "save_draft_found": wb._locate_save_draft(driver),
         "attach_control_found": wb._locate_attach_control(driver),
@@ -168,13 +206,21 @@ def main() -> int:
         else:
             _open_and_login(driver, wait, args.url, progress, None)
             report["landing_url_path"] = driver.current_url.split("?")[0]
-            report["add_feedback_files_found"] = wb._locate_add_feedback_files_control(driver)
             users_url = wb._submissions_users_url(args.url)
             if "folder_submissions_users" not in (driver.current_url or "").lower():
                 driver.get(users_url)
                 wait_for_ajax(driver)
-            report["add_feedback_files_found_on_users_view"] = (
-                wb._locate_add_feedback_files_control(driver))
+            report["users_view_url_path"] = driver.current_url.split("?")[0]
+            report["add_feedback_files_found_on_users_view"] = _poll(
+                lambda: wb._locate_add_feedback_files_control(driver), timeout=20)
+            inv = _inventory(driver)
+            # Page-level controls only: keep buttons that look like actions, drop row-level ones.
+            keep = re.compile(r"feedback|download|publish|add|import|upload|more|actions|"
+                              r"evaluat|rubric|email|filter|search|retract|save", re.I)
+            report["users_view_buttons"] = sorted({
+                (b.get("text") or b.get("aria_label") or "") + (" [visible]" if b.get("visible") else " [hidden]")
+                for b in inv.get("buttons", [])
+                if keep.search(b.get("text") or b.get("aria_label") or "")})
             _set_max_results_per_page(driver, wait, progress)
             learners = wb._gather_assignment_learners(driver, users_url)
             names = [lr.get("name", "") for lr in learners]
