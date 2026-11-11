@@ -165,10 +165,59 @@ def _inventory(driver) -> dict:
         return {"error": str(e)}
 
 
+# Everything visible inside the "Add Feedback Files" dialog frame: controls and short
+# headings/messages only (no values, no file names).
+_DIALOG_INVENTORY_JS = r"""
+function vis(el){try{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;}catch(e){return false;}}
+function short(t){return (t||'').replace(/\s+/g,' ').trim().slice(0,100);}
+const out={controls:[],text:[]};
+const SEL=['button','a','input','select','label','h1','h2','h3','h4','[role=alert]',
+  '[role=status]','.vui-heading-1','.vui-heading-2','.d2l-msg-container-text'].join(',');
+for(const el of document.querySelectorAll(SEL)){
+  const t=el.tagName.toLowerCase();
+  const rec={tag:t,type:el.getAttribute('type')||'',text:short(el.textContent||el.value||el.getAttribute('aria-label')),
+            visible:vis(el),disabled:!!el.disabled,checked:el.checked===undefined?null:!!el.checked};
+  if(['button','a','input','select'].includes(t))out.controls.push(rec);else out.text.push(rec);
+}
+return out;
+"""
+
+
+def _inspect_import_dialog(driver) -> dict:
+    """Open "Add Feedback Files", inventory the dialog frame, then Cancel. Uploads nothing."""
+    from selenium.webdriver.common.by import By
+    res: dict = {"opened": False}
+    try:
+        res["clicked"] = bool(driver.execute_script(wb._CLICK_ADD_FEEDBACK_FILES_JS))
+        time.sleep(3)
+        driver.switch_to.default_content()
+        frames = driver.find_elements(By.TAG_NAME, "iframe")
+        idx = [i for i, f in enumerate(frames)
+               if (f.get_attribute("title") or "") == "Add Feedback Files"]
+        res["dialog_frames"] = len(idx)
+        if idx:
+            driver.switch_to.frame(frames[idx[-1]])
+            res["opened"] = True
+            res["inventory"] = driver.execute_script(_DIALOG_INVENTORY_JS)
+            res["cancel_clicked"] = bool(driver.execute_script(wb._CLICK_TEXT_EXACT_JS, "Cancel"))
+            time.sleep(1)
+    except Exception as e:  # noqa: BLE001
+        res["error"] = str(e)
+    finally:
+        try:
+            driver.switch_to.default_content()
+        except Exception:  # noqa: BLE001
+            pass
+    return res
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", required=True, help="BrightSpace assignment or quiz URL")
+    ap.add_argument("--import-dialog", action="store_true",
+                    help="Assignment route: also open the Add Feedback Files dialog, "
+                         "inventory it and Cancel (uploads nothing)")
     ap.add_argument("--learners", type=int, default=2,
                     help="How many evaluation pages to inspect (default 2)")
     args = ap.parse_args()
@@ -230,6 +279,8 @@ def main() -> int:
                 (b.get("text") or b.get("aria_label") or "") + (" [visible]" if b.get("visible") else " [hidden]")
                 for b in inv.get("buttons", [])
                 if keep.search(b.get("text") or b.get("aria_label") or "")})
+            if args.import_dialog:
+                report["import_dialog"] = _inspect_import_dialog(driver)
             _set_max_results_per_page(driver, wait, progress)
             learners = wb._gather_assignment_learners(driver, users_url)
             names = [lr.get("name", "") for lr in learners]
@@ -240,6 +291,10 @@ def main() -> int:
                 if page["opened"]:
                     page["checks"] = _product_checks(driver)
                     page["inventory"] = _inventory(driver)
+                    # Existing feedback attachments show a "Remove Attachment: <file>" control.
+                    page["feedback_attachment_count"] = sum(
+                        1 for b in page["inventory"].get("buttons", [])
+                        if (b.get("aria_label") or "").startswith("Remove Attachment"))
                 report["pages"].append(page)
                 progress(f"inspected learner_{i}")
     finally:

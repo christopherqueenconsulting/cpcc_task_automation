@@ -829,6 +829,76 @@ def test_import_feedback_zip_missing_button_returns_false(mocker, tmp_path):
     assert wb.import_feedback_zip(driver, "/no/such/file.zip") is False
 
 
+def _import_driver(listed: bool, dialog_text: str = ""):
+    """A driver that walks the Add Feedback Files dialog; scripts answer by identity."""
+    from selenium.webdriver.common.by import By
+    iframe = MagicMock()
+    iframe.get_attribute.return_value = "Add Feedback Files"
+    clicked: list = []
+    driver = MagicMock()
+
+    def script(js, *args):
+        if js is wb._CLICK_ADD_FEEDBACK_FILES_JS:
+            return True
+        if js is wb._FILE_LISTED_JS:
+            return listed
+        if js is wb._CLICK_TEXT_EXACT_JS:
+            clicked.append(args[0])
+            return True
+        if js is wb._DIALOG_TEXT_JS:
+            return dialog_text
+        return None
+    driver.execute_script.side_effect = script
+    driver.find_elements.side_effect = lambda by, value: (
+        [iframe] if (by == By.TAG_NAME and value == "iframe")
+        else [MagicMock()] if ("addbuttons" in value or "input[type=file]" in value) else [])
+    return driver, clicked
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_refuses_when_zip_never_lists(mocker, tmp_path):
+    """No file queued in the dialog: do not click Add and do not claim success."""
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK\x03\x04")
+    driver, clicked = _import_driver(listed=False)
+    mocker.patch("time.sleep")
+    assert wb.import_feedback_zip(driver, str(z)) is False
+    assert clicked == []
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_fails_when_dialog_reports_error(mocker, tmp_path):
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK\x03\x04")
+    driver, clicked = _import_driver(listed=True, dialog_text="Error: no matching folders found")
+    mocker.patch("time.sleep")
+    msgs: list = []
+    assert wb.import_feedback_zip(driver, str(z), msgs.append) is False
+    assert clicked == ["Add"]
+    assert any("dialog after Add" in m and "Error" in m for m in msgs)
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_logs_dialog_text_on_success(mocker, tmp_path):
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK\x03\x04")
+    driver, _ = _import_driver(listed=True, dialog_text="Upload complete")
+    mocker.patch("time.sleep")
+    msgs: list = []
+    assert wb.import_feedback_zip(driver, str(z), msgs.append) is True
+    assert any("Upload complete" in m for m in msgs)
+
+
+@pytest.mark.unit
+def test_wait_for_feedback_attachment(mocker):
+    mocker.patch("time.sleep")
+    driver = MagicMock()
+    driver.execute_script.side_effect = [0, 0, 1]
+    assert wb._wait_for_feedback_attachment(driver, timeout=5) is True
+    driver.execute_script.side_effect = None
+    driver.execute_script.return_value = 0
+    assert wb._wait_for_feedback_attachment(driver, timeout=1) is False
+    driver.execute_script.return_value = MagicMock()   # not an int: never counts
+    assert wb._wait_for_feedback_attachment(driver, timeout=1) is False
+
+
 @pytest.mark.unit
 def test_import_assignment_feedback_docs_marks_outcomes(mocker, tmp_path):
     """Live import: submitters with a doc are flagged attached+saved; others noted."""
@@ -899,6 +969,7 @@ def test_push_assignment_grades_attach_mode_uses_bulk_import(mocker, tmp_path):
     mocker.patch.object(wb, "_gather_assignment_learners",
                         return_value=[{"name": "Jane", "userId": "7"}])
     mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+    mocker.patch.object(wb, "_wait_for_feedback_attachment", return_value=True)
     write = mocker.patch.object(wb, "_write_one_student")
     item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
                              feedback_doc_path=str(doc))
@@ -910,6 +981,37 @@ def test_push_assignment_grades_attach_mode_uses_bulk_import(mocker, tmp_path):
     write.assert_called_once()
     assert write.call_args.args[-1] == "none"
     assert report.outcomes[0].feedback_attached is True
+    assert not report.warnings
+
+
+@pytest.mark.unit
+def test_push_assignment_grades_flags_import_that_attached_nothing(mocker, tmp_path):
+    """The dialog said success but the learner's page has no attachment: report it."""
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
+    bulk_report = wb.GradeWriteReport(route="assignment", dry_run=False)
+    bulk_report.outcomes.append(wb.StudentWriteOutcome(
+        "1-2 - Jane", "Jane", matched=True, fields_found=True, saved=True,
+        feedback_attached=True, note="feedback doc imported as draft"))
+    mocker.patch.object(wb, "_import_assignment_feedback_docs", return_value=bulk_report)
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._set_max_results_per_page")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax")
+    mocker.patch.object(wb, "_gather_assignment_learners",
+                        return_value=[{"name": "Jane", "userId": "7"}])
+    mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+    mocker.patch.object(wb, "_wait_for_feedback_attachment", return_value=False)
+    mocker.patch.object(wb, "_write_one_student")
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+    report = wb._push_assignment_grades(MagicMock(), MagicMock(), "url", [item],
+                                        lambda *_: None, None, dry_run=False,
+                                        feedback_mode="attach")
+    out = report.outcomes[0]
+    assert out.feedback_attached is False
+    assert "NO attachment is on this learner's page" in out.note
+    assert "imported as draft" not in out.note      # no contradictory success text left
+    assert any("did not attach" in w for w in report.warnings)
+    assert not report.complete
 
 
 @pytest.mark.unit

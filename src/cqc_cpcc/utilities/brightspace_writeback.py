@@ -769,6 +769,8 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
                 outcome.feedback_attached = b.feedback_attached
                 if b.note:
                     outcome.note = f"{outcome.note}; feedback doc: {b.note}"
+        if not dry_run:
+            _verify_imported_attachments(driver, wait, url, matches, report, progress)
     return report
 
 
@@ -2017,6 +2019,82 @@ return false;
 """
 
 
+# Collapsed text of the current (dialog) frame, to log what BrightSpace said after "Add".
+_DIALOG_TEXT_JS = r"""
+return document.body ? document.body.innerText.replace(/\s+/g,' ').trim().slice(0,300) : '';
+"""
+# Words in the dialog text that mean the import was refused.
+_IMPORT_ERROR_RE = re.compile(
+    r"\b(error|unable|unsuccessful|failed|invalid|not (?:found|valid|matched)|no (?:matching|valid))\b",
+    re.I)
+
+# Number of "Remove Attachment: <file>" controls (one per attached feedback file) on an
+# evaluation page, crossing shadow roots. VERIFIED LIVE 2026-11-11: an evaluation page with
+# an attached feedback .docx shows exactly this control; one without shows none.
+_FEEDBACK_ATTACHMENT_COUNT_JS = r"""
+function* deep(root){
+  const s=[root.documentElement||root];
+  while(s.length){
+    const n=s.pop(); if(!n)continue; yield n;
+    if(n.shadowRoot)s.push(n.shadowRoot);
+    for(const c of (n.children||[]))s.push(c);
+  }
+}
+let n=0;
+for(const el of deep(document)){
+  const al=((el.getAttribute&&el.getAttribute('aria-label'))||'');
+  if(al.indexOf('Remove Attachment')===0) n++;
+}
+return n;
+"""
+
+
+def _wait_for_feedback_attachment(driver, timeout: float = 8.0) -> bool:
+    """True once the open evaluation page shows an attached feedback file."""
+    import time as _t
+    for _ in range(max(int(timeout / 0.5), 1)):
+        try:
+            n = driver.execute_script(_FEEDBACK_ATTACHMENT_COUNT_JS)
+        except Exception:  # noqa: BLE001
+            n = 0
+        if isinstance(n, int) and n > 0:
+            return True
+        _t.sleep(0.5)
+    return False
+
+
+def _verify_imported_attachments(driver, wait, url, matches, report, progress=_noop) -> None:
+    """Confirm each "imported" feedback doc is really attached on the learner's own page.
+
+    The import dialog's "success" proved nothing (a full class once reported imported with
+    no attachments), so trust only a "Remove Attachment" control on the evaluation page. A
+    learner without one is downgraded (``feedback_attached`` False, noted) and a single
+    warning is added, which also makes ``report.complete`` False.
+    """
+    by_key = {o.student_key: o for o in report.outcomes}
+    missing = 0
+    for m in matches:
+        outcome = by_key.get(m.item.student_key)
+        if outcome is None or not outcome.feedback_attached:
+            continue
+        if (_open_assignment_evaluation(driver, wait, url, m.learner)
+                and _wait_for_feedback_attachment(driver)):
+            continue
+        outcome.feedback_attached = False
+        failed = "feedback doc: import reported success but NO attachment is on this learner's page"
+        outcome.note = (outcome.note.replace("feedback doc: feedback doc imported as draft", failed)
+                        if "feedback doc imported as draft" in outcome.note
+                        else f"{outcome.note}; {failed}")
+        missing += 1
+    progress(f"Verified feedback attachments on learner pages: {missing} missing")
+    if missing:
+        report.warnings.append(
+            f"{missing} learner(s) have no feedback attachment on their page after the "
+            "'Add Feedback Files' import, so those docs did not attach. Scores were still "
+            "saved as drafts. Re-run delivery with “Add feedback directly”, or attach "
+            "the docs manually.")
+
+
 def import_feedback_zip(driver, zip_path: str, progress=_noop) -> bool:
     """Bulk-import ``zip_path`` via the dropbox "Add Feedback Files" dialog.
 
@@ -2069,12 +2147,26 @@ def import_feedback_zip(driver, zip_path: str, progress=_noop) -> bool:
             return False
         inp.send_keys(abspath)
 
+        listed = False
         for _ in range(60):  # up to ~30s for larger ZIPs
             if driver.execute_script(_FILE_LISTED_JS, fname):
+                listed = True
                 break
             _t.sleep(0.5)
-        driver.execute_script(_CLICK_TEXT_EXACT_JS, "Add")
+        if not listed:
+            # Clicking Add with nothing queued imports nothing yet used to report success.
+            progress("bulk import: the ZIP never showed in the dialog — Add not clicked")
+            return False
+        if not driver.execute_script(_CLICK_TEXT_EXACT_JS, "Add"):
+            progress("bulk import: 'Add' button not found in the dialog")
+            return False
         _t.sleep(4.0)
+        # Record what the dialog says after Add (diagnostic) and refuse an error message.
+        said = driver.execute_script(_DIALOG_TEXT_JS)
+        if isinstance(said, str) and said.strip():
+            progress(f"bulk import dialog after Add: {said.strip()[:200]}")
+            if _IMPORT_ERROR_RE.search(said):
+                return False
         driver.switch_to.default_content()
         return True
     except Exception as e:  # noqa: BLE001
