@@ -1,0 +1,22 @@
+[00:43:47] started the run; waiting for the browser to open
+[00:44:03] PASS opens on Tab snapshots ['Tab snapshots', 'Tab 1']
+[00:44:03] PASS no viewer is loaded until asked for 
+[00:44:07] PASS Tab snapshots stay fresh in the default view 
+[00:44:09] PASS iframe url asks the noVNC client to be view-only (a client flag, not a lock) 
+[00:44:09] PASS no login or url typed by the user 
+[00:44:16] PASS noVNC canvas has drawn pixels (not blank) {"w": 1920, "h": 1080, "colours": 908, "nonDark": 21374}
+[00:44:16] PASS iframe screenshot is not one flat colour 912 colours, 38.0% not the main colour
+[00:44:24] PASS iframe was not reloaded by the polling refresh 
+[00:44:37] CPU B running, viewer open       {"container_cpu_pct_median": 66.5, "container_mem": "640MiB", "streamlit_server_cpu_pct": 11.2, "viewing_browser_cpu_pct": 35.7, "window_seconds": 13.2}
+[00:44:39] PASS viewer closed in Log view 
+[00:44:52] CPU A running, no viewer         {"container_cpu_pct_median": 36.8, "container_mem": "626.2MiB", "streamlit_server_cpu_pct": 16.8, "viewing_browser_cpu_pct": 5.2, "window_seconds": 13.1}
+[00:45:13] PASS Pause button gives 'Paused since HH:MM ET' 
+[00:45:13] PASS run is frozen while paused clicks: before=47 at-pause=47 +3s=47 +13s=47 (lag 0)
+[00:45:17] PASS browser stays live while paused (page timer keeps ticking in the viewer) 
+[00:45:17] PASS viewer iframe stays mounted while paused 
+[00:45:31] CPU C paused, viewer open        {"container_cpu_pct_median": 14.2, "container_mem": "632.5MiB", "streamlit_server_cpu_pct": 9.4, "viewing_browser_cpu_pct": 43.1, "window_seconds": 13.5}
+[00:45:46] CPU D paused, no viewer          {"container_cpu_pct_median": 3.9, "container_mem": "614.3MiB", "streamlit_server_cpu_pct": 16.9, "viewing_browser_cpu_pct": 4.7, "window_seconds": 13.2}
+[00:45:50] PASS Tab 2 chosen ['Tab snapshots', 'Tab 2']
+[00:45:57] PASS view and tab are kept after a rerun ['Tab snapshots', 'Tab 2']
+[00:46:00] PASS Resume carries on clicks 47 -> 48
+[00:46:00] PASS Pause is offered again 
