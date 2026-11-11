@@ -780,7 +780,21 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
         # import would otherwise change feedback a student can already see.
         skipped = {o.student_key for o in report.outcomes
                    if o.already_published and not update_published}
-        import_items = [it for it in doc_items if it.student_key not in skipped]
+        dropbox = _dropbox_id(url)
+        match_by_key = {m.item.student_key: m for m in matches}
+        # BrightSpace matches a bulk-import folder on "<userId>-<dropboxId> - <name>", so a doc
+        # can only go to a learner we matched (we need their user id) on a URL with a db id.
+        import_items = [it for it in doc_items
+                        if it.student_key not in skipped and it.student_key in match_by_key]
+        if doc_items and not dropbox:
+            report.warnings.append(
+                "The assignment URL has no db=<dropbox id>, so the feedback ZIP folders cannot "
+                "be named the way BrightSpace expects; no feedback docs were imported.")
+            import_items = []
+        folder_names = {
+            it.student_key: bulk_feedback_folder_name(
+                match_by_key[it.student_key].learner.get("userId"), dropbox, it.display_name)
+            for it in import_items}
         bulk_by_key: dict = {}
         if import_items:
             try:
@@ -792,7 +806,7 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
                 driver, url, import_items, import_items,
                 GradeWriteReport(route="assignment", dry_run=dry_run,
                                  feedback_mode=feedback_mode),
-                progress, dry_run)
+                progress, dry_run, folder_names=folder_names)
             report.warnings.extend(bulk.warnings)
             bulk_by_key = {o.student_key: o for o in bulk.outcomes}
         for outcome in report.outcomes:
@@ -2042,7 +2056,9 @@ def _attach_feedback_file(driver, path: str, progress=_noop) -> bool:
 # navigation. It only works for SUBMITTERS (a non-submitter has no download ID and is
 # silently skipped by BrightSpace). Scores/rubric are then written per student by
 # _push_assignment_grades (feedback_mode="none").
-def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None) -> Optional[str]:
+def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None, *,
+                            folder_names: Optional[dict] = None,
+                            file_name: Optional[str] = None) -> Optional[str]:
     """Bundle per-student feedback ``.docx`` files into a ZIP for bulk import.
 
     Each doc is placed under ``{student_key}/{basename}`` where ``student_key`` is the
@@ -2053,6 +2069,10 @@ def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None)
         feedback_docs: ``{student_key: docx_path}``. Entries whose path is falsy or does
             not exist on disk are skipped.
         out_path: Destination ZIP path; a temp file is created when omitted.
+        folder_names: Optional ``{student_key: folder name}`` overriding the ZIP folder a
+            doc goes in (see :func:`bulk_feedback_folder_name`).
+        file_name: Optional name every doc gets inside its folder (default: its own
+            basename, which for a temp file is not something a student should see).
 
     Returns:
         The ZIP path, or ``None`` when no readable docs were provided.
@@ -2068,8 +2088,34 @@ def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None)
         os.close(fd)
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for student_key, path in entries:
-            zf.write(path, f"{student_key}/{os.path.basename(path)}")
+            folder = (folder_names or {}).get(student_key, student_key)
+            zf.write(path, f"{folder}/{file_name or os.path.basename(path)}")
     return out_path
+
+
+# The ZIP folder name BrightSpace's "Add Feedback Files" matches on. VERIFIED LIVE 2026-11-11
+# (one learner, throwaway file, drafts only), the download's own folder being
+# "<userId>-<dropboxId> - <name> - <date time>":
+#   "<userId>-<dropboxId> - <name> - <date time>/"  attached
+#   "<userId>-<dropboxId> - <name>/"                attached   (no date needed)
+#   "<userId>-<dropboxId>/"                         NOT attached: "Distribute Feedback ...
+#                                                   Identifiers were not found on these files"
+# The grader strips the id and date from its student key (zip_grading_utils), so the folder
+# is rebuilt here from the learner's page user id, the dropbox id in the URL and the name.
+BULK_FEEDBACK_FILE_NAME = "Feedback.docx"
+
+
+def _dropbox_id(url: str) -> str:
+    """The ``db=<id>`` (dropbox folder id) of an assignment URL, or ``""``."""
+    found = re.search(r"[?&]db=(\d+)", url or "")
+    return found.group(1) if found else ""
+
+
+def bulk_feedback_folder_name(user_id, dropbox_id, name: str) -> str:
+    """``"<userId>-<dropboxId> - <name>"``, with characters a ZIP folder can't hold removed."""
+    clean = re.sub(r'[\\/:*?"<>|]+', " ", name or "")
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return f"{user_id}-{dropbox_id} - {clean}"
 
 
 # Deep-scan (crossing shadow roots) for the submissions-page "Add Feedback Files"
@@ -2118,10 +2164,10 @@ _IMPORT_ERROR_RE = re.compile(
     r"\b(error|unable|unsuccessful|failed|invalid|not (?:found|valid|matched)|no (?:matching|valid))\b",
     re.I)
 
-# Number of "Remove Attachment: <file>" controls (one per attached feedback file) on an
-# evaluation page, crossing shadow roots. VERIFIED LIVE 2026-11-11: an evaluation page with
-# an attached feedback .docx shows exactly this control; one without shows none.
-_FEEDBACK_ATTACHMENT_COUNT_JS = r"""
+# File names of the feedback attachments on an evaluation page: one "Remove Attachment:
+# <file>" control per attached file, crossing shadow roots. VERIFIED LIVE 2026-11-11: a page
+# with an attached feedback .docx shows exactly this control; one without shows none.
+_FEEDBACK_ATTACHMENT_NAMES_JS = r"""
 function* deep(root){
   const s=[root.documentElement||root];
   while(s.length){
@@ -2130,27 +2176,57 @@ function* deep(root){
     for(const c of (n.children||[]))s.push(c);
   }
 }
-let n=0;
+const names=[];
 for(const el of deep(document)){
   const al=((el.getAttribute&&el.getAttribute('aria-label'))||'');
-  if(al.indexOf('Remove Attachment')===0) n++;
+  if(al.indexOf('Remove Attachment')===0) names.push(al.replace('Remove Attachment:','').trim());
 }
-return n;
+return names;
 """
 
 
-def _wait_for_feedback_attachment(driver, timeout: float = 8.0) -> bool:
-    """True once the open evaluation page shows an attached feedback file."""
+def _wait_for_feedback_attachment(driver, timeout: float = 8.0, name: Optional[str] = None) -> bool:
+    """True once the open evaluation page shows an attached feedback file.
+
+    With ``name``, only an attachment of exactly that file name counts, so a learner who
+    already had some other attachment is not mistaken for one whose import worked.
+    """
     import time as _t
+    want = (name or "").strip().lower()
     for _ in range(max(int(timeout / 0.5), 1)):
         try:
-            n = driver.execute_script(_FEEDBACK_ATTACHMENT_COUNT_JS)
+            names = driver.execute_script(_FEEDBACK_ATTACHMENT_NAMES_JS)
         except Exception:  # noqa: BLE001
-            n = 0
-        if isinstance(n, int) and n > 0:
-            return True
+            names = []
+        if isinstance(names, list):
+            if want and any(str(n).strip().lower() == want for n in names):
+                return True
+            if not want and names:
+                return True
         _t.sleep(0.5)
     return False
+
+
+_IMPORT_BUSY_RE = re.compile(r"\b(processing|loading|uploading)\b", re.I)
+
+
+def _wait_import_done(driver, timeout: float = 120.0) -> str:
+    """Poll the Add Feedback Files dialog until BrightSpace stops saying it is working.
+
+    Returns the dialog's last text. A dialog frame that is gone (closed after the import)
+    ends the wait; a ``timeout`` that elapses with the dialog still busy also ends it.
+    """
+    import time as _t
+    said = ""
+    for _ in range(max(int(timeout), 1)):
+        _t.sleep(1.0)
+        try:
+            said = driver.execute_script(_DIALOG_TEXT_JS)
+        except Exception:  # noqa: BLE001 - the frame detached: the dialog closed, so it is done
+            return said if isinstance(said, str) else ""
+        if not (isinstance(said, str) and _IMPORT_BUSY_RE.search(said)):
+            return said if isinstance(said, str) else ""
+    return said if isinstance(said, str) else ""
 
 
 def _verify_imported_attachments(driver, wait, url, matches, report, progress=_noop) -> None:
@@ -2168,7 +2244,7 @@ def _verify_imported_attachments(driver, wait, url, matches, report, progress=_n
         if outcome is None or not outcome.feedback_attached:
             continue
         if (_open_assignment_evaluation(driver, wait, url, m.learner)
-                and _wait_for_feedback_attachment(driver)):
+                and _wait_for_feedback_attachment(driver, name=BULK_FEEDBACK_FILE_NAME)):
             continue
         outcome.feedback_attached = False
         failed = "feedback doc: import reported success but NO attachment is on this learner's page"
@@ -2250,9 +2326,10 @@ def import_feedback_zip(driver, zip_path: str, progress=_noop) -> bool:
         if not driver.execute_script(_CLICK_TEXT_EXACT_JS, "Add"):
             progress("bulk import: 'Add' button not found in the dialog")
             return False
-        _t.sleep(4.0)
+        # BrightSpace unpacks the ZIP server-side ("Processing Extracted Files... Loading...",
+        # seen live 2026-11-11); leaving before it finishes can cancel the import.
+        said = _wait_import_done(driver)
         # Record what the dialog says after Add (diagnostic) and refuse an error message.
-        said = driver.execute_script(_DIALOG_TEXT_JS)
         if isinstance(said, str) and said.strip():
             progress(f"bulk import dialog after Add: {said.strip()[:200]}")
             if _IMPORT_ERROR_RE.search(said):
@@ -2271,13 +2348,16 @@ def import_feedback_zip(driver, zip_path: str, progress=_noop) -> bool:
 
 
 def _import_assignment_feedback_docs(driver, url, items, doc_items, report,
-                                     progress, dry_run) -> GradeWriteReport:
+                                     progress, dry_run,
+                                     folder_names: Optional[dict] = None) -> GradeWriteReport:
     """Attach-mode assignment delivery: one bulk "Add Feedback Files" ZIP import.
 
-    Builds a ZIP of ``{student_key}/Feedback.docx`` from every item that has a doc,
-    imports it as draft feedback (matched to submitters by the leading submission-ID),
-    and records a per-student outcome. Scores/rubric are NOT written here — run inline
-    mode for those. In dry-run the ZIP is built and reported but never uploaded.
+    Builds a ZIP from every item that has a doc and imports it as draft feedback. With
+    ``folder_names`` (``{student_key: "<userId>-<dropboxId> - <name>"}``, see
+    :func:`bulk_feedback_folder_name`) each doc goes in that folder as ``Feedback.docx``,
+    the layout BrightSpace matches to a learner; without it the grader's student key is
+    the folder name (which BrightSpace cannot match). Records a per-student outcome.
+    Scores/rubric are NOT written here. In dry-run the ZIP is built but never uploaded.
     """
     import os
 
@@ -2307,7 +2387,9 @@ def _import_assignment_feedback_docs(driver, url, items, doc_items, report,
         return report
 
     zip_path = build_feedback_docs_zip(
-        {it.student_key: it.feedback_doc_path for it in available_doc_items})
+        {it.student_key: it.feedback_doc_path for it in available_doc_items},
+        folder_names=folder_names,
+        file_name=BULK_FEEDBACK_FILE_NAME if folder_names else None)
     if not zip_path:
         report.warnings.append("No feedback .docx files were available to import.")
         for it in items:
