@@ -247,6 +247,25 @@ live read-only quiz (qi=<id> ou=<id>):
   - Plain `<a href>` `fileId`/`viewFile`/`download` links kept as a fallback.
   - Question text: `.d2l-html-block-rendered`.
 
+## Grade write-back — published grades and rollback (2026-11-11)
+
+- A grade that is already **published** has no Save Draft: the evaluation page shows
+  only **Update** and **Retract**. Write-back skips these students ("already published
+  — not changed") and imports no feedback doc for them, unless the instructor ticks
+  **Update published grades**.
+- With the box ticked, each published student gets ONE Update click, only after the new
+  score is verified in the field. Update republishes at once; Retract and Publish are
+  never clicked.
+- **Rollback.** Reverting the code does not undo a republished grade. The score each
+  Update replaced is in the write-back report ("previous score N") and in the gitignored
+  `output/writeback_updates/updates.jsonl` (`student_key`, `previous_score`,
+  `new_score`). Restore it by typing the previous score on that student's evaluation page
+  and clicking Update. The old feedback and rubric levels are NOT recorded; they cannot be
+  restored from this ledger.
+- Drafts (unpublished students) are not visible to students; edit or clear them in
+  BrightSpace before publishing.
+- Read-only field check: `scripts/brightspace_writeback_probe.py --url <assignment URL>`.
+
 ## Grade write-back — Feature #4 (assignment=draft VERIFIED 2026-07-01; quiz=POST VERIFIED 2026-07-09/10)
 
 Implemented in **`src/cqc_cpcc/utilities/brightspace_writeback.py`** +

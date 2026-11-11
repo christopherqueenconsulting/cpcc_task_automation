@@ -1630,13 +1630,14 @@ class _BrightSpaceWritebackJob:
     """
 
     def __init__(self, url: str, items: list, bridge, dry_run: bool = True,
-                 feedback_mode: str = "attach"):
+                 feedback_mode: str = "attach", update_published: bool = False):
         import threading
         self.url = url
         self.items = items
         self.bridge = bridge
         self.dry_run = dry_run
         self.feedback_mode = feedback_mode
+        self.update_published = update_published
         self.report = None  # GradeWriteReport
         self.error: Optional[str] = None
         self.done = threading.Event()
@@ -1662,6 +1663,7 @@ class _BrightSpaceWritebackJob:
                 self.url, self.items, progress=self._record,
                 mfa_handler=self.bridge, dry_run=self.dry_run,
                 feedback_mode=self.feedback_mode,
+                update_published=self.update_published,
             )
         except Exception as e:  # noqa: BLE001 - surfaced to the UI
             self.error = str(e)
@@ -2047,13 +2049,27 @@ def add_brightspace_writeback_element(
         st.info("ℹ️ Generate the feedback documents above first to attach them; "
                 "otherwise feedback is added directly.")
     # Assignment route: attach mode delivers docs via BrightSpace's bulk "Add Feedback
-    # Files" ZIP import (matched to submitters by submission-ID) and does NOT write
-    # scores — run "Add feedback directly" for scores/rubric.
+    # Files" ZIP import (matched to submitters by submission-ID), then writes each
+    # student's score and rubric levels as a draft on their evaluation page.
     if feedback_mode == "attach" and have_docs and url and not _is_quiz_writeback_url(url):
         st.caption(
             "📦 On an assignment, attaching bulk-imports all Feedback.docx files as "
-            "drafts in one step (only students who submitted are matched). Scores/rubric "
-            "are written separately — choose “Add feedback directly” for those.")
+            "drafts in one step (only students who submitted are matched), then saves "
+            "each student's score and rubric levels as a draft.")
+
+    # Already-published assignment grades have no Save Draft, only Update. Off by
+    # default: those learners are skipped and reported "already published".
+    update_published = False
+    if url and not _is_quiz_writeback_url(url):
+        update_published = st.checkbox(
+            "Update published grades",
+            value=False, key=key_prefix + "update_published",
+            help="Students whose grade is already published have no draft. When ticked, "
+                 "their new score and feedback are saved with Update, and they see the "
+                 "change right away. Only the old SCORE is kept (in the report and in "
+                 "output/writeback_updates/updates.jsonl); old feedback and rubric levels "
+                 "are not. When not ticked, they are skipped and listed.",
+        )
 
     # Submissions the validity gate scored 0 (missing/empty/wrong type) are held back
     # until confirmed in the results' "Needs review" section.
@@ -2082,7 +2098,8 @@ def add_brightspace_writeback_element(
                     it.feedback_doc_path = doc_path
         bridge = MfaBridge()
         new_job = _BrightSpaceWritebackJob(
-            url, items, bridge, dry_run=dry_run, feedback_mode=feedback_mode)
+            url, items, bridge, dry_run=dry_run, feedback_mode=feedback_mode,
+            update_published=update_published)
         new_job.start()
         st.session_state[job_key] = new_job
         st.session_state.pop(report_key, None)
@@ -2096,6 +2113,9 @@ def add_brightspace_writeback_element(
                          else f"Write {writable} draft{plural} to BrightSpace")
     route = ("post the grades and feedback to the quiz, published to students immediately"
              if is_quiz else "save the grades and feedback as drafts (not published)")
+    if update_published and not is_quiz:
+        route += (", and UPDATE any grade that is already published (those students "
+                  "see the change immediately)")
 
     with st.container(horizontal=True):
         if st.button("Preview write (dry run)", key=key_prefix + "dry", icon=":material/preview:",

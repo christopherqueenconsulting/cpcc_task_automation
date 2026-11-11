@@ -432,6 +432,7 @@ def test_write_one_student_no_score_field_reports_not_found(mocker):
     # Patch the hydration wait directly so the test doesn't sit through the poll timeout.
     mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": False, "feedback": False})
     mocker.patch.object(wb, "_locate_save_draft", return_value=False)
+    mocker.patch.object(wb, "_locate_update", return_value=False)
     save = mocker.patch.object(wb, "_save_draft")
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
@@ -447,6 +448,7 @@ def test_write_one_student_refuses_write_when_save_draft_control_missing(mocker)
     mocker.patch.object(wb, "_wait_for_write_targets",
                         return_value={"score": True, "feedback": True})
     mocker.patch.object(wb, "_locate_save_draft", return_value=False)
+    mocker.patch.object(wb, "_locate_update", return_value=False)
     save = mocker.patch.object(wb, "_save_draft")
     fill = mocker.patch.object(wb, "_fill_score")
     feedback = mocker.patch.object(wb, "_write_feedback_via_editor")
@@ -471,7 +473,7 @@ def test_build_write_items_populates_rubric_selections():
                             selected_level_label=None, feedback="")  # no level -> skipped
     results = [("id - Jane Doe - Oct 1, 2025 100 PM", _result(29, 35, criteria=[crit1, crit2]))]
     items = wb.build_write_items_from_results(results, buffer_pct=0)
-    sels = items[0].rubric_selections
+    sels = [s for s in items[0].rubric_selections if not s.optional]  # band row is optional
     assert len(sels) == 1
     assert sels[0].criterion_name == "Program Performance"
     assert sels[0].level_label == "Above Average"
@@ -518,6 +520,7 @@ def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
 
 @pytest.mark.unit
 def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker):
+    mocker.patch("time.sleep")
     driver = MagicMock()
     mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
     mocker.patch.object(wb, "_locate_save_draft", return_value=True)
@@ -530,10 +533,13 @@ def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker)
         wb.RubricLevelSelection("Program Performance", "Above Average"),
         wb.RubricLevelSelection("Style", "Full")])
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
-    rub.assert_called_once()
-    assert rub.call_args.kwargs.get("dry_run") is True     # matched only, not clicked
+    # A persistent mismatch is re-checked a bounded number of times, never clicked.
+    assert rub.call_count == 16
+    assert all(c.kwargs.get("dry_run") is True for c in rub.call_args_list)
     assert o.rubric_selected == 1 and len(o.rubric_missing) == 1 and not o.saved
-    assert not o.fields_found and "rubric 1/2 matched" in o.note
+    # An unmatched rubric level is reported but no longer blocks the score/feedback.
+    assert o.fields_found and "rubric 1/2 matched" in o.note
+    assert "Style -> Full [level not found]" in o.note
     save.assert_not_called()
 
 
@@ -823,6 +829,76 @@ def test_import_feedback_zip_missing_button_returns_false(mocker, tmp_path):
     assert wb.import_feedback_zip(driver, "/no/such/file.zip") is False
 
 
+def _import_driver(listed: bool, dialog_text: str = ""):
+    """A driver that walks the Add Feedback Files dialog; scripts answer by identity."""
+    from selenium.webdriver.common.by import By
+    iframe = MagicMock()
+    iframe.get_attribute.return_value = "Add Feedback Files"
+    clicked: list = []
+    driver = MagicMock()
+
+    def script(js, *args):
+        if js is wb._CLICK_ADD_FEEDBACK_FILES_JS:
+            return True
+        if js is wb._FILE_LISTED_JS:
+            return listed
+        if js is wb._CLICK_TEXT_EXACT_JS:
+            clicked.append(args[0])
+            return True
+        if js is wb._DIALOG_TEXT_JS:
+            return dialog_text
+        return None
+    driver.execute_script.side_effect = script
+    driver.find_elements.side_effect = lambda by, value: (
+        [iframe] if (by == By.TAG_NAME and value == "iframe")
+        else [MagicMock()] if ("addbuttons" in value or "input[type=file]" in value) else [])
+    return driver, clicked
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_refuses_when_zip_never_lists(mocker, tmp_path):
+    """No file queued in the dialog: do not click Add and do not claim success."""
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK\x03\x04")
+    driver, clicked = _import_driver(listed=False)
+    mocker.patch("time.sleep")
+    assert wb.import_feedback_zip(driver, str(z)) is False
+    assert clicked == []
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_fails_when_dialog_reports_error(mocker, tmp_path):
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK\x03\x04")
+    driver, clicked = _import_driver(listed=True, dialog_text="Error: no matching folders found")
+    mocker.patch("time.sleep")
+    msgs: list = []
+    assert wb.import_feedback_zip(driver, str(z), msgs.append) is False
+    assert clicked == ["Add"]
+    assert any("dialog after Add" in m and "Error" in m for m in msgs)
+
+
+@pytest.mark.unit
+def test_import_feedback_zip_logs_dialog_text_on_success(mocker, tmp_path):
+    z = tmp_path / "fb.zip"; z.write_bytes(b"PK\x03\x04")
+    driver, _ = _import_driver(listed=True, dialog_text="Upload complete")
+    mocker.patch("time.sleep")
+    msgs: list = []
+    assert wb.import_feedback_zip(driver, str(z), msgs.append) is True
+    assert any("Upload complete" in m for m in msgs)
+
+
+@pytest.mark.unit
+def test_wait_for_feedback_attachment(mocker):
+    mocker.patch("time.sleep")
+    driver = MagicMock()
+    driver.execute_script.side_effect = [0, 0, 1]
+    assert wb._wait_for_feedback_attachment(driver, timeout=5) is True
+    driver.execute_script.side_effect = None
+    driver.execute_script.return_value = 0
+    assert wb._wait_for_feedback_attachment(driver, timeout=1) is False
+    driver.execute_script.return_value = MagicMock()   # not an int: never counts
+    assert wb._wait_for_feedback_attachment(driver, timeout=1) is False
+
+
 @pytest.mark.unit
 def test_import_assignment_feedback_docs_marks_outcomes(mocker, tmp_path):
     """Live import: submitters with a doc are flagged attached+saved; others noted."""
@@ -883,15 +959,59 @@ def test_push_assignment_grades_attach_mode_uses_bulk_import(mocker, tmp_path):
     """Attach mode on the assignment route bulk-imports instead of per-student nav."""
     doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
     mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
-    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs",
-                               return_value=wb.GradeWriteReport(route="assignment", dry_run=False))
-    gather = mocker.patch.object(wb, "_gather_assignment_learners", return_value=[])
+    bulk_report = wb.GradeWriteReport(route="assignment", dry_run=False)
+    bulk_report.outcomes.append(wb.StudentWriteOutcome(
+        "1-2 - Jane", "Jane", matched=True, fields_found=True, saved=True,
+        feedback_attached=True, note="feedback doc imported as draft"))
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs", return_value=bulk_report)
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._set_max_results_per_page")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax")
+    mocker.patch.object(wb, "_gather_assignment_learners",
+                        return_value=[{"name": "Jane", "userId": "7"}])
+    mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+    mocker.patch.object(wb, "_wait_for_feedback_attachment", return_value=True)
+    write = mocker.patch.object(wb, "_write_one_student")
     item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
                              feedback_doc_path=str(doc))
-    wb._push_assignment_grades(MagicMock(), MagicMock(), "url", [item], lambda *_: None,
-                               None, dry_run=False, feedback_mode="attach")
+    report = wb._push_assignment_grades(MagicMock(), MagicMock(), "url", [item],
+                                        lambda *_: None, None, dry_run=False,
+                                        feedback_mode="attach")
     bulk.assert_called_once()
-    gather.assert_not_called()   # no per-student navigation in bulk attach mode
+    # Feedback went out in bulk; each student then gets score + rubric only.
+    write.assert_called_once()
+    assert write.call_args.args[-1] == "none"
+    assert report.outcomes[0].feedback_attached is True
+    assert not report.warnings
+
+
+@pytest.mark.unit
+def test_push_assignment_grades_flags_import_that_attached_nothing(mocker, tmp_path):
+    """The dialog said success but the learner's page has no attachment: report it."""
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
+    bulk_report = wb.GradeWriteReport(route="assignment", dry_run=False)
+    bulk_report.outcomes.append(wb.StudentWriteOutcome(
+        "1-2 - Jane", "Jane", matched=True, fields_found=True, saved=True,
+        feedback_attached=True, note="feedback doc imported as draft"))
+    mocker.patch.object(wb, "_import_assignment_feedback_docs", return_value=bulk_report)
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._set_max_results_per_page")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax")
+    mocker.patch.object(wb, "_gather_assignment_learners",
+                        return_value=[{"name": "Jane", "userId": "7"}])
+    mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+    mocker.patch.object(wb, "_wait_for_feedback_attachment", return_value=False)
+    mocker.patch.object(wb, "_write_one_student")
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
+                             feedback_doc_path=str(doc))
+    report = wb._push_assignment_grades(MagicMock(), MagicMock(), "url", [item],
+                                        lambda *_: None, None, dry_run=False,
+                                        feedback_mode="attach")
+    out = report.outcomes[0]
+    assert out.feedback_attached is False
+    assert "NO attachment is on this learner's page" in out.note
+    assert "imported as draft" not in out.note      # no contradictory success text left
+    assert any("did not attach" in w for w in report.warnings)
+    assert not report.complete
 
 
 @pytest.mark.unit
@@ -1058,9 +1178,9 @@ def test_push_assignment_grades_attach_no_docs_reports_clearly(mocker):
         "https://bs/d2l/lms/dropbox/admin/mark/x?ou=1&db=2", [item],
         driver=driver, wait=wait, dry_run=True, feedback_mode="attach")
     bulk.assert_not_called()    # no real docs -> no bulk import attempted
-    gather.assert_not_called()  # and no per-student navigation
+    gather.assert_called_once()  # scores are still written per student
     assert any("feedback" in w.lower() and "docx" in w.lower() for w in report.warnings)
-    assert report.outcomes and not report.outcomes[0].matched
+    assert not report.complete
 
 
 @pytest.mark.unit
@@ -1103,3 +1223,231 @@ def test_writeback_report_shows_warning_when_required_target_is_missing(mocker):
     success.assert_not_called()
     warning.assert_called_once()
     assert "incomplete" in warning.call_args.args[0]
+
+
+@pytest.mark.unit
+def test_write_one_student_score_only_mode_skips_feedback(mocker):
+    """feedback_mode="none" (after a bulk doc import) writes score + rubric, one save."""
+    driver = MagicMock()
+    mocker.patch("time.sleep")
+    wait_targets = mocker.patch.object(wb, "_wait_for_write_targets",
+                                       return_value={"score": True, "feedback": False})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
+    mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    save = mocker.patch.object(wb, "_save_draft", return_value=True)
+    inline = mocker.patch.object(wb, "_write_feedback_via_editor")
+    attach = mocker.patch.object(wb, "_attach_feedback_file")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>", feedback_doc_path="/x.docx")
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None,
+                          dry_run=False, feedback_mode="none")
+    assert wait_targets.call_args.kwargs["require_feedback"] is False
+    inline.assert_not_called()
+    attach.assert_not_called()
+    save.assert_called_once()
+    assert o.fields_found and o.saved and o.score_written == 90
+
+
+@pytest.mark.unit
+def test_find_score_input_js_tries_selectors_in_priority_order():
+    """The overall-grade selector must win over a broad fallback earlier in the DOM."""
+    js = wb._FIND_SCORE_INPUT_JS
+    assert "for(const sel of SELS)" in js
+    assert js.index("for(const sel of SELS)") < js.index("for(const el of all)")
+    assert wb.SCORE_INPUT_SELECTORS.index("input[aria-label^='Overall grade' i]") < \
+        wb.SCORE_INPUT_SELECTORS.index("input[aria-label*='Score' i]")
+
+
+@pytest.mark.unit
+def test_build_write_items_adds_optional_overall_score_row():
+    """The overall band fills BrightSpace's "Overall Score" rubric row (live 2026-11-11)."""
+    result = {"total_points_earned": 27, "total_points_possible": 30, "overall_feedback": "ok",
+              "overall_band_label": "Superior",
+              "criteria_results": [{"criterion_name": "Program Performance",
+                                    "selected_level_label": "Superior"}]}
+    [item] = wb.build_write_items_from_results([("1-2 - Jane Doe", result)], buffer_pct=0)
+    names = [(s.criterion_name, s.level_label, s.optional) for s in item.rubric_selections]
+    assert names == [("Program Performance", "Superior", False),
+                     ("Overall Score", "Superior", True)]
+
+
+@pytest.mark.unit
+def test_select_rubric_levels_drops_missing_optional_criterion():
+    driver = MagicMock()
+    driver.execute_script.return_value = {"selected": [], "missing": [
+        {"criterion": "Overall Score", "level": "Superior", "reason": "criterion not found"},
+        {"criterion": "Style", "level": "Full", "reason": "criterion not found"},
+        {"criterion": "Overall Score", "level": "Bogus", "reason": "level not found"},
+    ]}
+    sels = [wb.RubricLevelSelection("Style", "Full"),
+            wb.RubricLevelSelection("Overall Score", "Superior", optional=True)]
+    res = wb._select_rubric_levels(driver, sels, dry_run=True)
+    assert [m["criterion"] for m in res["missing"]] == ["Style", "Overall Score"]
+    assert res["missing"][1]["reason"] == "level not found"
+
+
+@pytest.mark.unit
+def test_await_rubric_match_rechecks_until_levels_render(mocker):
+    """A radiogroup with no levels yet must not be reported as a mismatch."""
+    mocker.patch("time.sleep")
+    unrendered = {"selected": [], "missing": [
+        {"criterion": "Program Performance", "level": "Superior", "reason": "level not found"}]}
+    rendered = {"selected": [{"criterion": "Program Performance", "level": "Superior"}],
+                "missing": []}
+    sel = mocker.patch.object(wb, "_select_rubric_levels",
+                              side_effect=[unrendered, unrendered, rendered])
+    res = wb._await_rubric_match(MagicMock(), [wb.RubricLevelSelection("Program Performance",
+                                                                       "Superior")])
+    assert res == rendered
+    assert sel.call_count == 3
+
+
+@pytest.mark.unit
+def test_await_rubric_match_gives_up_after_attempts(mocker):
+    mocker.patch("time.sleep")
+    missing = {"selected": [], "missing": [
+        {"criterion": "Style", "level": "Full", "reason": "level not found"}]}
+    sel = mocker.patch.object(wb, "_select_rubric_levels", return_value=missing)
+    res = wb._await_rubric_match(MagicMock(), [wb.RubricLevelSelection("Style", "Full")],
+                                 attempts=4)
+    assert res["missing"] and sel.call_count == 4
+
+
+def _published_page(mocker):
+    """An already-published evaluation page: Update/Retract, no Save Draft."""
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets",
+                        return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=False)
+    mocker.patch.object(wb, "_locate_update", return_value=True)
+    mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", return_value="75")
+    mocker.patch.object(wb, "_record_update")
+    return (mocker.patch.object(wb, "_save_draft", return_value=True),
+            mocker.patch.object(wb, "_click_commit", return_value=True))
+
+
+@pytest.mark.unit
+def test_write_one_student_skips_published_learner_by_default(mocker):
+    save, commit = _published_page(mocker)
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None, dry_run=False)
+    assert o.already_published and not o.saved and o.score_written is None
+    assert "already published" in o.note and "Update published grades" in o.note
+    save.assert_not_called()
+    commit.assert_not_called()
+
+
+@pytest.mark.unit
+def test_write_one_student_updates_published_learner_when_opted_in(mocker):
+    save, commit = _published_page(mocker)
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None,
+                          dry_run=False, update_published=True)
+    assert o.saved and o.score_written == 90 and o.note.startswith("updated")
+    assert "previous score 75" in o.note and o.previous_score == "75"
+    save.assert_not_called()                     # never Save Draft on a published page
+    assert commit.call_count == 1                # ONE Update, after the score is verified
+    for call in commit.call_args_list:
+        include, exclude = call.args[1], call.args[2]
+        assert include == ("update",)
+        assert "retract" in exclude and "publish" in exclude
+
+
+@pytest.mark.unit
+def test_write_one_student_dry_run_reports_published_update(mocker):
+    save, commit = _published_page(mocker)
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None,
+                          dry_run=True, update_published=True)
+    assert o.fields_found and not o.saved and "will republish" in o.note
+    save.assert_not_called()
+    commit.assert_not_called()
+
+
+@pytest.mark.unit
+def test_locate_update_never_matches_retract_or_publish():
+    driver = MagicMock()
+    driver.execute_script.return_value = True
+    assert wb._locate_update(driver) is True
+    _, include, exclude = driver.execute_script.call_args.args
+    assert include == ["update"]
+    assert "retract" in exclude and "publish" in exclude
+
+
+@pytest.mark.unit
+def test_write_one_student_never_updates_published_when_score_not_committed(mocker):
+    save, commit = _published_page(mocker)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=False)
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None,
+                          dry_run=False, update_published=True)
+    commit.assert_not_called()                   # _click_commit (Update) never called
+    save.assert_not_called()
+    wb._record_update.assert_not_called()
+    assert not o.saved and "Update not clicked" in o.note
+
+
+@pytest.mark.unit
+def test_push_assignment_attach_skips_bulk_import_for_published_learners(mocker, tmp_path):
+    """A published learner (Update not opted in) must not get a feedback doc imported."""
+    pub_doc = tmp_path / "a.docx"; pub_doc.write_bytes(b"x")
+    new_doc = tmp_path / "b.docx"; new_doc.write_bytes(b"x")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._set_max_results_per_page")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax")
+    mocker.patch.object(wb, "_gather_assignment_learners", return_value=[
+        {"name": "Ann Pub", "userId": "1"}, {"name": "Bo New", "userId": "2"}])
+    mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+
+    def fake_write(driver, wait, item, outcome, *a, **k):
+        outcome.already_published = item.display_name == "Ann Pub"
+        outcome.note = "x"
+    mocker.patch.object(wb, "_write_one_student", side_effect=fake_write)
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs",
+                               return_value=wb.GradeWriteReport("assignment", False))
+    items = [wb.GradeWriteItem("1-1 - Ann Pub", "Ann Pub", 80, 90, 100, "<p/>",
+                               feedback_doc_path=str(pub_doc)),
+             wb.GradeWriteItem("2-2 - Bo New", "Bo New", 80, 90, 100, "<p/>",
+                               feedback_doc_path=str(new_doc))]
+    report = wb._push_assignment_grades(MagicMock(), MagicMock(), "url", items,
+                                        lambda *_: None, None, dry_run=False,
+                                        feedback_mode="attach")
+    imported = bulk.call_args.args[2]
+    assert [it.display_name for it in imported] == ["Bo New"]
+    ann = next(o for o in report.outcomes if o.display_name == "Ann Pub")
+    assert "not imported (already published)" in ann.note
+
+
+@pytest.mark.unit
+def test_update_published_records_previous_score_ledger_line(mocker):
+    save, commit = _published_page(mocker)
+    lines = []
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lines.append,
+                          dry_run=False, update_published=True)
+    wb._record_update.assert_called_once_with(item, "75")
+    assert any("previous score 75 -> 90" in ln for ln in lines)
+
+
+@pytest.mark.unit
+def test_record_update_appends_private_jsonl(tmp_path):
+    import json, os, stat
+    path = tmp_path / "w" / "updates.jsonl"
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p/>")
+    wb._record_update(item, "75", path=str(path))
+    wb._record_update(item, None, path=str(path))
+    rows = [json.loads(x) for x in path.read_text().splitlines()]
+    assert [r["previous_score"] for r in rows] == ["75", None]
+    assert rows[0]["new_score"] == 90 and rows[0]["student_key"] == "1-2 - Jane"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
