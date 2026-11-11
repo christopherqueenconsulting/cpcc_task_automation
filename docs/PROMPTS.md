@@ -400,28 +400,44 @@ unchanged code must exit 0.
 - **Record, on master (`record-raw`).** When a push runs suites, this separate job runs each one **once more**,
   without judges, with `CQC_EVAL_RECORD_RAW` set to a store of its own, and uploads the stores as the artifact
   `prompt-eval-raw-<run id>` (`<suite>/raw-responses/` and `<suite>/base/<suite>/raw_outputs.jsonl`, 90 days).
+  **On this public repo the artifact, the job logs and the step summaries are readable by any signed-in GitHub
+  user for their retention period.** They hold the model's answers to the synthetic eval cases and must never hold
+  student data; widening a suite's dataset beyond fixtures is a change to review for that.
   **Cost: a second paid run of those suites on every master push that runs any**, with the `model-eval` key. One store
   per suite, because answers for another suite would read as "never asked for" and spoil the replay. The job runs
-  `scripts/pii_guard.py` over the store (a hit fails the job and nothing is uploaded) and drops a store larger than
-  `MAX_KB` (20480 KB, a placeholder: **not measured**, set it from the first real artifact). It is separate from the
-  history `record` job, so a failure here never loses a history row.
+  `scripts/pii_guard.py` over the store and the run logs (a hit fails the job and nothing is uploaded; the logs are
+  printed only after that scan) and drops the **whole record (every suite)** when its total size is over `MAX_KB`
+  (20480 KB, a placeholder: **not measured**, set it from the first real artifact), with a line in the step
+  summary. It is separate from the history `record` job and is `continue-on-error` with no concurrency group, so a
+  failure, a timeout or a cancelled pending job here leaves the master run's conclusion `success` and its
+  `prompt-eval-master` outputs findable (every artifact lookup filters on successful runs). The job itself still shows red.
+  **If `record-raw` fails on a `pii_guard` hit:** nothing was uploaded; open the run, read which file tripped
+  the guard (the guard never prints the matched text for a denylist hit), delete that run's logs if they hold it, and
+  treat the dataset as unsafe until reviewed.
 - **Replay, on a request-identical PR (`detect`).** For each suite that needs a run, the newest master run
   that recorded it is found among the last 30 successful pushes. The record is used only when its commit is an
   ancestor of the PR's base. The PR's own code then runs on it (no key, no network; the key variables are unset)
-  through `prompt-ab-replay`, and `replay-summary.json` is uploaded.
+  through `prompt-ab-replay`, and `replay-summary.json` is uploaded. "No network" means no model call: the
+  step still uses `gh` to download the record (the replay command itself runs with the API keys and `GH_TOKEN`
+  unset). Every new `detect` step that can fail has `continue-on-error`, and the job limit (60 minutes) holds the capture, the
+  replay and their setup, so a replay problem can never leave `prompt-eval/ab` pending.
 - **`report`:** the PR comment lists each suite as `identical`, `different (N case(s) differ)` or `unusable`, with
   the master commit the record came from. It never changes the fast-path decision or the verdict.
 - **`on`:** as `report`, and the fast path stays on only when **every** suite is `identical`. A missing record,
-  an unusable replay, a difference, a timeout or a crash turns it off, so the paid A/B runs. This can cost
-  money that the fast path alone would not: until master has recorded a suite, `on` runs the paid A/B for it.
+  an unusable replay, a difference, a timeout or a crash turns it off, and the PR comment says so. The paid A/B
+  then runs **only where the A/B job's trust rules allow**: a `claude/*` or `auto/*` branch, a fork or an author
+  outside `PROMPT_EVAL_TRUSTED_AUTHORS` gets a pending `prompt-eval/ab` that a maintainer clears with **Actions >
+  Prompt Evaluation (dispatch) > Run workflow**, mode `ab`, the PR number, dry run off. This can cost money (or a
+  maintainer step) that the fast path alone would not: until master has recorded a suite, `on` does it for that suite.
+  Only the newest record of a suite is tried; if it is not in the base's history the suite is `unusable`.
 - **Replay only tightens.** The decision step can clear the capture's `true`; nothing sets it. A PR the capture
   already sends to the paid A/B stays there.
 - **Residual gap.** The record is from the newest master run of that suite, not necessarily the PR's base commit.
   Response-side code that changed on master after the record makes the replay `different`, which is the safe
   direction; it is not re-checked with the base's code the way `ab-base-rule` re-checks the capture, so like the
   capture it guards against honest mistakes, not a hostile author.
-- **Rollback:** delete the `PROMPT_EVAL_REPLAY` variable (or set it to `off`). Both jobs and all steps skip,
-  and the fast path is the capture's result as before. Existing `prompt-eval-raw-*` artifacts expire on their own.
+- **Rollback:** delete the `PROMPT_EVAL_REPLAY` variable (or set it to `off`). `record-raw` and the replay steps
+  skip; the "Decide the fast path" step still runs on every PR and passes the capture's result through unchanged. Existing `prompt-eval-raw-*` artifacts expire on their own.
 
 **Per suite, not per PR.** The base capture runs the base's own code. A suite the base does not
 know (the PR adds it: #428, #429 and #432 did) used to make the single base command exit

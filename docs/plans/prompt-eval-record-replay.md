@@ -135,8 +135,7 @@ Each step is sized for one 20-minute run.
   records each suite the push runs once more (no judges, one store per suite, `pii_guard` scan, size cap, artifact
   `prompt-eval-raw-<run id>`); `detect` replays a request-identical PR on the newest record that is in the base's
   history; the `report` job prints fixed words from `replay-summary.json`; with `on` anything but `identical` on
-  every suite turns the fast path off. It follows `GitHub-Actions-Standard` (a timeout on every job and step, cancel
-  not needed for the master job, no path filter). Open for the owner: the second paid run it adds on master (the
+  every suite turns the fast path off. It follows `GitHub-Actions-Standard` (a timeout on every job, a step timeout on the replay and Java steps, no path filter on a required check). Open for the owner: the second paid run it adds on master (the
   recording cannot reuse the history run, which uses judges), the size cap (placeholder, unmeasured),
   and `report` first, `on` later. Christopher merges.
 - [x] **S5, docs:** `docs/PROMPTS.md` section "Record and replay for response-side changes" replaces the "Not

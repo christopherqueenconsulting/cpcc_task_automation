@@ -2,6 +2,7 @@
 """Event-driven prompt evaluation: affected suites, A/B decisions, calibration, records."""
 
 import json
+import pathlib
 from pathlib import Path
 
 import pytest
@@ -1002,7 +1003,11 @@ class TestReplayWiring:
         assert step["continue-on-error"] is True and step["timeout-minutes"] and jobs["detect"]["timeout-minutes"]
         assert "secrets." not in _json.dumps(jobs["detect"]) and "OPENROUTER" not in _json.dumps(step["env"])
         assert "env -u OPENROUTER_API_KEY -u OPENAI_API_KEY -u CQC_EVAL_BATCH" in step["run"]
-        assert "--is-ancestor" in step["run"]
+        java = self._step(jobs, "detect", name="Set up Java (compile gate, replay only)")
+        assert java["continue-on-error"] is True and java["timeout-minutes"]
+        # The job limit holds the capture, the replay and their setup: a job timeout would leave prompt-eval/ab pending.
+        assert jobs["detect"]["timeout-minutes"] >= 20 + 20 + 10 + 10
+        assert "-u GH_TOKEN" in step["run"] and "--is-ancestor" in step["run"]
         assert jobs["detect"]["permissions"] == {"contents": "read", "actions": "read"}
 
     def test_the_record_job_is_bounded_scanned_and_apart_from_the_history_record(self, jobs):
@@ -1010,11 +1015,17 @@ class TestReplayWiring:
 
         job = jobs["record-raw"]
         text = _json.dumps(job)
-        assert job["timeout-minutes"] and job["concurrency"]["cancel-in-progress"] is False
+        # A failed or timed-out job must not turn the master run red (every artifact lookup wants "success"), and a
+        # concurrency group could cancel a pending job and do the same.
+        assert job["timeout-minutes"] and job["continue-on-error"] is True and "concurrency" not in job
         assert job["environment"] == "model-eval" and "record" not in (job.get("needs") or [])
         assert "CQC_EVAL_BATCH" not in text and "--judges" not in text
         assert text.count("secrets.") == 1 and "OPENROUTER_EVAL_API_KEY" in text
         scan = self._step(jobs, "record-raw", name="Scan and size-check the record")
+        names = [s.get("name") for s in job["steps"]]
+        # The run logs are printed only after the scan has passed over them, and never before the upload gate.
+        assert names.index("Show the run logs (after the scan)") == names.index(scan["name"]) + 1
+        assert "pii_guard.py run-*.log" in scan["run"] and "tail" not in self._step(jobs, "record-raw", name="Run the suites once more and record the raw answers")["run"]
         assert "scripts/pii_guard.py" in scan["run"] and scan["env"]["MAX_KB"] and "-gt" in scan["run"]
         assert jobs["record-raw"]["permissions"] == {"contents": "read"}
 
@@ -1035,7 +1046,7 @@ class TestReplayWiring:
                "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}
         run = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
         assert run.returncode == 0, run.stderr[-1000:]
-        assert out.read_text() == f"request_identical={expected}\n"
+        assert out.read_text().splitlines()[0] == f"request_identical={expected}"
 
     @pytest.mark.parametrize("recorded, ancestor, rc, expected", [
         (True, True, 0, "identical"), (True, True, 3, "different"), (True, True, 4, "unusable"),
@@ -1069,6 +1080,20 @@ class TestReplayWiring:
         digest = json.loads((tmp_path / "replay-summary.json").read_text())["suites"]["digest"]
         assert digest["status"] == expected and digest["record"] == ("abcdef0" if recorded else "")
 
+    def test_the_decision_step_names_why_it_cleared_the_fast_path(self, jobs):
+        import os
+        import subprocess
+
+        script = self._step(jobs, "detect", id="fastpath")["run"]
+        assert jobs["detect"]["outputs"]["replay_cleared"] == "${{ steps.fastpath.outputs.replay_cleared }}"
+        for replay, cleared in (("different", "different"), ("unusable", "unusable"), ("", "incomplete")):
+            out = pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / f"fp-{replay or 'none'}"
+            env = {**os.environ, "CAPTURE": "true", "MODE": "on", "REPLAY": replay,
+                   "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(out) + ".sum"}
+            out.unlink(missing_ok=True)
+            subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+            assert f"replay_cleared={cleared}\n" in out.read_text()
+
     def test_the_fast_path_step_runs_on_pull_requests_only(self, jobs):
         condition = self._step(jobs, "detect", id="fastpath")["if"]
         assert "pull_request" in condition and "!cancelled()" in condition
@@ -1086,7 +1111,7 @@ class TestReportStateMachine:
                 "JUDGES_CHANGED": "", "DEPENDENCY_ONLY": "false", "SMOKE_RESULT": "skipped",
                 "AB_RESULT": "skipped", "AB_STATUS": "", "AUTHOR_TYPE": "User", "BASE_RESULT": "success",
                 "BASE_STATUS": "pass", "BASE_REQUIRED": "", "RUN_URL": "https://run", "HEAD_REF": "claude/x",
-                "RESCORE_RESULT": "skipped", "REQUEST_IDENTICAL": ""}
+                "RESCORE_RESULT": "skipped", "REQUEST_IDENTICAL": "", "REPLAY_MODE": "", "REPLAY_CLEARED": ""}
 
     @pytest.fixture(scope="class")
     @classmethod
@@ -1177,6 +1202,26 @@ class TestReportStateMachine:
         assert "- `digest`: different (3 case(s) differ), record from master abc1234" in comment
         assert "- `grading`: unusable" in comment and "evil" not in comment and "everyone" not in comment
         assert "Bad Name" not in comment and "mode `report`" in comment
+
+    def test_a_malformed_replay_summary_does_not_stop_the_report(self, script, tmp_path):
+        (tmp_path / "results" / "prompt-eval-replay-1").mkdir(parents=True)
+        (tmp_path / "results" / "prompt-eval-replay-1" / "replay-summary.json").write_text(
+            json.dumps({"suites": {"digest": {"status": "different", "different_count": {"x": 1}}, "grading": 5}}))
+        state, comment = self._post(script, tmp_path, RUN_SUITES="digest", BASE_REQUIRED="digest", AB_RESULT="skipped",
+                                    BASE_STATUS="not-run", REPLAY_MODE="on")
+        assert state == "pending" and "- `digest`: different" in comment and "case(s) differ" not in comment
+        (tmp_path / "u" / "results" / "prompt-eval-replay-1").mkdir(parents=True)
+        (tmp_path / "u" / "results" / "prompt-eval-replay-1" / "replay-summary.json").write_text("not json")
+        state, comment = self._post(script, tmp_path / "u", RUN_SUITES="digest", BASE_REQUIRED="digest",
+                                    AB_RESULT="skipped", BASE_STATUS="not-run", REPLAY_MODE="on")
+        assert state == "pending" and "could not be read" in comment
+
+    @pytest.mark.parametrize("cleared, shown", [("different", True), ("incomplete", True), ("@all", False), ("", False)])
+    def test_the_comment_says_when_replay_turned_the_fast_path_off(self, script, tmp_path, cleared, shown):
+        _, comment = self._post(script, tmp_path, RUN_SUITES="x", BASE_REQUIRED="x", AB_RESULT="skipped",
+                                BASE_STATUS="not-run", REPLAY_CLEARED=cleared)
+        assert ("turned the fast path off" in comment) is shown and "@all" not in comment
+        assert (not shown) or "maintainer runs it" in comment
 
     def test_an_a_b_that_did_not_finish_fails_and_says_so(self, script, tmp_path):
         state, comment = self._post(script, tmp_path, RUN_SUITES="x", AB_RESULT="cancelled", BASE_STATUS="pass")

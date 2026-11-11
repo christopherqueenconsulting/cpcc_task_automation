@@ -70,7 +70,9 @@ jobs:
   detect:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Two 20-minute steps (the capture and the replay) plus setup must fit, or a job timeout would skip
+    # `report` and leave the required prompt-eval/ab status pending.
+    timeout-minutes: 60
     # actions: read lets the replay step list and download master's raw-answer artifacts.
     permissions:
       contents: read
@@ -83,6 +85,8 @@ jobs:
       dependency_only: ${{ steps.affected.outputs.dependency_only }}
       # The fast-path decision: the capture's result, unless PROMPT_EVAL_REPLAY=on and the replay disagrees.
       request_identical: ${{ steps.fastpath.outputs.request_identical }}
+      # `identical` never appears here; one of different, unusable, incomplete when PROMPT_EVAL_REPLAY=on cleared the fast path.
+      replay_cleared: ${{ steps.fastpath.outputs.replay_cleared }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -154,6 +158,10 @@ jobs:
         if: >-
           github.event_name == 'pull_request' && steps.requests.outputs.request_identical == 'true' &&
           (vars.PROMPT_EVAL_REPLAY == 'report' || vars.PROMPT_EVAL_REPLAY == 'on')
+        # A failed setup must not fail `detect` (that would leave prompt-eval/ab pending): the replay step then
+        # runs without a compiler, differs or is unusable, and the paid A/B decides.
+        continue-on-error: true
+        timeout-minutes: 10
         uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -200,7 +208,7 @@ jobs:
             else
               echo "${s}: record from master ${sha::7}" | tee -a replay.log
               rc=0
-              env -u OPENROUTER_API_KEY -u OPENAI_API_KEY -u CQC_EVAL_BATCH poetry run python -m cqc_cpcc.model_eval \
+              env -u OPENROUTER_API_KEY -u OPENAI_API_KEY -u CQC_EVAL_BATCH -u GH_TOKEN poetry run python -m cqc_cpcc.model_eval \
                 prompt-ab-replay --suites "${s}" --ab-dir "${dir}" --out "evals/runs/replay/${s}" >> replay.log 2>&1 || rc=$?
               case "${rc}" in 0) st=identical;; 3) st=different;; *) st=unusable;; esac
             fi
@@ -237,12 +245,15 @@ jobs:
         run: |
           set -euo pipefail
           out="${CAPTURE}"
+          cleared=""
           if [ "${out}" = "true" ] && [ "${MODE,,}" = "on" ] && [ "${REPLAY}" != "identical" ]; then
             out=""
+            cleared="${REPLAY:-incomplete}"
             echo "Replay (PROMPT_EVAL_REPLAY=on) was ${REPLAY:-not completed}: the fast path is off and the paid A/B runs." \
               | tee -a "$GITHUB_STEP_SUMMARY"
           fi
           echo "request_identical=${out}" >> "$GITHUB_OUTPUT"
+          echo "replay_cleared=${cleared}" >> "$GITHUB_OUTPUT"
 
       - name: Upload the replay result
         if: always() && steps.replay.outcome != 'skipped'
@@ -646,6 +657,7 @@ jobs:
           RESCORE_RESULT: ${{ needs.rescore.result }}
           REQUEST_IDENTICAL: ${{ needs.detect.outputs.request_identical }}
           REPLAY_MODE: ${{ vars.PROMPT_EVAL_REPLAY }}
+          REPLAY_CLEARED: ${{ needs.detect.outputs.replay_cleared }}
           AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           BASE_RESULT: ${{ needs.ab-base-rule.result }}
           BASE_STATUS: ${{ needs.ab-base-rule.outputs.ab_status }}
@@ -703,7 +715,29 @@ jobs:
               if ls results/prompt-eval-replay-*/replay-summary.json >/dev/null 2>&1; then
                 # Untrusted data: only fixed words and an integer are printed, never a reason or a path.
                 echo; echo "Replay on master's recorded answers (\$0; mode \`${REPLAY_MODE:-off}\`, \`report\` never changes the verdict):"
-                python3 -c 'import glob, json, re; r = json.load(open(glob.glob("results/prompt-eval-replay-*/replay-summary.json")[0])); [print("- `" + s + "`: " + (v.get("status") if v.get("status") in ("identical", "different", "unusable") else "unusable") + (" (" + str(int(v.get("different_count") or 0)) + " case(s) differ)" if v.get("status") == "different" else "") + (", record from master " + v["record"] + "" if re.fullmatch("[0-9a-f]{7}", str(v.get("record"))) else "")) for s, v in sorted(r["suites"].items()) if re.fullmatch("[a-z0-9_-]+", s)]'
+                # A malformed summary prints one fixed line and never stops the report.
+                python3 - <<'PY' || echo "- (the replay summary could not be read)"
+          import glob, json, re
+          WORDS = ("identical", "different", "unusable")
+          data = json.load(open(glob.glob("results/prompt-eval-replay-*/replay-summary.json")[0]))
+          for suite, row in sorted(data.get("suites", {}).items()):
+              if not re.fullmatch(r"[a-z0-9_-]+", suite) or not isinstance(row, dict):
+                  continue
+              status = row.get("status") if row.get("status") in WORDS else "unusable"
+              line = f"- `{suite}`: {status}"
+              if status == "different":
+                  try:
+                      line += f" ({int(row.get('different_count') or 0)} case(s) differ)"
+                  except (TypeError, ValueError):
+                      pass
+              if re.fullmatch(r"[0-9a-f]{7}", str(row.get("record"))):
+                  line += f", record from master {row['record']}"
+              print(line)
+          PY
+              fi
+              if [ "${REPLAY_CLEARED}" = "different" ] || [ "${REPLAY_CLEARED}" = "unusable" ] || [ "${REPLAY_CLEARED}" = "incomplete" ]; then
+                echo; echo "**PROMPT_EVAL_REPLAY=on turned the fast path off** (replay: ${REPLAY_CLEARED}), so the requests count as not identical and the full A/B decides."
+                echo "A claude/* or auto/* branch, a fork or an author outside \`PROMPT_EVAL_TRUSTED_AUTHORS\` gets no automatic A/B: a maintainer runs it (**Actions > Prompt Evaluation (dispatch) > Run workflow**, mode \`ab\`, PR \`${PR}\`, dry run off)."
               fi
               if [ "${BASE_STATUS}" = "request-identical" ]; then
                 # The base re-captured its own side and it matches the PR's capture exactly.
@@ -790,17 +824,20 @@ jobs:
     # more time, without judges, recording the model's raw answers for `detect`'s replay on later PRs.
     # This is a second paid run of those suites on master: the cost of the switch. One store per suite,
     # because a store holding another suite's answers reads as "never asked for" and spoils the replay.
-    # A failure here never touches the history record: it is its own job.
+    # A failure here never touches the history record: it is its own job. `continue-on-error` keeps this
+    # run's conclusion "success" when the job fails or times out (a pii_guard hit still shows as a red job
+    # and an error annotation): every lookup of master's artifacts (`gh run list --status success`: the
+    # re-score, the history carry-forward, the replay) would otherwise skip this run's prompt-eval-master
+    # outputs. No concurrency group: a pending job in a group is cancelled by a third push, and a
+    # cancelled job would turn the run's conclusion red.
     needs: detect
     if: >-
       github.event_name == 'push' && needs.detect.outputs.run != '' &&
       (vars.PROMPT_EVAL_REPLAY == 'report' || vars.PROMPT_EVAL_REPLAY == 'on')
     runs-on: ubuntu-latest
     environment: model-eval
+    continue-on-error: true
     timeout-minutes: 150
-    concurrency:
-      group: prompt-eval-record-raw
-      cancel-in-progress: false
     permissions:
       contents: read
     steps:
@@ -840,9 +877,9 @@ jobs:
               && [ -s "raw-run/${s}/raw_outputs.jsonl" ] && [ -d "replay-store/${s}/raw-responses" ]; then
               mkdir -p "replay-store/${s}/base/${s}"
               cp "raw-run/${s}/raw_outputs.jsonl" "replay-store/${s}/base/${s}/"
-              tail -n 5 "run-${s}.log"
+              echo "recorded ${s}"
             else
-              tail -n 40 "run-${s}.log"
+              # The run log is printed only after the scan step has checked it (it may echo answer text).
               echo "::warning::could not record ${s}; replay will report no record for it"
               rm -rf "replay-store/${s}"
             fi
@@ -858,14 +895,25 @@ jobs:
           MAX_KB: "20480"
         run: |
           set -euo pipefail
+          # The run logs are scanned too, so that printing them below cannot publish what the store scan would stop.
+          if ls run-*.log >/dev/null 2>&1; then poetry run python scripts/pii_guard.py run-*.log; fi
           if [ -z "$(find replay-store -type f 2>/dev/null | head -n 1)" ]; then echo "nothing recorded"; exit 0; fi
           find replay-store -type f -print0 | xargs -0 poetry run python scripts/pii_guard.py
+          # The cap applies to the whole record (every suite): over it, nothing is uploaded.
           kb="$(du -sk replay-store | cut -f1)"
           echo "record size: ${kb} KB (cap ${MAX_KB} KB)"
           if [ "${kb}" -gt "${MAX_KB}" ]; then
             echo "::warning::the record is ${kb} KB, over the ${MAX_KB} KB cap: not uploaded"
+            echo "PROMPT_EVAL_REPLAY: the record is ${kb} KB, over the ${MAX_KB} KB cap, so nothing was uploaded and replay will find no record." >> "$GITHUB_STEP_SUMMARY"
             rm -rf replay-store
           fi
+
+      - name: Show the run logs (after the scan)
+        shell: bash
+        run: |
+          for f in run-*.log; do
+            if [ -f "${f}" ]; then echo "== ${f}"; tail -n 20 "${f}"; fi
+          done
 
       - name: Upload the raw-answer record
         uses: actions/upload-artifact@v7
