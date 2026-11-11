@@ -2066,7 +2066,9 @@ def add_brightspace_writeback_element(
             value=False, key=key_prefix + "update_published",
             help="Students whose grade is already published have no draft. When ticked, "
                  "their new score and feedback are saved with Update, and they see the "
-                 "change right away. When not ticked, they are skipped and listed.",
+                 "change right away. Only the old SCORE is kept (in the report and in "
+                 "output/writeback_updates/updates.jsonl); old feedback and rubric levels "
+                 "are not. When not ticked, they are skipped and listed.",
         )
 
     # Submissions the validity gate scored 0 (missing/empty/wrong type) are held back

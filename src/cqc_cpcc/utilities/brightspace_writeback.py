@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+import os
 from typing import Callable, Optional
 
 from cqc_cpcc.utilities.AI import posthog_telemetry as telemetry
@@ -1317,6 +1318,11 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
             if _ensure_score_committed(driver, item.score):
                 outcome.score_written = item.score
                 outcome.saved = commit()
+                if outcome.saved:
+                    _record_update(item, outcome.previous_score)
+                    progress(f"{item.display_name}: previous score "
+                             f"{outcome.previous_score or '(blank)'} -> {_fmt_num(item.score)} "
+                             "(updated, republished)")
         elif attach or skip_feedback:
             # No editor race here — (attach the .docx,) set score, single save.
             if attach:
@@ -1519,6 +1525,33 @@ for(const sel of SELS){
 }
 return null;
 """
+
+
+# Local, gitignored ledger of every Update on a published grade: the only lasting record
+# of the score it replaced (feedback and rubric levels are NOT recorded). Restore a grade
+# by typing ``previous_score`` back on that student's evaluation page and clicking Update.
+UPDATE_LEDGER_PATH = os.path.join("output", "writeback_updates", "updates.jsonl")
+
+
+def _record_update(item: GradeWriteItem, previous_score: Optional[str],
+                   path: Optional[str] = None) -> None:
+    """Append one previous -> new line for a republished grade. Never raises."""
+    import datetime as _dt
+    import json as _json
+    path = path or UPDATE_LEDGER_PATH
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as fh:
+            fh.write(_json.dumps({
+                "at": _dt.datetime.now().isoformat(timespec="seconds"),
+                "student_key": item.student_key,
+                "previous_score": previous_score,
+                "new_score": item.score,
+                "max_points": item.max_points,
+            }) + "\n")
+    except Exception as e:  # noqa: BLE001 - the ledger must never break the write
+        logger.warning("Could not record Update ledger line: %s", e)
 
 
 def _read_score_value(driver) -> Optional[str]:

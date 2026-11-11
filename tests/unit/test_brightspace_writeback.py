@@ -1225,6 +1225,7 @@ def _published_page(mocker):
     mocker.patch.object(wb, "_fill_score", return_value=True)
     mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
     mocker.patch.object(wb, "_read_score_value", return_value="75")
+    mocker.patch.object(wb, "_record_update")
     return (mocker.patch.object(wb, "_save_draft", return_value=True),
             mocker.patch.object(wb, "_click_commit", return_value=True))
 
@@ -1288,8 +1289,9 @@ def test_write_one_student_never_updates_published_when_score_not_committed(mock
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
     wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None,
                           dry_run=False, update_published=True)
-    commit.assert_not_called()
+    commit.assert_not_called()                   # _click_commit (Update) never called
     save.assert_not_called()
+    wb._record_update.assert_not_called()
     assert not o.saved and "Update not clicked" in o.note
 
 
@@ -1322,3 +1324,28 @@ def test_push_assignment_attach_skips_bulk_import_for_published_learners(mocker,
     assert [it.display_name for it in imported] == ["Bo New"]
     ann = next(o for o in report.outcomes if o.display_name == "Ann Pub")
     assert "not imported (already published)" in ann.note
+
+
+@pytest.mark.unit
+def test_update_published_records_previous_score_ledger_line(mocker):
+    save, commit = _published_page(mocker)
+    lines = []
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lines.append,
+                          dry_run=False, update_published=True)
+    wb._record_update.assert_called_once_with(item, "75")
+    assert any("previous score 75 -> 90" in ln for ln in lines)
+
+
+@pytest.mark.unit
+def test_record_update_appends_private_jsonl(tmp_path):
+    import json, os, stat
+    path = tmp_path / "w" / "updates.jsonl"
+    item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p/>")
+    wb._record_update(item, "75", path=str(path))
+    wb._record_update(item, None, path=str(path))
+    rows = [json.loads(x) for x in path.read_text().splitlines()]
+    assert [r["previous_score"] for r in rows] == ["75", None]
+    assert rows[0]["new_score"] == 90 and rows[0]["student_key"] == "1-2 - Jane"
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600

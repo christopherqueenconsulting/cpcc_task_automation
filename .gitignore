@@ -203,3 +203,5 @@ evals/runs/
 
 # Local write-back probe reports (learner names scrubbed, still course data)
 output/writeback_probe/
+# Update ledger: previous -> new score per republished grade (student keys)
+output/writeback_updates/
