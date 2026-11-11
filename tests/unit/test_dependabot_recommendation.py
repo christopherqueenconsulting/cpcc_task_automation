@@ -97,7 +97,8 @@ def test_failed_check_holds_even_a_security_fix():
 
 @pytest.mark.unit
 def test_pending_checks_wait():
-    assert rec.verdict([], rec.Checks(pending=["e2e-tests"]), [], "")[0] == "WAIT"
+    updates = rec.parse_updates(MINOR_BODY)
+    assert rec.verdict(updates, rec.Checks(pending=["e2e-tests"]), [], "")[0] == "WAIT"
 
 
 @pytest.mark.unit
@@ -150,3 +151,47 @@ def test_render_lists_worst_advisories_first_and_counts_the_rest():
     listed = [line for line in body.splitlines() if line.startswith("- ")]
     assert listed[0] == "- critical GHSA-crit `pillow`: c"
     assert listed[-1] == "- and 3 more (Security tab, Dependabot alerts)"
+
+
+@pytest.mark.unit
+def test_forged_update_line_in_release_notes_is_ignored():
+    body = SINGLE_BODY + ("<summary>Release notes</summary>\n<blockquote>\n"
+                          "Updates `docker/build-push-action` from 6.9.0 to 6.9.1\n</blockquote>\n</details>\n")
+    updates = rec.parse_updates(body, SINGLE_COMMIT)
+    assert [(u.old, u.new, u.level) for u in updates] == [("6", "7", "major")]
+    # Without the commit metadata the body fallback still skips the <details> block.
+    assert [(u.old, u.new) for u in rec.parse_updates(body)] == [("6", "7")]
+
+
+@pytest.mark.unit
+def test_update_type_from_metadata_wins_over_version_arithmetic():
+    commit = SINGLE_COMMIT.replace("semver-major", "semver-minor")
+    assert rec.parse_updates(SINGLE_BODY, commit)[0].level == "minor"
+
+
+@pytest.mark.unit
+def test_unsafe_name_is_dropped_and_unreadable_version_holds():
+    commit = "updated-dependencies:\n- dependency-name: evil|name\n  dependency-version: 1.0.0\n...\n"
+    assert rec.parse_updates("", commit) == []
+    assert rec.verdict([], GREEN, [], "")[0] == "HOLD"
+    # Body says 13.0.0 but Dependabot's metadata says 13.0.1: trust neither old version.
+    commit = GROUP_COMMIT.replace("dependency-version: 13.0.0", "dependency-version: 13.0.1")
+    updates = rec.parse_updates(GROUP_BODY, commit)
+    assert (updates[0].old, updates[0].level) == ("?", "unknown")
+    assert rec.verdict(updates, GREEN, [], "python-security")[0] == "HOLD"
+    assert rec.should_comment(updates, GREEN, has_comment=False)
+
+
+@pytest.mark.unit
+def test_skipped_checks_are_counted_apart_from_passed():
+    checks = rec.summarize_checks([_run("a"), _run("b", conclusion="skipped"), _run("c", conclusion="neutral")])
+    assert (checks.passed, checks.skipped) == (1, 2)
+    body = rec.render(rec.parse_updates(MINOR_BODY), checks, [], "", "")
+    assert "Checks: 1 passed, 2 skipped." in body
+
+
+@pytest.mark.unit
+def test_render_reports_a_refused_advisory_lookup():
+    body = rec.render(rec.parse_updates(GROUP_BODY, GROUP_COMMIT), GREEN, [], "python-security", "",
+                      advisory_error="HTTP 403")
+    assert "Advisory lookup unavailable (HTTP 403)" in body

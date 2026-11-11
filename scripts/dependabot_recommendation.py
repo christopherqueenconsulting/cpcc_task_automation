@@ -28,9 +28,14 @@ SEVERITY_ORDER = ("low", "medium", "high", "critical")
 # A cancelled run is normally superseded by a newer push, so it is not a failure.
 FAILED = {"failure", "timed_out", "action_required", "startup_failure"}
 
-_GROUP_UPDATE = re.compile(r"Updates `([^`]+)` from (\S+?) to (\S+?)\.?$", re.MULTILINE)
-_SINGLE_UPDATE = re.compile(r"Bumps \[([^\]]+)\]\([^)]*\) from (\S+?) to (\S+?)\.?$", re.MULTILINE)
+_GROUP_UPDATE = re.compile(r"^Updates `([^`]+)` from (\S+?) to (\S+?)\.?$", re.MULTILINE)
+_SINGLE_UPDATE = re.compile(r"^Bumps \[([^\]]+)\]\([^)]*\) from (\S+?) to (\S+?)\.?$", re.MULTILINE)
+# Upstream release notes sit inside <details> blocks and are written by the dependency's
+# maintainers: never parse versions out of them.
+_DETAILS = re.compile(r"<details>.*?</details>", re.DOTALL)
 _META_NAME = re.compile(r"^- dependency-name: (\S+)$", re.MULTILINE)
+_SAFE_NAME = re.compile(r"[A-Za-z0-9._@/+-]+")
+_SAFE_VERSION = re.compile(r"[0-9A-Za-z.+_-]+")
 
 
 @dataclass
@@ -39,9 +44,14 @@ class Update:
     old: str
     new: str
     dep_type: str = "unknown"  # direct:production, direct:development, indirect
+    update_type: str = ""      # version-update:semver-major etc., when the commit records it
 
     @property
     def level(self) -> str:
+        if self.update_type.startswith("version-update:semver-"):
+            return self.update_type.rsplit("-", 1)[1]
+        if not (_SAFE_VERSION.fullmatch(self.old) and _SAFE_VERSION.fullmatch(self.new)):
+            return "unknown"
         return semver_level(self.old, self.new)
 
 
@@ -50,6 +60,7 @@ class Checks:
     failed: list[str] = field(default_factory=list)
     pending: list[str] = field(default_factory=list)
     passed: int = 0
+    skipped: int = 0
 
 
 @dataclass
@@ -78,19 +89,49 @@ def semver_level(old: str, new: str) -> str:
     return "patch"
 
 
-def parse_updates(body: str, commit_message: str = "") -> list[Update]:
-    """Packages and versions from a Dependabot PR body; dependency types from its commit metadata."""
-    found = _GROUP_UPDATE.findall(body) or _SINGLE_UPDATE.findall(body)
-    updates = [Update(name, old, new) for name, old, new in found]
-    # The commit carries a YAML block: "- dependency-name: x" then "  dependency-type: y".
-    types: dict[str, str] = {}
+def _metadata(commit_message: str) -> list[dict[str, str]]:
+    """The YAML block Dependabot writes into its commit: one dict per ``- dependency-name:``."""
+    entries = []
     for block in re.split(r"^(?=- dependency-name:)", commit_message, flags=re.MULTILINE):
         name = _META_NAME.search(block)
-        dep_type = re.search(r"^\s+dependency-type: (\S+)$", block, re.MULTILINE)
-        if name and dep_type:
-            types[name.group(1).lower()] = dep_type.group(1)
-    for update in updates:
-        update.dep_type = types.get(update.name.lower(), "unknown")
+        if not name:
+            continue
+        entry = {"name": name.group(1).strip("'\"")}
+        for key in ("dependency-version", "dependency-type", "update-type"):
+            value = re.search(rf"^\s+{key}: (\S+)$", block, re.MULTILINE)
+            if value:
+                entry[key] = value.group(1).strip("'\"")
+        entries.append(entry)
+    return entries
+
+
+def parse_updates(body: str, commit_message: str = "") -> list[Update]:
+    """Packages and versions of a Dependabot PR.
+
+    Names, new versions, types and (when present) update types come from Dependabot's own commit
+    metadata. Only the old version comes from the PR body, outside its release-notes blocks. A
+    name that is not plain package syntax is dropped; an old version that cannot be read stays
+    ``?``, which makes the level ``unknown`` and the verdict HOLD.
+    """
+    text = _DETAILS.sub("", body)
+    from_body: dict[str, tuple[str, str]] = {}
+    for name, old, new in _GROUP_UPDATE.findall(text) + _SINGLE_UPDATE.findall(text):
+        from_body.setdefault(name.lower(), (old, new))
+    meta = _metadata(commit_message)
+    if not meta:  # no bot commit found: fall back to the body, still outside <details>
+        meta = [{"name": name, "dependency-version": new} for name, (_, new) in from_body.items()]
+    updates = []
+    for entry in meta:
+        name = entry["name"]
+        if not _SAFE_NAME.fullmatch(name):
+            continue
+        new = entry.get("dependency-version", "?")
+        old, body_new = from_body.get(name.lower(), ("?", "?"))
+        if body_new != new:
+            old = "?"
+        old, new = (v if _SAFE_VERSION.fullmatch(v) else "?" for v in (old, new))
+        updates.append(Update(name, old, new, entry.get("dependency-type", "unknown"),
+                              entry.get("update-type", "")))
     return updates
 
 
@@ -114,6 +155,8 @@ def summarize_checks(check_runs: list[dict], ignore: str = "") -> Checks:
             checks.pending.append(name)
         elif run.get("conclusion") in FAILED:
             checks.failed.append(name)
+        elif run.get("conclusion") in ("skipped", "neutral"):
+            checks.skipped += 1
         else:
             checks.passed += 1
     return checks
@@ -125,6 +168,8 @@ def verdict(updates: list[Update], checks: Checks, advisories: list[Advisory],
     if checks.failed:
         names = ", ".join(checks.failed)
         return "HOLD", f"{len(checks.failed)} check(s) failed: {names}. Labelled `{LABEL}` for an agent to fix."
+    if not updates or any(u.level == "unknown" for u in updates):
+        return "HOLD", "Could not read every package's old and new version from the PR; review it by hand."
     if checks.pending:
         return "WAIT", f"{len(checks.pending)} check(s) still running; this comment updates when they finish."
     top = max((u.level for u in updates), key=LEVELS.index, default="patch")
@@ -143,7 +188,8 @@ def verdict(updates: list[Update], checks: Checks, advisories: list[Advisory],
             "the PR body for removals, and run the rc checklist (docs/RELEASING.md) before `release` moves.")
 
 
-def render(updates: list[Update], checks: Checks, advisories: list[Advisory], group: str, run_url: str) -> str:
+def render(updates: list[Update], checks: Checks, advisories: list[Advisory], group: str, run_url: str,
+           advisory_error: str = "") -> str:
     word, reason = verdict(updates, checks, advisories, group)
     lines = [MARKER, f"## Dependabot recommendation: **{word}**", "", reason, ""]
     if updates:
@@ -153,15 +199,20 @@ def render(updates: list[Update], checks: Checks, advisories: list[Advisory], gr
     status = f"Checks: {checks.passed} passed"
     if checks.failed:
         status += f", {len(checks.failed)} failed ({', '.join(checks.failed)})"
+    if checks.skipped:
+        status += f", {checks.skipped} skipped"
     if checks.pending:
         status += f", {len(checks.pending)} running"
     lines.append(status + ".")
+    if advisory_error:
+        lines += ["", f"Advisory lookup unavailable ({advisory_error}); the verdict ignores advisories."]
     if advisories:
         lines.append("")
         lines.append("Open advisories this fixes:")
         rank = {s: i for i, s in enumerate(SEVERITY_ORDER)}
         ranked = sorted(advisories, key=lambda a: -rank.get(a.severity, -1))
-        lines += [f"- {a.severity} {a.ghsa} `{a.package}`: {a.summary.strip()}" for a in ranked[:MAX_LISTED]]
+        lines += [f"- {a.severity} {a.ghsa} `{a.package}`: {' '.join(a.summary.split())[:160]}"
+                  for a in ranked[:MAX_LISTED]]
         if len(ranked) > MAX_LISTED:
             lines.append(f"- and {len(ranked) - MAX_LISTED} more (Security tab, Dependabot alerts)")
     if group:
@@ -172,7 +223,7 @@ def render(updates: list[Update], checks: Checks, advisories: list[Advisory], gr
 
 def should_comment(updates: list[Update], checks: Checks, has_comment: bool) -> bool:
     """Comment on majors and red PRs; keep an existing comment current; stay quiet otherwise."""
-    major = any(u.level == "major" for u in updates)
+    major = not updates or any(u.level in ("major", "unknown") for u in updates)
     return major or bool(checks.failed) or has_comment
 
 
@@ -188,14 +239,23 @@ def gh_json(path: str) -> object:
     return json.loads(gh("api", path, "--paginate", "--slurp"))
 
 
-def fetch_advisories(repo: str, updates: list[Update]) -> list[Advisory]:
-    """Open Dependabot alerts the new versions fix. Best effort: an API refusal returns []."""
-    out = []
+def fetch_advisories(repo: str, updates: list[Update]) -> tuple[list[Advisory], str]:
+    """Open Dependabot alerts the new versions fix, and an error text when the API refuses.
+
+    Best effort: the workflow token may not be allowed to read Dependabot alerts. A refusal is
+    reported in the run log and in the comment, never silently treated as "no advisories".
+    """
+    out: list[Advisory] = []
     for update in updates:
+        if update.new == "?":
+            continue
         try:
-            pages = gh_json(f"repos/{repo}/dependabot/alerts?state=open&package={update.name}&per_page=100")
-        except subprocess.CalledProcessError:
-            return out
+            pages = json.loads(gh("api", "-X", "GET", f"repos/{repo}/dependabot/alerts", "-f", "state=open",
+                                  "-f", f"package={update.name}", "-f", "per_page=100", "--paginate", "--slurp"))
+        except subprocess.CalledProcessError as exc:
+            reason = (exc.stderr or "").strip().splitlines()[-1:] or ["gh api failed"]
+            print(f"advisory lookup failed: {reason[0]}", file=sys.stderr)
+            return out, reason[0][:120]
         for alert in (a for page in pages for a in page):
             patched = ((alert.get("security_vulnerability") or {}).get("first_patched_version") or {}).get("identifier")
             if patched and _parts(patched) <= _parts(update.new):
@@ -204,7 +264,7 @@ def fetch_advisories(repo: str, updates: list[Update]) -> list[Advisory]:
                                  advisory.get("summary", ""))
                 if all(a.ghsa != entry.ghsa for a in out):
                     out.append(entry)
-    return out
+    return out, ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -233,8 +293,8 @@ def main(argv: list[str] | None = None) -> int:
     runs = [r for page in gh_json(f"repos/{args.repo}/commits/{args.head_sha}/check-runs?per_page=100")
             for r in page["check_runs"]]
     checks = summarize_checks(runs, ignore=args.self_check)
-    advisories = fetch_advisories(args.repo, updates)
-    body = render(updates, checks, advisories, group, args.run_url)
+    advisories, advisory_error = fetch_advisories(args.repo, updates)
+    body = render(updates, checks, advisories, group, args.run_url, advisory_error)
 
     comments = [c for page in gh_json(f"repos/{args.repo}/issues/{args.pr}/comments?per_page=100") for c in page]
     mine = next((c for c in comments if MARKER in (c.get("body") or "")), None)

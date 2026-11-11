@@ -146,14 +146,25 @@ gh workflow run deploy-release.yml -f tag=vX.Y.Z -f dry_run=true   # optional: s
 gh workflow run deploy-release.yml -f tag=vX.Y.Z
 ```
 
-It checks the tag (format, on `master`, matches `pyproject.toml`, Release run green), then
+It runs only from `master`. It checks the tag (format, on `master`, matches `pyproject.toml`,
+newest Release run for the tag green and built from the tag's commit), then
 force-pushes `release` to the tag plus one commit, `deploy: requirements.txt for vX.Y.Z`. That
 commit adds `requirements.txt` generated from the tag's `poetry.lock` by `export_requirements.sh`.
 `requirements.txt` exists **only** on `release`: Community Cloud installs it (with uv) faster than
 `pyproject.toml`, and `master` keeps `poetry.lock` as its single dependency file so Dependabot never
 bumps a second copy out of step (PRs #524, #543, #555). Never commit `requirements.txt` to `master`;
 CI fails if it is tracked. The push is a normal git push, so the repository webhook to
-`share.streamlit.io` fires and the app redeploys.
+`share.streamlit.io` should fire and the app redeploy; this is not yet confirmed for a push made
+by the workflow token, so check the app after the first deploy (use an rc tag). The run summary
+records the previous and the new `release` commit.
+
+If the Deploy run fails, `release` is unchanged (the push is the last step):
+
+- *Tag check fails* (format, not on `master`, Release run not green or built from another
+  commit): fix the cause, usually by re-running the Release workflow for the tag. There is no
+  override input; when the check itself is wrong, use the manual fallback below.
+- *Push rejected* (a ruleset or branch protection on `release`): allow the `github-actions` app to
+  push to `release`, or use the manual fallback.
 
 An rc is live from that run, so move `release` to an rc only when Christopher has said to; the rc
 checklist above is then run against the live build. `master` carries whatever has merged and is not
@@ -165,11 +176,22 @@ To try a tag on a computer: `git fetch --tags && git checkout v0.2.0-rc1 && ./ru
 
 1. Find the last good tag: `git tag --sort=-v:refname` or the GitHub releases page.
 2. Roll the code back. Redeploy the last good tag at once with
-   `gh workflow run deploy-release.yml -f tag=<tag>`. Do not push the bare tag to `release` by
-   hand: a tag from after this change has no `requirements.txt`, and Community Cloud would fall
-   back to `pyproject.toml`. If Actions is down, push the tag and the generated file by hand:
-   `git checkout --detach '<tag>^{commit}' && ./export_requirements.sh && git add -f requirements.txt
-   && git commit -m "deploy: requirements.txt for <tag>" && git push --force origin HEAD:refs/heads/release`.
+   `gh workflow run deploy-release.yml -f tag=<tag>` (needs `gh auth status` with write access).
+   Do not push the bare tag to `release`: a tag from after this change has no `requirements.txt`,
+   and Community Cloud would fall back to `pyproject.toml`. Manual fallback, when Actions is down
+   or the tag check is wrong (needs `uv`; it uses `master`'s export script, because a tag from
+   before this change carries an older one):
+
+   ```bash
+   git fetch origin --tags && git checkout --detach origin/master
+   cp export_requirements.sh /tmp/export_requirements.sh
+   git checkout --detach '<tag>^{commit}'
+   bash /tmp/export_requirements.sh requirements.txt
+   git add -f requirements.txt
+   git commit --allow-empty -m "deploy: requirements.txt for <tag>"
+   git push --force origin HEAD:refs/heads/release
+   ```
+
    Then fix forward on `master`: open a revert PR for the bad change (do not rewrite `master`),
    bump the version and add a CHANGELOG entry in the same PR so new grades are not stamped with
    the bad version, merge it and cut a release as above.
