@@ -250,6 +250,7 @@ For detailed technical documentation, see:
 - The AI debug log redacts sensitive values by default (`CQC_AI_DEBUG_REDACT=true`)
 - Withdrawals write student data to local CSVs under `WITHDRAWALS_CSV_DIR`; that directory has no default so it is never written somewhere unexpected
 - A `PII Guard` CI workflow (`scripts/pii_guard.py`) fails the build if tracked files contain student names or BrightSpace ids
+- The Take Attendance live browser view (Docker browser, `HEADLESS_BROWSER=false`) shows MyColleges and BrightSpace pages with student names, which are FERPA education records. Its URL carries the noVNC password and `view_only=true` is only a client setting, so never share the page or the URL. noVNC is bound to `127.0.0.1` by default; before binding it elsewhere or setting `VNC_PUBLIC_URL`, change `SELENIUM_VNC_PASSWORD` from the public default `secret`, require authentication at your proxy (limited to the instructor) and use https (see `.env.example`)
 - Runtime log redaction, retention limits and the optional PostHog analytics are described in [docs/PRIVACY_AND_TELEMETRY.md](docs/PRIVACY_AND_TELEMETRY.md) (`poetry install -E telemetry` to enable analytics)
 
 ## Testing
@@ -303,7 +304,7 @@ Workflows in `.github/workflows/`:
 docker compose up -d selenium-chrome
 ```
 
-This starts only a `selenium/standalone-chrome` container (host ports 14444 and 17900 by default) for the `DOCKER_CHROME` browser type. There is no Dockerfile for the app itself. Port and project-name overrides come from `.env` if present.
+This starts only a `selenium/standalone-chrome` container (host ports 14444 and 17900 by default; the noVNC port 17900 is published on `127.0.0.1` only, change it with `SELENIUM_VNC_BIND`) for the `DOCKER_CHROME` browser type. With `HEADLESS_BROWSER=false`, the Take Attendance page opens on Tab snapshots, offers a live picture of that browser under Live browser (the instructor opens it when wanted) and offers Pause and Resume; see `.env.example` for `SELENIUM_VNC_BIND`, `SELENIUM_VNC_PASSWORD` and `VNC_PUBLIC_URL`. A paused run holds the grid's only browser slot and resumes by itself after 30 minutes. If a run is left stuck or its page is gone, restart the Streamlit process (`poetry run streamlit run src/cqc_streamlit_app/Home.py`; this ends the run) and free the browser slot with `docker compose -p cpcc_task_automation restart selenium-chrome` (otherwise the grid frees it after `SE_NODE_SESSION_TIMEOUT`, 600 s). There is no Dockerfile for the app itself. Port and project-name overrides come from `.env` if present.
 
 ## Support
 

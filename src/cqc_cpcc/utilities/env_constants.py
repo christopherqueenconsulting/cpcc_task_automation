@@ -96,6 +96,14 @@ DOCKER_PROJECT_NAME = get_constant_from_env('COMPOSE_PROJECT_NAME', default_valu
 SELENIUM_HOST_PORT = int(get_constant_from_env('SELENIUM_HOST_PORT', default_value='14444'))
 SELENIUM_VNC_PORT = int(get_constant_from_env('SELENIUM_VNC_PORT', default_value='17900'))
 SELENIUM_OPEN_VNC_BROWSER = isTrue(get_constant_from_env('SELENIUM_OPEN_VNC_BROWSER', default_value='False'))
+# Host address docker-compose binds the noVNC port to. Loopback by default: the viewer
+# page and the container run on one machine. Set 0.0.0.0 only behind your own proxy.
+SELENIUM_VNC_BIND = get_constant_from_env('SELENIUM_VNC_BIND', default_value='127.0.0.1')
+# noVNC password; docker-compose passes the same value to the container (SE_VNC_PASSWORD).
+SELENIUM_VNC_PASSWORD = get_constant_from_env('SELENIUM_VNC_PASSWORD', default_value='secret')
+# Base URL the viewer's browser should use for noVNC when ``localhost:<port>`` is not
+# reachable from it (a proxy, a remote Docker host), e.g. https://vnc.example.com.
+VNC_PUBLIC_URL = get_constant_from_env('VNC_PUBLIC_URL', default_value='')
 # Timezone the automated browser runs in. MyColleges compares typed dates with
 # midnight Eastern; a UTC browser reads a typed date 4 hours early and rejects the
 # course's first date as "less than minimum allowed date".

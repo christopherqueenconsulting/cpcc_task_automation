@@ -9,6 +9,7 @@ import pytest
 
 from cqc_cpcc.attendance_job import (
     PHASE_AWAITING_PLAN,
+    PHASE_RUNNING,
     PHASE_STARTING,
     PHASE_SUCCEEDED,
     AttendanceJob,
@@ -57,19 +58,27 @@ def _app(job=None):
     return app
 
 
+def _open_live(app):
+    """Choose the Live browser view (the page opens on Tab snapshots)."""
+    app.segmented_control(key="attendance_view").set_value("Live browser").run()
+
+
 def _button(app, label):
     return next(button for button in app.button if button.label == label)
 
 
 @pytest.mark.unit
 class TestTakeAttendancePage:
-    def test_idle_page_has_one_log_output_and_a_start_button(self):
+    def test_idle_page_offers_three_views_and_a_start_button(self):
         app = _app()
         app.run()
         assert not app.exception, app.exception
-        assert [t.label for t in app.tabs][:2] == ["Browser screenshot", "Log"]
+        picker = app.segmented_control(key="attendance_view")
+        assert picker.options == ["Live browser", "Tab snapshots", "Log"]
+        assert picker.value == "Tab snapshots"  # the live view is the instructor's choice
+        assert not app.tabs
         assert not app.text_area
-        assert len(app.code) == 1
+        assert not app.code  # the log shows only in its own view
         assert _button(app, "Start attendance")
 
     def test_log_output_shows_new_lines_on_each_run(self):
@@ -77,9 +86,11 @@ class TestTakeAttendancePage:
 
         app = _app()
         app.run()
+        app.segmented_control(key="attendance_view").set_value("Log").run()
         streamlit_handler.logs.append("Opened CSC-151-N855 roster")
         app.run()
         assert not app.exception, app.exception
+        assert len(app.code) == 1
         assert "Opened CSC-151-N855 roster" in app.code[0].value
 
     def test_running_job_refreshes_only_the_live_view(self):
@@ -294,8 +305,8 @@ class TestScreenshotSection:
         monkeypatch.setattr(pexels_helper, "get_photo", lambda query: photo)
         app = _app()
         app.run()
+        _open_live(app)
         assert not app.exception, app.exception
-        assert "Browser screenshot" in [t.label for t in app.tabs]
         assert app.get("image")[0].proto.imgs[0].url == photo.original
 
     def test_screenshot_replaces_the_placeholder(self, monkeypatch):
@@ -312,6 +323,7 @@ class TestScreenshotSection:
         job._store_screenshot(base64.b64encode(png).decode())
         app = _app(job)
         app.run()
+        _open_live(app)
         assert not app.exception, app.exception
         url = app.get("image")[0].proto.imgs[0].url
         assert "landscape" not in url
@@ -334,14 +346,18 @@ class TestScreenshotSection:
                               ["faculty", "course"])
         app = _app(job)
         app.run()
+        app.segmented_control(key="attendance_view").set_value("Tab snapshots").run()
         assert not app.exception, app.exception
-        all_labels = [tab.label for tab in app.tabs]
-        labels = all_labels[all_labels.index("Live"):]  # the browser views, inside "Browser screenshot"
-        assert labels[0] == "Live"
-        assert labels[1] == "Tab 1 · Faculty"
-        assert labels[2].startswith("Tab 2 · Section Details") and labels[2].endswith("…")
-        assert len(app.get("image")) == 3
-        assert any("The run is using this tab." in c.value for c in app.caption)
+        picker = app.segmented_control(key="attendance_snapshot_tab")
+        # The title is a caption, never part of the label: a title changes as a page
+        # loads, and a changing label would reset the picked tab.
+        assert picker.options == ["Tab 1", "Tab 2"]
+        assert picker.value == "Tab 1"
+        assert len(app.get("image")) == 1
+        assert any(c.value == "Faculty" for c in app.caption)
+        picker.set_value("Tab 2").run()
+        assert any(c.value == "Section Details for a long course title here · the run is using this tab"
+                   for c in app.caption)
 
     def test_no_pexels_key_shows_a_caption_instead(self, monkeypatch):
         from cqc_streamlit_app import pexels_helper
@@ -350,6 +366,7 @@ class TestScreenshotSection:
         monkeypatch.setattr(pexels_helper, "_api", None)
         app = _app()
         app.run()
+        _open_live(app)
         assert not app.exception, app.exception
         assert any("Screenshots of the browser appear here" in c.value for c in app.caption)
 
@@ -522,3 +539,211 @@ class TestAttendanceRecoveryControls:
         next(box for box in app.checkbox if box.key == "attendance_manage_eva").check().run()
         assert not app.exception, app.exception
         assert _button(app, "Re-run EVA").disabled is True
+
+
+@pytest.mark.unit
+class TestPauseControls:
+    """Pause freezes the run so the instructor can look closer; Resume carries on."""
+
+    def test_pause_is_offered_while_the_run_works(self):
+        app = _app(FakeJob(PHASE_RUNNING))
+        app.run()
+        assert not app.exception, app.exception
+        assert _button(app, "Pause")
+        assert any("Other pages cannot use the browser while it is paused" in c.value
+                   for c in app.caption)
+
+    def test_pause_is_hidden_while_the_plan_form_waits(self):
+        app = _app(FakeJob(PHASE_AWAITING_PLAN))
+        app.run()
+        assert not app.exception, app.exception
+        assert not [b for b in app.button if b.label in ("Pause", "Resume")]
+
+    def test_pause_is_hidden_while_the_mfa_number_waits(self):
+        job = FakeJob(PHASE_RUNNING)
+        job.bridge.on_challenge(MfaChallenge(context="microsoft", number="47"))
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        assert not [b for b in app.button if b.label in ("Pause", "Resume")]
+
+    def test_pause_then_resume_through_the_page(self):
+        job = FakeJob(PHASE_RUNNING)
+        app = _app(job)
+        app.run()
+
+        _button(app, "Pause").click().run()
+        assert not app.exception, app.exception
+        assert job.paused
+        assert not [b for b in app.button if b.label == "Pause"]
+        assert any("Paused since" in w.value and " ET" in w.value for w in app.warning)
+
+        _button(app, "Resume").click().run()
+        assert not app.exception, app.exception
+        assert not job.paused
+        assert _button(app, "Pause")
+
+    def test_a_long_pause_warns_that_mycolleges_may_sign_out(self):
+        job = FakeJob(PHASE_RUNNING)
+        job.pause()
+        job._gate._paused_since -= 16 * 60
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        assert any("over 15 minutes" in w.value and "resumes by itself after 30 minutes" in w.value
+                   for w in app.warning)
+
+    def test_a_short_pause_does_not_warn(self):
+        job = FakeJob(PHASE_RUNNING)
+        job.pause()
+        app = _app(job)
+        app.run()
+        assert not any("over 15 minutes" in w.value for w in app.warning)
+
+
+@pytest.mark.unit
+class TestViews:
+    """The view choice is a keyed widget: refreshes and tab-title changes never reset it."""
+
+    PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+    def _two_tabs(self, job, second_title="Section Details"):
+        job._store_screenshot(self.PNG, "faculty", "Faculty", ["faculty"])
+        job._store_screenshot(self.PNG, "course", second_title, ["faculty", "course"])
+
+    def test_view_and_tab_choice_survive_reruns_and_title_changes(self, monkeypatch):
+        from cqc_streamlit_app import pexels_helper
+
+        monkeypatch.setattr(pexels_helper, "get_photo", lambda query: pytest.fail("not needed"))
+        job = FakeJob(PHASE_RUNNING)
+        self._two_tabs(job)
+        app = _app(job)
+        app.run()
+        app.segmented_control(key="attendance_view").set_value("Tab snapshots").run()
+        app.segmented_control(key="attendance_snapshot_tab").set_value("Tab 2").run()
+
+        # Pages retitle as they load; the run keeps working.
+        self._two_tabs(job, second_title="Section Details for CSC-151-N855: Introduction to Java")
+        app.run()
+        job._store_screenshot(self.PNG, "course", "Loading...", ["faculty", "course"])
+        app.run()
+
+        assert not app.exception, app.exception
+        assert app.segmented_control(key="attendance_view").value == "Tab snapshots"
+        assert app.segmented_control(key="attendance_snapshot_tab").value == "Tab 2"
+        assert any(c.value.startswith("Loading...") for c in app.caption)
+
+    def test_a_closed_tab_does_not_break_the_tab_picker(self, monkeypatch):
+        job = FakeJob(PHASE_RUNNING)
+        self._two_tabs(job)
+        app = _app(job)
+        app.run()
+        app.segmented_control(key="attendance_view").set_value("Tab snapshots").run()
+        app.segmented_control(key="attendance_snapshot_tab").set_value("Tab 2").run()
+
+        job._store_screenshot(self.PNG, "faculty", "Faculty", ["faculty"])  # tab 2 closed
+        app.run()
+
+        assert not app.exception, app.exception
+        assert app.segmented_control(key="attendance_snapshot_tab").options == ["Tab 1"]
+        assert app.segmented_control(key="attendance_snapshot_tab").value == "Tab 1"
+
+    def test_clearing_the_view_falls_back_to_the_live_view(self):
+        app = _app()
+        app.run()
+        app.segmented_control(key="attendance_view").set_value(None).run()
+        assert not app.exception, app.exception
+
+    def test_live_viewer_is_embedded_with_the_view_only_url(self):
+        url = "http://localhost:17900/?autoconnect=1&view_only=true&resize=scale&password=secret"
+        job = FakeJob(PHASE_RUNNING)
+        job.viewer_url = url
+        app = _app(job)
+        app.run()
+        assert not app.get("iframe"), "the live view opens only when the instructor asks for it"
+        _open_live(app)
+        assert not app.exception, app.exception
+        frames = app.get("iframe")
+        assert len(frames) == 1
+        assert frames[0].proto.src == url
+        assert "view_only=true" in frames[0].proto.src
+
+    def test_screenshots_stand_in_when_there_is_no_live_viewer(self, monkeypatch):
+        from cqc_streamlit_app import pexels_helper
+
+        monkeypatch.setattr(pexels_helper, "get_photo", lambda query: pytest.fail("not needed"))
+        job = FakeJob(PHASE_RUNNING)
+        job._store_screenshot(self.PNG)
+        app = _app(job)
+        app.run()
+        _open_live(app)
+        assert not app.exception, app.exception
+        assert not app.get("iframe")
+        assert len(app.get("image")) == 1
+
+    def test_other_views_show_without_the_viewer_reloading_the_log(self):
+        job = FakeJob(PHASE_RUNNING)
+        job.viewer_url = "http://localhost:17900/?view_only=true"
+        app = _app(job)
+        app.run()
+        app.segmented_control(key="attendance_view").set_value("Log").run()
+        assert not app.exception, app.exception
+        assert not app.get("iframe")
+        assert len(app.code) == 1
+
+    def test_the_status_view_asks_for_a_full_redraw_when_the_viewer_appears(self):
+        job = FakeJob(PHASE_RUNNING)
+        app = _app(job)
+        app.run()
+        _open_live(app)
+        assert app.session_state["attendance_rendered_viewer"] is None
+        job.viewer_url = "http://localhost:17900/?view_only=true"
+        app.run()
+        assert not app.exception, app.exception
+        assert app.session_state["attendance_rendered_viewer"] == job.viewer_url
+        assert len(app.get("iframe")) == 1
+
+
+@pytest.mark.unit
+class TestLiveViewOpenFlag:
+    """The page tells the run whether the live viewer is on screen, so screenshots narrow
+    to tab changes only then and keep the Tab snapshots view fresh otherwise."""
+
+    URL = "http://localhost:17900/?view_only=true"
+
+    def test_default_view_leaves_the_flag_off_even_with_a_viewer(self):
+        job = FakeJob(PHASE_RUNNING)
+        job.viewer_url = self.URL
+        app = _app(job)
+        app.run()
+        assert not app.exception, app.exception
+        assert job.live_view_open is False
+
+    def test_opening_the_live_view_turns_the_flag_on_and_leaving_turns_it_off(self):
+        job = FakeJob(PHASE_RUNNING)
+        job.viewer_url = self.URL
+        app = _app(job)
+        app.run()
+
+        _open_live(app)
+        assert job.live_view_open is True
+
+        app.segmented_control(key="attendance_view").set_value("Log").run()
+        assert job.live_view_open is False
+
+        app.segmented_control(key="attendance_view").set_value("Tab snapshots").run()
+        assert job.live_view_open is False
+
+    def test_without_a_viewer_the_flag_stays_off_in_the_live_view(self):
+        job = FakeJob(PHASE_RUNNING)
+        app = _app(job)
+        app.run()
+        _open_live(app)
+        assert job.live_view_open is False
+
+    def test_clearing_the_view_falls_back_to_tab_snapshots(self):
+        app = _app()
+        app.run()
+        _open_live(app)
+        app.segmented_control(key="attendance_view").set_value(None).run()
+        assert not app.exception, app.exception

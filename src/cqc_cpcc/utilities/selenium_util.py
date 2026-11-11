@@ -671,6 +671,53 @@ def warn_if_browser_timezone_differs(driver, expected: str | None = None) -> str
     return actual
 
 
+def vnc_viewer_url(base_url: str) -> str:
+    """The noVNC page at ``base_url`` (``scheme://host[:port]``): auto-connect, scaled, and a
+    ``view_only`` client flag (not a lock: the URL carries the VNC password)."""
+    query = urlencode([
+        ("autoconnect", "1"),
+        ("view_only", "true"),
+        ("resize", "scale"),
+        ("password", SELENIUM_VNC_PASSWORD),
+    ])
+    return f"{base_url.rstrip('/')}/?{query}"
+
+
+def live_viewer_url(timeout: float = 1.0) -> str | None:
+    """The noVNC URL for the Docker browser, or ``None`` when it cannot be shown.
+
+    ``view_only=true`` is a noVNC *client* setting. The URL also carries the container's
+    VNC password, so anyone who holds it can connect with full control of the signed-in
+    browser; the container is not view-only. Show it only to the instructor.
+
+    Shown only when the run really uses the Docker browser (not headless, not a local
+    or virtual-display Chrome) and the noVNC port answers. The probe goes to the
+    address compose binds the port to; the returned URL is what the *viewer's* browser
+    opens, so ``VNC_PUBLIC_URL`` replaces ``http://localhost:<port>`` when a proxy or a
+    remote host sits in between. Never prompts: callers use it to choose a display.
+    """
+    if IS_GITHUB_ACTION or HEADLESS_BROWSER or USE_VIRTUAL_DISPLAY:
+        return None
+    if _enum_from_env(BrowserType, BROWSER_TYPE) != BrowserType.DOCKER_CHROME:
+        return None
+    probe_host = "localhost" if SELENIUM_VNC_BIND in ("", "0.0.0.0", "::") else SELENIUM_VNC_BIND
+    if ":" in probe_host:
+        probe_host = f"[{probe_host}]"
+    try:
+        reachable = requests.get(f"http://{probe_host}:{SELENIUM_VNC_PORT}/", timeout=timeout).ok
+    except Exception:  # noqa: BLE001 - any failure means "no viewer"
+        reachable = False
+    if not reachable:
+        logger.debug("noVNC viewer is not reachable on %s:%s.", probe_host, SELENIUM_VNC_PORT)
+        return None
+    exposed = bool((VNC_PUBLIC_URL or "").strip()) or SELENIUM_VNC_BIND not in ("127.0.0.1", "::1", "localhost")
+    if exposed and SELENIUM_VNC_PASSWORD == "secret":
+        logger.warning("The live browser view is reachable beyond this machine (SELENIUM_VNC_BIND / "
+                       "VNC_PUBLIC_URL) while SELENIUM_VNC_PASSWORD is still the public default. "
+                       "Change the password and require authentication at your proxy.")
+    return vnc_viewer_url((VNC_PUBLIC_URL or "").strip() or f"http://localhost:{SELENIUM_VNC_PORT}")
+
+
 def get_docker_driver(headless=False):
     # Mark Docker browser usage so command-line wrappers can offer teardown prompts.
     set_docker_usage_flag(True)
@@ -745,7 +792,7 @@ def get_docker_driver(headless=False):
     time.sleep(3)
     warn_if_browser_timezone_differs(driver)
 
-    vnc_url = f"{selenium_container_url}:{SELENIUM_VNC_PORT}/?autoconnect=1&view_only=true&resize=scale&password=secret"
+    vnc_url = vnc_viewer_url(f"{selenium_container_url}:{SELENIUM_VNC_PORT}")
     vnc_parts = urlsplit(vnc_url)
     safe_query = urlencode([
         (key, "<redacted>" if key.lower() == "password" else value)

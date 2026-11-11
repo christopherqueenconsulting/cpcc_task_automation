@@ -1,0 +1,10 @@
+# Test-only override for scripts/verify_pause_keepalive.py: a 60 s grid idle timeout, so a
+# short pause is already longer than the session timeout. Never use for real runs.
+#
+#   docker compose -p cpcc_task_automation -f docker-compose.yml \
+#       -f scripts/docker-compose.keepalive-test.yml up -d --force-recreate selenium-chrome
+# Undo with the same command without the second -f file.
+services:
+    selenium-chrome:
+        environment:
+          - SE_NODE_SESSION_TIMEOUT=60
